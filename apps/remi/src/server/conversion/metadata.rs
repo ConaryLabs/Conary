@@ -8,6 +8,7 @@ use conary_core::db::models::{RepositoryPackage, RepositoryProvide};
 use conary_core::filesystem::path::sanitize_filename;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::deb::DebPackage;
+use conary_core::packages::eopkg::EopkgPackage;
 use conary_core::packages::payload::PackagePayload;
 use conary_core::packages::rpm::RpmPackage;
 use conary_core::packages::traits::PackageFormat;
@@ -110,6 +111,15 @@ impl ConversionService {
                 let metadata = Self::build_metadata(&pkg)?;
                 Ok((metadata, files, "deb"))
             }
+            ProfilePackageFormat::Eopkg => {
+                let pkg = EopkgPackage::parse(path_str)
+                    .map_err(|e| anyhow!("Failed to parse eopkg package: {}", e))?;
+                let files = pkg
+                    .package_payload()
+                    .map_err(|e| anyhow!("Failed to open eopkg package payload: {}", e))?;
+                let metadata = Self::build_metadata(&pkg)?;
+                Ok((metadata, files, "eopkg"))
+            }
         }
     }
 
@@ -156,22 +166,38 @@ pub(super) fn repository_package_conversion_inputs_match(
         && expected.package_release == current.package_release
         && expected.architecture == current.architecture
         && expected.debian_multi_arch == current.debian_multi_arch
-        && bare_sha256(&expected.checksum) == bare_sha256(&current.checksum)
+        && expected.checksum == current.checksum
         && expected.source_profile == current.source_profile
         && expected.version_scheme == current.version_scheme
 }
 
-fn bare_sha256(value: &str) -> &str {
-    value.strip_prefix("sha256:").unwrap_or(value)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{create_test_db, insert_repo};
+    use super::super::test_support::{create_test_db, eopkg_fixture, insert_repo};
     use super::*;
     use conary_core::ccs::convert::ForeignConversionInput;
     use conary_core::db::models::{RepositoryPackage, RepositoryProvide};
     use std::path::PathBuf;
+
+    #[test]
+    fn remi_parses_eopkg_through_the_exact_solus_profile() {
+        let fixture = eopkg_fixture();
+        let root = tempfile::tempdir().unwrap();
+        let service = ConversionService::new(
+            root.path().join("chunks"),
+            root.path().join("cache"),
+            root.path().join("remi.db"),
+            None,
+        );
+        let (metadata, payload, format) = service.parse_package(fixture.path(), "solus").unwrap();
+
+        assert_eq!(metadata.name(), "demo");
+        assert_eq!(metadata.version(), "1.0-2");
+        assert_eq!(metadata.version_scheme(), VersionScheme::Eopkg);
+        assert_eq!(metadata.architecture(), Some("x86_64"));
+        assert_eq!(payload.files().len(), 1);
+        assert_eq!(format, "eopkg");
+    }
 
     #[test]
     fn test_safe_ccs_filename_normal() {

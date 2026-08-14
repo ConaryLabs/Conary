@@ -11,6 +11,7 @@ pub mod config_authority;
 pub mod cpio;
 pub mod deb;
 pub mod dpkg_query;
+pub mod eopkg;
 pub mod install_reason;
 pub mod installed_identity;
 pub mod native_abi;
@@ -46,6 +47,7 @@ pub enum SystemPackageManager {
     Rpm,
     Dpkg,
     Pacman,
+    Eopkg,
     Unknown,
 }
 
@@ -63,6 +65,7 @@ impl SystemPackageManager {
             VersionScheme::Rpm => Some(Self::Rpm),
             VersionScheme::Debian => Some(Self::Dpkg),
             VersionScheme::Arch => Some(Self::Pacman),
+            VersionScheme::Eopkg => Some(Self::Eopkg),
         }
     }
 
@@ -88,7 +91,7 @@ impl SystemPackageManager {
 
         let mut observations = Vec::new();
 
-        for manager in [Self::Rpm, Self::Dpkg, Self::Pacman] {
+        for manager in [Self::Rpm, Self::Dpkg, Self::Pacman, Self::Eopkg] {
             if requested.is_some_and(|requested| requested != manager) {
                 continue;
             }
@@ -96,6 +99,7 @@ impl SystemPackageManager {
                 Self::Rpm => ("rpm", &["--version"][..]),
                 Self::Dpkg => ("dpkg-query", &["--version"][..]),
                 Self::Pacman => ("pacman", &["--version"][..]),
+                Self::Eopkg => ("eopkg", &["--version"][..]),
                 Self::Unknown => unreachable!("unknown authority was rejected"),
             };
             if query_binary_available(binary, args)? {
@@ -103,6 +107,7 @@ impl SystemPackageManager {
                     Self::Rpm => rpm_query::query_all_packages()?.len(),
                     Self::Dpkg => dpkg_query::query_all_packages()?.len(),
                     Self::Pacman => pacman_query::query_all_packages()?.len(),
+                    Self::Eopkg => eopkg::query::query_all_packages()?.len(),
                     Self::Unknown => unreachable!("unknown authority was rejected"),
                 };
                 observations.push(NativeDatabaseObservation {
@@ -178,6 +183,7 @@ impl SystemPackageManager {
             Self::Rpm => "RPM",
             Self::Dpkg => "dpkg",
             Self::Pacman => "pacman",
+            Self::Eopkg => "eopkg",
             Self::Unknown => "unknown",
         }
     }
@@ -188,6 +194,7 @@ impl SystemPackageManager {
             Self::Rpm => "rpm",
             Self::Dpkg => "dpkg",
             Self::Pacman => "pacman",
+            Self::Eopkg => "eopkg",
             Self::Unknown => "unknown",
         }
     }
@@ -198,6 +205,7 @@ impl SystemPackageManager {
             Self::Rpm => format!("dnf remove {}", name),
             Self::Dpkg => format!("apt remove {}", name),
             Self::Pacman => format!("pacman -R {}", name),
+            Self::Eopkg => format!("eopkg remove {}", name),
             Self::Unknown => format!("(unknown package manager) remove {}", name),
         }
     }
@@ -208,6 +216,7 @@ impl SystemPackageManager {
             Self::Rpm => format!("dnf update {}", name),
             Self::Dpkg => format!("apt upgrade {}", name),
             Self::Pacman => format!("pacman -Syu {}", name),
+            Self::Eopkg => format!("eopkg upgrade {}", name),
             Self::Unknown => format!("(unknown package manager) update {}", name),
         }
     }
@@ -221,6 +230,7 @@ impl SystemPackageManager {
             Self::Rpm => Some(VersionScheme::Rpm),
             Self::Dpkg => Some(VersionScheme::Debian),
             Self::Pacman => Some(VersionScheme::Arch),
+            Self::Eopkg => Some(VersionScheme::Eopkg),
             Self::Unknown => None,
         }
     }

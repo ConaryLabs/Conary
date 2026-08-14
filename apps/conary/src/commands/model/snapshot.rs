@@ -3,8 +3,6 @@
 use super::super::open_db;
 use anyhow::Result;
 use conary_core::model::{capture_current_state, snapshot_to_model};
-#[cfg(test)]
-use conary_core::repository::resolution_policy::DependencyMixingPolicy;
 
 /// Create a model file from current system state
 pub async fn cmd_model_snapshot(
@@ -60,15 +58,11 @@ pub async fn cmd_model_snapshot(
 mod tests {
     use super::*;
     use crate::commands::test_helpers::create_test_db;
-    use conary_core::db::models::DistroPin;
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_model_snapshot_writes_effective_source_policy() {
+    async fn test_model_snapshot_writes_system_convergence_policy() {
         let (_temp_file, db_path) = create_test_db();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        DistroPin::set(&conn, "arch", DependencyMixingPolicy::Strict).unwrap();
-        drop(conn);
 
         let temp_dir = tempdir().unwrap();
         let output_path = temp_dir.path().join("system.toml");
@@ -83,8 +77,7 @@ mod tests {
 
         let content = std::fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("[system]"));
-        assert!(content.contains("[system.pin]"));
-        assert!(content.contains("distro = \"arch\""));
-        assert!(content.contains("strength = \"strict\""));
+        assert!(content.contains("convergence"));
+        assert!(!content.contains("[system.pin]"));
     }
 }

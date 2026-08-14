@@ -48,6 +48,7 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
     drop(conn);
     let provenance = RepositoryInstallProvenance {
         repository_id,
+        source_identity: Some("fedora-44".to_string()),
         source_profile: Some("fedora-44".to_string()),
         version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
         source_kind: RepositorySourceKind::Native,
@@ -60,7 +61,7 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
         &native_path,
         PackageFormatType::Rpm,
         db_path_str,
-        &test_resolution_policy().with_primary_profile("fedora-44"),
+        Some("fedora-44"),
     )
     .await
     .unwrap();

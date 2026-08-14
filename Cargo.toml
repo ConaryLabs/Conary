@@ -12,6 +12,14 @@ members = [
 exclude = ["third_party/resolvo-0.12.0-patched"]
 resolver = "3"
 
+[workspace.package]
+version = "0.15.0"
+edition = "2024"
+rust-version = "1.97.1"
+authors = ["Conary Contributors"]
+license = "MIT"
+publish = false
+
 [patch.crates-io]
 aws-creds = { path = "third_party/aws-creds-0.39.1-patched" }
 rust-s3 = { path = "third_party/rust-s3-0.37.2-patched" }
@@ -19,8 +27,13 @@ rust-s3 = { path = "third_party/rust-s3-0.37.2-patched" }
 resolvo = { path = "third_party/resolvo-0.12.0-patched" }
 
 [workspace.dependencies]
+# OpenPGP verification (RustCrypto backend)
+sequoia-openpgp = { version = "2", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
+
 # Database
 rusqlite = { version = "0.40", features = ["bundled", "limits"] }
+liblzma = "0.4"
+zip = { version = "8.4.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 # Error handling
 thiserror = "2.0"
@@ -84,7 +97,8 @@ x509-cert = { version = "0.2", features = ["pem", "std"] }
 # Archives
 tar = "0.4"
 flate2 = "1.0"
-rpm = { version = "0.25", default-features = false, features = ["payload"] }
+# Pin the upstream Sequoia signature backend until it reaches a crates.io release.
+rpm = { git = "https://github.com/rpm-rs/rpm-rs", rev = "283563a92383dd63cf92fe1d261d42ecdf71ff12", version = "0.27.1", default-features = false, features = ["payload"] }
 rpm-version = "0.5.0"
 debversion = "0.5.4"
 alpm-types = "0.11.2"
@@ -112,7 +126,7 @@ mdns-sd = "0.20.0"
 dashmap = "6.0"
 
 # MCP
-rmcp = "1.7.0"
+rmcp = "3.1.2"
 schemars = "1.0"
 
 # Other shared

@@ -12,8 +12,8 @@ use conary_core::ccs::native_lifecycle::{
     ScriptletFidelity, SourceFormat, TransactionOrder, VersionScheme,
 };
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, DistroPin, InstallSource, PackageDelta, PackageResolution,
-    PrimaryStrategy, Repository, ResolutionStrategy, Trove, TroveType,
+    Changeset, ChangesetStatus, InstallSource, PackageDelta, PackageResolution, PrimaryStrategy,
+    Repository, ResolutionStrategy, Trove, TroveType,
 };
 use conary_core::filesystem::{CasStore, object_path};
 use conary_core::repository::resolution_policy::ResolutionPolicy;
@@ -84,7 +84,7 @@ fn rpm_upgrade_entry() -> NativeLifecycleEntry {
     let body = "print('rpm-upgrade-new-pre')\n";
     NativeLifecycleEntry {
         id: "rpm:%pre".to_string(),
-        native_slot: "%pre".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::Pre),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PreUpgrade,
         lifecycle_paths: vec!["upgrade:new-pre".to_string()],
@@ -108,8 +108,7 @@ fn rpm_upgrade_entry() -> NativeLifecycleEntry {
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::EmbeddedLua,
             body_transforms: Vec::new(),
-            critical: true,
-            criticality: RpmCriticality::Header,
+            criticality: RpmCriticality::SlotDefault,
             raw_flags: 0,
             unknown_flags: 0,
             install_prefixes: Vec::new(),
@@ -220,12 +219,6 @@ async fn update_executes_typed_rpm_lifecycle_and_commits_changeset() {
     let (package_url, _server_handle) = serve_test_file(package_path);
 
     let mut conn = crate::commands::open_db(&db_path).unwrap();
-    DistroPin::set(
-        &conn,
-        "fedora-44",
-        conary_core::repository::resolution_policy::DependencyMixingPolicy::Strict,
-    )
-    .unwrap();
     let repo_id = insert_test_static_ccs_repository(&conn, "fedora-test", package_url.as_str());
 
     conary_core::db::transaction(&mut conn, |tx| {
@@ -324,12 +317,6 @@ async fn static_ccs_update_verifies_signature_before_lifecycle_execution_preflig
     let (package_url, _server_handle) = serve_test_file(package_path);
 
     let mut conn = crate::commands::open_db(&db_path).unwrap();
-    DistroPin::set(
-        &conn,
-        "fedora-44",
-        conary_core::repository::resolution_policy::DependencyMixingPolicy::Strict,
-    )
-    .unwrap();
     let mut repo = Repository::new("static-test".to_string(), package_url.clone());
     repo.default_strategy = Some("static".to_string());
     repo.source_profile = Some("fedora-44".to_string());
@@ -429,12 +416,6 @@ async fn update_delta_candidate_executes_typed_rpm_lifecycle() {
     let (package_url, _server_handle) = serve_test_file(package_path);
 
     let mut conn = crate::commands::open_db(&db_path).unwrap();
-    DistroPin::set(
-        &conn,
-        "fedora-44",
-        conary_core::repository::resolution_policy::DependencyMixingPolicy::Strict,
-    )
-    .unwrap();
     let repo_id = insert_test_static_ccs_repository(&conn, "fedora-test", package_url.as_str());
 
     conary_core::db::transaction(&mut conn, |tx| {

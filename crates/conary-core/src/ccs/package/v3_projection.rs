@@ -56,7 +56,7 @@ pub(super) fn files_from_v3_authority(authority: &AuthorityDocumentV3) -> Result
             node: file.node.clone(),
             content: file.content.clone(),
             component: file.component.clone(),
-            chunks: None,
+            chunks: file.content_layout.chunks().map(<[_]>::to_vec),
         })
         .collect())
 }
@@ -111,6 +111,8 @@ const fn capability_kind(kind: DependencyKindV3) -> RepositoryCapabilityKind {
         DependencyKindV3::Binary => RepositoryCapabilityKind::Binary,
         DependencyKindV3::Soname => RepositoryCapabilityKind::Soname,
         DependencyKindV3::PkgConfig => RepositoryCapabilityKind::PkgConfig,
+        DependencyKindV3::PkgConfig32 => RepositoryCapabilityKind::PkgConfig32,
+        DependencyKindV3::Comar => RepositoryCapabilityKind::Comar,
     }
 }
 

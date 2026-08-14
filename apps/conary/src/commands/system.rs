@@ -8,7 +8,7 @@ mod rollback_restore;
 
 pub use init::cmd_init;
 #[cfg(test)]
-use init::{NATIVE_REPOSITORY_SEEDS, paths_refer_to_same_location, validate_init_privileges};
+use init::{paths_refer_to_same_location, validate_init_privileges};
 pub use rebuild_database::cmd_rebuild_database;
 pub use rollback_command::cmd_rollback;
 #[cfg(test)]
@@ -31,7 +31,6 @@ use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
 #[cfg(test)]
 use conary_core::payload::PayloadNodeKind;
-use conary_core::repository::RepositoryFormat;
 use std::path::{Path, PathBuf};
 use tracing::info;
 

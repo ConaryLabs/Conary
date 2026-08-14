@@ -19,7 +19,7 @@ const pages = [
 		file: 'install/index.html',
 		title: 'Conary tester release status — Conary',
 		canonical: 'https://conary.io/install/',
-		marker: 'Wait for the next verified tester release.'
+		marker: 'The release is verified; the tester runbook remains paused.'
 	},
 	{
 		file: 'compare/index.html',

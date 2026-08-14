@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::backend::ContainerBackend;
-use crate::config::DistroBuildContext;
+use crate::config::{DistroBuildContext, DistroConfig};
 
+#[derive(Debug)]
 struct StagedBuildContext {
     root: PathBuf,
     dockerfile: PathBuf,
@@ -210,6 +211,7 @@ fn canonical_native_package_name(format: ProfilePackageFormat) -> &'static str {
         ProfilePackageFormat::Rpm => "conary-release.rpm",
         ProfilePackageFormat::Deb => "conary-release.deb",
         ProfilePackageFormat::Arch => "conary-release.pkg.tar.zst",
+        ProfilePackageFormat::Eopkg => "conary-release.eopkg",
     }
 }
 
@@ -242,6 +244,24 @@ fn stage_native_package(root: &Path, artifact: NativePackageArtifact<'_>) -> Res
         )
     })?;
     Ok(())
+}
+
+/// Pick the Conary binary an image receives.
+///
+/// The static choice fails closed rather than falling back to the host build:
+/// a host binary that happens to run in one image and dies at the dynamic
+/// linker in another is the exact failure this capability removes.
+fn resolve_stage_source(
+    build_context: DistroBuildContext,
+    host_binary: &Path,
+    target_dir: &Path,
+) -> Result<PathBuf> {
+    match build_context {
+        DistroBuildContext::Binary => Ok(host_binary.to_path_buf()),
+        DistroBuildContext::StaticBinary => {
+            crate::static_binary::static_conary_binary_in(target_dir)
+        }
+    }
 }
 
 fn stage_build_context(
@@ -289,10 +309,18 @@ fn stage_build_context(
             .with_context(|| format!("failed to copy {}", arch_pkgbuild.display()))?;
     }
 
-    let binary = crate::paths::find_host_conary_binary(&project_root)?;
+    // Fixture packages are built by running Conary on this host, so that step
+    // always uses the host binary. What gets staged into the image is a
+    // separate, typed choice: the image's userland is not the host's.
+    let host_binary = crate::paths::find_host_conary_binary(&project_root)?;
+    let stage_source = resolve_stage_source(
+        build_context,
+        &host_binary,
+        &crate::static_binary::static_target_dir(&project_root),
+    )?;
     let staged_binary = root.join("conary");
-    fs::copy(&binary, &staged_binary)
-        .with_context(|| format!("failed to stage host conary binary {}", binary.display()))?;
+    fs::copy(&stage_source, &staged_binary)
+        .with_context(|| format!("failed to stage conary binary {}", stage_source.display()))?;
 
     // Strip debug symbols to shrink the tar context sent over the container
     // socket. A debug build can be 300MB+; stripped it drops to ~70MB, which
@@ -305,15 +333,7 @@ fn stage_build_context(
         stage_native_package(&root, artifact)?;
     }
 
-    ensure_phase2_fixture_outputs(&root.join("fixtures"), &binary)?;
-
-    if build_context == DistroBuildContext::WorkspaceSource {
-        copy_dir_filtered(
-            &project_root,
-            &root.join("source"),
-            &[".git", "target", ".jj", ".direnv"],
-        )?;
-    }
+    ensure_phase2_fixture_outputs(&root.join("fixtures"), &host_binary)?;
 
     Ok(StagedBuildContext {
         dockerfile: root.join("containers").join(dockerfile_name),
@@ -328,9 +348,9 @@ pub async fn build_distro_image(
     backend: &dyn ContainerBackend,
     containerfile: &Path,
     distro: &str,
-    build_context: DistroBuildContext,
+    distro_config: &DistroConfig,
 ) -> Result<String> {
-    build_distro_image_inner(backend, containerfile, distro, build_context, None).await
+    build_distro_image_inner(backend, containerfile, distro, distro_config, None).await
 }
 
 /// Build a distro-specific test image by installing one exact native package.
@@ -342,7 +362,7 @@ pub async fn build_distro_image_from_native_package(
     backend: &dyn ContainerBackend,
     containerfile: &Path,
     distro: &str,
-    build_context: DistroBuildContext,
+    distro_config: &DistroConfig,
     package: &Path,
     package_format: ProfilePackageFormat,
 ) -> Result<String> {
@@ -350,7 +370,7 @@ pub async fn build_distro_image_from_native_package(
         backend,
         containerfile,
         distro,
-        build_context,
+        distro_config,
         Some(NativePackageArtifact {
             path: package,
             format: package_format,
@@ -363,7 +383,7 @@ async fn build_distro_image_inner(
     backend: &dyn ContainerBackend,
     containerfile: &Path,
     distro: &str,
-    build_context: DistroBuildContext,
+    distro_config: &DistroConfig,
     native_package: Option<NativePackageArtifact<'_>>,
 ) -> Result<String> {
     let tag = format!("conary-test-{distro}:latest");
@@ -389,8 +409,20 @@ async fn build_distro_image_inner(
         }
     }
 
-    let staged = stage_build_context(containerfile, distro, build_context, native_package)?;
-    let mut build_args = HashMap::new();
+    let staged = stage_build_context(
+        containerfile,
+        distro,
+        distro_config.build_context,
+        native_package,
+    )?;
+    let mut build_args = match (&distro_config.release_root, &distro_config.target_root) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("distro {distro} cannot declare both release_root and target_root")
+        }
+        (Some(release_root), None) => release_root.docker_build_args()?,
+        (None, Some(target_root)) => target_root.docker_build_args()?,
+        (None, None) => HashMap::new(),
+    };
     if native_package.is_some() {
         build_args.insert("INSTALL_MODE".to_string(), "package".to_string());
     }
@@ -402,7 +434,8 @@ async fn build_distro_image_inner(
 #[cfg(test)]
 mod tests {
     use super::{
-        NativePackageArtifact, find_project_root, stage_build_context, stage_native_package,
+        NativePackageArtifact, find_project_root, resolve_stage_source, stage_build_context,
+        stage_native_package,
     };
     use crate::config::DistroBuildContext;
     use conary_core::repository::supported_profiles::ProfilePackageFormat;
@@ -651,81 +684,108 @@ printf 'fixture\n' > "$output/$file"
         fs::remove_dir_all(workspace_root).expect("cleanup workspace root");
     }
 
+    /// Which binary reaches the image is a typed decision, and the static
+    /// choice fails closed rather than quietly staging the host build.
     #[test]
-    fn workspace_source_staging_is_controlled_by_typed_capability() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_nanos();
-        let project_root =
-            std::env::temp_dir().join(format!("conary-test-source-context-{unique}"));
-        let remi_root = project_root.join("apps/conary/tests/integration/remi");
-        let containerfile = remi_root.join("containers/Containerfile.custom");
+    fn staged_binary_is_selected_by_typed_capability() {
+        let target_dir = tempfile::tempdir().expect("create temp target directory");
+        let host_binary = Path::new("/workspace/target/debug/conary");
 
-        fs::create_dir_all(remi_root.join("containers")).expect("create containers");
-        fs::create_dir_all(project_root.join("crates/example/src")).expect("create source");
-        fs::write(
-            project_root.join("Cargo.toml"),
-            "[workspace]\nmembers = []\n",
-        )
-        .expect("write workspace manifest");
-        fs::write(
-            project_root.join("crates/example/src/lib.rs"),
-            "pub fn example() {}\n",
-        )
-        .expect("write source file");
-        fs::write(project_root.join("conary"), "binary").expect("write binary");
-        fs::write(&containerfile, "FROM scratch\n").expect("write containerfile");
-        fs::write(remi_root.join("config.toml"), "[paths]\n").expect("write config");
-
-        let source_staged = stage_build_context(
-            &containerfile,
-            "not-an-ubuntu-name",
-            DistroBuildContext::WorkspaceSource,
-            None,
-        )
-        .expect("stage workspace source context");
-        assert!(
-            source_staged
-                .root
-                .join("source/crates/example/src/lib.rs")
-                .is_file()
+        assert_eq!(
+            resolve_stage_source(DistroBuildContext::Binary, host_binary, target_dir.path())
+                .expect("host staging needs no static artifact"),
+            host_binary,
+            "the binary capability must stage the host build"
         );
-        drop(source_staged);
 
-        let binary_staged = stage_build_context(
-            &containerfile,
-            "ubuntu-name-does-not-matter",
-            DistroBuildContext::Binary,
-            None,
+        let error = resolve_stage_source(
+            DistroBuildContext::StaticBinary,
+            host_binary,
+            target_dir.path(),
         )
-        .expect("stage binary context");
-        assert!(!binary_staged.root.join("source").exists());
-        drop(binary_staged);
+        .expect_err("a missing static artifact must not fall back to the host binary");
+        assert!(
+            error
+                .to_string()
+                .contains("static conary artifact not found"),
+            "unexpected message: {error}"
+        );
 
-        fs::remove_dir_all(project_root).expect("cleanup project root");
+        let artifact = crate::static_binary::static_conary_binary_path_in(target_dir.path());
+        fs::create_dir_all(artifact.parent().expect("artifact parent"))
+            .expect("create musl profile directory");
+        fs::write(
+            &artifact,
+            crate::static_binary::synthetic_elf(&[crate::static_binary::PT_LOAD]),
+        )
+        .expect("write static artifact");
+
+        assert_eq!(
+            resolve_stage_source(
+                DistroBuildContext::StaticBinary,
+                host_binary,
+                target_dir.path()
+            )
+            .expect("static staging must accept a static artifact"),
+            artifact,
+            "the static capability must stage the musl artifact"
+        );
+    }
+
+    /// Every image now receives an already-built binary. Prove no Containerfile
+    /// still expects a staged workspace to compile from.
+    #[test]
+    fn containerfiles_install_a_staged_binary_without_building_from_source() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let containers = manifest_dir.join("../conary/tests/integration/remi/containers");
+        for file in [
+            "Containerfile.fedora44",
+            "Containerfile.ubuntu-26.04",
+            "Containerfile.arch",
+            "Containerfile.artix",
+            "Containerfile.debian-derivative",
+        ] {
+            let contents =
+                fs::read_to_string(containers.join(file)).expect("read distro containerfile");
+            assert!(
+                contents.contains("install -m 755 /tmp/install/conary /usr/bin/conary"),
+                "{file} must install the staged binary"
+            );
+            assert!(
+                !contents.contains("source/"),
+                "{file} must not stage the workspace source tree"
+            );
+            assert!(
+                !contents.contains("cargo build"),
+                "{file} must not build Conary from source"
+            );
+        }
     }
 
     #[test]
-    fn ubuntu_source_builder_proves_pinned_rust_and_native_crypto_tools() {
+    fn artix_container_uses_core_mirrors_before_package_sync() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let containerfile = manifest_dir
-            .join("../conary/tests/integration/remi/containers/Containerfile.ubuntu-26.04");
-        let contents = fs::read_to_string(&containerfile).expect("read ubuntu containerfile");
+        let containerfile =
+            manifest_dir.join("../conary/tests/integration/remi/containers/Containerfile.artix");
+        let contents = fs::read_to_string(containerfile).expect("read Artix containerfile");
+
+        let mirror1 = contents
+            .find("Server = https://mirror1.artixlinux.org/repos/$repo/os/$arch")
+            .expect("Artix container must select the first official core mirror");
+        let cvut = contents
+            .find("Server = https://ftp.sh.cvut.cz/artix-linux/$repo/os/$arch")
+            .expect("Artix container must select the second official core mirror");
+        let sync = contents
+            .find("pacman -Syyu --noconfirm")
+            .expect("Artix container must force-refresh package databases before upgrading");
 
         assert!(
-            contents.contains("cmake"),
-            "Ubuntu source-build image must install cmake for aws-lc-sys"
+            mirror1 < sync && cvut < sync,
+            "Artix core mirrors must be configured before package synchronization"
         );
         assert!(
-            contents.contains("--output \"$installer\"")
-                && contents.contains("--default-toolchain 1.96.0")
-                && contents.contains("/root/.cargo/bin/cargo --version"),
-            "Ubuntu source-build image must download, pin, and prove Rust explicitly"
-        );
-        assert!(
-            !contents.contains("https://sh.rustup.rs |"),
-            "Ubuntu source-build image must not hide rustup download failures in a pipeline"
+            !contents.contains("--overwrite"),
+            "the image must resolve repository coherence instead of masking file conflicts"
         );
     }
 
@@ -748,6 +808,16 @@ printf 'fixture\n' > "$output/$file"
                 "Containerfile.arch",
                 "conary-release.pkg.tar.zst",
                 "pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst",
+            ),
+            (
+                "Containerfile.artix",
+                "conary-release.pkg.tar.zst",
+                "pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst",
+            ),
+            (
+                "Containerfile.debian-derivative",
+                "conary-release.deb",
+                "apt-get install -y /tmp/install/conary-release.deb",
             ),
         ] {
             let contents =

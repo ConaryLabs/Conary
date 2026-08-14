@@ -117,7 +117,7 @@ fn new_repo_does_not_trust_stray_package_keys_without_metadata() {
     let repo_root = temp.path().join("repo");
     std::fs::create_dir_all(repo_root.join("keys")).unwrap();
     let keys = PackageKeysFile {
-        schema: 1,
+        schema: crate::repository::static_repo::SCHEMA_VERSION,
         keys: vec![PackageKeyEntry {
             algorithm: "ed25519".to_string(),
             public_key: stray_key.public_key_base64(),

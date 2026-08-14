@@ -7,6 +7,21 @@ pub(super) fn create_mcp_router(
     state: Arc<RwLock<ServerState>>,
 ) -> Router<Arc<RwLock<ServerState>>> {
     let state_for_mcp = state;
+    // Remi deliberately exposes only the modern, stateless MCP transport.
+    // Keep rmcp's loopback host default; Origin is separately restricted to
+    // local browser origins and the two configured admin-port variants.
+    let config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(false)
+        .with_json_response(true)
+        .with_allowed_origins([
+            "http://127.0.0.1",
+            "http://localhost",
+            "http://127.0.0.1:8081",
+            "http://localhost:8081",
+            "http://127.0.0.1:8082",
+            "http://localhost:8082",
+        ])
+        .with_stateless_protocol_metadata_required(true);
     let mcp_service = rmcp::transport::streamable_http_server::StreamableHttpService::new(
         move || {
             Ok(crate::server::mcp::RemiMcpServer::new(
@@ -14,9 +29,9 @@ pub(super) fn create_mcp_router(
             ))
         },
         Arc::new(
-            rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+            rmcp::transport::streamable_http_server::session::never::NeverSessionManager::default(),
         ),
-        Default::default(),
+        config,
     );
     let mcp_service = tower::service_fn(move |request: Request<Body>| {
         let mut service = mcp_service.clone();

@@ -25,7 +25,11 @@ impl HookExecutor {
         Ok(())
     }
 
-    pub(super) fn execute_service_action(&self, name: &str, action: &ServiceAction) -> Result<()> {
+    pub(super) fn execute_systemd_service_action(
+        &self,
+        name: &str,
+        action: &ServiceAction,
+    ) -> Result<()> {
         self.validate_systemd_unit(name)?;
         let runtime_action = match action {
             ServiceAction::Enable => {
@@ -76,7 +80,7 @@ impl HookExecutor {
         Ok(())
     }
 
-    fn validate_systemd_unit(&self, unit: &str) -> Result<()> {
+    pub(super) fn validate_systemd_unit(&self, unit: &str) -> Result<()> {
         if !is_safe_declarative_unit_name(unit) {
             anyhow::bail!(
                 "invalid declarative systemd unit '{}': unit names must be pathless, nonempty, and contain no NUL bytes",

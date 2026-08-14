@@ -6,9 +6,6 @@ on:
     types: [completed]
   workflow_dispatch:
     inputs:
-      product:
-        description: Optional product to validate against serialized metadata.
-        required: false
       source_run:
         description: release-build workflow run ID to deploy from.
         required: false
@@ -35,34 +32,55 @@ concurrency:
 jobs:
   resolve:
     name: resolve
-    if: ${{ (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && github.event.inputs.bootstrap_remi_access != 'true' }}
+    if: ${{ github.event.inputs.bootstrap_remi_access != 'true' }}
     runs-on: ubuntu-latest
     outputs:
-      product: ${{ steps.meta.outputs.product }}
+      release: ${{ steps.meta.outputs.release }}
       version: ${{ steps.meta.outputs.version }}
       tag_name: ${{ steps.meta.outputs.tag_name }}
       dry_run: ${{ steps.meta.outputs.dry_run }}
       bundle_name: ${{ steps.meta.outputs.bundle_name }}
       deploy_mode: ${{ steps.meta.outputs.deploy_mode }}
       artifact_patterns: ${{ steps.meta.outputs.artifact_patterns }}
+      artifacts: ${{ steps.meta.outputs.artifacts }}
       source_run: ${{ steps.meta.outputs.source_run }}
       environment: ${{ steps.meta.outputs.environment }}
     steps:
       - name: Resolve source run
         id: source
         shell: bash
+        env:
+          INPUT_SOURCE_RUN: ${{ github.event.inputs.source_run }}
+          INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          UPSTREAM_RUN_ID: ${{ github.event.workflow_run.id }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
+          set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            echo "source_run=${{ github.event.inputs.source_run }}" >> "$GITHUB_OUTPUT"
-            echo "environment=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
-            echo "manual_product=${{ github.event.inputs.product }}" >> "$GITHUB_OUTPUT"
-            echo "manual_dry_run=${{ github.event.inputs.dry_run || 'true' }}" >> "$GITHUB_OUTPUT"
+            source_run="$INPUT_SOURCE_RUN"
+            target_environment="$INPUT_ENVIRONMENT"
+            manual_dry_run="${INPUT_DRY_RUN:-true}"
           else
-            echo "source_run=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
-            echo "environment=production" >> "$GITHUB_OUTPUT"
-            echo "manual_product=" >> "$GITHUB_OUTPUT"
-            echo "manual_dry_run=" >> "$GITHUB_OUTPUT"
+            [[ "$UPSTREAM_CONCLUSION" == "success" ]] || {
+              echo "release-build source run concluded ${UPSTREAM_CONCLUSION}, expected success" >&2
+              exit 1
+            }
+            source_run="$UPSTREAM_RUN_ID"
+            target_environment="production"
+            manual_dry_run=""
           fi
+
+          [[ "$source_run" =~ ^[0-9]+$ ]] || { echo "source_run must be a numeric workflow run ID" >&2; exit 1; }
+          [[ "$target_environment" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "environment contains unsupported characters" >&2; exit 1; }
+          [[ -z "$manual_dry_run" || "$manual_dry_run" == "true" || "$manual_dry_run" == "false" ]] || {
+            echo "dry_run must be true or false" >&2
+            exit 1
+          }
+
+          echo "source_run=${source_run}" >> "$GITHUB_OUTPUT"
+          echo "environment=${target_environment}" >> "$GITHUB_OUTPUT"
+          echo "manual_dry_run=${manual_dry_run}" >> "$GITHUB_OUTPUT"
       - name: Download source artifacts
         shell: bash
         env:
@@ -71,13 +89,23 @@ jobs:
           SOURCE_RUN: ${{ steps.source.outputs.source_run }}
         run: |
           set -euo pipefail
+          source_run_json="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}")"
+          [[ "$(jq -r '.path' <<< "$source_run_json")" == ".github/workflows/release-build.yml" ]] || {
+            echo "source_run=${SOURCE_RUN} is not a release-build workflow run" >&2
+            exit 1
+          }
+          [[ "$(jq -r '.conclusion' <<< "$source_run_json")" == "success" ]] || {
+            echo "source_run=${SOURCE_RUN} did not conclude successfully" >&2
+            exit 1
+          }
+
           if gh run download "$SOURCE_RUN" --dir source-artifacts; then
             exit 0
           fi
 
           echo "gh run download failed for source_run=${SOURCE_RUN}; attempting release-asset fallback" >&2
           rm -rf source-artifacts
-          source_tag="$(gh api "repos/${GH_REPO}/actions/runs/${SOURCE_RUN}" --jq '.head_branch')"
+          source_tag="$(jq -r '.head_branch' <<< "$source_run_json")"
           [[ -n "$source_tag" && "$source_tag" != "null" ]] || {
             echo "source run has no head_branch for release fallback" >&2
             exit 1
@@ -94,8 +122,8 @@ jobs:
           }
 
           bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
-          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
-            echo "release fallback bundle_name missing for ${source_tag}" >&2
+          [[ "$bundle_name" == "suite-bundle" ]] || {
+            echo "release fallback bundle_name is ${bundle_name}, expected suite-bundle" >&2
             exit 1
           }
 
@@ -107,45 +135,54 @@ jobs:
         id: meta
         shell: bash
         env:
-          MANUAL_PRODUCT: ${{ steps.source.outputs.manual_product }}
           MANUAL_DRY_RUN: ${{ steps.source.outputs.manual_dry_run }}
           SOURCE_RUN: ${{ steps.source.outputs.source_run }}
           TARGET_ENVIRONMENT: ${{ steps.source.outputs.environment }}
         run: |
           set -euo pipefail
-          metadata_file=$(find source-artifacts -name metadata.json -print -quit)
-          [[ -n "$metadata_file" ]] || { echo "metadata.json not found in source artifacts" >&2; exit 1; }
+          metadata_file="source-artifacts/suite-bundle/metadata.json"
+          [[ -s "$metadata_file" && ! -L "$metadata_file" ]] || {
+            echo "suite-bundle metadata.json not found, empty, or symlinked" >&2
+            exit 1
+          }
+          jq -e '.schema_version == 1 and (.dry_run | type) == "boolean"' "$metadata_file" >/dev/null || {
+            echo "suite-bundle metadata must use schema_version 1 and a boolean dry_run" >&2
+            exit 1
+          }
 
-          product=$(jq -r '.product' "$metadata_file")
+          release=$(jq -r '.release' "$metadata_file")
           version=$(jq -r '.version' "$metadata_file")
           tag_name=$(jq -r '.tag_name' "$metadata_file")
           dry_run=$(jq -r '.dry_run' "$metadata_file")
           bundle_name=$(jq -r '.bundle_name' "$metadata_file")
           deploy_mode=$(jq -r '.deploy_mode' "$metadata_file")
           artifact_patterns=$(jq -c '.artifact_patterns' "$metadata_file")
+          artifacts=$(jq -c '.artifacts' "$metadata_file")
 
-          [[ -n "$product" && "$product" != "null" ]] || { echo "metadata product missing" >&2; exit 1; }
-          [[ -n "$version" && "$version" != "null" ]] || { echo "metadata version missing" >&2; exit 1; }
-          [[ -n "$tag_name" && "$tag_name" != "null" ]] || { echo "metadata tag_name missing" >&2; exit 1; }
-          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || { echo "metadata bundle_name missing" >&2; exit 1; }
-          [[ -n "$deploy_mode" && "$deploy_mode" != "null" ]] || { echo "metadata deploy_mode missing" >&2; exit 1; }
+          [[ "$release" == "suite" ]] || { echo "metadata release is ${release}, expected suite" >&2; exit 1; }
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "metadata version is not exact MAJOR.MINOR.PATCH" >&2; exit 1; }
+          [[ "$tag_name" == "v${version}" ]] || { echo "metadata tag_name does not match version ${version}" >&2; exit 1; }
+          [[ "$bundle_name" == "suite-bundle" ]] || { echo "metadata bundle_name is ${bundle_name}, expected suite-bundle" >&2; exit 1; }
+          [[ "$deploy_mode" == "suite" ]] || { echo "metadata deploy_mode is ${deploy_mode}, expected suite" >&2; exit 1; }
+          [[ "$dry_run" == "true" || "$dry_run" == "false" ]] || { echo "metadata dry_run must be true or false" >&2; exit 1; }
           [[ -n "$artifact_patterns" && "$artifact_patterns" != "null" ]] || { echo "metadata artifact_patterns missing" >&2; exit 1; }
+          [[ -n "$artifacts" && "$artifacts" != "null" ]] || { echo "metadata artifacts missing" >&2; exit 1; }
 
-          if [[ -n "$MANUAL_PRODUCT" && "$MANUAL_PRODUCT" != "$product" ]]; then
-            echo "workflow_dispatch product ${MANUAL_PRODUCT} does not match serialized metadata product ${product}" >&2
+          if [[ "$MANUAL_DRY_RUN" == "true" ]]; then
+            dry_run="true"
+          elif [[ "$MANUAL_DRY_RUN" == "false" && "$dry_run" == "true" ]]; then
+            echo "manual deployment cannot promote rehearsal artifacts into a live deployment" >&2
             exit 1
           fi
-          if [[ -n "$MANUAL_DRY_RUN" ]]; then
-            dry_run="$MANUAL_DRY_RUN"
-          fi
 
-          echo "product=${product}" >> "$GITHUB_OUTPUT"
+          echo "release=${release}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
           echo "bundle_name=${bundle_name}" >> "$GITHUB_OUTPUT"
           echo "deploy_mode=${deploy_mode}" >> "$GITHUB_OUTPUT"
           echo "artifact_patterns=${artifact_patterns}" >> "$GITHUB_OUTPUT"
+          echo "artifacts=${artifacts}" >> "$GITHUB_OUTPUT"
           echo "source_run=${SOURCE_RUN}" >> "$GITHUB_OUTPUT"
           echo "environment=${TARGET_ENVIRONMENT}" >> "$GITHUB_OUTPUT"
 
@@ -157,24 +194,37 @@ jobs:
       - name: Validate deploy routing
         shell: bash
         env:
-          PRODUCT: ${{ needs.resolve.outputs.product }}
+          RELEASE: ${{ needs.resolve.outputs.release }}
           DEPLOY_MODE: ${{ needs.resolve.outputs.deploy_mode }}
           BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
           ARTIFACT_PATTERNS: ${{ needs.resolve.outputs.artifact_patterns }}
+          ARTIFACTS: ${{ needs.resolve.outputs.artifacts }}
         run: |
           set -euo pipefail
 
-          [[ -n "$BUNDLE_NAME" ]] || { echo "bundle_name output missing" >&2; exit 1; }
+          [[ "$BUNDLE_NAME" == "suite-bundle" ]] || { echo "bundle_name must be suite-bundle" >&2; exit 1; }
           [[ -n "$ARTIFACT_PATTERNS" && "$ARTIFACT_PATTERNS" != "null" ]] || { echo "artifact_patterns output missing" >&2; exit 1; }
+          jq -e 'length == 11 and (unique | length) == 11' <<< "$ARTIFACT_PATTERNS" >/dev/null || {
+            echo "suite artifact pattern inventory must contain 11 unique entries" >&2
+            exit 1
+          }
 
-          case "$PRODUCT:$DEPLOY_MODE" in
-            conary:release_bundle|remi:remote_bundle|conaryd:none|conary-test:none)
-              ;;
-            *)
-              echo "No deploy lane defined for product=${PRODUCT} deploy_mode=${DEPLOY_MODE}" >&2
-              exit 1
-              ;;
-          esac
+          [[ "$RELEASE:$DEPLOY_MODE" == "suite:suite" ]] || {
+            echo "No deploy lane defined for release=${RELEASE} deploy_mode=${DEPLOY_MODE}" >&2
+            exit 1
+          }
+          jq -e '
+            length == 4 and
+            map({product, bundle_name, deploy_mode}) == [
+              {"product":"conary","bundle_name":"release-bundle","deploy_mode":"release_bundle"},
+              {"product":"remi","bundle_name":"remi-bundle","deploy_mode":"remote_bundle"},
+              {"product":"conaryd","bundle_name":"conaryd-bundle","deploy_mode":"none"},
+              {"product":"conary-test","bundle_name":"conary-test-bundle","deploy_mode":"none"}
+            ]
+          ' <<< "$ARTIFACTS" >/dev/null || {
+            echo "serialized artifact deployment routes do not match the suite contract" >&2
+            exit 1
+          }
 
   bootstrap-remi-access:
     name: bootstrap-remi-access
@@ -216,7 +266,7 @@ jobs:
   verify-conary:
     name: verify-conary
     needs: [resolve, validate-routing]
-    if: ${{ needs.resolve.outputs.product == 'conary' && needs.resolve.outputs.deploy_mode == 'release_bundle' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
+    if: ${{ needs.resolve.outputs.release == 'suite' && needs.resolve.outputs.deploy_mode == 'suite' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download source artifacts
@@ -250,8 +300,8 @@ jobs:
           }
 
           bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
-          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
-            echo "release fallback bundle_name missing for ${source_tag}" >&2
+          [[ "$bundle_name" == "suite-bundle" ]] || {
+            echo "release fallback bundle_name is ${bundle_name}, expected suite-bundle" >&2
             exit 1
           }
 
@@ -265,15 +315,20 @@ jobs:
           BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
         run: |
           set -euo pipefail
-          release_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
-          [[ -n "$release_dir" ]] || { echo "release-bundle artifact missing" >&2; exit 1; }
+          release_dir="source-artifacts/${BUNDLE_NAME}"
+          [[ -d "$release_dir" && ! -L "$release_dir" ]] || { echo "suite-bundle artifact missing or symlinked" >&2; exit 1; }
+          (
+            cd "$release_dir"
+            [[ -s SHA256SUMS && ! -L SHA256SUMS ]] || { echo "suite checksums missing or symlinked" >&2; exit 1; }
+            sha256sum -c SHA256SUMS
+          )
           echo "[DRY RUN] Conary artifacts ready for deployment:"
           find "$release_dir" -maxdepth 1 -type f -printf '  %f\n' | sort
 
   deploy-conary:
     name: deploy-conary
-    needs: [resolve, validate-routing]
-    if: ${{ needs.resolve.outputs.product == 'conary' && needs.resolve.outputs.deploy_mode == 'release_bundle' && needs.resolve.outputs.dry_run != 'true' }}
+    needs: [resolve, validate-routing, deploy-remi]
+    if: ${{ needs.resolve.outputs.release == 'suite' && needs.resolve.outputs.deploy_mode == 'suite' && needs.resolve.outputs.dry_run != 'true' && needs.deploy-remi.result == 'success' }}
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
@@ -308,8 +363,8 @@ jobs:
           }
 
           bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
-          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
-            echo "release fallback bundle_name missing for ${source_tag}" >&2
+          [[ "$bundle_name" == "suite-bundle" ]] || {
+            echo "release fallback bundle_name is ${bundle_name}, expected suite-bundle" >&2
             exit 1
           }
 
@@ -326,9 +381,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
-          [[ -n "$release_dir" ]] || { echo "release-bundle artifact missing" >&2; exit 1; }
+          release_dir="source-artifacts/${BUNDLE_NAME}"
+          [[ -d "$release_dir" && ! -L "$release_dir" ]] || { echo "suite-bundle artifact missing or symlinked" >&2; exit 1; }
           [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
+
+          (
+            cd "$release_dir"
+            [[ -s SHA256SUMS && ! -L SHA256SUMS ]] || { echo "suite checksums missing or symlinked" >&2; exit 1; }
+            sha256sum -c SHA256SUMS
+          )
+
+          conary_deploy_dir="${RUNNER_TEMP}/conary-release-${VERSION}"
+          mkdir -p "$conary_deploy_dir"
+          for asset in \
+            "conary-${VERSION}.ccs" \
+            "conary-${VERSION}.ccs.sig" \
+            "conary-${VERSION}-1.fc44.x86_64.rpm" \
+            "conary_${VERSION}-1_amd64.deb" \
+            "conary-${VERSION}-1-x86_64.pkg.tar.zst" \
+            metadata.json; do
+            [[ -s "${release_dir}/${asset}" && ! -L "${release_dir}/${asset}" ]] || {
+              echo "required Conary suite asset is missing, empty, or symlinked: ${asset}" >&2
+              exit 1
+            }
+            cp -- "${release_dir}/${asset}" "$conary_deploy_dir/"
+          done
+          (
+            cd "$conary_deploy_dir"
+            sha256sum -- * > SHA256SUMS
+          )
+          release_dir="$conary_deploy_dir"
 
           target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
           mkdir -p ~/.ssh
@@ -453,7 +535,7 @@ jobs:
   prove-conary-release-artifacts:
     name: prove-conary-release-artifacts
     needs: [resolve, deploy-conary]
-    if: ${{ needs.resolve.outputs.product == 'conary' && needs.resolve.outputs.deploy_mode == 'release_bundle' && needs.resolve.outputs.dry_run != 'true' && needs.deploy-conary.result == 'success' }}
+    if: ${{ needs.resolve.outputs.release == 'suite' && needs.resolve.outputs.deploy_mode == 'suite' && needs.resolve.outputs.dry_run != 'true' && needs.deploy-conary.result == 'success' }}
     permissions:
       contents: read
     uses: ./.github/workflows/release-artifact-proof.yml
@@ -463,7 +545,7 @@ jobs:
   verify-remi:
     name: verify-remi
     needs: [resolve, validate-routing]
-    if: ${{ needs.resolve.outputs.product == 'remi' && needs.resolve.outputs.deploy_mode == 'remote_bundle' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
+    if: ${{ needs.resolve.outputs.release == 'suite' && needs.resolve.outputs.deploy_mode == 'suite' && github.event_name == 'workflow_dispatch' && needs.resolve.outputs.dry_run == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download source artifacts
@@ -497,8 +579,8 @@ jobs:
           }
 
           bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
-          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
-            echo "release fallback bundle_name missing for ${source_tag}" >&2
+          [[ "$bundle_name" == "suite-bundle" ]] || {
+            echo "release fallback bundle_name is ${bundle_name}, expected suite-bundle" >&2
             exit 1
           }
 
@@ -513,16 +595,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bundle_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
-          [[ -n "$bundle_dir" ]] || { echo "remi bundle artifact directory missing" >&2; exit 1; }
-          bundle=$(find "$bundle_dir" -maxdepth 1 -name "remi-${VERSION}-linux-x64.tar.gz" -print -quit)
-          [[ -n "$bundle" ]] || { echo "remi bundle missing" >&2; exit 1; }
+          bundle_dir="source-artifacts/${BUNDLE_NAME}"
+          [[ -d "$bundle_dir" && ! -L "$bundle_dir" ]] || { echo "suite-bundle artifact missing or symlinked" >&2; exit 1; }
+          (
+            cd "$bundle_dir"
+            [[ -s SHA256SUMS && ! -L SHA256SUMS ]] || { echo "suite checksums missing or symlinked" >&2; exit 1; }
+            sha256sum -c SHA256SUMS
+          )
+          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"
+          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }
           echo "[DRY RUN] remi bundle ready: $bundle"
 
   deploy-remi:
     name: deploy-remi
     needs: [resolve, validate-routing]
-    if: ${{ needs.resolve.outputs.product == 'remi' && needs.resolve.outputs.deploy_mode == 'remote_bundle' && needs.resolve.outputs.dry_run != 'true' }}
+    if: ${{ needs.resolve.outputs.release == 'suite' && needs.resolve.outputs.deploy_mode == 'suite' && needs.resolve.outputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
     environment: ${{ needs.resolve.outputs.environment }}
     steps:
@@ -573,8 +660,8 @@ jobs:
           }
 
           bundle_name="$(jq -r '.bundle_name' "$metadata_file")"
-          [[ -n "$bundle_name" && "$bundle_name" != "null" ]] || {
-            echo "release fallback bundle_name missing for ${source_tag}" >&2
+          [[ "$bundle_name" == "suite-bundle" ]] || {
+            echo "release fallback bundle_name is ${bundle_name}, expected suite-bundle" >&2
             exit 1
           }
 
@@ -592,10 +679,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bundle_dir=$(find source-artifacts -type d -name "$BUNDLE_NAME" -print -quit)
-          [[ -n "$bundle_dir" ]] || { echo "remi bundle artifact directory missing" >&2; exit 1; }
-          bundle=$(find "$bundle_dir" -maxdepth 1 -name "remi-${VERSION}-linux-x64.tar.gz" -print -quit)
-          [[ -n "$bundle" ]] || { echo "remi bundle missing" >&2; exit 1; }
+          bundle_dir="source-artifacts/${BUNDLE_NAME}"
+          [[ -d "$bundle_dir" && ! -L "$bundle_dir" ]] || { echo "suite-bundle artifact missing or symlinked" >&2; exit 1; }
+          (
+            cd "$bundle_dir"
+            [[ -s SHA256SUMS && ! -L SHA256SUMS ]] || { echo "suite checksums missing or symlinked" >&2; exit 1; }
+            sha256sum -c SHA256SUMS
+          )
+          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"
+          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }
           [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
 
           target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
@@ -653,10 +745,22 @@ jobs:
           echo "$body"
           echo "$body" | jq -e '.ready == true' >/dev/null
 
-  no-deploy-required:
-    name: no-deploy-required
+  verify-build-only-routes:
+    name: verify-build-only-routes
     needs: [resolve, validate-routing]
-    if: ${{ needs.resolve.outputs.deploy_mode == 'none' }}
+    if: ${{ needs.resolve.outputs.release == 'suite' && needs.resolve.outputs.deploy_mode == 'suite' }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo "No deployment configured for ${{ needs.resolve.outputs.product }}"
+      - name: Record build-only artifact routes
+        env:
+          ARTIFACTS: ${{ needs.resolve.outputs.artifacts }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for product in conaryd conary-test; do
+            jq -e \
+              --arg product "$product" \
+              'any(.[]; .product == $product and .deploy_mode == "none")' \
+              <<< "$ARTIFACTS" >/dev/null
+            echo "${product}: build-and-release proof only; no deployment configured"
+          done

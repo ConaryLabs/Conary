@@ -149,14 +149,15 @@ impl TakeoverRecord {
         matches!(
             self.status,
             TakeoverStatus::Planning | TakeoverStatus::Running | TakeoverStatus::Incomplete
-        )
+        ) || (self.status == TakeoverStatus::Failed
+            && self.completed_phases.contains(&TakeoverPhase::Owned)
+            && !self.completed_phases.contains(&TakeoverPhase::Generation))
     }
 
     pub fn start_phase(&mut self, phase: TakeoverPhase) {
         self.current_phase = Some(phase);
-        if self.status != TakeoverStatus::Failed {
-            self.status = TakeoverStatus::Running;
-        }
+        self.status = TakeoverStatus::Running;
+        self.failure_reason = None;
         self.touch();
     }
 
@@ -360,5 +361,48 @@ mod tests {
             false,
         );
         assert_eq!(status, TakeoverStatus::CompletedWithWarnings);
+    }
+
+    #[test]
+    fn failed_generation_after_owned_is_resumable_and_clears_failure() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("conary.db");
+        let mut record = TakeoverRecord::planned(
+            db_path.to_str().expect("db path"),
+            "generation",
+            TakeoverInventory::default(),
+            "eopkg",
+            "grub",
+        );
+        record.finish_phase(TakeoverPhase::Cas);
+        record.finish_phase(TakeoverPhase::Owned);
+        record.start_phase(TakeoverPhase::Generation);
+        record.mark_failed("generation boot asset resolution failed");
+
+        assert!(record.is_resumable());
+        record.start_phase(TakeoverPhase::Generation);
+        assert_eq!(record.status, TakeoverStatus::Running);
+        assert_eq!(record.current_phase, Some(TakeoverPhase::Generation));
+        assert_eq!(record.failure_reason, None);
+    }
+
+    #[test]
+    fn failed_takeover_before_owned_or_after_generation_is_not_resumable() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("conary.db");
+        let mut record = TakeoverRecord::planned(
+            db_path.to_str().expect("db path"),
+            "generation",
+            TakeoverInventory::default(),
+            "eopkg",
+            "grub",
+        );
+        record.mark_failed("adoption failed");
+        assert!(!record.is_resumable());
+
+        record.finish_phase(TakeoverPhase::Owned);
+        record.finish_phase(TakeoverPhase::Generation);
+        record.mark_failed("post-generation failure");
+        assert!(!record.is_resumable());
     }
 }

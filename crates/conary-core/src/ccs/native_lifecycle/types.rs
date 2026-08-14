@@ -34,6 +34,7 @@ string_enum! {
         Rpm => "rpm",
         Deb => "deb",
         Arch => "arch",
+        Eopkg => "eopkg",
     }
 }
 
@@ -42,6 +43,7 @@ string_enum! {
         Rpm => "rpm",
         Deb => "deb",
         Arch => "arch",
+        Eopkg => "eopkg",
         Semver => "semver",
     }
 }
@@ -55,6 +57,7 @@ impl VersionScheme {
             Self::Rpm => crate::repository::versioning::VersionScheme::Rpm,
             Self::Deb => crate::repository::versioning::VersionScheme::Debian,
             Self::Arch => crate::repository::versioning::VersionScheme::Arch,
+            Self::Eopkg => crate::repository::versioning::VersionScheme::Eopkg,
             Self::Semver => crate::repository::versioning::VersionScheme::Conary,
         }
     }

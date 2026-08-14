@@ -171,8 +171,9 @@ fn repo_identity_toml(name: &str, description: Option<&str>, root_key_ids: &[Str
     let description = description
         .map(|value| format!("description = \"{value}\"\n"))
         .unwrap_or_default();
+    let schema = conary_core::repository::static_repo::SCHEMA_VERSION;
     format!(
-        "schema = 1\n[repo]\nname = \"{name}\"\n{description}[trust]\nroot_key_ids = [{root_keys}]\n"
+        "schema = {schema}\n[repo]\nname = \"{name}\"\n{description}[trust]\nroot_key_ids = [{root_keys}]\n"
     )
 }
 
@@ -233,6 +234,13 @@ async fn add_static_repo_with(
         remi_endpoint: None,
         ccs_package_keys: Vec::new(),
         source_profile: source_profile.map(str::to_string),
+        source_id: None,
+        repository_id: None,
+        stream_kind: None,
+        stream_id: None,
+        policy_group: None,
+        follow: false,
+        pin_snapshot_sha256: None,
         security_advisory_support: SecurityAdvisorySupport::Unknown,
         fingerprints,
         yes,
@@ -280,6 +288,13 @@ async fn add_repo_with_declared_format(
         remi_endpoint: Some(url.to_string()),
         ccs_package_keys: vec![public_key],
         source_profile: Some(source_profile.to_string()),
+        source_id: None,
+        repository_id: None,
+        stream_kind: None,
+        stream_id: None,
+        policy_group: None,
+        follow: false,
+        pin_snapshot_sha256: None,
         security_advisory_support: SecurityAdvisorySupport::Unknown,
         fingerprints: Vec::new(),
         yes: true,
@@ -836,6 +851,13 @@ async fn static_identity_probe_error_does_not_fall_back_to_native_add() {
         remi_endpoint: None,
         ccs_package_keys: Vec::new(),
         source_profile: None,
+        source_id: None,
+        repository_id: None,
+        stream_kind: None,
+        stream_id: None,
+        policy_group: None,
+        follow: false,
+        pin_snapshot_sha256: None,
         security_advisory_support: SecurityAdvisorySupport::Unknown,
         fingerprints: Vec::new(),
         yes: false,

@@ -1,0 +1,28 @@
+[package]
+name = "conary-openrc-lifecycle-fixture"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "Typed OpenRC selected-root and generation activation fixture"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["conary-openrc-lifecycle-fixture"]
+binaries = []
+
+[components]
+default = ["runtime"]
+
+[[hooks.services]]
+name = "conary-openrc-fixture"
+action = "enable"
+
+[[hooks.services]]
+name = "conary-openrc-fixture"
+action = "try-restart"

@@ -1,6 +1,27 @@
 -- Current repository, federation, derivation, and TUF schema.
 -- Part of the current pre-alpha schema epoch.
 
+CREATE TABLE repository_source_policies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_identity TEXT NOT NULL,
+            scope_kind TEXT NOT NULL CHECK(scope_kind IN ('repository', 'group')),
+            scope_identity TEXT NOT NULL,
+            ecosystem TEXT NOT NULL CHECK(ecosystem IN ('rpm', 'deb', 'alpm', 'eopkg')),
+            version_scheme TEXT NOT NULL CHECK(version_scheme IN ('rpm', 'debian', 'arch', 'eopkg')),
+            stream_kind TEXT NOT NULL CHECK(stream_kind IN ('release', 'channel', 'rolling')),
+            stream_identity TEXT NOT NULL,
+            update_mode TEXT NOT NULL CHECK(update_mode IN ('follow', 'pin')),
+            CHECK(length(source_identity) BETWEEN 1 AND 255 AND trim(source_identity) = source_identity),
+            CHECK(length(scope_identity) BETWEEN 1 AND 255 AND trim(scope_identity) = scope_identity),
+            CHECK(length(stream_identity) BETWEEN 1 AND 255 AND trim(stream_identity) = stream_identity),
+            CHECK(
+                (ecosystem = 'rpm' AND version_scheme = 'rpm')
+                OR (ecosystem = 'deb' AND version_scheme = 'debian')
+                OR (ecosystem = 'alpm' AND version_scheme = 'arch')
+                OR (ecosystem = 'eopkg' AND version_scheme = 'eopkg')
+            ),
+            UNIQUE(source_identity, scope_kind, scope_identity)
+        );
 CREATE TABLE repositories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
@@ -15,25 +36,249 @@ CREATE TABLE repositories (
             default_strategy TEXT
                 CHECK(default_strategy IS NULL OR default_strategy IN ('binary', 'remi', 'static')),
             default_strategy_endpoint TEXT,
-            source_profile TEXT
-                CHECK(source_profile IS NULL OR source_profile IN (
-                    'fedora-44', 'ubuntu-26.04', 'arch'
-                )),
+            source_profile TEXT,
             tuf_enabled INTEGER NOT NULL DEFAULT 0, tuf_root_version INTEGER, tuf_root_url TEXT,
             security_advisory_support TEXT NOT NULL DEFAULT 'unknown'
             CHECK(security_advisory_support IN ('unknown', 'unsupported', 'supported')),
             package_format TEXT NOT NULL DEFAULT 'unspecified'
-                CHECK(package_format IN ('arch', 'deb', 'rpm', 'json', 'unspecified')),
+                CHECK(package_format IN ('arch', 'deb', 'rpm', 'eopkg', 'json', 'unspecified')),
             parser_config_json TEXT,
             managed_by TEXT NOT NULL DEFAULT 'operator'
-                CHECK(managed_by IN ('operator', 'remi-config')),
+                CHECK(managed_by IN ('operator', 'remi-config', 'native-projection', 'package-projection')),
+            source_policy_id INTEGER REFERENCES repository_source_policies(id) ON DELETE RESTRICT,
+            repository_identity TEXT,
+            stream_binding_sha256 TEXT,
+            authenticated_snapshot_sha256 TEXT,
             CHECK(
                 (package_format = 'unspecified' AND parser_config_json IS NULL)
                 OR (package_format != 'unspecified' AND parser_config_json IS NOT NULL)
-            ));
+            ),
+            CHECK(
+                (package_format IN ('arch', 'deb', 'rpm', 'eopkg')
+                    AND source_policy_id IS NOT NULL
+                    AND repository_identity IS NOT NULL
+                    AND stream_binding_sha256 IS NOT NULL)
+                OR (package_format NOT IN ('arch', 'deb', 'rpm', 'eopkg')
+                    AND source_policy_id IS NULL
+                    AND repository_identity IS NULL
+                    AND stream_binding_sha256 IS NULL
+                    AND authenticated_snapshot_sha256 IS NULL)
+            ),
+            CHECK(repository_identity IS NULL OR (length(repository_identity) BETWEEN 1 AND 255 AND trim(repository_identity) = repository_identity)),
+            CHECK(stream_binding_sha256 IS NULL OR (length(stream_binding_sha256) = 64 AND stream_binding_sha256 NOT GLOB '*[^0-9a-f]*')),
+            CHECK(authenticated_snapshot_sha256 IS NULL OR (length(authenticated_snapshot_sha256) = 64 AND authenticated_snapshot_sha256 NOT GLOB '*[^0-9a-f]*')),
+            UNIQUE(source_policy_id, repository_identity)
+        );
 CREATE INDEX idx_repositories_name ON repositories(name);
 CREATE INDEX idx_repositories_enabled ON repositories(enabled);
 CREATE INDEX idx_repositories_priority ON repositories(priority);
+CREATE TRIGGER repositories_validate_repository_scope_insert
+BEFORE INSERT ON repositories
+WHEN NEW.source_policy_id IS NOT NULL
+BEGIN
+    SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM repository_source_policies policy
+        WHERE policy.id = NEW.source_policy_id
+          AND policy.scope_kind = 'repository'
+          AND policy.scope_identity != NEW.repository_identity
+    ) THEN RAISE(ABORT, 'repository-scope source policy identity mismatch') END;
+END;
+CREATE TRIGGER repositories_validate_repository_scope_update
+BEFORE UPDATE OF source_policy_id, repository_identity ON repositories
+WHEN NEW.source_policy_id IS NOT NULL
+BEGIN
+    SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM repository_source_policies policy
+        WHERE policy.id = NEW.source_policy_id
+          AND policy.scope_kind = 'repository'
+          AND policy.scope_identity != NEW.repository_identity
+    ) THEN RAISE(ABORT, 'repository-scope source policy identity mismatch') END;
+END;
+CREATE TABLE repository_source_pins (
+            repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+            snapshot_sha256 TEXT NOT NULL,
+            CHECK(length(snapshot_sha256) = 64 AND snapshot_sha256 NOT GLOB '*[^0-9a-f]*')
+        );
+CREATE TRIGGER repository_source_pins_require_pin_policy
+BEFORE INSERT ON repository_source_pins
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repositories repository
+        JOIN repository_source_policies policy ON policy.id = repository.source_policy_id
+        WHERE repository.id = NEW.repository_id
+          AND policy.update_mode = 'pin'
+    ) THEN RAISE(ABORT, 'repository source pin requires pin update policy') END;
+END;
+CREATE TABLE native_repository_takeovers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            selected_root TEXT NOT NULL UNIQUE,
+            preview_sha256 TEXT NOT NULL,
+            preview_json TEXT NOT NULL,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK(length(selected_root) > 0),
+            CHECK(length(preview_sha256) = 64 AND preview_sha256 NOT GLOB '*[^0-9a-f]*')
+        );
+CREATE TABLE native_repository_takeover_members (
+            takeover_id INTEGER NOT NULL REFERENCES native_repository_takeovers(id) ON DELETE CASCADE,
+            repository_id INTEGER NOT NULL UNIQUE REFERENCES repositories(id) ON DELETE RESTRICT,
+            PRIMARY KEY(takeover_id, repository_id)
+        );
+CREATE TRIGGER native_repository_takeover_members_require_owned_repository
+BEFORE INSERT ON native_repository_takeover_members
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repositories
+        WHERE id = NEW.repository_id AND managed_by = 'native-projection'
+    ) THEN RAISE(ABORT, 'native takeover member requires native-projection ownership') END;
+END;
+CREATE TRIGGER native_repository_takeover_members_preserve_owned_repository
+BEFORE UPDATE OF managed_by ON repositories
+WHEN EXISTS (
+    SELECT 1 FROM native_repository_takeover_members
+    WHERE repository_id = OLD.id
+)
+BEGIN
+    SELECT CASE WHEN NEW.managed_by != 'native-projection'
+        THEN RAISE(ABORT, 'native takeover repository ownership is immutable') END;
+END;
+CREATE TRIGGER native_repository_takeover_members_preserve_repository_authority
+BEFORE UPDATE ON repositories
+WHEN EXISTS (
+    SELECT 1 FROM native_repository_takeover_members
+    WHERE repository_id = OLD.id
+)
+BEGIN
+    SELECT CASE WHEN
+        NEW.name IS NOT OLD.name
+        OR NEW.url IS NOT OLD.url
+        OR NEW.content_url IS NOT OLD.content_url
+        OR NEW.enabled IS NOT OLD.enabled
+        OR NEW.priority IS NOT OLD.priority
+        OR NEW.trust_policy_json IS NOT OLD.trust_policy_json
+        OR NEW.metadata_expire IS NOT OLD.metadata_expire
+        OR NEW.default_strategy IS NOT OLD.default_strategy
+        OR NEW.default_strategy_endpoint IS NOT OLD.default_strategy_endpoint
+        OR NEW.source_profile IS NOT OLD.source_profile
+        OR NEW.tuf_enabled IS NOT OLD.tuf_enabled
+        OR NEW.tuf_root_version IS NOT OLD.tuf_root_version
+        OR NEW.tuf_root_url IS NOT OLD.tuf_root_url
+        OR NEW.security_advisory_support IS NOT OLD.security_advisory_support
+        OR NEW.package_format IS NOT OLD.package_format
+        OR NEW.parser_config_json IS NOT OLD.parser_config_json
+        OR NEW.managed_by IS NOT OLD.managed_by
+        OR NEW.source_policy_id IS NOT OLD.source_policy_id
+        OR NEW.repository_identity IS NOT OLD.repository_identity
+        OR NEW.stream_binding_sha256 IS NOT OLD.stream_binding_sha256
+        THEN RAISE(ABORT, 'native takeover repository authority changes require projection enrollment') END;
+END;
+CREATE TABLE native_repository_projections (
+            takeover_id INTEGER NOT NULL REFERENCES native_repository_takeovers(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            content BLOB NOT NULL,
+            sha256 TEXT NOT NULL,
+            mode INTEGER NOT NULL CHECK(mode BETWEEN 0 AND 4095),
+            prior_existed INTEGER NOT NULL CHECK(prior_existed IN (0, 1)),
+            prior_content BLOB,
+            prior_mode INTEGER,
+            CHECK(length(path) > 1 AND substr(path, 1, 1) = '/'),
+            CHECK(length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK((prior_existed = 1 AND prior_content IS NOT NULL AND prior_mode IS NOT NULL)
+                OR (prior_existed = 0 AND prior_content IS NULL AND prior_mode IS NULL)),
+            PRIMARY KEY(takeover_id, path)
+        );
+CREATE TABLE package_repository_enrollments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trove_id INTEGER REFERENCES troves(id) ON DELETE CASCADE,
+            owner_kind TEXT NOT NULL CHECK(owner_kind IN ('package', 'retained')),
+            source_package TEXT NOT NULL,
+            source_version TEXT NOT NULL,
+            intent_id TEXT NOT NULL,
+            intent_sha256 TEXT NOT NULL,
+            intent_json TEXT NOT NULL,
+            last_owner TEXT NOT NULL CHECK(last_owner IN ('remove-when-unowned', 'retain')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK(length(source_package) BETWEEN 1 AND 255),
+            CHECK(length(source_version) BETWEEN 1 AND 255),
+            CHECK(length(intent_id) BETWEEN 1 AND 255 AND trim(intent_id) = intent_id),
+            CHECK(length(intent_sha256) = 64 AND intent_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK((owner_kind = 'package' AND trove_id IS NOT NULL)
+                OR (owner_kind = 'retained' AND trove_id IS NULL)),
+            UNIQUE(trove_id, intent_id)
+        );
+CREATE INDEX idx_package_repository_enrollments_trove
+ON package_repository_enrollments(trove_id);
+CREATE TABLE package_repository_enrollment_members (
+            enrollment_id INTEGER NOT NULL REFERENCES package_repository_enrollments(id) ON DELETE CASCADE,
+            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE RESTRICT,
+            repository_name TEXT NOT NULL,
+            definition_sha256 TEXT NOT NULL,
+            CHECK(length(repository_name) BETWEEN 1 AND 255),
+            CHECK(length(definition_sha256) = 64 AND definition_sha256 NOT GLOB '*[^0-9a-f]*'),
+            PRIMARY KEY(enrollment_id, repository_id),
+            UNIQUE(enrollment_id, repository_name)
+        );
+CREATE INDEX idx_package_repository_enrollment_members_repository
+ON package_repository_enrollment_members(repository_id);
+CREATE TABLE package_repository_projection_owners (
+            enrollment_id INTEGER NOT NULL REFERENCES package_repository_enrollments(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            mode INTEGER NOT NULL CHECK(mode BETWEEN 0 AND 4095),
+            role TEXT NOT NULL CHECK(role IN ('declaration', 'trust-root')),
+            CHECK(length(path) > 1 AND substr(path, 1, 1) = '/'),
+            CHECK(length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+            PRIMARY KEY(enrollment_id, path)
+        );
+CREATE INDEX idx_package_repository_projection_owners_path
+ON package_repository_projection_owners(path);
+CREATE TRIGGER package_repository_members_require_owned_repository
+BEFORE INSERT ON package_repository_enrollment_members
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repositories
+        WHERE id = NEW.repository_id AND managed_by = 'package-projection'
+    ) THEN RAISE(ABORT, 'package enrollment member requires package-projection ownership') END;
+END;
+CREATE TRIGGER package_repository_members_preserve_owned_repository
+BEFORE UPDATE OF managed_by ON repositories
+WHEN EXISTS (
+    SELECT 1 FROM package_repository_enrollment_members
+    WHERE repository_id = OLD.id
+)
+BEGIN
+    SELECT CASE WHEN NEW.managed_by != 'package-projection'
+        THEN RAISE(ABORT, 'package enrollment repository ownership is immutable') END;
+END;
+CREATE TRIGGER package_repository_members_preserve_repository_authority
+BEFORE UPDATE ON repositories
+WHEN EXISTS (
+    SELECT 1 FROM package_repository_enrollment_members
+    WHERE repository_id = OLD.id
+)
+BEGIN
+    SELECT CASE WHEN
+        NEW.name IS NOT OLD.name
+        OR NEW.url IS NOT OLD.url
+        OR NEW.content_url IS NOT OLD.content_url
+        OR NEW.enabled IS NOT OLD.enabled
+        OR NEW.priority IS NOT OLD.priority
+        OR NEW.trust_policy_json IS NOT OLD.trust_policy_json
+        OR NEW.metadata_expire IS NOT OLD.metadata_expire
+        OR NEW.default_strategy IS NOT OLD.default_strategy
+        OR NEW.default_strategy_endpoint IS NOT OLD.default_strategy_endpoint
+        OR NEW.source_profile IS NOT OLD.source_profile
+        OR NEW.tuf_enabled IS NOT OLD.tuf_enabled
+        OR NEW.tuf_root_version IS NOT OLD.tuf_root_version
+        OR NEW.tuf_root_url IS NOT OLD.tuf_root_url
+        OR NEW.security_advisory_support IS NOT OLD.security_advisory_support
+        OR NEW.package_format IS NOT OLD.package_format
+        OR NEW.parser_config_json IS NOT OLD.parser_config_json
+        OR NEW.managed_by IS NOT OLD.managed_by
+        OR NEW.source_policy_id IS NOT OLD.source_policy_id
+        OR NEW.repository_identity IS NOT OLD.repository_identity
+        OR NEW.stream_binding_sha256 IS NOT OLD.stream_binding_sha256
+        THEN RAISE(ABORT, 'package enrollment repository authority changes require package transaction') END;
+END;
 CREATE TABLE repository_packages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_id INTEGER NOT NULL,
@@ -48,9 +293,9 @@ CREATE TABLE repository_packages (
             download_url TEXT NOT NULL,
             metadata TEXT,
             synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, is_security_update INTEGER NOT NULL DEFAULT 0, severity TEXT, cve_ids TEXT, advisory_id TEXT, advisory_url TEXT,
-            source_profile TEXT CHECK(source_profile IS NULL OR source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+            source_profile TEXT,
             version_scheme TEXT NOT NULL
-                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')), canonical_id INTEGER
+                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')), canonical_id INTEGER
             REFERENCES canonical_packages(id) ON DELETE SET NULL, package_release TEXT NOT NULL DEFAULT '',
             CHECK(
                 (version_scheme = 'debian' AND debian_multi_arch IS NOT NULL)
@@ -262,7 +507,7 @@ CREATE INDEX idx_federation_stats_date ON federation_stats(date DESC);
 CREATE TABLE download_stats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_profile TEXT NOT NULL
-                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             package_name TEXT NOT NULL,
             package_version TEXT,
             downloaded_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -275,7 +520,7 @@ CREATE INDEX idx_download_stats_time
             ON download_stats(downloaded_at);
 CREATE TABLE download_counts (
             source_profile TEXT NOT NULL
-                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             package_name TEXT NOT NULL,
             total_count INTEGER NOT NULL DEFAULT 0,
             count_30d INTEGER NOT NULL DEFAULT 0,
@@ -362,7 +607,7 @@ CREATE INDEX idx_mirror_health_repo ON mirror_health(repository_id);
 CREATE TABLE delta_manifests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_profile TEXT NOT NULL
-                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             package_name TEXT NOT NULL,
             from_version TEXT NOT NULL,
             to_version TEXT NOT NULL,
@@ -387,7 +632,7 @@ CREATE TABLE package_implementations (
             id INTEGER PRIMARY KEY,
             canonical_id INTEGER NOT NULL REFERENCES canonical_packages(id) ON DELETE CASCADE,
             distro TEXT NOT NULL
-                CHECK(distro IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(distro IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             distro_name TEXT NOT NULL,
             source TEXT NOT NULL
                 CHECK(source IN ('contract', 'remi')),
@@ -397,14 +642,6 @@ CREATE INDEX idx_pkg_impl_distro
             ON package_implementations(distro, distro_name);
 CREATE INDEX idx_pkg_impl_canonical
             ON package_implementations(canonical_id);
-CREATE TABLE distro_pin (
-            id INTEGER PRIMARY KEY,
-            distro TEXT NOT NULL
-                CHECK(distro IN ('fedora-44', 'ubuntu-26.04', 'arch')),
-            mixing_policy TEXT NOT NULL
-                CHECK(mixing_policy IN ('strict', 'guarded', 'permissive')),
-            created_at TEXT NOT NULL
-        );
 CREATE TABLE repository_provides (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_package_id INTEGER NOT NULL,
@@ -415,7 +652,7 @@ CREATE TABLE repository_provides (
             kind TEXT NOT NULL DEFAULT 'package',
             raw TEXT,
             version_scheme TEXT NOT NULL
-                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')),
+                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')),
             architecture_qualifier_kind TEXT NOT NULL
                 CHECK(architecture_qualifier_kind IN ('implicit', 'any', 'exact')),
             architecture TEXT,
@@ -437,10 +674,15 @@ CREATE TABLE repository_provides (
         );
 CREATE INDEX idx_repository_provides_pkg
             ON repository_provides(repository_package_id);
+-- Capability is the only column any provider lookup seeks on. A
+-- (kind, capability) composite cannot serve a capability-only seek, and the one
+-- statement that also filters kind seeks this index and filters the rows one
+-- capability holds, so the composite is not carried.
 CREATE INDEX idx_repository_provides_capability
             ON repository_provides(capability);
-CREATE INDEX idx_repository_provides_kind_capability
-            ON repository_provides(kind, capability);
+CREATE INDEX idx_repository_provides_raw
+            ON repository_provides(raw)
+            WHERE raw IS NOT NULL AND raw != '';
 CREATE TABLE repository_requirement_groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repository_package_id INTEGER NOT NULL,
@@ -562,7 +804,7 @@ CREATE TABLE native_package_publications (
             repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
             repository_package_id INTEGER NOT NULL REFERENCES repository_packages(id) ON DELETE CASCADE,
             source_profile TEXT NOT NULL
-                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')),
+                CHECK(source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')),
             name TEXT NOT NULL,
             version TEXT NOT NULL,
             package_release TEXT NOT NULL,

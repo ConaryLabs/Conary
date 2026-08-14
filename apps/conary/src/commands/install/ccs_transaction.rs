@@ -152,7 +152,7 @@ fn show_ccs_dry_run_summary(pkg: &conary_core::ccs::CcsPackage, extraction: &Ext
     println!("\nDry run complete. No changes made.");
 }
 
-pub(super) fn check_ccs_upgrade_status(
+pub(crate) fn check_ccs_upgrade_status(
     conn: &rusqlite::Connection,
     pkg: &conary_core::ccs::CcsPackage,
     semantics: &InstallSemantics,
@@ -186,7 +186,7 @@ pub(super) fn check_ccs_upgrade_status(
 /// Recover the package-manager semantics carried through a converted CCS
 /// archive. CCS is a transport here; it must not erase the source package
 /// manager's version, config, or directory-materialization contract.
-pub(super) fn install_semantics_for_ccs_manifest(
+pub(crate) fn install_semantics_for_ccs_manifest(
     manifest: &conary_core::ccs::manifest::CcsManifest,
 ) -> Result<InstallSemantics> {
     let Some(native) = manifest.native_lifecycle.as_ref() else {
@@ -199,6 +199,7 @@ pub(super) fn install_semantics_for_ccs_manifest(
         SourceFormat::Rpm => super::PackageFormatType::Rpm,
         SourceFormat::Deb => super::PackageFormatType::Deb,
         SourceFormat::Arch => super::PackageFormatType::Arch,
+        SourceFormat::Eopkg => super::PackageFormatType::Eopkg,
     };
     let semantics = InstallSemantics::native_package(format);
     if manifest.package.version_scheme != semantics.version_scheme {
@@ -359,6 +360,14 @@ fn install_ccs_package_transactionally_inner(
     let progress = InstallProgress::single("Installing");
     let semantics = install_semantics_for_ccs_manifest(pkg.manifest())?;
     enforce_ccs_scriptlet_capability_gate(pkg)?;
+    // A caller-owned selected root already owns the runtime mutation lock.
+    // Standalone real installs acquire it before resolving upgrade authority;
+    // dry runs remain read-only and do not serialize with mutations.
+    let locked_root = if !opts.dry_run && !caller_owned_selected_root {
+        Some(crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(opts.db_path)?)
+    } else {
+        None
+    };
     let upgrade = check_ccs_upgrade_status(
         conn,
         pkg,
@@ -382,18 +391,12 @@ fn install_ccs_package_transactionally_inner(
         | UpgradeCheck::Replatform(trove) => Some(trove.as_ref()),
     };
     // Dry-run remains filesystem-read-only. Every real CCS mutation receives
-    // either its caller-owned try root or a freshly materialized selected root.
-    let mut owned_selected_root = if !opts.dry_run && selected_root.is_none() {
-        Some(
-            crate::commands::generation::selected_root::SelectedRootSession::begin(
-                conn,
-                opts.db_path,
-                format!("Install {}-{}", pkg.name(), pkg.version()),
-            )?,
-        )
-    } else {
-        None
-    };
+    // either its caller-owned try root or a freshly prepared selected root.
+    let mut owned_selected_root = locked_root
+        .map(|locked_root| {
+            locked_root.prepare(conn, format!("Install {}-{}", pkg.name(), pkg.version()))
+        })
+        .transpose()?;
     let selected_root = match selected_root {
         Some(selected_root) => Some(selected_root),
         None => owned_selected_root.as_mut(),
@@ -505,6 +508,14 @@ fn install_ccs_package_transactionally_inner(
         Path::new(&transaction_root),
         &pkg.manifest().file_capabilities,
     )?;
+    let repository_enrollments = pkg
+        .v3_authority()
+        .map(|authority| authority.lifecycle.repository_enrollments.as_slice())
+        .unwrap_or_default();
+    conary_core::repository::enrollment::validate_payload_bindings(
+        repository_enrollments,
+        &extraction.extracted_files,
+    )?;
     let tx_ctx = TransactionContext {
         db_path: opts.db_path,
         root: &transaction_root,
@@ -519,6 +530,7 @@ fn install_ccs_package_transactionally_inner(
         defer_generation: opts.defer_generation && caller_owned_selected_root,
         repository_provenance: opts.repository_provenance,
         native_lifecycle_bundle,
+        repository_enrollments,
         relation_removals: &relation_plan.removals,
         relation_deconfigurations: &relation_plan.deconfigurations,
         retain_replaced_payload_until_lifecycle: native_transaction
@@ -659,6 +671,7 @@ mod tests {
                 SourceFormat::Rpm => NativeVersionScheme::Rpm,
                 SourceFormat::Deb => NativeVersionScheme::Deb,
                 SourceFormat::Arch => NativeVersionScheme::Arch,
+                SourceFormat::Eopkg => NativeVersionScheme::Eopkg,
             },
             conversion_tool: "conary-test".to_string(),
             conversion_tool_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -676,10 +689,11 @@ mod tests {
             SourceFormat::Rpm => VersionScheme::Rpm,
             SourceFormat::Deb => VersionScheme::Debian,
             SourceFormat::Arch => VersionScheme::Arch,
+            SourceFormat::Eopkg => VersionScheme::Eopkg,
         };
         manifest.package.debian_multi_arch = match format {
             SourceFormat::Deb => Some(DebianMultiArch::No),
-            SourceFormat::Rpm | SourceFormat::Arch => None,
+            SourceFormat::Rpm | SourceFormat::Arch | SourceFormat::Eopkg => None,
         };
         manifest.native_lifecycle = Some(native_free_bundle(format, version));
         let encoded = toml::to_string_pretty(&manifest).unwrap();
@@ -805,3 +819,7 @@ mod tests {
 #[cfg(test)]
 #[path = "ccs_transaction/converted_directory_tests.rs"]
 mod converted_directory_tests;
+
+#[cfg(test)]
+#[path = "ccs_transaction/mutation_lock_tests.rs"]
+mod mutation_lock_tests;

@@ -1,0 +1,10 @@
+# libzypp permits repeated and whitespace-separated URL declarations.
+[vendor]
+name=Vendor
+enabled=0
+autorefresh=1
+baseurl=https://one.example
+ https://two.example, https://three.example
+gpgkey=https://keys.example/vendor.asc
+priority=90
+x-vendor-preserved=opaque

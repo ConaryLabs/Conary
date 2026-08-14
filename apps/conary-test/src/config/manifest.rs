@@ -59,6 +59,9 @@ pub struct TestDef {
     /// Runtime capabilities required inside the test container.
     #[serde(default)]
     pub requires: Vec<String>,
+    /// Attributable just-works corpus authority for this test.
+    #[serde(default)]
+    pub corpus: Option<super::corpus::CorpusCaseDef>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -436,6 +439,15 @@ impl TestManifest {
     /// Validate all assertions in the manifest for conflicting fields.
     pub fn validate(&self) -> Result<()> {
         for test in &self.test {
+            if let Some(corpus) = &test.corpus {
+                corpus.validate(&test.id)?;
+                if test.resources.is_some() {
+                    bail!(
+                        "test {}: corpus evidence cannot use a resource-scoped disposable container",
+                        test.id
+                    );
+                }
+            }
             for requirement in &test.requires {
                 if requirement != "composefs_runtime" {
                     bail!(

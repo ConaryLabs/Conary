@@ -10,7 +10,7 @@ use conary_core::repository::resolution_policy::{
     DependencyMixingPolicy, RequestScope, ResolutionPolicy,
 };
 use conary_core::repository::selector::{
-    PackageSelector, SelectionOptions, candidate_source_profile,
+    PackageSelector, SelectionOptions, candidate_source_identity,
 };
 use conary_core::repository::versioning::resolve_package_version_scheme;
 use conary_core::scriptlet::SandboxMode;
@@ -19,7 +19,9 @@ use conary_core::version::VersionConstraint;
 use super::InstallIntent;
 use super::batch::BatchInstaller;
 use super::dependencies::resolved_repository_deps_from_sat_result;
-use super::repository_batch::{RepositoryBatchSelection, prepare_repository_batch};
+use super::repository_batch::{
+    RepositoryBatchMode, RepositoryBatchSelection, prepare_repository_batch,
+};
 use super::source_policy::resolve_canonical_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,10 +38,35 @@ pub(crate) async fn install_package_set(
     sandbox_mode: SandboxMode,
     requests: Vec<PackageSetRequest>,
 ) -> Result<usize> {
+    process_package_set(
+        db_path,
+        requests,
+        PackageSetOperation::Install(sandbox_mode),
+    )
+    .await
+}
+
+pub(crate) async fn validate_package_set(
+    db_path: &str,
+    requests: Vec<PackageSetRequest>,
+) -> Result<usize> {
+    process_package_set(db_path, requests, PackageSetOperation::Validate).await
+}
+
+enum PackageSetOperation {
+    Validate,
+    Install(SandboxMode),
+}
+
+async fn process_package_set(
+    db_path: &str,
+    requests: Vec<PackageSetRequest>,
+    operation: PackageSetOperation,
+) -> Result<usize> {
     if requests.is_empty() {
         return Ok(0);
     }
-    crate::commands::hint_unconfigured_source_policy();
+    crate::commands::hint_default_convergence();
 
     let conn = super::super::open_db(db_path)?;
     let policy =
@@ -65,7 +92,7 @@ pub(crate) async fn install_package_set(
             Ok((name.clone(), constraint))
         })
         .collect::<Result<Vec<_>>>()?;
-    let policy = bind_package_set_source_profile(&conn, policy, &solver_requests)?;
+    let policy = bind_package_set_source_identity(&conn, policy, &solver_requests)?;
     let solved = conary_core::resolver::solve_install_with_policy(&conn, &solver_requests, &policy)
         .context("failed to solve the complete model package set")?;
     if let Some(conflict) = solved.conflict_message.as_deref() {
@@ -106,38 +133,53 @@ pub(crate) async fn install_package_set(
             }
         })
         .collect();
-    let prepared = prepare_repository_batch(db_path, selections).await?;
+    let preparation_mode = match &operation {
+        PackageSetOperation::Validate => RepositoryBatchMode::Validate,
+        PackageSetOperation::Install(_) => RepositoryBatchMode::Install,
+    };
+    let prepared = prepare_repository_batch(db_path, selections, preparation_mode).await?;
     let root_count = resolved_requests.len();
-    println!(
-        "Installing model package set ({} explicit roots)...",
-        root_count
-    );
-    prepared.install(BatchInstaller::new(db_path, sandbox_mode))?;
+    match operation {
+        PackageSetOperation::Validate => {
+            println!(
+                "Validating model package set ({} explicit roots)...",
+                root_count
+            );
+            prepared.validate(BatchInstaller::new(db_path, SandboxMode::Always))?;
+        }
+        PackageSetOperation::Install(sandbox_mode) => {
+            println!(
+                "Installing model package set ({} explicit roots)...",
+                root_count
+            );
+            prepared.install(BatchInstaller::new(db_path, sandbox_mode))?;
+        }
+    }
     Ok(root_count)
 }
 
-/// Establish the strict transaction profile shared by every typed root.
+/// Establish the strict transaction source identity shared by every typed root.
 ///
 /// A single-package install selects its repository-backed root before solving
-/// dependencies, and that exact provenance binds the transaction profile. A
+/// dependencies, and that exact provenance binds the transaction source. A
 /// package set has no privileged root, so the only implicit authority is the
-/// one exact profile common to every root's version-compatible candidates.
-/// Ambiguous or disjoint profile sets require an explicit system pin instead
+/// one exact source identity common to every root's version-compatible candidates.
+/// Ambiguous or disjoint identity sets require an explicit source scope instead
 /// of deriving authority from model order. SAT remains the sole owner of the
 /// exact package-set selection.
-fn bind_package_set_source_profile(
+fn bind_package_set_source_identity(
     conn: &rusqlite::Connection,
     mut policy: ResolutionPolicy,
     requests: &[(String, VersionConstraint)],
 ) -> Result<ResolutionPolicy> {
     if policy.mixing != DependencyMixingPolicy::Strict
-        || policy.primary_profile().is_some()
+        || policy.primary_source_identity().is_some()
         || !matches!(policy.request_scope, RequestScope::Any)
     {
         return Ok(policy);
     }
 
-    let mut common_profiles: Option<BTreeSet<String>> = None;
+    let mut common_identities: Option<BTreeSet<String>> = None;
     for (name, constraint) in requests {
         let options = SelectionOptions {
             policy: Some(policy.clone()),
@@ -145,45 +187,50 @@ fn bind_package_set_source_profile(
             ..SelectionOptions::default()
         };
         let candidates = PackageSelector::search_packages(conn, name, &options)?;
-        let mut candidate_profiles = BTreeSet::new();
+        let mut candidate_identities = BTreeSet::new();
         for candidate in candidates {
             let scheme = resolve_package_version_scheme(&candidate.package);
             if super::dep_resolution::version_satisfies_constraint(
                 scheme,
                 &candidate.package.version,
                 constraint,
-            )? && let Some(profile) =
-                candidate_source_profile(&candidate.package, &candidate.repository)?
+            )? && let Some(source_identity) =
+                candidate_source_identity(&candidate.package, &candidate.repository)?
             {
-                candidate_profiles.insert(profile.to_string());
+                candidate_identities.insert(source_identity.to_string());
             }
         }
-        if candidate_profiles.is_empty() {
+        if candidate_identities.is_empty() {
             continue;
         }
 
-        common_profiles = Some(match common_profiles.take() {
-            Some(current) => current.intersection(&candidate_profiles).cloned().collect(),
-            None => candidate_profiles,
+        common_identities = Some(match common_identities.take() {
+            Some(current) => current
+                .intersection(&candidate_identities)
+                .cloned()
+                .collect(),
+            None => candidate_identities,
         });
-        if common_profiles.as_ref().is_some_and(BTreeSet::is_empty) {
+        if common_identities.as_ref().is_some_and(BTreeSet::is_empty) {
             anyhow::bail!(
-                "model package set has no exact source profile common to every repository-backed root; pin the system to one supported source profile"
+                "model package set has no exact source identity common to every repository-backed root; select one source identity explicitly"
             );
         }
     }
 
-    let Some(common_profiles) = common_profiles else {
+    let Some(common_identities) = common_identities else {
         return Ok(policy);
     };
-    if common_profiles.len() != 1 {
+    if common_identities.len() != 1 {
         anyhow::bail!(
-            "model package set has ambiguous source profiles [{}]; pin the system to one supported source profile",
-            common_profiles.into_iter().collect::<Vec<_>>().join(", ")
+            "model package set has ambiguous source identities [{}]; select one source identity explicitly",
+            common_identities.into_iter().collect::<Vec<_>>().join(", ")
         );
     }
-    policy.set_primary_profile(common_profiles.into_iter().next());
-    policy.validate_profile_ids().map_err(anyhow::Error::msg)?;
+    policy.set_primary_source_identity(common_identities.into_iter().next());
+    policy
+        .validate_source_identities()
+        .map_err(anyhow::Error::msg)?;
     Ok(policy)
 }
 
@@ -241,24 +288,24 @@ mod tests {
         add_candidate(&conn, "ubuntu", "ubuntu-26.04", 100, "demo", "2");
         add_candidate(&conn, "fedora", "fedora-44", 10, "demo", "1");
 
-        let policy = bind_package_set_source_profile(
+        let policy = bind_package_set_source_identity(
             &conn,
             ResolutionPolicy::new(),
             &[("demo".to_string(), VersionConstraint::parse("= 1").unwrap())],
         )
         .unwrap();
 
-        assert_eq!(policy.primary_profile(), Some("fedora-44"));
+        assert_eq!(policy.primary_source_identity(), Some("fedora-44"));
     }
 
     #[test]
-    fn package_set_binds_only_profile_common_to_every_root() {
+    fn package_set_binds_only_source_identity_common_to_every_root() {
         let conn = test_db();
         add_candidate(&conn, "fedora", "fedora-44", 10, "alpha", "1");
         add_candidate(&conn, "ubuntu", "ubuntu-26.04", 10, "alpha", "1");
         add_candidate(&conn, "fedora", "fedora-44", 10, "beta", "1");
 
-        let policy = bind_package_set_source_profile(
+        let policy = bind_package_set_source_identity(
             &conn,
             ResolutionPolicy::new(),
             &[
@@ -268,16 +315,16 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(policy.primary_profile(), Some("fedora-44"));
+        assert_eq!(policy.primary_source_identity(), Some("fedora-44"));
     }
 
     #[test]
-    fn package_set_rejects_disjoint_root_profiles() {
+    fn package_set_rejects_disjoint_root_source_identities() {
         let conn = test_db();
         add_candidate(&conn, "fedora", "fedora-44", 10, "alpha", "1");
         add_candidate(&conn, "ubuntu", "ubuntu-26.04", 10, "beta", "1");
 
-        let error = bind_package_set_source_profile(
+        let error = bind_package_set_source_identity(
             &conn,
             ResolutionPolicy::new(),
             &[
@@ -287,18 +334,22 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("no exact source profile common"));
+        assert!(
+            error
+                .to_string()
+                .contains("no exact source identity common")
+        );
     }
 
     #[test]
-    fn package_set_rejects_ambiguous_common_profiles() {
+    fn package_set_rejects_ambiguous_common_source_identities() {
         let conn = test_db();
         for package in ["alpha", "beta"] {
             add_candidate(&conn, "fedora", "fedora-44", 10, package, "1");
             add_candidate(&conn, "ubuntu", "ubuntu-26.04", 10, package, "1");
         }
 
-        let error = bind_package_set_source_profile(
+        let error = bind_package_set_source_identity(
             &conn,
             ResolutionPolicy::new(),
             &[
@@ -308,19 +359,19 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("ambiguous source profiles"));
+        assert!(error.to_string().contains("ambiguous source identities"));
     }
 
     #[test]
-    fn package_set_preserves_an_existing_transaction_profile() {
+    fn package_set_preserves_an_existing_transaction_source_identity() {
         let conn = test_db();
-        let policy = bind_package_set_source_profile(
+        let policy = bind_package_set_source_identity(
             &conn,
-            ResolutionPolicy::new().with_primary_profile("fedora-44"),
+            ResolutionPolicy::new().with_primary_source_identity("fedora-44"),
             &[("not-in-any-repository".to_string(), VersionConstraint::Any)],
         )
         .unwrap();
 
-        assert_eq!(policy.primary_profile(), Some("fedora-44"));
+        assert_eq!(policy.primary_source_identity(), Some("fedora-44"));
     }
 }

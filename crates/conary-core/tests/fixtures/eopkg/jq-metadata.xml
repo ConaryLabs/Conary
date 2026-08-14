@@ -1,0 +1,143 @@
+<PISI>
+    <Source>
+        <Name>jq</Name>
+        <Homepage>https://stedolan.github.io/jq/</Homepage>
+        <Packager>
+            <Name>mattstaude</Name>
+            <Email>50743403+mattstaude@users.noreply.github.com</Email>
+        </Packager>
+    </Source>
+    <Package>
+        <Name>jq</Name>
+        <Summary xml:lang="en">jq is a lightweight and flexible command-line JSON processor</Summary>
+        <Description xml:lang="en">jq is a lightweight and flexible command-line JSON processor akin tosed,awk,grep, and friends for JSON data. It&apos;s written in portable C and has zero runtime dependencies, allowing you to easily slice, filter, map, and transform structured data.
+</Description>
+        <PartOf>programming.tools</PartOf>
+        <License>MIT</License>
+        <RuntimeDependencies>
+            <Dependency releaseFrom="5">oniguruma</Dependency>
+            <Dependency releaseFrom="141">glibc</Dependency>
+        </RuntimeDependencies>
+        <History>
+            <Update release="13">
+                <Date>2026-06-20</Date>
+                <Version>1.8.2</Version>
+                <Comment>jq: Update to 1.8.2</Comment>
+                <Name>mattstaude</Name>
+                <Email>50743403+mattstaude@users.noreply.github.com</Email>
+            </Update>
+            <Update release="12">
+                <Date>2025-08-14</Date>
+                <Version>1.8.1</Version>
+                <Comment>jq: Update to v1.8.1
+
+**Summary**
+
+- Release notes [here](https://github.com/jqlang/jq/releases/tag/jq-1.8.1)</Comment>
+                <Name>David Harder</Name>
+                <Email>david@davidjharder.ca</Email>
+            </Update>
+            <Update release="11" type="security">
+                <Date>2025-06-20</Date>
+                <Version>1.8.0</Version>
+                <Comment>jq: Update to v1.8.0
+
+**Summary**
+- Release notes can be found [here](https://github.com/jqlang/jq/releases/tag/jq-1.8.0).
+- This release includes a number of improvements since the last version. Note that some changes may introduce breaking changes to existing scripts, so be sure to read the release notes carefully.
+
+**Security**
+Includes fixes for:
+- CVE-2024-23337
+- CVE-2024-53427
+- CVE-2025-48060</Comment>
+                <Name>Jakob Gezelius</Name>
+                <Email>jakob@knugen.nu</Email>
+            </Update>
+            <Update release="10" type="security">
+                <Date>2023-12-17</Date>
+                <Version>1.7.1</Version>
+                <Comment>jq: Update to v1.7.1
+
+Release notes available [here](https://github.com/jqlang/jq/releases/tag/jq-1.7.1)
+
+Resolves CVE-2023-50246, CVE-2023-50268
+
+Signed-off-by: Reilly Brogan &lt;reilly@reillybrogan.com&gt;</Comment>
+                <Name>Reilly Brogan</Name>
+                <Email>reilly@reillybrogan.com</Email>
+            </Update>
+            <Update release="9">
+                <Date>2023-09-10</Date>
+                <Version>1.7</Version>
+                <Comment>jq: Update to 1.7
+
+[Changelog](https://github.com/jqlang/jq/releases/tag/jq-1.7)
+
+**Packaging**
+- Use more descript description</Comment>
+                <Name>Joey Riches</Name>
+                <Email>josephriches@gmail.com</Email>
+            </Update>
+            <Update release="8">
+                <Date>2023-07-29</Date>
+                <Version>1.6</Version>
+                <Comment>jq: Rebuild for perl 5.38
+
+Signed-off-by: Algent Albrahimi &lt;algent@protonmail.com&gt;</Comment>
+                <Name>Algent Albrahimi</Name>
+                <Email>algent@protonmail.com</Email>
+            </Update>
+            <Update release="7">
+                <Date>2022-10-16</Date>
+                <Version>1.6</Version>
+                <Comment>jq: Safe rebuild against Perl 5.36.0
+
+Signed-off-by: Algent Albrahimi &lt;algent@protonmail.com&gt;</Comment>
+                <Name>Algent Albrahimi</Name>
+                <Email>algent@protonmail.com</Email>
+            </Update>
+            <Update release="6">
+                <Date>2022-04-27</Date>
+                <Version>1.6</Version>
+                <Comment>jq: Add oniguruma regex support to jq</Comment>
+                <Name>Thomas Staudinger</Name>
+                <Email>Staudi.Kaos@gmail.com</Email>
+            </Update>
+            <Update release="5">
+                <Date>2021-12-11</Date>
+                <Version>1.6</Version>
+                <Comment>jq: jq package cleanup
+
+- Fix: license
+- Fix: component
+- Add: homepage
+
+Signed-off-by: Pierre-Yves &lt;pyu@riseup.net&gt;</Comment>
+                <Name>Pierre-Yves</Name>
+                <Email>pyu@riseup.net</Email>
+            </Update>
+            <Update release="4">
+                <Date>2021-06-26</Date>
+                <Version>1.6</Version>
+                <Comment>jq: Safety rebuild</Comment>
+                <Name>Joshua Strobl</Name>
+                <Email>joshua@streambits.io</Email>
+            </Update>
+        </History>
+        <BuildHost>solus</BuildHost>
+        <Distribution>Solus</Distribution>
+        <DistributionRelease>1</DistributionRelease>
+        <Architecture>x86_64</Architecture>
+        <InstalledSize>505000</InstalledSize>
+        <PackageFormat>1.2</PackageFormat>
+        <Source>
+            <Name>jq</Name>
+            <Homepage>https://stedolan.github.io/jq/</Homepage>
+            <Packager>
+                <Name>mattstaude</Name>
+                <Email>50743403+mattstaude@users.noreply.github.com</Email>
+            </Packager>
+        </Source>
+    </Package>
+</PISI>

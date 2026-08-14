@@ -12,6 +12,7 @@
 //! DB-touching tools delegate to [`crate::server::admin_service`] so that
 //! business logic is shared with the HTTP admin handlers.
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -29,7 +30,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::server::ServerState;
-use crate::server::admin_service::{self, AddPeerInput, ServiceError};
+use crate::server::admin_service::{self, AddPeerInput, ChunkGcReport, ServiceError};
 
 /// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
 ///
@@ -45,11 +46,19 @@ fn service_err_to_mcp(e: ServiceError) -> McpError {
     }
 }
 
+/// Render a [`ChunkGcReport`] as the `chunk_gc` tool's output object.
+///
+/// Going through [`serde_json::Value`] keeps the tool's established key order,
+/// which is independent of the report struct's field order.
+fn chunk_gc_tool_output(report: &ChunkGcReport) -> Result<serde_json::Value, McpError> {
+    serde_json::to_value(report)
+        .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))
+}
+
 /// MCP server instance that wraps Remi admin operations as tools.
 ///
-/// Each MCP session gets its own `RemiMcpServer` clone, but they all share
-/// the same `Arc<RwLock<ServerState>>` so mutations (if any) are visible
-/// across sessions.
+/// Each MCP request gets a fresh `RemiMcpServer` clone, while all requests
+/// share the same `Arc<RwLock<ServerState>>` for Remi state.
 #[derive(Clone)]
 pub struct RemiMcpServer {
     state: Arc<RwLock<ServerState>>,
@@ -220,7 +229,7 @@ impl RemiMcpServer {
             .map_err(service_err_to_mcp)?;
 
         let text = to_json_text(&tokens)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Create a new admin API token. Returns the plaintext token once.
@@ -246,7 +255,7 @@ impl RemiMcpServer {
             "scopes": created.scopes,
         });
         let text = to_json_text(&result)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Delete an admin API token by ID.
@@ -264,7 +273,7 @@ impl RemiMcpServer {
         if deleted {
             let result = serde_json::json!({"status": "deleted", "token_id": params.token_id});
             let text = to_json_text(&result)?;
-            Ok(CallToolResult::success(vec![Content::text(text)]))
+            Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
         } else {
             Err(McpError::invalid_params(
                 format!("Token with ID {} not found", params.token_id),
@@ -304,7 +313,7 @@ impl RemiMcpServer {
             .collect();
 
         let text = to_json_text(&json)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get details for a specific repository by name.
@@ -335,7 +344,7 @@ impl RemiMcpServer {
                     "default_strategy": r.default_strategy,
                 });
                 let text = to_json_text(&result)?;
-                Ok(CallToolResult::success(vec![Content::text(text)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
             }
             None => Err(McpError::invalid_params(
                 format!("Repository '{}' not found", params.name),
@@ -381,7 +390,7 @@ impl RemiMcpServer {
             .collect();
 
         let text = to_json_text(&json)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Add a federation peer by endpoint URL.
@@ -413,7 +422,7 @@ impl RemiMcpServer {
             "tier": peer.tier,
         });
         let text = to_json_text(&result)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Delete a federation peer by its peer ID.
@@ -431,7 +440,7 @@ impl RemiMcpServer {
         if deleted {
             let result = serde_json::json!({"status": "deleted", "peer_id": params.peer_id});
             let text = to_json_text(&result)?;
-            Ok(CallToolResult::success(vec![Content::text(text)]))
+            Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
         } else {
             Err(McpError::invalid_params(
                 format!("Peer with ID '{}' not found", params.peer_id),
@@ -464,7 +473,7 @@ impl RemiMcpServer {
         .map_err(service_err_to_mcp)?;
 
         let text = to_json_text(&entries)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Purge old audit log entries. Deletes entries older than the given date.
@@ -486,7 +495,7 @@ impl RemiMcpServer {
             "before": params.before,
         });
         let text = to_json_text(&result)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     // -----------------------------------------------------------------------
@@ -513,7 +522,7 @@ impl RemiMcpServer {
         .await
         .map_err(service_err_to_mcp)?;
         let text = to_json_text(&runs)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get full details for a test run including all test result summaries.
@@ -526,7 +535,7 @@ impl RemiMcpServer {
             .await
             .map_err(service_err_to_mcp)?;
         let text = to_json_text(&detail)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get a single test result with all execution steps and their logs.
@@ -539,7 +548,7 @@ impl RemiMcpServer {
             .await
             .map_err(service_err_to_mcp)?;
         let text = to_json_text(&detail)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get test execution logs, optionally filtered by stream and step index.
@@ -560,7 +569,7 @@ impl RemiMcpServer {
         .await
         .map_err(service_err_to_mcp)?;
         let text = to_json_text(&logs)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Get aggregate test health: total runs, recent activity, and pass/fail
@@ -573,7 +582,7 @@ impl RemiMcpServer {
             .await
             .map_err(service_err_to_mcp)?;
         let text = to_json_text(&health)?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     // -----------------------------------------------------------------------
@@ -597,35 +606,13 @@ impl RemiMcpServer {
         Parameters(params): Parameters<ChunkGcParams>,
     ) -> Result<CallToolResult, McpError> {
         let dry_run = params.dry_run.unwrap_or(true);
-        let grace_period_secs: u64 = 3600; // 1 hour grace period
 
-        let state = self.state.read().await;
-        let db_path = state.config.db_path.clone();
-        let objects_dir = state.config.chunk_dir.join("objects");
-        let r2_store = state.r2_store.clone();
-        drop(state);
+        let report = admin_service::run_chunk_gc_op(&self.state, dry_run)
+            .await
+            .map_err(service_err_to_mcp)?;
 
-        let gc_result = crate::server::chunk_gc::run_chunk_gc(
-            &db_path,
-            &objects_dir,
-            r2_store,
-            dry_run,
-            grace_period_secs,
-        )
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let text = to_json_text(&serde_json::json!({
-            "dry_run": dry_run,
-            "referenced": gc_result.referenced,
-            "local_scanned": gc_result.local_scanned,
-            "r2_scanned": gc_result.r2_scanned,
-            "local_deleted": gc_result.local_deleted,
-            "r2_deleted": gc_result.r2_deleted,
-            "local_bytes_freed": gc_result.local_bytes_freed,
-            "r2_bytes_freed": gc_result.r2_bytes_freed,
-        }))?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        let text = to_json_text(&chunk_gc_tool_output(&report)?)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     // -----------------------------------------------------------------------
@@ -656,7 +643,7 @@ impl RemiMcpServer {
             "status": "ok",
             "new_mappings": count,
         }))?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Trigger an immediate Repology + AppStream fetch cycle.
@@ -691,7 +678,7 @@ impl RemiMcpServer {
             "repology_cached": repology_count,
             "appstream_cached": appstream_count,
         }))?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
 
@@ -700,6 +687,10 @@ impl RemiMcpServer {
 // ---------------------------------------------------------------------------
 
 impl ServerHandler for RemiMcpServer {
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(&[ProtocolVersion::V_2026_07_28])
+    }
+
     fn get_info(&self) -> ServerInfo {
         server_info(
             "remi-mcp",
@@ -716,8 +707,10 @@ impl ServerHandler for RemiMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        let mut tools = self.tool_router.list_all();
+        tools.sort_by(|left, right| left.name.cmp(&right.name));
         std::future::ready(Ok(ListToolsResult {
-            tools: self.tool_router.list_all(),
+            tools,
             ..Default::default()
         }))
     }
@@ -726,7 +719,7 @@ impl ServerHandler for RemiMcpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CallToolResponse, McpError>> + Send + '_ {
         let tool_context = ToolCallContext::new(self, request, context);
         async move { self.tool_router.call(tool_context).await }
     }
@@ -751,6 +744,49 @@ mod tests {
 
         let info = server.get_info();
         assert_eq!(info.server_info.name, "remi-mcp");
+    }
+
+    #[test]
+    fn mcp_server_supports_only_the_modern_protocol_version() {
+        let config = crate::server::ServerConfig::default();
+        let state = Arc::new(RwLock::new(
+            crate::server::ServerState::new(config).expect("test server state"),
+        ));
+        let server = RemiMcpServer::new(state);
+
+        assert_eq!(
+            server.supported_protocol_versions().as_ref(),
+            [ProtocolVersion::V_2026_07_28]
+        );
+    }
+
+    #[test]
+    fn chunk_gc_tool_output_matches_the_published_report_object() {
+        let report = ChunkGcReport {
+            dry_run: true,
+            referenced: 1,
+            local_scanned: 2,
+            r2_scanned: 3,
+            local_deleted: 4,
+            r2_deleted: 5,
+            local_bytes_freed: 6,
+            r2_bytes_freed: 7,
+        };
+
+        let rendered = to_json_text(&chunk_gc_tool_output(&report).unwrap()).unwrap();
+        let expected = to_json_text(&serde_json::json!({
+            "dry_run": true,
+            "referenced": 1,
+            "local_scanned": 2,
+            "r2_scanned": 3,
+            "local_deleted": 4,
+            "r2_deleted": 5,
+            "local_bytes_freed": 6,
+            "r2_bytes_freed": 7,
+        }))
+        .unwrap();
+
+        assert_eq!(rendered, expected);
     }
 
     #[test]

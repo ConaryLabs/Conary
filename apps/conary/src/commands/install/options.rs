@@ -2,8 +2,9 @@
 
 use super::OwnershipMode;
 use anyhow::{Context, Result};
-use conary_core::ccs::verify::{TrustPolicy, verify_package};
+use conary_core::ccs::verify::{TrustPolicy, verify_package, verify_package_into_cas};
 use conary_core::db::models::{Repository, RepositoryPackage, RepositoryPackageKey};
+use conary_core::filesystem::CasStore;
 use conary_core::repository::RepositorySourceKind;
 use conary_core::repository::versioning::resolve_package_version_scheme;
 use conary_core::scriptlet::SandboxMode;
@@ -43,8 +44,8 @@ pub struct InstallOptions<'a> {
     pub ownership: Option<OwnershipMode>,
     /// Skip confirmation prompts
     pub yes: bool,
-    /// Install from an exact supported source profile.
-    pub from_profile: Option<String>,
+    /// Install from an exact source identity.
+    pub from_source: Option<String>,
     /// Repository provenance supplied by an internal caller that already
     /// selected and downloaded the package before calling `cmd_install`.
     pub(crate) repository_provenance: Option<RepositoryInstallProvenance>,
@@ -53,6 +54,7 @@ pub struct InstallOptions<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RepositoryInstallProvenance {
     pub repository_id: i64,
+    pub source_identity: Option<String>,
     pub source_profile: Option<String>,
     pub version_scheme: conary_core::repository::versioning::VersionScheme,
     pub source_kind: RepositorySourceKind,
@@ -78,14 +80,17 @@ pub(crate) fn repository_install_provenance_from_package(
         .id
         .ok_or_else(|| anyhow::anyhow!("Selected repository has no database ID"))?;
     let version_scheme = resolve_package_version_scheme(package);
+    let source_identity =
+        conary_core::repository::selector::candidate_source_identity(package, repository)?
+            .map(str::to_string);
     let source_profile =
         conary_core::repository::selector::candidate_source_profile(package, repository)?
             .map(str::to_string);
-    if source_profile.is_none()
+    if source_identity.is_none()
         && version_scheme != conary_core::repository::versioning::VersionScheme::Conary
     {
         anyhow::bail!(
-            "selected repository package '{}-{}' has no exact source profile",
+            "selected repository package '{}-{}' has no exact source identity",
             package.name,
             package.version
         );
@@ -93,6 +98,7 @@ pub(crate) fn repository_install_provenance_from_package(
 
     Ok(RepositoryInstallProvenance {
         repository_id,
+        source_identity,
         source_profile,
         version_scheme,
         source_kind: match repository.default_strategy.as_deref() {
@@ -109,6 +115,36 @@ pub(crate) fn verify_ccs_package_authority(
     envelope_authority: &CcsEnvelopeAuthority,
     repository_provenance: Option<&RepositoryInstallProvenance>,
 ) -> Result<conary_core::ccs::VerifiedCcsArchive> {
+    let policy = ccs_trust_policy(db_path, envelope_authority, repository_provenance)?;
+    verify_package(ccs_path, &policy).with_context(|| {
+        format!(
+            "CCS package authority verification failed for {}",
+            ccs_path.display()
+        )
+    })
+}
+
+pub(crate) fn verify_ccs_package_authority_into_cas(
+    db_path: &str,
+    ccs_path: &Path,
+    envelope_authority: &CcsEnvelopeAuthority,
+    repository_provenance: Option<&RepositoryInstallProvenance>,
+    cas: &CasStore,
+) -> Result<conary_core::ccs::VerifiedCcsArchive> {
+    let policy = ccs_trust_policy(db_path, envelope_authority, repository_provenance)?;
+    verify_package_into_cas(ccs_path, &policy, cas).with_context(|| {
+        format!(
+            "CCS package authority verification and permanent CAS ingestion failed for {}",
+            ccs_path.display()
+        )
+    })
+}
+
+fn ccs_trust_policy(
+    db_path: &str,
+    envelope_authority: &CcsEnvelopeAuthority,
+    repository_provenance: Option<&RepositoryInstallProvenance>,
+) -> Result<TrustPolicy> {
     let keys = match envelope_authority {
         CcsEnvelopeAuthority::Repository => {
             let provenance = repository_provenance.context(
@@ -151,13 +187,7 @@ pub(crate) fn verify_ccs_package_authority(
             .to_vec(),
         CcsEnvelopeAuthority::ExactKey(key) => vec![key.clone()],
     };
-    let policy = TrustPolicy::strict(keys);
-    verify_package(ccs_path, &policy).with_context(|| {
-        format!(
-            "CCS package authority verification failed for {}",
-            ccs_path.display()
-        )
-    })
+    Ok(TrustPolicy::strict(keys))
 }
 
 #[cfg(test)]

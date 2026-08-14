@@ -150,7 +150,7 @@ exit_code = 0
 [[test]]
 id = "T154"
 name = "bootloader_config_deployed"
-description = "Install the bootloader package and verify expected config paths exist"
+description = "Force the GRUB fallback and verify the exact provider updates its exact config path"
 timeout = 3600
 group = "N"
 depends_on = ["T150"]
@@ -171,11 +171,11 @@ commands = [
     "conary repo sync ${REPO_NAME} --force",
     "conary system adopt --system --full",
     "conary install kernel --repo ${REPO_NAME} --yes --sandbox always",
-    "conary install grub2 --repo ${REPO_NAME} --yes --sandbox always",
+    "test \"$(command -v grub2-mkconfig)\" = /usr/bin/grub2-mkconfig",
     "conary system generation build --yes --summary \"T154 bootloader generation\"",
+    "test -d /boot/loader/entries; mv /boot/loader/entries /boot/loader/entries.conary-test-disabled",
     "GEN=$(find /conary/generations -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort -n | tail -1); test -n \"$GEN\"; conary system generation switch \"$GEN\" --yes",
-    "GEN=$(basename \"$(readlink /conary/current)\"); test -n \"$GEN\"; test -f /conary/generations/$GEN/.conary-artifact.json",
-    "ls /etc/grub.d /boot/grub /boot/grub2 /boot/loader 2>/dev/null || true",
+    "GEN=$(basename \"$(readlink /conary/current)\"); test -n \"$GEN\"; test -f /conary/generations/$GEN/.conary-artifact.json; test -x /etc/grub.d/42_conary; grep -Fq \"Conary Generation $GEN\" /etc/grub.d/42_conary; grep -Fq \"Conary Generation $GEN\" /boot/grub2/grub.cfg",
     "echo bootloader-config-ok",
 ]
 expect_output = [

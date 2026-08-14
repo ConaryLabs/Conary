@@ -1,61 +1,53 @@
 ---
-last_updated: 2026-07-25
-revision: 9
-summary: Decision record for Conary's stateless MCP adapter path and its current code and test evidence
+last_updated: 2026-08-09
+revision: 12
+summary: Decision record for Remi's modern stateless MCP adapter and the framework-neutral compliance proof
 ---
 
 # Agent MCP Adapter Decision
 
 ## Decision
 
-The first LLM-native operations milestone remains contract-only plus
-inventory/prune. Conary will not add new live MCP resources, tools, prompts, or
-discovery behavior on the existing session-based `rmcp` path.
+The live MCP surface is Remi's modern-only stateless Streamable HTTP `/mcp`.
+`conary-test` is a local CLI and integration-test engine; its former network
+server and both former MCP adapters were removed in issue #351. The
+transport-neutral operation contract and framework-neutral MCP compliance
+harness remain in their owning crates.
 
 ## Current State
 
-- Workspace requirement: `rmcp = "1.7.0"` in `Cargo.toml`
-- Resolved dependency: `rmcp 1.7.0` in `Cargo.lock`
-- Latest public `rmcp` docs checked on 2026-05-24 list `rmcp 1.7.0`, but still
-  document session/initialize-era types such as `LocalSessionManager` and
-  `InitializeResult`
-- Current Remi and conary-test wiring uses `RoleServer`, `ServerHandler`,
-  `StreamableHttpService`, and `LocalSessionManager`
-- Current live MCP surfaces are tool-only from Conary's product perspective
+- Workspace `rmcp = "3.1.2"` supports Remi's modern-only stateless Streamable
+  HTTP implementation; the authoritative product description is
+  `docs/modules/remi.md`.
 - `crates/conary-mcp::stateless` contains the non-live compliance harness for
-  request validation, discovery result modeling, cacheable result modeling, and
-  adapter-boundary guard tests
-- `crates/conary-mcp::stateless_http` contains the framework-neutral raw HTTP
-  adapter support for `server/discover`, resource list/read dispatch when a
-  provider is configured, origin validation, JSON-RPC envelope validation,
-  header extraction, protocol error mapping, and unsupported-method responses
-- `apps/conary-test` exposes `POST /mcp/stateless` as the first live
-  stateless adapter gate. It handles `server/discover`, `resources/list`, and
-  `resources/read` for `conary-local://bootstrap/status` and
-  `conary-test://suites`, and keeps the existing `/mcp` session-based tool
-  surface unchanged.
+  request validation, discovery result modeling, and cacheable result modeling.
+- `crates/conary-mcp::stateless_http` contains framework-neutral raw HTTP
+  adapter support for discovery, resource list/read dispatch, origin
+  validation, JSON-RPC envelope validation, header extraction, protocol error
+  mapping, and unsupported-method responses.
+- The conary-test engine retains its Remi test-data client and local WAL result
+  buffer for the planned streaming path. The local CLI currently does not
+  construct that path or stream results; issue #354 tracks the wiring. It does
+  not bind a network listener or register MCP tools, resources, prompts, or
+  routes.
 - The raw HTTP adapter support does not mount routes, bind sockets, register
-  product resources by itself, register tools, register prompts, or depend on
-  `rmcp` / `axum`
-- The compliance harness does not add live MCP resources, tools, prompts,
-  routes, or discovery behavior
-- `crates/conary-agent-contract` may define draft-shaped metadata names such as
-  `ttlMs` and `cacheScope`, but those are contract/catalog metadata only and do
-  not create live MCP list/read behavior
+  product resources, register tools, register prompts, or depend on `rmcp` or
+  `axum`.
 
 ## Target
 
-Target the current MCP draft stateless direction associated with the 2026-07-28
-release candidate. The draft docs currently use `DRAFT-2026-v1` as the
-protocol-version token; re-verify the final token before live adapter work.
+Keep the current Remi MCP protocol direction associated with protocol revision
+`2026-07-28`. Any future live MCP surface must be owned by the service that
+actually provides the operation and must use the shared agent contract as its
+durable vocabulary.
 
 ## Adapter Gate
 
-Before new live MCP registration work begins, implementation must prove one of
+Before adding another live MCP registration, implementation must prove one of
 these paths:
 
-1. `rmcp` supports the target draft features needed by Conary.
-2. A thin raw HTTP adapter can implement the target draft with tests for:
+1. `rmcp` supports the target protocol features needed by the owning service.
+2. A thin raw HTTP adapter can implement the target protocol with tests for:
    - per-request `POST`
    - `Accept`
    - `MCP-Protocol-Version`
@@ -63,63 +55,32 @@ these paths:
    - `Mcp-Name`
    - per-request `_meta`
    - `Origin` validation
-   - `server/discover`
+   - discovery
    - cache metadata before the first live list/read response is exposed
 
 ## Current Choice
 
-Do not build new live MCP registrations on the existing session-based path.
-After the contract, catalog, local bootstrap, compliance harness, non-live raw
-proof, and first live resource slices, the selected live adapter-gate surface
-is a `conary-test` route at `POST /mcp/stateless`. It exposes
-`server/discover` plus read-only `conary-local://bootstrap/status` and
-`conary-test://suites` resources, and advertises no tools or prompts.
-
-The raw HTTP adapter supports list/read through an explicit provider trait.
-Cache metadata remains modeled through `CacheableResult<T>` and the shared
-contract `CachePolicy`; live list/read behavior is added only when a service
-wires a provider.
+Do not recreate a conary-test network or MCP adapter. Remi owns the live
+`/mcp` service surface, while `crates/conary-agent-contract` owns the
+transport-neutral operation vocabulary and `crates/conary-mcp` remains adapter
+glue plus compliance proof.
 
 ## Harness Slice
 
-The current implementation slice is the stateless MCP adapter compliance
-harness: it moved the workspace to the latest compatible `rmcp` crate version
-and added draft-shaped validation, discovery, cacheable-result, and guard tests
-in `crates/conary-mcp` without adding live MCP resources, tools, prompts,
-routes, or discovery behavior. This keeps Conary aimed at the MCP draft while
-avoiding fresh investment in the session-based path.
-
-Current evidence lives in `crates/conary-mcp/src/stateless.rs`,
+The stateless MCP work remains a framework-neutral compliance harness in
+`crates/conary-mcp`. It validates draft-shaped requests, discovery, cacheable
+results, raw HTTP policy, and adapter boundaries without adding a live route or
+service listener. Its current evidence lives in
+`crates/conary-mcp/src/stateless.rs`,
+`crates/conary-mcp/src/stateless_http.rs`,
 `crates/conary-mcp/tests/stateless_dependency_boundary.rs`, and the owning
 crate tests.
 
-## Raw HTTP Proof Slice
+## Conary-Test Server Cut
 
-The raw HTTP proof slice proved Conary can satisfy the current MCP draft
-stateless HTTP requirements without waiting for `rmcp` support. It reuses
-`crates/conary-mcp::stateless`, adds framework-neutral request/response
-adapter support, handles `server/discover`, and can dispatch `resources/list`
-and `resources/read` through a configured provider.
-
-Current evidence lives in `crates/conary-mcp/src/stateless_http.rs` and its
-focused unit tests.
-
-## Conary-Test Stateless Route Slice
-
-The first live stateless adapter gate is `POST /mcp/stateless` in
-`conary-test`. It adapts Axum requests into `crates/conary-mcp::stateless_http`,
-uses `serverInfo.name = "conary-test-mcp"`, preserves the existing `/mcp`
-session-based service, and stays inside the existing conary-test auth boundary
-when a token is configured.
-
-This route supports `server/discover`, `resources/list`, and `resources/read`
-for `conary-local://bootstrap/status` and `conary-test://suites`. Bootstrap
-status returns the existing local bootstrap `InspectResult` as
-`application/json` text content. The suites resource returns a static
-manifest-inventory `InspectResult` from `AppState.manifest_dir`. It must not
-add tools, prompts, resource templates, subscriptions, SSE, smoke execution,
-per-suite resources, or Remi route behavior.
-
-Current evidence lives in `apps/conary-test/src/server/stateless_mcp.rs`,
-`apps/conary-test/src/bootstrap.rs`, `apps/conary-test/src/suite_inventory.rs`,
-and the owning package tests.
+Issue #351 removed the conary-test HTTP orchestration layer, session-era MCP
+adapter, stateless MCP prior-art adapter, and `serve` CLI entry point. The
+surviving CLI commands, run engine, Remi test-data client, retained WAL path,
+manifests, fixtures, and image/deploy tooling remain local-owned surfaces. The
+result-streaming path is currently unconstructed for local runs; issue #354
+tracks its wiring.

@@ -25,6 +25,8 @@ pub enum VersionScheme {
     Debian,
     /// Arch Linux ALPM epoch-pkgver-pkgrel ordering.
     Arch,
+    /// Solus eopkg/PISI version ordering.
+    Eopkg,
 }
 
 impl VersionScheme {
@@ -35,6 +37,7 @@ impl VersionScheme {
             Self::Rpm => "rpm",
             Self::Debian => "debian",
             Self::Arch => "arch",
+            Self::Eopkg => "eopkg",
         }
     }
 }
@@ -48,6 +51,7 @@ impl FromStr for VersionScheme {
             "rpm" => Ok(Self::Rpm),
             "debian" => Ok(Self::Debian),
             "arch" => Ok(Self::Arch),
+            "eopkg" => Ok(Self::Eopkg),
             other => Err(format!(
                 "unsupported persisted native version scheme '{other}'"
             )),
@@ -113,6 +117,57 @@ pub enum RepoVersionConstraint {
     LessThan(String),
     LessOrEqual(String),
     NotEqual(String),
+    Eopkg(EopkgVersionConstraint),
+}
+
+/// Independent eopkg/PISI version and integer-release bounds.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EopkgVersionConstraint {
+    pub version: Option<String>,
+    pub version_from: Option<String>,
+    pub version_to: Option<String>,
+    pub release: Option<u64>,
+    pub release_from: Option<u64>,
+    pub release_to: Option<u64>,
+}
+
+impl EopkgVersionConstraint {
+    pub fn validate(&self) -> VersionResult<()> {
+        for value in [
+            self.version.as_deref(),
+            self.version_from.as_deref(),
+            self.version_to.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            super::eopkg_version::validate_upstream(value)?;
+        }
+        if self.version.is_some() && (self.version_from.is_some() || self.version_to.is_some()) {
+            return Err(VersionComparisonError::InvalidConstraint {
+                scheme: "eopkg",
+                constraint: self.to_string(),
+                reason: "exact version cannot be combined with version range bounds".to_string(),
+            });
+        }
+        if self.release.is_some() && (self.release_from.is_some() || self.release_to.is_some()) {
+            return Err(VersionComparisonError::InvalidConstraint {
+                scheme: "eopkg",
+                constraint: self.to_string(),
+                reason: "exact release cannot be combined with release range bounds".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for EopkgVersionConstraint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        serde_json::to_string(self)
+            .map_err(|_| std::fmt::Error)
+            .and_then(|value| formatter.write_str(&format!("eopkg:{value}")))
+    }
 }
 
 /// Validate one version against the exact grammar selected by `scheme`.
@@ -134,6 +189,7 @@ pub fn validate_repo_version(scheme: VersionScheme, raw: &str) -> VersionResult<
         VersionScheme::Arch => alpm_types::Version::from_str(raw)
             .map(|_| ())
             .map_err(|error| invalid(error.to_string())),
+        VersionScheme::Eopkg => super::eopkg_version::validate(raw),
     }
 }
 
@@ -160,6 +216,7 @@ pub fn compare_repo_versions(scheme: VersionScheme, a: &str, b: &str) -> Version
             let b = parse_arch(b)?;
             Ok(a.cmp(&b))
         }
+        VersionScheme::Eopkg => super::eopkg_version::compare(a, b),
     }
 }
 
@@ -186,6 +243,24 @@ pub fn parse_repo_constraint(
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(RepoVersionConstraint::Any);
+    }
+    if scheme == VersionScheme::Eopkg {
+        let json = trimmed.strip_prefix("eopkg:").ok_or_else(|| {
+            VersionComparisonError::InvalidConstraint {
+                scheme: "eopkg",
+                constraint: raw.to_string(),
+                reason: "expected typed 'eopkg:<json>' constraint".to_string(),
+            }
+        })?;
+        let constraint: EopkgVersionConstraint = serde_json::from_str(json).map_err(|error| {
+            VersionComparisonError::InvalidConstraint {
+                scheme: "eopkg",
+                constraint: raw.to_string(),
+                reason: error.to_string(),
+            }
+        })?;
+        constraint.validate()?;
+        return Ok(RepoVersionConstraint::Eopkg(constraint));
     }
 
     let operators = [
@@ -230,6 +305,43 @@ pub fn repo_version_satisfies(
     version: &str,
     constraint: &RepoVersionConstraint,
 ) -> VersionResult<bool> {
+    if let RepoVersionConstraint::Eopkg(constraint) = constraint {
+        if scheme != VersionScheme::Eopkg {
+            return Err(VersionComparisonError::InvalidConstraint {
+                scheme: scheme.as_str(),
+                constraint: constraint.to_string(),
+                reason: "eopkg constraint used with another version scheme".to_string(),
+            });
+        }
+        let candidate = super::eopkg_version::parse(version)?;
+        let compare =
+            |expected: &str| super::eopkg_version::compare_upstream(&candidate.version, expected);
+        if constraint
+            .version
+            .as_deref()
+            .is_some_and(|expected| compare(expected) != Ok(Ordering::Equal))
+            || constraint
+                .version_from
+                .as_deref()
+                .is_some_and(|expected| compare(expected) == Ok(Ordering::Less))
+            || constraint
+                .version_to
+                .as_deref()
+                .is_some_and(|expected| compare(expected) == Ok(Ordering::Greater))
+            || constraint
+                .release
+                .is_some_and(|value| candidate.release != value)
+            || constraint
+                .release_from
+                .is_some_and(|value| candidate.release < value)
+            || constraint
+                .release_to
+                .is_some_and(|value| candidate.release > value)
+        {
+            return Ok(false);
+        }
+        return Ok(true);
+    }
     let expected = match constraint {
         RepoVersionConstraint::Any => {
             validate_repo_version(scheme, version)?;
@@ -241,6 +353,7 @@ pub fn repo_version_satisfies(
         | RepoVersionConstraint::LessThan(expected)
         | RepoVersionConstraint::LessOrEqual(expected)
         | RepoVersionConstraint::NotEqual(expected) => expected,
+        RepoVersionConstraint::Eopkg(_) => unreachable!("handled above"),
     };
     let ordering = compare_repo_versions(scheme, version, expected)?;
     Ok(match constraint {
@@ -251,6 +364,7 @@ pub fn repo_version_satisfies(
         RepoVersionConstraint::LessThan(_) => ordering == Ordering::Less,
         RepoVersionConstraint::LessOrEqual(_) => ordering != Ordering::Greater,
         RepoVersionConstraint::NotEqual(_) => ordering != Ordering::Equal,
+        RepoVersionConstraint::Eopkg(_) => unreachable!("handled above"),
     })
 }
 
@@ -281,7 +395,10 @@ pub fn provided_range_matches_requirement(
         return Ok(match scheme {
             // rpm's existence-test rule overlaps a same-name versioned range.
             VersionScheme::Rpm => true,
-            VersionScheme::Conary | VersionScheme::Debian | VersionScheme::Arch => {
+            VersionScheme::Conary
+            | VersionScheme::Debian
+            | VersionScheme::Arch
+            | VersionScheme::Eopkg => {
                 matches!(requirement, RepoVersionConstraint::Any)
             }
         });
@@ -326,6 +443,13 @@ fn rpm_provided_range_overlaps_requirement(
                 scheme: VersionScheme::Rpm.as_str(),
                 constraint: format!("!= {version}"),
                 reason: "RPM dependency ranges do not define a not-equal relation".to_string(),
+            });
+        }
+        RepoVersionConstraint::Eopkg(_) => {
+            return Err(VersionComparisonError::InvalidConstraint {
+                scheme: VersionScheme::Rpm.as_str(),
+                constraint: "eopkg".to_string(),
+                reason: "eopkg constraint cannot participate in RPM range overlap".to_string(),
             });
         }
     };
@@ -380,6 +504,7 @@ fn constraint_boundary(constraint: &RepoVersionConstraint) -> Option<&str> {
         | RepoVersionConstraint::LessThan(version)
         | RepoVersionConstraint::LessOrEqual(version)
         | RepoVersionConstraint::NotEqual(version) => Some(version),
+        RepoVersionConstraint::Eopkg(_) => None,
     }
 }
 

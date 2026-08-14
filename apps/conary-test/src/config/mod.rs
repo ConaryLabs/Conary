@@ -1,10 +1,18 @@
 // conary-test/src/config/mod.rs
 
+pub mod corpus;
 pub mod distro;
 pub mod manifest;
+pub mod release_root;
 
 pub use distro::{DistroBuildContext, DistroConfig, GlobalConfig, TestPackage};
 pub use manifest::{Assertion, StepType, TestDef, TestManifest};
+pub use release_root::{
+    AptGlobalTrustBinding, AuthenticatedTargetRoot, DistroReleaseRoot, ExpectedNativePackage,
+    ExpectedOsRelease, NativePackageQuery, NativeRepositoryTrustBinding, PinnedTargetFile,
+    ReleaseMediaAuthority, TargetArtifactIdentity, TargetArtifactRole, TargetPackageIdentity,
+    TargetReleaseEvidence, TargetReleaseStage, TargetReleaseStageResult,
+};
 
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
@@ -52,3 +60,4 @@ pub fn validate_unique_test_ids(manifests: &[(PathBuf, TestManifest)]) -> Result
 
 #[cfg(test)]
 mod tests;
+pub use corpus::{CorpusCaseDef, CorpusSourceFormat, CorpusTargetDef};

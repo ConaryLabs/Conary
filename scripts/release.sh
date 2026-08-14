@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/release.sh -- Automated release based on conventional commits
+# scripts/release.sh -- Prepare one synchronized Conary workspace release.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,87 +11,35 @@ die() {
     exit 1
 }
 
-mapfile -t PRODUCTS < <(bash "$MATRIX" products)
-
 usage() {
     cat <<'EOF'
-Usage: scripts/release.sh [conary|remi|conaryd|conary-test|all] [OPTIONS]
+Usage: scripts/release.sh suite (--dry-run | --prepare-only) [--target VERSION]
 
-Analyze conventional commits since the latest product release tag and bump versions.
-  conary       - conary CLI + owned crates + packaging
-  remi         - Remi service app
-  conaryd      - daemon service app
-  conary-test  - integration harness + conary-mcp
-  all          - all release tracks
+Analyze or prepare the one synchronized Conary workspace release. The suite
+version covers every workspace package and all four artifact products.
 
 Options:
-  --dry-run                  Show what would happen without making changes.
-  --prepare-only             Update and stage release files without committing or tagging.
-  --target PRODUCT=VERSION   Use an explicit exact target for one selected product.
+  --dry-run          Show the inferred or explicit release without changing files.
+  --prepare-only     Update and stage release files without committing or tagging.
+  --target VERSION   Use one explicit exact MAJOR.MINOR.PATCH suite version.
+
+Release commits are reviewed and merged before the exact merge commit receives
+its annotated v* tag. This script intentionally does not create commits or tags.
 EOF
     exit 1
-}
-
-is_product() {
-    local candidate="$1"
-    local product
-
-    for product in "${PRODUCTS[@]}"; do
-        if [[ "$product" == "$candidate" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
 }
 
 is_release_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
-matrix_field() {
-    local product="$1"
-    local field="$2"
-    bash "$MATRIX" field "$product" "$field"
-}
-
-join_by() {
-    local delimiter="$1"
-    shift
-    local joined=""
-    local value
-
-    for value in "$@"; do
-        if [[ -n "$joined" ]]; then
-            joined+="${delimiter}"
-        fi
-        joined+="${value}"
-    done
-
-    printf '%s\n' "$joined"
-}
-
 version_max() {
-    local first="${1:-}"
-    local second="${2:-}"
-
-    if [[ -z "$first" ]]; then
-        printf '%s\n' "$second"
-        return
-    fi
-
-    if [[ -z "$second" ]]; then
-        printf '%s\n' "$first"
-        return
-    fi
-
-    printf '%s\n' "$first" "$second" | sort -V | tail -n1
+    printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1
 }
 
 version_lt() {
     local first="$1"
     local second="$2"
-
     [[ "$(printf '%s\n%s\n' "$first" "$second" | sort -V | head -n1)" == "$first" && "$first" != "$second" ]]
 }
 
@@ -109,94 +57,43 @@ bump_version() {
     esac
 }
 
-matching_tags_for_product() {
-    local product="$1"
-    local canonical_prefix
-
-    canonical_prefix="$(matrix_field "$product" canonical_tag_prefix)"
-    git tag --list "${canonical_prefix}*"
-}
-
-tag_version_for_product() {
-    local product="$1"
-    local tag="$2"
-    local canonical_prefix
-
-    canonical_prefix="$(matrix_field "$product" canonical_tag_prefix)"
-    if [[ "$tag" == "${canonical_prefix}"* ]]; then
-        printf '%s\n' "${tag#"$canonical_prefix"}"
-        return 0
-    fi
-
-    return 1
+matching_suite_tags() {
+    git tag --list 'v[0-9]*'
 }
 
 history_baseline_version() {
-    local product="$1"
     local -a tags=()
-
-    mapfile -t tags < <(matching_tags_for_product "$product")
+    mapfile -t tags < <(matching_suite_tags)
     if [[ ${#tags[@]} -eq 0 ]]; then
         printf '%s\n' '0.0.0'
         return
     fi
-
-    bash "$MATRIX" latest-version-from-list "$product" "${tags[@]}"
+    bash "$MATRIX" latest-version-from-list suite "${tags[@]}"
 }
 
 history_baseline_tag() {
-    local product="$1"
-    local history_version="$2"
-    local canonical_prefix
-    local -a tags=()
-    local tag
-    local version
-
-    mapfile -t tags < <(matching_tags_for_product "$product")
-    if [[ ${#tags[@]} -eq 0 ]]; then
-        return 1
-    fi
-
-    canonical_prefix="$(matrix_field "$product" canonical_tag_prefix)"
-
-    for tag in "${tags[@]}"; do
-        version="$(tag_version_for_product "$product" "$tag")" || continue
-        if [[ "$version" == "$history_version" && "$tag" == "${canonical_prefix}"* ]]; then
-            printf '%s\n' "$tag"
-            return 0
-        fi
-    done
-
-    return 1
+    local version="$1"
+    local tag="v${version}"
+    git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null || return 1
+    printf '%s\n' "$tag"
 }
 
-commits_for_product() {
-    local product="$1"
-    local since_ref="$2"
+commits_for_suite() {
+    local since_ref="$1"
     local -a scope_paths=()
-
-    mapfile -t scope_paths < <(matrix_field "$product" bump_scope_paths)
+    mapfile -t scope_paths < <(bash "$MATRIX" field suite bump_scope_paths)
 
     if [[ -n "$since_ref" ]]; then
-        git log "${since_ref}..HEAD" --oneline -- "${scope_paths[@]}" 2>/dev/null || true
+        git log --no-merges "${since_ref}..HEAD" --oneline -- "${scope_paths[@]}" 2>/dev/null || true
     else
-        git log --oneline -- "${scope_paths[@]}" 2>/dev/null || true
+        git log --no-merges --oneline -- "${scope_paths[@]}" 2>/dev/null || true
     fi
 }
 
 determine_bump() {
-    local product="$1"
-    local since_ref="$2"
+    local since_ref="$1"
     local level="none"
-    local commits
-    local line
-    local subject
-
-    commits="$(commits_for_product "$product" "$since_ref")"
-    if [[ -z "$commits" ]]; then
-        printf '%s\n' 'none'
-        return
-    fi
+    local line subject
 
     while IFS= read -r line; do
         [[ -n "$line" ]] || continue
@@ -206,28 +103,20 @@ determine_bump() {
             printf '%s\n' 'major'
             return
         fi
-
-        if [[ "$subject" =~ ^feat(\(.+\))?: ]] && [[ "$level" != "major" ]]; then
+        if [[ "$subject" =~ ^feat(\(.+\))?: ]]; then
             level="minor"
-        fi
-
-        if [[ "$subject" =~ ^(fix|security|perf)(\(.+\))?: ]] && [[ "$level" == "none" ]]; then
+        elif [[ "$subject" =~ ^(fix|security|perf)(\(.+\))?: ]] && [[ "$level" == "none" ]]; then
             level="patch"
         fi
-    done <<< "$commits"
+    done < <(commits_for_suite "$since_ref")
 
     printf '%s\n' "$level"
 }
 
 generate_changelog() {
-    local product="$1"
-    local since_ref="$2"
-    local new_version="$3"
-    local tag_name
-    local date
-    local line
-    local subject
-    local description
+    local since_ref="$1"
+    local new_version="$2"
+    local date line subject description
     local -a features=()
     local -a changed=()
     local -a fixes=()
@@ -236,146 +125,100 @@ generate_changelog() {
     local -a other=()
 
     date="$(date +%Y-%m-%d)"
-    tag_name="$(bash "$MATRIX" canonical-tag "$product" "$new_version")"
+    printf '\n## [v%s] - %s\n\n' "$new_version" "$date"
 
-    {
-        printf '\n'
-        printf '## [%s] - %s\n\n' "$tag_name" "$date"
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        subject="${line#* }"
+        description="${subject#*: }"
 
-        while IFS= read -r line; do
-            [[ -n "$line" ]] || continue
-            subject="${line#* }"
-            description="${subject#*: }"
+        if [[ "$subject" =~ ^feat(\(.+\))?!?: ]]; then
+            features+=("- ${description}")
+        elif [[ "$subject" =~ ^refactor(\(.+\))?!?: ]]; then
+            changed+=("- ${description}")
+        elif [[ "$subject" =~ ^fix(\(.+\))?!?: ]]; then
+            fixes+=("- ${description}")
+        elif [[ "$subject" =~ ^security(\(.+\))?!?: ]]; then
+            security+=("- ${description}")
+        elif [[ "$subject" =~ ^perf(\(.+\))?!?: ]]; then
+            perf+=("- ${description}")
+        elif [[ "$subject" =~ ^(test|chore|docs|release)(\(.+\))?!?: ]]; then
+            :
+        else
+            other+=("- ${subject}")
+        fi
+    done < <(commits_for_suite "$since_ref")
 
-            if [[ "$subject" =~ ^feat(\(.+\))?!?: ]]; then
-                features+=("- ${description}")
-            elif [[ "$subject" =~ ^refactor(\(.+\))?!?: ]]; then
-                changed+=("- ${description}")
-            elif [[ "$subject" =~ ^fix(\(.+\))?!?: ]]; then
-                fixes+=("- ${description}")
-            elif [[ "$subject" =~ ^security(\(.+\))?!?: ]]; then
-                security+=("- ${description}")
-            elif [[ "$subject" =~ ^perf(\(.+\))?!?: ]]; then
-                perf+=("- ${description}")
-            elif [[ "$subject" =~ ^(test|chore|docs)(\(.+\))?!?: ]]; then
-                :
-            else
-                other+=("- ${subject}")
-            fi
-        done < <(commits_for_product "$product" "$since_ref")
+    if [[ ${#features[@]} -gt 0 ]]; then
+        printf '### Added\n%s\n\n' "$(printf '%s\n' "${features[@]}")"
+    fi
+    if [[ ${#changed[@]} -gt 0 ]]; then
+        printf '### Changed\n%s\n\n' "$(printf '%s\n' "${changed[@]}")"
+    fi
+    if [[ ${#fixes[@]} -gt 0 ]]; then
+        printf '### Fixed\n%s\n\n' "$(printf '%s\n' "${fixes[@]}")"
+    fi
+    if [[ ${#security[@]} -gt 0 ]]; then
+        printf '### Security\n%s\n\n' "$(printf '%s\n' "${security[@]}")"
+    fi
+    if [[ ${#perf[@]} -gt 0 ]]; then
+        printf '### Performance\n%s\n\n' "$(printf '%s\n' "${perf[@]}")"
+    fi
+    if [[ ${#other[@]} -gt 0 ]]; then
+        printf '### Other\n%s\n\n' "$(printf '%s\n' "${other[@]}")"
+    fi
+}
 
-        if [[ ${#features[@]} -gt 0 ]]; then
-            printf '### Added\n'
-            printf '%s\n' "${features[@]}"
-            printf '\n'
-        fi
-        if [[ ${#changed[@]} -gt 0 ]]; then
-            printf '### Changed\n'
-            printf '%s\n' "${changed[@]}"
-            printf '\n'
-        fi
-        if [[ ${#fixes[@]} -gt 0 ]]; then
-            printf '### Fixed\n'
-            printf '%s\n' "${fixes[@]}"
-            printf '\n'
-        fi
-        if [[ ${#security[@]} -gt 0 ]]; then
-            printf '### Security\n'
-            printf '%s\n' "${security[@]}"
-            printf '\n'
-        fi
-        if [[ ${#perf[@]} -gt 0 ]]; then
-            printf '### Performance\n'
-            printf '%s\n' "${perf[@]}"
-            printf '\n'
-        fi
-        if [[ ${#other[@]} -gt 0 ]]; then
-            printf '### Other\n'
-            printf '%s\n' "${other[@]}"
-            printf '\n'
-        fi
+update_workspace_version() {
+    local new_version="$1"
+    local tmp
+
+    tmp="$(mktemp)"
+    awk -v version="$new_version" '
+        /^\[workspace\.package\]$/ { in_workspace_package = 1; print; next }
+        /^\[/ { in_workspace_package = 0 }
+        in_workspace_package && /^version = "/ {
+            print "version = \"" version "\""
+            updated = 1
+            next
+        }
+        { print }
+        END {
+            if (!updated) {
+                exit 42
+            }
+        }
+    ' Cargo.toml > "$tmp" || {
+        status=$?
+        rm -f -- "$tmp"
+        [[ "$status" -eq 42 ]] && die "Cargo.toml has no [workspace.package] version authority"
+        exit "$status"
     }
-}
-
-update_cargo_version() {
-    local file="$1"
-    local new_version="$2"
-    sed -i "0,/^version = \".*\"/s/^version = \".*\"/version = \"${new_version}\"/" "$file"
-}
-
-has_owned_path() {
-    local needle="$1"
-    shift
-    local path
-
-    for path in "$@"; do
-        if [[ "$path" == "$needle" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
+    mv "$tmp" Cargo.toml
+    printf '  Updated root [workspace.package] version\n'
 }
 
 update_packaging_versions() {
     local new_version="$1"
-    shift
-    local -a owned_paths=("$@")
-    local deb_date
-    local tmp
+    local deb_date tmp
 
     deb_date="$(date -R)"
+    sed -i "s/^Version:.*$/Version:        ${new_version}/" packaging/rpm/conary.spec
+    sed -i "s/^pkgver=.*$/pkgver=${new_version}/" packaging/arch/PKGBUILD
+    sed -i "s/^version = \".*\"/version = \"${new_version}\"/" packaging/ccs/ccs.toml
 
-    if has_owned_path "packaging/rpm/conary.spec" "${owned_paths[@]}" && [[ -f packaging/rpm/conary.spec ]]; then
-        sed -i "s/^Version:.*$/Version:        ${new_version}/" packaging/rpm/conary.spec
-        printf '  Updated packaging/rpm/conary.spec\n'
-    fi
-
-    if has_owned_path "packaging/arch/PKGBUILD" "${owned_paths[@]}" && [[ -f packaging/arch/PKGBUILD ]]; then
-        sed -i "s/^pkgver=.*$/pkgver=${new_version}/" packaging/arch/PKGBUILD
-        printf '  Updated packaging/arch/PKGBUILD\n'
-    fi
-
-    if has_owned_path "packaging/deb/debian/changelog" "${owned_paths[@]}" && [[ -f packaging/deb/debian/changelog ]]; then
+    if [[ "$(sed -n '1s/^[^(]*(\([^)]*\)-[0-9][^)]*) .*/\1/p' packaging/deb/debian/changelog)" != "$new_version" ]]; then
         tmp="$(mktemp)"
-        cat > "$tmp" <<DEBEOF
-conary (${new_version}-1) unstable; urgency=medium
-
-  * Release ${new_version}
-
- -- Conary Contributors <contributors@conary.io>  ${deb_date}
-
-DEBEOF
-        cat packaging/deb/debian/changelog >> "$tmp"
+        {
+            printf 'conary (%s-1) unstable; urgency=medium\n\n' "$new_version"
+            printf '  * Release %s\n\n' "$new_version"
+            printf ' -- Conary Contributors <contributors@conary.io>  %s\n\n' "$deb_date"
+            cat packaging/deb/debian/changelog
+        } > "$tmp"
         mv "$tmp" packaging/deb/debian/changelog
-        printf '  Updated packaging/deb/debian/changelog\n'
     fi
 
-    if has_owned_path "packaging/ccs/ccs.toml" "${owned_paths[@]}" && [[ -f packaging/ccs/ccs.toml ]]; then
-        sed -i "s/^version = \".*\"/version = \"${new_version}\"/" packaging/ccs/ccs.toml
-        printf '  Updated packaging/ccs/ccs.toml\n'
-    fi
-}
-
-print_owned_paths() {
-    local -a owned_paths=("$@")
-    local path
-
-    printf '  Owned manifests:\n'
-    for path in "${owned_paths[@]}"; do
-        printf '    - %s\n' "$path"
-    done
-}
-
-stage_release_files() {
-    local -a files=("$@")
-
-    files+=("Cargo.lock")
-    if [[ -f CHANGELOG.md ]]; then
-        files+=("CHANGELOG.md")
-    fi
-
-    git add -- "${files[@]}"
+    printf '  Updated Conary RPM, Arch, Debian, and CCS packaging versions\n'
 }
 
 regenerate_conary_man_page() {
@@ -384,262 +227,138 @@ regenerate_conary_man_page() {
     local man_page="apps/conary/man/conary.1"
 
     [[ -f "$build_script" ]] || die "missing Conary build script: ${build_script}"
-
-    # The package-version edit already invalidates Cargo's package fingerprint.
-    # Touching the build script additionally guarantees that Cargo reruns it even
-    # when a release is prepared in a reused target directory.
     touch "$build_script"
     cargo build -p conary --bin conary --quiet
 
     [[ -s "$man_page" ]] || die "Conary man-page generation did not produce ${man_page}"
-    # Keep the tracked release artifact diff-clean when the roff generator pads
-    # a field with spaces or tabs.
     sed -i 's/[[:blank:]]\+$//' "$man_page"
     grep -Fq -- "conary ${new_version}" "$man_page" ||
         die "generated ${man_page} does not contain Conary version ${new_version}"
-
     printf '  Regenerated %s for %s\n' "$man_page" "$new_version"
 }
 
+insert_changelog() {
+    local entry="$1"
+    local new_version="$2"
+    local tmp
+
+    [[ -f CHANGELOG.md ]] || return
+    if grep -Fq "## [v${new_version}]" CHANGELOG.md; then
+        if [[ "$(sed -n 's/^## \[v\([^]]*\)\].*/\1/p' CHANGELOG.md | head -n1)" != "$new_version" ]]; then
+            die "CHANGELOG.md contains v${new_version} outside the current release position"
+        fi
+        printf '  Retained existing CHANGELOG.md entry for v%s\n' "$new_version"
+        return
+    fi
+
+    tmp="$(mktemp)"
+    head -5 CHANGELOG.md > "$tmp"
+    printf '%s\n' "$entry" >> "$tmp"
+    tail -n +6 CHANGELOG.md >> "$tmp"
+    mv "$tmp" CHANGELOG.md
+}
+
+stage_release_files() {
+    local -a owned_paths=()
+    mapfile -t owned_paths < <(bash "$MATRIX" owned-paths suite)
+    git add -- "${owned_paths[@]}" Cargo.lock CHANGELOG.md
+    git add -f -- apps/conary/man/conary.1
+}
+
 main() {
-    local DRY_RUN=false
-    local PREPARE_ONLY=false
-    local -a RELEASE_GROUPS=()
-    local -A TARGET_VERSIONS=()
+    local mode=""
+    local target_version=""
     local arg
-    local target_product
 
-    append_release_group() {
-        local candidate="$1"
-        local existing
-
-        for existing in "${RELEASE_GROUPS[@]}"; do
-            if [[ "$existing" == "$candidate" ]]; then
-                return
-            fi
-        done
-        RELEASE_GROUPS+=("$candidate")
-    }
-
-    register_target() {
-        local spec="$1"
-        local product="${spec%%=*}"
-        local version="${spec#*=}"
-
-        if [[ "$product" == "$spec" || -z "$product" || -z "$version" ]]; then
-            die "release target must use PRODUCT=VERSION"
-        fi
-        is_product "$product" || die "unknown release target product: $product"
-        is_release_version "$version" ||
-            die "release target for ${product} must be an exact MAJOR.MINOR.PATCH version"
-        if [[ -n "${TARGET_VERSIONS[$product]:-}" && "${TARGET_VERSIONS[$product]}" != "$version" ]]; then
-            die "conflicting release targets for ${product}"
-        fi
-        TARGET_VERSIONS["$product"]="$version"
-    }
+    [[ $# -ge 1 && "$1" == "suite" ]] || usage
+    shift
 
     while [[ $# -gt 0 ]]; do
         arg="$1"
         case "$arg" in
-            --dry-run)
-                DRY_RUN=true
-                ;;
-            --prepare-only)
-                PREPARE_ONLY=true
+            --dry-run|--prepare-only)
+                [[ -z "$mode" ]] || die "select exactly one of --dry-run or --prepare-only"
+                mode="$arg"
                 ;;
             --target)
                 shift
-                [[ $# -gt 0 ]] || die "--target requires PRODUCT=VERSION"
-                register_target "$1"
+                [[ $# -gt 0 ]] || die "--target requires VERSION"
+                target_version="$1"
                 ;;
-            --target=*)
-                register_target "${arg#--target=}"
-                ;;
-            all)
-                for target_product in "${PRODUCTS[@]}"; do
-                    append_release_group "$target_product"
-                done
-                ;;
-            *)
-                if is_product "$arg"; then
-                    append_release_group "$arg"
-                else
-                    usage
-                fi
-                ;;
+            --target=*) target_version="${arg#--target=}" ;;
+            *) usage ;;
         esac
         shift
     done
 
-    [[ ${#RELEASE_GROUPS[@]} -gt 0 ]] || usage
-    if [[ "$DRY_RUN" == "true" && "$PREPARE_ONLY" == "true" ]]; then
-        die "--dry-run and --prepare-only cannot be combined"
+    [[ -n "$mode" ]] || die "select exactly one of --dry-run or --prepare-only"
+    if [[ -n "$target_version" ]]; then
+        is_release_version "$target_version" ||
+            die "release target must be an exact MAJOR.MINOR.PATCH version"
     fi
 
-    for target_product in "${!TARGET_VERSIONS[@]}"; do
-        local selected=false
-        local release_group
-        for release_group in "${RELEASE_GROUPS[@]}"; do
-            if [[ "$release_group" == "$target_product" ]]; then
-                selected=true
-                break
-            fi
-        done
-        [[ "$selected" == "true" ]] ||
-            die "release target provided for unselected product: ${target_product}"
-    done
+    local history_version history_tag manifest_version current_version level new_version
+    local -a previous_tags=()
+    local changelog_entry
 
-    local product
-    for product in "${RELEASE_GROUPS[@]}"; do
-        local local_history_tag=""
-        local history_version=""
-        local manifest_version=""
-        local current_version=""
-        local current_tag=""
-        local level=""
-        local new_version=""
-        local new_tag=""
-        local bundle_name=""
-        local deploy_mode=""
-        local previous_tags_display=""
-        local canonical_prefix=""
-        local changelog_entry=""
-        local tmp=""
-        local -a owned_paths=()
-        local -a previous_tags=()
-        local owned_path
+    mapfile -t previous_tags < <(matching_suite_tags)
+    history_version="$(history_baseline_version)"
+    history_tag="$(history_baseline_tag "$history_version" 2>/dev/null || true)"
+    manifest_version="$(bash "$MATRIX" max-owned-version suite)"
+    current_version="$(version_max "$history_version" "$manifest_version")"
 
-        printf '=== Releasing: %s ===\n' "$product"
+    printf '=== Conary synchronized suite release ===\n'
+    printf '  Previous suite tags considered: %s\n' "${previous_tags[*]:-none}"
+    printf '  Published baseline: v%s\n' "$history_version"
+    printf '  Current version authority: %s\n' "$manifest_version"
 
-        canonical_prefix="$(matrix_field "$product" canonical_tag_prefix)"
-        bundle_name="$(matrix_field "$product" bundle_name)"
-        deploy_mode="$(matrix_field "$product" deploy_mode)"
-        mapfile -t owned_paths < <(bash "$MATRIX" owned-paths "$product")
-        mapfile -t previous_tags < <(matching_tags_for_product "$product")
+    if [[ -n "$target_version" ]]; then
+        version_lt "$history_version" "$target_version" ||
+            die "explicit release target ${target_version} must be greater than published baseline ${history_version}"
+        [[ -n "$(commits_for_suite "$history_tag")" ]] ||
+            die "explicit release target has no suite changes since ${history_tag}"
+        new_version="$target_version"
+        level="explicit"
+        printf '  Target authority: explicit\n'
+    else
+        level="$(determine_bump "$history_tag")"
+        [[ "$level" != "none" ]] || die "no version-bumping suite commits found since ${history_tag:-repository start}"
+        new_version="$(bump_version "$current_version" "$level")"
+        printf '  Target authority: conventional commits (%s)\n' "$level"
+    fi
 
-        history_version="$(history_baseline_version "$product")"
-        if local_history_tag="$(history_baseline_tag "$product" "$history_version" 2>/dev/null)"; then
-            :
-        else
-            local_history_tag=""
-        fi
-        manifest_version="$(bash "$MATRIX" max-owned-version "$product")"
-        current_version="$(version_max "$history_version" "$manifest_version")"
-        current_tag="${canonical_prefix}${current_version}"
+    if version_lt "$new_version" "$manifest_version"; then
+        die "release target ${new_version} would be lower than current version authority ${manifest_version}"
+    fi
 
-        if [[ ${#previous_tags[@]} -gt 0 ]]; then
-            previous_tags_display="$(join_by ', ' "${previous_tags[@]}")"
-        else
-            previous_tags_display="none"
-        fi
+    printf '  Next version: %s\n' "$new_version"
+    printf '  Tag after reviewed merge: v%s\n' "$new_version"
+    printf '  Artifact products: conary remi conaryd conary-test\n'
 
-        printf '  Previous tags considered: %s\n' "$previous_tags_display"
-        printf '  History baseline: %s\n' "$history_version"
-        printf '  Owned manifest baseline: %s\n' "$manifest_version"
-        printf '  Current: %s\n' "$current_tag"
+    changelog_entry="$(generate_changelog "$history_tag" "$new_version")"
+    if [[ "$mode" == "--dry-run" ]]; then
+        printf '%s\n' "$changelog_entry"
+        printf '=== Dry run complete ===\n'
+        return
+    fi
 
-        if [[ -n "${TARGET_VERSIONS[$product]:-}" ]]; then
-            new_version="${TARGET_VERSIONS[$product]}"
-            version_lt "$history_version" "$new_version" ||
-                die "explicit release target ${new_version} must be greater than published history baseline ${history_version} for ${product}"
-            if [[ -n "$local_history_tag" && -z "$(commits_for_product "$product" "$local_history_tag")" ]]; then
-                die "explicit release target for ${product} has no scoped changes since ${local_history_tag}"
-            fi
-            level="explicit"
-            printf '  Target authority: explicit\n'
-        else
-            level="$(determine_bump "$product" "$local_history_tag")"
-            if [[ "$level" == "none" ]]; then
-                if [[ -n "$local_history_tag" ]]; then
-                    printf '  No version-bumping commits since %s. Skipping.\n' "$local_history_tag"
-                else
-                    printf '  No version-bumping commits found in product scope. Skipping.\n'
-                fi
-                print_owned_paths "${owned_paths[@]}"
-                printf '  Bundle: %s\n' "$bundle_name"
-                printf '  Deploy mode: %s\n' "$deploy_mode"
-                printf '\n'
-                continue
-            fi
-            new_version="$(bump_version "$current_version" "$level")"
-            printf '  Target authority: conventional commits (%s)\n' "$level"
-        fi
+    update_workspace_version "$new_version"
+    update_packaging_versions "$new_version"
 
-        if version_lt "$new_version" "$manifest_version"; then
-            die "computed release target ${new_version} would be lower than owned manifest version ${manifest_version} for ${product}"
-        fi
+    case "${CONARY_RELEASE_LOCKFILE_MODE:-offline}" in
+        offline) cargo update --workspace --offline --quiet ;;
+        online) cargo update --workspace --quiet ;;
+        *) die "unknown CONARY_RELEASE_LOCKFILE_MODE: ${CONARY_RELEASE_LOCKFILE_MODE}" ;;
+    esac
+    printf '  Updated Cargo.lock\n'
 
-        new_tag="$(bash "$MATRIX" canonical-tag "$product" "$new_version")"
+    regenerate_conary_man_page "$new_version"
+    insert_changelog "$changelog_entry" "$new_version"
+    bash "$MATRIX" assert-owned-version suite "$new_version"
+    stage_release_files
 
-        printf '  Next version: %s\n' "$new_version"
-        printf '  Tag: %s\n' "$new_tag"
-        print_owned_paths "${owned_paths[@]}"
-        printf '  Bundle: %s\n' "$bundle_name"
-        printf '  Deploy mode: %s\n' "$deploy_mode"
-
-        if [[ "$DRY_RUN" == "true" ]]; then
-            printf '\n'
-            generate_changelog "$product" "$local_history_tag" "$new_version"
-            continue
-        fi
-
-        for owned_path in "${owned_paths[@]}"; do
-            case "$owned_path" in
-                */Cargo.toml)
-                    update_cargo_version "$owned_path" "$new_version"
-                    printf '  Updated %s\n' "$owned_path"
-                    ;;
-            esac
-        done
-
-        if [[ "$product" == "conary" ]]; then
-            update_packaging_versions "$new_version" "${owned_paths[@]}"
-        fi
-
-        case "${CONARY_RELEASE_LOCKFILE_MODE:-offline}" in
-            offline)
-                cargo update --workspace --offline --quiet
-                ;;
-            online)
-                cargo update --workspace --quiet
-                ;;
-            *)
-                die "unknown CONARY_RELEASE_LOCKFILE_MODE: ${CONARY_RELEASE_LOCKFILE_MODE}"
-                ;;
-        esac
-        printf '  Updated Cargo.lock\n'
-
-        if [[ "$product" == "conary" ]]; then
-            regenerate_conary_man_page "$new_version"
-        fi
-
-        changelog_entry="$(generate_changelog "$product" "$local_history_tag" "$new_version")"
-        if [[ -f CHANGELOG.md ]]; then
-            tmp="$(mktemp)"
-            head -5 CHANGELOG.md > "$tmp"
-            printf '%s\n' "$changelog_entry" >> "$tmp"
-            tail -n +6 CHANGELOG.md >> "$tmp"
-            mv "$tmp" CHANGELOG.md
-        fi
-
-        stage_release_files "${owned_paths[@]}"
-        if [[ "$product" == "conary" ]]; then
-            # Generated man pages are intentionally ignored between releases.
-            # Force-add this one exact artifact so the release tag carries the
-            # CLI surface generated for the version being published.
-            git add -f -- apps/conary/man/conary.1
-        fi
-        if [[ "$PREPARE_ONLY" == "true" ]]; then
-            printf '  [PREPARED] Updated %s without commit or tag\n\n' "$new_tag"
-            continue
-        fi
-        git commit -m "chore: release ${new_tag}"
-        git tag -a "$new_tag" -m "Release ${new_tag}"
-
-        printf '  [DONE] Released %s\n\n' "$new_tag"
-    done
-
-    printf '=== Release complete ===\n'
+    printf '  [PREPARED] v%s files staged without commit or tag\n' "$new_version"
+    printf '=== Release preparation complete ===\n'
 }
 
 main "$@"

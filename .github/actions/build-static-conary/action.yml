@@ -1,0 +1,26 @@
+name: build-static-conary
+description: >-
+  Build the static x86_64-unknown-linux-musl Conary artifact that distro test
+  images stage, so no image depends on the runner's glibc or libseccomp.
+runs:
+  using: composite
+  steps:
+    - name: Install musl build dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools gperf linux-libc-dev
+    - name: Install the musl Rust target
+      shell: bash
+      run: rustup target add x86_64-unknown-linux-musl
+    - name: Restore the cached static libseccomp
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ~/.cache/conary-static-deps
+        key: ${{ runner.os }}-conary-static-deps-v1-${{ hashFiles('scripts/build-static-conary.sh') }}
+    - name: Test the kernel-header probe
+      shell: bash
+      run: bash scripts/test-build-static-conary.sh
+    - name: Build the static Conary artifact
+      shell: bash
+      run: bash scripts/build-static-conary.sh

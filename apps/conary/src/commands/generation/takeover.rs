@@ -1,4 +1,4 @@
-// src/commands/generation/takeover.rs
+// apps/conary/src/commands/generation/takeover.rs
 //! Progressive system takeover pipeline
 //!
 //! Replaces the old all-or-nothing takeover with a three-level progressive
@@ -62,7 +62,7 @@ pub fn plan_takeover(
     if !pm.is_available() {
         return Err(anyhow!(
             "No supported system package manager detected. \
-             Conary supports RPM, dpkg, and pacman."
+             Conary supports RPM, dpkg, pacman, and eopkg."
         ));
     }
 
@@ -179,28 +179,61 @@ pub async fn cmd_system_takeover(
     }
 
     // -- Pre-flight -----------------------------------------------------------
-    preflight_checks(matches!(level, TakeoverLevel::Generation))?;
+    preflight_checks(takeover_requires_composefs(level, dry_run))?;
 
     // -- Plan -----------------------------------------------------------------
-    let pm = SystemPackageManager::resolve(requested_manager)?;
+    let incomplete_record = TakeoverRecord::load_latest_incomplete(db_path)?;
+    let (pm, completed_handoff_packages) = match SystemPackageManager::resolve(requested_manager) {
+        Ok(manager) => (manager, None),
+        Err(error) => {
+            let troves = {
+                let conn = open_db(db_path)?;
+                Trove::list_all(&conn)?
+            };
+            let packages =
+                completed_takeover_packages(requested_manager, incomplete_record.as_ref(), &troves)
+                    .ok_or(error)?;
+            (
+                requested_manager.expect("completed takeover requires requested manager"),
+                Some(packages),
+            )
+        }
+    };
+    if pm == SystemPackageManager::Eopkg {
+        conary_core::packages::eopkg::takeover::resume_pending_authority_removal()
+            .context("Failed to resume interrupted eopkg authority removal")?;
+    }
     let bootloader = detect_bootloader();
     let mut plan = {
         let conn = open_db(db_path)?;
-        plan_takeover(&conn, pm)?
+        if let Some(packages) = completed_handoff_packages {
+            let tracked = Trove::list_all(&conn)?
+                .into_iter()
+                .filter_map(|trove| {
+                    Some((
+                        trove.native_package_identity?.selector().to_string(),
+                        trove.install_source,
+                    ))
+                })
+                .collect::<HashMap<_, _>>();
+            classify_takeover_inventory(packages, &tracked)
+        } else {
+            plan_takeover(&conn, pm)?
+        }
     };
-    let mut record = TakeoverRecord::load_latest_incomplete(db_path)?.unwrap_or_else(|| {
+    let mut record = incomplete_record.unwrap_or_else(|| {
         TakeoverRecord::planned(
             db_path,
             takeover_level_name(level),
             takeover_inventory_from_plan(&plan),
             pm.display_name(),
-            bootloader_name(bootloader),
+            bootloader_name(&bootloader),
         )
     });
     record.requested_level = takeover_level_name(level).to_string();
     record.inventory = takeover_inventory_from_plan(&plan);
     record.discovered_package_manager = pm.display_name().to_string();
-    record.discovered_bootloader = bootloader_name(bootloader).to_string();
+    record.discovered_bootloader = bootloader_name(&bootloader).to_string();
     record.save(db_path)?;
 
     // Print inventory summary
@@ -410,7 +443,7 @@ pub async fn cmd_system_takeover(
     info!("Built generation {gen_number}");
 
     println!("  Writing boot entry ...");
-    let boot_entry_outcome = match write_boot_entry(gen_number) {
+    let boot_entry_outcome = match write_boot_entry(gen_number, &bootloader) {
         Ok(()) => BootEntryOutcome::Written,
         Err(error) => {
             warn!("Failed to write boot entry: {error}");
@@ -462,6 +495,43 @@ pub async fn cmd_system_takeover(
     println!("  conary verify                      - Verify system integrity");
 
     Ok(())
+}
+
+fn completed_takeover_packages(
+    requested: Option<SystemPackageManager>,
+    record: Option<&TakeoverRecord>,
+    troves: &[Trove],
+) -> Option<Vec<InstalledPackageIdentity>> {
+    let requested = requested?;
+    let record = record?;
+    if !record.completed_phases.contains(&TakeoverPhase::Owned)
+        || record.discovered_package_manager != requested.display_name()
+    {
+        return None;
+    }
+
+    let expected = record
+        .inventory
+        .needs_pm_removal
+        .iter()
+        .chain(&record.inventory.already_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    if expected.is_empty() {
+        return None;
+    }
+    expected
+        .into_iter()
+        .map(|selector| {
+            troves.iter().find_map(|trove| {
+                let identity = trove.native_package_identity.as_ref()?;
+                (trove.install_source == InstallSource::Taken
+                    && identity.selector() == selector.as_str()
+                    && SystemPackageManager::from_version_scheme(identity.version_scheme())
+                        == Some(requested))
+                .then(|| identity.clone())
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -556,10 +626,10 @@ fn takeover_level_name(level: TakeoverLevel) -> &'static str {
     }
 }
 
-fn bootloader_name(bootloader: super::boot::BootLoader) -> &'static str {
+fn bootloader_name(bootloader: &super::boot::BootLoader) -> &'static str {
     match bootloader {
         super::boot::BootLoader::Bls => "bls",
-        super::boot::BootLoader::Grub => "grub",
+        super::boot::BootLoader::Grub(_) => "grub",
         super::boot::BootLoader::None => "none",
     }
 }
@@ -591,6 +661,10 @@ fn preflight_checks(check_composefs: bool) -> Result<()> {
     Ok(())
 }
 
+fn takeover_requires_composefs(level: TakeoverLevel, dry_run: bool) -> bool {
+    !dry_run && matches!(level, TakeoverLevel::Generation)
+}
+
 // ---------------------------------------------------------------------------
 // System PM query
 // ---------------------------------------------------------------------------
@@ -610,6 +684,12 @@ fn query_all_system_packages(pm: &SystemPackageManager) -> Result<Vec<InstalledP
             .into_iter()
             .map(|record| record.identity)
             .collect()),
+        SystemPackageManager::Eopkg => {
+            Ok(conary_core::packages::eopkg::query::query_all_packages()?
+                .into_iter()
+                .map(|record| record.identity)
+                .collect())
+        }
         SystemPackageManager::Unknown => {
             Err(anyhow!("No supported system package manager detected"))
         }
@@ -672,6 +752,20 @@ mod tests {
     }
 
     #[test]
+    fn generation_takeover_dry_run_does_not_require_composefs() {
+        assert!(!takeover_requires_composefs(
+            TakeoverLevel::Generation,
+            true
+        ));
+        assert!(takeover_requires_composefs(
+            TakeoverLevel::Generation,
+            false
+        ));
+        assert!(!takeover_requires_composefs(TakeoverLevel::Cas, false));
+        assert!(!takeover_requires_composefs(TakeoverLevel::Owned, false));
+    }
+
+    #[test]
     fn incomplete_bulk_adoption_cannot_cross_pm_removal_boundary() {
         let outcome = BulkAdoptionOutcome {
             failures: vec![BulkAdoptionFailure::new(
@@ -698,10 +792,75 @@ mod tests {
     }
 
     #[test]
+    fn completed_owned_takeover_resumes_from_exact_taken_identities() {
+        let identity =
+            InstalledPackageIdentity::eopkg("bash", "bash", "5.3.3", 19, "x86_64").unwrap();
+        let mut trove = Trove::new_with_source(
+            "bash".to_string(),
+            identity.version(),
+            conary_core::db::models::TroveType::Package,
+            InstallSource::Taken,
+            conary_core::repository::versioning::VersionScheme::Eopkg,
+        );
+        trove.native_package_identity = Some(identity.clone());
+        let mut record = TakeoverRecord::planned(
+            "/var/lib/conary/conary.db",
+            "generation",
+            TakeoverInventory {
+                needs_pm_removal: vec!["bash".to_string()],
+                total_system_packages: 1,
+                ..TakeoverInventory::default()
+            },
+            "eopkg",
+            "systemd-boot",
+        );
+        record.completed_phases.push(TakeoverPhase::Owned);
+
+        assert_eq!(
+            completed_takeover_packages(Some(SystemPackageManager::Eopkg), Some(&record), &[trove]),
+            Some(vec![identity])
+        );
+    }
+
+    #[test]
+    fn completed_owned_takeover_rejects_missing_taken_identity() {
+        let mut record = TakeoverRecord::planned(
+            "/var/lib/conary/conary.db",
+            "generation",
+            TakeoverInventory {
+                needs_pm_removal: vec!["bash".to_string()],
+                total_system_packages: 1,
+                ..TakeoverInventory::default()
+            },
+            "eopkg",
+            "systemd-boot",
+        );
+        record.completed_phases.push(TakeoverPhase::Owned);
+
+        assert!(
+            completed_takeover_packages(Some(SystemPackageManager::Eopkg), Some(&record), &[])
+                .is_none()
+        );
+    }
+
+    #[test]
     fn takeover_inventory_preserves_both_multiarch_variants() {
-        let amd64 =
-            InstalledPackageIdentity::dpkg("libc6:amd64", "libc6", "2.42-1", "amd64").unwrap();
-        let i386 = InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.42-1", "i386").unwrap();
+        let amd64 = InstalledPackageIdentity::dpkg(
+            "libc6:amd64",
+            "libc6",
+            "2.42-1",
+            "amd64",
+            conary_core::repository::dependency_model::DebianMultiArch::Same,
+        )
+        .unwrap();
+        let i386 = InstalledPackageIdentity::dpkg(
+            "libc6:i386",
+            "libc6",
+            "2.42-1",
+            "i386",
+            conary_core::repository::dependency_model::DebianMultiArch::Same,
+        )
+        .unwrap();
         let tracked = HashMap::from([
             (amd64.selector().to_string(), InstallSource::AdoptedFull),
             (i386.selector().to_string(), InstallSource::AdoptedTrack),

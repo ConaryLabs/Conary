@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::config::corpus::{CorpusCaseDef, CorpusTargetDef};
 use crate::config::distro::GlobalConfig;
 use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, QemuGuestCopy, TestManifest};
 
@@ -12,6 +13,7 @@ use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, QemuGuestCopy, 
 /// via `${VAR}` substitution in manifest fields.
 pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, String> {
     let mut vars = HashMap::new();
+    vars.insert("DISTRO".to_string(), distro.to_string());
     vars.insert("REMI_ENDPOINT".to_string(), config.remi.endpoint.clone());
     vars.insert("DB_PATH".to_string(), config.paths.db.clone());
     vars.insert("CONARY_BIN".to_string(), config.paths.conary_bin.clone());
@@ -115,6 +117,31 @@ pub fn expand_variables(input: &str, vars: &HashMap<String, String>) -> String {
         result = result.replace(&pattern, value);
     }
     result
+}
+
+/// Resolve manifest variables in the string-bearing corpus authority before
+/// recording target evidence.
+pub fn expand_corpus_case(
+    definition: &CorpusCaseDef,
+    vars: &HashMap<String, String>,
+) -> CorpusCaseDef {
+    CorpusCaseDef {
+        evidence_path: expand_variables(&definition.evidence_path, vars),
+        source_profile: expand_variables(&definition.source_profile, vars),
+        source_format: definition.source_format,
+        digest_source: definition.digest_source,
+        target: CorpusTargetDef {
+            architecture: expand_variables(&definition.target.architecture, vars),
+            init_system: expand_variables(&definition.target.init_system, vars),
+            capabilities: definition
+                .target
+                .capabilities
+                .iter()
+                .map(|value| expand_variables(value, vars))
+                .collect(),
+        },
+        stages: definition.stages.clone(),
+    }
 }
 
 /// Expand all variable references in an `Assertion`.
@@ -244,6 +271,8 @@ mod tests {
                     package: "conary-test-fixture".to_string(),
                     binary: "/usr/bin/true".to_string(),
                 }],
+                release_root: None,
+                target_root: None,
             },
         );
 
@@ -326,6 +355,7 @@ mod tests {
         assert_eq!(vars["REMI_ENDPOINT"], "https://remi.conary.io");
         assert_eq!(vars["DB_PATH"], "/tmp/conary-test.db");
         assert_eq!(vars["CONARY_BIN"], "/usr/local/bin/conary");
+        assert_eq!(vars["DISTRO"], "fedora44");
         assert_eq!(vars["REMI_DISTRO"], "fedora-44");
         assert_eq!(vars["REPO_NAME"], "remi-fedora-44");
         assert_eq!(vars["TEST_PACKAGE_1"], "conary-test-fixture");
@@ -367,9 +397,24 @@ mod tests {
 
         // Core fields still present.
         assert_eq!(vars["REMI_ENDPOINT"], "https://remi.conary.io");
+        assert_eq!(vars["DISTRO"], "unknown-distro");
         // Distro-specific fields absent.
         assert!(!vars.contains_key("REMI_DISTRO"));
         assert!(!vars.contains_key("TEST_PACKAGE_1"));
+    }
+
+    #[test]
+    fn distro_expands_inside_quoted_manifest_commands() {
+        let config = test_config();
+        let vars = build_variables(&config, "linux-mint-22.3");
+
+        assert_eq!(
+            expand_variables(
+                "python3 -c 'assert value[\"target_profile\"] == \"${DISTRO}\"'",
+                &vars,
+            ),
+            "python3 -c 'assert value[\"target_profile\"] == \"linux-mint-22.3\"'"
+        );
     }
 
     #[test]
@@ -539,6 +584,39 @@ mod tests {
         assert_eq!(
             expanded.commands,
             vec!["test -s /tmp/conary-generation-export/generated.qcow2"]
+        );
+    }
+
+    #[test]
+    fn corpus_target_facts_expand_from_explicit_distro_overrides() {
+        let definition: CorpusCaseDef = toml::from_str(
+            r#"
+evidence_path = "/tmp/evidence.json"
+source_profile = "arch"
+source_format = "alpm"
+digest_source = "fixture_build_manifest"
+stages = ["installation"]
+
+[target]
+architecture = "x86_64"
+init_system = "${target_init_system}"
+capabilities = ["native_lifecycle", "${target_service_capability}"]
+"#,
+        )
+        .unwrap();
+        let vars = HashMap::from([
+            ("target_init_system".to_string(), "openrc".to_string()),
+            (
+                "target_service_capability".to_string(),
+                "openrc_activation".to_string(),
+            ),
+        ]);
+
+        let expanded = expand_corpus_case(&definition, &vars);
+        assert_eq!(expanded.target.init_system, "openrc");
+        assert_eq!(
+            expanded.target.capabilities,
+            ["native_lifecycle", "openrc_activation"]
         );
     }
 }

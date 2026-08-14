@@ -73,7 +73,7 @@ async fn precommit_failure_leaves_forward_mutation_retryable() {
         .unwrap_err()
         .to_string();
     assert!(
-        error.contains("forced rollback failure after publication candidate persistence"),
+        error.contains("forced rollback failure after publication snapshot persistence"),
         "{error}"
     );
 
@@ -113,7 +113,7 @@ async fn precommit_failure_leaves_forward_mutation_retryable() {
 }
 
 #[tokio::test]
-async fn crash_before_sqlite_commit_replaces_reused_candidate_id() {
+async fn crash_before_sqlite_commit_leaves_no_orphan_snapshot_authority() {
     let (_temp_dir, db_path) = crate::commands::test_helpers::setup_command_test_db();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     crate::commands::test_helpers::create_active_test_generation(Path::new(&db_path), 1);
@@ -147,23 +147,37 @@ async fn crash_before_sqlite_commit_replaces_reused_candidate_id() {
         },
     )
     .unwrap();
-    let orphan_candidate = crate::commands::generation::selected_root::publication_candidate_dir(
-        &runtime_root,
-        &orphan_debt,
-    )
-    .unwrap();
-    crate::commands::generation::selected_root::persist_captured_publication_candidate(
-        &runtime_root,
-        &orphan_debt,
-        &active_rollback_root(&db_path),
-    )
-    .unwrap();
-    assert!(orphan_candidate.is_dir());
+    let orphan_snapshot =
+        crate::commands::generation::selected_root::persist_captured_publication_snapshot(
+            &tx,
+            &orphan_debt,
+            &active_rollback_root(&db_path),
+        )
+        .unwrap();
+    assert!(
+        conary_core::generation::root_manifest::SelectedRootSnapshot::find(
+            &tx,
+            orphan_snapshot.id(),
+        )
+        .unwrap()
+        .is_some()
+    );
 
-    // A process death here rolls SQLite back but cannot remove the already
-    // durable candidate directory.
+    // A process death here rolls the publication debt and its snapshot back
+    // atomically, so a reused row ID cannot inherit stale authority.
     drop(tx);
     drop(engine);
+    drop(conn);
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert!(
+        conary_core::generation::root_manifest::SelectedRootSnapshot::find(
+            &conn,
+            orphan_snapshot.id(),
+        )
+        .unwrap()
+        .is_none()
+    );
     drop(conn);
 
     cmd_rollback(forward, &db_path)

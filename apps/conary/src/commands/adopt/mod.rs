@@ -8,6 +8,7 @@
 pub(crate) mod cas_capture;
 mod checkpoint;
 mod conflicts;
+mod convert;
 mod hooks;
 mod native_handoff;
 mod outcome;
@@ -21,6 +22,7 @@ mod unadopt;
 
 // Re-export all public commands
 pub use conflicts::cmd_conflicts;
+pub use convert::cmd_adopt_convert;
 pub use hooks::cmd_sync_hook_install;
 pub use native_handoff::{
     NativeHandoffOptions, NativeHandoffOutcome, NativeHandoffSummary, cmd_native_handoff,

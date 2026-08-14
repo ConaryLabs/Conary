@@ -18,9 +18,9 @@ use crate::engine::executor::{ExecutionContext, StepAction, execute_step};
 use crate::engine::mock_server::start_mock_server;
 use crate::engine::suite::{TestResult, TestStatus, TestSuite};
 use crate::engine::variables;
+use crate::remi_client::{PushResultData, PushStepData, RemiClient};
 use crate::report::stream::TestEvent;
-use crate::server::remi_client::{PushResultData, PushStepData, RemiClient};
-use crate::server::wal::Wal;
+use crate::wal::Wal;
 
 /// Context for streaming test results to the Remi admin API.
 ///
@@ -31,7 +31,7 @@ pub struct RemiStreamCtx {
     /// Remi run ID returned by `create_run`.
     pub remi_run_id: i64,
     pub client: Arc<RemiClient>,
-    pub wal: Option<Arc<std::sync::Mutex<Wal>>>,
+    pub wal: Option<Arc<tokio::sync::Mutex<Wal>>>,
 }
 
 /// Executes tests from a manifest against a container.
@@ -182,6 +182,13 @@ impl TestRunner {
             .await?;
 
         let mut suite = TestSuite::new(&manifest.suite.name, manifest.suite.phase);
+        suite.expect_corpus_cases(
+            manifest
+                .test
+                .iter()
+                .filter(|test| test.corpus.is_some())
+                .count(),
+        );
         suite.status = crate::engine::suite::RunStatus::Running;
 
         // Emit suite-started event.
@@ -217,6 +224,7 @@ impl TestRunner {
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, "cancelled");
                 continue;
             }
 
@@ -236,6 +244,7 @@ impl TestRunner {
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, "suite timeout exceeded");
                 continue;
             }
 
@@ -248,11 +257,12 @@ impl TestRunner {
                     name: test_def.name.clone(),
                     status: TestStatus::Skipped,
                     duration_ms: 0,
-                    message: Some(msg),
+                    message: Some(msg.clone()),
                     stdout: None,
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, &msg);
                 continue;
             }
 
@@ -272,6 +282,7 @@ impl TestRunner {
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, &msg);
                 if let Some((run_id, ref tx)) = event_tx {
                     let _ = tx.send(TestEvent::TestSkipped {
                         run_id,
@@ -301,6 +312,7 @@ impl TestRunner {
                     stderr: None,
                     attempts: Vec::new(),
                 });
+                self.record_unrun_corpus(&mut suite, test_def, &msg);
                 if let Some((run_id, ref tx)) = event_tx {
                     let _ = tx.send(TestEvent::TestSkipped {
                         run_id,
@@ -367,6 +379,21 @@ impl TestRunner {
                 attempts: Vec::new(),
             });
 
+            if let Some(corpus) = &test_def.corpus {
+                let corpus = variables::expand_corpus_case(corpus, &self.vars);
+                let corpus_result = crate::engine::corpus::capture_case(
+                    &corpus,
+                    &test_def.id,
+                    &self.distro,
+                    status,
+                    message.as_deref(),
+                    backend,
+                    container_id,
+                )
+                .await;
+                suite.record_corpus(corpus_result);
+            }
+
             // Push result to Remi if streaming is configured.
             if let Some(ctx) = remi_ctx {
                 let push_data = build_push_result(
@@ -429,6 +456,18 @@ impl TestRunner {
         }
 
         Ok(suite)
+    }
+
+    fn record_unrun_corpus(&self, suite: &mut TestSuite, test_def: &TestDef, reason: &str) {
+        if let Some(corpus) = &test_def.corpus {
+            let corpus = variables::expand_corpus_case(corpus, &self.vars);
+            suite.record_corpus(crate::engine::corpus::case_did_not_run(
+                &corpus,
+                &test_def.id,
+                &self.distro,
+                reason,
+            ));
+        }
     }
 
     async fn run_setup_steps(
@@ -763,12 +802,18 @@ async fn push_to_remi(ctx: &RemiStreamCtx, data: &PushResultData) {
                 error = %e,
                 "failed to push result to Remi, buffering to WAL"
             );
-            if let Some(ref wal) = ctx.wal
-                && let Ok(json) = serde_json::to_string(data)
-                && let Ok(wal_guard) = wal.lock()
-                && let Err(wal_err) = wal_guard.buffer(ctx.remi_run_id, &json)
-            {
-                warn!(error = %wal_err, "failed to buffer result in WAL");
+            if let Some(ref wal) = ctx.wal {
+                match serde_json::to_string(data) {
+                    Ok(json) => {
+                        let wal_guard = wal.lock().await;
+                        if let Err(wal_err) = wal_guard.buffer(ctx.remi_run_id, &json) {
+                            warn!(error = %wal_err, "failed to buffer result in WAL");
+                        }
+                    }
+                    Err(json_error) => {
+                        warn!(error = %json_error, "failed to serialize result for WAL");
+                    }
+                }
             }
         }
     }

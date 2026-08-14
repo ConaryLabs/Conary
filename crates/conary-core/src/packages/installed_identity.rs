@@ -3,7 +3,7 @@
 //! Typed identity for one exact native package-manager database record.
 
 use crate::error::{Error, Result};
-use crate::repository::dependency_model::SourcePackageFormat;
+use crate::repository::dependency_model::{DebianMultiArch, SourcePackageFormat};
 use crate::repository::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 
@@ -28,11 +28,19 @@ pub enum InstalledPackageIdentity {
         name: String,
         version: String,
         architecture: String,
+        multi_arch: DebianMultiArch,
     },
     Pacman {
         selector: String,
         name: String,
         version: String,
+        architecture: String,
+    },
+    Eopkg {
+        selector: String,
+        name: String,
+        version: String,
+        release: u64,
         architecture: String,
     },
 }
@@ -44,6 +52,7 @@ impl InstalledPackageIdentity {
             Self::Rpm { .. } => SourcePackageFormat::Rpm,
             Self::Dpkg { .. } => SourcePackageFormat::Debian,
             Self::Pacman { .. } => SourcePackageFormat::Alpm,
+            Self::Eopkg { .. } => SourcePackageFormat::Eopkg,
         }
     }
 
@@ -75,12 +84,14 @@ impl InstalledPackageIdentity {
         name: impl Into<String>,
         version: impl Into<String>,
         architecture: impl Into<String>,
+        multi_arch: DebianMultiArch,
     ) -> Result<Self> {
         Self::validated(Self::Dpkg {
             selector: selector.into(),
             name: name.into(),
             version: version.into(),
             architecture: architecture.into(),
+            multi_arch,
         })
     }
 
@@ -94,6 +105,22 @@ impl InstalledPackageIdentity {
             selector: selector.into(),
             name: name.into(),
             version: version.into(),
+            architecture: architecture.into(),
+        })
+    }
+
+    pub fn eopkg(
+        selector: impl Into<String>,
+        name: impl Into<String>,
+        version: impl Into<String>,
+        release: u64,
+        architecture: impl Into<String>,
+    ) -> Result<Self> {
+        Self::validated(Self::Eopkg {
+            selector: selector.into(),
+            name: name.into(),
+            version: version.into(),
+            release,
             architecture: architecture.into(),
         })
     }
@@ -119,12 +146,25 @@ impl InstalledPackageIdentity {
                 name,
                 version,
                 architecture,
+                ..
             }
             | Self::Pacman {
                 selector,
                 name,
                 version,
                 architecture,
+            } => vec![
+                ("selector", selector.as_str()),
+                ("name", name.as_str()),
+                ("version", version.as_str()),
+                ("architecture", architecture.as_str()),
+            ],
+            Self::Eopkg {
+                selector,
+                name,
+                version,
+                architecture,
+                ..
             } => vec![
                 ("selector", selector.as_str()),
                 ("name", name.as_str()),
@@ -166,6 +206,7 @@ impl InstalledPackageIdentity {
                 ..
             } => selector == name || *selector == format!("{name}:{architecture}"),
             Self::Pacman { selector, name, .. } => selector == name,
+            Self::Eopkg { selector, name, .. } => selector == name,
         };
         if !selector_matches_fields {
             return Err(Error::ParseError(format!(
@@ -181,12 +222,16 @@ impl InstalledPackageIdentity {
             Self::Rpm { selector, .. }
             | Self::Dpkg { selector, .. }
             | Self::Pacman { selector, .. } => selector,
+            Self::Eopkg { selector, .. } => selector,
         }
     }
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Rpm { name, .. } | Self::Dpkg { name, .. } | Self::Pacman { name, .. } => name,
+            Self::Rpm { name, .. }
+            | Self::Dpkg { name, .. }
+            | Self::Pacman { name, .. }
+            | Self::Eopkg { name, .. } => name,
         }
     }
 
@@ -210,6 +255,9 @@ impl InstalledPackageIdentity {
                 value
             }
             Self::Dpkg { version, .. } | Self::Pacman { version, .. } => version.clone(),
+            Self::Eopkg {
+                version, release, ..
+            } => format!("{version}-{release}"),
         }
     }
 
@@ -218,6 +266,15 @@ impl InstalledPackageIdentity {
             Self::Rpm { architecture, .. }
             | Self::Dpkg { architecture, .. }
             | Self::Pacman { architecture, .. } => architecture,
+            Self::Eopkg { architecture, .. } => architecture,
+        }
+    }
+
+    /// Exact Debian `Multi-Arch` behavior carried by a dpkg record.
+    pub const fn debian_multi_arch(&self) -> Option<DebianMultiArch> {
+        match self {
+            Self::Dpkg { multi_arch, .. } => Some(*multi_arch),
+            Self::Rpm { .. } | Self::Pacman { .. } | Self::Eopkg { .. } => None,
         }
     }
 
@@ -230,7 +287,9 @@ impl InstalledPackageIdentity {
             Self::Rpm {
                 name, architecture, ..
             } => format!("{name}.{architecture}"),
-            Self::Dpkg { selector, .. } | Self::Pacman { selector, .. } => selector.clone(),
+            Self::Dpkg { selector, .. }
+            | Self::Pacman { selector, .. }
+            | Self::Eopkg { selector, .. } => selector.clone(),
         }
     }
 
@@ -279,11 +338,18 @@ mod tests {
 
     #[test]
     fn dpkg_identity_preserves_multiarch_selector() {
-        let identity =
-            InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.41-12", "i386").unwrap();
+        let identity = InstalledPackageIdentity::dpkg(
+            "libc6:i386",
+            "libc6",
+            "2.41-12",
+            "i386",
+            DebianMultiArch::Same,
+        )
+        .unwrap();
 
         assert_eq!(identity.selector(), "libc6:i386");
         assert_eq!(identity.name(), "libc6");
+        assert_eq!(identity.debian_multi_arch(), Some(DebianMultiArch::Same));
     }
 
     #[test]
@@ -300,7 +366,16 @@ mod tests {
             InstalledPackageIdentity::rpm("other-1-1.x86_64", "fixture", None, "1", "1", "x86_64")
                 .is_err()
         );
-        assert!(InstalledPackageIdentity::dpkg("libc6:amd64", "libc6", "2.41-12", "i386").is_err());
+        assert!(
+            InstalledPackageIdentity::dpkg(
+                "libc6:amd64",
+                "libc6",
+                "2.41-12",
+                "i386",
+                DebianMultiArch::Same,
+            )
+            .is_err()
+        );
         assert!(InstalledPackageIdentity::pacman("bash-debug", "bash", "5.3-1", "x86_64").is_err());
     }
 

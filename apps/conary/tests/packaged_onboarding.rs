@@ -120,3 +120,54 @@ fn fedora_package_declares_and_preflights_systemd_macro_authority() {
         "release RPM build must install systemd-rpm-macros"
     );
 }
+
+#[test]
+fn native_release_packages_disable_unpublished_debug_subpackages() {
+    let spec = read_packaging_file("packaging/rpm/conary.spec");
+    assert!(
+        spec.lines()
+            .any(|line| line.trim() == "%global debug_package %{nil}"),
+        "RPM spec must disable automatic debuginfo and debugsource subpackages"
+    );
+    assert!(
+        spec.contains("no separate debug artifact") && spec.contains("discarded subpackages"),
+        "RPM spec must explain why automatic debug subpackages are disabled"
+    );
+    assert!(
+        spec.lines()
+            .any(|line| line.trim() == "%undefine _auto_set_build_flags"),
+        "RPM spec must stop Fedora's automatic debug-oriented Rust flag injection"
+    );
+    assert!(
+        spec.lines().any(|line| {
+            line.trim()
+                == "RUSTFLAGS=\"-Cforce-frame-pointers=yes -Clink-arg=%{_package_note_flags}\""
+        }) && spec.lines().any(|line| line.trim() == "%set_build_flags"),
+        "RPM spec must retain Fedora frame-pointer, package-note, and native build flags"
+    );
+    assert_eq!(
+        spec.matches("%set_build_flags").count(),
+        1,
+        "RPM macros expand inside comments; the build-flag macro must appear only as its command"
+    );
+    assert!(
+        !spec.contains("-Cdebuginfo")
+            && !spec.contains("-Cstrip=none")
+            && !spec.contains("%{build_rustflags}"),
+        "RPM spec must leave release debuginfo and stripping authority in Cargo.toml"
+    );
+
+    let pkgbuild = read_packaging_file("packaging/arch/PKGBUILD");
+    let options = pkgbuild
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("options=(")
+                .and_then(|value| value.strip_suffix(')'))
+        })
+        .expect("Arch PKGBUILD options");
+    assert!(
+        options.split_whitespace().any(|option| option == "!debug"),
+        "Arch PKGBUILD must disable automatic debug split packages"
+    );
+}

@@ -18,7 +18,7 @@ pub use automation::{
     SecurityAutomation, UpdateAutomation,
 };
 pub use federation::{FederationConfig, FederationTier};
-pub use source_policy::{ConvergenceIntent, SourcePinConfig, SystemConfig};
+pub use source_policy::{ConvergenceIntent, SystemConfig};
 
 /// Current model file version
 pub const MODEL_VERSION: u32 = 1;

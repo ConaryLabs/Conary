@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+case "${1-}" in
+    --version)
+        printf 'rc-service (OpenRC [Linux]) 0.62\n'
+        ;;
+    --dry-run)
+        ;;
+    *)
+        printf '%s\n' "$*" >> "${CONARY_OPENRC_CAPTURE:?}"
+        ;;
+esac

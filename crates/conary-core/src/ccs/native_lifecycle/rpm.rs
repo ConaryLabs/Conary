@@ -12,7 +12,6 @@ pub struct RpmRuntimeMetadata {
     pub program: RpmProgram,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub body_transforms: Vec<RpmBodyTransform>,
-    pub critical: bool,
     pub criticality: RpmCriticality,
     pub raw_flags: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -26,6 +25,16 @@ pub struct RpmRuntimeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package_rpm_version: Option<String>,
 }
+
+/// `RPMSCRIPT_FLAG_CRITICAL` bit within the persisted raw scriptlet flag word.
+///
+/// Pinned to RPM upstream `lib/rpmscript.hh` at
+/// a8f0192aee1c08bd1454ed2ac6ebaf506004b55c
+/// (`RPMSCRIPT_FLAG_CRITICAL = (1 << 2)`); the parser's `rpm::ScriptletFlags`
+/// uses the same value. The runtime re-derives header promotion from the
+/// persisted typed class and this bit instead of trusting a conversion-time
+/// stamp.
+pub const RPM_SCRIPTLET_FLAG_CRITICAL: u32 = 1 << 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -49,6 +58,18 @@ pub enum RpmCriticality {
     SlotDefault,
     WarningOnly,
     ForcedWarningOnly,
+}
+
+impl RpmCriticality {
+    /// The persisted wire value of this criticality.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Header => "header",
+            Self::SlotDefault => "slot-default",
+            Self::WarningOnly => "warning-only",
+            Self::ForcedWarningOnly => "forced-warning-only",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -197,14 +218,17 @@ pub enum RpmSysusersDirective {
 }
 
 impl RpmRuntimeMetadata {
+    /// Contract-shape validation of a persisted RPM runtime contract.
+    ///
+    /// This runs on every bundle load, including installed bundles that were
+    /// converted against an earlier posture table. The criticality stamp is
+    /// evidence only: it must be a valid value of the closed persisted enum
+    /// (serde enforces that at deserialization), but it is not cross-checked
+    /// against the current posture-table derivation here. The runtime derives
+    /// posture from the typed class and the persisted header flag word alone,
+    /// so a posture-table correction applies to already-converted artifacts
+    /// without reconversion.
     pub(super) fn validate(&self, entry_id: &str) -> Result<()> {
-        let expected_critical = !matches!(
-            self.criticality,
-            RpmCriticality::WarningOnly | RpmCriticality::ForcedWarningOnly
-        );
-        if self.critical != expected_critical {
-            bail!("entry '{entry_id}' RPM critical flag disagrees with its criticality authority");
-        }
         if self.unknown_flags != 0 {
             bail!(
                 "entry '{entry_id}' RPM scriptlet flags contain unknown bits {:#x}",
@@ -301,6 +325,35 @@ impl RpmRuntimeMetadata {
         }
         if let Some(version) = &self.package_rpm_version {
             required_string("RPM package RPM version", version)?;
+        }
+        Ok(())
+    }
+
+    /// Conversion-output validation: every contract-shape rule plus the
+    /// criticality-stamp agreement with the current posture-table derivation.
+    ///
+    /// Only the converter/publication path calls this, so nothing Conary
+    /// produces can carry a stale or disagreeing stamp. The effective
+    /// criticality is a projection of the typed class and the header flag
+    /// word; the stamp must agree with that derivation so a hand-edited
+    /// manifest cannot smuggle a posture the class does not declare.
+    pub(super) fn validate_as_conversion_output(
+        &self,
+        entry_id: &str,
+        class: Option<super::RpmLifecycleClass>,
+    ) -> Result<()> {
+        self.validate(entry_id)?;
+        let Some(class) = class else {
+            return Ok(());
+        };
+        let header_critical = self.raw_flags & RPM_SCRIPTLET_FLAG_CRITICAL != 0;
+        let expected = class.effective_criticality(header_critical);
+        if self.criticality != expected {
+            bail!(
+                "entry '{entry_id}' RPM criticality '{}' disagrees with its typed class authority '{}'",
+                self.criticality.as_str(),
+                expected.as_str()
+            );
         }
         Ok(())
     }

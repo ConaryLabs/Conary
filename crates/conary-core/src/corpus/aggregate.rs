@@ -145,16 +145,19 @@ mod tests {
 
     fn case_failing_with(stage: ConversionStage, failure: ConversionFailure) -> CorpusCaseResult {
         CorpusCaseResult::from_stages(
+            "arch-on-fedora",
             SourceProfileIdentity {
                 profile: "arch".into(),
                 format: "alpm".into(),
             },
-            SourceArtifactIdentity {
+            vec![SourceArtifactIdentity {
+                role: super::super::SourceArtifactRole::InstallRequest,
+                digest_source: super::super::SourceArtifactDigestSource::FixtureBuildManifest,
                 name: "btop".into(),
                 version: "1.4.0-1".into(),
                 architecture: Some("x86_64".into()),
                 digest: "d3983ae27b3e6e470bc33fd060a29c2e9a4a0c5a363ea76a07dd4ce300709c9c".into(),
-            },
+            }],
             TargetCapabilitySnapshot {
                 profile: "fedora-44".into(),
                 architecture: "x86_64".into(),
@@ -167,16 +170,19 @@ mod tests {
 
     fn passing_case() -> CorpusCaseResult {
         CorpusCaseResult::from_stages(
+            "arch-on-fedora",
             SourceProfileIdentity {
                 profile: "arch".into(),
                 format: "alpm".into(),
             },
-            SourceArtifactIdentity {
+            vec![SourceArtifactIdentity {
+                role: super::super::SourceArtifactRole::InstallRequest,
+                digest_source: super::super::SourceArtifactDigestSource::FixtureBuildManifest,
                 name: "curl".into(),
                 version: "8.0.0-1".into(),
                 architecture: Some("x86_64".into()),
                 digest: "abc".into(),
-            },
+            }],
             TargetCapabilitySnapshot {
                 profile: "fedora-44".into(),
                 architecture: "x86_64".into(),

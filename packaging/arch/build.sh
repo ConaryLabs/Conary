@@ -13,7 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUTPUT="$SCRIPT_DIR/output"
 
-VERSION=$(grep '^version' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"
+bash "$REPO_ROOT/scripts/release-matrix.sh" assert-owned-version suite "$VERSION"
 NAME="conary"
 TARNAME="$NAME-$VERSION"
 
@@ -106,8 +107,13 @@ else
 fi
 
 EXPECTED_PACKAGE="$OUTPUT/${NAME}-${VERSION}-1-x86_64.pkg.tar.zst"
-if [[ ! -s "$EXPECTED_PACKAGE" || -L "$EXPECTED_PACKAGE" ]]; then
-    echo "Expected Arch package not found: $EXPECTED_PACKAGE" >&2
+shopt -s nullglob
+package_outputs=("$OUTPUT"/*.pkg.tar.zst)
+if [[ ${#package_outputs[@]} -ne 1 ||
+      "${package_outputs[0]:-}" != "$EXPECTED_PACKAGE" ||
+      ! -s "$EXPECTED_PACKAGE" ||
+      -L "$EXPECTED_PACKAGE" ]]; then
+    echo "Expected exactly one Arch package at $EXPECTED_PACKAGE, found ${#package_outputs[@]}" >&2
     exit 1
 fi
 

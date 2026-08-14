@@ -153,7 +153,13 @@ impl CcsManifest {
         }
         match (self.package.version_scheme, self.package.debian_multi_arch) {
             (VersionScheme::Debian, Some(_))
-            | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, None) => {}
+            | (
+                VersionScheme::Conary
+                | VersionScheme::Rpm
+                | VersionScheme::Arch
+                | VersionScheme::Eopkg,
+                None,
+            ) => {}
             (VersionScheme::Debian, None) => {
                 return Err(ManifestError::MissingField(
                     "package.debian_multi_arch".to_string(),

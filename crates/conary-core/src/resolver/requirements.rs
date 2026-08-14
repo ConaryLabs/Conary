@@ -190,6 +190,8 @@ fn repository_capability_kind(kind: RepositoryCapabilityKind) -> &'static str {
         RepositoryCapabilityKind::Path => "path",
         RepositoryCapabilityKind::Binary => "binary",
         RepositoryCapabilityKind::PkgConfig => "pkgconfig",
+        RepositoryCapabilityKind::PkgConfig32 => "pkgconfig32",
+        RepositoryCapabilityKind::Comar => "comar",
         RepositoryCapabilityKind::Generic => "generic",
     }
 }
@@ -203,6 +205,8 @@ fn repository_capability_kind_from_db(kind: &str) -> Result<RepositoryCapability
         "path" => Ok(RepositoryCapabilityKind::Path),
         "binary" => Ok(RepositoryCapabilityKind::Binary),
         "pkgconfig" => Ok(RepositoryCapabilityKind::PkgConfig),
+        "pkgconfig32" => Ok(RepositoryCapabilityKind::PkgConfig32),
+        "comar" => Ok(RepositoryCapabilityKind::Comar),
         "generic" => Ok(RepositoryCapabilityKind::Generic),
         other => Err(Error::ConfigError(format!(
             "unsupported persisted repository capability kind '{other}'"

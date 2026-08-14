@@ -255,7 +255,10 @@ fn bounded_memory_fixture_rejects_repeated_assembly_over_aggregate_limit() {
                 size: FIXTURE_BYTES as u64,
             }),
             component: "runtime".to_string(),
-            chunks: Some(vec![hash.clone()]),
+            chunks: Some(vec![crate::ccs::chunking::ChunkReference {
+                sha256: hash.clone(),
+                size: FIXTURE_BYTES as u32,
+            }]),
         })
         .collect::<Vec<_>>();
     let error =

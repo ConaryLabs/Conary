@@ -23,6 +23,7 @@
 mod alternatives;
 mod capabilities;
 mod directory;
+mod openrc;
 mod sysctl;
 mod systemd;
 mod tmpfiles;
@@ -33,8 +34,8 @@ pub use capabilities::{
     HOST_CAPABILITY_INVENTORY_SETTING, HostCapabilityInventory, HostCapabilityInventoryError,
     HostCapabilityPreflightError, HostCapabilityRequirement, HostExecutableContract,
     HostExecutableImplementation, ImmutableBackingSecurity, ImmutableBackingSecurityError,
-    ImmutableBackingSecurityMechanism, InitSystemCapability, SystemdInterface, SystemdOperation,
-    TmpfilesInterface,
+    ImmutableBackingSecurityMechanism, InitSystemCapability, OpenRcInterface, SystemdInterface,
+    SystemdOperation, TmpfilesInterface,
 };
 // Re-export helper functions that may be useful externally
 pub(crate) use sysctl::{is_denied_sysctl_key, validate_sysctl_key, validate_sysctl_value};

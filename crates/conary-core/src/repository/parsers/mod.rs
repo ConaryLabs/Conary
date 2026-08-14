@@ -10,7 +10,11 @@
 pub mod arch;
 pub mod common;
 pub mod debian;
+pub mod eopkg;
 pub mod fedora;
+mod snapshot;
+
+pub use snapshot::{AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity};
 
 use crate::error::Result;
 use crate::repository::dependency_model::{
@@ -28,7 +32,7 @@ pub trait RepositoryParser {
     fn sync_metadata(
         &self,
         repo_url: &str,
-    ) -> impl std::future::Future<Output = Result<Vec<PackageMetadata>>> + Send;
+    ) -> impl std::future::Future<Output = Result<AuthenticatedRepositoryMetadata>> + Send;
 }
 
 /// Package metadata extracted from repository
@@ -85,6 +89,8 @@ pub struct PackageMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChecksumType {
+    /// SHA-1 carried by the authenticated eopkg index.
+    Sha1,
     /// SHA-256 (preferred)
     Sha256,
 

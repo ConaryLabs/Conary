@@ -150,6 +150,19 @@ pub fn project_build_result_authority_to_v3(
             path: file.path.clone(),
             node: file.node.clone(),
             content: file.content.clone(),
+            content_layout: if file.node.kind.is_regular() {
+                match &file.chunks {
+                    Some(chunks) => FileContentLayoutV3::FastCdcV2020 {
+                        min_size: crate::ccs::chunking::MIN_CHUNK_SIZE,
+                        average_size: crate::ccs::chunking::AVG_CHUNK_SIZE,
+                        max_size: crate::ccs::chunking::MAX_CHUNK_SIZE,
+                        chunks: chunks.clone(),
+                    },
+                    None => FileContentLayoutV3::WholeObject,
+                }
+            } else {
+                FileContentLayoutV3::NoContent
+            },
             component: file.component.clone(),
             config: config_authority.get(&file.path).copied(),
             conflict: ConflictPolicyV3::Error,
@@ -370,6 +383,8 @@ fn dependency_kind_order(kind: DependencyKindV3) -> u8 {
         DependencyKindV3::Binary => 4,
         DependencyKindV3::Soname => 5,
         DependencyKindV3::PkgConfig => 6,
+        DependencyKindV3::PkgConfig32 => 7,
+        DependencyKindV3::Comar => 8,
     }
 }
 

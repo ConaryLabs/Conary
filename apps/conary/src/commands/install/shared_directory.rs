@@ -30,6 +30,7 @@ pub(crate) enum UpstreamDirectoryBehavior {
     DpkgUnpackPreservesDirectoryOrSymlinkToDirectory,
     DpkgRemoveDeletesOnlyUnsharedDirectoryOrSymlink,
     LibalpmInstallPreservesDirectoryAndReplacesSymlink,
+    EopkgTarInstallAppliesDirectoryMetadata,
 }
 
 /// Immutable upstream source inputs behind Conary's existing-directory policy.
@@ -74,6 +75,15 @@ pub(crate) const UPSTREAM_DIRECTORY_MATERIALIZATION_INPUTS:
         url: "https://gitlab.archlinux.org/pacman/pacman/-/raw/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/add.c",
         sha256: "c63fb24d5f7a458d1a1c0fb1f0bd9cadf8b23e461f6f9cf7598e31310f672dda",
         behavior: UpstreamDirectoryBehavior::LibalpmInstallPreservesDirectoryAndReplacesSymlink,
+    },
+    UpstreamDirectoryMaterializationInput {
+        format: PackageFormatType::Eopkg,
+        implementation: "eopkg",
+        revision: "59e423ea39088cd46f1903b1094127d8fda28d73",
+        path: "pisi/archive.py",
+        url: "https://github.com/getsolus/eopkg/blob/59e423ea39088cd46f1903b1094127d8fda28d73/pisi/archive.py",
+        sha256: "4c4dd694b8d3b0f48fb878cbb79a0fbfb04e89f40f0397589b3e40504041684c",
+        behavior: UpstreamDirectoryBehavior::EopkgTarInstallAppliesDirectoryMetadata,
     },
 ];
 
@@ -655,6 +665,9 @@ fn upstream_install_behavior(format: PackageFormatType) -> UpstreamDirectoryBeha
         }
         PackageFormatType::Arch => {
             UpstreamDirectoryBehavior::LibalpmInstallPreservesDirectoryAndReplacesSymlink
+        }
+        PackageFormatType::Eopkg => {
+            UpstreamDirectoryBehavior::EopkgTarInstallAppliesDirectoryMetadata
         }
     };
     UPSTREAM_DIRECTORY_MATERIALIZATION_INPUTS

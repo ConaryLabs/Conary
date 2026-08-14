@@ -9,6 +9,14 @@ use anyhow::{Context, Result};
 use s3::Bucket;
 use s3::Region;
 use s3::creds::Credentials;
+use s3::serde_types::{DeleteObjectsResult, ObjectIdentifier};
+use std::collections::BTreeSet;
+
+/// Maximum keys S3/R2 accepts in one `DeleteObjects` request.
+const R2_DELETE_BATCH_SIZE: usize = 1000;
+
+/// Maximum (hash, error) pairs retained from a bulk delete for diagnostics.
+const R2_DELETE_FAILURE_SAMPLES: usize = 10;
 
 /// Configuration for the R2 storage backend
 #[derive(Debug, Clone)]
@@ -32,6 +40,79 @@ impl Default for R2Config {
             region: "auto".to_string(),
         }
     }
+}
+
+/// Aggregate outcome of a bulk chunk delete.
+///
+/// A per-key rejection is recorded rather than propagated so one bad key
+/// cannot abandon the rest of a garbage-collection run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct R2BatchDeleteOutcome {
+    /// Keys submitted for deletion
+    pub attempted: usize,
+    /// Keys R2 removed (or that were already absent)
+    pub deleted: usize,
+    /// Keys R2 refused, plus keys in a batch whose request failed outright.
+    ///
+    /// Held in full rather than counted: the caller subtracts these from what it
+    /// submitted to decide which chunks are actually gone, and a count cannot
+    /// answer that. Size is bounded by the submitted key set the caller already
+    /// holds.
+    pub failed_hashes: BTreeSet<String>,
+    /// Up to `R2_DELETE_FAILURE_SAMPLES` (hash, error) pairs for diagnostics
+    pub failure_samples: Vec<(String, String)>,
+}
+
+impl R2BatchDeleteOutcome {
+    /// Number of keys that were not removed.
+    pub fn failed(&self) -> usize {
+        self.failed_hashes.len()
+    }
+
+    fn record_failure(&mut self, hash: &str, error: &str) {
+        if !self.failed_hashes.insert(hash.to_string()) {
+            return;
+        }
+        if self.failure_samples.len() < R2_DELETE_FAILURE_SAMPLES {
+            self.failure_samples
+                .push((hash.to_string(), error.to_string()));
+        }
+    }
+
+    /// Fold a batch whose request succeeded.
+    ///
+    /// S3 reports only the keys it refused; deletion is idempotent, so every
+    /// other key in the batch is gone whether or not it existed.
+    fn fold_batch(&mut self, batch: &[String], failures: &[(String, String)]) {
+        for (hash, error) in failures {
+            self.record_failure(hash, error);
+        }
+        self.deleted += batch.len().saturating_sub(failures.len());
+    }
+
+    /// Fold a batch whose request itself failed: none of its keys were removed.
+    fn fold_batch_request_failure(&mut self, batch: &[String], error: &str) {
+        for hash in batch {
+            self.record_failure(hash, error);
+        }
+    }
+}
+
+/// Split chunk hashes into request-sized batches.
+fn delete_batches(hashes: &[String]) -> std::slice::Chunks<'_, String> {
+    hashes.chunks(R2_DELETE_BATCH_SIZE)
+}
+
+/// Convert a bulk-delete response's per-key errors into (hash, error) pairs.
+fn delete_failures(prefix: &str, response: &DeleteObjectsResult) -> Vec<(String, String)> {
+    response
+        .errors
+        .iter()
+        .map(|err| {
+            let hash = err.key.strip_prefix(prefix).unwrap_or(&err.key).to_string();
+            (hash, format!("{}: {}", err.code, err.message))
+        })
+        .collect()
 }
 
 /// Cloudflare R2 object storage backend for CAS chunks
@@ -124,14 +205,35 @@ impl R2Store {
         }
     }
 
-    /// Delete a chunk from R2. Returns `true` if the object was deleted,
-    /// `false` if it did not exist.
-    pub async fn delete_chunk(&self, hash: &str) -> Result<bool> {
-        let key = self.chunk_key(hash);
-        let response = self.bucket.delete_object(&key).await?;
+    /// Delete many chunks from R2 using the S3 multi-object delete API.
+    ///
+    /// Keys are sent in batches of at most `R2_DELETE_BATCH_SIZE`. Neither a
+    /// per-key rejection nor a failed batch request aborts the remaining
+    /// batches; both are reported through the returned outcome.
+    pub async fn delete_chunks(&self, hashes: &[String]) -> Result<R2BatchDeleteOutcome> {
+        let mut outcome = R2BatchDeleteOutcome {
+            attempted: hashes.len(),
+            ..Default::default()
+        };
 
-        // S3/R2 returns 204 for successful delete, 404 if not found
-        Ok(response.status_code() < 300)
+        for batch in delete_batches(hashes) {
+            let objects: Vec<ObjectIdentifier> = batch
+                .iter()
+                .map(|hash| ObjectIdentifier::new(self.chunk_key(hash)))
+                .collect();
+
+            match self.bucket.delete_objects(objects).await {
+                Ok(response) => {
+                    let failures = delete_failures(&self.prefix, &response);
+                    outcome.fold_batch(batch, &failures);
+                }
+                Err(e) => {
+                    outcome.fold_batch_request_failure(batch, &e.to_string());
+                }
+            }
+        }
+
+        Ok(outcome)
     }
 
     /// Generate a presigned GET URL for a chunk
@@ -254,6 +356,164 @@ mod tests {
         }
 
         assert_eq!(hashes, vec!["abc123def456", "xyz789"]);
+    }
+
+    fn hashes(range: std::ops::Range<usize>) -> Vec<String> {
+        range.map(|i| format!("hash-{i:06}")).collect()
+    }
+
+    #[test]
+    fn delete_batches_never_exceed_the_s3_request_limit() {
+        let keys = hashes(0..2500);
+        let batches: Vec<&[String]> = delete_batches(&keys).collect();
+
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[0].len(), R2_DELETE_BATCH_SIZE);
+        assert_eq!(batches[1].len(), R2_DELETE_BATCH_SIZE);
+        // Final partial batch carries the remainder.
+        assert_eq!(batches[2].len(), 500);
+        assert_eq!(batches[0][0], "hash-000000");
+        assert_eq!(batches[2][499], "hash-002499");
+
+        let total: usize = batches.iter().map(|b| b.len()).sum();
+        assert_eq!(total, keys.len());
+    }
+
+    #[test]
+    fn delete_batches_are_empty_for_no_keys() {
+        assert_eq!(delete_batches(&[]).count(), 0);
+    }
+
+    #[test]
+    fn delete_batches_send_an_exact_multiple_without_a_trailing_batch() {
+        let keys = hashes(0..R2_DELETE_BATCH_SIZE * 2);
+        let batches: Vec<&[String]> = delete_batches(&keys).collect();
+        assert_eq!(batches.len(), 2);
+        assert!(batches.iter().all(|b| b.len() == R2_DELETE_BATCH_SIZE));
+    }
+
+    fn delete_error(key: &str, code: &str) -> s3::serde_types::DeleteError {
+        s3::serde_types::DeleteError {
+            key: key.to_string(),
+            code: code.to_string(),
+            message: "denied".to_string(),
+            version_id: None,
+        }
+    }
+
+    #[test]
+    fn delete_failures_strip_the_chunk_prefix() {
+        let response = DeleteObjectsResult {
+            deleted: Vec::new(),
+            errors: vec![
+                delete_error("chunks/abc123", "AccessDenied"),
+                // A key outside the prefix is reported verbatim.
+                delete_error("other/def456", "InternalError"),
+            ],
+        };
+
+        let failures = delete_failures("chunks/", &response);
+        assert_eq!(
+            failures,
+            vec![
+                ("abc123".to_string(), "AccessDenied: denied".to_string()),
+                (
+                    "other/def456".to_string(),
+                    "InternalError: denied".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn outcome_counts_unreported_keys_in_a_batch_as_deleted() {
+        let batch = hashes(0..5);
+        let mut outcome = R2BatchDeleteOutcome {
+            attempted: batch.len(),
+            ..Default::default()
+        };
+
+        outcome.fold_batch(
+            &batch,
+            &[(
+                "hash-000002".to_string(),
+                "AccessDenied: denied".to_string(),
+            )],
+        );
+
+        assert_eq!(outcome.attempted, 5);
+        assert_eq!(outcome.deleted, 4);
+        assert_eq!(outcome.failed(), 1);
+        assert_eq!(
+            outcome.failure_samples,
+            vec![(
+                "hash-000002".to_string(),
+                "AccessDenied: denied".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn outcome_accumulates_across_batches() {
+        let first = hashes(0..3);
+        let second = hashes(3..6);
+        let mut outcome = R2BatchDeleteOutcome {
+            attempted: 6,
+            ..Default::default()
+        };
+
+        outcome.fold_batch(&first, &[]);
+        // A failed request loses its whole batch but not the earlier one.
+        outcome.fold_batch_request_failure(&second, "connection reset");
+
+        assert_eq!(outcome.deleted, 3);
+        assert_eq!(outcome.failed(), 3);
+        assert_eq!(outcome.failure_samples.len(), 3);
+        assert!(
+            outcome
+                .failure_samples
+                .iter()
+                .all(|(_, error)| error == "connection reset")
+        );
+    }
+
+    #[test]
+    fn outcome_caps_failure_samples_but_keeps_counting() {
+        let batch = hashes(0..250);
+        let mut outcome = R2BatchDeleteOutcome {
+            attempted: batch.len(),
+            ..Default::default()
+        };
+
+        outcome.fold_batch_request_failure(&batch, "timeout");
+
+        assert_eq!(outcome.deleted, 0);
+        assert_eq!(outcome.failed(), 250);
+        assert_eq!(outcome.failure_samples.len(), R2_DELETE_FAILURE_SAMPLES);
+        // Samples are the first failures seen, not a random subset.
+        assert_eq!(outcome.failure_samples[0].0, "hash-000000");
+        assert_eq!(outcome.failure_samples[9].0, "hash-000009");
+    }
+
+    #[test]
+    fn outcome_does_not_underflow_when_a_server_over_reports_errors() {
+        let batch = hashes(0..2);
+        let mut outcome = R2BatchDeleteOutcome {
+            attempted: batch.len(),
+            ..Default::default()
+        };
+
+        outcome.fold_batch(
+            &batch,
+            &[
+                ("hash-000000".to_string(), "e".to_string()),
+                ("hash-000001".to_string(), "e".to_string()),
+                ("hash-000099".to_string(), "e".to_string()),
+            ],
+        );
+
+        assert_eq!(outcome.deleted, 0);
+        assert_eq!(outcome.failed(), 3);
     }
 
     #[test]

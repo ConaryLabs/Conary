@@ -19,7 +19,7 @@ CREATE TABLE converted_packages (
             -- Conversion algorithm version (re-convert if upgraded)
             conversion_version INTEGER NOT NULL DEFAULT 1,
             -- When the conversion occurred
-            converted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, enhancement_version INTEGER DEFAULT 0, extracted_provenance_json TEXT, enhancement_status TEXT DEFAULT 'pending', enhancement_error TEXT, enhancement_attempted_at TEXT, enhancement_priority INTEGER DEFAULT 1, package_name TEXT, package_version TEXT, source_profile TEXT CHECK(source_profile IS NULL OR source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch')), chunk_hashes_json TEXT, total_size INTEGER, content_hash TEXT, ccs_path TEXT, package_architecture TEXT, scriptlet_fidelity TEXT NOT NULL DEFAULT 'native-free', evidence_digest TEXT, scriptlet_summary_json TEXT NOT NULL DEFAULT '{"scriptlet_fidelity":"native-free","evidence_digest":null}',
+            converted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, enhancement_version INTEGER DEFAULT 0, extracted_provenance_json TEXT, enhancement_status TEXT DEFAULT 'pending', enhancement_error TEXT, enhancement_attempted_at TEXT, enhancement_priority INTEGER DEFAULT 1, package_name TEXT, package_version TEXT, source_profile TEXT CHECK(source_profile IS NULL OR source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')), chunk_hashes_json TEXT, total_size INTEGER, content_hash TEXT, ccs_path TEXT, package_architecture TEXT, scriptlet_fidelity TEXT NOT NULL DEFAULT 'native-free', evidence_digest TEXT, scriptlet_summary_json TEXT NOT NULL DEFAULT '{"scriptlet_fidelity":"native-free","evidence_digest":null}',
             CHECK (
                 (
                     artifact_kind = 'installed'
@@ -32,7 +32,7 @@ CREATE TABLE converted_packages (
                     AND chunk_hashes_json IS NULL
                     AND total_size IS NULL
                     AND content_hash IS NULL
-                    AND ccs_path IS NULL
+                    AND (ccs_path IS NULL OR length(ccs_path) > 0)
                 )
                 OR (
                     artifact_kind = 'repository'

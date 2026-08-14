@@ -90,7 +90,7 @@ pub(super) fn show_dry_run_summary(
 
 /// Extract a native package without inventing component boundaries.
 ///
-/// Native RPM, Debian, and Arch packages do not expose Conary's component
+/// Native RPM, Debian, Arch, and eopkg packages do not expose Conary's component
 /// contract. Their complete payload is therefore one lossless `runtime`
 /// component unless a future package parser provides explicit typed metadata.
 pub(super) fn extract_and_classify_files(

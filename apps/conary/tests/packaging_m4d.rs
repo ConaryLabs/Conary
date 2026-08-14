@@ -26,16 +26,16 @@ fn packaging_m4d_distro_list_exposes_only_supported_profiles() {
 }
 
 #[test]
-fn packaging_m4d_distro_set_rejects_unsupported_target() {
+fn packaging_m4d_distro_surface_is_read_only() {
     let (_db_temp, db_path) = common::setup_command_test_db();
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
-        .args(["distro", "set", "debian-13", "--db-path", &db_path])
+        .args(["distro", "set", "linux-mint:22", "--db-path", &db_path])
         .output()
-        .expect("run conary distro set");
+        .expect("run removed conary distro mutation");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Unsupported source feed"));
+    assert!(stderr.contains("unrecognized subcommand 'set'"), "{stderr}");
 }
 
 #[test]

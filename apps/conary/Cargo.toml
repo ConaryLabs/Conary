@@ -1,12 +1,13 @@
 [package]
 name = "conary"
-version = "0.14.0"
-edition = "2024"
-rust-version = "1.96"
-authors = ["Conary Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
 description = "Early-preview Linux package manager with native-package adoption"
 repository = "https://github.com/ConaryLabs/Conary"
-license = "MIT"
+license.workspace = true
 keywords = ["package-manager", "rpm", "deb", "system"]
 categories = ["command-line-utilities"]
 
@@ -41,6 +42,7 @@ chrono.workspace = true
 indicatif.workspace = true
 console = "0.16"
 tempfile.workspace = true
+fs2.workspace = true
 uuid.workspace = true
 base64.workspace = true
 toml.workspace = true
@@ -81,6 +83,10 @@ conary-core = { path = "../../crates/conary-core" }
 [dev-dependencies]
 axum.workspace = true
 ed25519-dalek.workspace = true
+liblzma.workspace = true
 remi = { path = "../remi" }
-rpm.workspace = true
+rpm = { workspace = true, features = ["signature-sequoia"] }
+sequoia-openpgp.workspace = true
+sha1.workspace = true
 tower.workspace = true
+zip.workspace = true

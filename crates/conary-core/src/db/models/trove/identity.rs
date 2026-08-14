@@ -26,7 +26,10 @@ pub(super) fn validated_native_identity_json(trove: &Trove) -> Result<Option<Str
     }
     match (trove.version_scheme, trove.debian_multi_arch) {
         (VersionScheme::Debian, Some(_))
-        | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, None) => {}
+        | (
+            VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Eopkg,
+            None,
+        ) => {}
         (VersionScheme::Debian, None) => {
             return Err(Error::ConfigError(format!(
                 "{} {} has Debian version authority without exact Multi-Arch metadata",
@@ -56,6 +59,12 @@ pub(super) fn validated_native_identity_json(trove: &Trove) -> Result<Option<Str
                     trove.version,
                     identity.version_scheme().as_str(),
                     trove.version_scheme.as_str()
+                )));
+            }
+            if identity.debian_multi_arch() != trove.debian_multi_arch {
+                return Err(Error::ConfigError(format!(
+                    "{} {} native identity Multi-Arch authority does not match its trove projection",
+                    trove.name, trove.version
                 )));
             }
             if identity.name() != trove.name {

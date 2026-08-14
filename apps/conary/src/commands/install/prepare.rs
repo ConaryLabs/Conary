@@ -36,6 +36,10 @@ pub fn parse_package(path: &Path, format: PackageFormatType) -> Result<Box<dyn P
             ArchPackage::parse(path_str)
                 .with_context(|| format!("Failed to parse Arch package '{}'", path_str))?,
         ),
+        PackageFormatType::Eopkg => Box::new(
+            conary_core::packages::eopkg::EopkgPackage::parse(path_str)
+                .with_context(|| format!("Failed to parse eopkg package '{}'", path_str))?,
+        ),
     };
 
     info!(
@@ -185,6 +189,7 @@ pub(super) fn version_scheme_for_format(format: PackageFormatType) -> VersionSch
         PackageFormatType::Rpm => VersionScheme::Rpm,
         PackageFormatType::Deb => VersionScheme::Debian,
         PackageFormatType::Arch => VersionScheme::Arch,
+        PackageFormatType::Eopkg => VersionScheme::Eopkg,
     }
 }
 

@@ -208,21 +208,7 @@ fn write_v3_ccs_package_with_open<'a>(
             anyhow::bail!("missing component {}", file.component);
         }
         if file.node.kind.is_regular() {
-            let content = file.content.as_ref().with_context(|| {
-                format!(
-                    "regular payload node {} has no content authority",
-                    file.path
-                )
-            })?;
-            let mut reader = open_payload(&file.path)?;
-            object_store
-                .store_reader_expected(reader.as_mut(), content.size, &content.sha256)
-                .with_context(|| {
-                    format!(
-                        "payload for {} does not match signed v3 authority",
-                        file.path
-                    )
-                })?;
+            write_file_objects(file, &object_store, open_payload(&file.path)?)?;
         }
     }
 
@@ -236,6 +222,93 @@ fn write_v3_ccs_package_with_open<'a>(
     append_dir_with_mtime(&mut archive, temp_dir.path(), "", timestamp)?;
     archive.into_inner()?.finish()?;
     Ok(())
+}
+
+fn write_file_objects(
+    file: &crate::ccs::v3::schema::FileAuthorityV3,
+    object_store: &crate::filesystem::CasStore,
+    mut reader: Box<dyn std::io::Read + '_>,
+) -> Result<()> {
+    use crate::ccs::v3::schema::FileContentLayoutV3;
+
+    let content = file.content.as_ref().with_context(|| {
+        format!(
+            "regular payload node {} has no content authority",
+            file.path
+        )
+    })?;
+    match &file.content_layout {
+        FileContentLayoutV3::WholeObject => object_store
+            .store_reader_expected(reader.as_mut(), content.size, &content.sha256)
+            .with_context(|| {
+                format!(
+                    "payload for {} does not match signed v3 authority",
+                    file.path
+                )
+            })
+            .map(|_| ()),
+        FileContentLayoutV3::FastCdcV2020 {
+            min_size,
+            average_size,
+            max_size,
+            chunks,
+        } => {
+            let chunker =
+                crate::ccs::chunking::Chunker::with_sizes(*min_size, *average_size, *max_size);
+            let mut whole_hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
+            let mut index = 0_usize;
+            let processed = chunker.visit_reader_chunks(reader, |chunk| {
+                let signed = chunks.get(index).with_context(|| {
+                    format!(
+                        "payload for {} produces an unsigned chunk at index {index}",
+                        file.path
+                    )
+                })?;
+                let actual = chunk.reference();
+                if &actual != signed {
+                    anyhow::bail!(
+                        "payload for {} chunk {index} is {}/{}, signed authority requires {}/{}",
+                        file.path,
+                        actual.sha256,
+                        actual.size,
+                        signed.sha256,
+                        signed.size
+                    );
+                }
+                whole_hasher.update(&chunk.data);
+                object_store.store_reader_expected(
+                    &mut std::io::Cursor::new(&chunk.data),
+                    u64::from(chunk.length),
+                    &signed.sha256,
+                )?;
+                index += 1;
+                Ok(())
+            })?;
+            if index != chunks.len() {
+                anyhow::bail!(
+                    "payload for {} produces {index} chunks, signed authority requires {}",
+                    file.path,
+                    chunks.len()
+                );
+            }
+            let actual = whole_hasher.finalize().value;
+            if processed != content.size || actual != content.sha256 {
+                anyhow::bail!(
+                    "payload for {} reconstructs as {actual}/{processed}, signed whole-file authority requires {}/{}",
+                    file.path,
+                    content.sha256,
+                    content.size
+                );
+            }
+            Ok(())
+        }
+        FileContentLayoutV3::NoContent => {
+            anyhow::bail!(
+                "regular payload node {} declares no content layout",
+                file.path
+            )
+        }
+    }
 }
 
 /// Admit one attestation-class control document against the shared budget.

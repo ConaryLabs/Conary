@@ -1,0 +1,53 @@
+# Selected-root OverlayFS capability and transaction proof on the published Solus fixture.
+
+[suite]
+name = "Solus Selected-Root Overlay Proof"
+phase = 4
+timeout = 1200
+
+[[test]]
+id = "TNPME403"
+name = "solus_overlay_profile_probe"
+description = "The Solus 7.1 kernel and ext4 runtime filesystem satisfy the exact profile, mount the selected generation directly, and execute manifest-delta transactions"
+timeout = 1200
+fatal = true
+group = "selected-root-overlay-profile-solus"
+
+[[test.step]]
+[test.step.qemu_boot]
+image = "solus-4.9-polaris-2026-08-12-v3"
+memory_mb = 2048
+timeout_seconds = 900
+ssh_port = 2252
+stage_conary = true
+copy_to_guest = [
+    { source = "apps/conary/tests/fixtures/selected-root-overlay-profile/probe.py", dest = "/tmp/overlay-profile-probe.py" },
+    { source = "apps/conary/tests/fixtures/selected-root-current-generation/prepare.py", dest = "/tmp/prepare-current-generation.py" },
+    { source = "apps/conary/tests/fixtures/adversarial/deps/dep-base-v1/output/dep-base-1.0.0-1.ccs", dest = "/tmp/dep-base-1.0.0-1.ccs" },
+    { source = "apps/conary/tests/fixtures/ccs-test-authority/trust-policy.toml", dest = "/tmp/ccs-trust-policy.toml" },
+]
+commands = [
+    "test \"$(uname -r)\" = 7.1.7-351.current",
+    "python3 /tmp/overlay-profile-probe.py",
+    "rm -rf /var/tmp/conary-403-current-runtime && mkdir -p /var/tmp/conary-403-current-runtime",
+    "conary system init --db-path /var/tmp/conary-403-current-runtime/conary.db",
+    "python3 /tmp/prepare-current-generation.py /var/tmp/conary-403-current-runtime; test -L /var/tmp/conary-403-current-runtime/current; test -f /var/tmp/conary-403-current-runtime/current/root.erofs",
+    "bash -o pipefail -c 'env -u CONARY_TEST_SKIP_GENERATION_MOUNT CONARY_TEST_FAIL_GENERATION_REBUILD=selected-root-direct-lower-proof RUST_LOG=info conary ccs install --yes /tmp/dep-base-1.0.0-1.ccs --policy /tmp/ccs-trust-policy.toml --sandbox always --db-path /var/tmp/conary-403-current-runtime/conary.db 2>&1 | tee /tmp/selected-root-direct-lower.log'",
+    "grep -Fq 'mounted current generation directly as selected-root immutable lower' /tmp/selected-root-direct-lower.log; test -z \"$(find /var/tmp/conary-403-current-runtime/selected-root-sessions -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)\"; ! findmnt -rn -t overlay,composefs | grep -q '/var/tmp/conary-403-current-runtime/selected-root-sessions'",
+    "rm -rf /var/tmp/conary-403-overlay-runtime && mkdir -p /var/tmp/conary-403-overlay-runtime",
+    "conary system init --db-path /var/tmp/conary-403-overlay-runtime/conary.db",
+    "env -u CONARY_TEST_SKIP_GENERATION_MOUNT conary ccs install --yes /tmp/dep-base-1.0.0-1.ccs --policy /tmp/ccs-trust-policy.toml --sandbox always --db-path /var/tmp/conary-403-overlay-runtime/conary.db",
+    "CANDIDATE=$(find /var/tmp/conary-403-overlay-runtime/publication-roots -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1); test -n \"$CANDIDATE\"; test -f \"$CANDIDATE/generation-root.json\"; test -f \"$CANDIDATE/mutable-state.json\"; test ! -e \"$CANDIDATE/root\"; grep -q '\"path\": \"/usr/bin/dep-base-v1\"' \"$CANDIDATE/generation-root.json\"; test -z \"$(find /var/tmp/conary-403-overlay-runtime/selected-root-sessions -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)\"; ! findmnt -rn -t overlay | grep -q '/var/tmp/conary-403-overlay-runtime/selected-root-sessions'",
+    "env -u CONARY_TEST_SKIP_GENERATION_MOUNT conary remove dep-base --yes --sandbox always --db-path /var/tmp/conary-403-overlay-runtime/conary.db",
+    "CANDIDATE=$(find /var/tmp/conary-403-overlay-runtime/publication-roots -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1); test -n \"$CANDIDATE\"; ! grep -q '\"path\": \"/usr/bin/dep-base-v1\"' \"$CANDIDATE/generation-root.json\"; test ! -e \"$CANDIDATE/root\"; test -z \"$(find /var/tmp/conary-403-overlay-runtime/selected-root-sessions -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)\"; ! findmnt -rn -t overlay | grep -q '/var/tmp/conary-403-overlay-runtime/selected-root-sessions'; echo selected-root-overlay-transaction-ok",
+]
+expect_output = [
+    "\"hardlink_copy_up\": \"preserved\"",
+    "\"metadata_copy_up\": \"complete-data\"",
+    "\"opaque_directory\": \"logical-y\"",
+    "mounted current generation directly as selected-root immutable lower",
+    "selected-root-overlay-transaction-ok",
+]
+
+[test.step.assert]
+exit_code = 0

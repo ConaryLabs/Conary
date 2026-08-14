@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-07-31
-revision: 14
+last_updated: 2026-08-13
+revision: 15
 status: paused
-summary: Preserve the v0.14.0 tester-loop shape while execution waits for a release containing the supported-host fixes
+summary: Preserve the v0.15.0 tester-loop shape while execution waits for the ordinary-package corpus gate
 ---
 
 # Agent-Assisted Tester Loop
@@ -16,16 +16,19 @@ Use a disposable VM, a snapshot, or a non-critical host. Do not run this loop
 first on an irreplaceable daily driver.
 
 **Do not run this guide while its frontmatter status is `paused`.** Its
-`v0.14.0` commands are retained so the next release can be re-pinned without
-losing the reviewed flow, but that immutable release predates fixes discovered
-during supported-host generation bring-up and is not current tester authority.
-Resume only after this guide names a later release and the
+`v0.15.0` commands match the current immutable, independently verified suite,
+but release proof does not satisfy #110's ordinary-package corpus gate and the
+suite is not yet pinned tester authority. Resume only after that separate gate
+passes, this guide names an exact tester release, and the
 [current release artifact matrix](https://github.com/ConaryLabs/Conary/blob/main/docs/operations/release-artifact-matrix.md)
-records that exact tag as published and independently verified.
+still records that tag as published and independently verified.
 
 ## Copy-Paste Agent Prompt
 
-Paste this into the agent running inside the VM or snapshot:
+The retained prompt below is inactive while this guide is paused. It assumes
+the frontmatter has been changed to active and the displayed release has been
+assigned as tester authority. Only then paste it into the agent running inside
+the VM or snapshot:
 
 ```text
 First read the guide frontmatter. If its status is paused, stop without
@@ -35,19 +38,19 @@ release exists.
 I want you to help me run the Conary first external tester loop on this host.
 
 Read this guide first:
-https://github.com/ConaryLabs/Conary/blob/v0.14.0/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.15.0/docs/guides/agent-assisted-tester-loop.md
 
 Goal: install, inspect, update-preview, and remove a package whose source
 format differs from this host's native package format with pinned Conary
-v0.14.0, then draft a pre-alpha tester feedback issue. You are testing the user-facing
+v0.15.0, then draft a pre-alpha tester feedback issue. You are testing the user-facing
 cross-distro package-manager flow, not developing Conary itself.
 
 Safety rules:
 - Stop immediately if this is not a VM, snapshot, or explicitly non-critical
   host.
 - Confirm distro, architecture, kernel, and sudo before installing anything.
-- Use only the pinned v0.14.0 release from
-  https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0 and confirm its
+- Use only the pinned v0.15.0 release from
+  https://github.com/ConaryLabs/Conary/releases/tag/v0.15.0 and confirm its
   release page provides the package for this host plus SHA256SUMS.
 - Verify SHA256SUMS for every downloaded artifact before installation.
 - Run dry-run commands before live commands when the loop provides both.
@@ -73,7 +76,7 @@ Stop and do not install Conary if any of these are true:
 - the host is not Fedora 44, Ubuntu 26.04 LTS, or Arch Linux;
 - the host is not `x86_64`;
 - `sudo -v` fails;
-- the pinned `v0.14.0` release page does not provide the package for this host
+- the pinned `v0.15.0` release page does not provide the package for this host
   plus `SHA256SUMS`;
 - downloaded artifact checksums do not match `SHA256SUMS`;
 - the agent or human cannot explain what a live mutation command is about to
@@ -109,45 +112,45 @@ support. Those only matter for generation-model features outside this test.
 Create a clean work directory:
 
 ```bash
-mkdir -p "$HOME/conary-preview-v0.14.0"
-cd "$HOME/conary-preview-v0.14.0"
+mkdir -p "$HOME/conary-preview-v0.15.0"
+cd "$HOME/conary-preview-v0.15.0"
 ```
 
 Download `SHA256SUMS` and the package for the current distro from:
 
 ```text
-https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0
+https://github.com/ConaryLabs/Conary/releases/tag/v0.15.0
 ```
 
 Use exactly one package. Fedora 44:
 
 ```bash
-base="https://github.com/ConaryLabs/Conary/releases/download/v0.14.0"
+base="https://github.com/ConaryLabs/Conary/releases/download/v0.15.0"
 curl -fLO "$base/SHA256SUMS"
-curl -fLO "$base/conary-0.14.0-1.fc44.x86_64.rpm"
+curl -fLO "$base/conary-0.15.0-1.fc44.x86_64.rpm"
 ```
 
 Ubuntu 26.04 LTS:
 
 ```bash
-base="https://github.com/ConaryLabs/Conary/releases/download/v0.14.0"
+base="https://github.com/ConaryLabs/Conary/releases/download/v0.15.0"
 curl -fLO "$base/SHA256SUMS"
-curl -fLO "$base/conary_0.14.0-1_amd64.deb"
+curl -fLO "$base/conary_0.15.0-1_amd64.deb"
 ```
 
 Arch Linux:
 
 ```bash
-base="https://github.com/ConaryLabs/Conary/releases/download/v0.14.0"
+base="https://github.com/ConaryLabs/Conary/releases/download/v0.15.0"
 curl -fLO "$base/SHA256SUMS"
-curl -fLO "$base/conary-0.14.0-1-x86_64.pkg.tar.zst"
+curl -fLO "$base/conary-0.15.0-1-x86_64.pkg.tar.zst"
 ```
 
 Downloaded package names:
 
-- Fedora 44: `conary-0.14.0-1.fc44.x86_64.rpm`
-- Ubuntu 26.04 LTS: `conary_0.14.0-1_amd64.deb`
-- Arch Linux: `conary-0.14.0-1-x86_64.pkg.tar.zst`
+- Fedora 44: `conary-0.15.0-1.fc44.x86_64.rpm`
+- Ubuntu 26.04 LTS: `conary_0.15.0-1_amd64.deb`
+- Arch Linux: `conary-0.15.0-1-x86_64.pkg.tar.zst`
 
 Verify the downloaded package against `SHA256SUMS`:
 
@@ -164,19 +167,19 @@ Ask the human before running the matching install command.
 Fedora 44:
 
 ```bash
-sudo dnf install ./conary-0.14.0-1.fc44.x86_64.rpm
+sudo dnf install ./conary-0.15.0-1.fc44.x86_64.rpm
 ```
 
 Ubuntu 26.04 LTS:
 
 ```bash
-sudo apt install ./conary_0.14.0-1_amd64.deb
+sudo apt install ./conary_0.15.0-1_amd64.deb
 ```
 
 Arch Linux:
 
 ```bash
-sudo pacman -U ./conary-0.14.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./conary-0.15.0-1-x86_64.pkg.tar.zst
 ```
 
 Then record:

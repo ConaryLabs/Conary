@@ -842,6 +842,49 @@ fn test_changeset_history() {
     assert_eq!(cs_by_id.unwrap().description, nginx_cs.description);
 }
 
+#[test]
+fn test_history_reports_persisted_lifecycle_failure() {
+    use conary_core::db::models::{Changeset, ChangesetStatus, LifecycleEvent, NewLifecycleEvent};
+    use conary_core::scriptlet::{EffectiveSandbox, SandboxMode, ScriptletFailureKind};
+
+    let (_temp_dir, db_path) = common::setup_command_test_db();
+    let conn = db::open(&db_path).unwrap();
+    let mut changeset = Changeset::new("Install lifecycle-fixture-1.0.0".to_string());
+    let changeset_id = changeset.insert(&conn).unwrap();
+    LifecycleEvent::append_batch(
+        &conn,
+        changeset_id,
+        &[NewLifecycleEvent {
+            source_package: "lifecycle-fixture".to_string(),
+            source_version: "1.0.0".to_string(),
+            source_entry: "rpm:%post".to_string(),
+            failure: conary_core::scriptlet::ScriptletFailureOutcome {
+                phase: "post-install".to_string(),
+                failure_kind: ScriptletFailureKind::ScriptExited,
+                requested_sandbox_mode: SandboxMode::Always,
+                effective_sandbox: EffectiveSandbox::TargetRoot,
+                message: "script returned 42".to_string(),
+            },
+        }],
+    )
+    .unwrap();
+    changeset
+        .update_status(&conn, ChangesetStatus::Applied)
+        .unwrap();
+    drop(conn);
+
+    let output = run_conary(&["system", "history", "--db-path", &db_path]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[warn]"), "{stdout}");
+    assert!(
+        stdout.contains("lifecycle-fixture 1.0.0 rpm:%post"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("ScriptExited"), "{stdout}");
+    assert!(stdout.contains("script returned 42"), "{stdout}");
+}
+
 /// Test whatprovides functionality
 #[test]
 fn test_whatprovides_operations() {

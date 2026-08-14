@@ -16,7 +16,7 @@ pub(crate) fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -
 
     for transaction in &plan.transactions {
         let current = transaction
-            .current_distro
+            .current_source_identity
             .as_deref()
             .unwrap_or("unknown source");
         let status = if transaction.executable {
@@ -30,7 +30,7 @@ pub(crate) fn render_replatform_execution_plan(plan: &ReplatformExecutionPlan) -
             transaction.package,
             transaction.current_version,
             current,
-            transaction.target_distro,
+            transaction.target_source_identity,
             transaction.target_version
         );
         if let Some(arch) = &transaction.architecture {
@@ -121,8 +121,8 @@ mod tests {
             transactions: vec![
                 conary_core::model::ReplatformExecutionTransaction {
                     package: "bash".to_string(),
-                    current_distro: Some("fedora-44".to_string()),
-                    target_distro: "arch".to_string(),
+                    current_source_identity: Some("fedora-44".to_string()),
+                    target_source_identity: "arch".to_string(),
                     current_version: "5.1.0".to_string(),
                     current_architecture: Some("x86_64".to_string()),
                     target_version: "5.2.0".to_string(),
@@ -140,8 +140,8 @@ mod tests {
                 },
                 conary_core::model::ReplatformExecutionTransaction {
                     package: "vim".to_string(),
-                    current_distro: Some("fedora-44".to_string()),
-                    target_distro: "arch".to_string(),
+                    current_source_identity: Some("fedora-44".to_string()),
+                    target_source_identity: "arch".to_string(),
                     current_version: "9.0.1".to_string(),
                     current_architecture: Some("x86_64".to_string()),
                     target_version: "9.1.0".to_string(),
@@ -194,8 +194,8 @@ mod tests {
         let plan = ReplatformExecutionPlan {
             transactions: vec![conary_core::model::ReplatformExecutionTransaction {
                 package: "vim".to_string(),
-                current_distro: Some("fedora-44".to_string()),
-                target_distro: "arch".to_string(),
+                current_source_identity: Some("fedora-44".to_string()),
+                target_source_identity: "arch".to_string(),
                 current_version: "9.0.1".to_string(),
                 current_architecture: Some("x86_64".to_string()),
                 target_version: "9.1.0".to_string(),
@@ -229,8 +229,8 @@ mod tests {
         let plan = ReplatformExecutionPlan {
             transactions: vec![conary_core::model::ReplatformExecutionTransaction {
                 package: "vim".to_string(),
-                current_distro: Some("fedora-44".to_string()),
-                target_distro: "arch".to_string(),
+                current_source_identity: Some("fedora-44".to_string()),
+                target_source_identity: "arch".to_string(),
                 current_version: "9.0.1".to_string(),
                 current_architecture: Some("x86_64".to_string()),
                 target_version: "9.1.0".to_string(),

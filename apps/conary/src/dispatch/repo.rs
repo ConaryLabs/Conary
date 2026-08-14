@@ -37,6 +37,13 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
                 remi_endpoint,
                 ccs_package_keys,
                 source_profile,
+                source_id,
+                repository_id,
+                stream_kind,
+                stream_id,
+                policy_group,
+                follow,
+                pin_snapshot_sha256,
                 security_advisories,
             } = *args;
             let security_advisory_support = match security_advisories {
@@ -90,6 +97,17 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
                 remi_endpoint,
                 ccs_package_keys,
                 source_profile,
+                source_id,
+                repository_id,
+                stream_kind: stream_kind.map(|kind| match kind {
+                    cli::CliNativeStreamKind::Release => "release".to_string(),
+                    cli::CliNativeStreamKind::Channel => "channel".to_string(),
+                    cli::CliNativeStreamKind::Rolling => "rolling".to_string(),
+                }),
+                stream_id,
+                policy_group,
+                follow,
+                pin_snapshot_sha256,
                 security_advisory_support,
             })
             .await

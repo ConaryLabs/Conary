@@ -29,7 +29,7 @@ fn bundle_with_interest() -> NativeLifecycleBundle {
         scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
         entries: vec![NativeLifecycleEntry {
             id: "deb:triggers".to_string(),
-            native_slot: "DEBIAN/triggers".to_string(),
+            native_slot: None,
             kind: NativeLifecycleEntryKind::ControlArtifact,
             phase: conary_core::ccs::native_lifecycle::LifecyclePath::Trigger,
             lifecycle_paths: vec!["trigger".to_string()],

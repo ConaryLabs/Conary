@@ -30,13 +30,11 @@ use crate::child_wait::wait_with_output;
 use crate::error::{Error, Result, ScriptletFailureKind};
 use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::sched::{CloneFlags, unshare};
-use nix::sys::signal::{Signal, kill};
-use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{ForkResult, Gid, Pid, Uid};
 use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -44,14 +42,22 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-use tracing::{debug, warn};
+use tracing::warn;
+
+#[cfg(test)]
+use nix::sys::wait::{WaitStatus, waitpid};
 
 mod analysis;
+#[cfg(test)]
+mod child_fork_safety;
+mod child_safety;
 mod namespaces;
+
+use child_safety::set_rlimit;
 
 pub use analysis::{ScriptAnalysis, ScriptRisk, analyze_script};
 use namespaces::{
-    RlimitResource, UserNamespaceSync, adopt_raw_fd, chdir_syscall, chroot_syscall,
+    RlimitResource, UserNamespaceSync, chdir_syscall, chroot_syscall,
     configure_user_namespace_root_mapping_for_pid, fork_process, prepare_user_namespace_entrypoint,
     prepare_user_namespace_root, sandbox_host_gid, sandbox_host_uid, sandbox_namespace_flags,
     set_parent_death_signal, set_rlimit_syscall, sethostname_syscall,
@@ -525,18 +531,6 @@ pub struct Sandbox {
 }
 
 mod execution;
-/// Set a resource limit if the value is non-zero
-fn set_rlimit(resource: RlimitResource, value: u64, name: &str) {
-    if value > 0 {
-        let limit = libc::rlimit {
-            rlim_cur: value,
-            rlim_max: value,
-        };
-        if let Err(err) = set_rlimit_syscall(resource, &limit) {
-            warn!("setrlimit {} failed: {}", name, err);
-        }
-    }
-}
 
 /// Check if namespace isolation is available
 pub fn isolation_available() -> bool {

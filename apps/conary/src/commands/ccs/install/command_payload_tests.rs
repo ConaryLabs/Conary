@@ -8,6 +8,72 @@ use super::test_support::{
 };
 
 #[tokio::test]
+async fn ccs_install_dry_run_keeps_permanent_cas_absent() {
+    use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let package_path = temp_dir.path().join("dry-run-payload.ccs");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+
+    let content = b"dry run must remain read only".to_vec();
+    let hash = conary_core::hash::sha256(&content);
+    let files = vec![ccs_regular_file(
+        "/usr/share/dry-run-proof".to_string(),
+        hash.clone(),
+        content.len() as u64,
+        0o100644,
+        "runtime".to_string(),
+    )];
+    let result = BuildResult {
+        manifest: CcsManifest::new_minimal("dry-run-payload", "1.0.0"),
+        components: HashMap::from([(
+            "runtime".to_string(),
+            ComponentData {
+                name: "runtime".to_string(),
+                files: files.clone(),
+                hash: "runtime".to_string(),
+                size: content.len() as u64,
+            },
+        )]),
+        files: files.clone(),
+        payloads: conary_core::ccs::builder::payloads_from_bounded_memory_for_tests(
+            &files,
+            HashMap::from([(hash, content)]),
+        )
+        .unwrap(),
+        total_size: files[0].content.as_ref().unwrap().size,
+        chunked: false,
+        chunk_stats: None,
+    };
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
+    let objects_dir = temp_dir.path().join("objects");
+    assert!(!objects_dir.exists());
+
+    cmd_ccs_install(
+        package_path.to_str().unwrap(),
+        db_path_str,
+        install_root.to_str().unwrap(),
+        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
+        None,
+        crate::commands::SandboxMode::Always,
+        true,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !objects_dir.exists(),
+        "CCS dry-run verification must not create permanent CAS state"
+    );
+}
+
+#[tokio::test]
 async fn ccs_install_rejects_child_write_beneath_package_symlink() {
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;

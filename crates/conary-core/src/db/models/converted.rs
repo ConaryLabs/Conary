@@ -2,7 +2,7 @@
 
 //! Converted package tracking model
 //!
-//! Tracks packages converted from native formats (RPM/DEB/Arch) to CCS.
+//! Tracks packages converted from native formats (RPM/DEB/Arch/eopkg) to CCS.
 //! This enables:
 //! - Skip re-conversion of same package artifact (checksum-based dedup)
 //! - Persist typed lifecycle evidence
@@ -14,12 +14,18 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::collections::BTreeSet;
 use strum_macros::{AsRefStr, Display, EnumString};
 
+mod validation;
+use validation::{default_scriptlet_summary_json, validate_current_scriptlet_summary};
+
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages.
 ///
-/// Revision 13 preserves source-defined strong dependency ordering in signed
-/// CCS authority.
-pub const CONVERSION_VERSION: i32 = 13;
+/// Revision 16 cuts the persisted CCS scriptlet contract: the redundant
+/// `RpmRuntimeMetadata.critical` boolean leaves the contract entirely
+/// (`deny_unknown_fields` rejects old manifests naming it), and
+/// `NativeLifecycleEntry.native_slot` persists the typed `RpmScriptletSlot`
+/// class with exact wire strings instead of a free string.
+pub const CONVERSION_VERSION: i32 = 16;
 /// Canonical digest of an empty repository-provide projection.
 pub const EMPTY_REPOSITORY_PROVIDES_DIGEST: &str =
     "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
@@ -57,7 +63,8 @@ pub struct ConvertedPackage {
     pub trove_id: Option<i64>,
     /// Original package format (rpm, deb, arch)
     pub original_format: String,
-    /// Checksum of original package file (skip if already converted)
+    /// Exact repository checksum identity for repository artifacts, or the
+    /// verified native artifact checksum for installed conversions.
     pub original_checksum: String,
     /// Digest of the exact repository-provide cache projection. It invalidates
     /// stale conversions but never mutates source artifact authority.
@@ -78,8 +85,8 @@ pub struct ConvertedPackage {
     /// When enhancement was last attempted
     pub enhancement_attempted_at: Option<String>,
 
-    // Server-side conversion identity and storage fields.
-    /// Package name (for server-side lookups)
+    // Repository conversion identity plus durable installed-conversion output.
+    /// Package name (for repository lookups)
     pub package_name: Option<String>,
     /// Package version (for server-side lookups)
     pub package_version: Option<String>,
@@ -93,7 +100,8 @@ pub struct ConvertedPackage {
     pub total_size: Option<i64>,
     /// Content hash of the CCS package
     pub content_hash: Option<String>,
-    /// Path to the CCS package file
+    /// Path to the CCS package file. Repository records require it; installed
+    /// records may retain the verified adopted-package conversion output.
     pub ccs_path: Option<String>,
 
     // Foreign-package scriptlet evidence fields.
@@ -330,6 +338,16 @@ impl ConvertedPackage {
         Ok(result)
     }
 
+    /// Delete conversion evidence for one installed trove.
+    pub fn delete_installed_by_trove(conn: &Connection, trove_id: i64) -> Result<usize> {
+        conn.execute(
+            "DELETE FROM converted_packages
+             WHERE artifact_kind = 'installed' AND trove_id = ?1",
+            [trove_id],
+        )
+        .map_err(Into::into)
+    }
+
     /// Check if a package needs re-conversion (algorithm upgraded)
     pub fn needs_reconversion(&self) -> bool {
         self.conversion_version != CONVERSION_VERSION
@@ -350,14 +368,13 @@ impl ConvertedPackage {
             artifact.package_architecture,
         )?
         .into_iter()
-        .map(|(checksum, digest)| (bare_sha256(&checksum).to_string(), digest))
         .collect::<BTreeSet<_>>();
         if current_inputs.len() > 1 {
             return Ok(false);
         }
 
         Ok(current_inputs.contains(&(
-            bare_sha256(&self.original_checksum).to_string(),
+            self.original_checksum.clone(),
             artifact.repository_provides_digest.to_string(),
         )))
     }
@@ -525,10 +542,15 @@ impl ConvertedPackage {
                     || self.chunk_hashes_json.is_some()
                     || self.total_size.is_some()
                     || self.content_hash.is_some()
-                    || self.ccs_path.is_some()
                 {
                     return Err(crate::Error::InternalError(format!(
                         "installed converted package {} carries repository-serving fields",
+                        self.record_identity()
+                    )));
+                }
+                if self.ccs_path.as_deref().is_some_and(str::is_empty) {
+                    return Err(crate::Error::InternalError(format!(
+                        "installed converted package {} carries an empty CCS path",
                         self.record_identity()
                     )));
                 }
@@ -544,6 +566,17 @@ impl ConvertedPackage {
                 self.repository_artifact().map(|_| ())
             }
         }
+    }
+
+    /// Attach the durable signed CCS output retained for an adopted package.
+    pub fn set_installed_ccs_path(&mut self, path: String) -> Result<()> {
+        if self.artifact_kind != ConvertedArtifactKind::Installed || path.is_empty() {
+            return Err(crate::Error::InternalError(
+                "installed CCS path requires a non-empty installed conversion".to_string(),
+            ));
+        }
+        self.ccs_path = Some(path);
+        Ok(())
     }
 
     /// Store passive scriptlet metadata generated during conversion.
@@ -953,28 +986,6 @@ impl ConvertedPackage {
         self.enhancement_status == "pending"
             || (self.enhancement_status == "complete" && self.enhancement_version < current_version)
     }
-}
-
-fn bare_sha256(value: &str) -> &str {
-    value.strip_prefix("sha256:").unwrap_or(value)
-}
-
-fn default_scriptlet_summary_json() -> String {
-    serde_json::to_string(&ScriptletBundleSummary::default())
-        .expect("default lifecycle summary must serialize")
-}
-
-fn validate_current_scriptlet_summary(summary: &ScriptletBundleSummary) -> Result<()> {
-    if !matches!(
-        summary.scriptlet_fidelity.as_str(),
-        "native-free" | "native-lifecycle"
-    ) {
-        return Err(crate::Error::InternalError(format!(
-            "unsupported current lifecycle fidelity {:?}",
-            summary.scriptlet_fidelity
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

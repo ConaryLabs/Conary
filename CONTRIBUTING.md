@@ -19,7 +19,7 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 
 ### Prerequisites
 
-- **Rust 1.96+** (edition 2024) -- install via [rustup](https://rustup.rs/)
+- **Rust 1.97.1+** (edition 2024) -- install via [rustup](https://rustup.rs/)
 - **Git**
 - **Linux** -- Conary uses Linux-specific APIs (namespaces, landlock, seccomp) and does not currently build on macOS or Windows
 
@@ -170,7 +170,7 @@ cargo test -p conaryd
 
 ### Rust Specifics
 
-- Edition 2024, minimum supported Rust version 1.96
+- Edition 2024, minimum supported Rust version 1.97.1
 - Use `thiserror` for library/module error types
 - Use `anyhow` for application-level error propagation
 - Minimize `.unwrap()` in production code paths -- prefer `?` or explicit error handling
@@ -321,7 +321,8 @@ and four shared crates.
 | `apps/conary-test/src/engine/` | Test suite, runner, assertions |
 | `apps/conary-test/src/container/` | ContainerBackend trait and container lifecycle |
 | `apps/conary-test/src/report/` | JSON output and SSE event streaming |
-| `apps/conary-test/src/server/` | Axum HTTP API and MCP server (rmcp) |
+| `apps/conary-test/src/remi_client.rs` | Remi test-data API client and retained result-streaming path |
+| `apps/conary-test/src/wal.rs` | Retained SQLite result buffer for the planned Remi streaming path |
 
 ## Development Workflow
 

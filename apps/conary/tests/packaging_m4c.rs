@@ -337,6 +337,7 @@ fn release_artifact_with_attestation(
                     sha256: payload_hash,
                     size: payload.len() as u64,
                 }),
+                content_layout: conary_core::ccs::v3::schema::FileContentLayoutV3::WholeObject,
                 component: "main".to_string(),
                 config: None,
                 conflict: ConflictPolicyV3::Error,

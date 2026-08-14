@@ -38,3 +38,15 @@ repology_repo = "arch"
 package_format = "arch"
 version_scheme = "arch"
 scriptlet_shell = "/usr/bin/bash"
+
+[[profiles]]
+id = "solus"
+display_name = "Solus (rolling)"
+release = "rolling"
+
+[profiles.identity]
+family_slug = "solus"
+remi_route_slug = "solus"
+repology_repo = "solus"
+package_format = "eopkg"
+version_scheme = "eopkg"

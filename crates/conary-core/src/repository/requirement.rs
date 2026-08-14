@@ -49,7 +49,7 @@ pub fn parse_native_requirement(
                 super::package_relation::parse_arch_atom(native_text)?
             })
         }
-        VersionScheme::Conary => RepositoryRequirementExpression::Atom(
+        VersionScheme::Conary | VersionScheme::Eopkg => RepositoryRequirementExpression::Atom(
             super::package_relation::parse_inline_atom(native_text, scheme)?,
         ),
     };
@@ -152,7 +152,7 @@ fn validate_positive_expression_shape(
     scheme: VersionScheme,
 ) -> Result<(), String> {
     match scheme {
-        VersionScheme::Rpm | VersionScheme::Conary => Ok(()),
+        VersionScheme::Rpm | VersionScheme::Conary | VersionScheme::Eopkg => Ok(()),
         VersionScheme::Debian => {
             let valid = match expression {
                 RepositoryRequirementExpression::Atom(_) => true,

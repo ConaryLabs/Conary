@@ -65,7 +65,10 @@ pub(super) fn validate_identity(
         authority.identity.debian_multi_arch,
     ) {
         (VersionScheme::Debian, Some(_))
-        | (VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch, None) => {}
+        | (
+            VersionScheme::Conary | VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Eopkg,
+            None,
+        ) => {}
         (VersionScheme::Debian, None) => diagnostics.push(V3Diagnostic::error(
             V3DiagnosticCode::MissingAuthority,
             "Debian v3 package identity requires exact Multi-Arch authority",
@@ -85,6 +88,14 @@ pub(super) fn validate_capabilities(
     authority: &AuthorityDocumentV3,
     diagnostics: &mut Vec<V3Diagnostic>,
 ) {
+    let signed_paths = match &authority.kind {
+        crate::ccs::v3::schema::PackageKindV3::Package(data) => data
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        _ => std::collections::BTreeSet::new(),
+    };
     for (index, entry) in authority.provided_capabilities.iter().enumerate() {
         let field = format!("capabilities[{index}]");
         if entry.target.is_some() || entry.component.is_some() {
@@ -112,6 +123,8 @@ pub(super) fn validate_capabilities(
                 DependencyKindV3::Binary => RepositoryCapabilityKind::Binary,
                 DependencyKindV3::Soname => RepositoryCapabilityKind::Soname,
                 DependencyKindV3::PkgConfig => RepositoryCapabilityKind::PkgConfig,
+                DependencyKindV3::PkgConfig32 => RepositoryCapabilityKind::PkgConfig32,
+                DependencyKindV3::Comar => RepositoryCapabilityKind::Comar,
             },
             name: entry.name.clone(),
             version: entry.provider_version.clone(),
@@ -124,8 +137,21 @@ pub(super) fn validate_capabilities(
             diagnostics.push(V3Diagnostic::error(
                 V3DiagnosticCode::KindContractViolation,
                 format!("invalid provided capability authority: {error}"),
-                Some(field),
+                Some(field.clone()),
                 "encode a complete provider record accepted by the shared capability grammar",
+            ));
+        }
+        // A promise says a path will be created; signed payload says it already
+        // has content. One artifact cannot claim both about one path.
+        if !projected.witnesses_installed_content() && signed_paths.contains(entry.name.as_str()) {
+            diagnostics.push(V3Diagnostic::error(
+                V3DiagnosticCode::KindContractViolation,
+                format!(
+                    "promised path '{}' is also signed payload content",
+                    entry.name
+                ),
+                Some(field),
+                "publish a path either as signed payload or as a promised path, never as both",
             ));
         }
     }
