@@ -188,11 +188,28 @@ require_match() {
     fi
 }
 
-conary_release_version() {
-    local manifest="apps/conary/Cargo.toml"
+workspace_release_version() {
+    local manifest="Cargo.toml"
     require_file "$manifest" || return 1
 
-    sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)"/\1/p' "$manifest" | head -n1
+    awk '
+        /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+        /^\[/ { in_workspace_package = 0 }
+        in_workspace_package && /^version[[:space:]]*=[[:space:]]*"/ {
+            value = $0
+            sub(/^version[[:space:]]*=[[:space:]]*"/, "", value)
+            sub(/".*$/, "", value)
+            print value
+            exit
+        }
+    ' "$manifest"
+}
+
+published_conary_release_version() {
+    local source="site/src/lib/preview-release.ts"
+    require_file "$source" || return 1
+
+    sed -nE "s/.*(const[[:space:]]+tag[[:space:]]*=[[:space:]]*|tag:[[:space:]]*)'v([^']+)'.*/\2/p" "$source" | head -n1
 }
 
 check_schema_versions() {
@@ -288,26 +305,35 @@ check_preview_status() {
 }
 
 check_release_doc_versions() {
-    local version
-    version="$(conary_release_version)"
-    if [[ -z "$version" ]]; then
-        report_error "apps/conary/Cargo.toml: could not parse Conary release version"
+    local workspace_version published_version
+    workspace_version="$(workspace_release_version)"
+    if [[ -z "$workspace_version" ]]; then
+        report_error "Cargo.toml: could not parse workspace release version"
         return
     fi
 
-    local current_tag="v${version}"
-    local current_artifact_dash="conary-${version}"
-    local current_artifact_underscore="conary_${version}"
+    published_version="$(published_conary_release_version)"
+    if [[ -z "$published_version" ]]; then
+        report_error "site/src/lib/preview-release.ts: could not parse published Conary release version"
+        return
+    fi
+
+    if [[ "$(printf '%s\n%s\n' "$workspace_version" "$published_version" | sort -V | tail -n1)" != "$workspace_version" ]]; then
+        report_error "published Conary release v${published_version} is newer than workspace release authority v${workspace_version}"
+    fi
+
+    local current_tag="v${published_version}"
+    local prepared_tag="v${workspace_version}"
+    local current_artifact_dash="conary-${published_version}"
+    local current_artifact_underscore="conary_${published_version}"
     local path
-    local -a release_docs=(
+    local -a public_release_docs=(
         "README.md"
         "docs/guides/agent-assisted-tester-loop.md"
-        "docs/operations/release-artifact-matrix.md"
-        "docs/roadmaps/external-tester-milestone.md"
         "site/src"
     )
 
-    for path in "${release_docs[@]}"; do
+    for path in "${public_release_docs[@]}"; do
         [[ -e "$path" ]] || continue
         require_match "$path" "$current_tag" "current Conary release tag ${current_tag}"
 
@@ -323,9 +349,26 @@ check_release_doc_versions() {
 
         while IFS=: read -r file line_no text; do
             if [[ "$text" != *"$current_artifact_dash"* && "$text" != *"$current_artifact_underscore"* ]]; then
-                report_error "$file:$line_no has stale conary release reference; expected ${version}: $text"
+                report_error "$file:$line_no has stale conary release reference; expected ${published_version}: $text"
             fi
         done < <(rg -nH -- 'conary[-_][0-9]+\.[0-9]+\.[0-9]+' "$path" || true)
+    done
+
+    local truth_doc
+    local -a release_truth_docs=(
+        "docs/operations/release-artifact-matrix.md"
+        "docs/roadmaps/external-tester-milestone.md"
+    )
+    for truth_doc in "${release_truth_docs[@]}"; do
+        [[ -f "$truth_doc" ]] || continue
+        if ! rg -q -- "$current_tag" "$truth_doc"; then
+            report_error "$truth_doc has stale conary release reference; expected published baseline ${current_tag}"
+        fi
+        if [[ "$prepared_tag" != "$current_tag" ]]; then
+            if ! rg -q -- "$prepared_tag" "$truth_doc"; then
+                report_error "$truth_doc has stale conary release reference; expected prepared target ${prepared_tag}"
+            fi
+        fi
     done
 
     local planned_doc="docs/operations/external-tester-outreach.md"

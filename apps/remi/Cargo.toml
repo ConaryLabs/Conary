@@ -1,11 +1,11 @@
 [package]
 name = "remi"
-version = "0.12.1"
-edition = "2024"
-rust-version = "1.97.1"
-authors = ["Conary Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 description = "Remi package server for Conary"
-license = "MIT"
+license.workspace = true
 
 [dependencies]
 conary-bootstrap = { path = "../../crates/conary-bootstrap" }

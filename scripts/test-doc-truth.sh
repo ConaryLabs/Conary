@@ -71,6 +71,14 @@ make_good_repo() {
         "$root/site/src/routes/install" \
         "$root/web/src/routes/about"
 
+    cat > "$root/Cargo.toml" <<'EOF'
+[workspace]
+members = ["apps/conary", "crates/conary-core"]
+
+[workspace.package]
+version = "0.10.1"
+EOF
+
     cat > "$root/crates/conary-core/src/db/schema.rs" <<'EOF'
 /// Current schema version
 pub const SCHEMA_VERSION: i32 = 69;

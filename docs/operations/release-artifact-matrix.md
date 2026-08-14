@@ -1,15 +1,16 @@
 ---
-last_updated: 2026-07-31
-revision: 21
-summary: Record published Conary 0.14.0 and deployed Remi 0.9.5 while keeping release proof separate from current tester authority
+last_updated: 2026-08-13
+revision: 22
+summary: Define the synchronized suite release contract while preserving exact historical release and current Remi deployment evidence
 ---
 
 # Release Artifact Matrix
 
-This matrix is the limited-preview artifact contract. It distinguishes a
-versioned release target from a published and independently verified release.
-Artifact URLs, checksums, signatures, deployments, and runtime behavior become
-authority only after their exact evidence is recorded here.
+This matrix is the limited-preview artifact contract. It distinguishes Cargo
+package ownership, artifact construction, a prepared release target, immutable
+publication, deployment, and independent runtime proof. Artifact URLs,
+checksums, signatures, deployments, and behavior become authority only after
+their exact evidence is recorded here.
 
 Remote Forge validation and conary-test deployment are decommissioned. Local
 QEMU/KVM evidence may support a preview row only when it names the absolute run
@@ -17,29 +18,80 @@ date, distro, suite, and pass counts.
 
 ## Current Release Suite
 
-Conary `v0.14.0` is an immutable published limited-preview release with exact
-asset, deployment, and released-package proof. It is not current
-tester-authoritative: supported-host generation bring-up after the tag exposed
-product defects whose fixes remain unreleased on issue #137 and PR #151. The
-release remains valid evidence for the exact tree it contains; later source
-proof does not retroactively change that tree.
+Issue [#428](https://github.com/ConaryLabs/Conary/issues/428) establishes the
+current hard-cut topology: all eight Cargo packages inherit one root workspace
+version; four artifact products are built from one reviewed suite commit; and
+one annotated `vMAJOR.MINOR.PATCH` tag publishes one GitHub release. Conary and
+Remi retain protected deployment lanes. conaryd and conary-test remain
+build-only artifacts with `deploy_mode=none`. Suite metadata is a schema-v1
+JSON resource; `dry_run` is a boolean rather than release authority encoded as
+free-form text.
 
-Remi `0.9.5` is the current immutable release and production authority. Its
-exact release, protected deployment, independent asset identity, and live
-health proof are recorded below.
+Version `0.15.0` is prepared by that issue but is not yet immutable release
+authority. It becomes authority only after the preparation PR is reviewed and
+merged, `v0.15.0` is created at that exact merge commit, all four products are
+published together, deployment and released-package workflows finish, and the
+independent evidence is recorded in a closeout PR. Historical product-prefixed
+tags and releases remain immutable evidence for their own trees, but they are
+not current release inputs.
 
-The build-only conaryd and conary-test releases retain their existing immutable
-lineage. Broad external outreach remains separately postponed at 0/10
-qualifying completions.
+The current production Remi is a merged exact-main candidate at
+`c5b13097ef8818ab2df050afdf93d8343994cca9`, deployed by successful protected
+run `31751375620`. It reports `remi 0.12.1` with binary SHA-256
+`e6c6b826b1df6c12e33391dcbf5abc88e2719ab2b63c46750188d40675a80ef3`.
+That candidate is deployment authority, not an independent release baseline.
+The latest immutable historical Remi release is `remi-v0.12.1`; its lightweight
+tag points directly to commit `ad8537f93ed94da417ecb4b53dc12c978d985bf9`.
 
-| Product | Artifact classes | Release workflow | Source authority | Release URL | Required evidence | Preview support | Known caveats | Source-build fallback |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst` | `.github/workflows/release-build.yml`, `scripts/release.sh conary`, `scripts/release-matrix.sh` | annotated tag object `c36c767c7169ff519a96dfdc7bedfa757211f334`, reviewed commit `fe23a604b64ea6f7cc87fce8298911e2245e027f` | https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0 | immutable publication, checksums/GitHub digests, detached CCS signature, deployment, self-update endpoint, three-distro released-package lifecycle, and Fedora sparse-sync proof complete; no SBOM or provenance sidecar published | published limited-preview artifact; not current tester-authoritative after unreleased supported-host fixes | use only on disposable, snapshotted, or explicitly non-critical x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch hosts; current source fixes are not part of this artifact | `cargo build -p conary` |
-| `remi` | binary and deploy bundle | `.github/workflows/release-build.yml`, `scripts/release.sh remi`, `scripts/release-matrix.sh` | annotated tag object `f2bf17f0086a7f8ea4be3e032336551c4e6089c1`, reviewed commit `101dba655257f1ff3d1bee689d9c5ac8b2b68cbd` | https://github.com/ConaryLabs/Conary/releases/tag/remi-v0.9.5 | immutable publication, checksums/GitHub digests, raw/tar identity, installed identity, protected deployment, schema/source/signing state, conversions, full health, and public serving proof complete; no detached signature, SBOM, or provenance sidecar published | current production authority | distribution and a wider stranger-operated path remain limited | `cargo build -p remi` |
-| `conaryd` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh conaryd`, `scripts/release-matrix.sh` | annotated tag object `381ee55cd051234dd78647ef5d7a8c3250c6b9df`, commit `a231276a900bbe8a8ccb6a0942f104cba2ab86b4` | https://github.com/ConaryLabs/Conary/releases/tag/conaryd-v0.7.0 | exact publication, checksums, raw/tar identity, binary version, build-only routing, signature, SBOM, and provenance recorded below | release artifact only; no deployment | Forge staging is decommissioned; package jobs retain the CLI live-mutation acknowledgement boundary | `cargo build -p conaryd` |
-| `conary-test` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh conary-test`, `scripts/release-matrix.sh` | annotated tag object `6c4a8cb4bb2c6e89f359a8ceb89ac40a5ce06890`, commit `a231276a900bbe8a8ccb6a0942f104cba2ab86b4` | https://github.com/ConaryLabs/Conary/releases/tag/conary-test-v0.9.0 | exact publication, checksums, raw/tar identity, binary version, suite inventory, build-only routing, signature, SBOM, and provenance recorded below | release artifact only; no deployment | QEMU/KVM suites require a capable local host while remote validation is decommissioned | `cargo build -p conary-test` |
+Conary `v0.14.0` remains immutable evidence for its exact tree, but it is not
+current tester authority. Broad external outreach remains separately postponed
+at 0/10 qualifying completions.
+
+| Artifact product | Artifact classes | Current construction authority | Suite deploy mode | Authority before the 0.15.0 closeout | Local build |
+| --- | --- | --- | --- | --- | --- |
+| `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst` | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected release assets, static sites, and released-package proof | immutable `v0.14.0` evidence at annotated tag object `c36c767c7169ff519a96dfdc7bedfa757211f334`, reviewed commit `fe23a604b64ea6f7cc87fce8298911e2245e027f`; not current tester authority | `cargo build -p conary` |
+| `remi` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected Remi deployment and repopulation proof, serialized before Conary deployment | current deployed exact-main candidate `c5b13097ef8818ab2df050afdf93d8343994cca9`; latest immutable historical release [remi-v0.12.1](https://github.com/ConaryLabs/Conary/releases/tag/remi-v0.12.1) | `cargo build -p remi` |
+| `conaryd` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | immutable historical `conaryd-v0.7.0` at tag object `381ee55cd051234dd78647ef5d7a8c3250c6b9df`, commit `a231276a900bbe8a8ccb6a0942f104cba2ab86b4`; no deployment | `cargo build -p conaryd` |
+| `conary-test` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | immutable historical `conary-test-v0.9.0` at tag object `6c4a8cb4bb2c6e89f359a8ceb89ac40a5ce06890`, commit `a231276a900bbe8a8ccb6a0942f104cba2ab86b4`; no deployment | `cargo build -p conary-test` |
 
 ## Recorded Evidence
+
+### Current exact-main Remi candidate
+
+- Protected candidate-deployment run `31751375620` completed successfully on
+  2026-08-13 at exact merged commit
+  `c5b13097ef8818ab2df050afdf93d8343994cca9`.
+- Independent host proof found the active `/usr/local/bin/remi` reporting
+  `remi 0.12.1` with SHA-256
+  `e6c6b826b1df6c12e33391dcbf5abc88e2719ab2b63c46750188d40675a80ef3`.
+- `conary-remi-deploy inspect-remi --require-repopulated` passed with schema
+  revision 37, 6/6 populated sources, four exact signing profiles, 110,220
+  repository packages, and 1,645 conversions. Solus contributes 11,907 eopkg
+  packages and one validated conversion.
+- `scripts/remi-health.sh --full` independently passed 10/10, and public Solus
+  package conversion for `0ad` returned HTTP 200.
+- This evidence proves the current deployment. It does not create a tag,
+  GitHub release, or separate Remi version authority.
+
+### Remi 0.12.1
+
+- Historical lightweight tag `remi-v0.12.1` points directly to release commit
+  `ad8537f93ed94da417ecb4b53dc12c978d985bf9`. It remains exact evidence but
+  does not satisfy the synchronized suite's annotated-tag contract.
+- Release-build run `31327202489` passed and published the immutable release on
+  2026-08-09. Independently downloaded assets matched their GitHub digests:
+  `metadata.json`
+  `ee3b00e16e4fd6a95db6ebe69a891555cfff9797a81d7e8c6f62133eb37530a8`,
+  raw binary
+  `88e6b76c1310e64080cb297c50aff44219a19584ab69fa1c6c468ba35f357401`,
+  and tarball
+  `f701b063c5a39a6f61d3deb7117b90fc85ad6f7163c9a2e410ab778cd96efa9a`.
+- The raw and tar-extracted binaries are byte-identical and report
+  `remi 0.12.1`. The release has no detached signature, `SHA256SUMS`, SBOM, or
+  provenance sidecar.
+- Protected deploy-and-verify run `31328183745` passed. The later exact-main
+  candidate deployment recorded above supersedes its production state without
+  changing this release's immutable evidence.
 
 ### Conary 0.14.0
 
@@ -131,15 +183,16 @@ bash scripts/check-release-matrix.sh
 bash scripts/release-cargo-audit.sh
 ```
 
-For each published release, also record:
+For each published suite release, also record:
 
 - annotated tag object and peeled commit;
 - publication time and complete asset names;
 - workflow run IDs and terminal conclusions;
 - independently downloaded asset SHA-256 values and matching GitHub digests;
-- binary `--version` output from the downloaded artifact;
-- signature, SBOM, and provenance status;
-- deployment and live-behavior proof required by that product row.
+- binary `--version` output from all four downloaded artifacts;
+- signature, SBOM, and provenance status for each artifact product;
+- serialized build-only routing for conaryd and conary-test;
+- Conary and Remi deployment and live-behavior proof required by their rows.
 
 ## Support Loop
 

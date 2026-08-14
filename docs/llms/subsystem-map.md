@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-13
-revision: 68
-summary: Route typed database rebuilds, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
+revision: 69
+summary: Route workspace and release boundaries, typed database rebuilds, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -16,6 +16,13 @@ summary: Route typed database rebuilds, exact native source identity and adopted
 - `crates/conary-bootstrap/`: shared tracing, runtime, and error-exit helpers for workspace apps
 - `crates/conary-agent-contract/`: transport-neutral agent operation contract, resource refs, risk labels, and catalogs
 - `crates/conary-mcp/`: shared MCP adapter helpers used by workspace apps
+
+The eight Cargo packages are code-ownership boundaries. The four artifact
+products are `conary`, `remi`, `conaryd`, and `conary-test`. They inherit one
+root workspace package authority and ship from one reviewed suite commit, one
+canonical `vMAJOR.MINOR.PATCH` tag, and one GitHub release. Conary and Remi
+deploy from that suite; conaryd and conary-test remain build-only artifacts.
+Do not infer a separate version owner from a package boundary or artifact route.
 
 ## Look Here First
 
@@ -45,7 +52,7 @@ commands.
 - `remi`: Remi ingest, conversion, publication, admin, MCP, and fixture serving
 - `conaryd`: local daemon auth, package jobs, routes, and lifecycle events
 - `bootstrap`: bootstrap prerequisite, image, seed, run, and local QEMU validation
-- `release`: exact-tag construction, immutable publication, serialized deployment, and independent proof
+- `release`: synchronized suite versioning, four-artifact construction, exact-tag publication, serialized deployment, and independent proof
 - `conary-test`: declarative integration suites, CLI, result delivery, and QEMU proof
 - `agent-mcp`: transport-neutral operation vocabulary and MCP adapters
 

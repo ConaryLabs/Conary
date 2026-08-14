@@ -1,12 +1,12 @@
 [package]
 name = "conary"
-version = "0.14.0"
-edition = "2024"
-rust-version = "1.97.1"
-authors = ["Conary Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 description = "Early-preview Linux package manager with native-package adoption"
 repository = "https://github.com/ConaryLabs/Conary"
-license = "MIT"
+license.workspace = true
 keywords = ["package-manager", "rpm", "deb", "system"]
 categories = ["command-line-utilities"]
 
