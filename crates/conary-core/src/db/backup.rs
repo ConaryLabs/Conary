@@ -624,7 +624,7 @@ fn verify_sqlite_connection(path: &Path, conn: &Connection) -> Result<BackupVeri
 
     Ok(BackupVerification {
         backup_path: path.to_path_buf(),
-        db_schema_version: schema::get_schema_version(&conn)?,
+        db_schema_version: schema::get_schema_version(conn)?,
         integrity_check,
         backup_sha256: sha256_file(path)?,
         sqlite_page_count: conn
