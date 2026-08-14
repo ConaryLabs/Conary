@@ -239,7 +239,8 @@ old process. That can fail with `Text file busy`.
 - The eight Cargo packages are code-ownership boundaries. The four artifact
   products are Conary, Remi, conaryd, and conary-test. One suite release owns
   their shared root `[workspace.package]` version, reviewed commit, tag, and
-  GitHub release.
+  GitHub release. All members inherit `publish = false`; there is no parallel
+  crates.io release track.
 - Run `./scripts/release.sh suite --dry-run` to inspect the next version, or
   pass an exact decision such as `--target 0.15.0`. The target must be an
   increasing `MAJOR.MINOR.PATCH` version for the complete suite.
@@ -250,6 +251,8 @@ old process. That can fail with `Text file busy`.
 - After exact-head CI and review complete, merge the preparation PR and prove
   local `main`, `origin/main`, and remote `main` agree. Only then create the
   annotated `vMAJOR.MINOR.PATCH` tag at that reviewed commit and push it.
+  Live release construction rejects a tag commit that is not reachable from
+  `origin/main`.
 - Product-prefixed tags remain immutable historical evidence for their exact
   trees. They are not current baselines, version inputs, or workflow routes.
 - `release-build` constructs all four products from the exact suite tag,

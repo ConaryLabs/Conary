@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+publish.workspace = true
 description = "Transport-neutral agent operation contract for Conary"
 license.workspace = true
 

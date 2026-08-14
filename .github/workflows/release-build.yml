@@ -70,6 +70,12 @@ jobs:
               echo "checkout does not match the peeled suite tag ${tag_name}" >&2
               exit 1
             }
+            git fetch --no-tags origin \
+              refs/heads/main:refs/remotes/origin/main
+            git merge-base --is-ancestor "refs/tags/${tag_name}^{}" origin/main || {
+              echo "live suite tag ${tag_name} is not reachable from origin/main" >&2
+              exit 1
+            }
             bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
           fi
 
@@ -101,6 +107,7 @@ jobs:
       - uses: ./.github/actions/setup-rust-workspace
         with:
           components: clippy,rustfmt
+          toolchain: 1.97.1
       - name: Enable exact ownership-test namespaces
         uses: ./.github/actions/setup-exact-ownership-tests
       - name: Check formatting
@@ -491,6 +498,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.97.1
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -552,6 +561,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.97.1
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -613,6 +624,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.97.1
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash

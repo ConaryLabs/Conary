@@ -52,6 +52,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+publish.workspace = true
 EOF
 }
 
@@ -109,6 +110,7 @@ edition = "2024"
 rust-version = "1.97.1"
 authors = ["Conary Contributors"]
 license = "MIT"
+publish = false
 EOF
 
     printf 'fn main() {}\n' > "$repo/apps/conary/build.rs"
@@ -255,6 +257,7 @@ create_release_policy_fixture() {
     mkdir -p \
         "$repo/scripts" \
         "$repo/.github/actions/setup-exact-ownership-tests" \
+        "$repo/.github/actions/setup-rust-workspace" \
         "$repo/.github/ISSUE_TEMPLATE" \
         "$repo/.github/workflows" \
         "$repo/docs/operations" \
@@ -272,6 +275,8 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
     cp "$REPO_ROOT/.github/actions/setup-exact-ownership-tests/action.yml" \
         "$repo/.github/actions/setup-exact-ownership-tests/action.yml"
+    cp "$REPO_ROOT/.github/actions/setup-rust-workspace/action.yml" \
+        "$repo/.github/actions/setup-rust-workspace/action.yml"
     cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md" "$repo/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
     cp "$REPO_ROOT/docs/operations/release-artifact-matrix.md" "$repo/docs/operations/release-artifact-matrix.md"
     cp "$REPO_ROOT/site/src/lib/preview-release.ts" "$repo/site/src/lib/preview-release.ts"
@@ -450,6 +455,52 @@ test_assert_owned_version_rejects_mismatched_manifest() {
         "$output" \
         "workspace package version is not inherited from [workspace.package]: crates/conary-core/Cargo.toml" \
         "version inheritance failure should identify the package manifest"
+}
+
+test_assert_owned_version_rejects_independent_publish_policy() {
+    local repo output status
+
+    repo="$(create_release_fixture)"
+    replace_fixture_text_once \
+        "$repo/crates/conary-agent-contract/Cargo.toml" \
+        'publish.workspace = true' \
+        'publish = true'
+
+    set +e
+    output="$(run_repo_matrix "$repo" assert-owned-version suite 0.7.0 2>&1)"
+    status=$?
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+        fail "assert-owned-version should reject an independently publishable workspace package"
+    fi
+    assert_contains \
+        "$output" \
+        "workspace package publish is not inherited from [workspace.package]: crates/conary-agent-contract/Cargo.toml" \
+        "publication inheritance failure should identify the package manifest"
+}
+
+test_assert_owned_version_rejects_publishable_workspace_root() {
+    local repo output status
+
+    repo="$(create_release_fixture)"
+    replace_fixture_text_once \
+        "$repo/Cargo.toml" \
+        'publish = false' \
+        'publish = true'
+
+    set +e
+    output="$(run_repo_matrix "$repo" assert-owned-version suite 0.7.0 2>&1)"
+    status=$?
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+        fail "assert-owned-version should reject a publishable workspace root"
+    fi
+    assert_contains \
+        "$output" \
+        "workspace registry publication must be disabled in Cargo.toml [workspace.package]" \
+        "root publication failure should identify the workspace authority"
 }
 
 test_release_dry_run_uses_one_suite_history() {
@@ -750,10 +801,9 @@ test_check_release_matrix_rejects_unverified_rustup_init() {
 test_check_release_matrix_rejects_unpinned_ccs_toolchain() {
     local repo
     repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'toolchain: 1.97.1' \
-        'toolchain: stable'
+    sed -i \
+        '/^  build-ccs:/,/^  build-rpm:/{s/toolchain: 1\.97\.1/toolchain: stable/;}' \
+        "$repo/.github/workflows/release-build.yml"
 
     assert_check_release_matrix_fails "$repo" "release-build CCS builder pinned Rust toolchain"
 }
@@ -769,16 +819,29 @@ test_check_release_matrix_rejects_unpinned_arch_toolchain() {
     assert_check_release_matrix_fails "$repo" "release-build Arch builder pinned Rust toolchain"
 }
 
-test_check_release_matrix_rejects_ambient_release_preparation_toolchain() {
+test_check_release_matrix_rejects_moving_release_preparation_toolchain() {
     local repo
     repo="$(create_release_policy_fixture)"
     sed -i \
-        '/^  build-remi:/,/^  build-conaryd:/{/uses: \.\/\.github\/actions\/setup-rust-workspace/d;}' \
+        '/^  build-remi:/,/^  build-conaryd:/{s/toolchain: 1\.97\.1/toolchain: stable/;}' \
         "$repo/.github/workflows/release-build.yml"
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "build-remi pinned workspace setup must precede Cargo-backed release preparation"
+        "build-remi exact workspace toolchain must precede Cargo-backed release preparation"
+}
+
+test_check_release_matrix_rejects_untyped_workspace_toolchain_setup() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/actions/setup-rust-workspace/action.yml" \
+        '        toolchain: ${{ inputs.toolchain }}' \
+        '        toolchain: stable'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "shared workspace setup typed toolchain input"
 }
 
 test_check_release_matrix_rejects_missing_live_version_assertion() {
@@ -803,6 +866,19 @@ test_check_release_matrix_rejects_lightweight_live_tag_guard() {
     assert_check_release_matrix_fails "$repo" "live suite build must require an annotated tag at the exact checkout"
 }
 
+test_check_release_matrix_rejects_unmerged_live_tag() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '              refs/heads/main:refs/remotes/origin/main' \
+        '              main'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "live suite tag must already be reachable from a freshly fetched main"
+}
+
 test_check_release_matrix_rejects_unbound_proof_metadata_version() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -814,6 +890,19 @@ test_check_release_matrix_rejects_unbound_proof_metadata_version() {
     assert_check_release_matrix_fails \
         "$repo" \
         "published artifact proof must bind metadata to the annotated tag version and suite authority"
+}
+
+test_check_release_matrix_rejects_draft_artifact_proof() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-artifact-proof.yml" \
+        '             "$(jq -r '\''.isDraft'\'' <<< "$release_state")" == "false" ]] || {' \
+        '             "$(jq -r '\''.isDraft'\'' <<< "$release_state")" == "true" ]] || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "published artifact proof must reject a draft or mismatched GitHub release"
 }
 
 test_check_release_matrix_rejects_rehearsal_artifact_promotion() {
@@ -1100,6 +1189,8 @@ main() {
         test_max_owned_version_in_fixture
         test_assert_owned_version_accepts_matching_manifests
         test_assert_owned_version_rejects_mismatched_manifest
+        test_assert_owned_version_rejects_independent_publish_policy
+        test_assert_owned_version_rejects_publishable_workspace_root
         test_release_dry_run_uses_one_suite_history
         test_release_dry_run_prefers_highest_numeric_suite_history
         test_release_dry_run_cross_app_feature_selects_one_minor
@@ -1118,10 +1209,13 @@ main() {
         test_check_release_matrix_rejects_unverified_rustup_init
         test_check_release_matrix_rejects_unpinned_ccs_toolchain
         test_check_release_matrix_rejects_unpinned_arch_toolchain
-        test_check_release_matrix_rejects_ambient_release_preparation_toolchain
+        test_check_release_matrix_rejects_moving_release_preparation_toolchain
+        test_check_release_matrix_rejects_untyped_workspace_toolchain_setup
         test_check_release_matrix_rejects_missing_live_version_assertion
         test_check_release_matrix_rejects_lightweight_live_tag_guard
+        test_check_release_matrix_rejects_unmerged_live_tag
         test_check_release_matrix_rejects_unbound_proof_metadata_version
+        test_check_release_matrix_rejects_draft_artifact_proof
         test_check_release_matrix_rejects_rehearsal_artifact_promotion
         test_check_release_matrix_rejects_unverified_remi_suite_bundle
         test_check_release_matrix_rejects_merge_validation_production_probes

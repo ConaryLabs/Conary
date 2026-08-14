@@ -18,6 +18,7 @@ edition = "2024"
 rust-version = "1.97.1"
 authors = ["Conary Contributors"]
 license = "MIT"
+publish = false
 
 [patch.crates-io]
 aws-creds = { path = "third_party/aws-creds-0.39.1-patched" }

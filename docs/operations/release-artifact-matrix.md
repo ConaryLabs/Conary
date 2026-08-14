@@ -25,7 +25,8 @@ one annotated `vMAJOR.MINOR.PATCH` tag publishes one GitHub release. Conary and
 Remi retain protected deployment lanes. conaryd and conary-test remain
 build-only artifacts with `deploy_mode=none`. Suite metadata is a schema-v1
 JSON resource; `dry_run` is a boolean rather than release authority encoded as
-free-form text.
+free-form text. Every member also inherits `publish = false`; the workspace has
+no independent Cargo-registry publication track.
 
 Version `0.15.0` is prepared by that issue but is not yet immutable release
 authority. It becomes authority only after the preparation PR is reviewed and

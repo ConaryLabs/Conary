@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+publish.workspace = true
 description = "Early-preview Linux package manager with native-package adoption"
 repository = "https://github.com/ConaryLabs/Conary"
 license.workspace = true

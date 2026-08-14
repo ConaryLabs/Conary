@@ -1348,12 +1348,13 @@ claimed.
 
 **Safety notes:** published tags and releases are immutable evidence. The
 workspace has one suite version and one current `vMAJOR.MINOR.PATCH` tag route;
-artifact products do not own independent version baselines. A live release
-must come from the exact canonical tag at a reviewed commit; dry-run artifact
-proof is not publication or production proof. Release signing secrets must
-never be logged or persisted in artifacts. A successful workflow dispatch is
-not deployment proof: wait for terminal CI, then verify installed binaries,
-served artifacts, signatures, and live health independently.
+artifact products do not own independent version baselines or Cargo-registry
+publication. A live release must come from the exact canonical tag at a
+reviewed commit already reachable from `main`; dry-run artifact proof is not
+publication or production proof. Release signing secrets must never be logged
+or persisted in artifacts. A successful workflow dispatch is not deployment
+proof: wait for terminal CI, then verify installed binaries, served artifacts,
+signatures, and live health independently.
 
 ## conary-test Integration Execution
 

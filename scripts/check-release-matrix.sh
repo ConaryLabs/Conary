@@ -10,6 +10,7 @@ artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
 merge_workflow=".github/workflows/merge-validation.yml"
 pr_workflow=".github/workflows/pr-gate.yml"
 exact_ownership_action=".github/actions/setup-exact-ownership-tests/action.yml"
+workspace_setup_action=".github/actions/setup-rust-workspace/action.yml"
 artifact_matrix="docs/operations/release-artifact-matrix.md"
 feedback_template=".github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
 site_preview_release="site/src/lib/preview-release.ts"
@@ -139,6 +140,7 @@ for required_file in \
     "$merge_workflow" \
     "$pr_workflow" \
     "$exact_ownership_action" \
+    "$workspace_setup_action" \
     "$artifact_matrix" \
     "$feedback_template" \
     "$site_preview_release" \
@@ -177,14 +179,17 @@ require_match "$release_build" 'git config --global --add safe\.directory "\$\(p
 require_match "$release_build" '\[\[ "\$tag_name" == "v\$\{version\}" \]\]' 'dry-run preparation should bind the target version to the suite tag'
 require_job_match "$release_build" prepare 'if \[\[ "\$dry_run" != "true" \]\]; then[\s\S]*scripts/release-matrix\.sh assert-owned-version "\$release" "\$version"' 'live suite tag must match the workspace-owned version'
 require_job_match "$release_build" prepare 'git cat-file -t "refs/tags/\$\{tag_name\}"[\s\S]*== "tag"[\s\S]*git rev-parse HEAD[\s\S]*refs/tags/\$\{tag_name\}\^\{\}' 'live suite build must require an annotated tag at the exact checkout'
+require_job_match "$release_build" prepare 'git fetch --no-tags origin[\s\S]*refs/heads/main:refs/remotes/origin/main[\s\S]*git merge-base --is-ancestor "refs/tags/\$\{tag_name\}\^\{\}" origin/main' 'live suite tag must already be reachable from a freshly fetched main'
 require_literal_count "$release_build" 'bash scripts/release-matrix.sh assert-owned-version "$release" "$version"' 8 'live and dry-run suite-version assertions'
 require_job_match "$release_build" build-rpm "image: ${fedora_release_image}" 'release-build RPM builder must use the pinned Fedora 44 image'
 require_job_match "$release_build" build-deb "image: ${ubuntu_release_image}" 'release-build DEB builder must use the pinned Ubuntu 26.04 image'
 require_job_match "$release_build" build-arch "image: ${arch_release_image}" 'release-build Arch builder must use the pinned Arch image'
 require_job_match "$release_build" build-ccs 'name: Install build dependencies[\s\S]*name: Prepare dry-run release tree' 'release-build CCS dry-run prerequisites must be installed before release preparation'
+require_match "$workspace_setup_action" 'toolchain:[\s\S]*default: stable[\s\S]*toolchain: \$\{\{ inputs\.toolchain \}\}' 'shared workspace setup typed toolchain input'
 for product_job in build-remi build-conaryd build-conary-test; do
-    require_job_match "$release_build" "$product_job" 'uses: \./\.github/actions/setup-rust-workspace[\s\S]*name: Prepare dry-run release tree' "$product_job pinned workspace setup must precede Cargo-backed release preparation"
+    require_job_match "$release_build" "$product_job" 'uses: \./\.github/actions/setup-rust-workspace[\s\S]*toolchain: 1\.97\.1[\s\S]*name: Prepare dry-run release tree' "$product_job exact workspace toolchain must precede Cargo-backed release preparation"
 done
+require_job_match "$release_build" workspace-validation 'uses: \./\.github/actions/setup-rust-workspace[\s\S]*components: clippy,rustfmt[\s\S]*toolchain: 1\.97\.1' 'release workspace validation exact Rust toolchain'
 require_match "$rpm_containerfile" "^FROM ${fedora_release_image}$" 'RPM Containerfile must use the release-build Fedora image digest'
 require_match "$deb_containerfile" "^FROM ${ubuntu_release_image}$" 'DEB Containerfile must use the release-build Ubuntu image digest'
 require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Containerfile must use the release-build Arch image digest'
@@ -320,6 +325,7 @@ require_match "$artifact_proof_workflow" 'workflow_dispatch:[\s\S]*tag_name:[\s\
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'actions/checkout@[0-9a-f]+[\s\S]*ref: \$\{\{ inputs\.tag_name \}\}[\s\S]*fetch-depth: 0[\s\S]*persist-credentials: false' 'published artifact proof must run the exact tag harness'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'distro: fedora44[\s\S]*native_format: rpm[\s\S]*distro: ubuntu-26\.04[\s\S]*native_format: deb[\s\S]*distro: arch[\s\S]*native_format: arch' 'published-artifact three-distro typed matrix'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'release-matrix\.sh resolve-tag "\$RELEASE_TAG"[\s\S]*resolved_version=.*\^version=[\s\S]*git cat-file -t "\$RELEASE_TAG"[\s\S]*== "tag"[\s\S]*git worktree add --detach "\$tag_tree"[\s\S]*"\$version" == "\$resolved_version"[\s\S]*"\$tag_tree/scripts/release-matrix\.sh" assert-owned-version suite "\$version"' 'published artifact proof must bind metadata to the annotated tag version and suite authority'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh release view "\$RELEASE_TAG"[\s\S]*--json isDraft,tagName[\s\S]*\$\(jq -r '\''\.isDraft'\'' <<< "\$release_state"\)" == "false"' 'published artifact proof must reject a draft or mismatched GitHub release'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle '\.schema_version == 1 and \(\.dry_run \| type\) == "boolean"' 'published artifact metadata schema and boolean dry-run validation'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh release download "\$RELEASE_TAG"[\s\S]*--pattern metadata\.json[\s\S]*sha256sum -c SHA256SUMS --ignore-missing[\s\S]*published_digest[\s\S]*actual_digest' 'published artifact metadata, checksum, and GitHub digest proof'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'images build[\s\S]*--native-package "\$\{\{ steps\.release\.outputs\.native_package \}\}"[\s\S]*CONARY_TEST_REUSE_IMAGE: "1"[\s\S]*--suite native-cross-source-lifecycle' 'published native package installation and Cartesian lifecycle proof'

@@ -298,7 +298,7 @@ max_owned_version() {
 assert_owned_version() {
     local release="$1"
     local expected_version="$2"
-    local file actual_version field
+    local file actual_version field workspace_publish
 
     [[ "$release" == "suite" ]] || die "unknown release: $release"
     is_release_version "$expected_version" || die "invalid release version: $expected_version"
@@ -310,9 +310,26 @@ assert_owned_version() {
             die "suite version mismatch: $file is $actual_version, expected $expected_version"
     done < <(version_authority_files)
 
+    workspace_publish="$({
+        awk '
+            /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+            in_workspace_package && /^\[/ { exit }
+            in_workspace_package && /^publish[[:space:]]*=/ {
+                value = $0
+                sub(/^[^=]*=[[:space:]]*/, "", value)
+                sub(/[[:space:]]*#.*/, "", value)
+                sub(/[[:space:]]*$/, "", value)
+                print value
+                exit
+            }
+        ' Cargo.toml
+    } || true)"
+    [[ "$workspace_publish" == "false" ]] ||
+        die "workspace registry publication must be disabled in Cargo.toml [workspace.package]"
+
     while IFS= read -r file; do
         [[ -f "$file" ]] || die "workspace package manifest missing: $file"
-        for field in version edition rust-version authors license; do
+        for field in version edition rust-version authors license publish; do
             grep -Fxq "${field}.workspace = true" "$file" ||
                 die "workspace package $field is not inherited from [workspace.package]: $file"
             if grep -Eq "^${field}[[:space:]]*=" "$file"; then

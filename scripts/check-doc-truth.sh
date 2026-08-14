@@ -763,11 +763,17 @@ PY
 }
 
 check_conary_core_surface() {
+    require_file "Cargo.toml" || return
     require_file "crates/conary-core/Cargo.toml" || return
     require_file "crates/conary-core/src/lib.rs" || return
 
-    if ! rg -q -- '^publish[ \t]*=[ \t]*false$' "crates/conary-core/Cargo.toml"; then
-        report_error "crates/conary-core/Cargo.toml must set publish = false while conary-core is internal"
+    if ! sed -n '/^\[workspace\.package\]$/,/^\[/p' Cargo.toml \
+        | rg -q -- '^publish[ \t]*=[ \t]*false$'; then
+        report_error "Cargo.toml [workspace.package] must disable registry publication for internal workspace packages"
+    fi
+
+    if ! rg -q -- '^publish\.workspace[ \t]*=[ \t]*true$' "crates/conary-core/Cargo.toml"; then
+        report_error "crates/conary-core/Cargo.toml must inherit the workspace publication policy while conary-core is internal"
     fi
 
     require_match "crates/conary-core/src/lib.rs" 'Internal workspace crate|internal workspace crate' 'internal crate documentation'

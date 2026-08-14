@@ -52,7 +52,10 @@ produce shipped artifacts and the whole workspace shares one release authority:
 | Suite release | 1 | Owns the workspace version, reviewed source commit, canonical `vMAJOR.MINOR.PATCH` tag, and GitHub release |
 
 The root `[workspace.package]` table owns the version, Rust edition, minimum
-toolchain, authors, and license inherited by every member.
+toolchain, authors, license, and disabled Cargo-registry publication policy
+inherited by every member. Conary publishes the synchronized source suite and
+its named artifacts through GitHub; workspace packages are not separate
+crates.io release tracks.
 `conary-core` owns shared package-management behavior;
 `conary-bootstrap` owns common binary startup;
 `conary-agent-contract` owns transport-neutral operation types; and

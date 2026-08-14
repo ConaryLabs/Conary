@@ -4,9 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+publish.workspace = true
 description = "Core library for the Conary package manager"
 license.workspace = true
-publish = false
 
 [features]
 default = ["composefs-rs"]

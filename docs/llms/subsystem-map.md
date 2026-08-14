@@ -22,7 +22,8 @@ products are `conary`, `remi`, `conaryd`, and `conary-test`. They inherit one
 root workspace package authority and ship from one reviewed suite commit, one
 canonical `vMAJOR.MINOR.PATCH` tag, and one GitHub release. Conary and Remi
 deploy from that suite; conaryd and conary-test remain build-only artifacts.
-Do not infer a separate version owner from a package boundary or artifact route.
+Standalone Cargo-registry publication is disabled. Do not infer a separate
+version or publication owner from a package boundary or artifact route.
 
 ## Look Here First
 
