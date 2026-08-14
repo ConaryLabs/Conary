@@ -12,12 +12,12 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 38 of the current-only schema epoch.
+/// Revision 39 of the current-only schema epoch.
 ///
-/// Revision 38 hard-cuts selected-root transaction authority to indexed,
-/// append-only SQLite snapshots. Earlier pre-alpha databases must be rebuilt;
-/// no compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 38;
+/// Revision 39 adds the transaction-scoped mutation token used to prove an
+/// exact generation database delta base. Earlier pre-alpha databases must be
+/// rebuilt; no compatibility migration is provided.
+pub const SCHEMA_VERSION: i32 = 39;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -111,6 +111,7 @@ pub fn require_current(conn: &Connection) -> Result<()> {
 /// deliberate: carrying an untested compatibility chain would make old
 /// structure, queue normalization, and retired workflow state authoritative.
 pub fn ensure_current(conn: &Connection) -> Result<()> {
+    super::generation_delta::configure_mutation_epoch(conn)?;
     let current_version = get_schema_version(conn)?;
     match get_schema_identity(conn)? {
         Some((epoch, revision)) if epoch == SCHEMA_EPOCH && revision == SCHEMA_VERSION => {
@@ -239,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_37_requires_rebuild_for_revision_38() {
+    fn revision_38_requires_rebuild_for_revision_39() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -247,19 +248,19 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 37);
+                VALUES ('conary-current-v1', 38);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (37);",
+            INSERT INTO schema_version (version) VALUES (38);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 37; this pre-alpha build supports only schema epoch conary-current-v1 revision 38"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 38; this pre-alpha build supports only schema epoch conary-current-v1 revision 39"
         );
     }
 

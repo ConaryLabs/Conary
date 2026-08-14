@@ -10,6 +10,12 @@ CREATE TABLE schema_identity (
     revision INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE generation_db_mutation_epoch (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    token TEXT NOT NULL CHECK(length(token) = 36)
+);
+INSERT INTO generation_db_mutation_epoch (singleton, token)
+VALUES (1, '00000000-0000-0000-0000-000000000000');
 CREATE TABLE troves (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,

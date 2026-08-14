@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-14
-revision: 50
+revision: 51
 summary: Describe workspace and release boundaries, exact native source authority, package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
@@ -715,6 +715,17 @@ verification and recovery repeat the full check, while an uninterrupted
 publication does not immediately verify the same snapshot a second time.
 Recovery opens checkpointed snapshots through SQLite's immutable read-only
 mode so verification cannot create or consume WAL sidecars.
+
+Schema revision 39 adds one generation-delta mutation epoch row plus generated
+triggers for every authoritative table. A connection-local SQLite function
+assigns one UUID to all writes in a transaction, and the triggers persist that
+UUID exactly once for the transaction. Generation publication can therefore
+admit a session changeset only when the live database still names the exact
+prior generation baseline; `PRAGMA data_version` separately rejects a commit
+from another connection while capture is active. Every Conary write connection
+registers the function before schema validation. An unconfigured writer fails
+closed at the trigger instead of changing authority without advancing the
+epoch. This is a pre-alpha hard cut: revision 38 databases must be rebuilt.
 
 **Composefs-native transactions**: Every package mutation follows one linear
 pipeline: resolve -> fetch -> materialize an isolated selected root -> run typed

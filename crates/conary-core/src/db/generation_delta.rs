@@ -4,23 +4,42 @@
 
 use crate::{Error, Result};
 use rusqlite::Connection;
+use rusqlite::functions::FunctionFlags;
 use rusqlite::session::Session;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+const MUTATION_TOKEN_FUNCTION: &str = "conary_generation_mutation_token";
+const MUTATION_EPOCH_TABLE: &str = "generation_db_mutation_epoch";
 
 /// Why a transaction-local changeset cannot be complete generation authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GenerationDbDeltaFallbackReason {
     ConcurrentConnectionWrite,
+    SourceBaselineChanged,
 }
 
 impl GenerationDbDeltaFallbackReason {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ConcurrentConnectionWrite => "concurrent-connection-write",
+            Self::SourceBaselineChanged => "source-baseline-changed",
         }
     }
+}
+
+/// Cheap persisted SQLite identity used only to admit an incremental delta.
+///
+/// The cryptographic recovery identity remains the base digest plus ordered
+/// changeset digests. This token proves that the checkpointed source file has
+/// not moved away from the exact prior generation baseline before recording
+/// begins.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationDbBaselineToken {
+    pub mutation_token: String,
 }
 
 /// Exact bytes and identity emitted by SQLite's session extension.
@@ -67,6 +86,7 @@ pub struct GenerationDbDeltaRecorder<'connection> {
     source: &'connection Connection,
     source_path: PathBuf,
     starting_data_version: i64,
+    baseline_fallback: Option<GenerationDbDeltaFallbackReason>,
 }
 
 impl<'connection> GenerationDbDeltaRecorder<'connection> {
@@ -81,13 +101,33 @@ impl<'connection> GenerationDbDeltaRecorder<'connection> {
             source,
             source_path: source_path.to_path_buf(),
             starting_data_version,
+            baseline_fallback: None,
         })
+    }
+
+    pub fn begin_against(
+        source: &'connection Connection,
+        source_path: impl AsRef<Path>,
+        expected: GenerationDbBaselineToken,
+    ) -> Result<Self> {
+        let source_path = source_path.as_ref();
+        let observed = read_baseline_token(source)?;
+        let mut recorder = Self::begin(source, source_path)?;
+        recorder.baseline_fallback = if observed == expected {
+            None
+        } else {
+            Some(GenerationDbDeltaFallbackReason::SourceBaselineChanged)
+        };
+        Ok(recorder)
     }
 
     pub fn finish(mut self) -> Result<GenerationDbDeltaCapture> {
         let mut bytes = Vec::new();
         self.session.changeset_strm(&mut bytes)?;
         let ending_data_version = data_version(self.source)?;
+        if let Some(reason) = self.baseline_fallback {
+            return Ok(GenerationDbDeltaCapture::Fallback(reason));
+        }
         if ending_data_version != self.starting_data_version {
             return Ok(GenerationDbDeltaCapture::Fallback(
                 GenerationDbDeltaFallbackReason::ConcurrentConnectionWrite,
@@ -102,6 +142,88 @@ impl<'connection> GenerationDbDeltaRecorder<'connection> {
     pub fn source_path(&self) -> &Path {
         &self.source_path
     }
+}
+
+pub fn read_baseline_token(source: &Connection) -> Result<GenerationDbBaselineToken> {
+    let mutation_token = source.query_row(
+        "SELECT token FROM generation_db_mutation_epoch WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(GenerationDbBaselineToken { mutation_token })
+}
+
+pub(crate) fn configure_mutation_epoch(source: &Connection) -> Result<()> {
+    let transaction_token = Arc::new(Mutex::new(None::<String>));
+    let function_token = Arc::clone(&transaction_token);
+    source.create_scalar_function(
+        MUTATION_TOKEN_FUNCTION,
+        0,
+        FunctionFlags::SQLITE_UTF8,
+        move |_| {
+            let mut token = function_token.lock().map_err(|_| {
+                rusqlite::Error::UserFunctionError(Box::new(std::io::Error::other(
+                    "generation DB mutation token lock is poisoned",
+                )))
+            })?;
+            Ok(token
+                .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                .clone())
+        },
+    )?;
+    let committed_token = Arc::clone(&transaction_token);
+    source.commit_hook(Some(move || {
+        committed_token.lock().map_or(true, |mut token| {
+            *token = None;
+            false
+        })
+    }))?;
+    source.rollback_hook(Some(move || {
+        if let Ok(mut token) = transaction_token.lock() {
+            *token = None;
+        }
+    }))?;
+    Ok(())
+}
+
+pub(crate) fn create_mutation_epoch_triggers(source: &Connection) -> Result<()> {
+    let mut statement = source.prepare(
+        "SELECT name
+         FROM sqlite_schema
+         WHERE type = 'table'
+           AND name NOT LIKE 'sqlite_%'
+           AND name != ?1
+         ORDER BY name",
+    )?;
+    let tables = statement
+        .query_map([MUTATION_EPOCH_TABLE], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    for (index, table) in tables.iter().enumerate() {
+        let table = quote_identifier(table);
+        for (operation, suffix) in [("INSERT", "ai"), ("UPDATE", "au"), ("DELETE", "ad")] {
+            let trigger = quote_identifier(&format!(
+                "conary_generation_mutation_epoch_{index:03}_{suffix}"
+            ));
+            source.execute_batch(&format!(
+                "CREATE TRIGGER {trigger}
+                 AFTER {operation} ON {table}
+                 WHEN (SELECT token FROM {MUTATION_EPOCH_TABLE} WHERE singleton = 1)
+                      != {MUTATION_TOKEN_FUNCTION}()
+                 BEGIN
+                     UPDATE {MUTATION_EPOCH_TABLE}
+                     SET token = {MUTATION_TOKEN_FUNCTION}()
+                     WHERE singleton = 1;
+                 END;"
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 fn data_version(source: &Connection) -> Result<i64> {
@@ -144,6 +266,28 @@ mod tests {
                  INSERT INTO authority (id, value) VALUES (1, 'base');",
             )
             .unwrap();
+        connection
+    }
+
+    fn create_epoch_fixture(path: &Path) -> Connection {
+        let connection = Connection::open(path).unwrap();
+        configure_mutation_epoch(&connection).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE generation_db_mutation_epoch (
+                     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                     token TEXT NOT NULL CHECK(length(token) = 36)
+                 );
+                 INSERT INTO generation_db_mutation_epoch (singleton, token)
+                 VALUES (1, '00000000-0000-0000-0000-000000000000');
+                 CREATE TABLE authority (
+                     id INTEGER PRIMARY KEY,
+                     value TEXT NOT NULL
+                 );
+                 INSERT INTO authority (id, value) VALUES (1, 'base');",
+            )
+            .unwrap();
+        create_mutation_epoch_triggers(&connection).unwrap();
         connection
     }
 
@@ -215,6 +359,108 @@ mod tests {
     }
 
     #[test]
+    fn mutation_token_admits_only_the_exact_prior_source_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("source.sqlite");
+        let source = create_epoch_fixture(&source_path);
+        let baseline = read_baseline_token(&source).unwrap();
+        let recorder =
+            GenerationDbDeltaRecorder::begin_against(&source, &source_path, baseline.clone())
+                .unwrap();
+        source
+            .execute(
+                "INSERT INTO authority (id, value) VALUES (2, 'same connection')",
+                [],
+            )
+            .unwrap();
+
+        assert!(matches!(
+            recorder.finish().unwrap(),
+            GenerationDbDeltaCapture::Captured(_)
+        ));
+        assert_ne!(read_baseline_token(&source).unwrap(), baseline);
+    }
+
+    #[test]
+    fn committed_source_change_rejects_the_prior_baseline_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("source.sqlite");
+        let source = create_epoch_fixture(&source_path);
+        let baseline = read_baseline_token(&source).unwrap();
+        source
+            .execute(
+                "INSERT INTO authority (id, value) VALUES (2, 'committed divergence')",
+                [],
+            )
+            .unwrap();
+        let recorder =
+            GenerationDbDeltaRecorder::begin_against(&source, &source_path, baseline).unwrap();
+
+        assert_eq!(
+            recorder.finish().unwrap(),
+            GenerationDbDeltaCapture::Fallback(
+                GenerationDbDeltaFallbackReason::SourceBaselineChanged
+            )
+        );
+    }
+
+    #[test]
+    fn one_transaction_uses_one_mutation_token_for_many_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("source.sqlite");
+        let source = create_epoch_fixture(&source_path);
+        let before = read_baseline_token(&source).unwrap();
+        let tx = source.unchecked_transaction().unwrap();
+        tx.execute("INSERT INTO authority (id, value) VALUES (2, 'first')", [])
+            .unwrap();
+        let after_first = read_baseline_token(&tx).unwrap();
+        tx.execute("INSERT INTO authority (id, value) VALUES (3, 'second')", [])
+            .unwrap();
+        let after_second = read_baseline_token(&tx).unwrap();
+        tx.commit().unwrap();
+
+        assert_ne!(after_first, before);
+        assert_eq!(after_second, after_first);
+        assert_eq!(read_baseline_token(&source).unwrap(), after_first);
+    }
+
+    #[test]
+    fn another_configured_connection_advances_the_persisted_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("source.sqlite");
+        let source = create_epoch_fixture(&source_path);
+        let before = read_baseline_token(&source).unwrap();
+        let writer = Connection::open(&source_path).unwrap();
+        configure_mutation_epoch(&writer).unwrap();
+
+        writer
+            .execute(
+                "INSERT INTO authority (id, value) VALUES (2, 'other connection')",
+                [],
+            )
+            .unwrap();
+
+        assert_ne!(read_baseline_token(&source).unwrap(), before);
+    }
+
+    #[test]
+    fn unconfigured_writer_cannot_bypass_the_mutation_epoch() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("source.sqlite");
+        let _source = create_epoch_fixture(&source_path);
+        let writer = Connection::open(&source_path).unwrap();
+
+        let error = writer
+            .execute(
+                "INSERT INTO authority (id, value) VALUES (2, 'untracked write')",
+                [],
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains(MUTATION_TOKEN_FUNCTION));
+    }
+
+    #[test]
     fn source_connection_must_name_the_exact_database_path() {
         let temp = tempfile::tempdir().unwrap();
         let source_path = temp.path().join("source.sqlite");
@@ -254,5 +500,28 @@ mod tests {
             tables.is_empty(),
             "SQLite session changesets require a declared primary key: {tables:?}"
         );
+
+        let table_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM sqlite_schema
+                 WHERE type = 'table'
+                   AND name NOT LIKE 'sqlite_%'
+                   AND name != ?1",
+                [MUTATION_EPOCH_TABLE],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let trigger_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM sqlite_schema
+                 WHERE type = 'trigger'
+                   AND name LIKE 'conary_generation_mutation_epoch_%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(trigger_count, table_count * 3);
     }
 }
