@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-13
-revision: 22
+revision: 23
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and retired Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -242,7 +242,7 @@ old process. That can fail with `Text file busy`.
   GitHub release. All members inherit `publish = false`; there is no parallel
   crates.io release track.
 - Run `./scripts/release.sh suite --dry-run` to inspect the next version, or
-  pass an exact decision such as `--target 0.15.0`. The target must be an
+  pass an exact decision as `--target MAJOR.MINOR.PATCH`. The target must be an
   increasing `MAJOR.MINOR.PATCH` version for the complete suite.
 - Run `./scripts/release.sh suite --prepare-only --target VERSION` on the
   issue-linked release branch. Preparation updates the root version, inherited

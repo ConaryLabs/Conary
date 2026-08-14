@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-31
-revision: 7
+last_updated: 2026-08-13
+revision: 8
 status: postponed
 target_release: unassigned
 summary: Postponed multi-venue launch packet for the first cross-distro tester loop
@@ -11,17 +11,16 @@ summary: Postponed multi-venue launch packet for the first cross-distro tester l
 > **POSTPONED; NO NEW DATE IS ASSIGNED:** the current qualifying milestone is
 > 0/10. The two earlier supported-host reports remain useful adoption and
 > onboarding evidence, but neither installed a source package whose format
-> differed from the host's native format. Release `v0.14.0` is published and
-> artifact-verified, but supported-host bring-up subsequently exposed defects
-> whose fixes remain unreleased. It is not current tester authority. Do not
-> publish the copy below until a later immutable release is named here and the
-> W7, external cached-history, and venue-eligibility gates are closed.
+> differed from the host's native format. Release `v0.15.0` is published and
+> artifact-verified, but release proof does not satisfy #110's ordinary-package
+> corpus gate. No tester release is assigned. Do not publish the copy below
+> until W7, external cached-history, and venue-eligibility gates are closed.
 
-The venue copy below retains its `v0.14.0` wording as an unpublishable draft
-until a replacement release exists; replacing the version without exact
-release evidence would create false authority. The maintainer re-pins and
-assigns fresh dates only after every remaining gate closes, then posts manually
-and remains available to answer comments.
+The venue copy below references the current `v0.15.0` release as an
+unpublishable draft, not as assigned tester authority. The maintainer re-pins
+the exact current release if necessary and assigns fresh dates only after every
+remaining gate closes, then posts manually and remains available to answer
+comments.
 
 ## Show HN Submission
 
@@ -71,10 +70,10 @@ the executor enforcement contract automatically. Unsupported requirements fail
 before mutation; there is no capability-approval bypass.
 
 Agent-assisted walkthrough, including download and checksum verification:
-https://github.com/ConaryLabs/Conary/blob/v0.14.0/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.15.0/docs/guides/agent-assisted-tester-loop.md
 
 Pinned release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0
+https://github.com/ConaryLabs/Conary/releases/tag/v0.15.0
 
 Privacy-safe feedback form:
 https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md
@@ -113,13 +112,13 @@ The pinned guide asks an agent to preflight a disposable supported VM, verify
 the release checksum, select a source format different from the host format,
 explain the complete dry-run, ask before live mutations, keep a private
 transcript, and draft privacy-safe feedback:
-https://github.com/ConaryLabs/Conary/blob/v0.14.0/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.15.0/docs/guides/agent-assisted-tester-loop.md
 
 Repository:
 https://github.com/ConaryLabs/Conary
 
 Pinned release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0
+https://github.com/ConaryLabs/Conary/releases/tag/v0.15.0
 
 I'm interested both in product defects and in whether repo-owned instructions
 make Codex useful as a supervised systems-test operator. Exact failures,
@@ -151,11 +150,11 @@ contracts while owning the transaction and rollback on the target.
 The guide tells Claude Code to confirm a disposable supported VM, verify the
 pinned release checksum, inspect the complete dry-run, ask before every live
 mutation, keep a private transcript, and draft privacy-safe feedback:
-https://github.com/ConaryLabs/Conary/blob/v0.14.0/docs/guides/agent-assisted-tester-loop.md
+https://github.com/ConaryLabs/Conary/blob/v0.15.0/docs/guides/agent-assisted-tester-loop.md
 
 Repository and pinned release:
 https://github.com/ConaryLabs/Conary
-https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0
+https://github.com/ConaryLabs/Conary/releases/tag/v0.15.0
 
 The useful feedback is where a source-native contract fails, whether Conary
 explains it precisely, whether install/update/remove behave consistently, and
@@ -186,7 +185,7 @@ failed attempts are useful evidence.
   reports as non-qualifying historical evidence.
 - [x] Rewrite the venue copy around the cross-distro package loop.
 - [x] Retire the passed 2026-07-20 through 2026-07-22 dates.
-- [x] Publish immutable `v0.14.0` with RPM, DEB, Arch, CCS, checksums, and the
+- [x] Publish immutable `v0.15.0` with RPM, DEB, Arch, CCS, checksums, and the
   required signature and installed-binary evidence.
 - [x] Record exact cross-distro install/query/update-preview/remove proof for
   the released binary on supported hosts.
@@ -194,9 +193,11 @@ failed attempts are useful evidence.
   body claims.
 - [x] Update the release artifact matrix and milestone tracker with exact
   release, deployment, and Remi population evidence.
-- [ ] Publish and independently verify a later immutable Conary release that
-  contains the supported-host fixes discovered after `v0.14.0`, then replace
-  every pinned version and URL in this draft.
+- [x] Publish and independently verify the synchronized `v0.15.0` suite that
+  contains the supported-host fixes, then replace every release version and
+  URL in this draft.
+- [ ] Pass #110's ordinary-package corpus gate and assign the exact tester
+  release without treating release proof as corpus proof.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
   and commit views have been dereferenced.
 - [ ] Re-check each venue's current rules and account eligibility immediately
