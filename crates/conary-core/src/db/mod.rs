@@ -10,6 +10,7 @@
 
 pub mod backup;
 pub mod current_schema;
+pub mod generation_snapshot;
 pub mod models;
 pub mod paths;
 pub mod rebuild;

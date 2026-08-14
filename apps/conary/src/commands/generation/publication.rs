@@ -284,6 +284,7 @@ fn replay_publication(
                 )?;
                 checkpoint(PublicationReplayCheckpoint::ActiveStateMarkedBeforeDatabaseBackup)?;
                 conary_core::db::backup::create_generation_db_backup(
+                    conn,
                     db_path,
                     runtime_root.generation_path(built.generation_number),
                     built.generation_number,
@@ -296,7 +297,7 @@ fn replay_publication(
                     GenerationPublicationPhase::DatabaseBackedUp,
                     Some(built),
                 )?;
-                phase = GenerationPublicationPhase::DatabaseBackedUp;
+                return Ok(*built);
             }
             GenerationPublicationPhase::DatabaseBackedUp => {
                 let built = required_publication_numbers(built.as_ref(), phase)?;

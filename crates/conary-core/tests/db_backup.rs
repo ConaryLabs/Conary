@@ -148,15 +148,23 @@ fn recovery_apply_quarantines_corrupt_db_and_sidecars() {
 fn generation_backup_writes_manifest_and_verifies_artifact_and_publication_state() {
     let fixture = GenerationBackupFixture::new(3);
 
-    let record =
-        create_generation_db_backup(&fixture.db_path, &fixture.generation_dir, 3, 3).unwrap();
+    let record = create_generation_db_backup(
+        &fixture.connection(),
+        &fixture.db_path,
+        &fixture.generation_dir,
+        3,
+        3,
+    )
+    .unwrap();
 
-    assert_eq!(record.manifest.format, "conary.generation-db-backup.v1");
-    assert_eq!(record.manifest.manifest_version, 1);
+    assert_eq!(record.manifest.format, "conary.generation-db-backup.v2");
+    assert_eq!(record.manifest.manifest_version, 2);
     assert_eq!(record.manifest.generation_number, 3);
     assert_eq!(record.manifest.state_number, 3);
     assert_eq!(record.manifest.db_schema_version, SCHEMA_VERSION);
     assert_eq!(record.manifest.backup_file, "conary.db.backup");
+    assert_eq!(record.manifest.transaction_high_water_mark, None);
+    assert!(record.creation_metrics.is_some());
     assert!(record.backup_path.ends_with("state/conary.db.backup"));
     assert!(
         record
@@ -179,8 +187,14 @@ fn generation_backup_writes_manifest_and_verifies_artifact_and_publication_state
 #[test]
 fn generation_backup_verification_rejects_tampered_backup_file() {
     let fixture = GenerationBackupFixture::new(4);
-    let record =
-        create_generation_db_backup(&fixture.db_path, &fixture.generation_dir, 4, 4).unwrap();
+    let record = create_generation_db_backup(
+        &fixture.connection(),
+        &fixture.db_path,
+        &fixture.generation_dir,
+        4,
+        4,
+    )
+    .unwrap();
 
     std::fs::write(&record.backup_path, b"not the original backup").unwrap();
 
@@ -191,7 +205,14 @@ fn generation_backup_verification_rejects_tampered_backup_file() {
 #[test]
 fn generation_backup_dry_run_recovery_verifies_copy_without_live_db() {
     let fixture = GenerationBackupFixture::new(5);
-    create_generation_db_backup(&fixture.db_path, &fixture.generation_dir, 5, 5).unwrap();
+    create_generation_db_backup(
+        &fixture.connection(),
+        &fixture.db_path,
+        &fixture.generation_dir,
+        5,
+        5,
+    )
+    .unwrap();
     std::fs::remove_file(&fixture.db_path).unwrap();
 
     let outcome = recover_generation_db_backup(
@@ -215,7 +236,14 @@ fn generation_backup_dry_run_recovery_verifies_copy_without_live_db() {
 #[test]
 fn generation_backup_apply_quarantines_corrupt_db_and_sidecars() {
     let fixture = GenerationBackupFixture::new(6);
-    create_generation_db_backup(&fixture.db_path, &fixture.generation_dir, 6, 6).unwrap();
+    create_generation_db_backup(
+        &fixture.connection(),
+        &fixture.db_path,
+        &fixture.generation_dir,
+        6,
+        6,
+    )
+    .unwrap();
 
     let wal_path = fixture.db_path.with_file_name("conary.db-wal");
     let shm_path = fixture.db_path.with_file_name("conary.db-shm");
@@ -245,7 +273,14 @@ fn generation_backup_apply_quarantines_corrupt_db_and_sidecars() {
 #[test]
 fn generation_backup_apply_refuses_healthy_live_db_without_debug_override() {
     let fixture = GenerationBackupFixture::new(7);
-    create_generation_db_backup(&fixture.db_path, &fixture.generation_dir, 7, 7).unwrap();
+    create_generation_db_backup(
+        &fixture.connection(),
+        &fixture.db_path,
+        &fixture.generation_dir,
+        7,
+        7,
+    )
+    .unwrap();
 
     let error = recover_generation_db_backup(
         &fixture.db_path,
@@ -260,6 +295,61 @@ fn generation_backup_apply_refuses_healthy_live_db_without_debug_override() {
     .unwrap_err();
 
     assert!(error.to_string().contains("refusing to replace"));
+}
+
+#[test]
+fn generation_backup_retry_replaces_partial_snapshot_and_metadata() {
+    let fixture = GenerationBackupFixture::new(8);
+    let conn = fixture.connection();
+    let first = create_generation_db_backup(&conn, &fixture.db_path, &fixture.generation_dir, 8, 8)
+        .unwrap();
+    let state_dir = fixture.generation_dir.join("state");
+    std::fs::write(
+        state_dir.join(".conary.db.backup.tmp"),
+        b"interrupted snapshot",
+    )
+    .unwrap();
+    std::fs::write(&first.backup_path, b"interrupted published snapshot").unwrap();
+    std::fs::write(&first.checksum_path, b"interrupted checksum").unwrap();
+    std::fs::write(&first.manifest_path, b"{\"interrupted\":true}").unwrap();
+
+    let retried =
+        create_generation_db_backup(&conn, &fixture.db_path, &fixture.generation_dir, 8, 8)
+            .unwrap();
+
+    assert!(!state_dir.join(".conary.db.backup.tmp").exists());
+    assert_eq!(retried.manifest.generation_number, 8);
+    verify_generation_db_backup(&fixture.generation_dir, None).unwrap();
+}
+
+#[test]
+fn generation_backup_binds_and_verifies_transaction_high_water_mark() {
+    let fixture = GenerationBackupFixture::new(9);
+    let conn = fixture.connection();
+    conn.execute(
+        "INSERT INTO changesets (description, status) VALUES ('history boundary', 'applied')",
+        [],
+    )
+    .unwrap();
+    let high_water = conn.last_insert_rowid();
+    let record =
+        create_generation_db_backup(&conn, &fixture.db_path, &fixture.generation_dir, 9, 9)
+            .unwrap();
+    assert_eq!(
+        record.manifest.transaction_high_water_mark,
+        Some(high_water)
+    );
+
+    let mut tampered = record.manifest;
+    tampered.transaction_high_water_mark = None;
+    std::fs::write(
+        &record.manifest_path,
+        serde_json::to_vec_pretty(&tampered).unwrap(),
+    )
+    .unwrap();
+
+    let error = verify_generation_db_backup(&fixture.generation_dir, None).unwrap_err();
+    assert!(error.to_string().contains("high-water mark changed"));
 }
 
 struct GenerationBackupFixture {
@@ -287,6 +377,10 @@ impl GenerationBackupFixture {
             db_path,
             generation_dir,
         }
+    }
+
+    fn connection(&self) -> rusqlite::Connection {
+        db::open(&self.db_path).unwrap()
     }
 }
 

@@ -167,3 +167,7 @@ required-features = ["composefs-rs"]
 [[bench]]
 name = "selected_root_delta"
 harness = false
+
+[[bench]]
+name = "generation_db_snapshot"
+harness = false

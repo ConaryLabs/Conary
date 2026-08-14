@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-13
-revision: 69
-summary: Route workspace and release boundaries, typed database rebuilds, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
+last_updated: 2026-08-14
+revision: 70
+summary: Route workspace and release boundaries, typed database rebuilds and generation snapshots, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -156,6 +156,9 @@ commands.
   `db/models/canonical.rs` for typed persistence authority.
 - Generation, bootstrap, and QEMU proof:
   `docs/modules/feature-ownership.md` slugs `generation` and `bootstrap`, plus
+  `crates/conary-core/src/db/backup.rs`,
+  `crates/conary-core/src/db/generation_snapshot.rs`,
+  `crates/conary-core/benches/generation_db_snapshot.rs`,
   `crates/conary-core/src/generation/root_manifest.rs`,
   `crates/conary-core/src/generation/root_manifest/authority.rs`,
   `crates/conary-core/src/generation/root_manifest/overlay/indexed.rs`,
