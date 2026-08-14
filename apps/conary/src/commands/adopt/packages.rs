@@ -12,11 +12,11 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallSource, Trove,
-    TroveType,
+    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallReason,
+    InstallSource, Trove, TroveType,
 };
 use conary_core::packages::{
-    InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+    InstalledInventorySnapshot, InstalledPackageIdentity, NativeInstallReason, SystemPackageManager,
 };
 use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryRequirementGroup};
 use conary_core::repository::versioning::VersionScheme;
@@ -63,6 +63,7 @@ struct ResolvedNativePackage {
     requested: String,
     native: InstalledPackageIdentity,
     description: Option<String>,
+    install_reason: NativeInstallReason,
 }
 
 #[derive(Clone, Debug)]
@@ -70,7 +71,6 @@ enum PackageLookup {
     Found(ResolvedNativePackage),
     Missing { reason: String },
     Ambiguous { reason: String },
-    Unsupported { reason: String },
 }
 
 trait NativePackageSource {
@@ -82,15 +82,22 @@ trait NativePackageSource {
         &self,
         identity: &InstalledPackageIdentity,
     ) -> Result<Vec<ProvidedCapability>>;
+    fn revalidate(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 struct DetectedNativePackageSource {
     manager: SystemPackageManager,
+    inventory: InstalledInventorySnapshot,
 }
 
 impl DetectedNativePackageSource {
-    fn new(manager: SystemPackageManager) -> Self {
-        Self { manager }
+    fn new(manager: SystemPackageManager) -> Result<Self> {
+        Ok(Self {
+            manager,
+            inventory: InstalledInventorySnapshot::capture(manager)?,
+        })
     }
 }
 
@@ -100,102 +107,85 @@ impl NativePackageSource for DetectedNativePackageSource {
     }
 
     fn lookup(&self, requested: &str) -> PackageLookup {
-        let result = match self.manager {
-            SystemPackageManager::Rpm => {
-                rpm_query::query_package(requested).map(|record| ResolvedNativePackage {
-                    requested: requested.to_string(),
-                    native: record.identity,
-                    description: record.info.description.or(record.info.summary),
-                })
-            }
-            SystemPackageManager::Dpkg => {
-                dpkg_query::query_package(requested).map(|record| ResolvedNativePackage {
-                    requested: requested.to_string(),
-                    native: record.identity,
-                    description: record.info.description,
-                })
-            }
-            SystemPackageManager::Pacman => {
-                pacman_query::query_package(requested).map(|record| ResolvedNativePackage {
-                    requested: requested.to_string(),
-                    native: record.identity,
-                    description: record.info.description,
-                })
-            }
-            SystemPackageManager::Eopkg => {
-                conary_core::packages::eopkg::query::query_package(requested).map(|record| {
-                    ResolvedNativePackage {
-                        requested: requested.to_string(),
-                        native: record.identity,
-                        description: record.info.description,
-                    }
-                })
-            }
-            SystemPackageManager::Unknown => {
-                return PackageLookup::Unsupported {
-                    reason: "no supported native package manager is available".to_string(),
-                };
-            }
-        };
-
-        match result {
-            Ok(identity) => PackageLookup::Found(identity),
-            Err(conary_core::Error::NotFound(_)) => PackageLookup::Missing {
+        let mut matches = self
+            .inventory
+            .packages()
+            .filter(|package| {
+                package.identity.selector() == requested || package.identity.name() == requested
+            })
+            .collect::<Vec<_>>();
+        match matches.len() {
+            0 => PackageLookup::Missing {
                 reason: format!(
                     "'{requested}' is not installed in the {} database",
                     self.manager.display_name()
                 ),
             },
-            Err(conary_core::Error::ConflictError(reason)) => PackageLookup::Ambiguous { reason },
-            Err(error) => PackageLookup::Unsupported {
+            1 => {
+                let package = matches.pop().expect("one native inventory match");
+                PackageLookup::Found(ResolvedNativePackage {
+                    requested: requested.to_string(),
+                    native: package.identity.clone(),
+                    description: package.description.clone(),
+                    install_reason: package.install_reason,
+                })
+            }
+            _ => PackageLookup::Ambiguous {
                 reason: format!(
-                    "{} could not inspect '{requested}': {error}",
-                    self.manager.display_name()
+                    "Package '{requested}' matches multiple installed {} variants: {}. Use one exact installed native selector.",
+                    self.manager.display_name(),
+                    matches
+                        .iter()
+                        .map(|package| package.identity.selector())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
             },
         }
     }
 
     fn query_files(&self, query_name: &str) -> Result<Vec<FileInfoTuple>> {
-        let files = match self.manager {
-            SystemPackageManager::Rpm => rpm_query::query_package_files(query_name)
-                .with_context(|| format!("RPM file query failed for '{query_name}'"))?,
-            SystemPackageManager::Dpkg => dpkg_query::query_package_files(query_name)
-                .with_context(|| format!("dpkg file query failed for '{query_name}'"))?,
-            SystemPackageManager::Pacman => pacman_query::query_package_files(query_name)
-                .with_context(|| format!("pacman file query failed for '{query_name}'"))?,
-            SystemPackageManager::Eopkg => {
-                conary_core::packages::eopkg::query::query_package_files(query_name)
-                    .with_context(|| format!("eopkg file query failed for '{query_name}'"))?
-            }
-            SystemPackageManager::Unknown => Vec::new(),
-        };
-        Ok(files
-            .into_iter()
-            .map(|file| {
-                (
-                    file.path,
-                    file.size,
-                    file.mode,
-                    file.digest,
-                    file.user,
-                    file.group,
-                    file.link_target,
-                    file.absence_policy,
-                )
-            })
+        let package = self
+            .inventory
+            .package(query_name)
+            .ok_or_else(|| anyhow!("native inventory has no exact selector '{query_name}'"))?;
+        Ok(package
+            .files
+            .iter()
+            .map(super::system::inventory_file_tuple)
             .collect())
     }
 
     fn query_requirements(&self, query_name: &str) -> Result<Vec<RepositoryRequirementGroup>> {
-        super::requirements::query_package_requirements(self.manager, query_name)
+        Ok(self
+            .inventory
+            .package(query_name)
+            .ok_or_else(|| anyhow!("native inventory has no exact selector '{query_name}'"))?
+            .requirements
+            .clone())
     }
 
     fn query_provides(
         &self,
         identity: &InstalledPackageIdentity,
     ) -> Result<Vec<ProvidedCapability>> {
-        super::provides::query_package_provides(self.manager, identity)
+        Ok(self
+            .inventory
+            .package(identity.selector())
+            .ok_or_else(|| {
+                anyhow!(
+                    "native inventory has no exact selector '{}'",
+                    identity.selector()
+                )
+            })?
+            .provides
+            .clone())
+    }
+
+    fn revalidate(&self) -> Result<()> {
+        let current = InstalledInventorySnapshot::capture(self.manager)?;
+        self.inventory.require_unchanged(&current)?;
+        Ok(())
     }
 }
 
@@ -318,7 +308,7 @@ pub async fn cmd_adopt(
     if !manager.is_available() {
         bail!("No supported package manager found. Conary supports RPM, dpkg, pacman, and eopkg.");
     }
-    let source = DetectedNativePackageSource::new(manager);
+    let source = DetectedNativePackageSource::new(manager)?;
     cmd_adopt_with_source(packages, db_path, full, dry_run, &source)
 }
 
@@ -343,7 +333,7 @@ fn cmd_adopt_with_source(
     let plan = build_adoption_plan(&conn, packages, mode, source)?;
     render_non_ready_outcomes(&plan);
     refuse_empty_actionable_plan(&plan)?;
-    execute_adoption_plan(&mut conn, db_path, &plan)
+    execute_adoption_plan(&mut conn, db_path, &plan, source)
 }
 
 fn open_preview_db(path: &str) -> Result<Connection> {
@@ -425,12 +415,6 @@ fn build_adoption_plan(
             }),
             PackageLookup::Ambiguous { reason } => {
                 outcomes.push(PackagePlanOutcome::Ambiguous {
-                    requested: requested.clone(),
-                    reason,
-                });
-            }
-            PackageLookup::Unsupported { reason } => {
-                outcomes.push(PackagePlanOutcome::Unsupported {
                     requested: requested.clone(),
                     reason,
                 });
@@ -797,6 +781,7 @@ fn execute_adoption_plan(
     conn: &mut Connection,
     db_path: &str,
     plan: &PackageAdoptionPlan,
+    source: &dyn NativePackageSource,
 ) -> Result<()> {
     let ready = plan
         .outcomes
@@ -874,6 +859,11 @@ fn execute_adoption_plan(
             trove.description = identity.description.clone();
             trove.installed_by_changeset_id = Some(changeset_id);
             trove.selection_reason = Some("Adopted from the native package manager".to_string());
+            if identity.install_reason == NativeInstallReason::Dependency {
+                trove.install_reason = InstallReason::Dependency;
+                trove.selection_reason =
+                    Some("Auto-installed dependency (from native package manager)".to_string());
+            }
             trove.native_package_identity = Some(identity.native.clone());
             let trove_id = trove.insert(tx)?;
 
@@ -913,6 +903,11 @@ fn execute_adoption_plan(
                 &package.provides,
             )?;
 
+            source.revalidate().map_err(|error| {
+                conary_core::Error::ConflictError(format!(
+                    "native inventory changed before adopting {selector}: {error}"
+                ))
+            })?;
             changeset.update_status(tx, ChangesetStatus::Applied)?;
             Ok(changeset_id)
         })?;

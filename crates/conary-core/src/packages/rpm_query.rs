@@ -42,6 +42,9 @@ const DNF4_USER_INSTALLED_ARGS: &[&str] = &[
 mod provides;
 pub use provides::query_package_provides;
 
+mod inventory;
+pub use inventory::query_installed_inventory;
+
 /// RPM's reserved name for imported public keys.
 ///
 /// `rpmkeys --import` stores each trusted key as a header in the same database

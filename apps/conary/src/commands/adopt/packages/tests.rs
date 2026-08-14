@@ -4,7 +4,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use conary_core::db;
-use conary_core::db::models::{FileEntry, InstallSource, ProvideEntry, Trove, TroveType};
+use conary_core::db::models::{
+    FileEntry, InstallReason, InstallSource, ProvideEntry, Trove, TroveType,
+};
 use conary_core::payload::{PayloadContentAuthority, PayloadNodeKind};
 use walkdir::WalkDir;
 
@@ -18,6 +20,7 @@ struct FixtureSource {
     file_errors: HashMap<String, String>,
     requirements: HashMap<String, Vec<RepositoryRequirementGroup>>,
     provides: HashMap<String, Vec<ProvidedCapability>>,
+    revalidation_error: Option<String>,
 }
 
 impl FixtureSource {
@@ -47,6 +50,7 @@ impl FixtureSource {
                 )
                 .unwrap(),
                 description: Some("Fixture package".to_string()),
+                install_reason: NativeInstallReason::Explicit,
             }),
         );
         self.files.insert(selector.clone(), vec![file]);
@@ -115,6 +119,7 @@ impl FixtureSource {
                 )
                 .unwrap(),
                 description: Some("Debian fixture package".to_string()),
+                install_reason: NativeInstallReason::Explicit,
             }),
         );
         self.files.insert(requested.to_string(), vec![file]);
@@ -138,6 +143,11 @@ impl FixtureSource {
     fn with_file_error(mut self, selector: &str, reason: &str) -> Self {
         self.file_errors
             .insert(selector.to_string(), reason.to_string());
+        self
+    }
+
+    fn with_revalidation_error(mut self, reason: &str) -> Self {
+        self.revalidation_error = Some(reason.to_string());
         self
     }
 }
@@ -180,6 +190,13 @@ impl NativePackageSource for FixtureSource {
             .get(identity.selector())
             .cloned()
             .unwrap_or_default())
+    }
+
+    fn revalidate(&self) -> Result<()> {
+        if let Some(reason) = &self.revalidation_error {
+            return Err(anyhow!(reason.clone()));
+        }
+        Ok(())
     }
 }
 
@@ -239,6 +256,42 @@ fn dpkg_adoption_persists_exact_multi_arch_authority() {
             .and_then(InstalledPackageIdentity::debian_multi_arch),
         trove.debian_multi_arch
     );
+}
+
+#[test]
+fn package_adoption_persists_snapshot_install_reason() {
+    let (temp, db_path) = temp_db();
+    let payload = temp.path().join("dependency-fixture");
+    fs::write(&payload, b"fixture").unwrap();
+    let mut source =
+        FixtureSource::default().with_ready("fixture", "fixture", file_tuple(&payload, 0o100644));
+    let PackageLookup::Found(package) = source.lookups.get_mut("fixture").unwrap() else {
+        panic!("fixture should be a found package");
+    };
+    package.install_reason = NativeInstallReason::Dependency;
+
+    cmd_adopt_with_source(&["fixture".to_string()], &db_path, false, false, &source).unwrap();
+
+    let conn = db::open(&db_path).unwrap();
+    let trove = Trove::find_by_name(&conn, "fixture").unwrap().remove(0);
+    assert_eq!(trove.install_reason, InstallReason::Dependency);
+}
+
+#[test]
+fn native_inventory_change_rolls_back_package_adoption_before_commit() {
+    let (temp, db_path) = temp_db();
+    let payload = temp.path().join("mutation-fixture");
+    fs::write(&payload, b"fixture").unwrap();
+    let source = FixtureSource::default()
+        .with_ready("fixture", "fixture", file_tuple(&payload, 0o100644))
+        .with_revalidation_error("forced native inventory token change");
+
+    let error = cmd_adopt_with_source(&["fixture".to_string()], &db_path, false, false, &source)
+        .unwrap_err();
+
+    assert!(error.to_string().contains("native inventory changed"));
+    let conn = db::open(&db_path).unwrap();
+    assert!(Trove::find_by_name(&conn, "fixture").unwrap().is_empty());
 }
 
 fn file_tuple(path: &Path, mode: i32) -> FileInfoTuple {
@@ -438,7 +491,7 @@ fn ready_package(plan: &PackageAdoptionPlan) -> &PlannedPackage {
 }
 
 #[test]
-fn plan_classifies_ready_tracked_missing_ambiguous_unsupported_and_conflict() {
+fn plan_classifies_ready_tracked_missing_ambiguous_and_conflict() {
     let (temp, db_path) = temp_db();
     let ready_path = temp.path().join("root/usr/bin/ready");
     let tracked_path = temp.path().join("root/usr/bin/tracked");
@@ -469,23 +522,9 @@ fn plan_classifies_ready_tracked_missing_ambiguous_unsupported_and_conflict() {
             PackageLookup::Ambiguous {
                 reason: "two native variants match".to_string(),
             },
-        )
-        .with_lookup(
-            "unsupported",
-            PackageLookup::Unsupported {
-                reason: "metadata cannot be represented".to_string(),
-            },
         );
     let conn = db::open(&db_path).unwrap();
-    let packages = [
-        "ready",
-        "tracked",
-        "missing",
-        "ambiguous",
-        "unsupported",
-        "conflicting",
-    ]
-    .map(str::to_string);
+    let packages = ["ready", "tracked", "missing", "ambiguous", "conflicting"].map(str::to_string);
 
     let plan = build_adoption_plan(&conn, &packages, AdoptionMode::Track, &source).unwrap();
 
@@ -504,10 +543,6 @@ fn plan_classifies_ready_tracked_missing_ambiguous_unsupported_and_conflict() {
     ));
     assert!(matches!(
         plan.outcomes[4],
-        PackagePlanOutcome::Unsupported { .. }
-    ));
-    assert!(matches!(
-        plan.outcomes[5],
         PackagePlanOutcome::Conflict { .. }
     ));
 }

@@ -23,6 +23,9 @@ use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use tracing::debug;
 
+mod inventory;
+pub use inventory::query_installed_inventory;
+
 const DPKG_PACKAGE_RECORD_FORMAT: &str = "${binary:Package}\x1e${Package}\x1e${Version}\x1e${Architecture}\x1e${Description}\x1e${Maintainer}\x1e${Homepage}\x1e${Section}\x1e${Priority}\x1e${Installed-Size}\x1e${Multi-Arch}\x1f";
 
 /// Information about an installed dpkg package

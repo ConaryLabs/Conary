@@ -15,7 +15,7 @@ use crate::repository::dependency_model::{
 };
 use crate::repository::versioning::VersionScheme;
 
-const RPM_PROVIDE_RECORD_FORMAT: &str =
+pub(super) const RPM_PROVIDE_RECORD_FORMAT: &str =
     "[%{PROVIDENAME}\x1e%{PROVIDEFLAGS:hex}\x1e%{PROVIDEVERSION}\x1f]";
 
 /// Query one installed RPM package's exact identity and declared provides.
@@ -54,7 +54,7 @@ pub fn query_package_provides(
     Ok(provides)
 }
 
-fn parse_rpm_provide_records(
+pub(super) fn parse_rpm_provide_records(
     identity: &InstalledPackageIdentity,
     output: &str,
 ) -> Result<Vec<ProvidedCapability>> {

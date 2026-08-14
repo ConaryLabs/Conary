@@ -14,7 +14,7 @@ use crate::repository::dependency_model::{
 use crate::repository::versioning::VersionScheme;
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct InstalledEopkgInfo {
@@ -24,10 +24,10 @@ pub struct InstalledEopkgInfo {
     pub description: Option<String>,
 }
 
-struct InstalledEopkgEntry {
-    package: InstalledPackageRecord<InstalledEopkgInfo>,
-    metadata: xml::Metadata,
-    files: Vec<xml::FileRecord>,
+pub(super) struct InstalledEopkgEntry {
+    pub(super) package: InstalledPackageRecord<InstalledEopkgInfo>,
+    pub(super) metadata: xml::Metadata,
+    pub(super) files: Vec<xml::FileRecord>,
 }
 
 /// One exact snapshot of eopkg's retained installed-package authority.
@@ -36,7 +36,8 @@ struct InstalledEopkgEntry {
 /// the complete package database for each package field is both unnecessary
 /// and quadratic in the number of installed packages.
 pub struct InstalledEopkgDatabase {
-    entries: BTreeMap<String, InstalledEopkgEntry>,
+    pub(super) entries: BTreeMap<String, InstalledEopkgEntry>,
+    automatic_path: PathBuf,
 }
 
 impl InstalledEopkgDatabase {
@@ -45,9 +46,21 @@ impl InstalledEopkgDatabase {
     }
 
     pub fn load_root(root: &Path) -> Result<Self> {
+        let automatic_path = root
+            .parent()
+            .unwrap_or(root)
+            .join("info")
+            .join("autoinstalled");
+        Self::load_roots(root, automatic_path)
+    }
+
+    pub(crate) fn load_roots(root: &Path, automatic_path: PathBuf) -> Result<Self> {
         let mut entries = BTreeMap::new();
         if !root.exists() {
-            return Ok(Self { entries });
+            return Ok(Self {
+                entries,
+                automatic_path,
+            });
         }
         for directory in fs::read_dir(root)? {
             let directory = directory?;
@@ -103,7 +116,10 @@ impl InstalledEopkgDatabase {
                 )));
             }
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            automatic_path,
+        })
     }
 
     pub fn packages(&self) -> Vec<InstalledPackageRecord<InstalledEopkgInfo>> {
@@ -139,7 +155,7 @@ impl InstalledEopkgDatabase {
     }
 
     pub fn user_installed(&self) -> Result<std::collections::HashSet<String>> {
-        let automatic = fs::read_to_string("/var/lib/eopkg/info/autoinstalled")
+        let automatic = fs::read_to_string(&self.automatic_path)
             .unwrap_or_default()
             .split_whitespace()
             .map(str::to_string)
@@ -150,6 +166,11 @@ impl InstalledEopkgDatabase {
             .map(|entry| entry.package.identity.install_reason_selector())
             .filter(|name| !automatic.contains(name))
             .collect())
+    }
+
+    /// Project this parsed database into the shared coherent inventory.
+    pub fn inventory_snapshot(&self) -> Result<crate::packages::InstalledInventorySnapshot> {
+        super::inventory::from_database(self)
     }
 
     fn entry(&self, name: &str) -> Result<&InstalledEopkgEntry> {
@@ -232,7 +253,7 @@ pub fn query_package_provides(
     InstalledEopkgDatabase::load()?.package_provides(identity)
 }
 
-fn project_provides(
+pub(super) fn project_provides(
     metadata: &xml::Metadata,
     identity: &InstalledPackageIdentity,
 ) -> Result<Vec<ProvidedCapability>> {

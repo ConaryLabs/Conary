@@ -20,8 +20,8 @@ use conary_core::db::models::{
     InstallSource, PayloadClaim, Trove, TroveType,
 };
 use conary_core::packages::{
-    InstalledFileAbsencePolicy, InstalledPackageIdentity, SystemPackageManager, dpkg_query,
-    pacman_query, rpm_query,
+    InstalledFileAbsencePolicy, InstalledInventoryFile, InstalledInventorySnapshot,
+    InstalledPackageIdentity, NativeInstallReason, SystemPackageManager,
 };
 use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryRequirementGroup};
 use std::collections::HashMap;
@@ -55,12 +55,6 @@ pub type FileInfoTuple = (
     Option<String>,
     InstalledFileAbsencePolicy,
 );
-
-#[derive(Debug)]
-struct InstalledSystemPackage {
-    identity: InstalledPackageIdentity,
-    description: Option<String>,
-}
 
 struct PackageData {
     identity: InstalledPackageIdentity,
@@ -151,11 +145,7 @@ pub async fn cmd_adopt_system(
     let include_pattern = parse_package_pattern("--pattern", pattern)?;
     let exclude_pattern = parse_package_pattern("--exclude", exclude)?;
     let complete_full_root_scope = full && pattern.is_none() && exclude.is_none() && !explicit_only;
-    let eopkg_database = if pkg_mgr == SystemPackageManager::Eopkg {
-        Some(conary_core::packages::eopkg::query::InstalledEopkgDatabase::load()?)
-    } else {
-        None
-    };
+    let inventory = InstalledInventorySnapshot::capture(pkg_mgr)?;
 
     let mut conn = open_db(db_path)?;
 
@@ -176,64 +166,13 @@ pub async fn cmd_adopt_system(
     // Get every exact installed package-manager record. The typed selector is
     // kept distinct from the package name so multilib/multiarch variants
     // survive inventory and all follow-up queries target the intended record.
-    let installed: Vec<InstalledSystemPackage> = match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_all_packages()?
-            .into_iter()
-            .map(|record| InstalledSystemPackage {
-                identity: record.identity,
-                description: record.info.description.or(record.info.summary),
-            })
-            .collect(),
-        SystemPackageManager::Dpkg => dpkg_query::query_all_packages()?
-            .into_iter()
-            .map(|record| InstalledSystemPackage {
-                identity: record.identity,
-                description: record.info.description,
-            })
-            .collect(),
-        SystemPackageManager::Pacman => pacman_query::query_all_packages()?
-            .into_iter()
-            .map(|record| InstalledSystemPackage {
-                identity: record.identity,
-                description: record.info.description,
-            })
-            .collect(),
-        SystemPackageManager::Eopkg => eopkg_database
-            .as_ref()
-            .expect("eopkg manager owns installed database snapshot")
-            .packages()
-            .into_iter()
-            .map(|record| InstalledSystemPackage {
-                identity: record.identity,
-                description: record.info.description,
-            })
-            .collect(),
-        _ => return Err(anyhow::anyhow!("Unsupported package manager")),
-    };
+    let installed = inventory.packages().collect::<Vec<_>>();
     if complete_full_root_scope {
         ensure_complete_native_partition(
             &tracked_packages,
             installed.iter().map(|package| package.identity.selector()),
         )?;
     }
-
-    // Exact install-reason authority is required. An empty set means the
-    // package manager explicitly reported no user-installed packages; query
-    // failure is not reinterpreted as "everything is explicit."
-    let user_installed: std::collections::HashSet<String> = match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_user_installed()
-            .map_err(|error| anyhow::anyhow!("RPM install-reason query failed: {error}"))?,
-        SystemPackageManager::Dpkg => dpkg_query::query_user_installed()
-            .map_err(|error| anyhow::anyhow!("dpkg install-reason query failed: {error}"))?,
-        SystemPackageManager::Pacman => pacman_query::query_user_installed()
-            .map_err(|error| anyhow::anyhow!("pacman install-reason query failed: {error}"))?,
-        SystemPackageManager::Eopkg => eopkg_database
-            .as_ref()
-            .expect("eopkg manager owns installed database snapshot")
-            .user_installed()
-            .map_err(|error| anyhow::anyhow!("eopkg install-reason query failed: {error}"))?,
-        _ => return Err(anyhow::anyhow!("Unsupported package manager")),
-    };
 
     // Apply selective filters
     let pre_filter_count = installed.len();
@@ -250,9 +189,7 @@ pub async fn cmd_adopt_system(
             {
                 return false;
             }
-            if explicit_only
-                && !user_installed.contains(&package.identity.install_reason_selector())
-            {
+            if explicit_only && package.install_reason != NativeInstallReason::Explicit {
                 return false;
             }
             true
@@ -284,7 +221,7 @@ pub async fn cmd_adopt_system(
                 }
             } else {
                 to_adopt += 1;
-                if !user_installed.contains(&package.identity.install_reason_selector()) {
+                if package.install_reason == NativeInstallReason::Dependency {
                     dep_count += 1;
                 } else {
                     explicit_count += 1;
@@ -398,72 +335,18 @@ pub async fn cmd_adopt_system(
 
         progress.set_phase(selector, AdoptPhase::Querying);
 
-        // Query ALL PM metadata before opening the DB transaction.
-        let files: Vec<FileInfoTuple> =
-            match query_pm_files(pkg_mgr, selector, eopkg_database.as_ref()) {
-                Ok(f) => f,
-                Err(e) => {
-                    warn!("Failed to query files for '{}': {}; skipping", selector, e);
-                    progress.fail_package(selector, &e.to_string());
-                    error_count += 1;
-                    failures.push(BulkAdoptionFailure::new(
-                        selector,
-                        BulkAdoptionFailureStage::FileQuery,
-                        e.to_string(),
-                    ));
-                    continue;
-                }
-            };
+        let files = package
+            .files
+            .iter()
+            .map(inventory_file_tuple)
+            .collect::<Vec<_>>();
         let (requirements, mut provides) = if promote_trove_id.is_some() {
             // Track adoption already persisted the native metadata. Promotion
             // changes only its payload authority from discovery hashes to
             // privately captured CAS content.
             (Vec::new(), Vec::new())
         } else {
-            let requirement_result = match eopkg_database.as_ref() {
-                Some(database) => database
-                    .package_requirement_groups(selector)
-                    .map_err(anyhow::Error::from),
-                None => super::requirements::query_package_requirements(pkg_mgr, selector),
-            };
-            let requirements = match requirement_result {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!("Failed to query deps for '{}': {}; skipping", selector, e);
-                    progress.fail_package(selector, &e.to_string());
-                    error_count += 1;
-                    failures.push(BulkAdoptionFailure::new(
-                        selector,
-                        BulkAdoptionFailureStage::RequirementQuery,
-                        e.to_string(),
-                    ));
-                    continue;
-                }
-            };
-            let provide_result = match eopkg_database.as_ref() {
-                Some(database) => database
-                    .package_provides(&package.identity)
-                    .map_err(anyhow::Error::from),
-                None => super::provides::query_package_provides(pkg_mgr, &package.identity),
-            };
-            let provides = match provide_result {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!(
-                        "Failed to query provides for '{}': {}; skipping",
-                        selector, e
-                    );
-                    progress.fail_package(selector, &e.to_string());
-                    error_count += 1;
-                    failures.push(BulkAdoptionFailure::new(
-                        selector,
-                        BulkAdoptionFailureStage::ProvideQuery,
-                        e.to_string(),
-                    ));
-                    continue;
-                }
-            };
-            (requirements, provides)
+            (package.requirements.clone(), package.provides.clone())
         };
 
         // Capture exact live nodes and bytes outside the transaction. Full
@@ -511,7 +394,7 @@ pub async fn cmd_adopt_system(
             captured_files.iter().map(|file| file.source.0.as_str()),
         )?;
 
-        let is_dependency = !user_installed.contains(&package.identity.install_reason_selector());
+        let is_dependency = package.install_reason == NativeInstallReason::Dependency;
 
         pre_collected.push(PackageData {
             identity: package.identity.clone(),
@@ -647,6 +530,12 @@ pub async fn cmd_adopt_system(
             captured_root_sync = Some(synchronize_captured_root(tx, changeset_id, captured)?);
         }
 
+        // Re-read every native authority immediately before committing the
+        // ownership handoff. Any package, path, relation, reason, config, or
+        // lifecycle change rolls this entire Conary transaction back.
+        let current_inventory = InstalledInventorySnapshot::capture(pkg_mgr)?;
+        inventory.require_unchanged(&current_inventory)?;
+
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok(changeset_id)
     })?;
@@ -767,39 +656,17 @@ fn promote_track_package(
 
 const LIVE_ROOT_PACKAGE_NAME: &str = "conary-live-root";
 
-fn query_pm_files(
-    pkg_mgr: SystemPackageManager,
-    name: &str,
-    eopkg_database: Option<&conary_core::packages::eopkg::query::InstalledEopkgDatabase>,
-) -> Result<Vec<FileInfoTuple>> {
-    let raw = match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_package_files(name)
-            .map_err(|e| anyhow::anyhow!("RPM file query failed for '{name}': {e}"))?,
-        SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
-            .map_err(|e| anyhow::anyhow!("DPKG file query failed for '{name}': {e}"))?,
-        SystemPackageManager::Pacman => pacman_query::query_package_files(name)
-            .map_err(|e| anyhow::anyhow!("Pacman file query failed for '{name}': {e}"))?,
-        SystemPackageManager::Eopkg => eopkg_database
-            .ok_or_else(|| anyhow::anyhow!("eopkg installed database snapshot is absent"))?
-            .package_files(name)
-            .map_err(|e| anyhow::anyhow!("eopkg file query failed for '{name}': {e}"))?,
-        _ => return Ok(Vec::new()),
-    };
-    Ok(raw
-        .into_iter()
-        .map(|f| {
-            (
-                f.path,
-                f.size,
-                f.mode,
-                f.digest,
-                f.user,
-                f.group,
-                f.link_target,
-                f.absence_policy,
-            )
-        })
-        .collect())
+pub(super) fn inventory_file_tuple(file: &InstalledInventoryFile) -> FileInfoTuple {
+    (
+        file.file.path.clone(),
+        file.file.size,
+        file.file.mode,
+        file.file.digest.clone(),
+        file.file.user.clone(),
+        file.file.group.clone(),
+        file.file.link_target.clone(),
+        file.file.absence_policy,
+    )
 }
 
 #[cfg(test)]

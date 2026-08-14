@@ -24,6 +24,9 @@ use std::collections::HashSet;
 use std::process::Command;
 use tracing::debug;
 
+mod inventory;
+pub use inventory::query_installed_inventory;
+
 /// Information about an installed pacman package
 #[derive(Debug, Clone)]
 pub struct InstalledPacmanInfo {

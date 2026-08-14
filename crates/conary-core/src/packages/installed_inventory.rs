@@ -175,6 +175,21 @@ struct TokenAuthority<'a> {
 impl InstalledInventorySnapshot {
     pub const TOKEN_VERSION: u32 = 1;
 
+    /// Acquire one complete inventory from the selected backend.
+    pub fn capture(manager: SystemPackageManager) -> Result<Self> {
+        match manager {
+            SystemPackageManager::Rpm => super::rpm_query::query_installed_inventory(),
+            SystemPackageManager::Dpkg => super::dpkg_query::query_installed_inventory(),
+            SystemPackageManager::Pacman => super::pacman_query::query_installed_inventory(),
+            SystemPackageManager::Eopkg => {
+                super::eopkg::query::InstalledEopkgDatabase::load()?.inventory_snapshot()
+            }
+            SystemPackageManager::Unknown => Err(Error::ConfigError(
+                "cannot capture an installed inventory for unknown native authority".to_string(),
+            )),
+        }
+    }
+
     pub fn from_packages(
         manager: SystemPackageManager,
         packages: Vec<InstalledInventoryPackage>,
