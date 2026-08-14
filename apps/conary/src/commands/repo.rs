@@ -4,52 +4,26 @@
 mod authority;
 #[cfg(test)]
 mod authority_tests;
+mod options;
+mod trust_display;
+
+pub use options::RepoAddOptions;
 
 use super::open_db;
 use anyhow::{Context, Result};
-use conary_core::db::models::{RepositoryPackageKey, SecurityAdvisorySupport};
+use conary_core::db::models::{
+    AuthenticatedSnapshotIdentity, NativeSourceEcosystem, NativeSourceStream, RepositoryPackageKey,
+    RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode,
+};
 use conary_core::repository::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, OpenPgpTrustRoot,
     RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy,
 };
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
 
 use authority::resolve_ccs_package_authority;
-
-/// Options for adding a new repository
-pub struct RepoAddOptions {
-    pub name: String,
-    pub url: String,
-    pub package_format: Option<RepositoryFormat>,
-    pub distribution: Option<String>,
-    pub component: Option<String>,
-    pub architecture: Option<String>,
-    pub database: Option<String>,
-    pub db_path: String,
-    pub content_url: Option<String>,
-    pub priority: i32,
-    pub disabled: bool,
-    pub debian_release_keys: Vec<OpenPgpTrustRoot>,
-    pub rpm_metadata_keys: Vec<OpenPgpTrustRoot>,
-    pub rpm_metalink: Option<String>,
-    pub rpm_package_keys: Vec<OpenPgpTrustRoot>,
-    pub arch_keyring: Option<String>,
-    pub arch_keyring_format: Option<ArchKeyringFormat>,
-    pub arch_master_keys: Vec<String>,
-    pub arch_packager_key_threshold: Option<usize>,
-    pub arch_database_signature: Option<ArchSignatureRequirement>,
-    pub fingerprints: Vec<String>,
-    pub yes: bool,
-    pub replace: bool,
-    pub default_strategy: Option<String>,
-    pub remi_endpoint: Option<String>,
-    pub ccs_package_keys: Vec<PathBuf>,
-    pub source_profile: Option<String>,
-    pub security_advisory_support: SecurityAdvisorySupport,
-}
 
 /// Add a new repository
 pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
@@ -79,6 +53,20 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
         })
         .transpose()?;
 
+    if opts.package_format.is_none()
+        && (opts.source_id.is_some()
+            || opts.repository_id.is_some()
+            || opts.stream_kind.is_some()
+            || opts.stream_id.is_some()
+            || opts.policy_group.is_some()
+            || opts.follow
+            || opts.pin_snapshot_sha256.is_some())
+    {
+        anyhow::bail!(
+            "native source policy options require an explicit rpm, deb, arch, or eopkg package format"
+        );
+    }
+
     if super::repo_static::try_cmd_repo_add_static(&opts).await? {
         return Ok(());
     }
@@ -87,46 +75,53 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
         anyhow::bail!("--fingerprint is only supported for static repositories");
     }
 
-    if opts.replace {
-        anyhow::bail!("--replace is only supported for static repositories");
-    }
     let package_format = opts.package_format.ok_or_else(|| {
         anyhow::anyhow!(
-            "--package-format is required for non-static repositories; choose rpm, deb, arch, or json"
+            "--package-format is required for non-static repositories; choose rpm, deb, arch, eopkg, or json"
         )
     })?;
-    let profile = supplied_profile.ok_or_else(|| {
-        anyhow::anyhow!(
-            "--source-profile is required for non-static repositories; use an exact public profile ID"
-        )
-    })?;
-    let format_matches = matches!(
-        (package_format, profile.package_format()),
-        (
-            RepositoryFormat::Fedora,
-            conary_core::repository::supported_profiles::ProfilePackageFormat::Rpm
-        ) | (
-            RepositoryFormat::Debian,
-            conary_core::repository::supported_profiles::ProfilePackageFormat::Deb
-        ) | (
-            RepositoryFormat::Arch,
-            conary_core::repository::supported_profiles::ProfilePackageFormat::Arch
-        ) | (RepositoryFormat::Json, _)
-    );
-    if !format_matches {
-        anyhow::bail!(
-            "source profile '{}' uses '{}' packages, not '{}' metadata",
-            profile.id(),
-            profile.package_format().as_str(),
-            package_format.as_str()
+    if let Some(profile) = supplied_profile {
+        let format_matches = matches!(
+            (package_format, profile.package_format()),
+            (
+                RepositoryFormat::Fedora,
+                conary_core::repository::supported_profiles::ProfilePackageFormat::Rpm
+            ) | (
+                RepositoryFormat::Debian,
+                conary_core::repository::supported_profiles::ProfilePackageFormat::Deb
+            ) | (
+                RepositoryFormat::Arch,
+                conary_core::repository::supported_profiles::ProfilePackageFormat::Arch
+            ) | (
+                RepositoryFormat::Eopkg,
+                conary_core::repository::supported_profiles::ProfilePackageFormat::Eopkg
+            ) | (RepositoryFormat::Json, _)
         );
+        if !format_matches {
+            anyhow::bail!(
+                "source profile '{}' uses '{}' packages, not '{}' metadata",
+                profile.id(),
+                profile.package_format().as_str(),
+                package_format.as_str()
+            );
+        }
     }
-    let package_authority = resolve_ccs_package_authority(
-        opts.default_strategy.as_deref(),
-        opts.remi_endpoint.as_deref(),
-        profile.id(),
-        &opts.ccs_package_keys,
-    )?;
+    let profile_id = supplied_profile.map(|profile| profile.id().to_string());
+    let package_authority = if opts.default_strategy.as_deref() == Some("remi") {
+        let profile_id = profile_id.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "--source-profile is required for Remi repositories; use an exact public profile ID"
+            )
+        })?;
+        resolve_ccs_package_authority(
+            opts.default_strategy.as_deref(),
+            opts.remi_endpoint.as_deref(),
+            profile_id,
+            &opts.ccs_package_keys,
+        )?
+    } else {
+        Vec::new()
+    };
     let parser_config = exact_parser_config(
         package_format,
         opts.distribution,
@@ -145,12 +140,8 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
         arch_master_keys: opts.arch_master_keys,
         arch_packager_key_threshold: opts.arch_packager_key_threshold,
         arch_database_signature: opts.arch_database_signature,
+        eopkg_origin: format!("{}/", opts.url.trim_end_matches('/')),
     })?;
-
-    let db_path = opts.db_path;
-
-    let mut conn = open_db(&db_path)?;
-    let tx = conn.transaction()?;
 
     // Create the repository with all settings
     let mut repo = conary_core::db::models::Repository::new(opts.name, opts.url);
@@ -163,8 +154,78 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     repo.priority = opts.priority;
     repo.default_strategy = opts.default_strategy;
     repo.default_strategy_endpoint = opts.remi_endpoint;
-    repo.source_profile = Some(profile.id().to_string());
+    repo.source_profile = profile_id;
     repo.security_advisory_support = opts.security_advisory_support;
+
+    let native_format = matches!(
+        package_format,
+        RepositoryFormat::Arch
+            | RepositoryFormat::Debian
+            | RepositoryFormat::Fedora
+            | RepositoryFormat::Eopkg
+    );
+    if native_format {
+        let source_identity = opts
+            .source_id
+            .ok_or_else(|| anyhow::anyhow!("--source-id is required for native repositories"))?;
+        let repository_identity = opts.repository_id.ok_or_else(|| {
+            anyhow::anyhow!("--repository-id is required for native repositories")
+        })?;
+        let stream_kind = opts
+            .stream_kind
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--stream-kind is required for native repositories"))?;
+        let stream_identity = opts
+            .stream_id
+            .ok_or_else(|| anyhow::anyhow!("--stream-id is required for native repositories"))?;
+        let stream = match stream_kind {
+            "release" => NativeSourceStream::release(stream_identity)?,
+            "channel" => NativeSourceStream::channel(stream_identity)?,
+            "rolling" => NativeSourceStream::rolling(stream_identity)?,
+            other => anyhow::bail!("unsupported native stream kind '{other}'"),
+        };
+        let (update_mode, pinned_snapshot) = match (
+            opts.follow,
+            opts.pin_snapshot_sha256
+                .map(AuthenticatedSnapshotIdentity::from_sha256),
+        ) {
+            (true, None) => (RepositoryUpdateMode::Follow, None),
+            (false, Some(snapshot)) => (RepositoryUpdateMode::Pin, Some(snapshot?)),
+            (false, None) => anyhow::bail!(
+                "exactly one of --follow or --pin-snapshot-sha256 is required for native repositories"
+            ),
+            (true, Some(_)) => {
+                anyhow::bail!("--follow and --pin-snapshot-sha256 are mutually exclusive")
+            }
+        };
+        let scope = match opts.policy_group {
+            Some(group) => RepositoryPolicyScope::group(group)?,
+            None => RepositoryPolicyScope::repository(repository_identity.clone())?,
+        };
+        let ecosystem = NativeSourceEcosystem::from_repository_format(package_format)?;
+        let policy =
+            RepositorySourcePolicy::new(source_identity, scope, ecosystem, stream, update_mode)?;
+        repo.set_native_source_policy(policy, repository_identity, pinned_snapshot)?;
+    } else if opts.source_id.is_some()
+        || opts.repository_id.is_some()
+        || opts.stream_kind.is_some()
+        || opts.stream_id.is_some()
+        || opts.policy_group.is_some()
+        || opts.follow
+        || opts.pin_snapshot_sha256.is_some()
+    {
+        anyhow::bail!("native source policy options require rpm, deb, arch, or eopkg metadata");
+    }
+
+    let db_path = opts.db_path;
+    let mut conn = open_db(&db_path)?;
+    let tx = conn.transaction()?;
+    if opts.replace
+        && let Some(existing) = conary_core::db::models::Repository::find_by_name(&tx, &repo.name)?
+    {
+        let existing_id = existing.id.context("persisted repository has no ID")?;
+        conary_core::db::models::Repository::delete(&tx, existing_id)?;
+    }
 
     if let Err(error) = repo.insert(&tx) {
         if matches!(&error, conary_core::Error::ConflictError(_)) {
@@ -211,14 +272,19 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     }
     println!("  Enabled: {}", repo.enabled);
     println!("  Priority: {}", repo.priority);
-    println!(
-        "  Source Profile: {}",
-        repo.source_profile
-            .as_deref()
-            .expect("repository insertion validated its source profile")
-    );
+    if let Some(source_profile) = repo.source_profile.as_deref() {
+        println!("  Source Profile: {source_profile}");
+    }
+    if let (Some(policy), Some(repository_identity)) = (
+        repo.source_policy.as_ref(),
+        repo.repository_identity.as_deref(),
+    ) {
+        println!("  Source Identity: {}", policy.source_identity);
+        println!("  Repository Identity: {repository_identity}");
+        println!("  Update Policy: {}", policy.update_mode.as_str());
+    }
     if let Some(policy) = repo.trust_policy.as_ref() {
-        println!("  Repository Trust: {}", describe_trust_policy(policy));
+        println!("  Repository Trust: {}", trust_display::describe(policy));
     } else if !package_authority_rows.is_empty() {
         println!(
             "  Repository Trust: {} pinned CCS package key(s)",
@@ -255,6 +321,7 @@ struct ExactTrustPolicyInput {
     arch_master_keys: Vec<String>,
     arch_packager_key_threshold: Option<usize>,
     arch_database_signature: Option<ArchSignatureRequirement>,
+    eopkg_origin: String,
 }
 
 fn exact_trust_policy(input: ExactTrustPolicyInput) -> Result<Option<RepositoryTrustPolicy>> {
@@ -269,6 +336,7 @@ fn exact_trust_policy(input: ExactTrustPolicyInput) -> Result<Option<RepositoryT
         arch_master_keys,
         arch_packager_key_threshold,
         arch_database_signature,
+        eopkg_origin,
     } = input;
     let reject = |flag: &str, present: bool| -> Result<()> {
         if present {
@@ -358,6 +426,26 @@ fn exact_trust_policy(input: ExactTrustPolicyInput) -> Result<Option<RepositoryT
                 },
             })
         }
+        RepositoryFormat::Eopkg => {
+            reject("--debian-release-key", !debian_release_keys.is_empty())?;
+            reject("--rpm-metadata-key", !rpm_metadata_keys.is_empty())?;
+            reject("--rpm-metalink", rpm_metalink.is_some())?;
+            reject("--rpm-package-key", !rpm_package_keys.is_empty())?;
+            reject("--arch-keyring", arch_keyring.is_some())?;
+            reject("--arch-keyring-format", arch_keyring_format.is_some())?;
+            reject("--arch-master-key", !arch_master_keys.is_empty())?;
+            reject(
+                "--arch-packager-key-threshold",
+                arch_packager_key_threshold.is_some(),
+            )?;
+            reject(
+                "--arch-database-signature",
+                arch_database_signature.is_some(),
+            )?;
+            Some(RepositoryTrustPolicy::Eopkg {
+                origin: eopkg_origin,
+            })
+        }
         RepositoryFormat::Json => {
             reject("--debian-release-key", !debian_release_keys.is_empty())?;
             reject("--rpm-metadata-key", !rpm_metadata_keys.is_empty())?;
@@ -384,38 +472,6 @@ fn exact_trust_policy(input: ExactTrustPolicyInput) -> Result<Option<RepositoryT
         policy.validate()?;
     }
     Ok(policy)
-}
-
-fn describe_trust_policy(policy: &RepositoryTrustPolicy) -> String {
-    match policy {
-        RepositoryTrustPolicy::Debian { release_keys } => {
-            format!(
-                "Debian Release chain ({} pinned key(s))",
-                release_keys.len()
-            )
-        }
-        RepositoryTrustPolicy::Rpm {
-            metadata,
-            package_keys,
-        } => format!(
-            "RPM metadata/package chain ({}, {} package key(s))",
-            match metadata {
-                conary_core::repository::RpmMetadataAuthority::OpenPgp { keys } =>
-                    format!("{} metadata key(s)", keys.len()),
-                conary_core::repository::RpmMetadataAuthority::Metalink { .. } =>
-                    "exact metalink identity".to_string(),
-            },
-            package_keys.len()
-        ),
-        RepositoryTrustPolicy::Arch { keyring, sig_level } => format!(
-            "Arch database/package chain ({} pinned master key(s), {} certification threshold, \
-             database {:?}, package {:?})",
-            keyring.master_fingerprints.len(),
-            keyring.packager_key_threshold,
-            sig_level.database,
-            sig_level.package
-        ),
-    }
 }
 
 fn exact_parser_config(
@@ -463,6 +519,14 @@ fn exact_parser_config(
             reject("--architecture", architecture.is_some())?;
             RepositoryParserConfig::Arch {
                 database: required("--database", database)?,
+            }
+        }
+        RepositoryFormat::Eopkg => {
+            reject("--distribution", distribution.is_some())?;
+            reject("--component", component.is_some())?;
+            reject("--database", database.is_some())?;
+            RepositoryParserConfig::Eopkg {
+                architecture: required("--architecture", architecture)?,
             }
         }
         RepositoryFormat::Json => {
@@ -700,7 +764,9 @@ pub async fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{Repository, SecurityAdvisorySupport};
+    use conary_core::db::models::{
+        NativeSourceStream, Repository, RepositoryUpdateMode, SecurityAdvisorySupport,
+    };
 
     #[tokio::test]
     async fn repo_add_rejects_internal_source_route_slug() {
@@ -732,6 +798,13 @@ mod tests {
             remi_endpoint: Some("https://remi.example.invalid".to_string()),
             ccs_package_keys: Vec::new(),
             source_profile: Some("fedora".to_string()),
+            source_id: None,
+            repository_id: None,
+            stream_kind: None,
+            stream_id: None,
+            policy_group: None,
+            follow: false,
+            pin_snapshot_sha256: None,
             security_advisory_support: SecurityAdvisorySupport::Unknown,
         })
         .await
@@ -777,6 +850,13 @@ mod tests {
             remi_endpoint: None,
             ccs_package_keys: Vec::new(),
             source_profile: Some("fedora-44".to_string()),
+            source_id: None,
+            repository_id: None,
+            stream_kind: None,
+            stream_id: None,
+            policy_group: None,
+            follow: false,
+            pin_snapshot_sha256: None,
             security_advisory_support: SecurityAdvisorySupport::Supported,
         })
         .await
@@ -789,6 +869,134 @@ mod tests {
         assert_eq!(
             repo.security_advisory_support,
             SecurityAdvisorySupport::Supported
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_add_replaces_uncatalogued_native_policy_without_orphans() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("conary.db");
+        let db_path_string = db_path.to_string_lossy().to_string();
+        conary_core::db::init(&db_path).unwrap();
+
+        for (source_id, stream_id, replace) in [
+            ("third-party:widgets", "stable", false),
+            ("third-party:widgets-next", "candidate", true),
+        ] {
+            cmd_repo_add(RepoAddOptions {
+                name: "widgets".to_string(),
+                url: "https://packages.example.test/widgets".to_string(),
+                package_format: Some(RepositoryFormat::Fedora),
+                distribution: None,
+                component: None,
+                architecture: Some("x86_64".to_string()),
+                database: None,
+                db_path: db_path_string.clone(),
+                content_url: None,
+                priority: 75,
+                disabled: false,
+                debian_release_keys: Vec::new(),
+                rpm_metadata_keys: vec![OpenPgpTrustRoot {
+                    url: "https://keys.example.test/metadata.gpg".to_string(),
+                    fingerprint: "A".repeat(40),
+                }],
+                rpm_metalink: None,
+                rpm_package_keys: vec![OpenPgpTrustRoot {
+                    url: "https://keys.example.test/packages.gpg".to_string(),
+                    fingerprint: "B".repeat(40),
+                }],
+                arch_keyring: None,
+                arch_keyring_format: None,
+                arch_master_keys: Vec::new(),
+                arch_packager_key_threshold: None,
+                arch_database_signature: None,
+                fingerprints: Vec::new(),
+                yes: false,
+                replace,
+                default_strategy: None,
+                remi_endpoint: None,
+                ccs_package_keys: Vec::new(),
+                source_profile: None,
+                source_id: Some(source_id.to_string()),
+                repository_id: Some("widgets:x86_64".to_string()),
+                stream_kind: Some("channel".to_string()),
+                stream_id: Some(stream_id.to_string()),
+                policy_group: None,
+                follow: true,
+                pin_snapshot_sha256: None,
+                security_advisory_support: SecurityAdvisorySupport::Unknown,
+            })
+            .await
+            .unwrap();
+        }
+
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let repository = Repository::find_by_name(&conn, "widgets").unwrap().unwrap();
+        assert_eq!(repository.source_profile, None);
+        let policy = repository.source_policy.unwrap();
+        assert_eq!(policy.source_identity, "third-party:widgets-next");
+        assert_eq!(
+            policy.stream,
+            NativeSourceStream::channel("candidate").unwrap()
+        );
+        assert_eq!(policy.update_mode, RepositoryUpdateMode::Follow);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM repository_source_policies",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn static_probe_cannot_discard_native_source_policy_options() {
+        let error = cmd_repo_add(RepoAddOptions {
+            name: "ambiguous".to_string(),
+            url: "/does/not/matter".to_string(),
+            package_format: None,
+            distribution: None,
+            component: None,
+            architecture: None,
+            database: None,
+            db_path: "/does/not/matter.db".to_string(),
+            content_url: None,
+            priority: 50,
+            disabled: false,
+            debian_release_keys: Vec::new(),
+            rpm_metadata_keys: Vec::new(),
+            rpm_metalink: None,
+            rpm_package_keys: Vec::new(),
+            arch_keyring: None,
+            arch_keyring_format: None,
+            arch_master_keys: Vec::new(),
+            arch_packager_key_threshold: None,
+            arch_database_signature: None,
+            fingerprints: Vec::new(),
+            yes: false,
+            replace: false,
+            default_strategy: None,
+            remi_endpoint: None,
+            ccs_package_keys: Vec::new(),
+            source_profile: None,
+            source_id: Some("source".to_string()),
+            repository_id: None,
+            stream_kind: None,
+            stream_id: None,
+            policy_group: None,
+            follow: false,
+            pin_snapshot_sha256: None,
+            security_advisory_support: SecurityAdvisorySupport::Unknown,
+        })
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("explicit rpm, deb, arch, or eopkg")
         );
     }
 }

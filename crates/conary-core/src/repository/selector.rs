@@ -100,7 +100,9 @@ impl PackageSelector {
         options: &SelectionOptions,
     ) -> Result<Vec<PackageWithRepo>> {
         if let Some(policy) = &options.policy {
-            policy.validate_profile_ids().map_err(Error::ConfigError)?;
+            policy
+                .validate_source_identities()
+                .map_err(Error::ConfigError)?;
         }
         let detected_arch = Self::detect_architecture();
         let system_arch = options.architecture.as_deref().unwrap_or(&detected_arch);
@@ -178,34 +180,20 @@ impl PackageSelector {
                 continue;
             }
 
-            // Repository and package profile claims are one exact authority.
-            // Validate them even when no source policy was supplied so an
-            // unscoped request cannot admit contradictory metadata.
-            let candidate_profile = candidate_source_profile(&pkg, &repo)?;
+            // Native source identity comes from the stream-bound repository
+            // policy. Public feed-profile claims remain an exact projection
+            // for Remi/static repositories and may not contradict each other.
+            let candidate_identity = candidate_source_identity(&pkg, &repo)?;
 
             // Apply resolution policy filter
-            if let Some(ref policy) = options.policy {
-                if !candidate_matches_allowed_distros(policy, &pkg, &repo)? {
-                    debug!(
-                        "Policy rejected package {} {} from repository {} due to allowlist mismatch",
-                        pkg.name, pkg.version, repo.name
-                    );
-                    continue;
-                }
-
-                let mut policy_without_allowlist = policy.clone();
-                policy_without_allowlist.allowed_distros.clear();
-                if !policy_without_allowlist.accepts_candidate(
-                    &repo.name,
-                    candidate_profile,
-                    options.is_root,
-                ) {
-                    debug!(
-                        "Policy rejected package {} {} from repository {} (scheme {:?})",
-                        pkg.name, pkg.version, repo.name, scheme
-                    );
-                    continue;
-                }
+            if let Some(ref policy) = options.policy
+                && !policy.accepts_candidate(&repo.name, candidate_identity, options.is_root)
+            {
+                debug!(
+                    "Policy rejected package {} {} from repository {} (scheme {:?})",
+                    pkg.name, pkg.version, repo.name, scheme
+                );
+                continue;
             }
 
             results.push(PackageWithRepo {
@@ -226,16 +214,18 @@ impl PackageSelector {
             return Err(Error::NotFound("No matching packages found".to_string()));
         }
 
-        let guarded_profile = options.policy.as_ref().and_then(|policy| {
+        let guarded_source_identity = options.policy.as_ref().and_then(|policy| {
             (policy.mixing == DependencyMixingPolicy::Guarded)
-                .then(|| policy.primary_profile())
+                .then(|| policy.primary_source_identity())
                 .flatten()
         });
-        let selected_index = exact_winner_index(&candidates, |candidate| {
-            let candidate_profile =
-                candidate_source_profile(&candidate.package, &candidate.repository)?;
-            Ok(guarded_profile.is_some_and(|profile| candidate_profile == Some(profile)))
-        })?;
+        let selected_index =
+            exact_winner_index(&candidates, |candidate| {
+                let candidate_identity =
+                    candidate_source_identity(&candidate.package, &candidate.repository)?;
+                Ok(guarded_source_identity
+                    .is_some_and(|identity| candidate_identity == Some(identity)))
+            })?;
         let selected = candidates.swap_remove(selected_index);
         info!(
             "Selected package {} {} from repository {} (priority {})",
@@ -396,8 +386,8 @@ fn ambiguous_selection(
     }
 }
 
-/// Return the one exact public source profile jointly declared by a package
-/// row and its repository.
+/// Return the one exact public feed profile jointly declared by a package row
+/// and its repository.
 ///
 /// Package-level metadata may repeat repository authority, but it may never
 /// contradict it. This is the shared projection used by selection,
@@ -421,31 +411,23 @@ pub fn candidate_source_profile<'a>(
         (Some(package_profile), _) => Some(package_profile),
         (None, repository_profile) => repository_profile,
     };
-    if let Some(profile) = profile
-        && crate::repository::supported_profiles::profile_by_public_id(profile).is_none()
-    {
-        return Err(Error::ConfigError(format!(
-            "repository package '{}-{}' resolves to unsupported source profile '{}'",
-            pkg.name, pkg.version, profile
-        )));
-    }
     Ok(profile)
 }
 
-pub(crate) fn candidate_matches_allowed_distros(
-    policy: &ResolutionPolicy,
-    pkg: &RepositoryPackage,
-    repo: &Repository,
-) -> Result<bool> {
-    if policy.allowed_distros.is_empty() {
-        return candidate_source_profile(pkg, repo).map(|_| true);
+/// Return the exact native source identity for one candidate.
+///
+/// A stream-bound native repository policy is authoritative. Remi/static
+/// candidates without one use their exact public feed-profile projection.
+pub fn candidate_source_identity<'a>(
+    pkg: &'a RepositoryPackage,
+    repo: &'a Repository,
+) -> Result<Option<&'a str>> {
+    let feed_profile = candidate_source_profile(pkg, repo)?;
+    if let Some(policy) = repo.source_policy.as_ref() {
+        policy.validate()?;
+        return Ok(Some(policy.source_identity.as_str()));
     }
-
-    let candidate_profile = candidate_source_profile(pkg, repo)?;
-    Ok(policy
-        .allowed_distros
-        .iter()
-        .any(|allowed| candidate_profile.is_some_and(|profile| allowed == profile)))
+    Ok(feed_profile)
 }
 
 /// Compare two exact package architecture tokens under their owning package

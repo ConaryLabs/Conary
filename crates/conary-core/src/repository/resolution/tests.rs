@@ -297,8 +297,8 @@ mod tests {
         .unwrap();
         let static_repo_id = conn.last_insert_rowid();
         conn.execute(
-            "INSERT INTO repositories (name, url, enabled, priority, default_strategy, source_profile)
-             VALUES ('remi-repo', 'https://remi.example.invalid', 1, 10, 'remi', 'fedora-44')",
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy, default_strategy_endpoint, source_profile)
+             VALUES ('remi-repo', 'https://remi.example.invalid', 1, 10, 'remi', 'https://remi.example.invalid', 'fedora-44')",
             [],
         )
         .unwrap();

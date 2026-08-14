@@ -436,6 +436,67 @@ fn repo_add_accepts_exact_public_source_profile() {
 }
 
 #[test]
+fn repo_add_parses_uncatalogued_native_follow_policy() {
+    let cli = parse_cli([
+        "conary",
+        "repo",
+        "add",
+        "widgets",
+        "https://packages.example.test/widgets",
+        "--package-format",
+        "rpm",
+        "--architecture",
+        "x86_64",
+        "--source-id",
+        "third-party:widgets",
+        "--repository-id",
+        "widgets:x86_64",
+        "--stream-kind",
+        "channel",
+        "--stream-id",
+        "stable",
+        "--follow",
+    ])
+    .unwrap();
+    let Some(Commands::Repo(RepoCommands::Add { args })) = cli.command else {
+        panic!("expected repo add command");
+    };
+    assert_eq!(args.source_profile, None);
+    assert_eq!(args.source_id.as_deref(), Some("third-party:widgets"));
+    assert_eq!(args.repository_id.as_deref(), Some("widgets:x86_64"));
+    assert_eq!(args.stream_id.as_deref(), Some("stable"));
+    assert!(args.follow);
+}
+
+#[test]
+fn repo_add_native_update_choice_is_closed_and_sha256_is_canonical() {
+    let both = [
+        "conary",
+        "repo",
+        "add",
+        "widgets",
+        "https://packages.example.test/widgets",
+        "--follow",
+        "--pin-snapshot-sha256",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ];
+    assert!(parse_cli(both).is_err());
+
+    assert!(
+        parse_cli([
+            "conary",
+            "repo",
+            "add",
+            "widgets",
+            "https://packages.example.test/widgets",
+            "--pin-snapshot-sha256",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
 fn repo_add_accepts_repeatable_self_hosted_ccs_package_keys() {
     let cli = parse_cli([
         "conary",
@@ -496,6 +557,72 @@ fn system_init_has_no_host_distro_selector() {
     }
 
     assert!(parse_cli(["conary", "system", "init", "--profile", "fedora-44"]).is_err());
+}
+
+#[test]
+fn repository_takeover_separates_preview_apply_and_rollback_intent() {
+    let preview = parse_cli([
+        "conary",
+        "system",
+        "repository-takeover",
+        "--root",
+        "/selected",
+        "--manifest",
+        "takeover.json",
+        "--dry-run",
+    ])
+    .unwrap();
+    match preview.command {
+        Some(Commands::System(SystemCommands::RepositoryTakeover {
+            common,
+            manifest,
+            dry_run,
+            rollback,
+            ..
+        })) => {
+            assert_eq!(common.root, "/selected");
+            assert_eq!(manifest.unwrap(), std::path::PathBuf::from("takeover.json"));
+            assert!(dry_run);
+            assert!(!rollback);
+        }
+        _ => panic!("expected repository takeover command"),
+    }
+
+    assert!(
+        parse_cli([
+            "conary",
+            "system",
+            "repository-takeover",
+            "--manifest",
+            "takeover.json",
+            "--yes",
+        ])
+        .is_err(),
+        "apply requires the exact preview digest"
+    );
+    assert!(
+        parse_cli([
+            "conary",
+            "system",
+            "repository-takeover",
+            "--manifest",
+            "takeover.json",
+            "--preview-sha256",
+            "00",
+        ])
+        .is_err(),
+        "apply requires explicit intent"
+    );
+    assert!(
+        parse_cli([
+            "conary",
+            "system",
+            "repository-takeover",
+            "--rollback",
+            "--yes",
+        ])
+        .is_ok()
+    );
 }
 
 #[test]

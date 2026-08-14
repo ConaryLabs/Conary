@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-31
-revision: 43
-summary: Document selected-generation lifecycle proof and the current Fedora supported-host generation export gates
+last_updated: 2026-08-13
+revision: 49
+summary: Document authenticated derivative targets, transport normalization, typed release evidence, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -52,6 +52,10 @@ cargo run -p conary-test -- run --suite phase4-security-advisory-pipeline --dist
 
 # Run the focused RPM/DEB/Arch lifecycle contract on one target image
 cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro fedora44 --phase 4
+
+# Run authentic Debian-derivative repository and native APT acceptance
+cargo run -p conary-test -- run --suite debian-derivative-acceptance --distro linux-mint-22.3 --phase 4
+cargo run -p conary-test -- run --suite debian-derivative-acceptance --distro pop-os-24.04 --phase 4
 
 # Run all tests for a phase
 cargo run -p conary-test -- run --distro fedora44 --phase 1
@@ -171,13 +175,15 @@ FAT/ext4 mkfs tools, and composefs inspection tools as needed). Group P uses the
 same source fixture and provisions ISO helper packages through Conary when
 `xorriso`/`mtools` are absent before it assembles the generation.
 
-A step with `stage_conary = true` copies the host-built `conary` into the guest,
-which couples the guest to the build host's glibc and to a matching
-`libseccomp.so.2`. `scripts/build-static-conary.sh` removes that coupling: it
-builds a static libseccomp for musl once, caches it, and produces a
-statically linked `conary` for `x86_64-unknown-linux-musl` that runs on any
-guest. Point the harness at it with `CONARY_HOST_BIN`. The build is debug
-profile and the binary is a test-staging artifact, not a release artifact.
+A step with `stage_conary = true` copies a `conary` into the guest. A host-built
+binary would couple the guest to the build host's glibc and to a matching
+`libseccomp.so.2`, so the harness stages the artifact from
+`scripts/build-static-conary.sh` instead: it builds a static libseccomp for musl
+once, caches it, and produces a statically linked `conary` for
+`x86_64-unknown-linux-musl` that runs on any guest. `CONARY_HOST_BIN` overrides
+that default to stage a specific binary. The build is debug profile and the
+binary is a test-staging artifact, not a release artifact. Distro container
+images stage the same artifact through `build_context = "static-binary"`.
 
 `scripts/build-qemu-guest-image.sh` builds such an image from a pinned official
 Fedora Cloud Base qcow2 plus provisioning, and `bash
@@ -239,16 +245,12 @@ Common conary-test operations have CLI equivalents for human use:
 |---------|---------|
 | `conary-test bootstrap check [--json]` | Inspect local developer prerequisites and smoke-readiness status |
 | `conary-test bootstrap smoke [--dry-run] [--json]` | Preview or run the local developer smoke proof loop |
-| `conary-test deploy rollout (--unit <name> \| --group <name>) [--ref <git-ref> \| --path <path>]` | Managed Forge deploy flow; trusted default source is a GitHub ref |
 | `conary-test run --suite <name> --distro <distro> --phase <N>` | Execute a test suite |
-| `conary-test deploy source [--ref <git-ref>]` | Deploy source and rebuild |
-| `conary-test deploy rebuild` | Rebuild binaries from the currently deployed source checkout |
-| `conary-test deploy restart` | Restart the test service |
-| `conary-test deploy status [--port <port>]` | Show running-binary status separately from local checkout state and drift |
+| `conary-test deploy status` | Show local binary, checkout, and managed-rollout status |
 | `conary-test fixtures build [--groups all]` | Build test fixture CCS packages |
 | `conary-test fixtures publish` | Publish fixtures to Remi |
 | `conary-test logs <test-id> [--run <id>] [--step <N>]` | Retrieve test logs |
-| `conary-test health [--port <port>]` | Normalized health envelope with `mode`, `deploy_status`, optional `remi`, and optional `reason` |
+| `conary-test health` | Normalized local/Remi health envelope with local `deploy_status`, optional `remi`, and optional `reason` |
 | `conary-test images build --distro <name>` | Build a container image for a configured distro |
 | `conary-test images list` | List locally built container images |
 | `conary-test images prune [--keep <N>]` | Remove old container images |
@@ -304,13 +306,13 @@ cargo run -p conary-test -- bootstrap smoke --json
 result files through the normal runner. It is not package publishing, does not
 publish fixtures, and does not require cloud credentials.
 
-Remote Forge control-plane validation is temporarily paused while Conary
-replaces the old VPS runner with a KVM-capable host. The Forge scripts remain
-checked in for the next runner, but they are not active release evidence today.
+Remote Forge control-plane validation and conary-test deployment are
+decommissioned. Use the local QEMU/KVM gate for temporary release evidence;
+there is no replacement Forge rollout path.
 
-Do not describe local evidence as hosted CI while the remote KVM path is
-paused. Any QEMU release evidence must name the absolute run date, distro,
-suite name, and pass/fail/skip/cancel counts.
+Do not describe local evidence as hosted CI. Any QEMU release evidence must
+name the absolute run date, distro, suite name, and pass/fail/skip/cancel
+counts.
 
 For the temporary local QEMU release gate, run this on a development machine
 with `/dev/kvm`:
@@ -547,16 +549,72 @@ Corpus coverage boundaries (not product support exemptions):
 - dependency installation from the generated local corpus package; this suite
   records dependency metadata and installs with `--no-deps`
 
-The focused `native-cross-source-lifecycle` manifest contains one fatal,
-non-flaky test that executes the same shared lifecycle helper as `TNPM02X`.
+The focused `native-cross-source-lifecycle` manifest contains three non-flaky
+corpus cases, one for each exact source format. A failed case does not suppress
+the remaining source-format evidence. Each case executes the same shared
+lifecycle helper as `TNPM02X`, writes a versioned evidence
+envelope carrying both install and update artifact digests, the typed fixture
+build-manifest authority that produced them, and stage checkpoints. It is
+projected by `conary-test` into a typed
+`CorpusCaseResult`. The suite JSON carries the typed aggregate beside the
+ordinary test results and records the manifest-declared case count; a missing,
+malformed, skipped, failed, or unclassified corpus case makes the command fail
+even if generic command output happened to look successful.
+
+The adopted-artifact bridge has a separate hermetic command test:
+
+```bash
+cargo test -p conary --lib commands::adopt::convert
+```
+
+Its lifecycle case re-executes in an unprivileged user and private mount
+namespace when the parent test is not root. For RPM, Debian, and Arch it
+publishes two adoption-produced signed CCS versions, installs and updates them
+in a clean selected root, rolls the update back, removes the restored package,
+and confirms the persisted native lifecycle bundle. The execution path uses
+only CCS operations after publication and therefore never consults a source
+package manager or its database at runtime.
 The `pr-gate` workflow builds each configured distro image first and then runs
-that focused manifest across `fedora44`, `ubuntu-26.04`, and `arch`. Together,
-the required lanes authenticate all three checked-in source-ABI traces and run
-the full 3x3 Conary Cartesian product. Missing native manager authority,
-container support, an exact trace match, or an image build fails its matrix
-job; there is no manifest skip fallback. A stable
+that focused manifest across `fedora44`, `ubuntu-26.04`, `arch`, the OpenRC
+`artix` lane, Linux Mint 22.3, and Pop!_OS 24.04. Together, the required lanes
+authenticate all three checked-in source-ABI traces and run the full 6x3
+Conary Cartesian product. Corpus target
+facts resolve from explicit per-lane manifest authority, so Artix records
+OpenRC rather than inheriting a systemd default. Missing native manager
+authority, container support, an exact trace match, or an image build fails its
+matrix job; there is no manifest skip fallback. A stable
 `native-cross-source-lifecycle` aggregator fails unless every distro matrix job
 succeeds.
+
+The Artix lane keeps both sides of its rolling package view deliberate: the OCI
+base is digest-pinned, and the container selects Artix's two official core
+mirrors before forcing a package-database refresh. Normal mirrors sync from
+those core mirrors and can briefly advertise packages older than the pinned
+image during publication, so they are not image-build authority for this lane.
+
+The two Debian-derivative jobs also run `debian-derivative-acceptance`. Their
+shared Containerfile starts from one digest-pinned Ubuntu transport root, then
+installs exact release-owned identity and keyring packages and restores the
+actual APT declarations captured from authenticated release media. Before any
+release package is installed, the builder verifies and removes the pinned OCI
+transport's dpkg payload-exclusion policy; release-root package records must
+refer to materialized payload rather than Docker-reduced bytes. Build and
+runtime preflight require exact `/etc/os-release`, package versions,
+declaration bytes, signing-root bytes and fingerprints, and `conary --version`.
+Linux Mint's legacy global APT trust is resolved only by declaration-entry and
+fingerprint bindings in typed test configuration; Pop!_OS retains its explicit
+`Signed-By` declarations. The suite executes repository
+preview/apply/repeat/rollback plus native dpkg query, adoption, refresh,
+takeover preview, unadoption, and removal. Distro names select test data only;
+product trust and parser selection remain typed declaration authority.
+
+Successful derivative reports carry a `target_release` schema with the exact
+release-media, base-image, package, APT declaration, signing-root, checkout,
+and running Conary artifact identities plus typed preflight stages. Each
+artifact distinguishes pinned release authority, pinned build input, and bytes
+observed in the running target; configuration is not mislabeled as a runtime
+read. Merely configuring these lanes is not acceptance evidence; the first exact-head
+hosted runs remain required before public support claims.
 
 Published-release proof uses the same contract through
 `.github/workflows/release-artifact-proof.yml`. Its explicit
@@ -567,7 +625,39 @@ filename, and makes the image install that package through `dnf`, `apt`, or
 digest before the installed `/usr/bin/conary` runs all three source formats.
 Source-built PR evidence is not a substitute for this published-byte lane.
 
-Each full parity run must pass `scripts/check-conary-test-result-gate.sh`,
+Solus uses the separate `solus-eopkg-acceptance` QEMU suite because its
+release authority is an official bootable image rather than a container
+facsimile. The suite boots the pinned current Polaris root, proves native
+eopkg and update state, applies/repeats/rolls back exact repository takeover,
+syncs the authenticated 11,907-record index, and converts an authentic
+installed eopkg only after exact adopted-payload equivalence. Its image is the
+published `solus-4.9-polaris-2026-08-12-v3.qcow2` test artifact; a skipped
+download or QEMU step is not acceptance evidence. The published image's ext4
+root carries the `verity` feature before the suite starts, and the suite proves
+that fixture contract before Conary initialization so generation publication
+cannot degrade to an unprotected composefs mount.
+
+The bounded `selected-root-overlay-profile-solus` QEMU suite reuses that
+immutable fixture without running takeover. It functionally mounts the exact
+selected-root OverlayFS profile and proves indexed hardlink copy-up, complete
+metadata copy-up, character-device whiteouts, logical opaque replacement, and
+`EXDEV` for lower-directory rename. Against the fixture's selected generation,
+it proves the verified composefs image is mounted directly beneath typed mutable
+state and that both nested mounts are gone before publication failure returns.
+The bounded artifact is reconstructed by
+`apps/conary/tests/fixtures/selected-root-current-generation/prepare.py`; a
+core integration test loads that exact artifact contract before the privileged
+lane consumes it.
+It also stages an isolated first-generation runtime, installs and removes a
+signed lifecycle-free CCS through the materialized-candidate path, verifies the
+changed path appears and disappears in successive manifest-only candidates,
+and proves that no session mount or workspace survives either commit. This is
+the positive kernel/filesystem and transaction counterpart to the runtime typed
+preflight; a kernel version or registered filesystem name alone is not
+capability evidence.
+
+Each full parity run must pass `scripts/check-conary-test-result-gate.sh` and
+`scripts/check-conary-corpus-result-gate.sh`,
 which requires zero failed, skipped, and cancelled results before the matrix
 can count as limited-preview release evidence. The `conary-test run` command also exits
 unsuccessfully for skipped or cancelled results. Distro images rebuild by
@@ -575,7 +665,7 @@ default so the matrix uses the current checkout; set `CONARY_TEST_REUSE_IMAGE=1`
 only for local iterative debugging where stale-image risk is acceptable.
 
 Evidence from the former 18-test, host-native-only matrix does not certify the
-current 19-test cross-source contract. Record new evidence only after all three
+current 19-test cross-source contract. Record new evidence only after all six
 current distro jobs pass the result gate.
 
 Focused Goal 3 security advisory pipeline proof:
@@ -594,16 +684,10 @@ Fresh Goal 3 evidence from May 19, 2026:
 - Fedora 44/RPM: `phase4-security-advisory-pipeline`, 7 passed, 0 failed, 0
   skipped, 0 cancelled.
 
-For supported Forge control-plane validation after a new runner is registered,
-prefer:
-
-```bash
-bash scripts/forge-smoke.sh
-```
-
-That path validates the local `conary-test` service contract (`/v1/health`,
-`/v1/deploy/status`, `health --json`, and `deploy status --json`) without
-pretending to be a full integration suite.
+The former Forge control-plane smoke depended on the removed conary-test
+network server and is no longer a validation path. Use the CLI run/list proof
+and the hosted Remi checks below; no replacement Forge runner or rollout path
+is part of the supported surface.
 
 ## Release Evidence Block
 
@@ -634,38 +718,45 @@ available. Review the generated bundle before attaching it. It does not copy
 `conary.db`, raw logs, environment dumps, shell history, private keys, SSH keys,
 `/etc/conary/trust`, host-local access notes, or package payloads.
 
-For managed Forge deployments from an operator workstation, prefer:
-
-```bash
-FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref main
-```
-
 ## Validation Modes
 
-- `merge-validation` is the trusted on-merge lane. It now runs the Forge
-  control-plane smoke against a freshly started `conary-test` server on a
-  dedicated test port before the package-manager smoke and Remi smoke. This
-  remote path is paused until a new KVM-capable runner is available; the
-  workflow currently runs hosted build/list/Remi smoke checks instead.
+- `merge-validation` is the trusted on-merge lane. The former Forge
+  control-plane server smoke is retired; the workflow currently runs hosted
+  build/list/Remi smoke checks instead.
 - `scheduled-ops` keeps hosted Remi health, audit, and manifest-inventory
-  checks active. Forge-backed Phase 1-3 and QEMU jobs are paused rather than
-  queued against a missing runner.
-- Raw `cargo run -p conary-test -- run ...` from an SSH shell is still useful
-  for debugging, but it is no longer the main supported Forge control-plane
-  check.
+  checks active. Forge-backed Phase 1-3 and QEMU jobs are retired; local QEMU
+  evidence must name its host, date, distro, suite, and counts.
+- Raw `cargo run -p conary-test -- run ...` remains useful for local debugging
+  and evidence collection.
 
 ### Available Distros
 
 | Distro | Container | Base | `build_context` |
 |--------|-----------|------|-----------------|
-| `fedora44` | `Containerfile.fedora44` | Fedora 44 | `binary` |
-| `ubuntu-26.04` | `Containerfile.ubuntu-26.04` | Ubuntu 26.04 LTS | `workspace-source` |
-| `arch` | `Containerfile.arch` | Arch Linux (rolling) | `binary` |
+| `fedora44` | `Containerfile.fedora44` | Fedora 44 | `static-binary` |
+| `ubuntu-26.04` | `Containerfile.ubuntu-26.04` | Ubuntu 26.04 LTS | `static-binary` |
+| `arch` | `Containerfile.arch` | Arch Linux (rolling) | `static-binary` |
+| `artix` | `Containerfile.artix` | Artix Linux (rolling, OpenRC) | `static-binary` |
+| `linux-mint-22.3` | `Containerfile.debian-derivative` | Linux Mint 22.3 release-owned root | `static-binary` |
+| `pop-os-24.04` | `Containerfile.debian-derivative` | Pop!_OS 24.04 release-owned root | `static-binary` |
+| `solus` | QEMU artifact | Solus 4.9 updated to current Polaris | `static-binary` |
 
-`build_context` is a required typed distro capability in `config.toml`.
-`binary` stages the built Conary binary and fixtures; `workspace-source` also
-stages the workspace for a container-native build. Distro names do not select
-this behavior.
+`build_context` is a required typed distro capability in `config.toml` that
+selects which Conary binary an image receives. Distro names do not select this
+behavior.
+
+- `static-binary` stages the static `x86_64-unknown-linux-musl` artifact from
+  `scripts/build-static-conary.sh`. It carries no glibc or `libseccomp.so.2`
+  coupling, so one artifact runs in every image. Build it before
+  `images build`; staging fails closed when it is missing or not actually
+  static.
+- `binary` stages the host-built Conary binary. It only runs in an image whose
+  userland matches the build host.
+
+Every distro uses `static-binary`. Ubuntu was the forcing case: its container
+userland does not match the build host, which is why that image used to compile
+Conary from source in a builder stage and made its CI leg roughly three times
+slower than the others.
 
 ## Test Structure
 
@@ -741,7 +832,7 @@ Adversarial and stress tests.
 
 ### Phase 4: Feature Validation
 
-Phase 4 currently contains 153 tests across eight manifests. It validates the
+Phase 4 currently contains 155 tests across eight manifests. It validates the
 active, user-facing command surface and checks that claimed features still match
 the current binary. Where a flow is intentionally preview-only or not yet
 implemented, the manifest asserts that it fails cleanly with an explicit
@@ -753,27 +844,27 @@ message rather than pretending it is production-ready.
 | B | T177-T195 plus suffix IDs | 20 | Label, model, collection, derive |
 | C | T196-T220 plus suffix IDs | 27 | CCS ops, query, repo management |
 | D | T221-T255 plus suffix IDs | 38 | Provenance, capability, trust, system ops, federation, automation |
-| E | T256-T277 plus suffix IDs | 24 | Cross-distro compatibility overlay: native package parity, distro policy, replatform, and takeover |
+| E | T256-T273 and T276-T277 plus suffix IDs | 22 | Cross-source compatibility overlay: native package parity, source identity, model convergence, and takeover |
 | Native package-manager parity | TNPM01-TNPM18 plus TNPM02X | 19 | Cross-distro native PM parity and daily-driver corpus |
-| Native cross-source lifecycle | TNPMX01 | 1 | Native-oracle install/update/rollback/remove trace parity on every target image |
+| Native cross-source lifecycle | TNPMX01R, TNPMX01D, TNPMX01A | 3 | Attributable native-oracle install/update/rollback/remove corpus evidence on every target image |
 | Security advisory pipeline | TSEC01-TSEC07 | 7 | Trusted advisory ingestion and security update proof |
 
 Phase 4 is intentionally mixed:
 
 - Positive-path coverage proves real flows such as tracked-config backup/restore,
-  the `conary distro` command family, label mutation, trigger mutation,
+  read-only `conary distro` diagnostics, label mutation, trigger mutation,
   selective CCS component installs, native local RPM/DEB/Arch installs, TUF
   bootstrap with a signed test root, provenance diff, pinned-fingerprint
-  federation peers, model-driven replatform apply, ready-to-activate takeover,
+  federation peers, model package convergence, ready-to-activate takeover,
   and the cross-distro takeover ownership ladder.
 - Preview-only flows are still exercised, but the assertions check for the
   expected explanatory output. Current examples include empty automation
   history and persisting automation configuration changes.
 
 Group E is intentionally richer than a simple “portability” smoke test. It
-covers canonical mapping, distro pinning and mixing behavior, source-policy
-replatform planning and apply flows, takeover across distro boundaries, and
-native-format package handling on the host distro.
+covers canonical mapping, repository-scoped source identity, read-only affinity
+diagnostics, package ownership convergence, takeover across source ecosystems,
+and native-format package handling on the host distribution.
 
 In addition to the container-backed suites, `apps/conary/tests/bootstrap_workflow.rs`
 exercises the `conary` binary directly for manifest-run record loading,
@@ -874,8 +965,9 @@ Override any config value via environment variables:
 | `RESULTS_DIR` | `[paths] results_dir` |
 | `DISTRO` | Which `[distros.*]` section to use |
 
-For admin-backed operations such as result streaming, log queries, and fixture
-publishing, also set:
+For admin-backed operations such as health checks, log queries, and fixture
+publishing, also set. The retained result-streaming path will use the same
+configuration once issue #354 wires it into local runs:
 
 | Variable | Purpose |
 |----------|---------|
@@ -915,69 +1007,61 @@ Test results are written as JSON under
 }
 ```
 
-## Error Responses
-
-API and MCP errors include structured fields for programmatic handling:
-
-```json
-{
-  "error": "test_timeout",
-  "category": "infrastructure",
-  "message": "Test T142 timed out after 300s",
-  "transient": true,
-  "hint": "Try reducing concurrency or increasing timeout."
-}
-```
-
-Categories: `infrastructure` (transient), `assertion` (test logic), `config` (manifest/distro), `deployment` (build/service), `validation` (request).
-
 ## Result Persistence
 
-Test results are streamed to Remi's admin API as each test completes. If Remi is unreachable, results are buffered in a local SQLite write-ahead log (`/tmp/conary-test-wal.db`) and retried automatically with exponential backoff.
+The Remi result-streaming and SQLite WAL path (`/tmp/conary-test-wal.db`) is
+retained, but it is currently unconstructed for local CLI runs. Local runs
+write their JSON reports locally and do not stream results to Remi or populate
+the WAL. Wiring the streaming path is tracked in issue #354.
 
 ## CI Integration
 
-Trusted integration validation belongs to GitHub Actions, with Forge used as
-execution capacity rather than as an independent control plane. The PR gate
-runs the focused native cross-source lifecycle on hosted Docker across all
-three distro images. The rest of the TOML inventory still requires a local or
+Trusted integration validation belongs to GitHub Actions, with any runner used
+as execution capacity rather than as an independent control plane. The PR gate
+runs the focused native cross-source lifecycle on hosted Docker across all six
+distro images and the derivative-specific APT gate on Mint and Pop!_OS. The
+rest of the TOML inventory still requires a local or
 hosted container/QEMU-capable runner; do not describe a normal PR or merge run
 as having executed all 324 manifest tests unless that runner path is present in
 the specific workflow run.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused three-distro native lifecycle matrix |
+| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused six-distro native lifecycle matrix and authentic derivative APT proof |
 | `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation for `conary`, `remi`, `conaryd`, and `conary-test` |
 | `release-artifact-proof` | Conary deployment + manual dispatch | Install each published native package and run the three-distro Cartesian lifecycle with those exact bytes |
 | `scheduled-ops` | Nightly/scheduled + manual dispatch | Deep validation, health checks, and scheduled operational audits |
 
 `conary-test deploy status` is internal infrastructure state, not a product
-release identity. Operators should read it as commit/ref/build provenance for
-the harness that is currently running on Forge.
+release identity. Operators should read it as local checkout and managed-rollout
+provenance; the removed conary-test server no longer provides a live service
+identity, and no deploy execution command remains.
 
 Current JSON semantics:
 
-- `conary-test deploy status --json` separates running binary state from local
-  checkout branch/commit and marks degraded output explicitly when the local
-  service is unreachable.
-- `conary-test health --json` always returns valid JSON. The top-level shape is
-  normalized to `mode`, `deploy_status`, optional `remi`, and optional
-  `reason`.
+- `conary-test deploy status --json` computes binary metadata from the local
+  invoking binary and reports checkout plus managed-rollout provenance. It has
+  no remote-runner or HTTP-degraded branch.
+- `conary-test health --json` always returns valid JSON with local
+  `deploy_status`, `mode`, optional `remi`, and optional `reason`.
 
 ## Adding Tests
 
 1. Create or edit a TOML manifest in `apps/conary/tests/integration/remi/manifests/`
 2. Define test steps using the manifest schema (run, assert, mock_server, etc.)
-3. For supported Forge control-plane validation, run `bash scripts/forge-smoke.sh`
+3. For a local proof, run `cargo run -p conary-test -- list`
 4. For deeper manual debugging, run `cargo run -p conary-test -- run --suite <manifest> --distro <distro> --phase <N>`
 
 ## Adding Distros
 
 1. Create `apps/conary/tests/integration/remi/containers/Containerfile.<name>`
+   or select a shared capability-driven Containerfile.
 2. Add `[distros.<name>]` to `config.toml` with an explicit typed
-   `build_context = "binary"` or `build_context = "workspace-source"`
-3. Add to CI workflow matrices
+   `build_context = "static-binary"` or `build_context = "binary"`
+3. For reconstructed derivative roots, declare the digest-pinned base,
+   authenticated media, exact identity/keyring packages, APT declaration
+   fixtures, signing roots, and exact legacy global-trust bindings when used.
+4. Add the target to CI workflow matrices and typed workflow tests.
 
 ## Troubleshooting
 

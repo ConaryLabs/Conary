@@ -138,12 +138,26 @@ pub(super) fn store_extracted_files_in_cas(
                 let authority = file.content_authority.as_ref().ok_or_else(|| {
                     anyhow!("regular payload {} has no content authority", file.path)
                 })?;
-                let mut reader = file
-                    .open_content()
-                    .with_context(|| format!("Failed to open payload source for {}", file.path))?;
-                let stored = cas
-                    .store_reader_expected(reader.as_mut(), authority.size, &authority.sha256)
-                    .with_context(|| format!("Failed to store {} in CAS", file.path))?;
+                let source = file.source().ok_or_else(|| {
+                    anyhow!("regular payload {} has no reopenable source", file.path)
+                })?;
+                let stored = match source
+                    .verified_cas_identity_for(cas, authority)
+                    .with_context(|| format!("Verified CAS authority failed for {}", file.path))?
+                {
+                    Some(identity) => identity,
+                    None => {
+                        let mut reader = file.open_content().with_context(|| {
+                            format!("Failed to open payload source for {}", file.path)
+                        })?;
+                        cas.store_reader_expected(
+                            reader.as_mut(),
+                            authority.size,
+                            &authority.sha256,
+                        )
+                        .with_context(|| format!("Failed to store {} in CAS", file.path))?
+                    }
+                };
                 if stored != authority.sha256 {
                     anyhow::bail!(
                         "CAS returned {} for {}, expected authoritative digest {}",
@@ -266,9 +280,7 @@ pub(super) fn install_inner_with_stored_files(
                      JOIN repositories r ON rp.repository_id = r.id
                      WHERE rp.name = ?1 AND rp.version = ?2
                        AND (?3 IS NULL OR rp.architecture IS NULL OR rp.architecture = ?3)
-                     ORDER BY
-                         (r.source_profile = (SELECT distro FROM distro_pin LIMIT 1)) DESC,
-                         r.priority DESC, r.id ASC
+                     ORDER BY r.priority DESC, r.id ASC
                      LIMIT 1",
                     rusqlite::params![pkg.name(), pkg.version(), pkg.architecture()],
                     |row| row.get(0),
@@ -653,6 +665,7 @@ fn config_source_for_context(ctx: &TransactionContext<'_>) -> ConfigSource {
             crate::commands::PackageFormatType::Rpm => ConfigSource::Rpm,
             crate::commands::PackageFormatType::Deb => ConfigSource::Deb,
             crate::commands::PackageFormatType::Arch => ConfigSource::Arch,
+            crate::commands::PackageFormatType::Eopkg => ConfigSource::Eopkg,
         },
         super::PreparedSourceKind::Ccs => ConfigSource::Auto,
     }

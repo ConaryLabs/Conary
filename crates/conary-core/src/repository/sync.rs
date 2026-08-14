@@ -22,9 +22,10 @@ use super::registry::{self, RepositoryFormat};
 use super::static_repo::sync::fetch_static_sync_snapshot;
 use super::trust::openpgp::PreparedOpenPgpTrust;
 use super::versioning::VersionScheme;
-pub(in crate::repository) use native::{capability_kind_to_db, convert_requirement_groups};
-use native::{
-    normalized_repository_capabilities, persist_native_sync_rows, persist_synced_package_rows,
+use native::persist_native_sync_rows;
+pub(in crate::repository) use native::{
+    capability_kind_to_db, convert_requirement_groups, persist_synced_package_rows,
+    synced_package_row,
 };
 #[cfg(test)]
 use remi::remi_sync_row;
@@ -49,11 +50,19 @@ async fn fetch_repository_native_snapshot(
     keyring_dir: &Path,
 ) -> Result<RepositorySyncSnapshot> {
     let parser_config = repo.require_parser_config()?;
-    let source_profile = repo.require_source_profile()?;
+    repo.validate_stream_binding()?;
+    let source_policy = repo.require_source_policy()?;
+    let repository_identity = repo.repository_identity.as_deref().ok_or_else(|| {
+        Error::ConfigError(format!(
+            "repository '{}' has no exact repository identity",
+            repo.name
+        ))
+    })?;
     info!(
-        "Syncing repository {} for exact profile {} using exact {} parser configuration",
+        "Syncing repository {} as exact source {}/{} using exact {} parser configuration",
         repo.name,
-        source_profile.id(),
+        source_policy.source_identity,
+        repository_identity,
         parser_config.format().as_str()
     );
 
@@ -61,12 +70,11 @@ async fn fetch_repository_native_snapshot(
         PreparedOpenPgpTrust::prepare(&repo.name, keyring_dir, repo.require_trust_policy()?)
             .await?;
     let parser = registry::create_parser(parser_config, trust)?;
-    let packages = parser.sync_metadata(&repo.url).await?;
+    let metadata = parser.sync_metadata(&repo.url).await?;
 
     let repo_id = repo
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-    let source_profile_id = source_profile.id().to_string();
 
     if let Some(ref content_url) = repo.content_url {
         info!(
@@ -76,54 +84,23 @@ async fn fetch_repository_native_snapshot(
     }
 
     // Convert package metadata to repository rows plus normalized capability rows.
-    let synced_packages: Vec<SyncedPackageRow> = packages
+    let synced_packages: Vec<SyncedPackageRow> = metadata
+        .packages
         .into_iter()
         .map(|pkg_meta| {
-            let provides = normalized_repository_capabilities(&pkg_meta);
-
-            // Rebase download URL if content_url is configured (reference mirror)
-            let download_url = rebase_download_url(
-                &pkg_meta.download_url,
+            synced_package_row(
+                repo_id,
+                repo.source_profile.as_deref(),
                 &repo.url,
                 repo.content_url.as_deref(),
-            );
-
-            let version_scheme = pkg_meta.version_scheme;
-            let mut repo_pkg = RepositoryPackage::new(
-                repo_id,
-                pkg_meta.name,
-                pkg_meta.version,
-                version_scheme,
-                pkg_meta.checksum,
-                pkg_meta.size as i64,
-                download_url,
-            );
-
-            repo_pkg.architecture = pkg_meta.architecture;
-            repo_pkg.debian_multi_arch = pkg_meta.debian_multi_arch;
-            repo_pkg.description = pkg_meta.description;
-            repo_pkg.metadata = match &pkg_meta.extra_metadata {
-                serde_json::Value::Null => None,
-                value => Some(value.to_string()),
-            };
-
-            // Persist the exact repository profile. Package format remains a
-            // separate typed field and is never promoted to distro authority.
-            repo_pkg.source_profile = Some(source_profile_id.clone());
-
-            // Convert parser-level requirement groups to DB models
-            let (req_groups, req_group_clauses) =
-                convert_requirement_groups(0, &pkg_meta.requirements);
-
-            Ok(SyncedPackageRow {
-                package: repo_pkg,
-                provides,
-                requirement_groups: req_groups,
-                requirement_group_clauses: req_group_clauses,
-            })
+                pkg_meta,
+            )
         })
-        .collect::<Result<_>>()?;
-    Ok(RepositorySyncSnapshot::NativeRows(synced_packages))
+        .collect();
+    Ok(RepositorySyncSnapshot::NativeRows {
+        packages: synced_packages,
+        snapshot: metadata.snapshot,
+    })
 }
 
 /// Synchronize repository using native metadata format parsers
@@ -161,9 +138,10 @@ async fn fetch_repository_sync_snapshot(
 ) -> Result<RepositorySyncSnapshot> {
     match repo.require_parser_config()?.format() {
         RepositoryFormat::Json => fetch_repository_json_snapshot(repo).await,
-        RepositoryFormat::Arch | RepositoryFormat::Debian | RepositoryFormat::Fedora => {
-            fetch_repository_native_snapshot(repo, keyring_dir).await
-        }
+        RepositoryFormat::Arch
+        | RepositoryFormat::Debian
+        | RepositoryFormat::Fedora
+        | RepositoryFormat::Eopkg => fetch_repository_native_snapshot(repo, keyring_dir).await,
         RepositoryFormat::Unspecified => Err(Error::InitError(format!(
             "repository '{}' has an unspecified parser configuration",
             repo.name
@@ -308,9 +286,10 @@ pub async fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result
     } else {
         match repo.require_parser_config()?.format() {
             RepositoryFormat::Json => sync_repository_json(conn, repo).await?,
-            RepositoryFormat::Arch | RepositoryFormat::Debian | RepositoryFormat::Fedora => {
-                sync_repository_native(conn, repo).await?
-            }
+            RepositoryFormat::Arch
+            | RepositoryFormat::Debian
+            | RepositoryFormat::Fedora
+            | RepositoryFormat::Eopkg => sync_repository_native(conn, repo).await?,
             RepositoryFormat::Unspecified => {
                 return Err(Error::InitError(format!(
                     "repository '{}' has an unspecified parser configuration",
@@ -699,8 +678,8 @@ fn persist_repository_sync_snapshot(
     snapshot: RepositorySyncSnapshot,
 ) -> Result<usize> {
     match snapshot {
-        RepositorySyncSnapshot::NativeRows(synced_packages) => {
-            persist_native_sync_rows(conn, repo, synced_packages)
+        RepositorySyncSnapshot::NativeRows { packages, snapshot } => {
+            persist_native_sync_rows(conn, repo, packages, snapshot)
         }
         RepositorySyncSnapshot::StaticRows {
             packages,

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-06
-revision: 4
-summary: Define lossless RPM, Debian, ALPM, and CCS package authority plus explicit consumer projections
+last_updated: 2026-08-11
+revision: 7
+summary: Define lossless RPM, Debian, ALPM, eopkg, and CCS package authority plus explicit consumer projections
 ---
 
 # Source Package Authority And Consumer Projections
@@ -17,7 +17,7 @@ have shipped the source-specific identity, provision, and configuration
 records, CCS v3 provenance, resolver distinction, provider and config
 persistence, and transaction projections. W5 is one complete hard cut.
 
-RPM, Debian, and ALPM identity and declared provisions now live in their
+RPM, Debian, ALPM, and eopkg identity and declared provisions now live in their
 format-specific authority modules behind `SourcePackageAuthority`.
 `PackageFormat::resolution_capabilities()` and
 `PackageFormat::config_declarations()` are explicit fallible consumer
@@ -37,9 +37,9 @@ the current signed CCS v3 envelope.
 > Normalize at the boundary of one named consumer, never while initially
 > parsing source authority.
 
-An RPM fact remains an RPM fact, a Debian fact remains a Debian fact, and an
-ALPM fact remains an ALPM fact until a fallible consumer projection asks for a
-specific target contract. Similar spelling does not establish shared
+An RPM fact remains an RPM fact, a Debian fact remains a Debian fact, an ALPM
+fact remains an ALPM fact, and an eopkg fact remains an eopkg fact until a
+fallible consumer projection asks for a specific target contract. Similar spelling does not establish shared
 semantics. In particular:
 
 - exact package identity is not an entry in a package's declared-provision
@@ -197,8 +197,13 @@ Capability provenance is a closed enum with at least these roles:
 | Role | Meaning |
 |---|---|
 | `author-declared` | Explicit capability in a directly authored CCS package |
-| `source-declared` | Exact RPM, Debian, or ALPM provision with source-format identity and source-record position |
+| `source-declared` | Exact RPM, Debian, ALPM, or eopkg provision with source-format identity and source-record position |
 | `source-derived-file` | Capability derived by one pinned source-format rule from an exact payload record |
+| `source-promised-path` | A path the source package owns but ships no content for, materialized by its own lifecycle |
+
+A path role carries its source format and nothing else. The capability's name
+is the path, so provenance never restates it: one path, one owner, and one
+stored copy per package-owned path across a whole distribution.
 
 Package-name satisfaction comes directly from signed `identity`. It is not a
 fourth capability role. A duplicate or contradictory identity, an unknown
@@ -262,8 +267,8 @@ queue, source-package-manager fallback, or best-effort transaction.
 
 The implementation decomposition is ownership-based:
 
-- `packages/rpm/authority.rs`, `packages/deb/authority.rs`, and
-  `packages/arch/authority.rs` own source-format identity, relations,
+- `packages/rpm/authority.rs`, `packages/deb/authority.rs`,
+  `packages/arch/authority.rs`, and `packages/eopkg/authority.rs` own source-format identity, relations,
   provisions, and config declarations. Existing parser hubs retain dispatch
   and re-exports only.
 - `packages/source_authority.rs` owns the closed format-dispatch enum. It does
@@ -272,7 +277,7 @@ The implementation decomposition is ownership-based:
   their existing shared payload-stream, node, and byte-exact path ownership.
 - `repository/dependency_model.rs` remains a resolution-consumer DTO. Native
   parsers stop constructing it as their source authority.
-- `ccs/convert/source_projection/` owns the explicit RPM, Debian, and ALPM to
+- `ccs/convert/source_projection/` owns the explicit RPM, Debian, ALPM, and eopkg to
   CCS projections; `convert/converter.rs` remains orchestration only.
 - the current signed CCS schema directory is replaced by `ccs/v3/`, with
   identity/capability validation and configuration-declaration validation in
@@ -313,14 +318,15 @@ The signed CCS contract and installed database both change intentionally.
 
 - CCS v3 replaces v2; every local, cached, static-repository, and Remi v2
   artifact must be rebuilt or reconverted from authenticated source.
-- SQLite schema revision 26 retains revision 25's source-authority and
-  fail-closed persisted-state constraints, and requires an explicit mixing
-  policy for every source pin.
+- SQLite schema revision 34 retains fail-closed source-authority constraints,
+  removes the global distro pin and allowlist, and keys diagnostic affinity by
+  opaque repository source identity. Optional named source profiles remain
+  feed and lifecycle projections; they are not package-eligibility authority.
   Installed and repository provider rows must distinguish identity-derived
   matches from declared/derived capabilities, and config persistence must
   distinguish source declarations from materialized node and transaction
   state.
-- Existing pre-revision-26 databases are disposable and must be recreated with
+- Existing pre-revision-34 databases are disposable and must be recreated with
   `conary system init` plus repository resync/reinstallation. No migration,
   compatibility decoder, dual write, or fallback reader is added.
 - Remi conversion records and indexes tied to v2 authority are rebuilt before

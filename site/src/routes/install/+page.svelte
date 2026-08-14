@@ -7,13 +7,13 @@
 
 <PageMeta
 	title="Conary tester release status — Conary"
-	description={`Conary ${previewRelease.tag} is published but not current tester authority; the packaged tester loop is paused until a release contains the supported-host fixes.`}
+	description={`Conary ${previewRelease.tag} is published and verified; the packaged tester loop remains paused until the ordinary-package corpus gate passes.`}
 	path="/install/"
 />
 
 <PageIntro
 	eyebrow="Tester loop paused"
-	title="Wait for the next verified tester release."
+	title="The release is verified; the tester runbook remains paused."
 	description={previewRelease.testerAuthorityReason}
 />
 
@@ -41,9 +41,9 @@
 				<h2 id="authority-pause-title">The package runbook is not open.</h2>
 				<p>
 					{previewRelease.testerAuthorityReason} The exact {previewRelease.tag}
-					artifacts remain available for inspecting that immutable release, but their
-					results do not validate the fixes now under review. This page will reopen
-					only after a later immutable release passes the artifact matrix.
+					artifacts are the current immutable release, but release proof is not the
+					ordinary-package corpus proof required before outreach. This page will reopen
+					only after that separate gate closes and a tester pin is assigned.
 				</p>
 				<div class="button-row">
 					<a href={previewRelease.matrixUrl} class="btn btn-primary">
@@ -56,7 +56,7 @@
 			</section>
 
 			<details class="retained-runbook">
-				<summary>Retained {previewRelease.tag} commands — historical reference, do not run</summary>
+				<summary>Retained {previewRelease.tag} commands — paused, do not run</summary>
 				<section class="install-step" id="preflight">
 				<div class="step-heading">
 					<span class="step-number">01</span>
@@ -263,7 +263,7 @@
 					<h2>Build a debug binary from source</h2>
 					<p>
 						Use this path for development, not as a substitute for the packaged tester lane.
-						It requires Rust 1.96+, Git, and Linux; Conary does not currently build on macOS or Windows.
+						It requires Rust 1.97.1+, Git, and Linux; Conary does not currently build on macOS or Windows.
 					</p>
 				</div>
 

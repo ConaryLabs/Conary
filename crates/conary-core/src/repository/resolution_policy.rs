@@ -3,10 +3,10 @@
 //! Repository resolution policy types.
 //!
 //! Policy rules control which repositories may satisfy which requests, how
-//! cross-distro mixing is handled, and how the resolver filters candidates.
+//! cross-source mixing is handled, and how the resolver filters candidates.
 //!
 //! Design principles:
-//! - Explicit request scope (`--repo`, `--from-distro`) applies only to root
+//! - Explicit request scope (`--repo`, `--from`) applies only to root
 //!   requests, not to transitive dependencies.
 //! - Policy filtering happens *after* native semantic matching, not before.
 //! - Dependency mixing can be strict, guarded, or permissive.
@@ -32,28 +32,28 @@ pub enum RequestScope {
     /// The user pinned to a specific repository by name (e.g. `--repo fedora`).
     Repository(String),
 
-    /// The user selected one exact supported distro profile.
-    DistroProfile(String),
+    /// The user selected one exact persisted native source identity.
+    SourceIdentity(String),
 }
 
 // ---------------------------------------------------------------------------
 // Dependency mixing policy
 // ---------------------------------------------------------------------------
 
-/// How aggressively cross-distro dependency mixing is permitted.
+/// How aggressively dependencies may mix exact source identities.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DependencyMixingPolicy {
-    /// Packages must come from one exact distro profile.
+    /// Packages must come from one exact source identity.
     /// This is the safest setting and is the default.
     #[default]
     Strict,
 
-    /// Packages prefer one exact distro profile but may fall back to others.
-    /// The resolver logs a warning for each cross-profile resolution.
+    /// Packages prefer one exact source identity but may fall back to others.
+    /// The resolver logs a warning for each cross-source resolution.
     Guarded,
 
-    /// Any repository may satisfy any dependency regardless of distro profile.
+    /// Any repository may satisfy any dependency regardless of source identity.
     /// This is intended for expert use and testing.
     Permissive,
 }
@@ -106,16 +106,14 @@ pub struct ResolutionPolicy {
     /// How cross-distro dependency mixing is handled.
     pub mixing: DependencyMixingPolicy,
 
-    /// Optional allowlist for distro/repository identifiers.
-    pub allowed_distros: Vec<String>,
-
-    /// Exact distro profile that owns this transaction.
+    /// Exact native source identity that owns this transaction.
     ///
     /// This is intentionally separate from package format. Fedora and
     /// openSUSE are both RPM ecosystems but are not interchangeable source
     /// authorities. Runtime loaders populate this from an explicit source
-    /// scope, repository declaration, or persisted system pin.
-    primary_profile: Option<String>,
+    /// scope or repository declaration. It is never inferred from a distro
+    /// name, package format, repository label, or URL.
+    primary_source_identity: Option<String>,
 }
 
 impl Default for ResolutionPolicy {
@@ -123,8 +121,7 @@ impl Default for ResolutionPolicy {
         Self {
             request_scope: RequestScope::Any,
             mixing: DependencyMixingPolicy::Strict,
-            allowed_distros: Vec::new(),
-            primary_profile: None,
+            primary_source_identity: None,
         }
     }
 }
@@ -150,102 +147,55 @@ impl ResolutionPolicy {
         self
     }
 
-    /// Set an explicit allowlist for distro/repository identifiers.
+    /// Set the exact native source identity that owns this transaction.
     #[must_use]
-    pub fn with_allowed_distros(mut self, allowed_distros: Vec<String>) -> Self {
-        self.allowed_distros = allowed_distros;
+    pub fn with_primary_source_identity(mut self, source_identity: impl Into<String>) -> Self {
+        self.primary_source_identity = Some(source_identity.into());
         self
     }
 
-    /// Set the exact distro profile that owns this transaction.
+    /// Replace or clear the exact native source identity for this transaction.
+    pub fn set_primary_source_identity(&mut self, source_identity: Option<String>) {
+        self.primary_source_identity = source_identity;
+    }
+
+    /// Return the exact native source identity that owns this transaction.
     #[must_use]
-    pub fn with_primary_profile(mut self, primary_profile: impl Into<String>) -> Self {
-        self.primary_profile = Some(primary_profile.into());
-        self
+    pub fn primary_source_identity(&self) -> Option<&str> {
+        self.primary_source_identity.as_deref()
     }
 
-    /// Replace or clear the exact distro profile that owns this transaction.
-    pub fn set_primary_profile(&mut self, primary_profile: Option<String>) {
-        self.primary_profile = primary_profile;
-    }
-
-    /// Return the exact distro profile that owns this transaction.
-    #[must_use]
-    pub fn primary_profile(&self) -> Option<&str> {
-        self.primary_profile.as_deref()
-    }
-
-    /// Validate every profile-bearing policy value against the exact public
-    /// profile catalog.
-    ///
-    /// Constructors intentionally remain lightweight data builders. Runtime
-    /// boundaries call this before a policy can select or reject candidates,
-    /// so route slugs, package formats, repository names, and misspellings
-    /// never become source authority.
-    pub fn validate_profile_ids(&self) -> Result<(), String> {
-        let validate = |field: &str, profile: &str| {
-            super::supported_profiles::profile_by_public_id(profile)
-                .map(|_| ())
-                .ok_or_else(|| {
-                    format!(
-                        "{field} contains unsupported source profile '{profile}'; use an exact public profile ID"
-                    )
-                })
-        };
-
-        if let Some(primary) = self.primary_profile() {
-            validate("primary profile", primary)?;
+    /// Validate exact source identities without consulting a named catalog.
+    pub fn validate_source_identities(&self) -> Result<(), String> {
+        if let Some(primary) = self.primary_source_identity() {
+            validate_source_identity(primary, "primary source identity")?;
         }
 
-        let mut seen = std::collections::HashSet::new();
-        for allowed in &self.allowed_distros {
-            validate("source allowlist", allowed)?;
-            if !seen.insert(allowed.as_str()) {
-                return Err(format!(
-                    "source allowlist contains duplicate exact profile '{allowed}'"
-                ));
-            }
-        }
-
-        if let RequestScope::DistroProfile(profile) = &self.request_scope {
-            validate("request scope", profile)?;
-            if let Some(primary) = self.primary_profile()
-                && primary != profile
+        if let RequestScope::SourceIdentity(source_identity) = &self.request_scope {
+            validate_source_identity(source_identity, "request source identity")?;
+            if let Some(primary) = self.primary_source_identity()
+                && primary != source_identity
             {
                 return Err(format!(
-                    "request scope profile '{profile}' conflicts with transaction profile '{primary}'"
+                    "request source identity '{source_identity}' conflicts with transaction source identity '{primary}'"
                 ));
             }
         }
-
-        if self.mixing == DependencyMixingPolicy::Strict
-            && let Some(primary) = self.primary_profile()
-            && !self.allowed_distros.is_empty()
-            && !self
-                .allowed_distros
-                .iter()
-                .any(|allowed| allowed == primary)
-        {
-            return Err(format!(
-                "strict transaction profile '{primary}' is excluded by the source allowlist"
-            ));
-        }
-
         Ok(())
     }
 
     /// Validate that strict dependency solving has one exact transaction
-    /// profile. Guarded and permissive policies may operate without one, but
+    /// source identity. Guarded and permissive policies may operate without one, but
     /// strict resolution must never infer authority from a package name,
     /// repository label, URL, or package format.
     pub fn validate_for_dependency_resolution(&self) -> Result<(), String> {
-        self.validate_profile_ids()?;
+        self.validate_source_identities()?;
         if self.mixing == DependencyMixingPolicy::Strict
-            && self.primary_profile().is_none()
+            && self.primary_source_identity().is_none()
             && !matches!(self.request_scope, RequestScope::Repository(_))
         {
             return Err(
-                "strict dependency resolution requires an exact transaction source profile or native CCS repository scope; pin the system, select --from/--repo, or resolve a repository-backed root package first"
+                "strict dependency resolution requires an exact transaction source identity or native CCS repository scope; select --from/--repo or resolve a repository-backed root package first"
                     .to_string(),
             );
         }
@@ -255,7 +205,7 @@ impl ResolutionPolicy {
     /// Evaluate whether a candidate is acceptable for a given package name
     /// under this policy.
     ///
-    /// Callers pass the repository name and exact repository profile directly
+    /// Callers pass the repository name and exact source identity directly
     /// from persisted package identity.
     ///
     /// `is_root` indicates whether this is a root-level request (user-typed)
@@ -266,18 +216,9 @@ impl ResolutionPolicy {
     pub fn accepts_candidate(
         &self,
         repository_name: &str,
-        repository_profile: Option<&str>,
+        source_identity: Option<&str>,
         is_root: bool,
     ) -> bool {
-        if !self.allowed_distros.is_empty()
-            && !self
-                .allowed_distros
-                .iter()
-                .any(|allowed| repository_profile == Some(allowed.as_str()))
-        {
-            return false;
-        }
-
         // Step 1: Check request scope (root requests only).
         if is_root {
             match &self.request_scope {
@@ -287,23 +228,23 @@ impl ResolutionPolicy {
                         return false;
                     }
                 }
-                RequestScope::DistroProfile(profile) => {
-                    if repository_profile != Some(profile.as_str()) {
+                RequestScope::SourceIdentity(expected) => {
+                    if source_identity != Some(expected.as_str()) {
                         return false;
                     }
                 }
             }
         }
 
-        // Step 2: Enforce one exact transaction profile under strict policy.
+        // Step 2: Enforce one exact transaction source under strict policy.
         //
         // An explicit root scope is already checked above. An unscoped root
-        // may establish a profile later, but an unprofiled transitive
+        // may establish an identity later, but an unidentified transitive
         // candidate can never satisfy strict mixing: accepting it would turn
         // package format or repository naming into an implicit authority.
         if self.mixing == DependencyMixingPolicy::Strict {
-            match self.primary_profile() {
-                Some(primary) if repository_profile != Some(primary) => return false,
+            match self.primary_source_identity() {
+                Some(primary) if source_identity != Some(primary) => return false,
                 Some(_) => {}
                 None => match &self.request_scope {
                     RequestScope::Repository(repository)
@@ -316,6 +257,22 @@ impl ResolutionPolicy {
 
         true
     }
+}
+
+/// Validate the closed lexical envelope shared by persisted and request source
+/// identities. Semantic authority comes from the signed repository policy,
+/// not membership in a distro-name catalog.
+pub fn validate_source_identity(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 255
+        || value.trim() != value
+        || !value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+    {
+        return Err(format!(
+            "{label} must contain 1 to 255 printable ASCII characters without surrounding whitespace"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -344,22 +301,6 @@ mod tests {
     }
 
     #[test]
-    fn resolution_policy_rejects_candidates_outside_allowed_distros() {
-        let policy = ResolutionPolicy::new().with_allowed_distros(vec!["fedora-44".to_string()]);
-
-        assert!(policy.accepts_candidate(FEDORA_REPOSITORY, Some("fedora-44"), true,));
-        assert!(!policy.accepts_candidate(UBUNTU_REPOSITORY, Some("ubuntu-26.04"), true,));
-    }
-
-    #[test]
-    fn allowed_profile_matches_exact_repository_profile_not_repo_name_shape() {
-        let policy = ResolutionPolicy::new().with_allowed_distros(vec!["fedora-44".to_string()]);
-
-        assert!(policy.accepts_candidate("updates", Some("fedora-44"), true,));
-        assert!(!policy.accepts_candidate("updates", Some("ubuntu-26.04"), true,));
-    }
-
-    #[test]
     fn default_strict_policy_allows_root_discovery_but_rejects_unprofiled_transitives() {
         let policy = ResolutionPolicy::default();
         assert!(policy.accepts_candidate(FEDORA_REPOSITORY, Some("fedora-44"), true));
@@ -368,27 +309,27 @@ mod tests {
 
     #[test]
     fn strict_mixing_rejects_a_different_exact_profile() {
-        let policy = ResolutionPolicy::default().with_primary_profile("fedora-44");
+        let policy = ResolutionPolicy::default().with_primary_source_identity("fedora-44");
         assert!(!policy.accepts_candidate("opensuse", Some("opensuse-tumbleweed"), false,));
     }
 
     #[test]
     fn strict_mixing_does_not_override_explicit_root_source_selection() {
         let policy = ResolutionPolicy::default()
-            .with_scope(RequestScope::DistroProfile("ubuntu-26.04".into()))
-            .with_primary_profile("ubuntu-26.04");
+            .with_scope(RequestScope::SourceIdentity("ubuntu-26.04".into()))
+            .with_primary_source_identity("ubuntu-26.04");
         assert!(policy.accepts_candidate(UBUNTU_REPOSITORY, Some("ubuntu-26.04"), true,));
     }
 
     #[test]
     fn strict_mixing_allows_the_same_exact_profile() {
-        let policy = ResolutionPolicy::default().with_primary_profile("fedora-44");
+        let policy = ResolutionPolicy::default().with_primary_source_identity("fedora-44");
         assert!(policy.accepts_candidate(FEDORA_REPOSITORY, Some("fedora-44"), false,));
     }
 
     #[test]
     fn strict_mixing_never_equates_two_rpm_profiles() {
-        let policy = ResolutionPolicy::default().with_primary_profile("fedora-44");
+        let policy = ResolutionPolicy::default().with_primary_source_identity("fedora-44");
         assert!(policy.accepts_candidate(FEDORA_REPOSITORY, Some("fedora-44"), false,));
         assert!(!policy.accepts_candidate("opensuse", Some("opensuse-tumbleweed"), false,));
     }
@@ -404,9 +345,9 @@ mod tests {
     }
 
     #[test]
-    fn request_scope_profile_does_not_collapse_to_package_format() {
+    fn request_scope_source_identity_does_not_collapse_to_package_format() {
         let policy =
-            ResolutionPolicy::new().with_scope(RequestScope::DistroProfile("fedora-44".into()));
+            ResolutionPolicy::new().with_scope(RequestScope::SourceIdentity("fedora-44".into()));
 
         assert!(policy.accepts_candidate("fedora-repository", Some("fedora-44"), true,));
         assert!(!policy.accepts_candidate(
@@ -429,20 +370,20 @@ mod tests {
     }
 
     #[test]
-    fn profile_validation_rejects_routes_formats_and_duplicates() {
-        for invalid in ["fedora", "rpm", "ubuntu"] {
-            let error = ResolutionPolicy::new()
-                .with_allowed_distros(vec![invalid.to_string()])
-                .validate_profile_ids()
-                .unwrap_err();
-            assert!(error.contains("exact public profile ID"), "{error}");
+    fn source_identity_validation_is_lexical_not_catalog_based() {
+        ResolutionPolicy::new()
+            .with_primary_source_identity("opensuse:tumbleweed:x86_64")
+            .validate_source_identities()
+            .unwrap();
+        for invalid in ["", " leading", "trailing ", "line\nbreak"] {
+            assert!(
+                ResolutionPolicy::new()
+                    .with_primary_source_identity(invalid)
+                    .validate_source_identities()
+                    .is_err(),
+                "{invalid:?}"
+            );
         }
-
-        let error = ResolutionPolicy::new()
-            .with_allowed_distros(vec!["fedora-44".to_string(), "fedora-44".to_string()])
-            .validate_profile_ids()
-            .unwrap_err();
-        assert!(error.contains("duplicate exact profile"), "{error}");
     }
 
     #[test]
@@ -451,12 +392,12 @@ mod tests {
             .validate_for_dependency_resolution()
             .unwrap_err();
         assert!(
-            error.contains("exact transaction source profile"),
+            error.contains("exact transaction source identity"),
             "{error}"
         );
 
         ResolutionPolicy::new()
-            .with_primary_profile("fedora-44")
+            .with_primary_source_identity("fedora-44")
             .validate_for_dependency_resolution()
             .unwrap();
     }
@@ -473,14 +414,14 @@ mod tests {
     }
 
     #[test]
-    fn profile_validation_rejects_conflicting_scope_and_primary() {
+    fn source_identity_validation_rejects_conflicting_scope_and_primary() {
         let error = ResolutionPolicy::new()
-            .with_scope(RequestScope::DistroProfile("ubuntu-26.04".to_string()))
-            .with_primary_profile("fedora-44")
-            .validate_profile_ids()
+            .with_scope(RequestScope::SourceIdentity("ubuntu-26.04".to_string()))
+            .with_primary_source_identity("fedora-44")
+            .validate_source_identities()
             .unwrap_err();
         assert!(
-            error.contains("conflicts with transaction profile"),
+            error.contains("conflicts with transaction source identity"),
             "{error}"
         );
     }

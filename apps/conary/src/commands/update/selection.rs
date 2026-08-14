@@ -77,27 +77,29 @@ fn persisted_source_profile(trove: &Trove) -> Option<&str> {
     trove.source_profile.as_deref()
 }
 
-fn effective_installed_source_profile(
+fn effective_installed_source_identity(
     conn: &rusqlite::Connection,
     trove: &Trove,
 ) -> Result<Option<String>> {
-    if let Some(profile) = &trove.source_profile {
-        return Ok(Some(profile.clone()));
+    if let Some(repository_id) = trove.installed_from_repository_id
+        && let Some(repository) = Repository::find_by_id(conn, repository_id)?
+    {
+        return Ok(repository
+            .resolution_source_identity()?
+            .map(str::to_string)
+            .or_else(|| trove.source_profile.clone()));
     }
-    let Some(repository_id) = trove.installed_from_repository_id else {
-        return Ok(None);
-    };
-    Ok(Repository::find_by_id(conn, repository_id)?
-        .and_then(|repository| repository.source_profile))
+    Ok(trove.source_profile.clone())
 }
 
 fn candidate_matches_installed_source(
+    conn: &rusqlite::Connection,
     trove: &Trove,
     package: &RepositoryPackage,
     repository: &Repository,
 ) -> Result<bool> {
-    let candidate_profile =
-        conary_core::repository::selector::candidate_source_profile(package, repository)?;
+    let candidate_identity =
+        conary_core::repository::selector::candidate_source_identity(package, repository)?;
     if trove
         .installed_from_repository_id
         .zip(repository.id)
@@ -108,8 +110,9 @@ fn candidate_matches_installed_source(
         return Ok(true);
     }
 
+    let installed_identity = effective_installed_source_identity(conn, trove)?;
     Ok(matches!(
-        (persisted_source_profile(trove), candidate_profile),
+        (installed_identity.as_deref().or_else(|| persisted_source_profile(trove)), candidate_identity),
         (Some(installed), Some(candidate)) if installed == candidate
     ))
 }
@@ -125,7 +128,8 @@ pub(super) fn select_update_candidate(
     policy: &ResolutionPolicy,
 ) -> Result<UpdateCandidateSelection> {
     let mut transaction_policy = policy.clone();
-    transaction_policy.set_primary_profile(effective_installed_source_profile(conn, trove)?);
+    transaction_policy
+        .set_primary_source_identity(effective_installed_source_identity(conn, trove)?);
     let options = SelectionOptions {
         version: None,
         package_release: None,
@@ -138,7 +142,12 @@ pub(super) fn select_update_candidate(
 
     let mut eligible = Vec::new();
     for candidate in PackageSelector::search_packages(conn, &trove.name, &options)? {
-        if !candidate_matches_installed_source(trove, &candidate.package, &candidate.repository)? {
+        if !candidate_matches_installed_source(
+            conn,
+            trove,
+            &candidate.package,
+            &candidate.repository,
+        )? {
             continue;
         }
         if is_repo_version_newer(trove, &candidate.package)? {

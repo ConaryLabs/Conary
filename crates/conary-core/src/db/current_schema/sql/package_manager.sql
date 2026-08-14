@@ -35,11 +35,11 @@ CREATE TABLE troves (
             orphan_since TEXT,
             source_profile TEXT
                 CHECK(source_profile IS NULL OR source_profile IN (
-                    'fedora-44', 'ubuntu-26.04', 'arch'
+                    'fedora-44', 'ubuntu-26.04', 'arch', 'solus'
                 )),
             version_scheme TEXT NOT NULL
                 CHECK(
-                    version_scheme IN ('conary', 'rpm', 'debian', 'arch')
+                    version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')
                     AND (
                         source_profile IS NULL
                         OR (
@@ -53,6 +53,10 @@ CREATE TABLE troves (
                         OR (
                             source_profile = 'arch'
                             AND version_scheme = 'arch'
+                        )
+                        OR (
+                            source_profile = 'solus'
+                            AND version_scheme = 'eopkg'
                         )
                     )
                 ),
@@ -74,7 +78,7 @@ CREATE TABLE troves (
                                 json_type(native_package_identity_json) = 'object'
                                 AND json_extract(
                                     native_package_identity_json, '$.manager'
-                                ) IN ('rpm', 'dpkg', 'pacman')
+                                ) IN ('rpm', 'dpkg', 'pacman', 'eopkg')
                                 AND json_type(
                                     native_package_identity_json, '$.selector'
                                 ) = 'text'
@@ -134,6 +138,15 @@ CREATE TABLE troves (
                                     ) = version
                                     WHEN 'pacman' THEN json_extract(
                                         native_package_identity_json, '$.version'
+                                    ) = version
+                                    WHEN 'eopkg' THEN (
+                                        json_extract(
+                                            native_package_identity_json, '$.version'
+                                        )
+                                        || '-'
+                                        || CAST(json_extract(
+                                            native_package_identity_json, '$.release'
+                                        ) AS TEXT)
                                     ) = version
                                     ELSE 0
                                 END
@@ -202,6 +215,18 @@ CREATE TABLE troves (
                                         ) = json_extract(
                                             native_package_identity_json, '$.name'
                                         )
+                                    WHEN 'eopkg' THEN
+                                        json_type(
+                                            native_package_identity_json, '$.release'
+                                        ) = 'integer'
+                                        AND json_extract(
+                                            native_package_identity_json, '$.release'
+                                        ) >= 0
+                                        AND json_extract(
+                                                native_package_identity_json, '$.selector'
+                                            ) = json_extract(
+                                                native_package_identity_json, '$.name'
+                                            )
                                     ELSE 0
                                 END
                             ) IS TRUE
@@ -291,10 +316,10 @@ CREATE TABLE provides (
                 CHECK(version_relation IN ('lt', 'le', 'eq', 'ge', 'gt')),
             kind TEXT NOT NULL CHECK(kind IN (
                 'package', 'virtual', 'soname', 'file',
-                'path', 'binary', 'pkgconfig', 'generic'
+                'path', 'binary', 'pkgconfig', 'pkgconfig32', 'comar', 'generic'
             )),
             version_scheme TEXT NOT NULL
-                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')),
+                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')),
             architecture_qualifier_kind TEXT NOT NULL
                 CHECK(architecture_qualifier_kind IN ('implicit', 'any', 'exact')),
             architecture_qualifier TEXT,
@@ -330,7 +355,7 @@ CREATE TABLE package_requirement_groups (
                 'conflict', 'breaks', 'replace', 'obsolete'
             )),
             version_scheme TEXT NOT NULL
-                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch')),
+                CHECK(version_scheme IN ('conary', 'rpm', 'debian', 'arch', 'eopkg')),
             requirement_json TEXT NOT NULL,
             UNIQUE(trove_id, kind, requirement_json)
         );
@@ -491,7 +516,7 @@ CREATE TABLE config_files (
             modified_at TEXT,
             -- Package source that declared this as config (rpm, deb, arch, auto)
             source TEXT NOT NULL DEFAULT 'auto'
-                CHECK(source IN ('rpm', 'deb', 'arch', 'auto'))
+                CHECK(source IN ('rpm', 'deb', 'arch', 'eopkg', 'auto'))
                 CHECK(ghost = 0 OR source = 'rpm')
                 CHECK(remove_on_upgrade = 0 OR source = 'deb'),
             CHECK(ghost = 0 OR remove_on_upgrade = 0),
@@ -689,7 +714,9 @@ CREATE INDEX idx_subpackage_component ON subpackage_relationships(component_type
 CREATE INDEX idx_troves_orphan_since ON troves(orphan_since)
             WHERE orphan_since IS NOT NULL;
 CREATE TABLE system_affinity (
-            distro TEXT PRIMARY KEY,
+            source_identity TEXT PRIMARY KEY
+                CHECK(length(source_identity) BETWEEN 1 AND 255
+                    AND trim(source_identity) = source_identity),
             package_count INTEGER NOT NULL DEFAULT 0,
             percentage REAL NOT NULL DEFAULT 0.0,
             updated_at TEXT NOT NULL
@@ -721,6 +748,65 @@ ON state_members(
 );
 CREATE INDEX idx_state_members_state ON state_members(state_id);
 CREATE INDEX idx_state_members_name ON state_members(trove_name);
+CREATE TABLE selected_root_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_id INTEGER REFERENCES selected_root_snapshots(id) ON DELETE RESTRICT,
+            root_node_json TEXT NOT NULL CHECK(json_valid(root_node_json)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK(parent_id IS NULL OR parent_id < id)
+        );
+CREATE INDEX idx_selected_root_snapshots_parent
+            ON selected_root_snapshots(parent_id);
+CREATE TABLE selected_root_snapshot_entries (
+            snapshot_id INTEGER NOT NULL
+                REFERENCES selected_root_snapshots(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            remove_self INTEGER NOT NULL DEFAULT 0 CHECK(remove_self IN (0, 1)),
+            remove_descendants INTEGER NOT NULL DEFAULT 0
+                CHECK(remove_descendants IN (0, 1)),
+            entry_json TEXT CHECK(entry_json IS NULL OR json_valid(entry_json)),
+            hardlink_identity TEXT,
+            PRIMARY KEY (snapshot_id, path),
+            CHECK (
+                remove_self = 1
+                OR remove_descendants = 1
+                OR entry_json IS NOT NULL
+            ),
+            CHECK (
+                hardlink_identity IS NULL
+                OR (entry_json IS NOT NULL AND length(hardlink_identity) > 0)
+            ),
+            CHECK (substr(path, 1, 1) = '/'),
+            CHECK (
+                entry_json IS NULL
+                OR json_extract(entry_json, '$.path') = path
+            )
+        );
+CREATE INDEX idx_selected_root_entries_path
+            ON selected_root_snapshot_entries(path, snapshot_id);
+CREATE INDEX idx_selected_root_entries_hardlink
+            ON selected_root_snapshot_entries(hardlink_identity, snapshot_id, path)
+            WHERE hardlink_identity IS NOT NULL;
+CREATE TRIGGER selected_root_snapshots_no_update
+BEFORE UPDATE ON selected_root_snapshots
+BEGIN
+    SELECT RAISE(ABORT, 'selected-root snapshots are append-only');
+END;
+CREATE TRIGGER selected_root_snapshots_no_delete
+BEFORE DELETE ON selected_root_snapshots
+BEGIN
+    SELECT RAISE(ABORT, 'selected-root snapshots are append-only');
+END;
+CREATE TRIGGER selected_root_snapshot_entries_no_update
+BEFORE UPDATE ON selected_root_snapshot_entries
+BEGIN
+    SELECT RAISE(ABORT, 'selected-root snapshot entries are append-only');
+END;
+CREATE TRIGGER selected_root_snapshot_entries_no_delete
+BEFORE DELETE ON selected_root_snapshot_entries
+BEGIN
+    SELECT RAISE(ABORT, 'selected-root snapshot entries are append-only');
+END;
 CREATE TABLE "changesets" (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             description TEXT NOT NULL,
@@ -736,6 +822,8 @@ CREATE TABLE "changesets" (
             reversed_by_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
             reverts_changeset_id INTEGER REFERENCES changesets(id),
             tx_uuid TEXT,
+            rollback_selected_root_snapshot_id INTEGER
+                REFERENCES selected_root_snapshots(id) ON DELETE RESTRICT,
             metadata TEXT,
             CHECK (
                 (kind = 'mutation' AND reverts_changeset_id IS NULL)
@@ -756,6 +844,8 @@ CREATE TABLE generation_publications (
             trigger_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
             published_through_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
             tx_uuid TEXT,
+            selected_root_snapshot_id INTEGER
+                REFERENCES selected_root_snapshots(id) ON DELETE RESTRICT,
             db_path TEXT NOT NULL,
             runtime_root TEXT NOT NULL,
             phase TEXT NOT NULL CHECK(phase IN (
@@ -804,6 +894,7 @@ CREATE TABLE activation_requests (
             sequence INTEGER NOT NULL CHECK(sequence >= 0),
             source_kind TEXT NOT NULL CHECK(source_kind IN (
                 'captured-systemctl',
+                'captured-openrc',
                 'ccs-service',
                 'captured-selinux',
                 'captured-apparmor'
@@ -820,6 +911,35 @@ CREATE INDEX idx_activation_requests_changeset
             ON activation_requests(changeset_id, sequence);
 CREATE INDEX idx_activation_requests_digest
             ON activation_requests(invocation_sha256);
+CREATE TABLE lifecycle_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            changeset_id INTEGER NOT NULL REFERENCES changesets(id) ON DELETE CASCADE,
+            sequence INTEGER NOT NULL CHECK(sequence >= 0),
+            source_package TEXT NOT NULL,
+            source_version TEXT NOT NULL,
+            source_entry TEXT NOT NULL,
+            failure_kind TEXT NOT NULL CHECK(failure_kind IN (
+                'ScriptExited',
+                'ScriptTimedOut',
+                'ContractViolation',
+                'ProgramUnavailable',
+                'ProcessSetupFailed',
+                'SandboxSetupUnavailable',
+                'EnforcementSetupFailed'
+            )),
+            requested_sandbox_mode TEXT NOT NULL CHECK(
+                requested_sandbox_mode IN ('always')
+            ),
+            effective_sandbox TEXT NOT NULL CHECK(
+                effective_sandbox IN ('target-root')
+            ),
+            phase TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(changeset_id, sequence)
+        );
+CREATE INDEX idx_lifecycle_events_changeset
+            ON lifecycle_events(changeset_id, sequence);
 CREATE TABLE generation_activation_intents (
             generation_number INTEGER NOT NULL
                 REFERENCES system_states(state_number) ON DELETE CASCADE,
@@ -862,6 +982,10 @@ CREATE TABLE installed_native_lifecycle_bundles (
                     OR (
                         source_profile = 'arch'
                         AND source_format = 'arch'
+                    )
+                    OR (
+                        source_profile = 'solus'
+                        AND source_format = 'eopkg'
                     )
                 ),
             source_release TEXT,

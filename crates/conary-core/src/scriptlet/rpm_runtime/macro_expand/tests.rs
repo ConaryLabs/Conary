@@ -25,7 +25,6 @@ fn runtime() -> RpmRuntimeMetadata {
     RpmRuntimeMetadata {
         program: RpmProgram::External,
         body_transforms: Vec::new(),
-        critical: false,
         criticality: RpmCriticality::WarningOnly,
         raw_flags: 0,
         unknown_flags: 0,

@@ -40,6 +40,25 @@ When = PostTransaction
 Exec = /usr/bin/conary system adopt --refresh --quiet --from-sync-hook --package-manager pacman
 "#;
 
+const EOPKG_PATH_CONTENT: &str = r#"[Unit]
+Description=Watch eopkg installed-package authority for Conary refresh
+
+[Path]
+PathChanged=/var/lib/eopkg/package
+Unit=conary-eopkg-sync.service
+
+[Install]
+WantedBy=multi-user.target
+"#;
+
+const EOPKG_SERVICE_CONTENT: &str = r#"[Unit]
+Description=Refresh Conary adopted eopkg package tracking
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/conary system adopt --refresh --quiet --from-sync-hook --package-manager eopkg
+"#;
+
 /// Hook file paths for each package manager
 struct HookPaths {
     filter: Option<&'static str>,
@@ -60,6 +79,10 @@ fn hook_paths(pkg_mgr: SystemPackageManager) -> Option<HookPaths> {
             filter: None,
             script: "/etc/pacman.d/hooks/conary-sync.hook",
         }),
+        SystemPackageManager::Eopkg => Some(HookPaths {
+            filter: Some("/etc/systemd/system/conary-eopkg-sync.service"),
+            script: "/etc/systemd/system/conary-eopkg-sync.path",
+        }),
         SystemPackageManager::Unknown => None,
     }
 }
@@ -77,7 +100,7 @@ pub async fn cmd_sync_hook_install(
     let pkg_mgr = SystemPackageManager::resolve(requested_manager)?;
     if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(
-            "No supported package manager found. Conary supports RPM, dpkg, and pacman."
+            "No supported package manager found. Conary supports RPM, dpkg, pacman, and eopkg."
         ));
     }
 
@@ -130,6 +153,23 @@ pub async fn cmd_sync_hook_install(
                 fs::write(paths.script, PACMAN_HOOK_CONTENT)?;
                 info!("Installed pacman hook at {}", paths.script);
             }
+            SystemPackageManager::Eopkg => {
+                let service = paths
+                    .filter
+                    .ok_or_else(|| anyhow::anyhow!("eopkg hook paths missing service path"))?;
+                ensure_parent_dir(service)?;
+                fs::write(service, EOPKG_SERVICE_CONTENT)?;
+                fs::write(paths.script, EOPKG_PATH_CONTENT)?;
+                let status = std::process::Command::new("systemctl")
+                    .args(["enable", "--now", "conary-eopkg-sync.path"])
+                    .status()?;
+                if !status.success() {
+                    return Err(anyhow::anyhow!(
+                        "systemctl could not enable conary-eopkg-sync.path"
+                    ));
+                }
+                info!("Installed eopkg systemd path hook at {}", paths.script);
+            }
             SystemPackageManager::Unknown => {
                 return Err(anyhow::anyhow!(
                     "Cannot install sync hooks for unsupported package manager"
@@ -150,7 +190,7 @@ pub(super) fn remove_detected_sync_hooks() -> Result<bool> {
     let pkg_mgr = SystemPackageManager::detect()?;
     if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(
-            "No supported package manager found. Conary supports RPM, dpkg, and pacman."
+            "No supported package manager found. Conary supports RPM, dpkg, pacman, and eopkg."
         ));
     }
 

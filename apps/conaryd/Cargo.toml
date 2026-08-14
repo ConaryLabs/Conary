@@ -1,11 +1,12 @@
 [package]
 name = "conaryd"
-version = "0.7.0"
-edition = "2024"
-rust-version = "1.96"
-authors = ["Conary Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
 description = "Conary system daemon"
-license = "MIT"
+license.workspace = true
 
 [dependencies]
 conary = { path = "../conary" }

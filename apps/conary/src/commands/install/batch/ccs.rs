@@ -97,6 +97,14 @@ pub(crate) fn prepare_ccs_package_for_batch(
         .collect::<Vec<_>>();
     let native_lifecycle_state =
         NativeLifecycleInstallState::from_bundle(package.manifest().native_lifecycle.as_ref())?;
+    let repository_enrollments = package
+        .v3_authority()
+        .map(|authority| authority.lifecycle.repository_enrollments.clone())
+        .unwrap_or_default();
+    conary_core::repository::enrollment::validate_payload_bindings(
+        &repository_enrollments,
+        &extracted_files,
+    )?;
 
     // A converted artifact declares only its source header capabilities, so the
     // payload it is about to install is the only authority for the file
@@ -117,6 +125,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
         architecture: package.architecture().map(str::to_string),
         description: package.description().map(str::to_string),
         extracted_files,
+        repository_enrollments,
         requirements: package.requirements().to_vec(),
         provides,
         relations: package.relations().to_vec(),

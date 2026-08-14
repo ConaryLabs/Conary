@@ -7,9 +7,8 @@
 //! package state independently.
 
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, Component, FileEntry, InstallSource, InstalledRequirementGroup,
-    LabelEntry, PackageResolution, ProvideEntry, Repository, RepositoryPackage,
-    RepositoryPackageKey, RepositoryPackageKeyStatus, Trove, TroveType,
+    Changeset, ChangesetStatus, Component, FileEntry, InstalledRequirementGroup, ProvideEntry,
+    Repository, RepositoryPackageKey, RepositoryPackageKeyStatus, Trove, TroveType,
 };
 use conary_core::db::schema;
 use conary_core::generation::artifact::{
@@ -514,79 +513,6 @@ fn stage_test_boot_assets(root: &std::path::Path) {
     )
     .unwrap();
     std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"test-efi").unwrap();
-}
-
-pub(crate) fn seed_mixed_replatform_fixture(conn: &rusqlite::Connection) {
-    let mut fedora_repo = Repository::new(
-        "fedora".to_string(),
-        "https://example.test/fedora".to_string(),
-    );
-    fedora_repo.source_profile = Some("fedora-44".to_string());
-    let fedora_repo_id = fedora_repo.insert(conn).unwrap();
-
-    let mut arch_repo = Repository::new(
-        "arch-core".to_string(),
-        "https://example.test/arch".to_string(),
-    );
-    arch_repo.default_strategy = Some("binary".to_string());
-    arch_repo.source_profile = Some("arch".to_string());
-    let arch_repo_id = arch_repo.insert(conn).unwrap();
-
-    let mut fedora_label = LabelEntry::new(
-        "fedora".to_string(),
-        "f43".to_string(),
-        "stable".to_string(),
-    );
-    fedora_label.insert(conn).unwrap();
-    fedora_label
-        .set_repository(conn, Some(fedora_repo_id))
-        .unwrap();
-
-    for (name, version) in [("vim", "9.0.1"), ("bash", "5.1.0"), ("zsh", "5.8.0")] {
-        let mut trove = Trove::new_with_source(
-            name.to_string(),
-            version.to_string(),
-            TroveType::Package,
-            InstallSource::Repository,
-            conary_core::repository::versioning::VersionScheme::Conary,
-        );
-        trove.architecture = Some("x86_64".to_string());
-        trove.label_id = fedora_label.id;
-        trove.insert(conn).unwrap();
-    }
-
-    for (name, version) in [("vim", "9.1.0"), ("bash", "5.2.0"), ("zsh", "5.9.1")] {
-        let mut pkg = RepositoryPackage::new(
-            arch_repo_id,
-            name.to_string(),
-            version.to_string(),
-            conary_core::repository::versioning::VersionScheme::Arch,
-            format!("sha256:{name}"),
-            123,
-            format!("https://example.test/arch/{name}.pkg.tar.zst"),
-        );
-        pkg.architecture = Some("x86_64".to_string());
-        pkg.insert(conn).unwrap();
-    }
-
-    let vim_package_id = RepositoryPackage::find_by_name_version(conn, "vim", "9.1.0")
-        .unwrap()
-        .unwrap()
-        .id
-        .unwrap();
-    let bash_package_id = RepositoryPackage::find_by_name_version(conn, "bash", "5.2.0")
-        .unwrap()
-        .unwrap()
-        .id
-        .unwrap();
-    let mut exact_resolution =
-        PackageResolution::repository_package(arch_repo_id, "vim".to_string(), vim_package_id);
-    exact_resolution.version = Some("9.1.0".to_string());
-    exact_resolution.insert(conn).unwrap();
-
-    let mut any_version_resolution =
-        PackageResolution::repository_package(arch_repo_id, "bash".to_string(), bash_package_id);
-    any_version_resolution.insert(conn).unwrap();
 }
 
 /// Run an exact test body with root authority inside an isolated user and

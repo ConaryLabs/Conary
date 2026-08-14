@@ -2,7 +2,7 @@
 
 [![Merge validation](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml/badge.svg?branch=main)](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release: v0.14.0](https://img.shields.io/badge/release-v0.14.0-blue.svg)](https://github.com/ConaryLabs/Conary/releases/tag/v0.14.0)
+[![Release: v0.15.0](https://img.shields.io/badge/release-v0.15.0-blue.svg)](https://github.com/ConaryLabs/Conary/releases/tag/v0.15.0)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
 
@@ -54,15 +54,15 @@ attach only a reviewed support bundle.
 
 ## Try It
 
-Release `v0.14.0` is published and artifact-verified, but it predates fixes
-discovered while completing the supported-host generation export/boot proof.
-It is therefore not current tester-authoritative. The
-[release artifact matrix](docs/operations/release-artifact-matrix.md) records
-the exact release proof and this limitation. If you inspect the released
-artifact, install it only on a VM or non-critical host; do not treat its result
-as validation of the unreleased fixes.
+Release `v0.15.0` is the current immutable, artifact-verified synchronized
+suite. The [release artifact matrix](docs/operations/release-artifact-matrix.md)
+records its exact tag, complete asset set, deployments, and three-distro
+released-package proof. Broad external testing remains paused until #110's
+ordinary-package corpus gate passes, so the release is not yet the pinned
+tester authority. If you inspect it now, install it only on a VM or
+non-critical host and do not treat the result as an outreach completion.
 
-After a later release is pinned and the tester guide is resumed, choose a
+After an exact release is pinned and the tester guide is resumed, choose a
 source whose package format differs from the host and run the complete bounded
 loop:
 
@@ -199,7 +199,7 @@ weight that a team's review would otherwise carry.
 
 | | |
 | --- | --- |
-| First-party Rust | 447,093 lines across 1,225 files, 8-crate workspace, edition 2024, Rust 1.96+ |
+| First-party Rust | 447,093 lines across 1,225 files, 8-crate workspace, edition 2024, Rust 1.97.1+ |
 | Unit tests | 5,499 `#[test]` and `#[tokio::test]` functions |
 | Integration tests | 324 tests in 29 suites across 4 phases |
 | Test targets | Real Fedora 44, Ubuntu 26.04 LTS, and Arch VMs driven by `apps/conary-test` |
@@ -222,7 +222,7 @@ Two of those deserve specific mention:
 
 ## Build From Source
 
-Conary requires Rust 1.96+ on Linux.
+Conary requires Rust 1.97.1+ on Linux.
 
 ```bash
 git clone https://github.com/ConaryLabs/Conary.git

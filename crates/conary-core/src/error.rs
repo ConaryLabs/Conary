@@ -37,6 +37,17 @@ impl ScriptletFailureKind {
             Self::EnforcementSetupFailed => "EnforcementSetupFailed",
         }
     }
+
+    /// Whether this failure is the source program's own result.
+    ///
+    /// Only a program that actually ran under the exact preflighted contract
+    /// and the selected-root enforcement boundary produces a result the source
+    /// format's failure table can speak about. Every other kind is a Conary
+    /// contract, process, sandbox, or enforcement failure, so a source format's
+    /// warning-only class must never suppress it.
+    pub const fn is_source_program_result(self) -> bool {
+        matches!(self, Self::ScriptExited | Self::ScriptTimedOut)
+    }
 }
 
 /// Core error types for Conary

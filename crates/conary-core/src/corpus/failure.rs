@@ -98,6 +98,18 @@ impl FailureKind {
 }
 
 impl ConversionFailure {
+    /// Record an unclassified failure by its concrete typed owner.
+    ///
+    /// This is for callers whose error type lives outside `conary-core`. The
+    /// incident identity is derived from the Rust type name; human diagnostic
+    /// text never participates in classification.
+    pub fn internal_for<T: 'static>(detail: impl Into<String>) -> Self {
+        ConversionFailure::InternalUnclassified {
+            incident_id: incident_id_for(&[std::any::type_name::<T>()]),
+            detail: detail.into(),
+        }
+    }
+
     pub fn kind(&self) -> FailureKind {
         match self {
             ConversionFailure::Trust { .. } => FailureKind::Trust,

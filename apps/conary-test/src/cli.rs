@@ -1,17 +1,19 @@
 // conary-test/src/cli.rs
 
 use anyhow::{Context, Result, bail};
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use conary_test::engine::container_setup::initialize_container_state;
 use conary_test::paths;
 use handlers::{
-    cmd_deploy_rebuild, cmd_deploy_restart, cmd_deploy_rollout, cmd_deploy_source,
     cmd_deploy_status, cmd_fixtures_build, cmd_fixtures_publish, cmd_health, cmd_images_info,
     cmd_images_prune, cmd_logs, cmd_manifests_reload,
 };
+use image_config::{base_image_reference, containerfile_path};
 use std::path::{Path, PathBuf};
 
 mod handlers;
+#[path = "cli/image_config.rs"]
+mod image_config;
 
 // ---------------------------------------------------------------------------
 // ANSI color helpers
@@ -73,21 +75,6 @@ enum Commands {
         all_distros: bool,
     },
 
-    /// Start the HTTP + MCP server
-    Serve {
-        /// Port to listen on
-        #[arg(long, default_value = "9090")]
-        port: u16,
-        /// Bearer token for authentication. If not set, reads CONARY_TEST_TOKEN env var.
-        /// If neither is set, the server runs without auth.
-        #[arg(long)]
-        token: Option<String>,
-        /// Maximum number of test runs that execute concurrently. Additional
-        /// runs queue until a slot becomes available.
-        #[arg(long, default_value = "2")]
-        max_concurrent: usize,
-    },
-
     /// List available test suites
     List,
 
@@ -103,7 +90,7 @@ enum Commands {
         command: ImageCommands,
     },
 
-    /// Deploy source, rebuild binaries, restart service
+    /// Inspect local build, checkout, and drift status
     Deploy {
         #[command(subcommand)]
         command: DeployCommands,
@@ -133,12 +120,8 @@ enum Commands {
         stream: Option<String>,
     },
 
-    /// Check service health and deployment status
-    Health {
-        /// Local conary-test service port
-        #[arg(long, env = "CONARY_TEST_PORT", default_value = "9090")]
-        port: u16,
-    },
+    /// Check local and Remi health
+    Health,
 
     /// Reload test manifests from disk
     Manifests {
@@ -180,6 +163,13 @@ enum ImageCommands {
         native_package: Option<PathBuf>,
     },
 
+    /// Print the exact digest-pinned base image for a distro lane
+    BaseRef {
+        /// Distro whose configured base image should be resolved
+        #[arg(long)]
+        distro: String,
+    },
+
     /// List built images
     List,
 
@@ -199,52 +189,8 @@ enum ImageCommands {
 
 #[derive(Subcommand)]
 enum DeployCommands {
-    /// Pull source from git (optionally checkout a specific ref)
-    Source {
-        /// Git ref to checkout (branch, tag, or commit). Default: pull current branch.
-        #[arg(long = "ref")]
-        git_ref: Option<String>,
-    },
-
-    /// Rebuild binaries from current source
-    Rebuild {
-        /// Specific crate to build (conary, conary-test). Default: both.
-        #[arg(long = "crate")]
-        crate_name: Option<String>,
-    },
-
-    /// Restart the conary-test systemd user service
-    Restart,
-
-    /// Show deployment status (version, uptime, service state)
-    Status {
-        /// Local conary-test service port
-        #[arg(long, env = "CONARY_TEST_PORT", default_value = "9090")]
-        port: u16,
-    },
-
-    /// Perform a managed Forge rollout from a Git ref or explicit local snapshot
-    #[command(
-        group(ArgGroup::new("rollout_target").args(["unit", "group"]).required(true).multiple(false)),
-        group(ArgGroup::new("rollout_source").args(["git_ref", "path"]).required(true).multiple(false))
-    )]
-    Rollout {
-        /// Deploy a single manifest-defined rollout unit
-        #[arg(long, group = "rollout_target")]
-        unit: Option<String>,
-
-        /// Deploy a manifest-defined rollout group
-        #[arg(long, group = "rollout_target")]
-        group: Option<String>,
-
-        /// Resolve and deploy an exact Git ref on Forge
-        #[arg(long = "ref", group = "rollout_source")]
-        git_ref: Option<String>,
-
-        /// Deploy an explicit local-snapshot path already synced to Forge
-        #[arg(long, group = "rollout_source")]
-        path: Option<PathBuf>,
-    },
+    /// Show local build, checkout, and rollout status
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -331,26 +277,6 @@ fn load_manifest_entries(
     Ok(manifests)
 }
 
-/// Resolve the containerfile path for a distro.
-fn containerfile_path(
-    config: &conary_test::config::distro::GlobalConfig,
-    distro: &str,
-) -> Result<PathBuf> {
-    let dc = config
-        .distros
-        .get(distro)
-        .with_context(|| format!("unknown distro: {distro}"))?;
-
-    let default_name = format!("Containerfile.{distro}");
-    let filename = dc.containerfile.as_deref().unwrap_or(&default_name);
-
-    let path = paths::default_container_dir()?.join(filename);
-    if !path.exists() {
-        bail!("containerfile not found: {}", path.display());
-    }
-    Ok(path)
-}
-
 fn host_results_dir() -> Result<PathBuf> {
     let path = std::env::var_os("CONARY_TEST_RESULTS_DIR")
         .map(PathBuf::from)
@@ -370,6 +296,41 @@ fn host_results_dir() -> Result<PathBuf> {
 /// executable until a directory containing `Cargo.toml` is found.
 fn project_dir() -> Result<String> {
     Ok(paths::project_dir()?.to_string_lossy().to_string())
+}
+
+fn checkout_identity() -> Result<(String, bool)> {
+    let root = paths::project_dir()?;
+    let revision = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&root)
+        .output()
+        .context("inspect checkout revision for target evidence")?;
+    if !revision.status.success() {
+        bail!(
+            "failed to inspect checkout revision: {}",
+            String::from_utf8_lossy(&revision.stderr).trim()
+        );
+    }
+    let commit = String::from_utf8(revision.stdout)
+        .context("checkout revision is not UTF-8")?
+        .trim()
+        .to_string();
+    if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("checkout revision is not an exact 40-digit Git object ID");
+    }
+
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(root)
+        .output()
+        .context("inspect checkout state for target evidence")?;
+    if !status.status.success() {
+        bail!(
+            "failed to inspect checkout state: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
+        );
+    }
+    Ok((commit, !status.stdout.is_empty()))
 }
 
 /// Run a shell command and return (exit_code, stdout, stderr).
@@ -494,14 +455,13 @@ fn run_single_distro(
 
         // Resolve and build the image.
         let cf_path = containerfile_path(config, distro)?;
-        let build_context = config
+        let distro_config = config
             .distros
             .get(distro)
-            .with_context(|| format!("unknown distro: {distro}"))?
-            .build_context;
+            .with_context(|| format!("unknown distro: {distro}"))?;
         tracing::info!(distro, containerfile = %cf_path.display(), "Building image");
         let image_tag =
-            conary_test::container::build_distro_image(&backend, &cf_path, distro, build_context)
+            conary_test::container::build_distro_image(&backend, &cf_path, distro, distro_config)
                 .await?;
         tracing::info!(distro, image = %image_tag, "Image built");
 
@@ -523,32 +483,93 @@ fn run_single_distro(
         backend.start(&container_id).await?;
         tracing::info!(distro, id = %container_id, "Container started");
 
+        let aggregate_suite_name = format!("phase-{phase}");
         let mut aggregate_suite =
-            conary_test::engine::suite::TestSuite::new(&format!("phase-{phase}"), phase);
+            conary_test::engine::suite::TestSuite::new(&aggregate_suite_name, phase);
         aggregate_suite.status = conary_test::engine::suite::RunStatus::Running;
-
-        for manifest_path in &manifest_paths {
-            let manifest = conary_test::config::load_manifest(manifest_path)
-                .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
-            initialize_container_state(
-                config,
-                distro,
-                manifest.suite.phase > 1,
-                &backend,
-                &container_id,
-            )
-            .await?;
-
-            let mut runner =
-                conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
-            let suite = runner
-                .run(&manifest, &backend, &container_id, Some(&container_config))
-                .await?;
-            for result in suite.results {
-                aggregate_suite.record(result);
-            }
+        if let Some(release_root) = &distro_config.release_root {
+            let (checkout_commit, checkout_dirty) = checkout_identity()?;
+            aggregate_suite.target_release = Some(
+                conary_test::engine::release_root::capture_target_release_evidence(
+                    &backend,
+                    &container_id,
+                    distro,
+                    release_root,
+                    checkout_commit,
+                    checkout_dirty,
+                )
+                .await?,
+            );
+        } else if let Some(target_root) = &distro_config.target_root {
+            let (checkout_commit, checkout_dirty) = checkout_identity()?;
+            aggregate_suite.target_release = Some(
+                conary_test::engine::release_root::capture_authenticated_target_evidence(
+                    &backend,
+                    &container_id,
+                    distro,
+                    target_root,
+                    checkout_commit,
+                    checkout_dirty,
+                )
+                .await?,
+            );
         }
+        let remi_run =
+            conary_test::remi_stream::LocalRemiRun::start(&aggregate_suite_name, distro, phase)
+                .await;
+
+        // The manifest loop is fallible, and an acknowledged Remi run must be
+        // closed on that path too: a run left at its `pending` default reads as
+        // still in flight forever.
+        let manifest_outcome: Result<()> = async {
+            for manifest_path in &manifest_paths {
+                let manifest =
+                    conary_test::config::load_manifest(manifest_path).with_context(|| {
+                        format!("failed to load manifest: {}", manifest_path.display())
+                    })?;
+                initialize_container_state(
+                    config,
+                    distro,
+                    manifest.suite.phase > 1,
+                    &backend,
+                    &container_id,
+                )
+                .await?;
+
+                let mut runner = conary_test::engine::runner::TestRunner::new(
+                    config.clone(),
+                    distro.to_string(),
+                );
+                let suite = runner
+                    .run_with_cancel(
+                        &manifest,
+                        &backend,
+                        &container_id,
+                        Some(&container_config),
+                        None,
+                        None,
+                        remi_run.as_ref().map(|run| run.context()),
+                    )
+                    .await?;
+                aggregate_suite.expect_corpus_cases(suite.corpus_expected());
+                for result in suite.results {
+                    aggregate_suite.record(result);
+                }
+                for case in suite.corpus_cases {
+                    aggregate_suite.record_corpus(case);
+                }
+            }
+            Ok(())
+        }
+        .await;
+
         aggregate_suite.finish();
+        if let Some(remi_run) = &remi_run {
+            remi_run
+                .finish(&aggregate_suite, manifest_outcome.is_err())
+                .await;
+        }
+        manifest_outcome?;
 
         // Print JSON results.
         let json = conary_test::report::json::to_json_report(&aggregate_suite)?;
@@ -559,9 +580,7 @@ fn run_single_distro(
         conary_test::report::json::write_json_report(&aggregate_suite, &results_file)?;
         tracing::info!(path = %results_file.display(), "Results written");
 
-        let has_blocking_results = aggregate_suite.failed() > 0
-            || aggregate_suite.skipped() > 0
-            || aggregate_suite.cancelled() > 0;
+        let has_blocking_results = aggregate_suite.has_blocking_results();
 
         // Cleanup container.
         let keep_container = std::env::var("CONARY_TEST_KEEP_CONTAINER")
@@ -607,29 +626,51 @@ async fn run_qemu_only_suite(
     let dummy_container_id: conary_test::container::ContainerId = "qemu-standalone".to_string();
     let dummy_config = conary_test::container::ContainerConfig::default();
 
+    let aggregate_suite_name = format!("phase-{phase}");
     let mut aggregate_suite =
-        conary_test::engine::suite::TestSuite::new(&format!("phase-{phase}"), phase);
+        conary_test::engine::suite::TestSuite::new(&aggregate_suite_name, phase);
     aggregate_suite.status = conary_test::engine::suite::RunStatus::Running;
+    let remi_run =
+        conary_test::remi_stream::LocalRemiRun::start(&aggregate_suite_name, distro, phase).await;
 
-    for manifest_path in manifest_paths {
-        let manifest = conary_test::config::load_manifest(manifest_path)
-            .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
+    // Fallible loop, closed run on both exits — see the container path.
+    let manifest_outcome: Result<()> = async {
+        for manifest_path in manifest_paths {
+            let manifest = conary_test::config::load_manifest(manifest_path)
+                .with_context(|| format!("failed to load manifest: {}", manifest_path.display()))?;
 
-        let mut runner =
-            conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
-        let suite = runner
-            .run(
-                &manifest,
-                &dummy_backend,
-                &dummy_container_id,
-                Some(&dummy_config),
-            )
-            .await?;
-        for result in suite.results {
-            aggregate_suite.record(result);
+            let mut runner =
+                conary_test::engine::runner::TestRunner::new(config.clone(), distro.to_string());
+            let suite = runner
+                .run_with_cancel(
+                    &manifest,
+                    &dummy_backend,
+                    &dummy_container_id,
+                    Some(&dummy_config),
+                    None,
+                    None,
+                    remi_run.as_ref().map(|run| run.context()),
+                )
+                .await?;
+            aggregate_suite.expect_corpus_cases(suite.corpus_expected());
+            for result in suite.results {
+                aggregate_suite.record(result);
+            }
+            for case in suite.corpus_cases {
+                aggregate_suite.record_corpus(case);
+            }
         }
+        Ok(())
     }
+    .await;
+
     aggregate_suite.finish();
+    if let Some(remi_run) = &remi_run {
+        remi_run
+            .finish(&aggregate_suite, manifest_outcome.is_err())
+            .await;
+    }
+    manifest_outcome?;
 
     let json = conary_test::report::json::to_json_report(&aggregate_suite)?;
     println!("{json}");
@@ -638,9 +679,7 @@ async fn run_qemu_only_suite(
     conary_test::report::json::write_json_report(&aggregate_suite, &results_file)?;
     tracing::info!(path = %results_file.display(), "Results written");
 
-    Ok(aggregate_suite.failed() == 0
-        && aggregate_suite.skipped() == 0
-        && aggregate_suite.cancelled() == 0)
+    Ok(!aggregate_suite.has_blocking_results())
 }
 
 // ---------------------------------------------------------------------------
@@ -686,28 +725,6 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
             Ok(())
-        }
-
-        Commands::Serve {
-            port,
-            token,
-            max_concurrent,
-        } => {
-            let token = token.or_else(|| std::env::var("CONARY_TEST_TOKEN").ok());
-            if token.is_some() {
-                tracing::info!("Bearer token authentication enabled");
-            } else {
-                tracing::warn!("No authentication token configured -- server is open");
-            }
-            let config = load_config()?;
-            let state = conary_test::server::AppState::with_max_concurrent(
-                config,
-                manifest_dir()?.display().to_string(),
-                max_concurrent,
-            );
-            tracing::info!(%port, max_concurrent, "Starting server");
-            tokio::runtime::Runtime::new()?
-                .block_on(conary_test::server::run_server(state, port, token))
         }
 
         Commands::List => {
@@ -812,6 +829,19 @@ fn main() -> Result<()> {
         Commands::Images { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
+                ImageCommands::BaseRef { distro } => {
+                    let config = load_config()?;
+                    let reference = base_image_reference(&config, &distro)?;
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({"distro": distro, "base_image": reference})
+                        );
+                    } else {
+                        println!("{reference}");
+                    }
+                    Ok(())
+                }
                 ImageCommands::Build {
                     distro,
                     native_package,
@@ -824,7 +854,6 @@ fn main() -> Result<()> {
                             .distros
                             .get(&distro)
                             .with_context(|| format!("unknown distro: {distro}"))?;
-                        let build_context = distro_config.build_context;
                         tracing::info!(%distro, containerfile = %cf_path.display(), "Building image");
                         let tag = match native_package {
                             Some(package) => {
@@ -841,7 +870,7 @@ fn main() -> Result<()> {
                                     &backend,
                                     &cf_path,
                                     &distro,
-                                    build_context,
+                                    distro_config,
                                     &package,
                                     profile.package_format(),
                                 )
@@ -852,7 +881,7 @@ fn main() -> Result<()> {
                                     &backend,
                                     &cf_path,
                                     &distro,
-                                    build_context,
+                                    distro_config,
                                 )
                                 .await?
                             }
@@ -909,20 +938,7 @@ fn main() -> Result<()> {
         Commands::Deploy { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {
-                DeployCommands::Source { git_ref } => {
-                    rt.block_on(cmd_deploy_source(git_ref.as_deref(), json))
-                }
-                DeployCommands::Rebuild { crate_name } => {
-                    rt.block_on(cmd_deploy_rebuild(crate_name.as_deref(), json))
-                }
-                DeployCommands::Restart => rt.block_on(cmd_deploy_restart(json)),
-                DeployCommands::Status { port } => rt.block_on(cmd_deploy_status(json, port)),
-                DeployCommands::Rollout {
-                    unit,
-                    group,
-                    git_ref,
-                    path,
-                } => rt.block_on(cmd_deploy_rollout(unit, group, git_ref, path, json)),
+                DeployCommands::Status => rt.block_on(cmd_deploy_status(json)),
             }
         }
 
@@ -944,9 +960,9 @@ fn main() -> Result<()> {
             rt.block_on(cmd_logs(&test_id, run, step, stream.as_deref(), json))
         }
 
-        Commands::Health { port } => {
+        Commands::Health => {
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(cmd_health(json, port))
+            rt.block_on(cmd_health(json))
         }
 
         Commands::Manifests { command } => match command {

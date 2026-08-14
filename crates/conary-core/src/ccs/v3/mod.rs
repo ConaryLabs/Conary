@@ -26,8 +26,8 @@ pub use identity::{
 pub(crate) use manifest_projection::project_manifest_identity;
 pub use reader::{ReadAuthorityV3, read_authority_document};
 pub use schema::{
-    AuthorityDocumentV3, DependencyEntryV3, FORMAT_VERSION_V3, PackageKindTagV3, PackageKindV3,
-    ProvidedCapabilityV3,
+    AuthorityDocumentV3, DependencyEntryV3, FORMAT_VERSION_V3, FileContentLayoutV3,
+    PackageKindTagV3, PackageKindV3, ProvidedCapabilityV3,
 };
 pub use validation::validate_authority;
 pub use validation::{authority_census, validate_authority_structure};

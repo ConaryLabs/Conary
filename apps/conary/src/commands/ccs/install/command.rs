@@ -8,9 +8,30 @@ use std::path::Path;
 use super::super::payload_paths::validate_ccs_payload_paths;
 use super::capability_declaration::validate_ccs_capability_declaration;
 use super::component_selection::select_ccs_components;
-use super::dependency::validate_incoming_version_against_dependents;
-use crate::commands::install::{CcsTransactionInstallOptions, install_ccs_package_transactionally};
+use super::dependency::{incoming_package_identity, validate_incoming_version_against_dependents};
+use crate::commands::install::{
+    CcsTransactionInstallOptions, InstallIntent, UpgradeCheck, check_ccs_upgrade_status,
+    install_ccs_package_transactionally, install_semantics_for_ccs_manifest,
+};
 use crate::commands::open_db;
+
+/// Resolve the replacement trove through the same CCS upgrade authority used
+/// by the transaction, including its exact already-installed rule.
+pub(super) fn check_ccs_install_upgrade_status(
+    conn: &rusqlite::Connection,
+    pkg: &CcsPackage,
+    reinstall: bool,
+) -> Result<UpgradeCheck> {
+    let semantics = install_semantics_for_ccs_manifest(pkg.manifest())?;
+    check_ccs_upgrade_status(
+        conn,
+        pkg,
+        &semantics,
+        false,
+        InstallIntent::PackageChange,
+        reinstall,
+    )
+}
 
 /// Install a CCS package
 #[allow(clippy::too_many_arguments)]
@@ -43,8 +64,17 @@ pub async fn cmd_ccs_install(
             "CCS install requires --policy or an initialized local-dev signing key; unsigned and untrusted packages cannot be installed"
         );
     };
-    let verification = verify::verify_package(package_path, &trust_policy)
-        .context("CCS package authority verification failed")?;
+    let permanent_cas = (!dry_run)
+        .then(|| {
+            let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path);
+            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+        })
+        .transpose()?;
+    let verification = match &permanent_cas {
+        Some(cas) => verify::verify_package_into_cas(package_path, &trust_policy, cas),
+        None => verify::verify_package(package_path, &trust_policy),
+    }
+    .context("CCS package authority verification failed")?;
     println!(
         "Verified signed CCS v3 authority ({} payload files)",
         verification.files_checked()
@@ -76,37 +106,69 @@ pub async fn cmd_ccs_install(
     // Step 3: Check for existing installation
     let mut conn = open_db(db_path)?;
 
-    let existing = conary_core::db::models::Trove::find_by_name(&conn, ccs_pkg.name())?;
-    if !existing.is_empty() {
-        let old = &existing[0];
-        if old.version == ccs_pkg.version() {
-            if reinstall {
+    let upgrade = check_ccs_install_upgrade_status(&conn, &ccs_pkg, reinstall)?;
+    let replacing = match &upgrade {
+        UpgradeCheck::FreshInstall => None,
+        UpgradeCheck::AlreadyInstalled(trove) => {
+            anyhow::bail!(
+                "Package {} version {} ({}) is already installed",
+                trove.name,
+                trove.version,
+                trove.architecture.as_deref().unwrap_or("no-arch")
+            )
+        }
+        UpgradeCheck::Upgrade(trove)
+        | UpgradeCheck::Downgrade(trove)
+        | UpgradeCheck::Replatform(trove) => {
+            if reinstall
+                && trove.version == ccs_pkg.version()
+                && trove.package_release.as_deref() == ccs_pkg.package_release()
+                && trove.architecture.as_deref() == ccs_pkg.architecture()
+            {
                 println!(
                     "Reinstalling {} {} (--reinstall)",
                     ccs_pkg.name(),
                     ccs_pkg.version()
                 );
             } else {
-                anyhow::bail!(
-                    "Package {} version {} is already installed",
+                println!(
+                    "Upgrading {} from {} to {}",
                     ccs_pkg.name(),
+                    trove.version,
                     ccs_pkg.version()
                 );
             }
+            Some(trove.as_ref())
         }
-        println!(
-            "Upgrading {} from {} to {}",
-            ccs_pkg.name(),
-            old.version,
-            ccs_pkg.version()
-        );
-    }
-    validate_incoming_version_against_dependents(
+    };
+
+    // The validator and the transaction must reason about the same exact
+    // outgoing identities. Upgrade selection is architecture-slot based for a
+    // CCS install; relation removals are already planned by exact trove ID.
+    let relation_plan = conary_core::transaction::plan_package_relations(
         &conn,
-        ccs_pkg.name(),
-        ccs_pkg.version(),
+        &ccs_pkg,
         ccs_pkg.manifest().package.version_scheme,
     )?;
+    let mut outgoing_trove_ids = relation_plan
+        .removals
+        .iter()
+        .map(|removal| removal.trove_id)
+        .collect::<Vec<_>>();
+    if let Some(trove) = replacing {
+        // Relation removal and replacement may duplicate an ID intentionally; the validator deduplicates it.
+        let trove_id = trove.id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "CCS replacement trove '{} {} ({})' has no database id",
+                trove.name,
+                trove.version,
+                trove.architecture.as_deref().unwrap_or("no-arch")
+            )
+        })?;
+        outgoing_trove_ids.push(trove_id);
+    }
+    let incoming_identity = incoming_package_identity(&ccs_pkg)?;
+    validate_incoming_version_against_dependents(&conn, &outgoing_trove_ids, &incoming_identity)?;
 
     // Step 4: Check dependencies
     if no_deps {

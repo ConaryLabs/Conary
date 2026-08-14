@@ -95,3 +95,6 @@ web/static/favicon.svg
 web/static/favicon-32.png
 web/static/favicon.ico
 web/static/apple-touch-icon.png
+
+# Delegate work reports stay local
+/REPORT.md

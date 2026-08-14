@@ -35,6 +35,10 @@ impl NativeLifecycleEntry {
         }
 
         match source_format {
+            SourceFormat::Rpm if self.native_slot.is_none() => bail!(
+                "RPM native lifecycle entry '{}' has no typed RPM slot class",
+                self.id
+            ),
             SourceFormat::Rpm if self.rpm_runtime.is_none() => bail!(
                 "RPM native lifecycle entry '{}' has no typed RPM runtime contract",
                 self.id
@@ -47,12 +51,20 @@ impl NativeLifecycleEntry {
                 "DEB native lifecycle entry '{}' has no typed maintainer-script contract",
                 self.id
             ),
+            SourceFormat::Deb if self.native_slot.is_some() => bail!(
+                "DEB native lifecycle entry '{}' carries an RPM slot class without a declared class table",
+                self.id
+            ),
             SourceFormat::Deb if has_rpm || arch_metadata_count != 0 => bail!(
                 "DEB native lifecycle entry '{}' carries foreign format metadata",
                 self.id
             ),
             SourceFormat::Arch if arch_metadata_count != 1 => bail!(
                 "Arch native lifecycle entry '{}' must carry exactly one .INSTALL or ALPM hook contract",
+                self.id
+            ),
+            SourceFormat::Arch if self.native_slot.is_some() => bail!(
+                "Arch native lifecycle entry '{}' carries an RPM slot class without a declared class table",
                 self.id
             ),
             SourceFormat::Arch if has_rpm || has_deb => bail!(

@@ -1,21 +1,32 @@
-// src/commands/generation/boot.rs
+// apps/conary/src/commands/generation/boot.rs
 //! BLS boot entries and GRUB fallback for generation switching
 
 use super::metadata::{GenerationMetadata, generation_path};
 use anyhow::{Context, Result, anyhow};
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 /// BLS entries directory
 const BLS_DIR: &str = "/boot/loader/entries";
+const GRUB_CONFIG: &str = "/boot/grub/grub.cfg";
+const GRUB2_CONFIG: &str = "/boot/grub2/grub.cfg";
+
+/// Exact GRUB provider selected for boot-entry mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrubConfiguration {
+    executable: PathBuf,
+    output: PathBuf,
+}
 
 /// Detected boot loader type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootLoader {
     /// Boot Loader Specification (systemd-boot, etc.)
     Bls,
     /// GRUB (legacy config generation)
-    Grub,
+    Grub(GrubConfiguration),
     /// No recognized boot loader
     None,
 }
@@ -23,12 +34,16 @@ pub enum BootLoader {
 /// Detect the system boot loader by checking for BLS directory or GRUB config tools.
 #[must_use]
 pub fn detect_bootloader() -> BootLoader {
-    if std::path::Path::new(BLS_DIR).exists() {
+    detect_bootloader_in(Path::new(BLS_DIR), std::env::var_os("PATH").as_deref())
+}
+
+fn detect_bootloader_in(bls_dir: &Path, path: Option<&OsStr>) -> BootLoader {
+    if bls_dir.exists() {
         return BootLoader::Bls;
     }
 
-    if which_grub_mkconfig().is_some() {
-        return BootLoader::Grub;
+    if let Some(configuration) = find_grub_configuration(path) {
+        return BootLoader::Grub(configuration);
     }
 
     BootLoader::None
@@ -87,7 +102,11 @@ pub fn write_bls_entry(gen_number: i64, root_uuid: &str) -> Result<PathBuf> {
 ///
 /// Creates `/etc/grub.d/42_conary` with a menuentry for the generation,
 /// then runs `grub-mkconfig` (or `grub2-mkconfig`) to regenerate the config.
-pub fn write_grub_snippet(gen_number: i64, root_uuid: &str) -> Result<()> {
+pub fn write_grub_snippet(
+    gen_number: i64,
+    root_uuid: &str,
+    configuration: &GrubConfiguration,
+) -> Result<()> {
     let gen_dir = generation_path(gen_number);
     let metadata = GenerationMetadata::read_from(&gen_dir)
         .with_context(|| format!("Failed to read metadata for generation {gen_number}"))?;
@@ -132,45 +151,44 @@ menuentry "Conary Generation {gen_number} ({date})" {{
 
     info!("Wrote GRUB snippet: {}", snippet_path.display());
 
-    // Regenerate GRUB config
-    if let Some(mkconfig) = which_grub_mkconfig() {
-        let grub_cfg = if mkconfig.contains("grub2") {
-            "/boot/grub2/grub.cfg"
-        } else {
-            "/boot/grub/grub.cfg"
-        };
+    let status = grub_mkconfig_command(configuration)
+        .status()
+        .with_context(|| format!("Failed to run {}", configuration.executable.display()))?;
 
-        let status = std::process::Command::new(&mkconfig)
-            .arg("-o")
-            .arg(grub_cfg)
-            .status()
-            .with_context(|| format!("Failed to run {mkconfig}"))?;
-
-        if !status.success() {
-            return Err(anyhow!(
-                "{mkconfig} exited with status {status}; boot entry is not active"
-            ));
-        }
-        info!("Regenerated GRUB config: {grub_cfg}");
+    if !status.success() {
+        return Err(anyhow!(
+            "{} exited with status {status}; boot entry is not active",
+            configuration.executable.display()
+        ));
     }
+    info!(
+        "Regenerated GRUB config: {}",
+        configuration.output.display()
+    );
 
     Ok(())
+}
+
+fn grub_mkconfig_command(configuration: &GrubConfiguration) -> std::process::Command {
+    let mut command = std::process::Command::new(&configuration.executable);
+    command.arg("-o").arg(&configuration.output);
+    command
 }
 
 /// Detect the boot loader and write the appropriate boot entry for the given generation.
 ///
 /// Returns an error unless a supported loader is available and its configuration
 /// is updated successfully.
-pub fn write_boot_entry(gen_number: i64) -> Result<()> {
+pub fn write_boot_entry(gen_number: i64, bootloader: &BootLoader) -> Result<()> {
     let root_uuid = detect_root_uuid()?;
 
-    match detect_bootloader() {
+    match bootloader {
         BootLoader::Bls => {
             let path = write_bls_entry(gen_number, &root_uuid)?;
             println!("Boot entry written: {}", path.display());
         }
-        BootLoader::Grub => {
-            write_grub_snippet(gen_number, &root_uuid)?;
+        BootLoader::Grub(configuration) => {
+            write_grub_snippet(gen_number, &root_uuid, configuration)?;
             println!("GRUB snippet written for generation {gen_number}");
         }
         BootLoader::None => {
@@ -232,16 +250,28 @@ fn read_machine_id() -> Result<Option<String>> {
     }
 }
 
-/// Find `grub-mkconfig` or `grub2-mkconfig` on the system.
-fn which_grub_mkconfig() -> Option<String> {
-    for cmd in &["grub2-mkconfig", "grub-mkconfig"] {
-        if std::process::Command::new("which")
-            .arg(cmd)
-            .output()
-            .ok()
-            .is_some_and(|o| o.status.success())
-        {
-            return Some((*cmd).to_string());
+/// Resolve the first exact supported GRUB provider from `PATH`.
+fn find_grub_configuration(path: Option<&OsStr>) -> Option<GrubConfiguration> {
+    let providers = [
+        ("grub2-mkconfig", GRUB2_CONFIG),
+        ("grub-mkconfig", GRUB_CONFIG),
+    ];
+
+    for (executable_name, output) in providers {
+        for directory in std::env::split_paths(path?) {
+            let candidate = directory.join(executable_name);
+            let Some(executable) = candidate.canonicalize().ok() else {
+                continue;
+            };
+            let is_executable = executable.metadata().is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            });
+            if is_executable {
+                return Some(GrubConfiguration {
+                    executable,
+                    output: PathBuf::from(output),
+                });
+            }
         }
     }
     None
@@ -250,11 +280,105 @@ fn which_grub_mkconfig() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn create_executable(path: &Path) {
+        fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     #[test]
     fn test_detect_bootloader_returns_value() {
         // Just verify this doesn't panic — result depends on environment
         let _loader = detect_bootloader();
+    }
+
+    #[test]
+    fn exact_grub2_identity_owns_its_output_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("grub2-mkconfig");
+        create_executable(&executable);
+
+        assert_eq!(
+            find_grub_configuration(Some(temp.path().as_os_str())),
+            Some(GrubConfiguration {
+                executable,
+                output: PathBuf::from(GRUB2_CONFIG),
+            })
+        );
+    }
+
+    #[test]
+    fn bls_directory_precedes_an_available_grub_provider() {
+        let temp = tempfile::tempdir().unwrap();
+        let bls_dir = temp.path().join("loader/entries");
+        fs::create_dir_all(&bls_dir).unwrap();
+        create_executable(&temp.path().join("grub2-mkconfig"));
+
+        assert_eq!(
+            detect_bootloader_in(&bls_dir, Some(temp.path().as_os_str())),
+            BootLoader::Bls
+        );
+    }
+
+    #[test]
+    fn exact_grub_identity_owns_its_output_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("grub-mkconfig");
+        create_executable(&executable);
+
+        assert_eq!(
+            find_grub_configuration(Some(temp.path().as_os_str())),
+            Some(GrubConfiguration {
+                executable,
+                output: PathBuf::from(GRUB_CONFIG),
+            })
+        );
+    }
+
+    #[test]
+    fn discovery_preserves_exact_grub2_provider_priority() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        create_executable(&first.path().join("grub-mkconfig"));
+        let grub2 = second.path().join("grub2-mkconfig");
+        create_executable(&grub2);
+        let search_path = std::env::join_paths([first.path(), second.path()]).unwrap();
+
+        assert_eq!(
+            find_grub_configuration(Some(&search_path)),
+            Some(GrubConfiguration {
+                executable: grub2,
+                output: PathBuf::from(GRUB2_CONFIG),
+            })
+        );
+    }
+
+    #[test]
+    fn substring_aliases_and_non_executable_providers_are_not_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        create_executable(&temp.path().join("vendor-grub2-mkconfig-helper"));
+        fs::write(temp.path().join("grub2-mkconfig"), "not executable").unwrap();
+
+        assert_eq!(find_grub_configuration(Some(temp.path().as_os_str())), None);
+    }
+
+    #[test]
+    fn command_uses_the_discovered_executable_and_output_without_reinterpretation() {
+        let configuration = GrubConfiguration {
+            executable: PathBuf::from("/exact/provider/grub2-mkconfig"),
+            output: PathBuf::from(GRUB2_CONFIG),
+        };
+        let command = grub_mkconfig_command(&configuration);
+
+        assert_eq!(
+            command.get_program(),
+            OsStr::new("/exact/provider/grub2-mkconfig")
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [OsStr::new("-o"), OsStr::new(GRUB2_CONFIG)]
+        );
     }
 
     #[test]

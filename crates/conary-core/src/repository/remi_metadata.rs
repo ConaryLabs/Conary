@@ -108,6 +108,8 @@ pub struct RemiSparseResolutionVersionEntry {
 #[serde(deny_unknown_fields)]
 pub struct RemiSparsePackageList {
     pub distro: String,
+    /// Exact supported source profile behind the stable distribution route.
+    pub source_profile: String,
     pub packages: Vec<String>,
     pub total: usize,
     pub page: usize,
@@ -128,6 +130,8 @@ pub enum RemiSparseListInclude {
 #[serde(deny_unknown_fields)]
 pub struct RemiSparsePackagePage {
     pub distro: String,
+    /// Exact supported source profile behind the stable distribution route.
+    pub source_profile: String,
     pub packages: Vec<RemiSparseResolutionEntry>,
     pub total: usize,
     pub page: usize,

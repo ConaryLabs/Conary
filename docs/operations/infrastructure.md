@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-29
-revision: 19
-summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and Forge staging guidance for Conary contributors and coding assistants
+last_updated: 2026-08-13
+revision: 25
+summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and retired Forge staging guidance for Conary contributors and coding assistants
 ---
 
 # Infrastructure Overview
@@ -16,28 +16,21 @@ summary: Non-secret infrastructure, agent-operations transport, release, Remi de
   updates this document. The Remi host OS is independent of the public client
   distro support matrix, which is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux
   for the limited preview.
-- Forge remote validation is temporarily paused. The old VPS runner is being
-  retired because it did not expose `/dev/kvm`, which made it unusable for
-  scheduled QEMU release evidence.
-- Until a replacement KVM-capable runner is registered, hosted CI keeps Remi
-  health/audit/build/list checks active, and QEMU release evidence comes from
-  `scripts/local-qemu-validation.sh` on a local development machine with
-  `/dev/kvm`.
-- Forge-local `conaryd` staging deployment is also paused while there is no
-  active Forge host.
+- Forge remote validation and Forge-local staging deployment are decommissioned.
+  The old VPS runner did not expose `/dev/kvm`, and no replacement Forge host
+  or conary-test deployment path is supported.
+- Hosted CI keeps Remi health/audit/build/list checks active. QEMU release
+  evidence comes from `scripts/local-qemu-validation.sh` on a local
+  development machine with `/dev/kvm`.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
   ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
 
 ## Agent Operations And MCP
 
-Today, the live Remi MCP endpoint and the `conary-test` `/mcp` endpoint are
-session-based, tool-only surfaces. `conary-test` also exposes
-`/mcp/stateless` as a draft stateless preview route with `server/discover`,
-`resources/list`, and `resources/read` for
-`conary-local://bootstrap/status` and `conary-test://suites`. Those resources
-are read-only local bootstrap and suite-manifest state. The stateless preview
-does not expose live tools, prompts, resource templates, subscriptions, SSE
-streaming, mutations, or smoke execution.
+Remi's `/mcp` is the live MCP surface and is modern-only stateless Streamable
+HTTP. `conary-test` is a local CLI and integration-test engine; it no longer
+binds an HTTP or MCP listener. The framework-neutral compliance and raw-adapter
+proof remains in `crates/conary-mcp`, while Remi owns live MCP behavior.
 
 Prefer MCP resources for read-only state inspection and MCP tools for audited
 mutations. MCP is the adapter, not the durable product contract:
@@ -48,11 +41,8 @@ the stateless MCP adapter decision is satisfied.
 The transport-neutral contract lives in `crates/conary-agent-contract`;
 `crates/conary-mcp` remains MCP-specific adapter glue.
 
-Remi and the existing session-based MCP endpoints remain on that transport
-until stateless support is intentionally expanded for those services.
-
 - Remi admin and package-service operations
-- `conary-test` run control, deploy/restart flows, image management, and fixture publishing
+- `conary-test` local run control, deploy/restart flows, image management, and fixture publishing
 
 ### Local Packaging MCP
 
@@ -74,57 +64,18 @@ not cover the task or when you are debugging the underlying service path itself.
   origin access
 - Remi OpenAPI spec: `http://localhost:8082/v1/admin/openapi.json` via SSH
   tunnel or direct origin access
-- Forge-local `conary-test` health endpoint, when a replacement runner exists:
-  `http://127.0.0.1:9090/v1/health`
-- Forge-local `conary-test` deploy-status endpoint, when a replacement runner
-  exists: `http://127.0.0.1:9090/v1/deploy/status`
+- `conary-test` has no network endpoint. Use its local `health` and `deploy
+  status` CLI commands for local/Remi checks.
 
 ## Source Deploy Patterns
 
 ### Forge
 
-- **Paused:** these commands describe the next Forge runner, not an active host.
-  Do not treat them as release evidence until a KVM-capable runner with
-  `/dev/kvm` is registered.
-- Preferred deployment path is managed rollout orchestration through
-  `conary-test deploy rollout`
-- From an operator workstation, use
-  `FORGE_HOST=peter@replacement.example ./scripts/deploy-forge.sh --group control_plane --ref main`
-  for the trusted default path after a replacement host exists
-- `scripts/deploy-forge.sh` currently requires `FORGE_HOST`; it has no default
-  while the old Forge host is retired
-- `--ref` is the normal supported source mode and resolves an exact GitHub ref
-  on Forge before build/restart/verify
-- `--path` remains available for debug/local-snapshot deploys; the wrapper keeps
-  the rsync boundary by syncing directly over the active Forge checkout before
-  invoking the managed rollout there
-- Rollout groups live in `deploy/forge-rollouts.toml`
-- `conary-test deploy status --json` now reports both live binary truth and the
-  last successful managed rollout, including explicit drift flags
-- For supported control-plane verification, run `bash scripts/forge-smoke.sh`
-- For trusted-runner runtime verification, run
-  `bash scripts/forge-preflight.sh --mode container` before container suites
-  and `bash scripts/forge-preflight.sh --mode qemu` before QEMU suites.
-  QEMU mode requires `/dev/kvm`; Forge runners without exposed KVM are infra
-  blockers for scheduled QEMU validation, not product pass evidence.
-- Container-heavy Forge validation should reclaim inactive rootless Podman
-  storage with `bash scripts/forge-container-cleanup.sh`; scheduled deep/QEMU
-  CI does this before starting the matrix.
-- Port resolution for CLI and smoke checks is `--port` > `CONARY_TEST_PORT` >
-  `9090`
-- Forge runtime repair should use
-  `sudo bash /home/peter/Conary/deploy/repair-forge-runtime.sh`; this refreshes
-  Podman/QEMU tooling and the rootless Podman socket without re-registering the
-  GitHub Actions runner
-- `conaryd` staging deployment is paused while Forge is retired. The release
-  matrix marks `conaryd` as `deploy_mode=none` until a replacement staging host
-  is available.
-- The dormant Forge-local verifier is `scripts/conaryd-health.sh`, which probes
-  `/run/conary/conaryd.sock` rather than a public network endpoint.
-- The retired Forge SSH host key is not retained. A replacement key must be
-  verified out of band and installed in host-local `known_hosts` before this
-  lane is re-enabled; `deploy/sudoers/conaryd-forge` is the dormant narrowed
-  privilege policy to review at that time.
+Forge staging, conary-test deployment, and the managed rollout path are
+decommissioned. No Forge host, remote test-service deployment, or rollout
+command is supported. Use the local QEMU/KVM validation gate and hosted Remi
+checks for current evidence; historical Forge artifacts are not an active host
+workflow.
 
 ### Remi
 
@@ -249,8 +200,8 @@ cache paths under `/conary/dev/cache`, install Rust through rustup, and install
 the assistant CLIs without version pinning:
 
 ```bash
-rustup toolchain install 1.96.0 --profile default
-rustup default 1.96.0
+rustup toolchain install 1.97.1 --profile default
+rustup default 1.97.1
 npm install -g @openai/codex @anthropic-ai/claude-code
 ```
 
@@ -285,46 +236,59 @@ old process. That can fail with `Text file busy`.
 ## Release Flow
 
 - GitHub Actions is the only long-term CI/CD control plane.
-- Run `./scripts/release.sh [conary|remi|conaryd|conary-test|all]` to inspect
-  the current release baseline, bump owned versions, update release state, and
-  create canonical tags
-- When the product decision is intentionally different from conventional-commit
-  inference, pass an exact typed target such as
-  `--target remi=0.8.0`. The script validates that the product is selected,
-  the version is an increasing `MAJOR.MINOR.PATCH`, and scoped changes exist.
-- Use `--prepare-only` for an issue-backed release PR that must update and
-  stage multiple product tracks without creating commits or tags before merge.
-- The supported release tracks are:
-  - `conary`
-  - `remi`
-  - `conaryd`
-  - `conary-test`
-- Canonical tag forms are:
-  - `v*` for `conary`
-  - `remi-v*` for `remi`
-  - `conaryd-v*` for `conaryd`
-  - `conary-test-v*` for `conary-test`
-- Historical tag prefixes are not release inputs; only canonical tags participate
-  in version baselines and release routing
-- Push the relevant canonical tags to trigger the GitHub release pipeline
-- GitHub Actions builds release artifacts in `release-build` and serializes the
-  resolved product metadata into the bundle
+- The eight Cargo packages are code-ownership boundaries. The four artifact
+  products are Conary, Remi, conaryd, and conary-test. One suite release owns
+  their shared root `[workspace.package]` version, reviewed commit, tag, and
+  GitHub release. All members inherit `publish = false`; there is no parallel
+  crates.io release track.
+- Run `./scripts/release.sh suite --dry-run` to inspect the next version, or
+  pass an exact decision as `--target MAJOR.MINOR.PATCH`. The target must be an
+  increasing `MAJOR.MINOR.PATCH` version for the complete suite.
+- Run `./scripts/release.sh suite --prepare-only --target VERSION` on the
+  issue-linked release branch. Preparation updates the root version, inherited
+  workspace lock state, Conary native/CCS packaging, generated man page, and
+  suite changelog, but creates no commit or tag.
+- After exact-head CI and review complete, merge the preparation PR and prove
+  local `main`, `origin/main`, and remote `main` agree. Only then create the
+  annotated `vMAJOR.MINOR.PATCH` tag at that reviewed commit and push it. The
+  active `Protect suite tags` ruleset permits creation of `v*` tags but rejects
+  their update or deletion. Live release construction rejects a tag commit
+  that is not reachable from `origin/main` and revalidates the remote tag
+  immediately before draft mutation and publication.
+- Product-prefixed tags remain immutable historical evidence for their exact
+  trees. They are not current baselines, version inputs, or workflow routes.
+- `release-build` constructs all four products from the exact suite tag,
+  serializes their deployment modes in one schema-v1 metadata document with a
+  typed rehearsal boolean, verifies raw and tar identities plus binary
+  versions, generates one complete checksum set, and publishes one GitHub
+  release only after every product bundle succeeds. Repository release
+  immutability is enabled, so publishing the completed draft locks its tag and
+  assets and creates a GitHub release attestation. Released-artifact proof must
+  reject any draft or mutable release; closeout independently runs
+  `gh release verify` and `gh release verify-asset`.
 - `merge-validation` proves the current source tree through deterministic
   source, build, policy, and test checks. It must not probe mutable production
   endpoints, because production continues to serve the previously deployed
   release until the candidate passes this gate and is tagged.
 - `deploy-and-verify` consumes that serialized metadata instead of re-deriving
-  product behavior locally
+  product behavior locally. It deploys and proves Remi first, then stages and
+  proves Conary release assets and static sites from the same suite bundle.
 - Within GitHub Actions, `deploy-and-verify` owns live contract proof after it
   deploys the exact tagged artifact. For Remi this includes both liveness and
   structured fail-closed readiness; independent production verification still
   follows the terminal workflow result.
-- `conary-test` is a supported build-and-release track in this phase, but it
-  intentionally has no deployment lane
-- `deploy-and-verify` performs protected deployment and verification only for
-  deployable products (`conary` and `remi`)
-- The `conaryd` release track is build-and-release only until a replacement
-  staging host exists; its release matrix entry remains `deploy_mode=none`
+- conaryd and conary-test are first-class suite artifacts with explicit
+  `deploy_mode=none`; no runtime deployment job may start for either product.
+- Native builders explicitly disable distro-default debug split packages
+  because the suite defines no debug artifact product. Upload and bundle steps
+  do not filter unexpected native outputs; an extra package fails exact asset
+  validation. The RPM spec also opts out of Fedora's automatic debug-oriented
+  Rust flags, manually reapplies the distro's frame-pointer, package-note, and
+  native dependency flags, and leaves release codegen and stripping to the
+  workspace Cargo profile.
+- Exact-main `deploy-remi-candidate` remains available between suite releases
+  for bounded hard cuts. It creates no tag or release and does not change suite
+  version authority.
 - Release verification is a GitHub workflow concern, not a Forgejo or
   Forge-hosted control-plane concern
 
@@ -336,8 +300,8 @@ old process. That can fail with `Text file busy`.
   starting template
 - For suite layout, phase selection, and manifest-run behavior, use
   [`docs/INTEGRATION-TESTING.md`](../INTEGRATION-TESTING.md)
-- For supported Forge smoke validation, prefer `scripts/forge-smoke.sh` over
-  treating raw `cargo run -p conary-test -- run ...` as the main operator path
+- For conary-test validation, use `cargo run -p conary-test -- list` and the
+  focused `run` commands in `docs/INTEGRATION-TESTING.md`.
 - For assistant and contributor routing, use `AGENTS.md` and
   [`docs/llms/README.md`](../llms/README.md); Git history remains available for
   retired tool-specific context

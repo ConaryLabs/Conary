@@ -191,10 +191,15 @@ async fn assert_additive_shared_directory_rollback(
 
     let mut changeset = Changeset::new(format!("Install {fixture} additions"));
     let changeset_id = changeset.insert(&conn).unwrap();
+    let rollback_snapshot = conary_core::generation::root_manifest::SelectedRootSnapshot::capture(
+        &conn,
+        &rollback_root,
+    )
+    .unwrap();
     let metadata = metadata_with_removed_troves(
         Vec::new(),
         rollback_materialized,
-        rollback_root.clone(),
+        rollback_snapshot,
         rollback_system,
     )
     .unwrap();
@@ -208,8 +213,10 @@ async fn assert_additive_shared_directory_rollback(
         "batch capture must deduplicate one pre-mutation materialization"
     );
     conn.execute(
-        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        params![metadata, changeset_id],
+        "UPDATE changesets
+         SET metadata = ?1, rollback_selected_root_snapshot_id = ?2
+         WHERE id = ?3",
+        params![metadata, rollback_snapshot.id(), changeset_id],
     )
     .unwrap();
     changeset

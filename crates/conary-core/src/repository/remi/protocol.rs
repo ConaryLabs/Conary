@@ -26,6 +26,10 @@ pub struct JobStatus {
 }
 
 /// Exact lifecycle states published by Remi's job-status endpoint.
+///
+/// The wire names are owned by `apps/remi/src/server/handlers/jobs.rs`. A state
+/// outside this set is rejected during deserialization rather than treated as
+/// active work.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ConversionJobState {
@@ -33,6 +37,15 @@ pub enum ConversionJobState {
     Converting,
     Ready,
     Failed,
+}
+
+impl ConversionJobState {
+    /// Every state the shared polling contract admits.
+    ///
+    /// Extend this when Remi publishes a new job state; the contract test
+    /// drives both clients through each entry.
+    #[cfg(test)]
+    pub(super) const ALL: [Self; 4] = [Self::Pending, Self::Converting, Self::Ready, Self::Failed];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,8 +89,8 @@ pub struct ChunkRef {
 /// Shared core logic for Remi clients.
 ///
 /// Handles URL construction, HTTP status mapping, and job status parsing.
-/// Used by both `RemiClient` (sync) and `AsyncRemiClient` (async) to avoid
-/// duplicating these operations.
+/// `RemiClient` owns these operations through this core so that any future
+/// client rebuilds on the same decision authority instead of duplicating it.
 pub(super) struct RemiClientCore {
     pub(super) base_url: String,
     pub(super) poll_interval: Duration,

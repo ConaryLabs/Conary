@@ -319,11 +319,7 @@ fn selected_config_db_path(command: &cli::ConfigCommands) -> &str {
 
 fn selected_distro_db_path(command: &cli::DistroCommands) -> &str {
     match command {
-        cli::DistroCommands::Set { db, .. }
-        | cli::DistroCommands::Remove { db, .. }
-        | cli::DistroCommands::List { db, .. }
-        | cli::DistroCommands::Info { db, .. }
-        | cli::DistroCommands::Mixing { db, .. } => &db.db_path,
+        cli::DistroCommands::List { db, .. } | cli::DistroCommands::Info { db, .. } => &db.db_path,
     }
 }
 
@@ -518,7 +514,8 @@ fn selected_system_db_path(command: &cli::SystemCommands) -> &str {
         | cli::SystemCommands::Sbom { db, .. }
         | cli::SystemCommands::Takeover { db, .. } => &db.db_path,
         cli::SystemCommands::Verify { common, .. }
-        | cli::SystemCommands::Restore { common, .. } => &common.db.db_path,
+        | cli::SystemCommands::Restore { common, .. }
+        | cli::SystemCommands::RepositoryTakeover { common, .. } => &common.db.db_path,
         cli::SystemCommands::DbBackup { command } => selected_db_backup_db_path(command),
         cli::SystemCommands::State(command) => selected_state_db_path(command),
         cli::SystemCommands::Generation(command) => selected_generation_db_path(command),

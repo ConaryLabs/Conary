@@ -58,7 +58,19 @@ impl PreparedNativeTransaction {
                     &event.stdin,
                     event.deb_package_refcount,
                 ),
-            ),
+            )
+            .map(|execution| {
+                if let runtime::EntryExecution::ContinuedAfterFailure(failure) = execution {
+                    self.continued_lifecycle_failures.borrow_mut().push(
+                        super::ContinuedLifecycleFailure {
+                            package: event.owner_package.clone(),
+                            version: event.owner_version.clone(),
+                            entry: entry_id.clone(),
+                            failure: *failure,
+                        },
+                    );
+                }
+            }),
             NativeEventProgram::Command { argv } => executor
                 .execute_native_command("native-transaction-hook", argv, &event.stdin)
                 .map_err(anyhow::Error::from),
@@ -201,6 +213,17 @@ impl PreparedNativeTransaction {
             warn!(error = %error, "Arch implicit ldconfig invocation failed");
         }
         Ok(())
+    }
+
+    /// Drain the lifecycle failures this transaction ran past.
+    ///
+    /// Warn-and-continue is the source format's own posture, not an absence of
+    /// a failure. The transaction keeps each one as typed evidence so the run
+    /// is never reported as an unqualified success.
+    pub(crate) fn take_continued_lifecycle_failures(
+        &self,
+    ) -> Vec<super::ContinuedLifecycleFailure> {
+        std::mem::take(&mut *self.continued_lifecycle_failures.borrow_mut())
     }
 
     pub(crate) fn take_activation_requests(

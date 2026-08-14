@@ -20,7 +20,9 @@ mod config;
 mod execution;
 mod ordering;
 mod preparation;
+mod promises;
 mod relations;
+mod witness_universe;
 
 use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::inner;
@@ -73,6 +75,10 @@ pub struct PreparedPackage {
     pub description: Option<String>,
     /// Exact payload descriptors with independently reopenable content sources.
     pub extracted_files: Vec<PackagePayloadFile>,
+    /// Pre-mutation repository authority derived from authenticated native
+    /// payloads or carried by signed CCS lifecycle authority.
+    pub repository_enrollments:
+        Vec<conary_core::repository::enrollment::PackageRepositoryEnrollmentIntent>,
     /// Exact positive requirement groups declared by the package.
     pub requirements: Vec<conary_core::repository::dependency_model::RepositoryRequirementGroup>,
     /// Exact source-native capabilities declared by the package.
@@ -263,6 +269,28 @@ impl<'a> BatchInstaller<'a> {
         self.install_batch_with_result(packages).map(|_| ())
     }
 
+    /// Run the read-only dependency ordering and relation validation shared
+    /// with [`Self::install_batch`] without materializing a selected root or
+    /// executing lifecycle and payload mutation.
+    pub(crate) fn validate_batch(self, mut packages: Vec<PreparedPackage>) -> Result<()> {
+        if packages.is_empty() {
+            return Ok(());
+        }
+        let conn = open_db(self.db_path)?;
+        self.validate_batch_transaction(&conn, &mut packages)?;
+        Ok(())
+    }
+
+    fn validate_batch_transaction(
+        &self,
+        conn: &Connection,
+        packages: &mut Vec<PreparedPackage>,
+    ) -> Result<promises::PromiseWitnessPlan> {
+        let promise_plan = ordering::order_packages_for_transaction(conn, packages)?;
+        self.plan_package_relations_for_batch(conn, packages)?;
+        Ok(promise_plan)
+    }
+
     pub(crate) fn install_batch_with_result(
         self,
         mut packages: Vec<PreparedPackage>,
@@ -285,8 +313,6 @@ impl<'a> BatchInstaller<'a> {
 
         // Open database connection
         let mut conn = open_db(self.db_path)?;
-        ordering::order_packages_for_transaction(&conn, &mut packages)?;
-        self.plan_package_relations_for_batch(&conn, &mut packages)?;
         // Build transaction description
         let tx_description = if package_count == 1 {
             format!("Install {}-{}", packages[0].name, packages[0].version)
@@ -297,12 +323,18 @@ impl<'a> BatchInstaller<'a> {
                 package_count - 1
             )
         };
-        let mut selected_root =
-            crate::commands::generation::selected_root::SelectedRootSession::begin(
-                &conn,
-                self.db_path,
-                &tx_description,
-            )?;
+
+        // Every fact this transaction certifies is read from installed state:
+        // requirement satisfaction against the end-state universe, promise
+        // reliance, and the negative relation effects of the incoming set. All
+        // of it is read with the runtime mutation lock already held. Certifying
+        // first and locking second would let another transaction remove a
+        // provider this certification relied on, and the database would commit
+        // an end state missing a capability the batch was admitted on.
+        let locked_root =
+            crate::commands::generation::selected_root::LockedRuntimeRoot::acquire(self.db_path)?;
+        let mut promise_plan = self.validate_batch_transaction(&conn, &mut packages)?;
+        let mut selected_root = locked_root.prepare(&conn, &tx_description)?;
         let selected_path = selected_root.selected_root().to_path_buf();
         for package in &mut packages {
             package.normalize_ccs_for_selected_root(&selected_path)?;
@@ -354,28 +386,9 @@ impl<'a> BatchInstaller<'a> {
 
         info!("Started batch transaction for {}", tx_description);
 
-        // Planning began before we waited for the runtime mutation lock. The
-        // selected-root session now owns that lock, so revalidate every exact
-        // relation transition against the serialized database state.
-        for package in &packages {
-            conary_core::transaction::validate_package_relation_transitions(
-                &conn,
-                &package.relation_removals,
-                &package.relation_deconfigurations,
-            )
-            .with_context(|| {
-                format!(
-                    "package relation transaction preflight changed for {}",
-                    package.name
-                )
-            })?;
-        }
-
-        // Phase 1: Unified planning across all packages
-        // Collect all files and detect cross-package conflicts
+        // Phase 1: Unified planning across all packages after selected-root
+        // normalization. Collect all files and detect cross-package conflicts.
         let batch_plan = self.plan_batch(&packages, &conn)?;
-
-        // Check for conflicts
         if !batch_plan.conflicts.is_empty() {
             let conflict_msgs: Vec<String> =
                 batch_plan.conflicts.iter().map(|c| c.to_string()).collect();
@@ -384,12 +397,10 @@ impl<'a> BatchInstaller<'a> {
                 conflict_msgs.join("\n  ")
             ));
         }
-
         info!(
             "Batch plan: {} total files across {} packages",
             batch_plan.total_files, package_count
         );
-
         self.preflight_file_ownership_for_batch(&conn, &packages)?;
 
         // Phase 2: Run exact typed lifecycle events before payload mutation.
@@ -416,6 +427,7 @@ impl<'a> BatchInstaller<'a> {
             &mut selected_root,
             rollback_root,
             &mut ccs_hook_executors,
+            &mut promise_plan,
         );
         let (_changeset_id, trove_ids, _retained_upgrade_trove_ids) = transaction_result?;
 
@@ -496,7 +508,7 @@ impl<'a> BatchInstaller<'a> {
         packages: &[PreparedPackage],
         tx_description: &str,
         tx_uuid: Option<String>,
-        rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
+        rollback_root: conary_core::generation::root_manifest::SelectedRootSnapshot,
     ) -> Result<BatchDbRows> {
         let mut changeset = match tx_uuid {
             Some(tx_uuid) => Changeset::with_tx_uuid(tx_description.to_string(), tx_uuid),

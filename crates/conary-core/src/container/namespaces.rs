@@ -2,7 +2,7 @@
 
 use std::ffi::CStr;
 use std::fs;
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -31,18 +31,6 @@ pub(super) fn fork_process() -> nix::Result<ForkResult> {
     // SAFETY: This is a thin wrapper so callers can keep all fork-specific
     // handling in one place and exercise it in targeted tests.
     unsafe { fork() }
-}
-
-pub(super) fn adopt_raw_fd(raw_fd: RawFd) -> Result<OwnedFd> {
-    if raw_fd < 0 {
-        return Err(Error::scriptlet(
-            ScriptletFailureKind::SandboxSetupUnavailable,
-            format!("invalid stdio fd: {raw_fd}"),
-        ));
-    }
-
-    // SAFETY: The caller hands us ownership of a valid raw file descriptor.
-    Ok(unsafe { OwnedFd::from_raw_fd(raw_fd) })
 }
 
 pub(super) fn sethostname_syscall(hostname: &CStr, len: usize) -> std::io::Result<()> {

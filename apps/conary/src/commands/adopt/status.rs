@@ -77,6 +77,9 @@ pub async fn cmd_adopt_status(
             SystemPackageManager::Pacman => {
                 conary_core::packages::pacman_query::query_all_packages()?.len()
             }
+            SystemPackageManager::Eopkg => {
+                conary_core::packages::eopkg::query::query_all_packages()?.len()
+            }
             _ => 0,
         };
         (count, format!("{:?}", pkg_mgr))

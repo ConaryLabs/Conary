@@ -69,6 +69,12 @@ pub struct TestSuite {
     pub phase: u32,
     pub status: RunStatus,
     pub results: Vec<TestResult>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub corpus_cases: Vec<conary_core::corpus::CorpusCaseResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_release: Option<crate::config::release_root::TargetReleaseEvidence>,
+    #[serde(skip)]
+    corpus_expected: usize,
     pub started_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<DateTime<Utc>>,
@@ -83,6 +89,9 @@ impl TestSuite {
             phase,
             status: RunStatus::Pending,
             results: Vec::new(),
+            corpus_cases: Vec::new(),
+            target_release: None,
+            corpus_expected: 0,
             started_at: Utc::now(),
             finished_at: None,
             unsuccessful_ids: HashSet::new(),
@@ -94,6 +103,18 @@ impl TestSuite {
             self.unsuccessful_ids.insert(result.id.clone());
         }
         self.results.push(result);
+    }
+
+    pub fn record_corpus(&mut self, result: conary_core::corpus::CorpusCaseResult) {
+        self.corpus_cases.push(result);
+    }
+
+    pub fn expect_corpus_cases(&mut self, count: usize) {
+        self.corpus_expected += count;
+    }
+
+    pub fn corpus_expected(&self) -> usize {
+        self.corpus_expected
     }
 
     pub fn has_failed(&self, id: &str) -> bool {
@@ -137,6 +158,22 @@ impl TestSuite {
 
     pub fn total(&self) -> usize {
         self.results.len()
+    }
+
+    pub fn corpus_all_completed(&self) -> bool {
+        self.corpus_cases.len() == self.corpus_expected
+            && conary_core::corpus::aggregate_cases(&self.corpus_cases).all_completed()
+    }
+
+    /// Whether anything in this suite blocks calling the run a success.
+    ///
+    /// One owner for a rule the CLI exit status, the QEMU-only path, and the
+    /// Remi run status all have to agree on.
+    pub fn has_blocking_results(&self) -> bool {
+        self.failed() > 0
+            || self.skipped() > 0
+            || self.cancelled() > 0
+            || !self.corpus_all_completed()
     }
 
     pub fn finish(&mut self) {

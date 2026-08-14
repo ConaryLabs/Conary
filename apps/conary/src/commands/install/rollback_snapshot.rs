@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::{FileEntry, Trove};
-use conary_core::generation::root_manifest::CapturedSelectedRoot;
+use conary_core::generation::root_manifest::SelectedRootSnapshot;
 use conary_core::transaction::PackageRelationRemoval;
 use std::collections::BTreeMap;
 
@@ -18,7 +18,7 @@ pub(super) fn record_install_rollback_snapshots<'a>(
     changeset_id: i64,
     upgraded_troves: impl IntoIterator<Item = &'a Trove>,
     relation_removals: impl IntoIterator<Item = &'a PackageRelationRemoval>,
-    rollback_root: CapturedSelectedRoot,
+    rollback_root: SelectedRootSnapshot,
     materialized_directories: Vec<FileEntry>,
 ) -> Result<()> {
     let mut replaced = BTreeMap::new();
@@ -64,9 +64,12 @@ pub(super) fn record_install_rollback_snapshots<'a>(
     )?;
     let updated = conn.execute(
         "UPDATE changesets
-         SET metadata = ?1
-         WHERE id = ?2 AND metadata IS NULL",
-        rusqlite::params![metadata, changeset_id],
+         SET metadata = ?1,
+             rollback_selected_root_snapshot_id = ?2
+         WHERE id = ?3
+           AND metadata IS NULL
+           AND rollback_selected_root_snapshot_id IS NULL",
+        rusqlite::params![metadata, rollback_root.id(), changeset_id],
     )?;
     if updated != 1 {
         bail!(
@@ -116,24 +119,26 @@ mod tests {
         Changeset, ChangesetStatus, InstalledNativeLifecycleBundle, TroveType,
     };
     use conary_core::generation::root_manifest::{
-        GENERATION_ROOT_MANIFEST_VERSION, GenerationRootManifest, MutableStateManifest,
+        CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootManifest,
+        MutableStateManifest,
     };
     use conary_core::payload::{PayloadNode, PayloadNodeKind, ResolvedPayloadNode};
     use conary_core::repository::dependency_model::DebianMultiArch;
     use conary_core::repository::versioning::VersionScheme;
 
-    fn rollback_root() -> CapturedSelectedRoot {
+    fn rollback_root(conn: &rusqlite::Connection) -> SelectedRootSnapshot {
         let mut root = PayloadNode::regular(0o755);
         root.kind = PayloadNodeKind::Directory;
         root.mode = libc::S_IFDIR | 0o755;
-        CapturedSelectedRoot {
+        let captured = CapturedSelectedRoot {
             generation: GenerationRootManifest {
                 version: GENERATION_ROOT_MANIFEST_VERSION,
                 root: ResolvedPayloadNode::from_numeric_source(root).unwrap(),
                 entries: Vec::new(),
             },
             state: MutableStateManifest::empty(),
-        }
+        };
+        SelectedRootSnapshot::capture(conn, &captured).unwrap()
     }
 
     #[test]
@@ -156,7 +161,7 @@ mod tests {
             changeset_id,
             [&installed],
             std::iter::empty(),
-            rollback_root(),
+            rollback_root(&conn),
             Vec::new(),
         )
         .unwrap();
@@ -222,7 +227,7 @@ mod tests {
             changeset_id,
             [&installed],
             std::iter::empty(),
-            rollback_root(),
+            rollback_root(&conn),
             Vec::new(),
         )
         .unwrap();

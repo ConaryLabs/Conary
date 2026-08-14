@@ -10,6 +10,7 @@ use conary_core::db::models::{InstalledCcsRemoveHook, InstalledNativeLifecycleBu
 use conary_core::packages::PackageFormat;
 use conary_core::packages::arch::ArchPackage;
 use conary_core::packages::deb::DebPackage;
+use conary_core::packages::native_abi::RpmScriptletSlot;
 use conary_core::packages::rpm::RpmPackage;
 use serde::Serialize;
 use std::path::Path;
@@ -86,7 +87,9 @@ struct BundleQuerySummary {
 #[derive(Debug, Serialize)]
 struct EntryQuerySummary {
     id: String,
-    native_slot: String,
+    /// The exact persisted typed slot class string, when the entry declares
+    /// one.
+    native_slot: Option<String>,
     phase: String,
     lifecycle_paths: Vec<String>,
     interpreter: String,
@@ -186,6 +189,9 @@ fn print_native_scriptlets(
         PackageFormatType::Rpm => Box::new(RpmPackage::parse(package_path)?),
         PackageFormatType::Deb => Box::new(DebPackage::parse(package_path)?),
         PackageFormatType::Arch => Box::new(ArchPackage::parse(package_path)?),
+        PackageFormatType::Eopkg => Box::new(conary_core::packages::eopkg::EopkgPackage::parse(
+            package_path,
+        )?),
     };
 
     let scriptlets = package.native_scriptlet_abi();
@@ -518,7 +524,10 @@ fn bundle_summary(bundle: &NativeLifecycleBundle) -> BundleQuerySummary {
 fn entry_summary(entry: &NativeLifecycleEntry) -> EntryQuerySummary {
     EntryQuerySummary {
         id: entry.id.clone(),
-        native_slot: entry.native_slot.clone(),
+        native_slot: entry
+            .native_slot
+            .map(RpmScriptletSlot::as_str)
+            .map(str::to_string),
         phase: entry.phase.as_str().to_string(),
         lifecycle_paths: entry.lifecycle_paths.clone(),
         interpreter: entry.interpreter.clone(),

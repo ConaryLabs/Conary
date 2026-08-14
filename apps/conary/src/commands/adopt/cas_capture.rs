@@ -1,12 +1,13 @@
 // apps/conary/src/commands/adopt/cas_capture.rs
 
+use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::FileEntry;
-use conary_core::filesystem::CasStore;
+use conary_core::filesystem::PrivateCasWriter;
 use conary_core::payload::{PayloadContentAuthority, PayloadNodeKind, ResolvedPayloadNode};
 
 use super::FileInfoTuple;
@@ -23,6 +24,42 @@ pub(crate) struct CapturedAdoptionFile {
     pub(crate) content: Option<PayloadContentAuthority>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct HardlinkKey {
+    device: u64,
+    inode: u64,
+}
+
+struct CapturedFile {
+    file: CapturedAdoptionFile,
+    hardlink_key: Option<HardlinkKey>,
+}
+
+/// Path-indexed authority from one complete selected-root capture.
+pub(crate) struct SelectedRootPayloadIndex {
+    entries: BTreeMap<String, (ResolvedPayloadNode, Option<PayloadContentAuthority>)>,
+}
+
+impl SelectedRootPayloadIndex {
+    pub(crate) fn new(
+        captured: &conary_core::generation::root_manifest::CapturedSelectedRoot,
+    ) -> Self {
+        let entries = captured
+            .generation
+            .entries
+            .iter()
+            .chain(&captured.state.entries)
+            .map(|entry| {
+                (
+                    entry.path.clone(),
+                    (entry.node.clone(), entry.content.clone()),
+                )
+            })
+            .collect();
+        Self { entries }
+    }
+}
+
 impl CapturedAdoptionFile {
     pub(crate) fn file_entry(&self, trove_id: i64) -> FileEntry {
         FileEntry::new(
@@ -37,9 +74,9 @@ impl CapturedAdoptionFile {
 pub(crate) fn capture_package_files(
     package_name: &str,
     files: &[FileInfoTuple],
-    cas: Option<&CasStore>,
+    cas: Option<&dyn PrivateCasWriter>,
 ) -> Result<Vec<CapturedAdoptionFile>> {
-    let captured = files
+    let mut captured = files
         .iter()
         .map(|file| {
             capture_file(file, cas).map_err(|error| {
@@ -49,8 +86,52 @@ pub(crate) fn capture_package_files(
                 )
             })
         })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(captured.into_iter().flatten().collect())
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    bind_package_hardlinks(&mut captured)?;
+    Ok(captured.into_iter().map(|captured| captured.file).collect())
+}
+
+/// Bind package declarations to a previously captured complete root.
+///
+/// Only paths intentionally absent from that capture (runtime exclusions and
+/// ephemeral domains) are read separately. This keeps the selected-root scan
+/// as the sole byte read for ordinary package-owned paths.
+pub(crate) fn capture_package_files_from_selected_root(
+    package_name: &str,
+    files: &[FileInfoTuple],
+    selected_root: &SelectedRootPayloadIndex,
+    cas: &dyn PrivateCasWriter,
+) -> Result<Vec<CapturedAdoptionFile>> {
+    let mut captured = files
+        .iter()
+        .map(|file| {
+            let path = Path::new(&file.0);
+            if is_selected_root_anchor(path) || permitted_native_absence(file, path) {
+                return Ok(None);
+            }
+            if let Some((node, content)) = selected_root.entries.get(&file.0) {
+                return Ok(Some(CapturedFile {
+                    file: CapturedAdoptionFile {
+                        source: file.clone(),
+                        node: node.clone(),
+                        content: content.clone(),
+                    },
+                    hardlink_key: None,
+                }));
+            }
+            capture_file(file, Some(cas))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    bind_package_hardlinks(&mut captured).map_err(|error| {
+        anyhow!("package {package_name} has invalid excluded-path hardlink authority: {error}")
+    })?;
+    Ok(captured.into_iter().map(|captured| captured.file).collect())
 }
 
 pub(crate) fn validate_package_files(package_name: &str, files: &[FileInfoTuple]) -> Result<()> {
@@ -67,8 +148,8 @@ pub(crate) fn validate_package_files(package_name: &str, files: &[FileInfoTuple]
 
 fn capture_file(
     file: &FileInfoTuple,
-    cas: Option<&CasStore>,
-) -> Result<Option<CapturedAdoptionFile>> {
+    cas: Option<&dyn PrivateCasWriter>,
+) -> Result<Option<CapturedFile>> {
     let path = Path::new(&file.0);
     if is_selected_root_anchor(path) {
         return Ok(None);
@@ -79,27 +160,79 @@ fn capture_file(
     let node = conary_core::generation::root_manifest::capture_existing_payload_node(path)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("failed to capture exact node {}", file.0))?;
-    let content = if matches!(node.source.kind, PayloadNodeKind::Regular { .. }) {
-        let bytes = read_regular_without_following(path)?;
+    let (content, hardlink_key) = if matches!(node.source.kind, PayloadNodeKind::Regular { .. }) {
+        let (bytes, hardlink_key) = read_regular_without_following(path)?;
         let sha256 = if let Some(cas) = cas {
             cas.store_private_copy(&bytes)
                 .with_context(|| format!("failed to store {} in private CAS", file.0))?
         } else {
             conary_core::hash::sha256(&bytes)
         };
-        Some(PayloadContentAuthority {
-            sha256,
-            size: bytes.len() as u64,
-        })
+        (
+            Some(PayloadContentAuthority {
+                sha256,
+                size: bytes.len() as u64,
+            }),
+            hardlink_key,
+        )
     } else {
-        None
+        (None, None)
     };
     node.source.validate_content(content.as_ref())?;
-    Ok(Some(CapturedAdoptionFile {
-        source: file.clone(),
-        node,
-        content,
+    Ok(Some(CapturedFile {
+        file: CapturedAdoptionFile {
+            source: file.clone(),
+            node,
+            content,
+        },
+        hardlink_key,
     }))
+}
+
+fn bind_package_hardlinks(captured: &mut [CapturedFile]) -> Result<()> {
+    let mut groups = BTreeMap::<HardlinkKey, Vec<usize>>::new();
+    for (index, captured) in captured.iter().enumerate() {
+        if let Some(key) = captured.hardlink_key {
+            groups.entry(key).or_default().push(index);
+        }
+    }
+    for indices in groups.values_mut().filter(|indices| indices.len() > 1) {
+        indices.sort_by(|left, right| {
+            captured[*left]
+                .file
+                .source
+                .0
+                .cmp(&captured[*right].file.source.0)
+        });
+        let target = captured[indices[0]].file.source.0.clone();
+        let identity_input = indices
+            .iter()
+            .map(|index| captured[*index].file.source.0.as_str())
+            .collect::<Vec<_>>()
+            .join("\0");
+        let identity = format!(
+            "adopted-hardlink:sha256:{}",
+            conary_core::hash::sha256(identity_input.as_bytes())
+        );
+        captured[indices[0]].file.node.source.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity.clone()),
+        };
+        let primary = &captured[indices[0]].file;
+        primary
+            .node
+            .source
+            .validate_content(primary.content.as_ref())?;
+        for index in indices.iter().skip(1) {
+            let file = &mut captured[*index].file;
+            file.node.source.kind = PayloadNodeKind::Hardlink {
+                target: target.clone(),
+                identity: identity.clone(),
+            };
+            file.content = None;
+            file.node.source.validate_content(None)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_file(file: &FileInfoTuple) -> Result<()> {
@@ -139,7 +272,7 @@ fn permitted_native_absence(file: &FileInfoTuple, path: &Path) -> bool {
     )
 }
 
-fn read_regular_without_following(path: &Path) -> Result<Vec<u8>> {
+fn read_regular_without_following(path: &Path) -> Result<(Vec<u8>, Option<HardlinkKey>)> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -162,7 +295,17 @@ fn read_regular_without_following(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .with_context(|| format!("failed to read regular file {}", path.display()))?;
-    Ok(bytes)
+    #[cfg(unix)]
+    let hardlink_key = {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.nlink() > 1).then_some(HardlinkKey {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    };
+    #[cfg(not(unix))]
+    let hardlink_key = None;
+    Ok((bytes, hardlink_key))
 }
 
 #[cfg(test)]
@@ -273,6 +416,53 @@ mod tests {
     }
 
     #[test]
+    fn complete_adoption_binds_package_to_captured_root_without_rereading_path() {
+        use conary_core::generation::root_manifest::{
+            CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry,
+            GenerationRootManifest, MutableStateManifest,
+        };
+
+        let tmp = tempdir_in_target();
+        let source = tmp.path().join("selected-root-source");
+        std::fs::write(&source, b"captured bytes").unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let source_arg = source.strip_prefix(&cwd).unwrap().to_str().unwrap();
+        let node =
+            conary_core::generation::root_manifest::capture_existing_payload_node(&source).unwrap();
+        let content = PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(b"captured bytes"),
+            size: 14,
+        };
+        let captured_root = CapturedSelectedRoot {
+            generation: GenerationRootManifest {
+                version: GENERATION_ROOT_MANIFEST_VERSION,
+                root: conary_core::generation::root_manifest::capture_root_node(&cwd).unwrap(),
+                entries: vec![GenerationRootEntry {
+                    path: source_arg.to_string(),
+                    node: node.clone(),
+                    content: Some(content.clone()),
+                }],
+            },
+            state: MutableStateManifest::empty(),
+        };
+        let index = SelectedRootPayloadIndex::new(&captured_root);
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        std::fs::remove_file(&source).unwrap();
+
+        let captured = capture_package_files_from_selected_root(
+            "fixture",
+            &[file_tuple(source_arg, 14, 0o100644, None, None)],
+            &index,
+            &cas,
+        )
+        .unwrap();
+
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].node, node);
+        assert_eq!(captured[0].content.as_ref(), Some(&content));
+    }
+
+    #[test]
     #[cfg(unix)]
     fn full_adoption_regular_file_uses_private_cas_inode() {
         use std::os::unix::fs::MetadataExt;
@@ -305,6 +495,51 @@ mod tests {
             std::fs::metadata(&cas_path).unwrap().ino(),
             "live full adoption must not share an inode with mutable source files"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn full_adoption_captures_package_hardlink_topology() {
+        let tmp = tempdir_in_target();
+        let primary = tmp.path().join("hardlink-a");
+        let secondary = tmp.path().join("hardlink-b");
+        std::fs::write(&primary, b"shared inode bytes").unwrap();
+        std::fs::hard_link(&primary, &secondary).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let primary_arg = primary.strip_prefix(&cwd).unwrap().to_str().unwrap();
+        let secondary_arg = secondary.strip_prefix(&cwd).unwrap().to_str().unwrap();
+
+        let captured = capture_package_files(
+            "fixture",
+            &[
+                file_tuple(secondary_arg, 18, 0o100644, None, None),
+                file_tuple(primary_arg, 18, 0o100644, None, None),
+            ],
+            None,
+        )
+        .unwrap();
+
+        let primary = captured
+            .iter()
+            .find(|file| file.source.0 == primary_arg)
+            .unwrap();
+        let secondary = captured
+            .iter()
+            .find(|file| file.source.0 == secondary_arg)
+            .unwrap();
+        let PayloadNodeKind::Regular {
+            hardlink_identity: Some(primary_identity),
+        } = &primary.node.source.kind
+        else {
+            panic!("lexicographically first package hardlink is not the primary");
+        };
+        let PayloadNodeKind::Hardlink { target, identity } = &secondary.node.source.kind else {
+            panic!("second package hardlink is not typed as a hardlink");
+        };
+        assert_eq!(target, primary_arg);
+        assert_eq!(identity, primary_identity);
+        assert!(primary.content.is_some());
+        assert!(secondary.content.is_none());
     }
 
     #[test]

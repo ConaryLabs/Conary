@@ -259,6 +259,8 @@ const fn capability_kind_name(kind: RepositoryCapabilityKind) -> &'static str {
         RepositoryCapabilityKind::Path => "path",
         RepositoryCapabilityKind::Binary => "binary",
         RepositoryCapabilityKind::PkgConfig => "pkgconfig",
+        RepositoryCapabilityKind::PkgConfig32 => "pkgconfig32",
+        RepositoryCapabilityKind::Comar => "comar",
         RepositoryCapabilityKind::Generic => "generic",
     }
 }

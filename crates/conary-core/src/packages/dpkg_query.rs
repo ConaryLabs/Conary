@@ -13,9 +13,9 @@ use crate::packages::query_common::{
     InstalledFileAbsencePolicy, InstalledFileInfo, InstalledPackageRecord, run_query_command,
 };
 use crate::repository::dependency_model::{
-    CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
-    RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,
-    SourcePackageFormat,
+    CapabilityProvenance, DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
+    ProvidedCapability, RepositoryCapabilityKind, RepositoryRequirementGroup,
+    RepositoryRequirementKind, SourcePackageFormat,
 };
 use crate::repository::requirement::parse_native_requirement;
 use crate::repository::versioning::VersionScheme;
@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use tracing::debug;
 
-const DPKG_PACKAGE_RECORD_FORMAT: &str = "${binary:Package}\x1e${Package}\x1e${Version}\x1e${Architecture}\x1e${Description}\x1e${Maintainer}\x1e${Homepage}\x1e${Section}\x1e${Priority}\x1e${Installed-Size}\x1f";
+const DPKG_PACKAGE_RECORD_FORMAT: &str = "${binary:Package}\x1e${Package}\x1e${Version}\x1e${Architecture}\x1e${Description}\x1e${Maintainer}\x1e${Homepage}\x1e${Section}\x1e${Priority}\x1e${Installed-Size}\x1e${Multi-Arch}\x1f";
 
 /// Information about an installed dpkg package
 #[derive(Debug, Clone)]
@@ -100,14 +100,20 @@ fn parse_package_query_records(
         .enumerate()
         .map(|(index, record)| {
             let parts = record.split('\x1e').collect::<Vec<_>>();
-            if parts.len() != 10 {
+            if parts.len() != 11 {
                 return Err(Error::ParseError(format!(
-                    "dpkg inventory record {} has {} fields; expected exactly 10",
+                    "dpkg inventory record {} has {} fields; expected exactly 11",
                     index + 1,
                     parts.len()
                 )));
             }
-            let identity = InstalledPackageIdentity::dpkg(parts[0], parts[1], parts[2], parts[3])?;
+            let multi_arch = if parts[10].is_empty() {
+                DebianMultiArch::No
+            } else {
+                DebianMultiArch::parse_exact(parts[10]).map_err(Error::ParseError)?
+            };
+            let identity =
+                InstalledPackageIdentity::dpkg(parts[0], parts[1], parts[2], parts[3], multi_arch)?;
             if !selectors.insert(identity.selector().to_string()) {
                 return Err(Error::ConflictError(format!(
                     "dpkg inventory repeated exact binary package selector '{}'",
@@ -743,8 +749,8 @@ mod tests {
 
     #[test]
     fn package_query_records_preserve_multiline_descriptions_and_variants() {
-        let output = "fixture:amd64\x1efixture\x1e1.2.3\x1eamd64\x1efirst line\nsecond line\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1f\
-                      fixture:arm64\x1efixture\x1e1.2.3\x1earm64\x1edescription\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1f";
+        let output = "fixture:amd64\x1efixture\x1e1.2.3\x1eamd64\x1efirst line\nsecond line\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1esame\x1f\
+                      fixture:arm64\x1efixture\x1e1.2.3\x1earm64\x1edescription\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1e\x1f";
         let records = parse_package_query_records(output).unwrap();
 
         assert_eq!(records.len(), 2);
@@ -753,6 +759,14 @@ mod tests {
             Some("first line\nsecond line")
         );
         assert_eq!(records[1].info.arch, "arm64");
+        assert_eq!(
+            records[0].identity.debian_multi_arch(),
+            Some(DebianMultiArch::Same)
+        );
+        assert_eq!(
+            records[1].identity.debian_multi_arch(),
+            Some(DebianMultiArch::No)
+        );
         assert_eq!(records[0].identity.selector(), "fixture:amd64");
         assert_eq!(records[1].identity.selector(), "fixture:arm64");
     }
@@ -761,14 +775,28 @@ mod tests {
     fn package_inventory_rejects_malformed_or_duplicate_records() {
         assert!(parse_package_query_records("missing-fields\x1f").is_err());
 
-        let record = "fixture:amd64\x1efixture\x1e1.2.3\x1eamd64\x1edescription\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1f";
+        let record = "fixture:amd64\x1efixture\x1e1.2.3\x1eamd64\x1edescription\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1eno\x1f";
         assert!(parse_package_query_records(&format!("{record}{record}")).is_err());
+
+        let unknown_multi_arch = "fixture:amd64\x1efixture\x1e1.2.3\x1eamd64\x1edescription\x1emaintainer\x1ehttps://example.invalid\x1eutils\x1eoptional\x1e42\x1esometimes\x1f";
+        let error = parse_package_query_records(unknown_multi_arch).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid Debian Multi-Arch value")
+        );
     }
 
     #[test]
     fn installed_provides_preserve_debian_versions_and_architecture_qualifiers() {
-        let identity =
-            InstalledPackageIdentity::dpkg("fixture:amd64", "fixture", "2:1.4-3", "amd64").unwrap();
+        let identity = InstalledPackageIdentity::dpkg(
+            "fixture:amd64",
+            "fixture",
+            "2:1.4-3",
+            "amd64",
+            DebianMultiArch::Foreign,
+        )
+        .unwrap();
         let provides = parse_dpkg_provide_record(
             &identity,
             "fixture:amd64\x1efixture\x1e2:1.4-3\x1email-api:any (= 2), helper:arm64",
@@ -792,8 +820,14 @@ mod tests {
 
     #[test]
     fn installed_provides_reject_identity_drift() {
-        let identity =
-            InstalledPackageIdentity::dpkg("fixture:amd64", "fixture", "1", "amd64").unwrap();
+        let identity = InstalledPackageIdentity::dpkg(
+            "fixture:amd64",
+            "fixture",
+            "1",
+            "amd64",
+            DebianMultiArch::No,
+        )
+        .unwrap();
         assert!(
             parse_dpkg_provide_record(&identity, "fixture:amd64\x1efixture\x1e2\x1email-api")
                 .is_err()

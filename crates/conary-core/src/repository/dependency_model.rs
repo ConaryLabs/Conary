@@ -3,7 +3,7 @@
 //! Native repository dependency model.
 //!
 //! Normalized representation of dependencies and capabilities as they appear in
-//! RPM, Debian, and Arch repository metadata.  The types here capture the full
+//! RPM, Debian, Arch, and eopkg repository metadata. The types here capture the full
 //! native semantics (alternatives, conditional markers, separate provide
 //! versions) without collapsing them into a lowest-common-denominator string.
 //!
@@ -14,96 +14,12 @@
 //!   package requirements.
 //! - Treat alternatives (`A | B`) as first-class groups, not flattened strings.
 
+pub use super::dependency_source::{
+    CapabilityProvenance, RepositoryDependencyFlavor, SourcePackageFormat,
+};
 use super::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-
-/// Source package format that established a signed or persisted capability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SourcePackageFormat {
-    Rpm,
-    Debian,
-    Alpm,
-    Ccs,
-}
-
-impl SourcePackageFormat {
-    #[must_use]
-    pub const fn version_scheme(self) -> VersionScheme {
-        match self {
-            Self::Rpm => VersionScheme::Rpm,
-            Self::Debian => VersionScheme::Debian,
-            Self::Alpm => VersionScheme::Arch,
-            Self::Ccs => VersionScheme::Conary,
-        }
-    }
-
-    /// Exact source format that owns package identity under `scheme`.
-    ///
-    /// Inverse of [`Self::version_scheme`]. A capability's provenance format and
-    /// its version scheme are one fact, so a consumer holding either recovers
-    /// the other instead of restating the pairing.
-    #[must_use]
-    pub const fn for_version_scheme(scheme: VersionScheme) -> Self {
-        match scheme {
-            VersionScheme::Rpm => Self::Rpm,
-            VersionScheme::Debian => Self::Debian,
-            VersionScheme::Arch => Self::Alpm,
-            VersionScheme::Conary => Self::Ccs,
-        }
-    }
-}
-
-/// Why a capability exists. Exact package identity is deliberately distinct
-/// from every declared or derived capability.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "role", rename_all = "kebab-case")]
-pub enum CapabilityProvenance {
-    ExactIdentity,
-    AuthorDeclared,
-    SourceDeclared {
-        format: SourcePackageFormat,
-        record_index: u32,
-    },
-    SourceDerivedFile {
-        format: SourcePackageFormat,
-        source_path: String,
-    },
-}
-
-// ---------------------------------------------------------------------------
-// Exact source profile
-// ---------------------------------------------------------------------------
-
-/// Which native ecosystem a dependency originates from.
-///
-/// This is intentionally parallel to [`VersionScheme`] but is used to tag
-/// dependency entries rather than version strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum RepositoryDependencyFlavor {
-    /// Conary-native package metadata and version ordering.
-    Conary,
-    /// RPM-based (Fedora, RHEL, openSUSE, etc.)
-    Rpm,
-    /// Debian-based (Debian, Ubuntu, etc.)
-    Deb,
-    /// Arch Linux / ALPM-based
-    Arch,
-}
-
-impl RepositoryDependencyFlavor {
-    /// Return the corresponding version comparison scheme.
-    #[must_use]
-    pub fn version_scheme(self) -> VersionScheme {
-        match self {
-            Self::Conary => VersionScheme::Conary,
-            Self::Rpm => VersionScheme::Rpm,
-            Self::Deb => VersionScheme::Debian,
-            Self::Arch => VersionScheme::Arch,
-        }
-    }
-}
+use std::collections::{BTreeMap, BTreeSet};
 
 // ---------------------------------------------------------------------------
 // Capability kinds
@@ -126,6 +42,10 @@ pub enum RepositoryCapabilityKind {
     Binary,
     /// A pkg-config module capability.
     PkgConfig,
+    /// A 32-bit pkg-config module capability in eopkg metadata.
+    PkgConfig32,
+    /// A COMAR component capability retained from eopkg metadata.
+    Comar,
     /// Anything that does not fit the above categories.
     Generic,
 }
@@ -342,6 +262,7 @@ impl ProvidedCapability {
             }
             CapabilityProvenance::SourceDeclared { format, .. }
             | CapabilityProvenance::SourceDerivedFile { format, .. }
+            | CapabilityProvenance::SourcePromisedPath { format, .. }
                 if format.version_scheme() != self.version_scheme =>
             {
                 return Err(crate::error::Error::ParseError(format!(
@@ -349,17 +270,76 @@ impl ProvidedCapability {
                     self.name
                 )));
             }
-            CapabilityProvenance::SourceDerivedFile { source_path, .. }
-                if self.kind != RepositoryCapabilityKind::File || !source_path.starts_with('/') =>
+            // Both path-owning provenances name the path through the capability
+            // itself, so the one absolute-path-and-file-kind rule covers both.
+            CapabilityProvenance::SourceDerivedFile { .. }
+            | CapabilityProvenance::SourcePromisedPath { .. }
+                if self.kind != RepositoryCapabilityKind::File || !self.name.starts_with('/') =>
             {
-                return Err(crate::error::Error::ParseError(
-                    "source-derived file capability requires a file kind and absolute source path"
-                        .to_string(),
-                ));
+                return Err(crate::error::Error::ParseError(format!(
+                    "source path capability '{}' requires a file kind and an absolute path name",
+                    self.name
+                )));
+            }
+            // A promise states that a path will exist, never what it contains.
+            CapabilityProvenance::SourcePromisedPath { .. } if self.version.is_some() => {
+                return Err(crate::error::Error::ParseError(format!(
+                    "promised path capability '{}' cannot carry a provider version",
+                    self.name
+                )));
             }
             _ => {}
         }
         Ok(())
+    }
+
+    /// Exact source-derived provider for a path the package ships.
+    #[must_use]
+    pub fn payload_file(format: SourcePackageFormat, path: &str) -> Self {
+        Self {
+            kind: RepositoryCapabilityKind::File,
+            name: path.to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: format.version_scheme(),
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDerivedFile { format },
+        }
+    }
+
+    /// Exact provider for a path the package owns but materializes at install
+    /// time rather than shipping.
+    #[must_use]
+    pub fn promised_path(format: SourcePackageFormat, path: &str) -> Self {
+        Self {
+            kind: RepositoryCapabilityKind::File,
+            name: path.to_string(),
+            version: None,
+            version_relation: None,
+            version_scheme: format.version_scheme(),
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourcePromisedPath { format },
+        }
+    }
+
+    /// Whether this capability is a promise that a path will exist rather than
+    /// a statement that the package ships it.
+    #[must_use]
+    pub const fn is_promised_path(&self) -> bool {
+        matches!(
+            self.provenance,
+            CapabilityProvenance::SourcePromisedPath { .. }
+        )
+    }
+
+    /// Whether a consumer may read installed content through this capability.
+    ///
+    /// Dependency resolution asks only whether a provider exists, so it must
+    /// not call this. Any check that reads, hashes, or verifies the file behind
+    /// a capability must, because a promised path has no content to read.
+    #[must_use]
+    pub const fn witnesses_installed_content(&self) -> bool {
+        !self.is_promised_path()
     }
 }
 
@@ -379,11 +359,33 @@ pub fn extend_materialized_file_provides<'a>(
     format: SourcePackageFormat,
     paths: impl IntoIterator<Item = &'a str>,
 ) -> crate::error::Result<()> {
+    extend_path_ownership(provides, format, paths, false)
+}
+
+/// Add the paths a package owns but materializes at install time.
+///
+/// The promise is what makes a native file dependency solvable against a
+/// package that ships no content for the path. It never states that content
+/// exists; see [`ProvidedCapability::witnesses_installed_content`].
+pub fn extend_promised_path_provides<'a>(
+    provides: &mut Vec<ProvidedCapability>,
+    format: SourcePackageFormat,
+    paths: impl IntoIterator<Item = &'a str>,
+) -> crate::error::Result<()> {
+    extend_path_ownership(provides, format, paths, true)
+}
+
+fn extend_path_ownership<'a>(
+    provides: &mut Vec<ProvidedCapability>,
+    format: SourcePackageFormat,
+    paths: impl IntoIterator<Item = &'a str>,
+    promised: bool,
+) -> crate::error::Result<()> {
     let mut existing = provides
         .iter()
         .filter(|provide| provide.kind == RepositoryCapabilityKind::File)
-        .map(|provide| provide.name.clone())
-        .collect::<BTreeSet<_>>();
+        .map(|provide| (provide.name.clone(), provide.is_promised_path()))
+        .collect::<BTreeMap<_, _>>();
 
     for path in paths.into_iter().collect::<BTreeSet<_>>() {
         if path == "/" {
@@ -394,20 +396,21 @@ pub fn extend_materialized_file_provides<'a>(
                 "materialized package file provider is not an absolute path: {path:?}"
             )));
         }
-        if !existing.insert(path.to_string()) {
-            continue;
+        match existing.insert(path.to_string(), promised) {
+            // Shipping a path and promising to create it are contradictory
+            // claims about the same path, so one package can only make one.
+            Some(previous) if previous != promised => {
+                return Err(crate::error::Error::ParseError(format!(
+                    "package path {path:?} is declared both as shipped payload and as a promised path"
+                )));
+            }
+            Some(_) => continue,
+            None => {}
         }
-        let provide = ProvidedCapability {
-            kind: RepositoryCapabilityKind::File,
-            name: path.to_string(),
-            version: None,
-            version_relation: None,
-            version_scheme: format.version_scheme(),
-            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-            provenance: CapabilityProvenance::SourceDerivedFile {
-                format,
-                source_path: path.to_string(),
-            },
+        let provide = if promised {
+            ProvidedCapability::promised_path(format, path)
+        } else {
+            ProvidedCapability::payload_file(format, path)
         };
         provide.validate()?;
         provides.push(provide);
@@ -853,219 +856,5 @@ impl RepositoryRequirementGroup {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dependency_flavor_maps_to_version_scheme() {
-        assert_eq!(
-            RepositoryDependencyFlavor::Rpm.version_scheme(),
-            VersionScheme::Rpm
-        );
-        assert_eq!(
-            RepositoryDependencyFlavor::Deb.version_scheme(),
-            VersionScheme::Debian
-        );
-        assert_eq!(
-            RepositoryDependencyFlavor::Arch.version_scheme(),
-            VersionScheme::Arch
-        );
-    }
-
-    #[test]
-    fn simple_requirement_group_is_simple() {
-        let group = RepositoryRequirementGroup::simple(
-            RepositoryRequirementKind::Depends,
-            RepositoryRequirementClause::name_only("glibc".to_string()),
-        );
-        assert!(group.is_simple());
-        assert_eq!(group.behavior, ConditionalRequirementBehavior::Hard);
-    }
-
-    #[test]
-    fn alternative_group_has_multiple_clauses() {
-        let group = RepositoryRequirementGroup::alternatives(
-            RepositoryRequirementKind::Depends,
-            vec![
-                RepositoryRequirementClause::name_only("default-mta".to_string()),
-                RepositoryRequirementClause::name_only("mail-transport-agent".to_string()),
-            ],
-        );
-        assert!(!group.is_simple());
-        assert_eq!(group.alternatives.len(), 2);
-    }
-
-    #[test]
-    fn optional_group_carries_description() {
-        let group = RepositoryRequirementGroup::optional(
-            RepositoryRequirementClause::name_only("fzf".to_string()),
-            Some("fuzzy finder for interactive use".to_string()),
-        );
-        assert_eq!(group.kind, RepositoryRequirementKind::Optional);
-        assert!(group.description.is_some());
-    }
-
-    #[test]
-    fn conditional_behavior_round_trips() {
-        let group = RepositoryRequirementGroup::simple(
-            RepositoryRequirementKind::Depends,
-            RepositoryRequirementClause::versioned("systemd".to_string(), ">= 255".to_string()),
-        )
-        .with_behavior(ConditionalRequirementBehavior::Conditional)
-        .with_native_text("(systemd >= 255 if systemd-resolved)".to_string());
-
-        assert_eq!(group.behavior, ConditionalRequirementBehavior::Conditional);
-        assert_eq!(
-            group.native_text.as_deref(),
-            Some("(systemd >= 255 if systemd-resolved)")
-        );
-    }
-
-    #[test]
-    fn provide_constructors_set_correct_kind() {
-        let pkg = RepositoryProvide::package_name("bash".to_string(), Some("5.2-1".to_string()));
-        assert_eq!(pkg.kind, RepositoryCapabilityKind::PackageName);
-
-        let virt = RepositoryProvide::virtual_cap("java-runtime".to_string(), None);
-        assert_eq!(virt.kind, RepositoryCapabilityKind::Virtual);
-
-        let so = RepositoryProvide::soname("libc.so.6".to_string(), None);
-        assert_eq!(so.kind, RepositoryCapabilityKind::Soname);
-
-        let file = RepositoryProvide::file("/usr/bin/python3".to_string());
-        assert_eq!(file.kind, RepositoryCapabilityKind::File);
-        assert!(file.version.is_none());
-    }
-
-    #[test]
-    fn versioned_clause_stores_constraint() {
-        let clause =
-            RepositoryRequirementClause::versioned("libc6".to_string(), ">= 2.34".to_string());
-        assert_eq!(clause.version_constraint.as_deref(), Some(">= 2.34"));
-        assert!(clause.capability_kind.is_none());
-    }
-
-    #[test]
-    fn capability_validation_rejects_malformed_provenance_and_architecture() {
-        let mut capability = ProvidedCapability {
-            kind: RepositoryCapabilityKind::File,
-            name: "/usr/bin/tool".to_string(),
-            version: None,
-            version_relation: None,
-            version_scheme: VersionScheme::Arch,
-            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-            provenance: CapabilityProvenance::SourceDerivedFile {
-                format: SourcePackageFormat::Alpm,
-                source_path: "usr/bin/tool".to_string(),
-            },
-        };
-        assert!(capability.validate().is_err());
-
-        capability.provenance = CapabilityProvenance::AuthorDeclared;
-        capability.architecture_qualifier = ProvideArchitectureQualifier::Exact(String::new());
-        assert!(capability.validate().is_err());
-    }
-
-    #[test]
-    fn every_materialized_file_provider_validates_under_its_source_format() {
-        for format in [
-            SourcePackageFormat::Rpm,
-            SourcePackageFormat::Debian,
-            SourcePackageFormat::Alpm,
-            SourcePackageFormat::Ccs,
-        ] {
-            let mut provides = Vec::new();
-            extend_materialized_file_provides(
-                &mut provides,
-                format,
-                ["/usr/bin/sh", "/usr/share/doc/tool/README", "/"],
-            )
-            .unwrap();
-
-            assert_eq!(
-                provides
-                    .iter()
-                    .map(|provide| provide.name.as_str())
-                    .collect::<Vec<_>>(),
-                vec!["/usr/bin/sh", "/usr/share/doc/tool/README"],
-                "the root directory is not a file provider"
-            );
-            for provide in &provides {
-                provide.validate().unwrap();
-                assert_eq!(provide.kind, RepositoryCapabilityKind::File);
-                assert_eq!(provide.version_scheme, format.version_scheme());
-                assert_eq!(
-                    provide.provenance,
-                    CapabilityProvenance::SourceDerivedFile {
-                        format,
-                        source_path: provide.name.clone(),
-                    }
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn materialized_file_providers_never_duplicate_a_declared_path() {
-        let mut provides = vec![ProvidedCapability {
-            kind: RepositoryCapabilityKind::File,
-            name: "/usr/bin/sh".to_string(),
-            version: None,
-            version_relation: None,
-            version_scheme: VersionScheme::Rpm,
-            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-            provenance: CapabilityProvenance::SourceDerivedFile {
-                format: SourcePackageFormat::Rpm,
-                source_path: "/usr/bin/sh".to_string(),
-            },
-        }];
-
-        extend_materialized_file_provides(
-            &mut provides,
-            SourcePackageFormat::Rpm,
-            ["/usr/bin/sh", "/usr/bin/sh", "/usr/bin/bash"],
-        )
-        .unwrap();
-
-        assert_eq!(
-            provides
-                .iter()
-                .map(|provide| provide.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["/usr/bin/sh", "/usr/bin/bash"]
-        );
-    }
-
-    #[test]
-    fn materialized_file_providers_reject_a_relative_payload_path() {
-        let mut provides = Vec::new();
-
-        let error = extend_materialized_file_provides(
-            &mut provides,
-            SourcePackageFormat::Rpm,
-            ["usr/bin/sh"],
-        )
-        .expect_err("a relative payload path has no absolute file-provider identity");
-
-        assert!(
-            error.to_string().contains("absolute path"),
-            "unexpected error: {error}"
-        );
-        assert!(provides.is_empty());
-    }
-
-    #[test]
-    fn source_format_and_version_scheme_recover_each_other() {
-        for format in [
-            SourcePackageFormat::Rpm,
-            SourcePackageFormat::Debian,
-            SourcePackageFormat::Alpm,
-            SourcePackageFormat::Ccs,
-        ] {
-            assert_eq!(
-                SourcePackageFormat::for_version_scheme(format.version_scheme()),
-                format
-            );
-        }
-    }
-}
+#[path = "dependency_model/tests.rs"]
+mod tests;

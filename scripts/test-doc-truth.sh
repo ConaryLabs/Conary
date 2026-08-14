@@ -71,6 +71,15 @@ make_good_repo() {
         "$root/site/src/routes/install" \
         "$root/web/src/routes/about"
 
+    cat > "$root/Cargo.toml" <<'EOF'
+[workspace]
+members = ["apps/conary", "crates/conary-core"]
+
+[workspace.package]
+version = "0.10.1"
+publish = false
+EOF
+
     cat > "$root/crates/conary-core/src/db/schema.rs" <<'EOF'
 /// Current schema version
 pub const SCHEMA_VERSION: i32 = 69;
@@ -116,7 +125,7 @@ EOF
 # Roadmap
 
 The cross-distro package-installation preview is active.
-Remote Forge validation is paused pending a KVM-capable runner.
+Remote Forge validation and conary-test deployment are decommissioned.
 The 2026-07-31 Group O QEMU run is dated local evidence.
 The 2026-07-31 Group P QEMU run is dated local evidence.
 The current milestone is the first external tester loop.
@@ -127,7 +136,7 @@ EOF
 # Development Roadmap
 
 The first external tester milestone is the current product milestone.
-Remote Forge validation is paused pending a KVM-capable runner.
+Remote Forge validation and conary-test deployment are decommissioned.
 The 2026-07-31 Group O QEMU run is dated local evidence.
 The 2026-07-31 Group P QEMU run is dated local evidence.
 EOF
@@ -159,7 +168,7 @@ EOF
     cat > "$root/docs/INTEGRATION-TESTING.md" <<'EOF'
 # Integration Testing
 
-Remote Forge control-plane validation is temporarily paused pending a KVM-capable runner.
+Remote Forge control-plane validation and conary-test deployment are decommissioned; there is no replacement Forge rollout path.
 Current Group O QEMU export evidence from 2026-07-31 is local evidence.
 Current Group P ISO export evidence from 2026-07-31 is local evidence.
 EOF
@@ -267,7 +276,7 @@ EOF
 [package]
 name = "conary-core"
 version = "0.8.0"
-publish = false
+publish.workspace = true
 EOF
 
     cat > "$root/crates/conary-core/src/lib.rs" <<'EOF'
@@ -483,8 +492,12 @@ break_route_doc() {
 }
 
 break_core_publish_guard() {
-    grep -v '^publish = false$' "$1/crates/conary-core/Cargo.toml" > "$1/crates/conary-core/Cargo.toml.tmp"
+    grep -v '^publish\.workspace = true$' "$1/crates/conary-core/Cargo.toml" > "$1/crates/conary-core/Cargo.toml.tmp"
     mv "$1/crates/conary-core/Cargo.toml.tmp" "$1/crates/conary-core/Cargo.toml"
+}
+
+break_workspace_publish_guard() {
+    sed -i 's/^publish = false$/publish = true/' "$1/Cargo.toml"
 }
 
 break_core_api_claim() {
@@ -520,7 +533,7 @@ break_unassigned_outreach_candidate_version() {
     printf '\nNo new release is assigned.\n' >> "$1/docs/operations/external-tester-outreach.md"
 }
 
-break_detailed_remote_forge_evidence() {
+break_detailed_forge_retirement_evidence() {
     sed -i '/Remote Forge validation/d' "$1/docs/roadmaps/development-roadmap.md"
 }
 
@@ -645,7 +658,8 @@ expect_failure "retired command parser" break_retired_command_parser 'retired co
 expect_failure "PolicyKit overclaim" break_policykit_claim 'PolicyKit'
 expect_failure "socket-group default" break_socket_group_default 'root/daemon-only default'
 expect_failure "missing route doc" break_route_doc 'conaryd route'
-expect_failure "missing core publish guard" break_core_publish_guard 'publish = false'
+expect_failure "missing core publish guard" break_core_publish_guard 'inherit.*publication policy'
+expect_failure "publishable workspace root" break_workspace_publish_guard 'disable registry publication'
 expect_failure "stable core API claim" break_core_api_claim 'stable.*conary-core'
 expect_failure "preview status drift" break_preview_status 'early preview warning'
 expect_failure "missing detailed roadmap link" break_root_roadmap_link 'detailed.*roadmap'
@@ -654,7 +668,7 @@ expect_failure "tracker release version drift" break_tracker_release_version 'st
 expect_failure "outreach release version drift" break_outreach_release_version 'current-release baseline|outside current/target contract'
 expect_failure "outreach target state" break_outreach_target_state 'exact vMAJOR.MINOR.PATCH tag or unassigned'
 expect_failure "unassigned outreach candidate version" break_unassigned_outreach_candidate_version 'outside current/target contract|outside retained current release'
-expect_failure "missing detailed remote Forge evidence" break_detailed_remote_forge_evidence 'remote Forge paused wording'
+expect_failure "missing Forge deployment retirement evidence" break_detailed_forge_retirement_evidence 'Forge deployment retirement wording'
 expect_failure "missing detailed Group O evidence" break_detailed_group_o_evidence 'dated Group O evidence'
 expect_failure "missing detailed Group P evidence" break_detailed_group_p_evidence 'dated Group P evidence'
 expect_failure "release doc version drift" break_release_doc_version 'stale conary release reference'

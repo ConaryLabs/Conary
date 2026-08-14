@@ -5,9 +5,11 @@
 //! Expands canonical or distro-specific package names into resolver candidates,
 //! ranks them by exact pin authority, and enforces mixing policy.
 
-use crate::db::models::{CanonicalPackage, DistroPin, PackageImplementation};
+use crate::db::models::{CanonicalPackage, PackageImplementation};
 use crate::error::{Error, Result};
-use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
+use crate::repository::resolution_policy::{
+    DependencyMixingPolicy, RequestScope, ResolutionPolicy,
+};
 use rusqlite::Connection;
 use std::cmp::Ordering;
 
@@ -125,7 +127,7 @@ impl<'db> CanonicalResolver<'db> {
         candidates: &[ResolverCandidate],
     ) -> Result<Vec<ResolverCandidate>> {
         Ok(self
-            .rank_with_authority(candidates.to_vec())?
+            .rank_with_authority(candidates.to_vec(), None)?
             .into_iter()
             .map(|(candidate, _)| candidate)
             .collect())
@@ -149,7 +151,7 @@ impl<'db> CanonicalResolver<'db> {
             .cloned()
             .collect();
         Ok(self
-            .rank_with_authority(candidates)?
+            .rank_with_authority(candidates, policy.primary_source_identity())?
             .into_iter()
             .map(|(candidate, _)| candidate)
             .collect())
@@ -169,7 +171,7 @@ impl<'db> CanonicalResolver<'db> {
             })
             .cloned()
             .collect();
-        let ranked = self.rank_with_authority(candidates)?;
+        let ranked = self.rank_with_authority(candidates, policy.primary_source_identity())?;
         let Some((winner, winner_rank)) = ranked.first() else {
             return Ok(None);
         };
@@ -201,13 +203,11 @@ impl<'db> CanonicalResolver<'db> {
     fn rank_with_authority(
         &self,
         candidates: Vec<ResolverCandidate>,
+        preferred_source: Option<&str>,
     ) -> Result<Vec<(ResolverCandidate, AuthorityRank)>> {
-        let pin = DistroPin::get_current(self.conn)?;
         let mut ranked = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            let pinned = pin
-                .as_ref()
-                .is_some_and(|value| value.distro == candidate.distro);
+            let pinned = preferred_source.is_some_and(|source| source == candidate.distro);
             ranked.push((candidate, AuthorityRank { pinned }));
         }
         ranked.sort_by(|(_, left), (_, right)| left.compare_best_first(*right));
@@ -236,17 +236,10 @@ impl<'db> CanonicalResolver<'db> {
 }
 
 fn candidate_allowed_by_policy(candidate: &ResolverCandidate, policy: &ResolutionPolicy) -> bool {
-    if policy.allowed_distros.is_empty() {
-        return true;
-    }
-
-    policy.allowed_distros.iter().any(|allowed| {
-        allowed == &candidate.distro
-            || candidate
-                .repository_name
-                .as_ref()
-                .is_some_and(|repository_name| repository_name == allowed)
-    })
+    policy.mixing != DependencyMixingPolicy::Strict
+        || policy
+            .primary_source_identity()
+            .is_none_or(|source| source == candidate.distro)
 }
 
 fn candidate_matches_request_scope(candidate: &ResolverCandidate, scope: &RequestScope) -> bool {
@@ -255,16 +248,14 @@ fn candidate_matches_request_scope(candidate: &ResolverCandidate, scope: &Reques
         RequestScope::Repository(repository) => {
             candidate.repository_name.as_deref() == Some(repository)
         }
-        RequestScope::DistroProfile(profile) => &candidate.distro == profile,
+        RequestScope::SourceIdentity(source_identity) => &candidate.distro == source_identity,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::{
-        CanonicalMappingAuthority, CanonicalPackage, DistroPin, PackageImplementation,
-    };
+    use crate::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
     use crate::db::testing::create_test_db;
     use crate::repository::resolution_policy::{
         DependencyMixingPolicy, RequestScope, ResolutionPolicy,
@@ -323,9 +314,8 @@ mod tests {
     }
 
     #[test]
-    fn test_rank_pinned() {
+    fn test_rank_uses_explicit_source_identity() {
         let (_t, conn) = create_test_db();
-        DistroPin::set(&conn, "ubuntu-26.04", DependencyMixingPolicy::Guarded).unwrap();
 
         let candidates = vec![
             ResolverCandidate {
@@ -343,7 +333,12 @@ mod tests {
         ];
 
         let resolver = CanonicalResolver::new(&conn);
-        let ranked = resolver.rank_candidates(&candidates).unwrap();
+        let policy = ResolutionPolicy::new()
+            .with_mixing(DependencyMixingPolicy::Guarded)
+            .with_primary_source_identity("ubuntu-26.04");
+        let ranked = resolver
+            .rank_candidates_with_policy(&candidates, &policy)
+            .unwrap();
         assert_eq!(ranked[0].distro, "ubuntu-26.04");
     }
 
@@ -351,7 +346,7 @@ mod tests {
     fn measured_affinity_cannot_break_a_mutation_authority_tie() {
         let (_t, conn) = create_test_db();
         conn.execute(
-            "INSERT INTO system_affinity (distro, package_count, percentage, updated_at) VALUES ('ubuntu-26.04', 80, 80.0, '2026-03-05')",
+            "INSERT INTO system_affinity (source_identity, package_count, percentage, updated_at) VALUES ('ubuntu-26.04', 80, 80.0, '2026-03-05')",
             [],
         )
         .unwrap();
@@ -483,7 +478,7 @@ mod tests {
         let candidates = resolver.expand("curl").unwrap();
 
         let policy =
-            ResolutionPolicy::new().with_scope(RequestScope::DistroProfile("ubuntu-26.04".into()));
+            ResolutionPolicy::new().with_scope(RequestScope::SourceIdentity("ubuntu-26.04".into()));
         let ranked = resolver
             .rank_candidates_with_policy(&candidates, &policy)
             .unwrap();
@@ -546,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_allowlist_can_resolve_otherwise_ambiguous_candidates() {
+    fn exact_source_scope_can_resolve_otherwise_ambiguous_candidates() {
         let (_t, conn) = create_test_db();
         let mut pkg = CanonicalPackage::new("python".into(), "package".into());
         let cid = pkg.insert(&conn).unwrap();
@@ -567,7 +562,9 @@ mod tests {
 
         let resolver = CanonicalResolver::new(&conn);
         let candidates = resolver.expand("python").unwrap();
-        let policy = ResolutionPolicy::new().with_allowed_distros(vec!["fedora-44".to_string()]);
+        let policy = ResolutionPolicy::new()
+            .with_scope(RequestScope::SourceIdentity("fedora-44".to_string()))
+            .with_primary_source_identity("fedora-44");
         let selected = resolver
             .select_candidate_with_policy(&candidates, &policy)
             .unwrap();

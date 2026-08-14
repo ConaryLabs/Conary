@@ -79,7 +79,7 @@ pub struct ConversionResult {
     pub signing_public_key: String,
 }
 
-/// Converts native packages (RPM/DEB/Arch) to CCS format.
+/// Converts native packages (RPM/DEB/Arch/eopkg) to CCS format.
 pub struct NativePackageConverter {
     options: ConversionOptions,
     source_profile: Option<String>,
@@ -150,6 +150,7 @@ impl NativePackageConverter {
             "rpm" => VersionScheme::Rpm,
             "deb" => VersionScheme::Debian,
             "arch" => VersionScheme::Arch,
+            "eopkg" => VersionScheme::Eopkg,
             other => {
                 return Err(ConversionError::ManifestError(format!(
                     "unsupported source package format '{other}'"
@@ -164,7 +165,25 @@ impl NativePackageConverter {
             )));
         }
 
+        // Architecture is package identity authority for every foreign
+        // conversion. Validate it before format-specific lifecycle
+        // projections so an optional projection (such as an RPM repository
+        // declaration) cannot change the canonical identity failure.
+        let architecture = metadata.architecture().ok_or_else(|| {
+            ConversionError::BuildError("v3 package identity architecture is required".to_string())
+        })?;
+
         let mut manifest = self.build_manifest(&final_metadata, &Hooks::default())?;
+        let repository_enrollments = if format == "rpm" {
+            crate::repository::enrollment::derive::derive_rpm_repository_enrollments(
+                files,
+                architecture,
+                self.source_profile.as_deref(),
+            )
+            .map_err(|error| ConversionError::ManifestError(error.to_string()))?
+        } else {
+            Vec::new()
+        };
         let build_risk_report = classify_foreign_build_body_risk(format, files);
         let scriptlet_risk_report = classify_foreign_scriptlet_risk(metadata);
         let conversion_evidence =
@@ -244,6 +263,7 @@ impl NativePackageConverter {
         authority.provenance.hermetic_evidence_hash = Some(conversion_evidence_hash);
         authority.identity.debian_multi_arch = metadata.debian_multi_arch();
         authority.provided_capabilities = project_source_capabilities(metadata)?;
+        authority.lifecycle.repository_enrollments = repository_enrollments;
         crate::ccs::v3::validate_authority(&authority).map_err(|error| {
             ConversionError::BuildError(format!(
                 "Foreign conversion produced invalid typed provider authority: {error}"
@@ -506,6 +526,8 @@ fn project_source_capabilities(
                 RepositoryCapabilityKind::Binary => DependencyKindV3::Binary,
                 RepositoryCapabilityKind::Soname => DependencyKindV3::Soname,
                 RepositoryCapabilityKind::PkgConfig => DependencyKindV3::PkgConfig,
+                RepositoryCapabilityKind::PkgConfig32 => DependencyKindV3::PkgConfig32,
+                RepositoryCapabilityKind::Comar => DependencyKindV3::Comar,
             },
             name: provide.name.clone(),
             provider_version: provide.version.clone(),

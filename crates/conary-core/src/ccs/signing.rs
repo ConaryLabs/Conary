@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static PRIVATE_KEY_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+static PUBLIC_KEY_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const PRIVATE_KEY_TEMP_ATTEMPTS: usize = 1024;
+const PUBLIC_KEY_TEMP_ATTEMPTS: usize = 1024;
 
 /// A signing key pair for CCS packages
 pub struct SigningKeyPair {
@@ -96,7 +98,15 @@ impl SigningKeyPair {
             .map_err(|e| Error::ParseError(format!("Failed to serialize private key: {}", e)))?;
         write_private_key_atomic(private_path, &private_toml)?;
 
-        // Save public key
+        self.save_public_key_to_file(public_path)
+    }
+
+    /// Atomically save the public half of this key pair.
+    ///
+    /// The private key remains the signing authority. This method allows
+    /// callers to repair a missing or mismatched public projection from that
+    /// authority without rewriting the secret.
+    pub fn save_public_key_to_file(&self, public_path: &Path) -> Result<()> {
         let public_data = KeyFile {
             algorithm: "ed25519".to_string(),
             key: self.public_key_base64(),
@@ -104,16 +114,7 @@ impl SigningKeyPair {
         };
         let public_toml = toml::to_string_pretty(&public_data)
             .map_err(|e| Error::ParseError(format!("Failed to serialize public key: {}", e)))?;
-        ensure_parent_dir(public_path)?;
-        fs::write(public_path, &public_toml).map_err(|e| {
-            Error::IoError(format!(
-                "Failed to write public key {}: {}",
-                public_path.display(),
-                e
-            ))
-        })?;
-
-        Ok(())
+        write_public_key_atomic(public_path, &public_toml)
     }
 
     /// Load a key pair from a private key file
@@ -255,6 +256,80 @@ fn rename_private_key(tmp_private_path: &Path, private_path: &Path) -> Result<()
             private_path.display(),
             tmp_private_path.display(),
             e
+        ))
+    })
+}
+
+fn write_public_key_atomic(public_path: &Path, public_toml: &str) -> Result<()> {
+    ensure_parent_dir(public_path)?;
+
+    let (tmp_public_path, mut file) = create_public_key_temp_file(public_path)?;
+    if let Err(error) = write_public_key_temp_file(&tmp_public_path, &mut file, public_toml) {
+        drop(file);
+        let _ = fs::remove_file(&tmp_public_path);
+        return Err(error);
+    }
+    drop(file);
+
+    let result = fs::rename(&tmp_public_path, public_path).map_err(|error| {
+        Error::IoError(format!(
+            "Failed to replace public key {} with temp file {}: {}",
+            public_path.display(),
+            tmp_public_path.display(),
+            error
+        ))
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_public_path);
+    }
+    result
+}
+
+fn create_public_key_temp_file(public_path: &Path) -> Result<(PathBuf, fs::File)> {
+    for _ in 0..PUBLIC_KEY_TEMP_ATTEMPTS {
+        let suffix = PUBLIC_KEY_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp_public_path =
+            public_path.with_extension(format!("public.tmp.{}.{}", std::process::id(), suffix));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+
+        match options.open(&tmp_public_path) {
+            Ok(file) => return Ok((tmp_public_path, file)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(Error::IoError(format!(
+                    "Failed to write public key temp file {}: {}",
+                    tmp_public_path.display(),
+                    error
+                )));
+            }
+        }
+    }
+
+    Err(Error::IoError(format!(
+        "Failed to create unique public key temp file next to {} after {} attempts",
+        public_path.display(),
+        PUBLIC_KEY_TEMP_ATTEMPTS
+    )))
+}
+
+fn write_public_key_temp_file(
+    tmp_public_path: &Path,
+    file: &mut fs::File,
+    public_toml: &str,
+) -> Result<()> {
+    file.write_all(public_toml.as_bytes()).map_err(|error| {
+        Error::IoError(format!(
+            "Failed to write public key temp file {}: {}",
+            tmp_public_path.display(),
+            error
+        ))
+    })?;
+    file.sync_all().map_err(|error| {
+        Error::IoError(format!(
+            "Failed to sync public key temp file {}: {}",
+            tmp_public_path.display(),
+            error
         ))
     })
 }

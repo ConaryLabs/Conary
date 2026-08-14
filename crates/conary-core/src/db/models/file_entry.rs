@@ -137,17 +137,40 @@ impl FileEntry {
         conn: &Connection,
         directory_materialization: ExistingDirectoryMaterialization,
     ) -> Result<i64> {
+        self.insert_or_replace_inner(conn, directory_materialization, false)
+    }
+
+    /// Insert or share exact payload authority inside a caller-owned savepoint.
+    ///
+    /// Bulk import uses one savepoint per package. Avoiding another savepoint
+    /// per file preserves the same package-atomic rollback boundary without
+    /// issuing hundreds of thousands of redundant SQLite control statements.
+    pub fn insert_or_replace_in_savepoint(
+        &mut self,
+        conn: &Connection,
+        directory_materialization: ExistingDirectoryMaterialization,
+    ) -> Result<i64> {
+        self.insert_or_replace_inner(conn, directory_materialization, true)
+    }
+
+    fn insert_or_replace_inner(
+        &mut self,
+        conn: &Connection,
+        directory_materialization: ExistingDirectoryMaterialization,
+        caller_owns_savepoint: bool,
+    ) -> Result<i64> {
         self.validate()?;
-        if let Some(existing) = Self::find_by_path(conn, &self.path)? {
+        let existing = Self::find_by_path(conn, &self.path)?;
+        if let Some(existing) = existing.as_ref() {
             let existing_id = existing.id.ok_or_else(|| {
                 Error::InternalError(format!(
                     "persisted file entry {} has no database identity",
                     self.path
                 ))
             })?;
-            if self.can_share_existing(conn, directory_materialization)? {
+            if self.can_share_existing_with(conn, existing, directory_materialization)? {
                 let incoming_claim = self.payload_claim(directory_materialization)?;
-                with_file_entry_savepoint(conn, || {
+                with_optional_file_entry_savepoint(conn, caller_owns_savepoint, || {
                     incoming_claim.insert(conn)?;
                     if matches!(self.node.source.kind, PayloadNodeKind::Directory)
                         && directory_materialization.applies_incoming()
@@ -168,7 +191,7 @@ impl FileEntry {
                 return Ok(existing_id);
             }
         }
-        if let Some(existing) = Self::find_by_path(conn, &self.path)?
+        if let Some(existing) = existing
             && super::PayloadClaim::find_retaining_path(conn, &self.path)?
                 .iter()
                 .any(|claim| claim.trove_id != existing.trove_id)
@@ -178,9 +201,10 @@ impl FileEntry {
                 self.path
             )));
         }
-        let id = with_file_entry_savepoint(conn, || {
+        let id = with_optional_file_entry_savepoint(conn, caller_owns_savepoint, || {
             let id = self.insert_row(conn, true)?;
-            self.insert_payload_claim(conn, directory_materialization)?;
+            self.payload_claim(directory_materialization)?
+                .insert_for_new_anchor(conn)?;
             Ok(id)
         })?;
         self.id = Some(id);
@@ -195,6 +219,15 @@ impl FileEntry {
         let Some(existing) = Self::find_by_path(conn, &self.path)? else {
             return Ok(false);
         };
+        self.can_share_existing_with(conn, &existing, directory_materialization)
+    }
+
+    fn can_share_existing_with(
+        &self,
+        conn: &Connection,
+        existing: &Self,
+        directory_materialization: ExistingDirectoryMaterialization,
+    ) -> Result<bool> {
         let direct_claims = super::PayloadClaim::find_by_path(conn, &self.path)?;
         if direct_claims.is_empty() {
             return Err(Error::ConfigError(format!(
@@ -216,7 +249,8 @@ impl FileEntry {
 
     pub fn find_by_path(conn: &Connection, path: &str) -> Result<Option<Self>> {
         let sql = format!("SELECT {} FROM files WHERE path = ?1", Self::COLUMNS);
-        conn.query_row(&sql, [path], Self::from_row)
+        conn.prepare_cached(&sql)?
+            .query_row([path], Self::from_row)
             .optional()
             .map_err(Into::into)
     }
@@ -729,17 +763,14 @@ impl FileEntry {
                 trove_id, component_id
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
         };
-        conn.execute(
-            operation,
-            params![
-                &self.path,
-                node_json,
-                self.content.as_ref().map(|content| &content.sha256),
-                content_size,
-                self.trove_id,
-                self.component_id,
-            ],
-        )?;
+        conn.prepare_cached(operation)?.execute(params![
+            &self.path,
+            node_json,
+            self.content.as_ref().map(|content| &content.sha256),
+            content_size,
+            self.trove_id,
+            self.component_id,
+        ])?;
         Ok(conn.last_insert_rowid())
     }
 
@@ -815,6 +846,18 @@ fn with_file_entry_savepoint<T>(
             let _ = conn.execute_batch(&format!("RELEASE {SAVEPOINT}"));
             Err(error)
         }
+    }
+}
+
+fn with_optional_file_entry_savepoint<T>(
+    conn: &Connection,
+    caller_owns_savepoint: bool,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    if caller_owns_savepoint {
+        operation()
+    } else {
+        with_file_entry_savepoint(conn, operation)
     }
 }
 

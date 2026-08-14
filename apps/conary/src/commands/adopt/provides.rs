@@ -18,6 +18,9 @@ pub(super) fn query_package_provides(
         SystemPackageManager::Rpm => rpm_query::query_package_provides(identity),
         SystemPackageManager::Dpkg => dpkg_query::query_package_provides(identity),
         SystemPackageManager::Pacman => pacman_query::query_package_provides(identity),
+        SystemPackageManager::Eopkg => {
+            conary_core::packages::eopkg::query::query_package_provides(identity)
+        }
         SystemPackageManager::Unknown => bail!("unsupported native package manager"),
     }
     .with_context(|| {

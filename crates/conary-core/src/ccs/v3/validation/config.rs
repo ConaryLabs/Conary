@@ -56,6 +56,9 @@ pub(super) fn validate_config_authority(
             crate::packages::config_authority::SourceConfigDeclaration::Alpm(_) => {
                 source_format == Some(crate::ccs::native_lifecycle::SourceFormat::Arch)
             }
+            crate::packages::config_authority::SourceConfigDeclaration::Eopkg(_) => {
+                source_format == Some(crate::ccs::native_lifecycle::SourceFormat::Eopkg)
+            }
             crate::packages::config_authority::SourceConfigDeclaration::Ccs(_) => {
                 source_format.is_none()
             }

@@ -320,12 +320,53 @@ fn rejects_system_adopt_from_sync_hook_with_full() {
 }
 
 #[test]
-fn rejects_removed_unsafe_adopt_convert_surface() {
+fn parses_exact_adopt_convert_scope() {
+    let cli = parse_cli([
+        "conary",
+        "system",
+        "adopt",
+        "curl",
+        "--convert",
+        "--version",
+        "8.12.1-3",
+        "--arch",
+        "x86_64",
+        "--dry-run",
+    ])
+    .expect("exact adopted-artifact conversion should parse");
+
+    match cli.command {
+        Some(Commands::System(SystemCommands::Adopt {
+            packages,
+            convert,
+            version,
+            arch,
+            dry_run,
+            ..
+        })) => {
+            assert_eq!(packages, vec!["curl".to_string()]);
+            assert!(convert);
+            assert_eq!(version.as_deref(), Some("8.12.1-3"));
+            assert_eq!(arch.as_deref(), Some("x86_64"));
+            assert!(dry_run);
+        }
+        _ => panic!("expected system adopt command"),
+    }
+
     let error = match parse_cli(["conary", "system", "adopt", "--convert"]) {
-        Ok(_) => panic!("adopt conversion requires exact artifact re-resolution"),
+        Ok(_) => panic!("adopt conversion must name an adopted package"),
         Err(error) => error,
     };
-    assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+
+    let error = match parse_cli(["conary", "system", "adopt", "curl", "--convert", "--full"]) {
+        Ok(_) => panic!("conversion must not recapture payload authority in the same command"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]

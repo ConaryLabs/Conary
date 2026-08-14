@@ -280,8 +280,6 @@ mod tests {
             )]),
             explicit: HashSet::from(["nginx".to_string()]),
             pinned: HashSet::new(),
-            source_pin: None,
-            allowed_distros: Vec::new(),
         };
 
         // Fetch the collection from cache

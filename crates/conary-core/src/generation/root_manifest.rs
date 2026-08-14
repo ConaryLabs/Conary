@@ -2,8 +2,11 @@
 
 //! Authoritative selected-root capture for generation and mutable-state publication.
 
+mod authority;
 mod composefs;
+mod delta;
 mod materialize;
+mod overlay;
 mod scan;
 
 use crate::payload::{PayloadContentAuthority, PayloadNode, PayloadNodeKind, ResolvedPayloadNode};
@@ -11,11 +14,21 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
+pub use authority::{SelectedRootSnapshot, SelectedRootSnapshotWork};
 pub use composefs::build_erofs_image_from_root_manifest;
+pub use delta::{SELECTED_ROOT_MANIFEST_DELTA_VERSION, SelectedRootManifestDelta};
 pub use materialize::{
     apply_resolved_payload_metadata, materialize_captured_selected_root,
     materialize_config_state_upper, materialize_generation_root, materialize_state_root,
     overlay_payload_entries,
+};
+pub use overlay::{
+    MountedSelectedRootOverlay, OverlayHardlinkCopyUp, OverlayLowerDirectoryRename,
+    OverlayMetadataCopyUp, OverlayOpaqueDirectory, OverlayWhiteoutEncoding, OverlayXattrNamespace,
+    SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION, SELECTED_ROOT_OVERLAY_PROFILE_VERSION,
+    SelectedRootOverlayCapabilities, SelectedRootOverlayProfile,
+    decode_selected_root_overlay_upper_indexed, encode_selected_root_overlay_upper_node,
+    probe_selected_root_overlay_profile,
 };
 pub use scan::{
     SelectedRootCaptureExclusions, capture_existing_payload_node, capture_root_node,
@@ -310,7 +323,7 @@ fn validate_entries(
     Ok(())
 }
 
-fn validate_hardlinks(entries: &[GenerationRootEntry]) -> crate::Result<()> {
+pub(super) fn validate_hardlinks(entries: &[GenerationRootEntry]) -> crate::Result<()> {
     let by_path = entries_by_path(entries);
     let mut identities = BTreeMap::<&str, (&GenerationRootEntry, usize)>::new();
     for entry in entries {
@@ -411,7 +424,7 @@ fn validate_root_path(path: &str) -> crate::Result<()> {
     Ok(())
 }
 
-fn validate_mode_matches_kind(path: &str, node: &PayloadNode) -> crate::Result<()> {
+pub(super) fn validate_mode_matches_kind(path: &str, node: &PayloadNode) -> crate::Result<()> {
     let expected = match node.kind {
         PayloadNodeKind::Regular { .. } => libc::S_IFREG,
         PayloadNodeKind::Directory => libc::S_IFDIR,

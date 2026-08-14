@@ -22,8 +22,8 @@ use crate::repository::static_repo::publish_gate::{
     format_publish_gate_failures, verify_static_artifact_publish_eligibility,
 };
 use crate::repository::static_repo::{
-    PackageKeysFile, RepoIdentity, RepoIdentityRepo, RepoIdentityTrust, RepoLocation, StaticIndex,
-    StaticPackageEntry, validate_repo_relative_path,
+    PackageKeysFile, RepoIdentity, RepoIdentityRepo, RepoIdentityTrust, RepoLocation,
+    SCHEMA_VERSION, StaticIndex, StaticPackageEntry, validate_repo_relative_path,
 };
 use crate::trust::ceremony::{create_initial_root, rotate_key, rotate_publish_key};
 use crate::trust::generate::{generate_snapshot, generate_targets, generate_timestamp};
@@ -633,7 +633,7 @@ fn build_index(
     package_entries: Vec<StaticPackageEntry>,
 ) -> StaticIndex {
     StaticIndex {
-        schema: 1,
+        schema: SCHEMA_VERSION,
         name: repo_name.to_string(),
         index_version: targets_version,
         generated: Utc::now(),
@@ -736,7 +736,7 @@ fn build_identity(
         .keyids
         .clone();
     let identity = RepoIdentity {
-        schema: 1,
+        schema: SCHEMA_VERSION,
         repo: RepoIdentityRepo {
             name: options.repo_name.clone(),
             description: options.repo_description.clone(),
@@ -895,7 +895,7 @@ fn write_atomic_temp_file(path: &Path, file: &mut File, bytes: &[u8]) -> Result<
 
 fn validate_repo_name_for_identity(repo_name: &str) -> Result<()> {
     let identity = RepoIdentity {
-        schema: 1,
+        schema: SCHEMA_VERSION,
         repo: RepoIdentityRepo {
             name: repo_name.to_string(),
             description: None,

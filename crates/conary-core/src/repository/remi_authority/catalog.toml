@@ -36,3 +36,13 @@ public_key = "/thv7CMMgGMwmT/bRQV9QBAhmFJQ6qulmEOsnlglmcc="
 key_id = "targets"
 status = "active"
 comment = "Canonical Remi Arch targets authority"
+
+[[profiles]]
+profile = "solus"
+
+[[profiles.keys]]
+algorithm = "ed25519"
+public_key = "wlVscKUaRMiCMil/pYCu4cZUfuywlO4suyfjR+qOLo4="
+key_id = "targets"
+status = "active"
+comment = "Canonical Remi Solus targets authority"

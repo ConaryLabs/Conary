@@ -52,6 +52,26 @@ fn active_rollback_root(db_path: &str) -> CapturedSelectedRoot {
     }
 }
 
+fn record_test_rollback_authority(
+    conn: &rusqlite::Connection,
+    changeset_id: i64,
+    snapshots: Vec<TroveSnapshot>,
+    directories: Vec<crate::commands::MaterializedDirectorySnapshot>,
+    root: CapturedSelectedRoot,
+    system: RollbackSystemAuthority,
+) {
+    let root =
+        conary_core::generation::root_manifest::SelectedRootSnapshot::capture(conn, &root).unwrap();
+    let metadata = metadata_with_removed_troves(snapshots, directories, root, system).unwrap();
+    conn.execute(
+        "UPDATE changesets
+         SET metadata = ?1, rollback_selected_root_snapshot_id = ?2
+         WHERE id = ?3",
+        params![metadata, root.id(), changeset_id],
+    )
+    .unwrap();
+}
+
 fn with_usr_bin_file(
     mut captured: CapturedSelectedRoot,
     path: &str,
@@ -171,7 +191,7 @@ fn rollback_typed_rpm_entry() -> NativeLifecycleEntry {
     let body = "print('rollback-post-remove')\n";
     NativeLifecycleEntry {
         id: "rpm:%postun".to_string(),
-        native_slot: "%postun".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::PostUn),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PostRemove,
         lifecycle_paths: vec!["remove:last".to_string()],
@@ -195,8 +215,7 @@ fn rollback_typed_rpm_entry() -> NativeLifecycleEntry {
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::EmbeddedLua,
             body_transforms: Vec::new(),
-            critical: true,
-            criticality: RpmCriticality::Header,
+            criticality: RpmCriticality::WarningOnly,
             raw_flags: 0,
             unknown_flags: 0,
             install_prefixes: Vec::new(),
@@ -250,20 +269,14 @@ fn record_additive_changeset_with_system_authority(
 ) -> i64 {
     let mut changeset = Changeset::new(format!("Install {fixture}"));
     let changeset_id = changeset.insert(conn).unwrap();
-    conn.execute(
-        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        params![
-            metadata_with_removed_troves(
-                Vec::new(),
-                Vec::new(),
-                active_rollback_root(db_path),
-                authority,
-            )
-            .unwrap(),
-            changeset_id,
-        ],
-    )
-    .unwrap();
+    record_test_rollback_authority(
+        conn,
+        changeset_id,
+        Vec::new(),
+        Vec::new(),
+        active_rollback_root(db_path),
+        authority,
+    );
     changeset
         .update_status(conn, ChangesetStatus::Applied)
         .unwrap();
@@ -436,7 +449,7 @@ async fn additive_rollback_restores_unaffected_derived_runtime_projection() {
 }
 
 #[tokio::test]
-async fn rollback_without_v5_authority_fails_closed_and_remains_retryable() {
+async fn rollback_without_v7_authority_fails_closed_and_remains_retryable() {
     let (_temp_dir, db_path_str) = crate::commands::test_helpers::setup_command_test_db();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     crate::commands::test_helpers::create_active_test_generation(
@@ -459,7 +472,7 @@ async fn rollback_without_v5_authority_fails_closed_and_remains_retryable() {
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.contains("no exact v5 rollback authority"), "{error}");
+        assert!(error.contains("no exact v7 rollback authority"), "{error}");
     }
 
     let conn = conary_core::db::open(&db_path_str).unwrap();
@@ -516,7 +529,7 @@ async fn rollback_with_retired_metadata_schema_fails_closed_and_remains_retryabl
             .to_string();
         assert!(
             error.contains("Unsupported changeset metadata schema")
-                && error.contains("conary.changeset.metadata.v6"),
+                && error.contains("conary.changeset.metadata.v7"),
             "{error}"
         );
     }
@@ -568,20 +581,14 @@ async fn rollback_snapshot_restores_exact_prior_typed_rpm_authority() {
 
     let mut changeset = Changeset::new("Upgrade rollback RPM fixture".to_string());
     let changeset_id = changeset.insert(&conn).unwrap();
-    conn.execute(
-        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        params![
-            metadata_with_removed_troves(
-                vec![old_snapshot],
-                Vec::new(),
-                active_rollback_root(&db_path_str),
-                RollbackSystemAuthority::default(),
-            )
-            .unwrap(),
-            changeset_id
-        ],
-    )
-    .unwrap();
+    record_test_rollback_authority(
+        &conn,
+        changeset_id,
+        vec![old_snapshot],
+        Vec::new(),
+        active_rollback_root(&db_path_str),
+        RollbackSystemAuthority::default(),
+    );
     changeset
         .update_status(&conn, ChangesetStatus::Applied)
         .unwrap();
@@ -673,20 +680,14 @@ async fn rollback_publishes_exact_pre_upgrade_parent_directory_authority() {
         )],
     );
     old_snapshot.architecture = Some("x86_64".to_string());
-    conn.execute(
-        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        params![
-            metadata_with_removed_troves(
-                vec![old_snapshot],
-                Vec::new(),
-                rollback_root.clone(),
-                RollbackSystemAuthority::default(),
-            )
-            .unwrap(),
-            changeset_id
-        ],
-    )
-    .unwrap();
+    record_test_rollback_authority(
+        &conn,
+        changeset_id,
+        vec![old_snapshot],
+        Vec::new(),
+        rollback_root.clone(),
+        RollbackSystemAuthority::default(),
+    );
     changeset
         .update_status(&conn, ChangesetStatus::Applied)
         .unwrap();
@@ -780,20 +781,14 @@ async fn rollback_update_without_active_generation_fails_closed() {
     let mut update_changeset =
         Changeset::new("CCS upgrade conary-test-fixture 1.0.0 -> 2.0.0".to_string());
     let update_changeset_id = update_changeset.insert(&conn).unwrap();
-    conn.execute(
-        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        params![
-            metadata_with_removed_troves(
-                vec![old_snapshot],
-                Vec::new(),
-                empty_rollback_root(),
-                RollbackSystemAuthority::default(),
-            )
-            .unwrap(),
-            update_changeset_id
-        ],
-    )
-    .unwrap();
+    record_test_rollback_authority(
+        &conn,
+        update_changeset_id,
+        vec![old_snapshot],
+        Vec::new(),
+        empty_rollback_root(),
+        RollbackSystemAuthority::default(),
+    );
     update_changeset
         .update_status(&conn, ChangesetStatus::Applied)
         .unwrap();

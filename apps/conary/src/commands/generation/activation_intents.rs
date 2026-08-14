@@ -197,6 +197,11 @@ fn resolve_activation_command(
             arguments: systemd.systemctl_args(),
             provider: "systemd",
         }),
+        RuntimeActivationInvocation::OpenRc(openrc) => Ok(ResolvedActivationCommand {
+            executable: resolve_booted_openrc_service(conn)?,
+            arguments: openrc.rc_service_args(),
+            provider: "openrc",
+        }),
         RuntimeActivationInvocation::SecurityPolicy(policy) => {
             let identity = policy.executable();
             Ok(ResolvedActivationCommand {
@@ -206,6 +211,24 @@ fn resolve_activation_command(
             })
         }
     }
+}
+
+fn resolve_booted_openrc_service(conn: &Connection) -> Result<std::path::PathBuf> {
+    if let Ok(inventory) = HostCapabilityInventory::load_required(conn)
+        && let Some(executable) = inventory.live_openrc_service_path()
+    {
+        return Ok(executable.to_path_buf());
+    }
+    let refreshed = HostCapabilityInventory::discover()
+        .context("failed to discover refreshed OpenRC host capability inventory")?;
+    let executable = refreshed
+        .live_openrc_service_path()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            anyhow!("generation activation requires a verified OpenRC rc-service interface")
+        })?;
+    refreshed.persist(conn)?;
+    Ok(executable)
 }
 
 fn verify_booted_provider_executable(
@@ -312,12 +335,12 @@ mod tests {
     use super::*;
     use clap::Parser;
     use conary_core::activation::{
-        SecurityPolicyInvocationDisposition, SystemdActivationAction, SystemdActivationInvocation,
-        parse_security_policy_invocation,
+        OpenRcActivationInvocation, SecurityPolicyInvocationDisposition, SystemdActivationAction,
+        SystemdActivationInvocation, parse_security_policy_invocation,
     };
     use conary_core::ccs::{
         ExecutableInterface, HostExecutableContract, HostExecutableImplementation,
-        InitSystemCapability, SystemdInterface, SystemdOperation,
+        InitSystemCapability, OpenRcInterface, SystemdInterface, SystemdOperation,
     };
     use conary_core::db::models::{
         ActivationRequest, ActivationRequestSourceKind, Changeset, ChangesetStatus,
@@ -463,6 +486,30 @@ mod tests {
         tools
     }
 
+    #[cfg(unix)]
+    fn persist_test_openrc_inventory(conn: &Connection) -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tools = tempfile::tempdir().unwrap();
+        let executable = tools.path().join("rc-service");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'rc-service (OpenRC [Linux]) 0.62'; fi\nexit 0\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        HostCapabilityInventory {
+            init_system: InitSystemCapability::OpenRc,
+            openrc: Some(OpenRcInterface::probe(executable).unwrap()),
+            ..HostCapabilityInventory::default()
+        }
+        .persist(conn)
+        .unwrap();
+        tools
+    }
+
     #[test]
     fn packaged_boot_service_command_parses_without_interactive_acknowledgement() {
         let cli = crate::cli::Cli::try_parse_from([
@@ -573,6 +620,24 @@ mod tests {
             .unwrap();
         let status: String = statement.query_row([request.id], |row| row.get(0)).unwrap();
         assert_eq!(GenerationActivationIntentStatus::Applied.as_str(), status);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn openrc_activation_resolves_the_verified_provider_and_exact_argv() {
+        let conn = create_test_db();
+        let tools = persist_test_openrc_inventory(&conn);
+        let invocation =
+            RuntimeActivationInvocation::OpenRc(OpenRcActivationInvocation::try_restart("sshd"));
+
+        let command = resolve_activation_command(&conn, &invocation).unwrap();
+
+        assert_eq!(command.executable, tools.path().join("rc-service"));
+        assert_eq!(
+            command.arguments,
+            ["--ifstarted", "--", "sshd", "restart"].map(str::to_string)
+        );
+        assert_eq!(command.provider, "openrc");
     }
 
     #[cfg(unix)]

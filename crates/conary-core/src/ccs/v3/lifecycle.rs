@@ -126,6 +126,7 @@ pub(crate) fn authority_from_manifest(manifest: &CcsManifest) -> LifecycleAuthor
             .as_ref()
             .map(|hook| script_from_manifest(hook, &capabilities)),
         native_lifecycle: manifest.native_lifecycle.clone(),
+        repository_enrollments: Vec::new(),
     }
 }
 

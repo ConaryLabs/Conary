@@ -92,6 +92,17 @@ fn install_trove(conn: &Connection, name: &str, version: &str, scheme: VersionSc
     trove.insert(conn).unwrap()
 }
 
+fn relation_facts(package: &TestPackage) -> IncomingPackageRelations<'_> {
+    IncomingPackageRelations {
+        name: package.name(),
+        version: package.version(),
+        architecture: package.architecture(),
+        version_scheme: package.version_scheme(),
+        provides: &package.provides,
+        relations: package.relations(),
+    }
+}
+
 fn incoming(relation: RepositoryRequirementGroup) -> TestPackage {
     TestPackage {
         name: "newpkg".to_string(),
@@ -312,6 +323,63 @@ fn atomic_batch_attributes_installed_rich_conflict_to_all_causal_packages() {
         vec!["new-a".to_string(), "new-b".to_string()]
     );
     assert!(plan.removals[0].ownership_transfer_packages.is_empty());
+}
+
+#[test]
+fn batch_removal_set_is_order_free_while_its_sequencing_is_not() {
+    let (_temp, conn) = create_test_db();
+    let target = install_trove(&conn, "shared-target", "1", VersionScheme::Rpm);
+    let conflicting = |name: &str| TestPackage {
+        name: name.to_string(),
+        version: "1".to_string(),
+        provides: Vec::new(),
+        relations: vec![
+            parse_native_relation(
+                RepositoryRequirementKind::Conflict,
+                VersionScheme::Rpm,
+                "shared-target",
+            )
+            .unwrap(),
+        ],
+    };
+    let first = conflicting("new-a");
+    let second = conflicting("new-b");
+
+    let forward = plan_package_relation_batch_facts(
+        &conn,
+        &[relation_facts(&first), relation_facts(&second)],
+    )
+    .unwrap();
+    let reversed = plan_package_relation_batch_facts(
+        &conn,
+        &[relation_facts(&second), relation_facts(&first)],
+    )
+    .unwrap();
+
+    // Which installed packages leave depends on the batch's composition and the
+    // installed state, never on the order the batch is presented in. Ordering
+    // relies on exactly this: it withholds the outgoing identities before the
+    // transaction has an execution order at all.
+    let removed = |plan: &PackageRelationPlan| {
+        plan.removals
+            .iter()
+            .map(|removal| removal.trove_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(removed(&forward), vec![target]);
+    assert_eq!(removed(&reversed), vec![target]);
+
+    // Where the removal is sequenced does depend on the order: it runs before
+    // the earliest element that triggers it, so it is planned against the
+    // ordered batch rather than reused from the pre-ordering answer.
+    assert_eq!(
+        forward.removals[0].triggering_incoming.package_name,
+        "new-a"
+    );
+    assert_eq!(
+        reversed.removals[0].triggering_incoming.package_name,
+        "new-b"
+    );
 }
 
 #[test]

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-06
-revision: 62
-summary: Route typed database rebuilds, lossless source authority, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, release authority, and subsystem proof through current feature owners.
+last_updated: 2026-08-13
+revision: 69
+summary: Route workspace and release boundaries, typed database rebuilds, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -12,10 +12,18 @@ summary: Route typed database rebuilds, lossless source authority, exact Remi si
 - `crates/conary-core/`: shared package-management domain, repository sync, resolver, trust, transaction, and CCS logic
 - `apps/remi/`: Remi package service, admin surface, MCP server, and federation
 - `apps/conaryd/`: local daemon, socket auth, job queue, and REST/SSE routes
-- `apps/conary-test/`: declarative integration-test engine, HTTP API, and MCP server
+- `apps/conary-test/`: declarative integration-test engine, CLI, Remi result client, and WAL buffering
 - `crates/conary-bootstrap/`: shared tracing, runtime, and error-exit helpers for workspace apps
 - `crates/conary-agent-contract/`: transport-neutral agent operation contract, resource refs, risk labels, and catalogs
 - `crates/conary-mcp/`: shared MCP adapter helpers used by workspace apps
+
+The eight Cargo packages are code-ownership boundaries. The four artifact
+products are `conary`, `remi`, `conaryd`, and `conary-test`. They inherit one
+root workspace package authority and ship from one reviewed suite commit, one
+canonical `vMAJOR.MINOR.PATCH` tag, and one GitHub release. Conary and Remi
+deploy from that suite; conaryd and conary-test remain build-only artifacts.
+Standalone Cargo-registry publication is disabled. Do not infer a separate
+version or publication owner from a package boundary or artifact route.
 
 ## Look Here First
 
@@ -45,8 +53,8 @@ commands.
 - `remi`: Remi ingest, conversion, publication, admin, MCP, and fixture serving
 - `conaryd`: local daemon auth, package jobs, routes, and lifecycle events
 - `bootstrap`: bootstrap prerequisite, image, seed, run, and local QEMU validation
-- `release`: exact-tag construction, immutable publication, serialized deployment, and independent proof
-- `conary-test`: declarative integration suites, HTTP, MCP, and QEMU proof
+- `release`: synchronized suite versioning, four-artifact construction, exact-tag publication, serialized deployment, and independent proof
+- `conary-test`: declarative integration suites, CLI, result delivery, and QEMU proof
 - `agent-mcp`: transport-neutral operation vocabulary and MCP adapters
 
 ## Canonical Detail Pointers
@@ -68,7 +76,9 @@ commands.
   `crates/conary-core/src/config_transaction/`; selected-root config capture
   and publication are owned by
   `apps/conary/src/commands/generation/config_transaction.rs`,
-  `apps/conary/src/commands/generation/selected_root.rs`, and
+  `apps/conary/src/commands/generation/selected_root.rs`,
+  `apps/conary/src/commands/generation/selected_root/overlay_session.rs`,
+  `apps/conary/src/commands/generation/selected_root/publication_authority.rs`, and
   `apps/conary/src/commands/generation/publication.rs`. Single-package install
   execution starts in
   `apps/conary/src/commands/install/transaction/selected_root.rs`; declarative
@@ -76,8 +86,11 @@ commands.
   `apps/conary/src/commands/install/package_set.rs` and
   `apps/conary/src/commands/install/repository_batch.rs`; removal starts in
   `apps/conary/src/commands/remove/native_graph.rs`. The selected-root
-  session acquires and owns the canonical runtime mutation lock before
-  materialization; the lock implementation starts in
+  session acquires and owns the canonical runtime mutation lock before lower
+  preparation. Current-generation immutable content mounts directly from its
+  verified composefs artifact; pending-candidate, first-generation, and
+  retained-try paths keep explicit materialization boundaries. The lock
+  implementation starts in
   `crates/conary-core/src/transaction/mod.rs`. Exact rollback execution and
   typed compensating lineage start in
   `apps/conary/src/commands/system/rollback_command.rs` and
@@ -101,17 +114,35 @@ commands.
   pre-payload sysusers target-interface execution starts in
   `crates/conary-core/src/scriptlet/sysusers.rs`; generic native argv remains
   selected-root confined in
-  `crates/conary-core/src/scriptlet/native_command.rs`. Exact source-independent
-  payload nodes start in `crates/conary-core/src/payload.rs`.
-  `apps/conary/src/commands/live_root/recovery.rs` is confined to the
-  selected-root session journal implementation.
+  `crates/conary-core/src/scriptlet/native_command.rs`. The per-scriptlet-class
+  failure posture that decides whether a failed lifecycle entry aborts its
+  transaction is owned by `crates/conary-core/src/scriptlet/failure_policy.rs`
+  and declared in `docs/specs/foreign-package-lifecycle-contracts.md`. Exact
+  source-independent payload nodes start in
+  `crates/conary-core/src/payload.rs`.
+  `apps/conary/src/commands/live_root.rs` owns mutation orchestration;
+  `apps/conary/src/commands/live_root/path.rs` owns selected-root path
+  resolution, `apps/conary/src/commands/live_root/durability.rs` owns durable
+  filesystem primitives, and `apps/conary/src/commands/live_root/recovery.rs`
+  is confined to the journal recovery implementation.
 - Declarative models, source selection, and replatforming:
   `docs/modules/feature-ownership.md` slug `model`, plus
   `docs/modules/source-selection.md`.
-- Native repository trust, authenticated metadata/package intake, typed
+- Native repository declarations, trust, authenticated metadata/package intake, typed
   package relations, provider matching, and SAT selection:
   `docs/modules/feature-ownership.md` slug `resolution`, plus
-  `docs/modules/source-selection.md`. Trust starts in
+  `docs/modules/source-selection.md`. Lossless selected-root declaration
+  discovery starts in `crates/conary-core/src/repository/declarations/` and its
+  pinned contracts are `docs/specs/native-repository-declarations.md` and
+  `docs/specs/native-repository-trust-import.md`. Native source identity,
+  follow-or-pin persistence, stream binding, and authenticated-snapshot
+  admission start in `crates/conary-core/src/db/models/repository/source.rs`,
+  `crates/conary-core/src/db/models/repository/source/policy.rs`, and
+  `docs/specs/native-source-identity-policy.md`. Native repository takeover,
+  selected-root projection ownership, drift, and rollback start in
+  `crates/conary-core/src/repository/declarations/takeover.rs`,
+  `apps/conary/src/commands/repository_takeover.rs`, and
+  `docs/specs/native-repository-takeover.md`. Trust verification starts in
   `crates/conary-core/src/repository/trust.rs` and
   `crates/conary-core/src/repository/trust/openpgp.rs`, with ALPM keyring and
   package-signature semantics in
@@ -126,6 +157,8 @@ commands.
 - Generation, bootstrap, and QEMU proof:
   `docs/modules/feature-ownership.md` slugs `generation` and `bootstrap`, plus
   `crates/conary-core/src/generation/root_manifest.rs`,
+  `crates/conary-core/src/generation/root_manifest/authority.rs`,
+  `crates/conary-core/src/generation/root_manifest/overlay/indexed.rs`,
   `crates/conary-core/src/generation/builder/carrier_capabilities.rs`,
   `crates/conary-core/src/generation/artifact.rs`,
   `crates/conary-core/src/generation/export.rs`,
@@ -147,11 +180,11 @@ commands.
   `docs/modules/feature-ownership.md` slugs `ccs`, `packaging`, and `profiles`,
   plus `docs/modules/ccs.md`,
   `docs/specs/source-package-authority.md`, and `docs/modules/recipe.md`.
-  The source-authority specification owns the W5 lossless RPM, Debian, ALPM,
-  and CCS models plus their resolution, conversion, and transaction
+  The source-authority specification owns the lossless RPM, Debian, ALPM,
+  eopkg, and CCS models plus their resolution, conversion, and transaction
   projections. Identity/provision work starts in
-  `crates/conary-core/src/packages/source_authority.rs` and the three
-  `packages/{rpm,deb,arch}/authority.rs` modules; CCS signing and verification
+  `crates/conary-core/src/packages/source_authority.rs` and the four
+  `packages/{rpm,deb,arch,eopkg}/authority.rs` modules; CCS signing and verification
   start in `crates/conary-core/src/ccs/v3/`. Native authoring
   content flow starts in `crates/conary-core/src/ccs/builder.rs`,
   `builder/source.rs`, `policy/content.rs`, and `builder/package_writer.rs`.
@@ -185,9 +218,9 @@ commands.
 
 ## Stable Patterns
 
-- Generation-aware mutation authority is the exact cumulative selected root,
-  materialized only after the runtime mutation lock is held, captured and
-  persisted before its SQLite transaction commits, and published before the
+- Generation-aware mutation authority is the exact cumulative indexed
+  selected-root snapshot, materialized only after the runtime mutation lock is
+  held, appended and bound before its SQLite transaction commits, and published before the
   lock owner is released. Publication never reconstructs filesystem effects
   from a database-only snapshot. Forward changesets and rollback changesets
   carry distinct typed lineage so compensating rows do not become LIFO
@@ -196,8 +229,9 @@ commands.
   older graph-based assumptions.
 - Keep shared operation vocabulary in `conary-core` and daemon-only request or
   execution policy in `conaryd`.
-- Remi and `conary-test` share service-layer patterns between HTTP handlers and
-  MCP tools; prefer those seams before duplicating handler logic.
+- Remi owns the live HTTP and MCP service-layer patterns. `conary-test` is a
+  local engine and CLI; its Remi client and WAL streaming path are retained but
+  currently unconstructed for local runs, with wiring tracked in issue #354.
 - Remi package-source and parser authority is the typed repository manifest;
   repository names, URLs, file extensions, and discovery indexes are not
   semantic authority.
@@ -225,6 +259,11 @@ commands.
 - Single-package adoption preview and apply share the planner in
   `apps/conary/src/commands/adopt/packages.rs`; preview stops before every
   SQLite, checkpoint, CAS, native-PM, hook, generation, and live-root write.
+- Adopted-package CCS conversion starts in
+  `apps/conary/src/commands/adopt/convert.rs`; it requires exact enrolled
+  artifact authority and complete adopted-payload equivalence before reusing
+  the direct native converter, then verifies and atomically retains the signed
+  CCS without changing the adopted trove's external ownership.
 - Trust is typed authority, not a default toggle. Native repositories require
   their ecosystem-specific metadata-to-package chain; static repositories
   require TUF. Missing proof fails closed and has no runtime disable command.
@@ -233,8 +272,9 @@ commands.
 
 - [`docs/modules/federation.md`](../modules/federation.md) for federation background
 - [`docs/modules/ccs.md`](../modules/ccs.md) for CCS format and conversion context
-- [`docs/specs/source-package-authority.md`](../specs/source-package-authority.md) for lossless RPM, Debian, ALPM, and CCS authority plus explicit consumer projections
-- [`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md) for authoritative RPM, Debian, and Arch lifecycle ABIs, transaction order, arguments, triggers, and payload visibility
+- [`docs/specs/source-package-authority.md`](../specs/source-package-authority.md) for lossless RPM, Debian, ALPM, eopkg, and CCS authority plus explicit consumer projections
+- [`docs/specs/foreign-package-lifecycle-contracts.md`](../specs/foreign-package-lifecycle-contracts.md) for authoritative RPM, Debian, Arch, and eopkg lifecycle ABIs, transaction order, arguments, triggers, and payload visibility
+- [`docs/specs/eopkg-source-abi.md`](../specs/eopkg-source-abi.md) for the pinned eopkg package, repository, trust, installed-state, configuration, and transaction mapping
 - [`docs/modules/feature-ownership.md`](../modules/feature-ownership.md) for feature ownership cards, neighboring systems, and interaction verification gates
 - [`docs/modules/test-fixtures.md`](../modules/test-fixtures.md) for Remi and CCS fixture ownership and proof commands
 - [`docs/modules/bootstrap.md`](../modules/bootstrap.md) for bootstrap and stage flows
@@ -243,7 +283,7 @@ commands.
 - [`docs/roadmaps/development-roadmap.md`](../roadmaps/development-roadmap.md) for remaining generation-bundle trust, pristine validation, and platform-projection horizons
 - [`docs/modules/recipe.md`](../modules/recipe.md) for recipe/build-system behavior
 - [`docs/modules/query.md`](../modules/query.md) for query-oriented CLI flows
-- [`docs/modules/source-selection.md`](../modules/source-selection.md) for source-policy, ranking, and replatform behavior
+- [`docs/modules/source-selection.md`](../modules/source-selection.md) for repository source identity, ranking, and replatform behavior
 
 ## Drift Rule
 

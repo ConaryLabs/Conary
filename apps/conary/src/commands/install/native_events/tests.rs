@@ -36,7 +36,7 @@ fn pre_remove_bundle(package_name: &str, version: &str) -> NativeLifecycleBundle
     let body = "exit 0\n".to_string();
     let entry = NativeLifecycleEntry {
         id: "rpm:%preun".to_string(),
-        native_slot: "%preun".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::PreUn),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PreRemove,
         lifecycle_paths: vec![LifecyclePath::PreRemove.as_str().to_string()],
@@ -59,7 +59,6 @@ fn pre_remove_bundle(package_name: &str, version: &str) -> NativeLifecycleBundle
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::External,
             body_transforms: Vec::new(),
-            critical: true,
             criticality: RpmCriticality::SlotDefault,
             raw_flags: 0,
             unknown_flags: 0,
@@ -105,11 +104,21 @@ fn rpm_bundle_for_phase(
     let mut bundle = pre_remove_bundle(package_name, version);
     let entry = &mut bundle.entries[0];
     entry.id = entry_id.to_string();
-    entry.native_slot = entry_id.trim_start_matches("rpm:").to_string();
+    // Fixture ids mix `rpm:<slot>` and `rpm:<slot>:<qualifier>` shapes; the
+    // slot is the `%`-prefixed segment.
+    entry.native_slot = entry_id
+        .strip_prefix("rpm:")
+        .and_then(|suffix| suffix.split(':').find(|part| part.starts_with('%')))
+        .and_then(conary_core::packages::native_abi::RpmScriptletSlot::from_tag);
     entry.phase = phase;
     entry.lifecycle_paths = vec![phase.as_str().to_string()];
     entry.interpreter = interpreter.to_string();
     entry.transaction_order.position = phase.as_str().to_string();
+    // Keep the persisted criticality stamp consistent with the typed class.
+    let entry_class = entry.rpm_class();
+    if let (Some(runtime), Some(class)) = (&mut entry.rpm_runtime, entry_class) {
+        runtime.criticality = class.effective_criticality(false);
+    }
     bundle
 }
 
@@ -191,15 +200,7 @@ fn deb_entry(
 ) -> NativeLifecycleEntry {
     let mut entry = pre_remove_bundle("fixture", "1").entries.remove(0);
     entry.id = id.to_string();
-    entry.native_slot = match control_member {
-        DebControlMember::Config => "config",
-        DebControlMember::Preinst => "preinst",
-        DebControlMember::Postinst => "postinst",
-        DebControlMember::Prerm => "prerm",
-        DebControlMember::Postrm => "postrm",
-        DebControlMember::Triggers => "triggers",
-    }
-    .to_string();
+    entry.native_slot = None;
     entry.phase = phase;
     entry.lifecycle_paths = vec![phase.as_str().to_string()];
     entry.interpreter = interpreter.to_string();
@@ -225,7 +226,7 @@ fn deb_entry(
 fn deb_triggers_entry(declarations: Vec<DebTriggerMetadata>) -> NativeLifecycleEntry {
     let mut entry = pre_remove_bundle("fixture", "1").entries.remove(0);
     entry.id = "deb:triggers".to_string();
-    entry.native_slot = "triggers".to_string();
+    entry.native_slot = None;
     entry.kind = NativeLifecycleEntryKind::ControlArtifact;
     entry.phase = LifecyclePath::Trigger;
     entry.lifecycle_paths = vec![LifecyclePath::Trigger.as_str().to_string()];

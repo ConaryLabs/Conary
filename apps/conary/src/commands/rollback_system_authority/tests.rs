@@ -1,11 +1,64 @@
 // apps/conary/src/commands/rollback_system_authority/tests.rs
 
 use super::*;
+use base64::Engine;
 use conary_core::ccs::native_lifecycle::{
     NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeLifecycleBundle,
     ScriptletFidelity, SourceFormat, VersionScheme,
 };
 use conary_core::db::models::{ConfigStatus, InstalledNativeLifecycleBundle, Trove};
+
+fn repository_intent() -> conary_core::repository::enrollment::PackageRepositoryEnrollmentIntent {
+    use conary_core::repository::enrollment::*;
+    use conary_core::repository::{
+        OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
+    };
+    let root = OpenPgpTrustRoot {
+        url: format!(
+            "data:application/pgp-keys;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(b"rollback-root")
+        ),
+        fingerprint: "A".repeat(40),
+    };
+    PackageRepositoryEnrollmentIntent {
+        schema: PACKAGE_REPOSITORY_ENROLLMENT_SCHEMA,
+        intent_id: "rollback-browser".to_string(),
+        repositories: vec![RepositoryDefinition {
+            name: "rollback-browser".to_string(),
+            source_identity: "rollback-source".to_string(),
+            repository_identity: "rollback-browser".to_string(),
+            scope: RepositoryPolicyScopeInput::Repository {
+                identity: "rollback-browser".to_string(),
+            },
+            stream: RepositorySourceStreamInput::Rolling {
+                identity: "rollback-stable".to_string(),
+            },
+            update: RepositoryUpdatePolicyInput::Follow,
+            metadata_url: "https://repo.example/rpm".to_string(),
+            content_url: None,
+            parser: RepositoryParserConfig::Rpm {
+                architecture: "x86_64".to_string(),
+            },
+            trust: RepositoryTrustPolicy::Rpm {
+                metadata: RpmMetadataAuthority::OpenPgp {
+                    keys: vec![root.clone()],
+                },
+                package_keys: vec![root],
+            },
+            enabled: true,
+            priority: 0,
+            metadata_expire: 3600,
+            source_profile: None,
+        }],
+        projections: vec![PackageProjectionReference {
+            path: "/etc/yum.repos.d/rollback-browser.repo".to_string(),
+            sha256: conary_core::hash::sha256(b"repository"),
+            mode: 0o644,
+            role: PackageProjectionRole::Declaration,
+        }],
+        last_owner: LastOwnerDisposition::RemoveWhenUnowned,
+    }
+}
 
 fn residual_bundle() -> NativeLifecycleBundle {
     NativeLifecycleBundle {
@@ -200,4 +253,76 @@ fn normalized_native_system_authority_rejects_broken_relations() {
     authority.alternative_groups.clear();
     let error = authority.validate().unwrap_err().to_string();
     assert!(error.contains("references missing owner"));
+}
+
+#[test]
+fn normalized_system_authority_restores_package_repository_owners() {
+    let (_temp, mut conn) = test_db();
+    let mut package = Trove::new(
+        "repository-release".to_string(),
+        "1".to_string(),
+        conary_core::db::models::TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    );
+    package.architecture = Some("x86_64".to_string());
+    let trove_id = package.insert(&conn).unwrap();
+    let tx = conn.transaction().unwrap();
+    conary_core::repository::enrollment::transaction::apply_transition(
+        &tx,
+        None,
+        trove_id,
+        "repository-release",
+        "1",
+        &[repository_intent()],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let repository_id =
+        conary_core::db::models::Repository::find_by_name(&conn, "rollback-browser")
+            .unwrap()
+            .unwrap()
+            .id
+            .unwrap();
+    conn.execute(
+        "UPDATE repositories
+         SET last_sync = '2026-08-12T00:00:00Z', authenticated_snapshot_sha256 = ?1
+         WHERE id = ?2",
+        rusqlite::params!["b".repeat(64), repository_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO repository_packages
+         (repository_id, name, version, architecture, checksum, size, download_url,
+          source_profile, version_scheme)
+         VALUES (?1, 'browser', '2-1', 'x86_64', ?2, 1,
+                 'https://repo.example/rpm/browser-2-1.rpm', 'fedora-44', 'rpm')",
+        rusqlite::params![repository_id, "c".repeat(64)],
+    )
+    .unwrap();
+    let before = RollbackSystemAuthority::capture(&conn).unwrap();
+
+    let tx = conn.transaction().unwrap();
+    conary_core::repository::enrollment::transaction::apply_removal(&tx, trove_id).unwrap();
+    tx.commit().unwrap();
+    assert!(
+        conary_core::db::models::Repository::find_by_name(&conn, "rollback-browser")
+            .unwrap()
+            .is_none()
+    );
+
+    let tx = conn.transaction().unwrap();
+    before.restore(&tx).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(RollbackSystemAuthority::capture(&conn).unwrap(), before);
+    let restored = conary_core::db::models::Repository::find_by_name(&conn, "rollback-browser")
+        .unwrap()
+        .unwrap();
+    assert!(restored.last_sync.is_none());
+    assert!(restored.authenticated_snapshot.is_none());
+    assert!(
+        conary_core::db::models::RepositoryPackage::find_by_repository(&conn, repository_id)
+            .unwrap()
+            .is_empty()
+    );
 }

@@ -18,7 +18,7 @@ pub(crate) enum InstallIntent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct InstallSemantics {
+pub(crate) struct InstallSemantics {
     pub(super) source: PreparedSourceKind,
     pub(super) version_scheme: VersionScheme,
 }
@@ -57,7 +57,7 @@ impl InstallSemantics {
                 format: PackageFormatType::Rpm,
             } => conary_core::payload::PayloadSharingPolicy::Rpm,
             PreparedSourceKind::NativePackage {
-                format: PackageFormatType::Deb | PackageFormatType::Arch,
+                format: PackageFormatType::Deb | PackageFormatType::Arch | PackageFormatType::Eopkg,
             }
             | PreparedSourceKind::Ccs => conary_core::payload::PayloadSharingPolicy::Exclusive,
         }

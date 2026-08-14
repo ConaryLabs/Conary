@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "repositories": [
+    {
+      "declaration": {
+        "ecosystem": "eopkg",
+        "name": "Solus",
+        "index_url": "https://cdn.getsol.us/repo/polaris/eopkg-index.xml.xz",
+        "location": {
+          "path": "/var/lib/eopkg/info/repos",
+          "line": 3
+        }
+      },
+      "name": "solus-polaris",
+      "source_identity": "solus-project",
+      "repository_identity": "solus-polaris-x86_64",
+      "scope": {
+        "kind": "repository",
+        "identity": "solus-polaris-x86_64"
+      },
+      "stream": {
+        "kind": "rolling",
+        "identity": "polaris"
+      },
+      "update": {
+        "mode": "follow"
+      },
+      "metadata_url": "https://cdn.getsol.us/repo/polaris/",
+      "content_url": null,
+      "parser": {
+        "package_format": "eopkg",
+        "architecture": "x86_64"
+      },
+      "trust": {
+        "ecosystem": "eopkg",
+        "origin": "https://cdn.getsol.us/repo/polaris/"
+      },
+      "enabled": true,
+      "priority": 50,
+      "metadata_expire": 3600,
+      "source_profile": "solus"
+    }
+  ]
+}

@@ -141,6 +141,7 @@ fn v3_authority(name: &str) -> AuthorityDocumentV3 {
             sha256: conary_core::hash::sha256(b"hello world\n"),
             size: b"hello world\n".len() as u64,
         }),
+        content_layout: conary_core::ccs::v3::schema::FileContentLayoutV3::WholeObject,
         component: "main".to_string(),
         config: None,
         conflict: ConflictPolicyV3::Error,

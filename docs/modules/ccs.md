@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-03
-revision: 58
-summary: Convert foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
+last_updated: 2026-08-13
+revision: 63
+summary: Convert direct and exactly re-resolved adopted foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -25,13 +25,15 @@ Apply typed install prefix (default `/`) to source-root children
      +-- Compute SHA-256 hash
      +-- Apply PolicyChain (Keep / Replace / Skip / Reject)
      +-- Apply exact path/rule component assignment, else lossless `runtime`
-     +-- Optional: split into CDC chunks (FastCDC)
+     +-- By default, split files >= 16 KiB into canonical FastCDC v2020 chunks
      |
   Group files by component -> ComponentData
      |
   BuildResult { manifest, components, files, payloads, chunk_stats }
      |
-  Sign manifest (Ed25519) -> embed PackageSignature
+  Project required whole-object or signed ordered-chunk layout
+     |
+  Sign MANIFEST authority (Ed25519)
      |
   Output .ccs archive (tar.gz with MANIFEST + MANIFEST.toml + objects/)
 ```
@@ -49,9 +51,12 @@ Apply typed install prefix (default `/`) to source-root children
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
 | CCS package projection | package/v3_projection.rs | Project verified signed v3 authority into install-time package data |
 | `AuthorityDocumentV3` | v3/schema.rs | Signed CCS v3 native package authority |
+| `FileContentLayoutV3` | v3/schema.rs + v3/validation/content_layout.rs | Required whole-object/no-content or canonical FastCDC v2020 reconstruction authority |
 | v3 manifest identity projection | v3/manifest_projection.rs | Project one exact signed identity into install and untrusted-inspection compatibility manifests |
 | `CcsStructuralBudget` | budget.rs | Single owner of every CCS structural and operator-resource limit; authoring preflight and verification both admit against it |
 | `AuthorityCensus` | budget.rs | Exact structural measurement of one authority document; derives that package's byte ceilings |
+| Verified object sink | verify/object_sink.rs + filesystem/cas/verified_batch.rs | Streams signed objects to a read-only spool or transaction-owned permanent CAS batch and returns typed committed object authority |
+| `ReopenablePayload` | packages/payload.rs | Reopens one object or lazily concatenates authenticated ordered chunks without whole-file buffering |
 | Component view | v3/component_view.rs | Derives component and file views from signed authority instead of a duplicated archive projection |
 | `ComponentType` | components/types.rs | Closed typed names for standard component metadata; never inferred from payload paths |
 | `SigningKeyPair` | signing.rs | Ed25519 key generation, signing, file I/O |
@@ -63,6 +68,13 @@ Apply typed install prefix (default `/`) to source-root children
 | `NativeExport` | manifest.rs, native_export/ | Format-specific RPM, Debian, and Arch export overrides and generators |
 | `BuildPolicy` (trait) | policy.rs | Pluggable build policy (DenyPaths, StripBinaries, FixShebangs, etc.) |
 | `EnhancementEngine` (trait) | enhancement/ | Exact post-conversion provenance recording |
+
+The `local-dev` signing authority is initialized under one process- and
+thread-safe file lock. Its private key is the sole persisted authority; every
+successful load atomically regenerates the public projection from that private
+key before signing or constructing a trust policy. Concurrent first use cannot
+replace an established signer, and a missing or mismatched public file never
+becomes independent trust authority.
 
 ## Submodules
 
@@ -84,9 +96,9 @@ enable or disable, generic service actions, tmpfiles, sysctl, alternatives.
 All operations respect a target_root parameter for bootstrap/container use.
 `hooks/capabilities.rs` owns the typed host-inventory epoch. `conary
 system init` discovers and persists the active init interface plus exact
-`systemctl`, `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and target-root
+`systemctl`, `rc-service`, `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and target-root
 `ldconfig` executable interfaces in `system.host-capability-inventory`.
-The version-4 document also records the target `/usr` node's exact opaque
+The version-5 document also records the target `/usr` node's exact opaque
 `security.selinux` value when present. Generation artifacts authenticate that
 target fact separately from each logical composefs node and use it only for
 carrier CAS backing. `hooks/capabilities/filesystem_security.rs` owns its
@@ -108,14 +120,15 @@ installs pass the exact rendered declaration to that executable; offline-root
 installs write the same declaration under the target root for its own
 `systemd-tmpfiles` implementation to consume.
 
-Systemd enable and disable use the documented `systemctl` grammar on a live
-host and `systemctl --root=...` for an offline root. A generic service start,
-stop, or restart is valid only against a running typed service manager; it is
-not guessed or deferred for an offline root. A `[[hooks.systemd]]` entry with
-`enable = false` is an explicit disable operation. Author-declared systemd and
-service fields are pathless unit names; raw native lifecycle argv has a
-separate exact systemctl-operand contract and is not narrowed by this
-declarative safety envelope.
+Systemd enable and disable use the documented `systemctl` grammar against the
+selected root. OpenRC enable and disable own the exact `default` runlevel
+symlink and require an executable, nonsymlinked init script. Generic service
+start, stop, reload, or restart resolves through the typed active systemd or
+OpenRC interface and is deferred as generation activation work. A
+`[[hooks.systemd]]` entry with `enable = false` is an explicit disable
+operation. Author-declared systemd and service fields are pathless names; raw
+native lifecycle argv has a separate exact provider-operand contract and is
+not narrowed by this declarative safety envelope.
 
 SELinux/AppArmor conversion adapters record discovery evidence only. CCS has no
 parallel `SecurityPolicyIntent` mutation contract. During selected-root
@@ -155,6 +168,17 @@ regular file, an exact SHA-256 and byte length. Symlink targets, hardlink
 identity, device numbers, FIFOs, sockets, and directories are variant data;
 consumers must not recover node kind from mode bits, path spelling, content
 length, or the presence of an unrelated field.
+
+`FileContentLayoutV3` is the signed storage contract layered beneath that
+whole-file authority. Non-regular nodes explicitly carry `no-content`.
+Unchunked regular files carry `whole-object`; default authoring for files at
+least 16 KiB carries the canonical FastCDC v2020 16/64/256 KiB profile and an
+ordered digest/length list. The writer re-chunks the reopened source and emits
+each unique address once. Verification authenticates those objects, lazily
+concatenates them, reruns the signed boundary profile, and proves the final
+whole-file digest and size before exposing payload authority. Generation and
+composefs materialization, not archive verification, owns the persistent
+whole-file CAS object required to publish a root.
 
 RPM header arrays own installed metadata while the paired CPIO member owns
 bytes. RPM `FILEUSERNAME` and `FILEGROUPNAME` remain source identities.
@@ -211,7 +235,7 @@ source-RPM verification database. The adopted-package `--rpm` verification
 path delegates to the installed RPM database, while native Conary verification
 uses the projected node and CAS authority.
 
-**convert/** -- RPM, Debian, and Arch to CCS conversion. Source package parsers
+**convert/** -- RPM, Debian, Arch, and eopkg to CCS conversion. Source package parsers
 produce a typed native ABI before conversion: exact lifecycle slots, body
 bytes, interpreters, invocation contracts, trigger/control metadata, and
 package-manager ordering. Source-defined strong requirement order, including
@@ -223,13 +247,26 @@ inspecting the script body and it does not suppress an entry because a command
 appears to have a declarative replacement. The resulting CCS is executed by
 Conary on any supported target; conversion and install do not delegate
 lifecycle planning, database mutation, or transaction completion to `rpm`,
-`dpkg`, or `pacman`.
+`dpkg`, `pacman`, or `eopkg`.
 Source format and target host are orthogonal: the running system exposes typed
 ABI/libc/loader, init, LSM, filesystem, boot/kernel, and helper capabilities.
-The implemented hook inventory currently records init/systemd, sysusers,
+The implemented hook inventory currently records init/systemd/OpenRC, sysusers,
 tmpfiles, sysctl, and ldconfig interfaces; the remaining capability families
 stay typed implementation work rather than distro-name fallbacks. Distro names
 do not select pairwise converters, compatibility profiles, or string gates.
+
+The adopted-package entrypoint is
+`apps/conary/src/commands/adopt/convert.rs`. It does not reconstruct a package
+from live files or installed database metadata. It re-resolves the exact
+authenticated RPM, Debian, Arch, or eopkg source artifact from an enrolled repository
+or verified Conary cache, proves exact installed identity and payload
+equivalence, and then calls the same direct native converter above. The signed
+CCS is verified in same-directory staging before an installed-conversion row
+and durable path commit together. Conversion failure, archive verification
+failure, or SQLite failure removes the new output. Current installed
+conversion records are reusable only while their conversion version, source
+format/checksum, signed identity, architecture, version scheme, and lifecycle
+source checksum remain exact.
 
 `convert/converter.rs` is the conversion orchestration hub.
 `convert/scriptlet_bundle/{builder,entries,format_metadata,native_contracts}.rs`
@@ -247,7 +284,7 @@ The authoritative package-manager surface, invocation matrices, event order,
 and payload visibility contract is
 `docs/specs/foreign-package-lifecycle-contracts.md`.
 
-**native_lifecycle.rs** -- Current persisted RPM, Debian, and Arch lifecycle
+**native_lifecycle.rs** -- Current persisted RPM, Debian, Arch, and eopkg lifecycle
 ABI. The schema-revision-19 bundle lives in the TOML manifest as
 `[native_lifecycle]` and records source identity and version scheme, exact
 entries with typed executable/control-artifact kind, body digests,
@@ -264,7 +301,7 @@ family/route aliases are rejected.
 The typed Debian declaration list is the sole trigger authority: validation
 reparses the preserved control artifact and rejects parallel superseded
 trigger-body or trigger-name projections. Actual provider execution at the
-selected-root process boundary is systemd, SELinux, AppArmor, boot, and kernel
+selected-root process boundary is systemd, OpenRC, SELinux, AppArmor, boot, and kernel
 runtime authority; static script classifications are not persisted authority.
 Revision 18 is a hard cut: earlier artifacts and installed rows must be
 reconverted, rebuilt, or discarded with the pre-alpha database rather than
@@ -429,7 +466,7 @@ separate exact-key or policy authority.
 `crates/conary-core/src/ccs/budget.rs` owns every CCS limit. There is no fixed
 serialized-byte ceiling on `MANIFEST`: limits are structural counts, per-item
 string and depth bounds, aggregate variable-length pools, payload-object
-bounds, and CBOR nesting depth, and byte ceilings are derived from them. The
+bounds, ordered-reference bounds, and CBOR nesting depth, and byte ceilings are derived from them. The
 writer admits the authority it is about to sign through the same
 `admit_authority` call verification uses, so a package this repository emits is
 readable by construction.
@@ -443,6 +480,21 @@ buffers. Tar decoders enforce declared size per entry, then independently bound
 cumulative payload, archive entries, metadata, and framing overhead; those
 dimensions replace a guessed global decompression ceiling without weakening
 decompression-bomb resistance. `docs/specs/ccs-format-v3.md` owns the contract.
+
+Verification-only and dry-run callers use a temporary payload spool and do not
+create permanent CAS state. Mutating CCS install, restore, and repository-batch
+preparation instead stream the signed complete layout-object set into one
+permanent SHA-256 `VerifiedObjectBatch`. Missing bytes are hashed while written once,
+data-synced, published without replacement, and followed by shard/root
+directory durability barriers. Exact-size canonical hits write no payload
+bytes and are not reread solely for insertion; a concurrent publication winner
+is reread and must match its signed size and digest. Only the committed batch
+can create `ReopenablePayload` object sources carrying `VerifiedObjectSet`
+authority. A whole-object source can transfer its canonical identity directly
+to installer storage for the same CAS root; a chunk layout yields a lazy
+concatenated source that installer storage ingests once into the whole-file CAS
+representation generation publication requires. Ordinary sources retain the
+existing bounded reader-ingestion path.
 
 Configuration authority is exact per path. Each signed declaration retains
 its source-specific record and a `matched` or `absent` payload association;
@@ -605,8 +657,10 @@ behavior.
 ## Install
 
 CCS packages are installed via `conary ccs install`. The installer verifies
-signatures, evaluates capability policy, stores content in CAS, reuses the
-shared composefs generation transaction, and runs declarative hooks.
+signatures, ingests authenticated missing objects directly into permanent CAS,
+evaluates capability policy, reuses the shared composefs generation
+transaction, and runs declarative hooks. Dry-run verification remains
+filesystem-read-only with respect to permanent CAS.
 
 ```bash
 conary ccs install package.ccs --policy ./ccs-trust.toml --yes

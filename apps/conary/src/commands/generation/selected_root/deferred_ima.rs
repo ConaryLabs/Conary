@@ -4,7 +4,9 @@
 
 use crate::commands::LiveRootFile;
 use anyhow::{Context, Result, bail};
-use conary_core::generation::root_manifest::{CapturedSelectedRoot, GenerationRootEntry};
+use conary_core::generation::root_manifest::{
+    CapturedSelectedRoot, GenerationRootEntry, SelectedRootManifestDelta,
+};
 use conary_core::payload::{PayloadContentAuthority, PayloadNodeKind};
 use std::collections::BTreeMap;
 
@@ -97,6 +99,68 @@ impl DeferredImaAuthority {
         }
         captured.generation.validate()?;
         captured.state.validate()?;
+        Ok(restored)
+    }
+
+    /// Restore signatures only into transaction-owned changed entries.
+    ///
+    /// Unchanged paths retain their signature in the parent snapshot. Starting
+    /// from the recorded content map and applying the delta lets hardlinks
+    /// compare against their effective target content without materializing
+    /// the complete selected root.
+    pub(super) fn restore_into_delta(
+        &self,
+        delta: &mut SelectedRootManifestDelta,
+    ) -> Result<usize> {
+        delta.validate()?;
+        let mut actual_content = self.content_by_path.clone();
+        for path in delta.removals.iter().chain(&delta.opaque_directories) {
+            remove_path_and_descendants(&mut actual_content, path);
+        }
+        for entry in &delta.upserts {
+            actual_content.remove(&entry.path);
+        }
+        for entry in &delta.upserts {
+            if matches!(entry.node.source.kind, PayloadNodeKind::Regular { .. }) {
+                let content = entry.content.clone().with_context(|| {
+                    format!(
+                        "selected-root delta regular path {} has no content authority",
+                        entry.path
+                    )
+                })?;
+                actual_content.insert(entry.path.clone(), content);
+            }
+        }
+        for entry in &delta.upserts {
+            if let PayloadNodeKind::Hardlink { target, .. } = &entry.node.source.kind {
+                let content = actual_content.get(target).cloned().with_context(|| {
+                    format!(
+                        "selected-root delta hardlink {} targets unavailable content {target}",
+                        entry.path
+                    )
+                })?;
+                actual_content.insert(entry.path.clone(), content);
+            }
+        }
+
+        let mut restored = 0;
+        for entry in &mut delta.upserts {
+            let Some(signature) = self.signatures.get(&entry.path) else {
+                continue;
+            };
+            if actual_content.get(&entry.path) != Some(&signature.content)
+                || entry.node.source.xattrs.contains_key(SECURITY_IMA_XATTR)
+            {
+                continue;
+            }
+            entry
+                .node
+                .source
+                .xattrs
+                .insert(SECURITY_IMA_XATTR.to_string(), signature.value.clone());
+            restored += 1;
+        }
+        delta.validate()?;
         Ok(restored)
     }
 
@@ -231,6 +295,55 @@ mod tests {
         assert_eq!(authority.restore_into(&mut captured).unwrap(), 0);
         assert!(
             !file_ref(&captured)
+                .node
+                .source
+                .xattrs
+                .contains_key(SECURITY_IMA_XATTR)
+        );
+    }
+
+    #[test]
+    fn exact_changed_upsert_restores_deferred_ima_without_materializing_prior() {
+        let source = signed_root(b"signed");
+        let authority = DeferredImaAuthority::from_captured(&source).unwrap();
+        let mut entry = file_ref(&source).clone();
+        entry.node.source.xattrs.remove(SECURITY_IMA_XATTR);
+        let mut delta = conary_core::generation::root_manifest::SelectedRootManifestDelta {
+            version: conary_core::generation::root_manifest::SELECTED_ROOT_MANIFEST_DELTA_VERSION,
+            root: None,
+            removals: Vec::new(),
+            opaque_directories: Vec::new(),
+            upserts: vec![entry],
+        };
+
+        assert_eq!(authority.restore_into_delta(&mut delta).unwrap(), 1);
+        assert!(
+            delta.upserts[0]
+                .node
+                .source
+                .xattrs
+                .contains_key(SECURITY_IMA_XATTR)
+        );
+    }
+
+    #[test]
+    fn changed_delta_content_does_not_inherit_prior_ima() {
+        let source = signed_root(b"signed");
+        let authority = DeferredImaAuthority::from_captured(&source).unwrap();
+        let mut entry = file_ref(&source).clone();
+        entry.node.source.xattrs.remove(SECURITY_IMA_XATTR);
+        entry.content = Some(content(b"changed"));
+        let mut delta = conary_core::generation::root_manifest::SelectedRootManifestDelta {
+            version: conary_core::generation::root_manifest::SELECTED_ROOT_MANIFEST_DELTA_VERSION,
+            root: None,
+            removals: Vec::new(),
+            opaque_directories: Vec::new(),
+            upserts: vec![entry],
+        };
+
+        assert_eq!(authority.restore_into_delta(&mut delta).unwrap(), 0);
+        assert!(
+            !delta.upserts[0]
                 .node
                 .source
                 .xattrs

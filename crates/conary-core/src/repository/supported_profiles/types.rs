@@ -38,6 +38,7 @@ pub enum ProfilePackageFormat {
     Rpm,
     Deb,
     Arch,
+    Eopkg,
 }
 
 impl ProfilePackageFormat {
@@ -47,6 +48,7 @@ impl ProfilePackageFormat {
             Self::Rpm => "rpm",
             Self::Deb => "deb",
             Self::Arch => "arch",
+            Self::Eopkg => "eopkg",
         }
     }
 }
@@ -57,6 +59,7 @@ pub(super) enum VersionSchemeValue {
     Rpm,
     Debian,
     Arch,
+    Eopkg,
 }
 
 impl From<VersionSchemeValue> for VersionScheme {
@@ -65,6 +68,7 @@ impl From<VersionSchemeValue> for VersionScheme {
             VersionSchemeValue::Rpm => VersionScheme::Rpm,
             VersionSchemeValue::Debian => VersionScheme::Debian,
             VersionSchemeValue::Arch => VersionScheme::Arch,
+            VersionSchemeValue::Eopkg => VersionScheme::Eopkg,
         }
     }
 }

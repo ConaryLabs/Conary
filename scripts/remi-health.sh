@@ -11,7 +11,8 @@ set -euo pipefail
 
 ENDPOINT="${REMI_ENDPOINT:-https://remi.conary.io}"
 MODE="smoke"
-EXPECTED_UBUNTU_RELEASE="${REMI_EXPECTED_UBUNTU_RELEASE:-resolute}"
+EXPECTED_UBUNTU_PROFILE="${REMI_EXPECTED_UBUNTU_PROFILE:-ubuntu-26.04}"
+CURL_BIN="${REMI_CURL_BIN:-curl}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -25,63 +26,78 @@ done
 
 PASS=0
 FAIL=0
+HTTP_CODE="000"
+CURL_EXIT=0
+CURL_CLASS="ok"
 
-check() {
-    local name="$1" url="$2" expect="${3:-200}"
-    local http_code
-    if ! http_code=$(curl -sfI -o /dev/null -w '%{http_code}' --max-time 30 "$url" 2>/dev/null); then
-        http_code="000"
+classify_curl_exit() {
+    case "$1" in
+        0)  printf '%s' "ok" ;;
+        6)  printf '%s' "dns" ;;
+        7)  printf '%s' "connect" ;;
+        22) printf '%s' "http" ;;
+        28) printf '%s' "timeout" ;;
+        35) printf '%s' "tls" ;;
+        52) printf '%s' "empty-reply" ;;
+        56) printf '%s' "receive" ;;
+        *)  printf 'curl-exit-%s' "$1" ;;
+    esac
+}
+
+probe() {
+    local method="$1" url="$2" output="$3"
+    local -a method_args=()
+    if [[ "$method" == "HEAD" ]]; then
+        method_args=(-I)
     fi
 
-    if [[ "$http_code" == "$expect" ]]; then
-        printf "  [PASS] %-40s %s\n" "$name" "$http_code"
+    if HTTP_CODE=$("$CURL_BIN" -sS -f "${method_args[@]}" -o "$output" \
+        -w '%{http_code}' --max-time 30 "$url" 2>/dev/null); then
+        CURL_EXIT=0
+    else
+        CURL_EXIT=$?
+    fi
+    CURL_CLASS=$(classify_curl_exit "$CURL_EXIT")
+}
+
+probe_result() {
+    printf 'http=%s curl_exit=%s class=%s' "$HTTP_CODE" "$CURL_EXIT" "$CURL_CLASS"
+}
+
+check() {
+    local name="$1" url="$2" expect="${3:-200}" method="${4:-HEAD}"
+    probe "$method" "$url" /dev/null
+
+    if [[ "$CURL_EXIT" -eq 0 && "$HTTP_CODE" =~ ^($expect)$ ]]; then
+        printf "  [PASS] %-40s %s\n" "$name" "$(probe_result)"
         PASS=$((PASS + 1))
     else
-        printf "  [FAIL] %-40s %s (expected %s)\n" "$name" "$http_code" "$expect"
+        printf "  [FAIL] %-40s %s (expected %s)\n" "$name" "$(probe_result)" "$expect"
         FAIL=$((FAIL + 1))
     fi
 }
 
 check_contains() {
     local name="$1" url="$2" needle="$3"
-    local body
-    body=$(curl -sf --max-time 10 "$url" 2>/dev/null || echo "")
+    local body_file
+    body_file=$(mktemp)
+    probe GET "$url" "$body_file"
 
-    if echo "$body" | grep -qF "$needle"; then
+    if [[ "$CURL_EXIT" -eq 0 && "$HTTP_CODE" == "200" ]] && grep -qF "$needle" "$body_file"; then
         printf "  [PASS] %-40s contains '%s'\n" "$name" "$needle"
         PASS=$((PASS + 1))
     else
-        printf "  [FAIL] %-40s missing '%s'\n" "$name" "$needle"
+        printf "  [FAIL] %-40s %s; missing '%s'\n" "$name" "$(probe_result)" "$needle"
         FAIL=$((FAIL + 1))
     fi
+    rm -f -- "$body_file"
 }
 
-check_ubuntu_release_metadata() {
-    local name="ubuntu release metadata"
-    local url="$ENDPOINT/v1/ubuntu/metadata"
-    local body
-    body=$(curl -sf --max-time 30 "$url" 2>/dev/null || echo "")
-
-    if [[ -z "$body" ]]; then
-        printf "  [FAIL] %-40s no metadata response\n" "$name"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    if grep -qF '"distribution":"noble"' <<<"$body"; then
-        printf "  [FAIL] %-40s still contains Noble metadata\n" "$name"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    if ! grep -qF "\"distribution\":\"$EXPECTED_UBUNTU_RELEASE\"" <<<"$body"; then
-        printf "  [FAIL] %-40s missing distribution '%s'\n" "$name" "$EXPECTED_UBUNTU_RELEASE"
-        FAIL=$((FAIL + 1))
-        return
-    fi
-
-    printf "  [PASS] %-40s distribution '%s'\n" "$name" "$EXPECTED_UBUNTU_RELEASE"
-    PASS=$((PASS + 1))
+check_source_profile() {
+    local distro="$1" expected="$2"
+    check_contains "source profile ($distro)" \
+        "$ENDPOINT/v1/index/$distro?page=1&per_page=1" \
+        "\"source_profile\":\"$expected\""
 }
 
 echo "Remi Health Check ($MODE)"
@@ -98,20 +114,16 @@ check_contains "readiness" "$ENDPOINT/health/ready" '"ready":true'
 check "stats overview"   "$ENDPOINT/v1/stats/overview"
 
 echo ""
-echo "=== Metadata (per distro) ==="
-for distro in fedora ubuntu arch; do
-    check "metadata ($distro)" "$ENDPOINT/v1/${distro}/metadata"
-done
+echo "=== Bounded Sparse Metadata ==="
+check_source_profile fedora fedora-44
+check_source_profile ubuntu "$EXPECTED_UBUNTU_PROFILE"
+check_source_profile arch arch
 
 # ── Full checks (--full only) ────────────────────────────────────────────
 if [[ "$MODE" == "full" ]]; then
     echo ""
     echo "=== Sparse Index ==="
-    check "sparse index (curl)" "$ENDPOINT/v1/packages/curl"
-
-    echo ""
-    echo "=== Release Metadata ==="
-    check_ubuntu_release_metadata
+    check "sparse index (curl)" "$ENDPOINT/v1/index/fedora/curl" 200 GET
 
     echo ""
     echo "=== Search ==="
@@ -123,17 +135,8 @@ if [[ "$MODE" == "full" ]]; then
 
     echo ""
     echo "=== Package Metadata / Conversion ==="
-    if ! conv_code=$(curl -sfI -o /dev/null -w '%{http_code}' --max-time 30 \
-        "$ENDPOINT/v1/fedora/packages/curl" 2>/dev/null); then
-        conv_code="000"
-    fi
-    if [[ "$conv_code" == "200" ]] || [[ "$conv_code" == "202" ]]; then
-        printf "  [PASS] %-40s %s\n" "package metadata / conversion" "$conv_code"
-        PASS=$((PASS + 1))
-    else
-        printf "  [FAIL] %-40s %s (expected 200 or 202)\n" "package metadata / conversion" "$conv_code"
-        FAIL=$((FAIL + 1))
-    fi
+    check "package metadata / conversion" \
+        "$ENDPOINT/v1/fedora/packages/curl" "200|202"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────

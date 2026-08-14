@@ -2,50 +2,105 @@
 
 //! Deterministic dependency-first ordering for an exact selected batch.
 
+use super::promises::{PromiseWitnessPlan, dependency_requirements};
 use super::*;
-use conary_core::repository::dependency_model::RepositoryRequirementKind;
+use conary_core::repository::dependency_model::{
+    RepositoryRequirementGroup, RepositoryRequirementKind,
+};
 use conary_core::resolver::identity::{PackageIdentity, ProvidedCapability};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Order the batch and plan what it must prove about promised paths.
+///
+/// Ordering and promise reliance are separate questions asked of the same
+/// facts. [`super::promises`] owns the second one for both holders -- incoming
+/// packages and already installed ones -- because a promise made by an earlier
+/// transaction can hold up this one's edge, and because a single-package batch
+/// has requirements to certify and promises to answer for even though it has
+/// nothing to order.
+///
+/// Both questions are asked of the transaction's end state, never of the
+/// database as it stands: [`super::witness_universe`] withholds every installed
+/// identity this transaction deletes, so an edge can only be certified against
+/// capabilities that still exist once the transaction commits.
 pub(super) fn order_packages_for_transaction(
     conn: &Connection,
     packages: &mut Vec<PreparedPackage>,
-) -> Result<()> {
-    if packages.len() < 2 {
-        return Ok(());
-    }
-
+) -> Result<PromiseWitnessPlan> {
     let native_architecture = conary_core::repository::registry::detect_system_arch();
-    let installed = conary_core::resolver::load_installed_package_identities(conn)?
-        .into_iter()
-        .map(|mut identity| {
-            if identity.architecture.as_deref().is_none_or(str::is_empty) {
-                identity.architecture = Some(native_architecture.clone());
-            }
-            identity
-        })
-        .collect::<Vec<_>>();
+    // A lone package with no hard requirements has nothing to certify and no
+    // edges to order, so the installed universe is not loaded for it. This is
+    // the only excused shape: one package, zero Depends/PreDepends. Every
+    // requirement-carrying batch of any size certifies below.
+    if packages.len() < 2
+        && packages
+            .iter()
+            .all(|package| dependency_requirements(package).next().is_none())
+    {
+        return Ok(PromiseWitnessPlan::default());
+    }
+    let installed = super::witness_universe::surviving_installed_identities(
+        conn,
+        packages,
+        &native_architecture,
+    )?;
     let selected = packages
         .iter()
         .map(|package| transaction_identity(package, &native_architecture))
         .collect::<Vec<_>>();
+    if packages.len() < 2 {
+        // A single-package batch has no edges to order, but every requirement
+        // is still certified against the transaction's end state -- the
+        // package itself plus the installed identities that survive it -- with
+        // the same expression evaluation and the same diagnostic the ordered
+        // path uses. The transaction layer does not assume an upstream layer
+        // (the solver) already caught an unsatisfiable requirement, so a lone
+        // package is not excused from certification. When the package
+        // supersedes -- or relation-removes -- the only provider of one of its
+        // own requirements, nothing downstream would notice: with no holder
+        // left, promise planning has no obligation to record and the post
+        // condition has nothing to re-ask.
+        let mut witnesses = installed;
+        witnesses.extend(selected.iter().cloned());
+        for package in packages.iter() {
+            for requirement in dependency_requirements(package) {
+                require_expression_satisfied(
+                    package,
+                    requirement,
+                    depending_architecture(package, &native_architecture),
+                    &native_architecture,
+                    &witnesses,
+                )?;
+            }
+        }
+        // The promise planner rebuilds this same universe from the installed
+        // identities and the selected ones, and decides holder side by position,
+        // so hand back the installed prefix rather than a second copy.
+        witnesses.truncate(witnesses.len() - selected.len());
+        return super::promises::plan_promise_witnesses(
+            packages,
+            witnesses,
+            &selected,
+            &native_architecture,
+        );
+    }
     let stable_indices = stable_package_indices(packages);
     let mut edges = vec![BTreeSet::new(); packages.len()];
     let mut strong_edges = vec![BTreeSet::new(); packages.len()];
 
+    // One witness vector for the whole loop, seeded by moving the installed
+    // universe in rather than cloning it per requirement or per retained
+    // witness. Every evaluation reads this vector; each requirement truncates
+    // the tail back to its own dependent and grows it with candidate
+    // identities, and the reverse pass takes one candidate out around each
+    // counterfactual and restores it when it is load-bearing -- the same
+    // mutate-and-restore shape promises.rs uses for promised paths.
+    let installed_count = installed.len();
+    let mut witnesses = installed;
     for (dependent_index, package) in packages.iter().enumerate() {
-        let depending_architecture = package
-            .architecture
-            .as_deref()
-            .filter(|architecture| !architecture.is_empty())
-            .unwrap_or(&native_architecture);
-        for requirement in package.requirements.iter().filter(|requirement| {
-            matches!(
-                requirement.kind,
-                RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends
-            )
-        }) {
-            let mut witnesses = installed.clone();
+        let depending_architecture = depending_architecture(package, &native_architecture);
+        for requirement in dependency_requirements(package) {
+            witnesses.truncate(installed_count);
             witnesses.push(selected[dependent_index].clone());
             if expression_satisfied(
                 requirement,
@@ -75,45 +130,34 @@ pub(super) fn order_packages_for_transaction(
                     break;
                 }
             }
-            if !expression_satisfied(
+            require_expression_satisfied(
+                package,
                 requirement,
-                package.semantics.version_scheme,
                 depending_architecture,
                 &native_architecture,
                 &witnesses,
-            )? {
-                anyhow::bail!(
-                    "selected package transaction does not satisfy exact {} requirement for {}: {}",
-                    requirement.kind.as_str(),
-                    package.name,
-                    requirement
-                        .native_text
-                        .as_deref()
-                        .unwrap_or("<typed expression>")
-                );
-            }
+            )?;
 
             // Remove every dispensable witness in a deterministic reverse
             // pass. The retained set is exact expression authority for the
             // dependency edge; package names and solver trail order never are.
+            // The witness tail mirrors selected_witnesses one for one, so the
+            // counterfactual removes one candidate from the shared universe
+            // and restores it at the same position when it must stay -- no
+            // second universe is built for it.
             for position in (0..selected_witnesses.len()).rev() {
-                let mut without_candidate = installed.clone();
-                without_candidate.push(selected[dependent_index].clone());
-                without_candidate.extend(
-                    selected_witnesses
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| *index != position)
-                        .map(|(_, index)| selected[*index].clone()),
-                );
+                let tail_index = installed_count + 1 + position;
+                let removed = witnesses.remove(tail_index);
                 if expression_satisfied(
                     requirement,
                     package.semantics.version_scheme,
                     depending_architecture,
                     &native_architecture,
-                    &without_candidate,
+                    &witnesses,
                 )? {
                     selected_witnesses.remove(position);
+                } else {
+                    witnesses.insert(tail_index, removed);
                 }
             }
             for provider_index in selected_witnesses {
@@ -125,6 +169,16 @@ pub(super) fn order_packages_for_transaction(
         }
     }
 
+    // The promise planner rebuilds this same universe from the installed
+    // prefix and the selected identities, and decides holder side by position,
+    // so hand back the installed prefix rather than a second copy.
+    witnesses.truncate(installed_count);
+    let plan = super::promises::plan_promise_witnesses(
+        packages,
+        witnesses,
+        &selected,
+        &native_architecture,
+    )?;
     let order = dependency_first_scc_order(packages, &edges, &strong_edges);
     let mut slots = packages.drain(..).map(Some).collect::<Vec<_>>();
     packages.extend(
@@ -132,7 +186,53 @@ pub(super) fn order_packages_for_transaction(
             .into_iter()
             .map(|index| slots[index].take().expect("package order repeats an index")),
     );
-    Ok(())
+    Ok(plan)
+}
+
+/// The architecture a package's own requirements are evaluated for.
+fn depending_architecture<'a>(
+    package: &'a PreparedPackage,
+    native_architecture: &'a str,
+) -> &'a str {
+    package
+        .architecture
+        .as_deref()
+        .filter(|architecture| !architecture.is_empty())
+        .unwrap_or(native_architecture)
+}
+
+/// Certify one requirement against `witnesses`, or fail the transaction.
+///
+/// One owner for the diagnostic, because two paths ask this: the ordered path,
+/// after adding every batch member that could witness the edge, and the
+/// single-package path, which has only the surviving installed identities and
+/// the package itself. Both failures mean the same thing -- the transaction's
+/// end state does not provide what the package requires.
+fn require_expression_satisfied(
+    package: &PreparedPackage,
+    requirement: &RepositoryRequirementGroup,
+    depending_architecture: &str,
+    native_architecture: &str,
+    witnesses: &[PackageIdentity],
+) -> Result<()> {
+    if expression_satisfied(
+        requirement,
+        package.semantics.version_scheme,
+        depending_architecture,
+        native_architecture,
+        witnesses,
+    )? {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "selected package transaction does not satisfy exact {} requirement for {}: {}",
+        requirement.kind.as_str(),
+        package.name,
+        requirement
+            .native_text
+            .as_deref()
+            .unwrap_or("<typed expression>")
+    )
 }
 
 fn expression_satisfied(

@@ -123,6 +123,38 @@ fn remove_file_and_sync_removes_target() {
 }
 
 #[test]
+fn disposable_overlay_removal_uses_no_external_recovery_authority() {
+    let temp = TempDir::new().unwrap();
+    let runtime = temp.path().join("runtime");
+    let root = temp.path().join("overlay-root");
+    fs::create_dir_all(root.join("usr/bin")).unwrap();
+    fs::write(root.join("usr/bin/fixture"), b"prior").unwrap();
+
+    let tx_uuid = Uuid::new_v4().to_string();
+    let mut tx = LiveRootTransaction::begin_disposable_overlay(
+        &runtime,
+        &root,
+        tx_uuid.clone(),
+        "remove fixture",
+    )
+    .unwrap();
+    let stats = tx
+        .apply_remove_paths(&["/usr/bin/fixture".to_string()])
+        .unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(stats.files_removed, 1);
+    assert!(!root.join("usr/bin/fixture").exists());
+    assert!(!runtime.join("live-root-journals").exists());
+    assert!(
+        !runtime
+            .join("live-root-journals")
+            .join(format!("{tx_uuid}.backups"))
+            .exists()
+    );
+}
+
+#[test]
 fn install_rejects_symlink_parent_without_writing_outside_root() {
     let temp = TempDir::new().unwrap();
     let runtime = temp.path().join("runtime");

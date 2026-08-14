@@ -512,6 +512,7 @@ mod tests {
                 _temp_dir: None,
                 repository_provenance: Some(RepositorySourceMetadata {
                     repository_id: 42,
+                    source_identity: Some("fedora-44".to_string()),
                     source_profile: Some("fedora-44".to_string()),
                     version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
                     source_kind: RepositorySourceKind::Remi,

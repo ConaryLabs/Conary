@@ -283,111 +283,147 @@ async fn fetch_package_requests_identity_encoding() {
     );
 }
 
-#[tokio::test]
-async fn get_package_rejects_retired_job_status() {
-    use tokio::net::TcpListener;
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base_url = format!("http://{}", listener.local_addr().unwrap());
-
-    tokio::spawn(async move {
-        let accepted =
-            r#"{"status":"queued","job_id":"35","poll_url":"/v1/jobs/35","eta_seconds":1}"#;
-        write_json_response(&listener, "202 Accepted", accepted).await;
-
-        let unsupported = r#"{
-            "job_id": "35",
-            "status": "blocked",
-            "distro": "fedora",
-            "package": "kernel-core",
-            "version": "6.19.10-300.fc44",
-            "architecture": "x86_64",
-            "progress": null,
-            "error": null,
-            "manifest": null
-        }"#;
-        write_json_response(&listener, "200 OK", unsupported).await;
-    });
-
-    let client = RemiClient::new(&base_url).unwrap();
-    let err = client
-        .get_package("fedora", "kernel-core", None, Some("x86_64"))
-        .await
-        .unwrap_err();
-    let message = err.to_string();
-
-    assert!(message.contains("unknown variant `blocked`"), "{message}");
-}
-
+/// Poll cycles the former fixed 300-second cutoff allowed at the 2-second poll
+/// interval. An active job must survive more than this many cycles.
 const POLLS_BEYOND_FORMER_FIVE_MINUTE_CUTOFF: usize = 152;
 
-async fn spawn_active_job_server(active_polls: usize) -> (String, tokio::task::JoinHandle<()>) {
+const CONTRACT_JOB_ID: &str = "55";
+const CONTRACT_PACKAGE: &str = "kernel-modules-core";
+const CONTRACT_FAILURE_REASON: &str = "converter rejected payload";
+
+fn job_response(state: &str, error: Option<&str>, manifest: Option<&str>) -> String {
+    let error = match error {
+        Some(reason) => format!("\"{reason}\""),
+        None => "null".to_string(),
+    };
+    let manifest = manifest.unwrap_or("null");
+    format!(
+        r#"{{"job_id":"{CONTRACT_JOB_ID}","status":"{state}","distro":"fedora","package":"{CONTRACT_PACKAGE}","version":"6.19.10-300.fc44","architecture":"x86_64","progress":null,"error":{error},"manifest":{manifest}}}"#
+    )
+}
+
+fn ready_job_response() -> String {
+    let manifest = format!(
+        r#"{{"name":"{CONTRACT_PACKAGE}","version":"6.19.10-300.fc44","distro":"fedora","chunks":[],"total_size":0,"content_hash":"sha256:test"}}"#
+    );
+    job_response("ready", None, Some(&manifest))
+}
+
+/// Outcome the shared contract requires for a given state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedOutcome {
+    ReadyManifest,
+    ConversionFailed,
+}
+
+/// The poll responses that exercise `state`, and the outcome the client must
+/// reach.
+///
+/// The match is exhaustive, so a new `ConversionJobState` cannot be added
+/// without stating its contract here.
+fn contract_case(state: ConversionJobState) -> (Vec<String>, ExpectedOutcome) {
+    let outlive_former_cutoff = |wire_state: &str| {
+        let mut responses =
+            vec![job_response(wire_state, None, None); POLLS_BEYOND_FORMER_FIVE_MINUTE_CUTOFF];
+        responses.push(ready_job_response());
+        (responses, ExpectedOutcome::ReadyManifest)
+    };
+
+    match state {
+        ConversionJobState::Pending => outlive_former_cutoff("pending"),
+        ConversionJobState::Converting => outlive_former_cutoff("converting"),
+        ConversionJobState::Ready => (vec![ready_job_response()], ExpectedOutcome::ReadyManifest),
+        ConversionJobState::Failed => (
+            vec![job_response("failed", Some(CONTRACT_FAILURE_REASON), None)],
+            ExpectedOutcome::ConversionFailed,
+        ),
+    }
+}
+
+/// Serve one 202 acceptance followed by `poll_responses` job-status bodies.
+async fn spawn_job_poll_server(
+    poll_responses: Vec<String>,
+) -> (String, tokio::task::JoinHandle<()>) {
     use tokio::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
-        let accepted =
-            r#"{"status":"queued","job_id":"55","poll_url":"/v1/jobs/55","eta_seconds":null}"#;
-        write_json_response(&listener, "202 Accepted", accepted).await;
+        let accepted = format!(
+            r#"{{"status":"queued","job_id":"{CONTRACT_JOB_ID}","poll_url":"/v1/jobs/{CONTRACT_JOB_ID}","eta_seconds":null}}"#
+        );
+        write_json_response(&listener, "202 Accepted", &accepted).await;
 
-        for poll in 0..active_polls {
-            let state = if poll % 2 == 0 {
-                "pending"
-            } else {
-                "converting"
-            };
-            let active = format!(
-                r#"{{"job_id":"55","status":"{state}","distro":"fedora","package":"kernel-modules-core","version":"6.19.10-300.fc44","architecture":"x86_64","progress":null,"error":null,"manifest":null}}"#
-            );
-            write_json_response(&listener, "200 OK", &active).await;
+        for body in poll_responses {
+            write_json_response(&listener, "200 OK", &body).await;
         }
-
-        let ready = r#"{
-            "job_id":"55",
-            "status":"ready",
-            "distro":"fedora",
-            "package":"kernel-modules-core",
-            "version":"6.19.10-300.fc44",
-            "architecture":"x86_64",
-            "progress":100,
-            "error":null,
-            "manifest":{
-                "name":"kernel-modules-core",
-                "version":"6.19.10-300.fc44",
-                "distro":"fedora",
-                "chunks":[],
-                "total_size":0,
-                "content_hash":"sha256:test"
-            }
-        }"#;
-        write_json_response(&listener, "200 OK", ready).await;
     });
 
     (base_url, server)
 }
 
-#[tokio::test]
-async fn both_clients_wait_past_the_former_five_minute_poll_cycle_count() {
-    let (base_url, server) = spawn_active_job_server(POLLS_BEYOND_FORMER_FIVE_MINUTE_CUTOFF).await;
-    let mut client = RemiClient::new(&base_url).unwrap();
+async fn remi_client_outcome(base_url: &str) -> Result<PackageManifest> {
+    let mut client = RemiClient::new(base_url).unwrap();
     client.core.poll_interval = Duration::from_millis(1);
-    let manifest = client
-        .get_package("fedora", "kernel-modules-core", None, Some("x86_64"))
+    client
+        .get_package("fedora", CONTRACT_PACKAGE, None, Some("x86_64"))
         .await
-        .unwrap();
-    assert_eq!(manifest.name, "kernel-modules-core");
-    server.await.unwrap();
+}
 
-    let (base_url, server) = spawn_active_job_server(POLLS_BEYOND_FORMER_FIVE_MINUTE_CUTOFF).await;
-    let cache = tempfile::tempdir().unwrap();
-    let mut client = AsyncRemiClient::new(&base_url, cache.path()).unwrap();
-    client.core.poll_interval = Duration::from_millis(1);
-    let manifest = client
-        .get_package("fedora", "kernel-modules-core", None, Some("x86_64"))
+fn assert_contract_outcome(
+    result: Result<PackageManifest>,
+    expected: ExpectedOutcome,
+    state: ConversionJobState,
+) {
+    match expected {
+        ExpectedOutcome::ReadyManifest => {
+            let manifest = result.unwrap_or_else(|error| {
+                panic!("Remi client failed on {state:?}: {error}");
+            });
+            assert_eq!(manifest.name, CONTRACT_PACKAGE);
+        }
+        ExpectedOutcome::ConversionFailed => {
+            let message = result
+                .err()
+                .unwrap_or_else(|| panic!("Remi client accepted a failed {state:?} job"))
+                .to_string();
+            assert!(
+                message.contains("Conversion failed"),
+                "Remi client on {state:?}: {message}"
+            );
+            assert!(
+                message.contains(CONTRACT_FAILURE_REASON),
+                "Remi client dropped the server failure reason on {state:?}: {message}"
+            );
+        }
+    }
+}
+
+/// Every state the shared protocol admits reaches its contracted outcome in the
+/// Remi client, and no active state is failed on elapsed time.
+#[tokio::test]
+async fn the_remi_client_honors_the_shared_polling_contract() {
+    for state in ConversionJobState::ALL {
+        let (responses, expected) = contract_case(state);
+
+        let (base_url, server) = spawn_job_poll_server(responses).await;
+        assert_contract_outcome(remi_client_outcome(&base_url).await, expected, state);
+        server.await.unwrap();
+    }
+}
+
+/// A status outside the shared contract is a typed rejection, never silently
+/// treated as an active job.
+#[tokio::test]
+async fn the_remi_client_rejects_a_status_outside_the_shared_contract() {
+    let retired = vec![job_response("blocked", None, None)];
+
+    let (base_url, server) = spawn_job_poll_server(retired).await;
+    let message = remi_client_outcome(&base_url)
         .await
-        .unwrap();
-    assert_eq!(manifest.name, "kernel-modules-core");
+        .expect_err("Remi client accepted a retired job status")
+        .to_string();
+    assert!(message.contains("unknown variant `blocked`"), "{message}");
     server.await.unwrap();
 }
 
@@ -735,61 +771,30 @@ async fn valid_body_atomically_replaces_existing_destination() {
     assert_eq!(output_filenames(output.path()), ["qemu-img.ccs"]);
 }
 
-mod async_tests {
-    use super::*;
+#[tokio::test]
+async fn health_check_reports_an_unreachable_server_as_unhealthy() {
+    let client = RemiClient::new("http://localhost:59999").unwrap();
 
-    #[test]
-    fn test_async_client_base_url_normalization() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    let result = client.health_check().await.unwrap();
+    assert!(!result);
+}
 
-        // With trailing slash
-        let client = AsyncRemiClient::new("http://localhost:8080/", temp_dir.path()).unwrap();
-        assert_eq!(client.core.base_url, "http://localhost:8080");
+#[test]
+fn test_manifest_parsing() {
+    let json = r#"{
+        "name": "nginx",
+        "version": "1.24.0",
+        "distro": "arch",
+        "chunks": [
+            {"hash": "abc123", "size": 1024, "offset": 0},
+            {"hash": "def456", "size": 2048, "offset": 1024}
+        ],
+        "total_size": 3072,
+        "content_hash": "xyz789"
+    }"#;
 
-        // Without trailing slash
-        let client = AsyncRemiClient::new("http://localhost:8080", temp_dir.path()).unwrap();
-        assert_eq!(client.core.base_url, "http://localhost:8080");
-    }
-
-    #[test]
-    fn test_async_client_with_custom_fetcher() {
-        use crate::repository::chunk_fetcher::{CompositeChunkFetcher, LocalCacheFetcher};
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let cache = LocalCacheFetcher::new(temp_dir.path());
-        let fetcher = CompositeChunkFetcher::new(vec![Arc::new(cache)]);
-
-        let client = AsyncRemiClient::with_fetcher("http://localhost:8080", fetcher).unwrap();
-        assert_eq!(client.core.base_url, "http://localhost:8080");
-    }
-
-    #[tokio::test]
-    async fn test_async_client_health_check_unreachable() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let client = AsyncRemiClient::new("http://localhost:59999", temp_dir.path()).unwrap();
-
-        // Should return false for unreachable server
-        let result = client.health_check().await.unwrap();
-        assert!(!result);
-    }
-
-    #[test]
-    fn test_manifest_parsing() {
-        let json = r#"{
-            "name": "nginx",
-            "version": "1.24.0",
-            "distro": "arch",
-            "chunks": [
-                {"hash": "abc123", "size": 1024, "offset": 0},
-                {"hash": "def456", "size": 2048, "offset": 1024}
-            ],
-            "total_size": 3072,
-            "content_hash": "xyz789"
-        }"#;
-
-        let manifest: PackageManifest = serde_json::from_str(json).unwrap();
-        assert_eq!(manifest.name, "nginx");
-        assert_eq!(manifest.chunks.len(), 2);
-        assert_eq!(manifest.total_size, 3072);
-    }
+    let manifest: PackageManifest = serde_json::from_str(json).unwrap();
+    assert_eq!(manifest.name, "nginx");
+    assert_eq!(manifest.chunks.len(), 2);
+    assert_eq!(manifest.total_size, 3072);
 }

@@ -3,8 +3,9 @@
 use super::*;
 use crate::packages::traits::{
     NativeArgumentValue, NativeLifecyclePath, NativeScriptletMetadata, NativeStdinContract,
-    RpmTriggerAction,
+    RpmScriptletCriticality, RpmTriggerAction,
 };
+use crate::scriptlet::RpmClassAuthority;
 
 fn package_for_test(name: &str, version: &str) -> RpmPackage {
     RpmPackage {
@@ -17,6 +18,7 @@ fn package_for_test(name: &str, version: &str) -> RpmPackage {
             architecture: "x86_64".to_string(),
             provides: Vec::new(),
             config: Vec::new(),
+            promised_paths: Vec::new(),
         },
         description: None,
         files: Vec::new(),
@@ -416,7 +418,10 @@ fn rpm_program_vector_splits_interpreter_and_args() {
 
 #[test]
 fn rpm_scriptlet_flags_preserve_names_and_bits() {
-    let flags = RpmPackage::rpm_scriptlet_flags_metadata(rpm::ScriptletFlags::EXPAND, false, false);
+    let flags = RpmPackage::rpm_scriptlet_flags_metadata(
+        rpm::ScriptletFlags::EXPAND,
+        RpmClassAuthority::DefaultWarnAndContinue,
+    );
 
     assert!(flags.names.contains(&"EXPAND".to_string()));
     assert_eq!(flags.raw_bits, rpm::ScriptletFlags::EXPAND.bits());
@@ -430,14 +435,15 @@ fn rpm_scriptlet_flags_preserve_names_and_bits() {
 fn rpm_effective_criticality_uses_slot_defaults_and_file_trigger_override() {
     let defaulted = RpmPackage::rpm_scriptlet_flags_metadata(
         rpm::ScriptletFlags::from_bits_retain(0),
-        true,
-        false,
+        RpmClassAuthority::DefaultAbortsTransaction,
     );
     assert!(defaulted.critical);
     assert_eq!(defaulted.criticality, RpmScriptletCriticality::SlotDefault);
 
-    let forced_warning =
-        RpmPackage::rpm_scriptlet_flags_metadata(rpm::ScriptletFlags::CRITICAL, true, true);
+    let forced_warning = RpmPackage::rpm_scriptlet_flags_metadata(
+        rpm::ScriptletFlags::CRITICAL,
+        RpmClassAuthority::ForcedWarnAndContinue,
+    );
     assert!(!forced_warning.critical);
     assert_eq!(
         forced_warning.criticality,

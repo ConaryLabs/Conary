@@ -1,5 +1,80 @@
 // conary-core/src/repository/sync/tests/native.rs
 
+#[path = "native/source_config.rs"]
+mod source_config;
+
+fn configure_native_test_repository(repo: &mut Repository, ecosystem: NativeSourceEcosystem) {
+    source_config::configure(repo, ecosystem);
+}
+
+fn configure_native_test_repository_with_policy(
+    repo: &mut Repository,
+    ecosystem: NativeSourceEcosystem,
+    update_mode: RepositoryUpdateMode,
+    pinned_snapshot: Option<AuthenticatedSnapshotIdentity>,
+) {
+    source_config::configure_with_policy(repo, ecosystem, update_mode, pinned_snapshot);
+}
+
+fn authenticated_snapshot(value: &[u8]) -> AuthenticatedSnapshotIdentity {
+    AuthenticatedSnapshotIdentity::for_bytes(value)
+}
+
+#[test]
+fn pin_refusal_leaves_native_rows_and_sync_state_untouched() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    let pinned = authenticated_snapshot(b"pinned-root");
+    let mut repo = Repository::new(
+        "pinned-rpm".to_string(),
+        "https://example.com/pinned-rpm".to_string(),
+    );
+    repo.source_profile = Some("fedora-44".to_string());
+    configure_native_test_repository_with_policy(
+        &mut repo,
+        NativeSourceEcosystem::Rpm,
+        RepositoryUpdateMode::Pin,
+        Some(pinned.clone()),
+    );
+    repo.insert(&conn).unwrap();
+    let repo_id = repo.id.unwrap();
+    let repository_url = repo.url.clone();
+    let package = |checksum: &str| {
+        synced_package_row(
+            repo_id,
+            Some("fedora-44"),
+            &repository_url,
+            None,
+            PackageMetadata::new(
+                "bash".to_string(),
+                "5.3-1".to_string(),
+                checksum.to_string(),
+                1,
+                "https://example.com/pinned-rpm/bash.rpm".to_string(),
+                RepositoryDependencyFlavor::Rpm,
+                VersionScheme::Rpm,
+            ),
+        )
+    };
+    persist_native_sync_rows(&conn, &mut repo, vec![package("old")], pinned.clone()).unwrap();
+    let before = Repository::find_by_id(&conn, repo_id).unwrap().unwrap();
+
+    let error = persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        vec![package("new")],
+        authenticated_snapshot(b"different-root"),
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::TrustError(_)));
+    let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].checksum, "sha256:old");
+    let after = Repository::find_by_id(&conn, repo_id).unwrap().unwrap();
+    assert_eq!(after.last_sync, before.last_sync);
+    assert_eq!(after.authenticated_snapshot, before.authenticated_snapshot);
+}
+
 #[test]
 fn test_persist_native_sync_rows_writes_normalized_capabilities() {
     let conn = Connection::open_in_memory().unwrap();
@@ -9,6 +84,7 @@ fn test_persist_native_sync_rows_writes_normalized_capabilities() {
         "arch-core".to_string(),
         "https://example.com/arch".to_string(),
     );
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Alpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -61,7 +137,13 @@ fn test_persist_native_sync_rows_writes_normalized_capabilities() {
         requirement_groups,
         requirement_group_clauses,
     }];
-    let count = persist_native_sync_rows(&conn, &mut repo, synced_packages).unwrap();
+    let count = persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced_packages,
+        authenticated_snapshot(b"arch-capabilities"),
+    )
+    .unwrap();
     assert_eq!(count, 1);
 
     let stored_packages = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
@@ -112,6 +194,7 @@ fn native_sync_persists_generator_selected_rpm_file_providers_without_reclassifi
         "https://example.com/fedora".to_string(),
     );
     repo.source_profile = Some("fedora-44".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Rpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -153,7 +236,13 @@ fn native_sync_persists_generator_selected_rpm_file_providers_without_reclassifi
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced_packages).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced_packages,
+        authenticated_snapshot(b"rpm-files"),
+    )
+    .unwrap();
 
     let package = RepositoryPackage::find_by_repository(&conn, repo_id)
         .unwrap()
@@ -180,6 +269,7 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
         "https://example.com/fedora".to_string(),
     );
     repo.source_profile = Some("fedora-44".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Rpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -223,7 +313,13 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
         }
     };
 
-    persist_native_sync_rows(&conn, &mut repo, vec![synced_row(false)]).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        vec![synced_row(false)],
+        authenticated_snapshot(b"rpm-before"),
+    )
+    .unwrap();
     let repository_package_id = RepositoryPackage::find_by_repository(&conn, repo_id)
         .unwrap()
         .pop()
@@ -247,7 +343,13 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
     );
     converted.insert(&conn).unwrap();
 
-    persist_native_sync_rows(&conn, &mut repo, vec![synced_row(true)]).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        vec![synced_row(true)],
+        authenticated_snapshot(b"rpm-after"),
+    )
+    .unwrap();
 
     assert!(
         ConvertedPackage::find_repository_by_checksum(
@@ -588,6 +690,7 @@ fn test_sync_persists_distro_and_version_scheme() {
         "https://example.com/fedora".to_string(),
     );
     repo.source_profile = Some("fedora-44".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Rpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -620,7 +723,13 @@ fn test_sync_persists_distro_and_version_scheme() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced,
+        authenticated_snapshot(b"rpm-origin"),
+    )
+    .unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -638,6 +747,7 @@ fn test_sync_persists_debian_origin_metadata() {
         "https://example.com/debian".to_string(),
     );
     repo.source_profile = Some("ubuntu-26.04".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Deb);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -670,7 +780,13 @@ fn test_sync_persists_debian_origin_metadata() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced,
+        authenticated_snapshot(b"deb-origin"),
+    )
+    .unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -691,6 +807,7 @@ fn test_sync_persists_arch_origin_metadata() {
         "https://example.com/arch".to_string(),
     );
     repo.source_profile = Some("arch".to_string());
+    configure_native_test_repository(&mut repo, NativeSourceEcosystem::Alpm);
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
 
@@ -723,7 +840,13 @@ fn test_sync_persists_arch_origin_metadata() {
         requirement_groups: Vec::new(),
         requirement_group_clauses: Vec::new(),
     }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
+    persist_native_sync_rows(
+        &conn,
+        &mut repo,
+        synced,
+        authenticated_snapshot(b"arch-origin"),
+    )
+    .unwrap();
 
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored.len(), 1);
@@ -731,384 +854,8 @@ fn test_sync_persists_arch_origin_metadata() {
     assert_eq!(stored[0].version_scheme, VersionScheme::Arch);
 }
 
-#[test]
-fn test_sync_persists_requirement_groups_with_alternatives() {
-    let conn = Connection::open_in_memory().unwrap();
-    ensure_current(&conn).unwrap();
+#[path = "native/requirements.rs"]
+mod requirements;
 
-    let mut repo = Repository::new(
-        "debian-main".to_string(),
-        "https://example.com/debian".to_string(),
-    );
-    repo.source_profile = Some("ubuntu-26.04".to_string());
-    repo.insert(&conn).unwrap();
-    let repo_id = repo.id.unwrap();
-
-    // Simulate a Debian package with an OR dependency: default-mta | mail-transport-agent
-    let or_group = dep_model::RepositoryRequirementGroup::alternatives(
-        RepositoryRequirementKind::Depends,
-        vec![
-            dep_model::RepositoryRequirementClause::name_only("default-mta".to_string()),
-            dep_model::RepositoryRequirementClause::name_only("mail-transport-agent".to_string()),
-        ],
-    )
-    .with_native_text("default-mta | mail-transport-agent".to_string());
-
-    let simple_group = dep_model::RepositoryRequirementGroup::simple(
-        RepositoryRequirementKind::Depends,
-        dep_model::RepositoryRequirementClause::versioned(
-            "libc6".to_string(),
-            ">= 2.34".to_string(),
-        ),
-    );
-
-    let mut pkg_meta = PackageMetadata::new(
-        "postfix".to_string(),
-        "3.9.1-1".to_string(),
-        "aabbcc".to_string(),
-        4096,
-        "https://example.com/debian/postfix.deb".to_string(),
-        RepositoryDependencyFlavor::Deb,
-        VersionScheme::Debian,
-    );
-    pkg_meta.requirements = vec![or_group, simple_group];
-
-    let provides = normalized_repository_capabilities(&pkg_meta);
-    let (req_groups, req_group_clauses) = convert_requirement_groups(0, &pkg_meta.requirements);
-
-    let synced = vec![SyncedPackageRow {
-        package: {
-            let mut p = RepositoryPackage::new(
-                repo_id,
-                pkg_meta.name.clone(),
-                pkg_meta.version.clone(),
-                pkg_meta.version_scheme,
-                pkg_meta.checksum.clone(),
-                pkg_meta.size as i64,
-                pkg_meta.download_url.clone(),
-            );
-            p.source_profile = Some("ubuntu-26.04".to_string());
-            p
-        },
-        provides,
-        requirement_groups: req_groups,
-        requirement_group_clauses: req_group_clauses,
-    }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
-
-    let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
-    assert_eq!(stored.len(), 1);
-    let pkg_id = stored[0].id.unwrap();
-
-    // Verify requirement groups were persisted
-    let groups = DbRequirementGroup::find_by_repository_package(&conn, pkg_id).unwrap();
-    assert_eq!(groups.len(), 2);
-
-    // First group: OR alternative
-    let or = groups
-        .iter()
-        .find(|g| g.native_text.as_deref() == Some("default-mta | mail-transport-agent"));
-    assert!(or.is_some(), "OR group should be persisted");
-    let or = or.unwrap();
-    assert_eq!(or.kind, "depends");
-    assert_eq!(or.behavior, "hard");
-
-    // Verify the OR group has two clauses
-    let or_clauses = RepositoryRequirement::find_by_group(&conn, or.id.unwrap()).unwrap();
-    assert_eq!(or_clauses.len(), 2);
-    assert!(or_clauses.iter().any(|c| c.capability == "default-mta"));
-    assert!(
-        or_clauses
-            .iter()
-            .any(|c| c.capability == "mail-transport-agent")
-    );
-
-    // Second group: simple versioned dependency
-    let simple = groups.iter().find(|g| g.native_text.is_none());
-    assert!(simple.is_some(), "simple group should be persisted");
-    let simple = simple.unwrap();
-    let simple_clauses = RepositoryRequirement::find_by_group(&conn, simple.id.unwrap()).unwrap();
-    assert_eq!(simple_clauses.len(), 1);
-    assert_eq!(simple_clauses[0].capability, "libc6");
-    assert_eq!(
-        simple_clauses[0].version_constraint.as_deref(),
-        Some(">= 2.34")
-    );
-}
-
-#[test]
-fn test_sync_persists_conditional_requirement_behavior() {
-    let conn = Connection::open_in_memory().unwrap();
-    ensure_current(&conn).unwrap();
-
-    let mut repo = Repository::new(
-        "fedora".to_string(),
-        "https://example.com/fedora".to_string(),
-    );
-    repo.source_profile = Some("fedora-44".to_string());
-    repo.insert(&conn).unwrap();
-    let repo_id = repo.id.unwrap();
-
-    // Simulate a conditional RPM rich dependency
-    let conditional_group = dep_model::RepositoryRequirementGroup::simple(
-        RepositoryRequirementKind::Depends,
-        dep_model::RepositoryRequirementClause::versioned(
-            "systemd".to_string(),
-            ">= 255".to_string(),
-        ),
-    )
-    .with_behavior(ConditionalRequirementBehavior::Conditional)
-    .with_native_text("(systemd >= 255 if systemd-resolved)".to_string());
-
-    let mut pkg_meta = PackageMetadata::new(
-        "resolved-client".to_string(),
-        "1.0-1.fc44".to_string(),
-        "ff00ff".to_string(),
-        256,
-        "https://example.com/fedora/resolved-client.rpm".to_string(),
-        RepositoryDependencyFlavor::Rpm,
-        VersionScheme::Rpm,
-    );
-    pkg_meta.requirements = vec![conditional_group];
-
-    let provides = normalized_repository_capabilities(&pkg_meta);
-    let (req_groups, req_group_clauses) = convert_requirement_groups(0, &pkg_meta.requirements);
-
-    let synced = vec![SyncedPackageRow {
-        package: {
-            let mut p = RepositoryPackage::new(
-                repo_id,
-                pkg_meta.name.clone(),
-                pkg_meta.version.clone(),
-                pkg_meta.version_scheme,
-                pkg_meta.checksum.clone(),
-                pkg_meta.size as i64,
-                pkg_meta.download_url.clone(),
-            );
-            p.source_profile = Some("fedora-44".to_string());
-            p
-        },
-        provides,
-        requirement_groups: req_groups,
-        requirement_group_clauses: req_group_clauses,
-    }];
-    persist_native_sync_rows(&conn, &mut repo, synced).unwrap();
-
-    let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
-    let pkg_id = stored[0].id.unwrap();
-
-    let groups = DbRequirementGroup::find_by_repository_package(&conn, pkg_id).unwrap();
-    assert_eq!(groups.len(), 1);
-    assert_eq!(groups[0].kind, "depends");
-    assert_eq!(groups[0].behavior, "conditional");
-    assert_eq!(
-        groups[0].native_text.as_deref(),
-        Some("(systemd >= 255 if systemd-resolved)")
-    );
-
-    let clauses = RepositoryRequirement::find_by_group(&conn, groups[0].id.unwrap()).unwrap();
-    assert_eq!(clauses.len(), 1);
-    assert_eq!(clauses[0].capability, "systemd");
-    assert_eq!(clauses[0].version_constraint.as_deref(), Some(">= 255"));
-}
-
-#[test]
-fn test_canonical_map_deserialization_and_persist() {
-    use crate::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
-
-    let conn = Connection::open_in_memory().unwrap();
-    ensure_current(&conn).unwrap();
-
-    // Simulate the JSON response from GET /v1/canonical/map
-    let json = json!({
-        "schema_version": 1,
-        "revision": 1,
-        "generated_at": "2026-03-16T00:00:00Z",
-        "entries": [
-            {
-                "canonical": "firefox",
-                "kind": "package",
-                "implementations": {
-                    "fedora-44": "firefox",
-                    "ubuntu-26.04": "firefox-esr",
-                    "arch": "firefox"
-                }
-            },
-            {
-                "canonical": "openssl",
-                "kind": "package",
-                "implementations": {
-                    "fedora-44": "openssl",
-                    "ubuntu-26.04": "libssl3"
-                }
-            }
-        ]
-    });
-
-    let map = crate::canonical::exchange::parse_snapshot(json.to_string().as_bytes()).unwrap();
-    assert_eq!(map.entries.len(), 2);
-
-    assert_eq!(persist_canonical_map(&conn, &map).unwrap(), 2);
-
-    // Verify canonical packages were persisted
-    let firefox = CanonicalPackage::find_by_name(&conn, "firefox")
-        .unwrap()
-        .unwrap();
-    assert_eq!(firefox.kind, "package");
-
-    let openssl = CanonicalPackage::find_by_name(&conn, "openssl")
-        .unwrap()
-        .unwrap();
-    assert_eq!(openssl.kind, "package");
-
-    // Verify implementations
-    let ff_impls = PackageImplementation::find_by_canonical(&conn, firefox.id.unwrap()).unwrap();
-    assert_eq!(ff_impls.len(), 3);
-    let debian_impl = ff_impls
-        .iter()
-        .find(|i| i.distro == "ubuntu-26.04")
-        .unwrap();
-    assert_eq!(debian_impl.distro_name, "firefox-esr");
-    assert_eq!(debian_impl.source, CanonicalMappingAuthority::Remi);
-
-    let ssl_impls = PackageImplementation::find_by_canonical(&conn, openssl.id.unwrap()).unwrap();
-    assert_eq!(ssl_impls.len(), 2);
-    let ubuntu_impl = ssl_impls
-        .iter()
-        .find(|i| i.distro == "ubuntu-26.04")
-        .unwrap();
-    assert_eq!(ubuntu_impl.distro_name, "libssl3");
-
-    // Second ingest is idempotent -- no duplicate rows
-    persist_canonical_map(&conn, &map).unwrap();
-
-    let ff_impls2 = PackageImplementation::find_by_canonical(&conn, firefox.id.unwrap()).unwrap();
-    assert_eq!(
-        ff_impls2.len(),
-        3,
-        "No duplicate implementations after re-ingest"
-    );
-}
-
-#[test]
-fn test_link_canonical_ids_populates_from_implementations() {
-    let conn = Connection::open_in_memory().unwrap();
-    ensure_current(&conn).unwrap();
-
-    conn.execute(
-        "INSERT INTO canonical_packages (name, kind) VALUES ('firefox-web', 'package')",
-        [],
-    )
-    .unwrap();
-    let canonical_id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO package_implementations (canonical_id, distro, distro_name, source)
-             VALUES (?1, 'fedora-44', 'firefox', 'contract')",
-        [canonical_id],
-    )
-    .unwrap();
-
-    conn.execute(
-        "INSERT INTO repositories (name, url, enabled, priority, source_profile)
-            VALUES ('fedora-44', 'https://example.com', 1, 10, 'fedora-44')",
-        [],
-    )
-    .unwrap();
-    let repo_id = conn.last_insert_rowid();
-
-    conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme)
-             VALUES (?1, 'firefox', '125.0', 'sha256:abc', 1024, 'https://example.com/firefox.rpm', 'rpm')",
-            [repo_id],
-        )
-        .unwrap();
-    let pkg_id = conn.last_insert_rowid();
-
-    let count = link_canonical_ids(&conn, repo_id).unwrap();
-    assert_eq!(count, 1);
-
-    let cid: Option<i64> = conn
-        .query_row(
-            "SELECT canonical_id FROM repository_packages WHERE id = ?1",
-            [pkg_id],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(cid, Some(canonical_id));
-}
-
-#[test]
-fn test_link_canonical_ids_skips_already_linked() {
-    let conn = Connection::open_in_memory().unwrap();
-    ensure_current(&conn).unwrap();
-
-    conn.execute(
-        "INSERT INTO canonical_packages (name, kind) VALUES ('test', 'package')",
-        [],
-    )
-    .unwrap();
-    let canonical_id = conn.last_insert_rowid();
-
-    conn.execute(
-        "INSERT INTO repositories (name, url, enabled, priority)
-             VALUES ('test-repo', 'https://example.com', 1, 10)",
-        [],
-    )
-    .unwrap();
-    let repo_id = conn.last_insert_rowid();
-
-    conn.execute(
-            "INSERT INTO repository_packages (repository_id, name, version, checksum, size, download_url, version_scheme, canonical_id)
-             VALUES (?1, 'test-pkg', '1.0', 'sha256:x', 100, 'https://example.com/x', 'rpm', ?2)",
-            rusqlite::params![repo_id, canonical_id],
-        )
-        .unwrap();
-
-    let count = link_canonical_ids(&conn, repo_id).unwrap();
-    assert_eq!(count, 0);
-}
-
-#[test]
-fn repository_name_never_substitutes_for_source_profile_authority() {
-    let conn = Connection::open_in_memory().unwrap();
-    ensure_current(&conn).unwrap();
-
-    conn.execute(
-        "INSERT INTO canonical_packages (name, kind) VALUES ('firefox-web', 'package')",
-        [],
-    )
-    .unwrap();
-    let canonical_id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO package_implementations (canonical_id, distro, distro_name, source)
-         VALUES (?1, 'fedora-44', 'firefox', 'contract')",
-        [canonical_id],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO repositories (name, url, enabled, priority)
-         VALUES ('fedora-44', 'https://example.com', 1, 10)",
-        [],
-    )
-    .unwrap();
-    let repo_id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO repository_packages
-         (repository_id, name, version, checksum, size, download_url, version_scheme)
-         VALUES (?1, 'firefox', '125.0', 'sha256:abc', 1024,
-                 'https://example.com/firefox.rpm', 'rpm')",
-        [repo_id],
-    )
-    .unwrap();
-    let package_id = conn.last_insert_rowid();
-
-    assert_eq!(link_canonical_ids(&conn, repo_id).unwrap(), 0);
-    let linked: Option<i64> = conn
-        .query_row(
-            "SELECT canonical_id FROM repository_packages WHERE id = ?1",
-            [package_id],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(linked, None);
-}
+#[path = "native/canonical.rs"]
+mod canonical;

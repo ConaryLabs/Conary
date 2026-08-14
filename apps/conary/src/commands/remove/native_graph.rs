@@ -4,7 +4,7 @@
 
 use super::transaction::{commit_remove_db, prepare_remove};
 use super::types::{RemoveInnerResult, RemoveLifecycleOptions};
-use crate::commands::generation::selected_root::SelectedRootSession;
+use crate::commands::generation::selected_root::{LockedRuntimeRoot, SelectedRootSession};
 use crate::commands::install::native_events::PreparedNativeTransaction;
 use crate::commands::install::native_graph::{NativePayloadBoundary, drive_native_graph_with};
 use crate::commands::progress::{RemovePhase, RemoveProgress};
@@ -33,6 +33,7 @@ pub(crate) fn execute_installed_trove_remove_graph(
         .context("selected package has no installed trove id")?;
     let identity =
         NativePackageIdentity::new(&trove.name, &trove.version, trove.architecture.as_deref());
+    let locked_root = LockedRuntimeRoot::acquire(db_path)?;
     let ownership = super::PackagePayloadOwnership::load(conn, trove_id)?;
     let native_transaction = PreparedNativeTransaction::prepare_remove(
         conn,
@@ -42,11 +43,9 @@ pub(crate) fn execute_installed_trove_remove_graph(
         ownership.lifecycle_paths().to_vec(),
         lifecycle_options.purge_config_files,
     )?;
-    let selected = SelectedRootSession::begin(
-        conn,
-        db_path,
-        format!("Remove {}-{}", trove.name, trove.version),
-    )?;
+    conary_core::repository::enrollment::transaction::preflight_removal(conn, trove_id)
+        .context("Package repository removal preflight failed")?;
+    let selected = locked_root.prepare(conn, format!("Remove {}-{}", trove.name, trove.version))?;
     native_transaction.preflight(selected.selected_root(), &ExecutionMode::Remove)?;
 
     execute_selected_root_graph(
@@ -102,6 +101,7 @@ fn execute_selected_root_graph(
     let mut purge_plan = None;
     let graph_result = drive_native_graph_with(
         &tx,
+        changeset_id,
         native_transaction,
         &selected_path,
         &ExecutionMode::Remove,
@@ -145,16 +145,20 @@ fn execute_selected_root_graph(
 
                 progress.set_phase(RemovePhase::UpdatingDb);
                 config_plan.persist_retained(conn)?;
+                conary_core::repository::enrollment::transaction::apply_removal(&tx, trove_id)
+                    .context("Failed to release package repository enrollment")?;
                 let removal = commit_remove_db(&tx, changeset_id, prepared)?;
                 let snapshot_json = crate::commands::metadata_with_removed_troves(
                     vec![removal.snapshot.clone()],
                     Vec::new(),
-                    rollback_root.clone(),
+                    rollback_root,
                     rollback_system.clone(),
                 )?;
                 conn.execute(
-                    "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-                    rusqlite::params![snapshot_json, changeset_id],
+                    "UPDATE changesets
+                     SET metadata = ?1, rollback_selected_root_snapshot_id = ?2
+                     WHERE id = ?3",
+                    rusqlite::params![snapshot_json, rollback_root.id(), changeset_id],
                 )?;
                 output = Some((removal, root_stats));
                 config_transaction = Some(captured_config);
@@ -203,20 +207,11 @@ fn execute_selected_root_graph(
             config_transaction,
         },
     )?;
-    if let Err(error) = selected.persist_for_publication(&runtime_root, &publication_debt) {
+    if let Err(error) = selected.persist_for_publication(&tx, &runtime_root, &publication_debt) {
         drop(tx);
-        let _ = crate::commands::generation::selected_root::remove_publication_candidate(
-            &runtime_root,
-            &publication_debt,
-        );
         return Err(error.context("failed to persist exact selected-root removal input"));
     }
     if let Err(error) = tx.commit() {
-        crate::commands::generation::selected_root::remove_publication_candidate(
-            &runtime_root,
-            &publication_debt,
-        )
-        .context("failed to discard selected-root candidate after database commit error")?;
         return Err(error.into());
     }
 
@@ -241,3 +236,7 @@ fn execute_selected_root_graph(
     }
     Ok(GraphRemoveResult { removal, stats })
 }
+
+#[cfg(test)]
+#[path = "native_graph_tests.rs"]
+mod tests;

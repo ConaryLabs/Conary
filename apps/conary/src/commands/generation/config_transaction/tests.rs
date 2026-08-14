@@ -102,6 +102,14 @@ fn source_config(source: ConfigSource, path: &str) -> SourceConfigDeclaration {
                 payload: ConfigPayloadAssociation::Matched,
             },
         ),
+        ConfigSource::Eopkg => SourceConfigDeclaration::Eopkg(
+            conary_core::packages::eopkg::authority::EopkgConfigDeclaration {
+                files_index: 0,
+                path: path.to_string(),
+                permanent: true,
+                payload: ConfigPayloadAssociation::Matched,
+            },
+        ),
         ConfigSource::Auto => SourceConfigDeclaration::Ccs(
             conary_core::packages::config_authority::CcsConfigDeclaration {
                 path: path.to_string(),
@@ -274,6 +282,7 @@ fn alpm_materialized_to_absent_preserves_modified_content_and_rolls_back_exactly
             OverlayMutation::Remove("/etc/demo/declared.conf.conary-save".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.dpkg-dist".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.dpkg-old".to_string()),
+            OverlayMutation::Remove("/etc/demo/declared.conf.newconfig".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.pacnew".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.pacsave".to_string()),
             OverlayMutation::Remove("/etc/demo/declared.conf.rpmnew".to_string()),

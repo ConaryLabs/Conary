@@ -35,13 +35,16 @@ mod validation;
 pub use batch::{BatchInstaller, prepare_package_for_batch};
 pub use command::cmd_install;
 pub(crate) use command::cmd_install_replatform;
+pub(crate) use conversion::{NativeCcsConversion, convert_native_package_to_ccs};
 pub use ownership_mode::OwnershipMode;
-pub(crate) use package_set::{PackageSetRequest, install_package_set};
+pub(crate) use package_set::{PackageSetRequest, install_package_set, validate_package_set};
+pub(crate) use payload_identity::resolve_native_payload_nodes;
 
 #[allow(unused_imports)]
 pub(crate) use ccs_transaction::{
-    CcsTransactionInstallOptions, CcsTransactionInstallResult, install_ccs_package_transactionally,
-    install_ccs_package_transactionally_in_selected_root,
+    CcsTransactionInstallOptions, CcsTransactionInstallResult, check_ccs_upgrade_status,
+    install_ccs_package_transactionally, install_ccs_package_transactionally_in_selected_root,
+    install_semantics_for_ccs_manifest,
 };
 
 #[allow(unused_imports)]
@@ -49,7 +52,7 @@ pub(crate) use native_lifecycle::NativeLifecycleInstallState;
 pub use options::InstallOptions;
 pub(crate) use options::{
     CcsEnvelopeAuthority, RepositoryInstallProvenance, repository_install_provenance_from_package,
-    verify_ccs_package_authority,
+    verify_ccs_package_authority, verify_ccs_package_authority_into_cas,
 };
 pub use prepare::{ComponentSelection, UpgradeCheck};
 pub(crate) use restore::{
@@ -72,7 +75,8 @@ use prepare::check_upgrade_status;
 pub(crate) use semantics::InstallIntent;
 use semantics::{InstallSemantics, PreparedSourceKind, build_execution_mode};
 use source_policy::{
-    bind_transaction_source_profile, build_resolution_policy, resolve_canonical_name,
+    bind_transaction_source_identity, build_resolution_policy, effective_source_profile,
+    resolve_canonical_name, source_profile_projection,
 };
 use transaction::{
     InstallTransactionResult, TransactionContext, execute_install_transaction_in_selected_root,

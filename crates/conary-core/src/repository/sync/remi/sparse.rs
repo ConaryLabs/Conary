@@ -139,6 +139,12 @@ impl RemiSparseSync {
                 page.distro, self.route_slug
             )));
         }
+        if page.source_profile != self.configured_target {
+            return Err(Error::ParseError(format!(
+                "Remi sparse page source profile '{}' disagrees with configured target '{}'",
+                page.source_profile, self.configured_target
+            )));
+        }
         if page.page != self.next_page || page.per_page != REMI_SPARSE_SYNC_PAGE_SIZE {
             return Err(Error::ParseError(format!(
                 "Remi sparse page pagination disagrees with request: page={}, per_page={}",
@@ -309,6 +315,7 @@ mod tests {
     ) -> RemiSparsePackagePage {
         RemiSparsePackagePage {
             distro: "fedora".to_string(),
+            source_profile: "fedora-44".to_string(),
             packages,
             total,
             page,
@@ -339,6 +346,19 @@ mod tests {
             .consume_page(test_page(2, 2, vec![test_entry("alpha")]))
             .unwrap_err();
         assert!(error.to_string().contains("globally unique and ordered"));
+    }
+
+    #[test]
+    fn page_validation_rejects_a_different_exact_source_profile() {
+        let mut page = test_page(1, 1, vec![test_entry("alpha")]);
+        page.source_profile = "fedora-45".to_string();
+
+        let error = test_sync().consume_page(page).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("disagrees with configured target 'fedora-44'")
+        );
     }
 
     #[test]

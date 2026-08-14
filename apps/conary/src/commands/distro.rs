@@ -1,44 +1,11 @@
 // src/commands/distro.rs
-//! Distro pinning command implementations
+//! Named feed and installed source-affinity diagnostics.
 
 use super::open_db;
 use anyhow::{Context, Result};
-use conary_core::db::models::{DistroPin, Repository, SystemAffinity};
-use conary_core::model::parser::SourcePinConfig;
+use conary_core::db::models::{Repository, SystemAffinity};
 use conary_core::repository::distro::source_feeds;
-use conary_core::repository::resolution_policy::DependencyMixingPolicy;
 use rusqlite::Connection;
-
-fn parse_mixing_policy(policy: &str) -> Result<DependencyMixingPolicy> {
-    policy.parse().map_err(anyhow::Error::msg)
-}
-
-pub async fn cmd_distro_set(db_path: &str, distro: &str, mixing: &str) -> Result<()> {
-    let mixing = parse_mixing_policy(mixing)?;
-    let profile = conary_core::repository::supported_profiles::profile_by_public_id(distro)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Unsupported source feed: {distro}. Use 'conary distro list' to see configured feed families."
-            )
-        })?;
-    let conn = open_db(db_path)?;
-    DistroPin::set_from_source_pin(
-        &conn,
-        &SourcePinConfig {
-            distro: profile.id().to_string(),
-            strength: mixing,
-        },
-    )?;
-    println!("Source pinned to {} (mixing: {mixing})", profile.id());
-    Ok(())
-}
-
-pub async fn cmd_distro_remove(db_path: &str) -> Result<()> {
-    let conn = open_db(db_path)?;
-    DistroPin::remove(&conn)?;
-    println!("Source pin removed. Resolution can mix configured feeds.");
-    Ok(())
-}
 
 pub async fn cmd_distro_info(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
@@ -47,27 +14,16 @@ pub async fn cmd_distro_info(db_path: &str) -> Result<()> {
 }
 
 pub fn render_distro_info(conn: &Connection) -> Result<String> {
-    let mut output = String::new();
-    match DistroPin::get_current(conn)? {
-        Some(pin) => {
-            output.push_str(&format!("Source feed: {}\n", pin.distro));
-            output.push_str(&format!("Mixing: {}\n", pin.mixing_policy));
-            output.push('\n');
-            output.push_str("Source affinity:\n");
-            let affinities = SystemAffinity::list(conn)?;
-            if affinities.is_empty() {
-                output.push_str("  (no data yet -- run a sync first)\n");
-            } else {
-                for a in &affinities {
-                    output.push_str(&format!(
-                        "  {}: {} packages ({:.1}%)\n",
-                        a.distro, a.package_count, a.percentage
-                    ));
-                }
-            }
-        }
-        None => {
-            output.push_str("No source pin set. Resolution can mix configured feeds.\n");
+    let mut output = String::from("Installed source affinity (diagnostic only):\n");
+    let affinities = SystemAffinity::list(conn)?;
+    if affinities.is_empty() {
+        output.push_str("  (no data yet -- run a sync first)\n");
+    } else {
+        for affinity in &affinities {
+            output.push_str(&format!(
+                "  {}: {} packages ({:.1}%)\n",
+                affinity.source_identity, affinity.package_count, affinity.percentage
+            ));
         }
     }
     Ok(output)
@@ -124,19 +80,6 @@ fn plural(count: usize) -> &'static str {
     if count == 1 { "" } else { "s" }
 }
 
-pub async fn cmd_distro_mixing(db_path: &str, policy: &str) -> Result<()> {
-    let policy = parse_mixing_policy(policy)?;
-    let conn = open_db(db_path)?;
-    if DistroPin::get_current(&conn)?.is_none() {
-        anyhow::bail!(
-            "No source pin set. Use 'conary distro set <feed>' before changing mixing policy."
-        );
-    }
-    DistroPin::set_mixing_policy(&conn, policy)?;
-    println!("Mixing policy changed to {policy}");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,59 +96,14 @@ mod tests {
         (temp_file, db_path, conn)
     }
 
-    #[tokio::test]
-    async fn test_cmd_distro_set_persists_supported_public_pin() {
-        let (_temp, db_path, conn) = create_test_db();
+    #[test]
+    fn distro_info_reports_affinity_as_diagnostic_only() {
+        let (_temp, _db_path, conn) = create_test_db();
 
-        cmd_distro_set(&db_path, "arch", "strict").await.unwrap();
+        let rendered = render_distro_info(&conn).unwrap();
 
-        let pin = DistroPin::get_current(&conn).unwrap().unwrap();
-        let source_pin = pin.as_source_pin();
-        assert_eq!(source_pin.distro, "arch");
-        assert_eq!(source_pin.strength, DependencyMixingPolicy::Strict);
-    }
-
-    #[tokio::test]
-    async fn test_cmd_distro_set_rejects_unsupported_public_id() {
-        let (_temp, db_path, conn) = create_test_db();
-
-        let err = cmd_distro_set(&db_path, "debian-13", "strict")
-            .await
-            .unwrap_err();
-
-        assert!(err.to_string().contains("Unsupported source feed"));
-        assert!(DistroPin::get_current(&conn).unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_cmd_distro_set_rejects_internal_only_route_slug() {
-        let (_temp, db_path, conn) = create_test_db();
-
-        let err = cmd_distro_set(&db_path, "fedora", "strict")
-            .await
-            .unwrap_err();
-
-        assert!(err.to_string().contains("Unsupported source feed"));
-        assert!(DistroPin::get_current(&conn).unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_cmd_distro_remove_clears_pin() {
-        let (_temp, db_path, conn) = create_test_db();
-        DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Guarded).unwrap();
-
-        cmd_distro_remove(&db_path).await.unwrap();
-
-        assert!(DistroPin::get_current(&conn).unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_cmd_distro_mixing_requires_existing_pin() {
-        let (_temp, db_path, _conn) = create_test_db();
-
-        let err = cmd_distro_mixing(&db_path, "strict").await.unwrap_err();
-
-        assert!(err.to_string().contains("No source pin set"));
+        assert!(rendered.contains("diagnostic only"));
+        assert!(rendered.contains("no data yet"));
     }
 
     #[test]

@@ -155,7 +155,7 @@ impl ServerHandler for PackagingMcpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CallToolResponse, McpError>> + Send + '_ {
         let tool_context = ToolCallContext::new(self, request, context);
         async move { self.tool_router.call(tool_context).await }
     }

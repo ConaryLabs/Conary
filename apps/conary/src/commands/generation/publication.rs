@@ -107,7 +107,7 @@ fn publish_pending_debt(
 enum PublicationReplayCheckpoint {
     CurrentLinkSwappedBeforePhase,
     ActiveStateMarkedBeforeDatabaseBackup,
-    CandidatesRemovedBeforeTerminalState,
+    DatabaseBackedUpBeforeTerminalState,
 }
 
 fn publish_pending_debt_with_hook(
@@ -135,11 +135,7 @@ fn publish_pending_debt_with_hook(
         &mut checkpoint,
     )
     .and_then(|built| {
-        super::selected_root::remove_backed_up_publication_candidates(
-            &runtime_root,
-            &recoverable_before,
-        )?;
-        checkpoint(PublicationReplayCheckpoint::CandidatesRemovedBeforeTerminalState)?;
+        checkpoint(PublicationReplayCheckpoint::DatabaseBackedUpBeforeTerminalState)?;
         let completed = debt.mark_complete_through(
             conn,
             high_water,
@@ -195,8 +191,7 @@ fn replay_publication(
                     None,
                     None,
                 )?;
-                let captured =
-                    super::selected_root::load_publication_candidate(runtime_root, debt)?;
+                let captured = super::selected_root::load_publication_selected_root(conn, debt)?;
                 let result =
                     crate::commands::composefs_ops::build_captured_generation_for_publication(
                         conn,
@@ -563,21 +558,21 @@ mod tests {
     }
 
     #[test]
-    fn recovery_completes_after_candidates_are_removed_before_terminal_state() {
+    fn recovery_completes_after_database_backup_before_terminal_state() {
         let fixture = PublicationCrashFixture::new();
         let mut interrupted = false;
         let outcome = publish_pending_debt_with_hook(
             &fixture.conn,
             &fixture.db_path,
-            "candidate-cleanup crash",
+            "database-backup crash",
             fixture.debt.clone(),
             |checkpoint| {
-                if checkpoint == PublicationReplayCheckpoint::CandidatesRemovedBeforeTerminalState
+                if checkpoint == PublicationReplayCheckpoint::DatabaseBackedUpBeforeTerminalState
                     && !interrupted
                 {
                     interrupted = true;
                     return Err(anyhow!(
-                        "simulated death after candidate cleanup before terminal state"
+                        "simulated death after database backup before terminal state"
                     ));
                 }
                 Ok(())
@@ -593,13 +588,13 @@ mod tests {
         );
         assert_eq!(interrupted_debt.status, GenerationPublicationStatus::Failed);
         assert!(interrupted_debt.recoverable);
-        assert!(!fixture.candidate_exists());
+        assert!(fixture.snapshot_exists());
         assert!(fixture.generation_backup_exists(&interrupted_debt));
 
         let recovered = retry_pending_publication(
             &fixture.conn,
             &fixture.db_path,
-            "recover candidate-cleanup crash",
+            "recover database-backup crash",
         )
         .unwrap();
 
@@ -667,7 +662,7 @@ mod tests {
             )
             .unwrap();
             session
-                .persist_for_publication(&runtime_root, &debt)
+                .persist_for_publication(&conn, &runtime_root, &debt)
                 .unwrap();
             drop(session);
 
@@ -709,10 +704,16 @@ mod tests {
             .is_ok()
         }
 
-        fn candidate_exists(&self) -> bool {
-            super::super::selected_root::publication_candidate_dir(&self.runtime_root, &self.debt)
-                .unwrap()
-                .exists()
+        fn snapshot_exists(&self) -> bool {
+            let debt = self.reload_debt();
+            debt.selected_root_snapshot_id
+                .and_then(|id| {
+                    conary_core::generation::root_manifest::SelectedRootSnapshot::find(
+                        &self.conn, id,
+                    )
+                    .unwrap()
+                })
+                .is_some()
         }
 
         fn assert_terminal_publication(&self) {
@@ -722,7 +723,7 @@ mod tests {
             assert!(!debt.recoverable);
             assert_eq!(self.config_status(), ConfigStatus::Pristine);
             assert!(self.generation_backup_exists(&debt));
-            assert!(!self.candidate_exists());
+            assert!(self.snapshot_exists());
             assert!(
                 GenerationPublication::pending_recoverable(&self.conn)
                     .unwrap()

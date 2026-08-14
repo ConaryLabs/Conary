@@ -71,6 +71,7 @@ pub(super) fn source_for_semantics(semantics: InstallSemantics) -> ConfigSource 
             PackageFormatType::Rpm => ConfigSource::Rpm,
             PackageFormatType::Deb => ConfigSource::Deb,
             PackageFormatType::Arch => ConfigSource::Arch,
+            PackageFormatType::Eopkg => ConfigSource::Eopkg,
         },
         PreparedSourceKind::Ccs => ConfigSource::Auto,
     }

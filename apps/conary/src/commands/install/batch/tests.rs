@@ -11,6 +11,15 @@ use conary_core::payload::{
 };
 use std::collections::BTreeMap;
 
+// Both children need an explicit path: `tests` is itself loaded through a
+// `#[path]` attribute, so its submodules resolve against `batch/` rather than
+// `batch/tests/`. Without this, `mod witness_universe;` silently binds to the
+// source module of the same name instead of the test file.
+#[path = "tests/mutation_lock.rs"]
+mod mutation_lock;
+#[path = "tests/witness_universe.rs"]
+mod witness_universe;
+
 fn payload_node(kind: PayloadNodeKind, mode: u32) -> PayloadNode {
     PayloadNode {
         kind,
@@ -118,6 +127,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
         architecture: Some("x86_64".to_string()),
         description: None,
         extracted_files: vec![extracted_regular("/usr/bin/foo", b"pkg1 content", 0o755)],
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: Vec::new(),
         relations: Vec::new(),
@@ -150,6 +160,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
             b"pkg2 content",
             0o755,
         )],
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: Vec::new(),
         relations: Vec::new(),
@@ -205,6 +216,7 @@ fn test_prepared_package_to_trove() {
         architecture: Some("amd64".to_string()),
         description: Some("Test package".to_string()),
         extracted_files: Vec::new(),
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: Vec::new(),
         relations: Vec::new(),
@@ -253,6 +265,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         architecture: Some("x86_64".to_string()),
         description: Some("Repo dependency".to_string()),
         extracted_files: Vec::new(),
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: Vec::new(),
         relations: Vec::new(),
@@ -269,6 +282,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         component_names_by_path: None,
         repository_provenance: Some(RepositoryInstallProvenance {
             repository_id: 9,
+            source_identity: Some("arch".to_string()),
             source_profile: Some("arch".to_string()),
             version_scheme: conary_core::repository::versioning::VersionScheme::Arch,
             source_kind: conary_core::repository::RepositorySourceKind::Native,
@@ -307,6 +321,7 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         architecture: Some("x86_64".to_string()),
         description: None,
         extracted_files: vec![extracted_regular(path, content, 0o755)],
+        repository_enrollments: Vec::new(),
         requirements: Vec::new(),
         provides: vec![crate::commands::test_helpers::exact_package_self_provider(
             name,
@@ -329,6 +344,150 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         native_lifecycle_state: NativeLifecycleInstallState::default(),
         ccs: None,
     }
+}
+
+fn prepared_repository_package(
+    name: &str,
+    version: &str,
+    endpoint: &str,
+    key: &[u8],
+) -> PreparedPackage {
+    let declaration_path = "/etc/yum.repos.d/browser.repo";
+    let key_path = "/etc/pki/rpm-gpg/browser.gpg";
+    let declaration = format!(
+        "[browser]\nbaseurl={endpoint}\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://{key_path}\n"
+    );
+    let mut package = prepared_test_package(name, declaration_path, declaration.as_bytes());
+    package.version = version.to_string();
+    package.extracted_files[0].node.mode = libc::S_IFREG | 0o644;
+    package
+        .extracted_files
+        .push(extracted_regular(key_path, key, 0o644));
+    package.classified_files.insert(
+        ComponentType::Runtime,
+        vec![declaration_path.to_string(), key_path.to_string()],
+    );
+    package.provides = vec![crate::commands::test_helpers::exact_package_self_provider(
+        name,
+        version,
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    )];
+    package.repository_enrollments =
+        conary_core::repository::enrollment::derive::derive_rpm_repository_enrollments(
+            &package.extracted_files,
+            "x86_64",
+            Some("fedora-44"),
+        )
+        .unwrap();
+    package
+}
+
+fn repository_certificate() -> Vec<u8> {
+    use sequoia_openpgp::cert::prelude::CertBuilder;
+    use sequoia_openpgp::serialize::Serialize;
+    let (certificate, _) = CertBuilder::new()
+        .add_userid("batch repository fixture")
+        .generate()
+        .unwrap();
+    let mut bytes = Vec::new();
+    certificate.serialize(&mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn batch_install_and_update_replace_repository_authority_atomically() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(&root).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let key = repository_certificate();
+    let first = prepared_repository_package(
+        "browser-repository-release",
+        "1",
+        "https://repo.example/one/$basearch",
+        &key,
+    );
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![first])
+        .unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let old_trove = Trove::find_by_name(&conn, "browser-repository-release")
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        conary_core::db::models::Repository::find_by_name(&conn, "browser")
+            .unwrap()
+            .unwrap()
+            .url,
+        "https://repo.example/one/x86_64"
+    );
+    drop(conn);
+
+    let mut second = prepared_repository_package(
+        "browser-repository-release",
+        "2",
+        "https://repo.example/two/$basearch",
+        &key,
+    );
+    second.is_upgrade = true;
+    second.old_trove = Some(Box::new(old_trove));
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![second])
+        .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert_eq!(
+        conary_core::db::models::Repository::find_by_name(&conn, "browser")
+            .unwrap()
+            .unwrap()
+            .url,
+        "https://repo.example/two/x86_64"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM package_repository_enrollments
+             WHERE owner_kind = 'package'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        1
+    );
+    drop(conn);
+
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(crate::commands::remove::cmd_remove(
+            "browser-repository-release",
+            &db_path_string,
+            None,
+            Some("x86_64".to_string()),
+            SandboxMode::Always,
+            false,
+        ))
+        .unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert!(
+        conary_core::db::models::Repository::find_by_name(&conn, "browser")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM package_repository_enrollments",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
 }
 
 fn prepared_test_hardlink_package(
@@ -641,7 +800,23 @@ fn no_current_generation_batch_materializes_db_state_and_publishes_selected_root
     let db_path = temp.path().join("conary.db");
     std::fs::create_dir_all(&root).unwrap();
     conary_core::db::init(&db_path).unwrap();
-    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let seeded_trove = crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+
+    // The fixture requirement must be satisfiable: since #345, a single-package
+    // batch's requirements are certified against the end state like every other
+    // batch's, so the seeded runtime has to provide what the fixture depends
+    // on. The materialization assertions below are about batch state, not
+    // about requirement semantics, so the provider is seeded directly.
+    let conn = conary_core::db::open(&db_path).unwrap();
+    conary_core::db::models::ProvideEntry::new(
+        seeded_trove,
+        "libfixture".to_string(),
+        Some("2.0.0".to_string()),
+        conary_core::repository::versioning::VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    drop(conn);
 
     let db_path_string = db_path.to_string_lossy().into_owned();
     let mut package =
@@ -1054,5 +1229,592 @@ fn payload_file_provider_satisfies_an_exact_path_requirement_and_orders_provider
             .map(|package| package.name.as_str())
             .collect::<Vec<_>>(),
         vec!["bash", "systemd-udev"]
+    );
+}
+
+#[test]
+fn a_single_package_rejects_an_unsatisfiable_requirement_with_the_ordered_batches_diagnostic() {
+    let (_temp, conn) = empty_test_db();
+    let unsatisfiable = || {
+        let mut package = prepared_test_package("needy", "/usr/bin/needy", b"needy");
+        package.requirements = vec![depends_on("/usr/bin/never-provided")];
+        package
+    };
+
+    // The ordered path already fails this batch, naming the dependent and the
+    // exact requirement. A lone package must fail with the identical typed
+    // diagnostic: one owner for every batch size, so the two paths cannot
+    // drift. The solver never ran here -- the batch is prepared directly and
+    // handed to transaction validation, which is the only authority between
+    // the packages and the commit.
+    let mut ordered = vec![
+        unsatisfiable(),
+        prepared_test_package("other", "/usr/bin/other", b"other"),
+    ];
+    let ordered_error =
+        super::ordering::order_packages_for_transaction(&conn, &mut ordered).unwrap_err();
+    let mut lone = vec![unsatisfiable()];
+    let lone_error = super::ordering::order_packages_for_transaction(&conn, &mut lone).unwrap_err();
+
+    assert!(
+        ordered_error.to_string().contains(
+            "selected package transaction does not satisfy exact depends requirement for needy"
+        ),
+        "{ordered_error:#}"
+    );
+    assert!(
+        lone_error.to_string().contains(
+            "selected package transaction does not satisfy exact depends requirement for needy"
+        ),
+        "{lone_error:#}"
+    );
+    assert_eq!(
+        format!("{lone_error:#}"),
+        format!("{ordered_error:#}"),
+        "a single-package batch must fail with the same typed diagnostic as an ordered batch"
+    );
+}
+
+#[test]
+fn a_lone_package_install_batch_rejects_an_unsatisfiable_requirement_at_validation() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(&root).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let mut package = prepared_test_package("lone-tool", "/usr/bin/lone-tool", b"tool");
+    package.requirements = vec![depends_on("/usr/bin/never-provided")];
+
+    // Nothing upstream (no solver, no repository) ran on this package: the
+    // batch installer is the first authority to see it, so this is exactly the
+    // single-package install the len<2 early return used to wave through.
+    let error = BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![package])
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(
+            "selected package transaction does not satisfy exact depends requirement for lone-tool"
+        ),
+        "{message}"
+    );
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert!(
+        conary_core::db::models::Changeset::list_all(&conn)
+            .unwrap()
+            .is_empty(),
+        "validation must fail before any changeset applies"
+    );
+}
+
+#[test]
+fn a_promised_path_witnesses_a_dependency_the_provider_ships_no_content_for() {
+    let (_temp, conn) = empty_test_db();
+    let dependent_of = |requirement: &str| {
+        let mut dependent = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+        dependent.requirements = vec![depends_on(requirement)];
+        dependent
+    };
+    let promised = "/etc/crypto-policies/back-ends/krb5.config";
+
+    // Before the package publishes its promise, nothing in the transaction can
+    // witness a path the provider owns but never ships.
+    let mut without_promise = vec![
+        dependent_of(promised),
+        prepared_test_package(
+            "crypto-policies",
+            "/usr/share/crypto-policies/DEFAULT",
+            b"policy",
+        ),
+    ];
+    let error =
+        super::ordering::order_packages_for_transaction(&conn, &mut without_promise).unwrap_err();
+    assert!(
+        error.to_string().contains(
+            "selected package transaction does not satisfy exact depends requirement for krb5-libs"
+        ),
+        "{error:#}"
+    );
+
+    let mut provider = prepared_test_package(
+        "crypto-policies",
+        "/usr/share/crypto-policies/DEFAULT",
+        b"policy",
+    );
+    provider.install_reason = InstallReason::Dependency;
+    provider.provides.push(
+        conary_core::repository::dependency_model::ProvidedCapability::promised_path(
+            conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
+            promised,
+        ),
+    );
+    let mut packages = vec![dependent_of(promised), provider];
+
+    super::ordering::order_packages_for_transaction(&conn, &mut packages).unwrap();
+
+    assert_eq!(
+        packages
+            .iter()
+            .map(|package| package.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["crypto-policies", "krb5-libs"],
+        "the package that promises the path must be ordered before its dependent"
+    );
+}
+
+fn promised(path: &str) -> conary_core::repository::dependency_model::ProvidedCapability {
+    conary_core::repository::dependency_model::ProvidedCapability::promised_path(
+        conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
+        path,
+    )
+}
+
+#[test]
+fn a_transaction_fails_when_a_witness_used_promised_path_is_never_materialized() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(temp.path().join("root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
+
+    // The dependent is satisfied only through the promise, so the transaction
+    // certified an edge against a path that must then exist.
+    let mut provider = prepared_test_package(
+        "crypto-policies",
+        "/usr/share/crypto-policies/DEFAULT/krb5.txt",
+        b"policy",
+    );
+    provider.install_reason = InstallReason::Dependency;
+    provider.provides.push(promised(promised_path));
+    let mut dependent = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+    dependent.requirements = vec![depends_on(promised_path)];
+    let installer = BatchInstaller::new(&db_path_string, SandboxMode::Always);
+
+    let error = installer
+        .install_batch(vec![dependent, provider])
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(&format!(
+            "did not materialize promised path {promised_path}"
+        )),
+        "{message}"
+    );
+    assert!(message.contains("crypto-policies"), "{message}");
+    // The diagnostic must name the edge that relied on the promise.
+    assert!(
+        message.contains("krb5-libs depends on it through"),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_unused_promised_path_never_fails_the_transaction() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(temp.path().join("root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+
+    // The real case this pins: Fedora's setup package owns /etc/fstab as a
+    // %ghost and never creates it -- an OS installer does. Nothing in the
+    // transaction depends on it, so the transaction has nothing to prove.
+    let mut setup = prepared_test_package("setup", "/etc/profile", b"profile");
+    setup.provides.push(promised("/etc/fstab"));
+    setup.provides.push(promised("/run/motd"));
+    // setup is a retained witness for a real edge, so the promises are in
+    // scope for consideration -- they are simply not what holds the edge up.
+    let mut other = prepared_test_package("filesystem", "/usr/bin/filesystem-marker", b"marker");
+    other.requirements = vec![depends_on("setup")];
+    let installer = BatchInstaller::new(&db_path_string, SandboxMode::Always);
+
+    installer.install_batch(vec![setup, other]).unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert_eq!(
+        conary_core::db::models::Changeset::list_all(&conn).unwrap()[0].status,
+        ChangesetStatus::Applied
+    );
+}
+
+#[test]
+fn a_witness_used_promise_already_present_satisfies_the_post_condition() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    std::fs::create_dir_all(temp.path().join("root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    let promised_path = "/usr/share/promised/marker.conf";
+
+    // The post-condition asks whether the path exists in the assembled root,
+    // not who produced it, so a path another batch member ships satisfies it.
+    let mut promiser = prepared_test_package("promiser", "/usr/bin/promiser", b"payload");
+    promiser.provides.push(promised(promised_path));
+    let producer = prepared_test_package("producer", promised_path, b"materialized");
+    let mut dependent = prepared_test_package("dependent", "/usr/bin/dependent", b"dependent");
+    dependent.requirements = vec![depends_on(promised_path)];
+    let installer = BatchInstaller::new(&db_path_string, SandboxMode::Always);
+
+    installer
+        .install_batch(vec![dependent, producer, promiser])
+        .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert_eq!(
+        conary_core::db::models::Changeset::list_all(&conn).unwrap()[0].status,
+        ChangesetStatus::Applied
+    );
+}
+
+/// A database with a bootable runtime and one completed prior transaction.
+///
+/// Whatever that transaction installed is exactly what a later batch inherits:
+/// promises held by packages the later transaction never sees among its own
+/// members.
+fn db_with_prior_transaction(
+    temp: &std::path::Path,
+    prior: Vec<PreparedPackage>,
+) -> (std::path::PathBuf, String) {
+    let db_path = temp.join("conary.db");
+    std::fs::create_dir_all(temp.join("root")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    crate::commands::test_helpers::seed_test_bootable_runtime(&db_path);
+    let db_path_string = db_path.to_string_lossy().into_owned();
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(prior)
+        .expect("the prior transaction must install");
+    (db_path, db_path_string)
+}
+
+fn crypto_policies_with_promise(promised_path: &str) -> PreparedPackage {
+    let mut holder = prepared_test_package(
+        "crypto-policies",
+        "/usr/share/crypto-policies/DEFAULT/krb5.txt",
+        b"policy",
+    );
+    holder.provides.push(promised(promised_path));
+    holder
+}
+
+fn every_changeset_applied(db_path: &std::path::Path) -> bool {
+    let conn = conary_core::db::open(db_path).unwrap();
+    conary_core::db::models::Changeset::list_all(&conn)
+        .unwrap()
+        .iter()
+        .all(|changeset| changeset.status == ChangesetStatus::Applied)
+}
+
+#[test]
+fn a_later_transaction_verifies_a_promise_it_relied_on_from_an_installed_package() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
+    let later_batch = || {
+        let mut dependent = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+        dependent.requirements = vec![depends_on(promised_path)];
+        vec![dependent]
+    };
+
+    // The promise materialized during the earlier transaction, so the path the
+    // later one leans on is really there and the batch applies. The producer
+    // declares no capability for the path, so the installed promise is the only
+    // witness the requirement has.
+    let kept = tempfile::tempdir().unwrap();
+    let (kept_db, kept_db_string) = db_with_prior_transaction(
+        kept.path(),
+        vec![
+            crypto_policies_with_promise(promised_path),
+            prepared_test_package("materializer", promised_path, b"generated"),
+        ],
+    );
+
+    BatchInstaller::new(&kept_db_string, SandboxMode::Always)
+        .install_batch(later_batch())
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&kept_db),
+        "a present promise must not fail the transaction that relies on it"
+    );
+
+    // Same reasoning, same reliance, but the path was never created. Scoping
+    // the post-condition to the current batch left nothing to re-ask the disk.
+    let broken = tempfile::tempdir().unwrap();
+    let (_broken_db, broken_db_string) = db_with_prior_transaction(
+        broken.path(),
+        vec![crypto_policies_with_promise(promised_path)],
+    );
+
+    let error = BatchInstaller::new(&broken_db_string, SandboxMode::Always)
+        .install_batch(later_batch())
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(&format!(
+            "installed package crypto-policies-1.0.0 no longer holds promised path {promised_path}"
+        )),
+        "{message}"
+    );
+    // The remedy differs from a batch member that never materialized its own
+    // promise, so the diagnostic names the installed holder to repair.
+    assert!(
+        message.contains("repair or reinstall crypto-policies"),
+        "{message}"
+    );
+    assert!(
+        message.contains("krb5-libs depends on it through"),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_installed_promise_no_batch_requirement_names_is_never_verified() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+
+    // Fedora's setup owns /etc/fstab as a %ghost and never creates it. Being
+    // installed does not put it in a later transaction's reach: only a promise
+    // that transaction leaned on is its business.
+    let mut setup = prepared_test_package("setup", "/etc/profile", b"profile");
+    setup.provides.push(promised("/etc/fstab"));
+    setup.provides.push(promised("/run/motd"));
+    let (db_path, db_path_string) = db_with_prior_transaction(temp.path(), vec![setup]);
+    let mut later = prepared_test_package("filesystem", "/usr/bin/filesystem-marker", b"marker");
+    later.requirements = vec![depends_on("setup")];
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![later])
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&db_path),
+        "an installed promise nothing in the batch requires must not be verified"
+    );
+}
+
+#[test]
+fn an_installed_promise_an_alternative_satisfies_is_never_verified() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
+
+    // The requirement names the promised path, but its other alternative is
+    // satisfied too, so the transaction never leaned on the path. Naming an
+    // atom is not relying on it -- which is why membership in the batch's atom
+    // set selects candidates and the counterfactual decides.
+    let (db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![crypto_policies_with_promise(promised_path)],
+    );
+    let mut later = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+    later.requirements = vec![
+        conary_core::repository::dependency_model::RepositoryRequirementGroup::alternatives(
+            conary_core::repository::dependency_model::RepositoryRequirementKind::Depends,
+            vec![
+                conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+                    promised_path.to_string(),
+                ),
+                conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+                    "crypto-policies".to_string(),
+                ),
+            ],
+        ),
+    ];
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![later])
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&db_path),
+        "a promise an alternative made dispensable must not be verified"
+    );
+}
+
+fn package_promising(name: &str, payload: &str, promised_path: &str) -> PreparedPackage {
+    let mut package = prepared_test_package(name, payload, b"payload");
+    package.provides.push(promised(promised_path));
+    package.install_reason = InstallReason::Dependency;
+    package
+}
+
+fn krb5_depending_on(
+    requirement: conary_core::repository::dependency_model::RepositoryRequirementGroup,
+) -> PreparedPackage {
+    let mut dependent = prepared_test_package("krb5-libs", "/usr/lib64/libkrb5.so.3", b"krb5");
+    dependent.requirements = vec![requirement];
+    dependent
+}
+
+fn any_of(
+    first: &str,
+    second: &str,
+) -> conary_core::repository::dependency_model::RepositoryRequirementGroup {
+    conary_core::repository::dependency_model::RepositoryRequirementGroup::alternatives(
+        conary_core::repository::dependency_model::RepositoryRequirementKind::Depends,
+        vec![
+            conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+                first.to_string(),
+            ),
+            conary_core::repository::dependency_model::RepositoryRequirementClause::name_only(
+                second.to_string(),
+            ),
+        ],
+    )
+}
+
+#[test]
+fn two_packages_promising_one_path_cannot_alibi_each_other() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
+
+    // One installed holder and one incoming holder promise the same path, and
+    // nothing creates it. Asking whether either promise alone is load-bearing
+    // gets "no" twice -- each is excused by the other -- and an unusable
+    // dependency commits. The question has to be asked of the path.
+    let (_db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![crypto_policies_with_promise(promised_path)],
+    );
+
+    let error = BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![
+            krb5_depending_on(depends_on(promised_path)),
+            package_promising(
+                "crypto-policies-extra",
+                "/usr/share/crypto-policies/EXTRA",
+                promised_path,
+            ),
+        ])
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    // Both holders are named, each with the remedy its own side needs.
+    assert!(
+        message.contains(&format!(
+            "installed package crypto-policies-1.0.0 no longer holds promised path {promised_path}"
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "package crypto-policies-extra-1.0.0 did not materialize promised path {promised_path}"
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains("krb5-libs depends on it through"),
+        "{message}"
+    );
+}
+
+#[test]
+fn two_packages_promising_one_present_path_satisfy_the_post_condition() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let promised_path = "/etc/crypto-policies/back-ends/krb5.config";
+
+    // Same two holders, but the path is really there. The post-condition asks
+    // the disk about the path, not about who is credited with it.
+    let (db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![
+            crypto_policies_with_promise(promised_path),
+            prepared_test_package("materializer", promised_path, b"generated"),
+        ],
+    );
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![
+            krb5_depending_on(depends_on(promised_path)),
+            package_promising(
+                "crypto-policies-extra",
+                "/usr/share/crypto-policies/EXTRA",
+                promised_path,
+            ),
+        ])
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&db_path),
+        "a present path must satisfy every package that promised it"
+    );
+}
+
+#[test]
+fn an_or_of_two_promised_paths_fails_when_neither_materializes() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let first = "/etc/promise-first";
+    let second = "/etc/promise-second";
+
+    // Two promised alternatives excuse each other exactly like two holders of
+    // one path do, one level up the expression.
+    let (_db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![
+            package_promising("holder-first", "/usr/share/holder-first", first),
+            package_promising("holder-second", "/usr/share/holder-second", second),
+        ],
+    );
+
+    let error = BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![krb5_depending_on(any_of(first, second))])
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(&format!(
+            "installed package holder-first-1.0.0 no longer holds promised path {first}"
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "installed package holder-second-1.0.0 no longer holds promised path {second}"
+        )),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_or_of_two_promised_paths_passes_when_one_materializes() {
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let first = "/etc/promise-first";
+    let second = "/etc/promise-second";
+
+    // The requirement is satisfied by either alternative, so one materialized
+    // promise is the whole obligation. Demanding both would reject a correct
+    // transaction -- the exact over-enforcement #300 removed.
+    let (db_path, db_path_string) = db_with_prior_transaction(
+        temp.path(),
+        vec![
+            package_promising("holder-first", "/usr/share/holder-first", first),
+            package_promising("holder-second", "/usr/share/holder-second", second),
+            prepared_test_package("materializer", second, b"generated"),
+        ],
+    );
+
+    BatchInstaller::new(&db_path_string, SandboxMode::Always)
+        .install_batch(vec![krb5_depending_on(any_of(first, second))])
+        .unwrap();
+
+    assert!(
+        every_changeset_applied(&db_path),
+        "one materialized alternative must satisfy an OR of promised paths"
     );
 }

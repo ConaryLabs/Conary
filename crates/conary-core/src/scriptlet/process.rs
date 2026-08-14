@@ -478,8 +478,12 @@ fn prepared_stdin(content: &[u8]) -> Result<File> {
 mod tests {
     use super::super::{PackageFormat, ScriptletExecutor};
     use super::{ScriptletProcess, configure_target_command_boundary};
+    use crate::activation::{
+        OpenRcActivationAction, OpenRcActivationCondition, RuntimeActivationInvocation,
+    };
     use crate::scriptlet::test_support::materialized_root;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::process::{Command, Stdio};
 
@@ -559,6 +563,59 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("host root '/'"));
+    }
+
+    #[test]
+    fn artix_lifecycle_captures_openrc_without_live_selected_root_mutation() {
+        const TEST_NAME: &str = "scriptlet::process::tests::artix_lifecycle_captures_openrc_without_live_selected_root_mutation";
+        let Some(root) = materialized_root(TEST_NAME, &["/bin/sh"]) else {
+            return;
+        };
+        let provider = root.host_path("/usr/sbin/rc-service");
+        fs::create_dir_all(provider.parent().unwrap()).unwrap();
+        fs::write(
+            &provider,
+            b"#!/bin/sh\nprintf '%s\\n' \"$*\" > /tmp/openrc-provider-argv\n",
+        )
+        .unwrap();
+        fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let executor = ScriptletExecutor::new(
+            root.path(),
+            "artix-foreign-service",
+            "1.0-1",
+            PackageFormat::Rpm,
+        );
+        executor
+            .execute_in_target(
+                ScriptletProcess {
+                    phase: "post-install",
+                    interpreter: "/bin/sh",
+                    interpreter_args: &[],
+                    args: &[],
+                    env: &[("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")],
+                    stdin: &[],
+                },
+                b"rc-service --ifstarted sshd restart",
+            )
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.host_path("/tmp/openrc-provider-argv")).unwrap(),
+            "--dry-run --ifstarted sshd restart\n",
+            "the selected-root provider must receive OpenRC's non-mutating dry-run flag"
+        );
+        let invocations = executor.take_activation_invocations();
+        assert_eq!(invocations.len(), 1);
+        let RuntimeActivationInvocation::OpenRc(invocation) = &invocations[0] else {
+            panic!("expected captured OpenRC invocation: {invocations:?}");
+        };
+        assert_eq!(invocation.action, OpenRcActivationAction::Restart);
+        assert_eq!(invocation.service, "sshd");
+        assert_eq!(
+            invocation.conditions,
+            vec![OpenRcActivationCondition::IfStarted]
+        );
     }
 
     #[test]

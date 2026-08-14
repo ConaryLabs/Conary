@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::packages::arch::authority::AlpmPackageAuthority;
 use crate::packages::config_authority::SourceConfigDeclaration;
 use crate::packages::deb::authority::DebianPackageAuthority;
+use crate::packages::eopkg::authority::EopkgPackageAuthority;
 use crate::packages::rpm::authority::RpmPackageAuthority;
 use crate::repository::dependency_model::{
     CapabilityProvenance, DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
@@ -29,6 +30,7 @@ pub enum SourcePackageAuthority {
     Rpm(RpmPackageAuthority),
     Debian(DebianPackageAuthority),
     Alpm(AlpmPackageAuthority),
+    Eopkg(EopkgPackageAuthority),
     Ccs(CcsPackageAuthority),
 }
 
@@ -53,6 +55,7 @@ impl SourcePackageAuthority {
             Self::Rpm(value) => &value.name,
             Self::Debian(value) => &value.name,
             Self::Alpm(value) => &value.name,
+            Self::Eopkg(value) => &value.name,
             Self::Ccs(value) => &value.name,
         }
     }
@@ -63,6 +66,7 @@ impl SourcePackageAuthority {
             Self::Rpm(value) => &value.evr,
             Self::Debian(value) => &value.version,
             Self::Alpm(value) => &value.version,
+            Self::Eopkg(value) => &value.version,
             Self::Ccs(value) => &value.version,
         }
     }
@@ -73,6 +77,7 @@ impl SourcePackageAuthority {
             Self::Rpm(_) => VersionScheme::Rpm,
             Self::Debian(_) => VersionScheme::Debian,
             Self::Alpm(_) => VersionScheme::Arch,
+            Self::Eopkg(_) => VersionScheme::Eopkg,
             Self::Ccs(value) => value.version_scheme,
         }
     }
@@ -83,6 +88,7 @@ impl SourcePackageAuthority {
             Self::Rpm(value) => Some(&value.architecture),
             Self::Debian(value) => Some(&value.architecture),
             Self::Alpm(value) => Some(&value.architecture),
+            Self::Eopkg(value) => Some(&value.architecture),
             Self::Ccs(value) => value.architecture.as_deref(),
         }
     }
@@ -92,7 +98,7 @@ impl SourcePackageAuthority {
         match self {
             Self::Debian(value) => Some(value.multi_arch),
             Self::Ccs(value) => value.debian_multi_arch,
-            Self::Rpm(_) | Self::Alpm(_) => None,
+            Self::Rpm(_) | Self::Alpm(_) | Self::Eopkg(_) => None,
         }
     }
 
@@ -102,6 +108,7 @@ impl SourcePackageAuthority {
             Self::Rpm(_) => SourcePackageFormat::Rpm,
             Self::Debian(_) => SourcePackageFormat::Debian,
             Self::Alpm(_) => SourcePackageFormat::Alpm,
+            Self::Eopkg(_) => SourcePackageFormat::Eopkg,
             Self::Ccs(_) => SourcePackageFormat::Ccs,
         }
     }
@@ -144,22 +151,33 @@ impl SourcePackageAuthority {
                 Ok(capability)
             };
         match self {
-            Self::Rpm(value) => value
-                .provides
-                .iter()
-                .map(|entry| {
-                    project(
-                        SourcePackageFormat::Rpm,
-                        VersionScheme::Rpm,
-                        entry.header_index,
-                        entry.kind,
-                        &entry.name,
-                        &entry.version,
-                        entry.version_relation,
-                        &entry.architecture_qualifier,
-                    )
-                })
-                .collect(),
+            Self::Rpm(value) => {
+                let mut capabilities = value
+                    .provides
+                    .iter()
+                    .map(|entry| {
+                        project(
+                            SourcePackageFormat::Rpm,
+                            VersionScheme::Rpm,
+                            entry.header_index,
+                            entry.kind,
+                            &entry.name,
+                            &entry.version,
+                            entry.version_relation,
+                            &entry.architecture_qualifier,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                // RPM satisfies a file dependency from its header file table,
+                // which includes paths the package only promises to create.
+                // Debian and Arch have no equivalent declaration.
+                crate::repository::dependency_model::extend_promised_path_provides(
+                    &mut capabilities,
+                    SourcePackageFormat::Rpm,
+                    value.promised_paths.iter().map(|entry| entry.path.as_str()),
+                )?;
+                Ok(capabilities)
+            }
             Self::Debian(value) => value
                 .provides
                 .iter()
@@ -184,6 +202,22 @@ impl SourcePackageAuthority {
                         SourcePackageFormat::Alpm,
                         VersionScheme::Arch,
                         entry.pkginfo_index,
+                        entry.kind,
+                        &entry.name,
+                        &entry.version,
+                        entry.version_relation,
+                        &entry.architecture_qualifier,
+                    )
+                })
+                .collect(),
+            Self::Eopkg(value) => value
+                .provides
+                .iter()
+                .map(|entry| {
+                    project(
+                        SourcePackageFormat::Eopkg,
+                        VersionScheme::Eopkg,
+                        entry.metadata_index,
                         entry.kind,
                         &entry.name,
                         &entry.version,
@@ -230,6 +264,12 @@ impl SourcePackageAuthority {
                 .iter()
                 .cloned()
                 .map(SourceConfigDeclaration::Alpm)
+                .collect(),
+            Self::Eopkg(value) => value
+                .config
+                .iter()
+                .cloned()
+                .map(SourceConfigDeclaration::Eopkg)
                 .collect(),
             Self::Ccs(value) => value.config.clone(),
         };
@@ -306,6 +346,7 @@ mod tests {
                     ),
                 }],
                 config: Vec::new(),
+                promised_paths: Vec::new(),
             }),
             SourcePackageAuthority::Debian(DebianPackageAuthority {
                 name: "runtime".to_string(),
@@ -384,6 +425,102 @@ mod tests {
                     format: expected.1,
                     record_index: expected.2,
                 }
+            );
+        }
+    }
+
+    fn rpm_authority_with_promised_paths(paths: &[&str]) -> SourcePackageAuthority {
+        SourcePackageAuthority::Rpm(RpmPackageAuthority {
+            name: "crypto-policies".to_string(),
+            epoch: None,
+            version_component: "20251128".to_string(),
+            release: "3".to_string(),
+            evr: "20251128-3".to_string(),
+            architecture: "noarch".to_string(),
+            provides: Vec::new(),
+            config: Vec::new(),
+            promised_paths: paths
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, path)| crate::packages::rpm::authority::RpmPromisedPath {
+                        header_index: index as u32,
+                        path: (*path).to_string(),
+                    },
+                )
+                .collect(),
+        })
+    }
+
+    #[test]
+    fn rpm_publishes_every_ghost_header_path_as_a_promised_capability() {
+        let authority =
+            rpm_authority_with_promised_paths(&["/etc/crypto-policies/back-ends/krb5.config"]);
+
+        let capabilities = authority.declared_capabilities().unwrap();
+
+        assert_eq!(capabilities.len(), 1);
+        let promised = &capabilities[0];
+        assert!(promised.is_promised_path());
+        assert!(!promised.witnesses_installed_content());
+        assert_eq!(promised.kind, RepositoryCapabilityKind::File);
+        assert_eq!(promised.name, "/etc/crypto-policies/back-ends/krb5.config");
+        assert_eq!(promised.version, None);
+        assert_eq!(promised.version_scheme, VersionScheme::Rpm);
+        promised.validate().unwrap();
+    }
+
+    #[test]
+    fn a_promised_path_never_displaces_the_exact_package_identity() {
+        let authority =
+            rpm_authority_with_promised_paths(&["/etc/crypto-policies/back-ends/krb5.config"]);
+
+        let capabilities = authority.resolution_capabilities().unwrap();
+
+        assert_eq!(
+            capabilities
+                .iter()
+                .filter(|capability| capability.provenance == CapabilityProvenance::ExactIdentity)
+                .count(),
+            1
+        );
+        assert!(
+            capabilities
+                .iter()
+                .any(ProvidedCapability::is_promised_path)
+        );
+    }
+
+    #[test]
+    fn only_rpm_declares_promised_paths() {
+        // Debian and Arch have no %ghost equivalent, so no source authority
+        // other than RPM may publish a promise.
+        for authority in [
+            SourcePackageAuthority::Debian(DebianPackageAuthority {
+                name: "tool".to_string(),
+                epoch: None,
+                source_version: "1.0-1".to_string(),
+                version: "1.0-1".to_string(),
+                architecture: "amd64".to_string(),
+                multi_arch: DebianMultiArch::No,
+                provides: Vec::new(),
+                config: Vec::new(),
+            }),
+            SourcePackageAuthority::Alpm(AlpmPackageAuthority {
+                name: "tool".to_string(),
+                version: "1.0-1".to_string(),
+                architecture: "x86_64".to_string(),
+                package_type: None,
+                provides: Vec::new(),
+                config: Vec::new(),
+            }),
+        ] {
+            assert!(
+                !authority
+                    .declared_capabilities()
+                    .unwrap()
+                    .iter()
+                    .any(ProvidedCapability::is_promised_path)
             );
         }
     }

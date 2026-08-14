@@ -1,13 +1,13 @@
 ---
-last_updated: 2026-08-06
-revision: 40
-summary: Define source-independent lifecycle, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, and Arch packages
+last_updated: 2026-08-12
+revision: 47
+summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, Arch, and eopkg packages
 ---
 
 # Foreign Package Lifecycle Contracts
 
 This specification defines how Conary preserves and executes lifecycle behavior
-from RPM, Debian, and Arch packages. The package managers expose finite,
+from RPM, Debian, Arch, and eopkg packages. The package managers expose finite,
 documented lifecycle ABIs around arbitrary program bodies. Conary models those
 ABIs directly; it does not infer lifecycle meaning from program text or
 delegate execution to the source package manager.
@@ -18,12 +18,19 @@ their fallible projection into this lifecycle and transaction contract. This
 document remains the owner of event order, arguments, installed config state,
 and selected-root execution.
 
+Repository declarations and signing roots installed by a package are a
+separate typed lifecycle effect. Their signed desired state, ownership, atomic
+install/update/remove behavior, and rollback contract are defined by
+[`package-repository-enrollment.md`](package-repository-enrollment.md). They
+are planned from authenticated package payloads before mutation and are never
+inferred by scraping a completed root or classifying script text.
+
 ## Cross-Distro Product Contract
 
 Foreign-package conversion is a primary acquisition path:
 
 ```text
-RPM, DEB, or Arch artifact
+RPM, DEB, Arch, or eopkg artifact
         |
         v
 Conary parser -> CCS lifecycle bundle -> Conary transaction planner/executor
@@ -32,9 +39,9 @@ Conary parser -> CCS lifecycle bundle -> Conary transaction planner/executor
 any supported Conary target
 ```
 
-RPM, dpkg, and libalpm documentation and source define the input contract.
+RPM, dpkg, libalpm, and eopkg documentation and source define the input contract.
 Conary owns the runtime implementation. Conversion and installation must not
-invoke `rpm`, `dpkg`, `apt`, `pacman`, or another source package manager to
+invoke `rpm`, `dpkg`, `apt`, `pacman`, `eopkg`, or another source package manager to
 decide lifecycle events, mutate its database, or complete the transaction. A
 Debian package installed on Fedora, an RPM installed on Arch, and an Arch
 package installed on Ubuntu use the same Conary planner and transaction engine
@@ -44,17 +51,31 @@ The program body may require an interpreter or helper runtime. Conary must
 satisfy that requirement through declared dependencies, a Conary-owned
 compatibility implementation, or a complete typed lowering. It must not assume
 that the target happens to provide the source distribution's package manager or
-helper behavior. Every documented RPM, Debian, and ALPM lifecycle semantic in
+helper behavior. Every documented RPM, Debian, ALPM, and eopkg lifecycle semantic in
 this specification is required implementation for the supported-format
 contract.
 
 System adoption is a migration-continuity feature for machines that already
 have native package-manager state. It is not the cross-distro product path and
 does not count as proof that conversion or source-independent execution works.
+For RPM adoption, the installed database's parallel `FILESTATES` array is the
+live-payload authority. Conary admits `NORMAL` and `NETSHARED`, the two states
+RPM itself defines as installed, and excludes `REPLACED`, `NOTINSTALLED`, and
+`WRONGCOLOR` records from capture. This preserves transactions such as
+`--excludedocs` without treating an intentionally uninstalled header entry as
+missing payload, and without capturing another package's replacement bytes.
+Unknown states fail closed. The pinned contract is RPM 4.20.1's
+[`rpmfileState` and `RPMFILE_IS_INSTALLED`](https://github.com/rpm-software-management/rpm/blob/c8dc5ea575a2e9c1488036d12f4b75f6a5a49120/include/rpm/rpmfiles.h#L31-L43).
+The explicit adoption-to-CCS bridge is valid only after Conary re-resolves an
+immutable source artifact from enrolled authority and proves its typed identity
+and complete payload equal the adopted record. It then enters the same parser,
+converter, signed CCS, and source-independent lifecycle path shown above; live
+files or the installed package database alone can never establish lifecycle
+equivalence.
 
 ### Orthogonal Source And Target Axes
 
-RPM, Debian, and Arch are source ABI families, not target-distro restrictions.
+RPM, Debian, Arch, and eopkg are source ABI families, not target-distro restrictions.
 The running system exposes a typed host-capability inventory; a distro name is
 neither a compatibility fact nor a runtime selector. Nothing selects a pairwise
 converter, script-text classifier, or hard-coded source/target exception.
@@ -75,9 +96,9 @@ text. Supporting another Linux environment means satisfying or implementing
 the same capability contracts and proof fixtures, not creating
 RPM-to-that-distro, DEB-to-that-distro, or Arch-to-that-distro code paths.
 
-The current host-inventory schema is version 4 and is persisted under
+The current host-inventory schema is version 5 and is persisted under
 `system.host-capability-inventory` by `conary system init`. Its structural
-contract records the active init interface and exact `systemctl`,
+contract records the active init interface and exact `systemctl`, `rc-service`,
 `systemd-sysusers`, `systemd-tmpfiles`, `sysctl`, and `ldconfig` command
 interfaces. Each executable descriptor carries the exact command/root grammar,
 parsed implementation family and version, absolute target path, and executable
@@ -88,11 +109,11 @@ for `--version` is not a capability. Probe processes receive a fixed sanitized
 environment, bounded output, a five-second deadline, and a private process
 group that Conary kills on timeout. Each inventory field accepts only its exact
 command contract, and the systemd operation set must be exactly the offline or
-live-manager shape discovered at initialization. The version-4 document also
+live-manager shape discovered at initialization. The version-5 document also
 records the opaque `security.selinux` value of the target `/usr` node when
 present, for use as immutable carrier-backing authority. It does not parse that
 value or derive one from a distro, path, policy name, source package manager, or
-pairwise compatibility selector. A version-3 inventory must be replaced by
+pairwise compatibility selector. A version-4 inventory must be replaced by
 rerunning `conary system init`.
 
 RPM sysusers planning emits a dedicated typed native event rather than a
@@ -115,12 +136,15 @@ reinterpret mode, identity, age, specifier, or argument semantics. The target
 against the exact declaration, while offline roots receive that declaration
 for the target executable at boot.
 
-CCS service preflight resolves generic service hooks through the typed init
-manager. Systemd-specific hooks resolve through the typed systemctl interface:
-unit-file enable/disable operations mutate only the selected root through
-systemctl's documented offline-root contract. `enable = false` means disable.
-Runtime service operations become generation activation intents; package
-installation never signals the host service manager.
+CCS service preflight resolves generic service hooks through the typed active
+init manager. Systemd-specific hooks resolve through the typed systemctl
+interface: unit-file enable/disable operations mutate only the selected root
+through systemctl's documented offline-root contract. OpenRC enable/disable
+projects the exact `default` runlevel symlink to an executable, nonsymlinked
+selected-root init script and rejects conflicting authority. `enable = false`
+means disable. Runtime service operations become typed systemd or OpenRC
+generation activation intents; package installation never signals the host
+service manager.
 
 Every successful typed Arch add, upgrade, or remove transaction evaluates
 libalpm's implicit ldconfig step exactly once after package post hooks and
@@ -134,13 +158,14 @@ the package transaction.
 
 Service-manager runtime work has two exact inputs. A declarative CCS service
 hook emits a typed operation directly. An arbitrary signed CCS hook or native
-RPM, Debian, or Arch lifecycle program is observed at the `systemctl` process
-boundary inside the isolated selected root: a private mount namespace places a
-capture proxy over the target executable, records the actual NUL-delimited
-argv, and suppresses a closed runtime action before it can reach any service
-manager. Non-runtime behavior is delegated to that same target executable with
-`SYSTEMD_OFFLINE=1`. Conary does not inspect script text to decide that a
-service action occurred.
+RPM, Debian, or Arch lifecycle program is observed at the `systemctl` or
+`rc-service` process boundary inside the isolated selected root: a private
+mount namespace places a capture proxy over the target executable, records the
+actual NUL-delimited argv, and prevents a live runtime action from reaching a
+service manager. Non-runtime systemd behavior is delegated to that same target
+executable with `SYSTEMD_OFFLINE=1`; OpenRC behavior is validated by the target
+provider with its documented `--dry-run` flag. Conary does not inspect script
+text to decide that a service action occurred.
 
 The closed action grammar follows systemd's
 [`unit_actions` table](https://github.com/systemd/systemd/blob/main/src/systemctl/systemctl-start-unit.c):
@@ -172,6 +197,16 @@ second shell-maintained command list. An option shape outside that closed table
 is suppressed before it can reach a live manager and becomes a typed contract
 error; `Ok(None)` is reserved for a positively parsed non-activation verb or
 explicit dry run.
+
+The OpenRC grammar is derived from `rc-service`'s current option and command
+contract. It preserves `start`, `stop`, `reload`, and `restart`, the six
+conditional execution flags, debug, dependency, color, verbosity, quietness,
+and trailing service-command arguments. Query/help/version modes and explicit
+dry runs create no activation work. Repeated idempotent condition flags are
+canonicalized; duplicate conditions in an already-typed persisted invocation,
+unknown options, invalid service names, and unsupported live target modes fail
+closed. Captured OpenRC argv has its own `captured-openrc` durable source kind;
+it cannot be misrepresented as captured systemctl work.
 
 SELinux and AppArmor use the same process-boundary authority: actual argv plus
 the selected root's exact provider executable. Private script-text diagnostics
@@ -211,11 +246,18 @@ a live binary or an operator queue.
 Each successful selected-root transaction appends the canonical invocation,
 source package/version/entry, source kind, exact sequence, canonical JSON, and
 SHA-256 to `activation_requests` before its changeset can become applied.
+When a source format explicitly permits a lifecycle class to fail while the
+transaction continues, the same transaction appends one ordered row per typed
+`ContinuedLifecycleFailure` to `lifecycle_events` before the changeset can
+become applied. The row mirrors the current evidence type: source
+package/version/entry, failure kind, phase, requested and effective sandbox,
+and message. It does not synthesize an exit-code or stderr column absent from
+`ScriptletFailureOutcome`; `conary system history` is the read surface.
 Security-policy requests also retain the exact invoked path, canonical path,
 and executable SHA-256 observed inside that selected root. Current-only
-database schema revision 9 stores the tagged systemd/SELinux/AppArmor union;
-revision-8 databases must be rebuilt and no compatibility decoder or migration
-exists.
+database schema revision 36 stores the tagged systemd/OpenRC/SELinux/AppArmor
+union and distinct captured source kinds; revision-35 databases must be rebuilt
+and no compatibility decoder or migration exists.
 Every generation build projects all eligible requests through that
 generation's applied-changeset high-water mark into
 `generation_activation_intents`. Thus a request projected onto generation N
@@ -227,11 +269,11 @@ The packaged `conary-generation-activation.service` invokes the hidden
 native boot. A Conary boot must contain exactly one non-negative
 `conary.generation=N` kernel argument, a matching activatable artifact, and a
 matching database state. The consumer then loads only N's intents and
-revalidates the persisted live-systemd capability and exact `systemctl`
-executable identity before each sequence begins. If a legitimate generation
-upgrade changed that interface, the consumer structurally rediscovers and
-persists the booted generation's typed capability inventory instead of
-requiring operator reconciliation. A security-policy request instead requires
+revalidates the persisted active init capability and exact `systemctl` or
+`rc-service` executable identity before each sequence begins. If a legitimate
+generation upgrade changed that interface, the consumer structurally
+rediscovers and persists the booted generation's typed capability inventory
+instead of requiring operator reconciliation. A security-policy request instead requires
 the booted provider's invoked path to resolve to the captured canonical path
 with the captured executable SHA-256, then runs the exact captured arguments.
 A missing or changed provider is a durable failed request and remains
@@ -281,7 +323,7 @@ validation prove the replacement complete for every control-flow path. That is
 a new schema contract, not a partial suppression marker or a mixture of guessed
 diagnostics and partial source-program execution.
 
-Current native lifecycle schema revision 19 has no replacement marker,
+Current native lifecycle schema revision 20 has no replacement marker,
 arbitrary extension map, reason code, effect projection, unknown-command
 evidence, diagnostic-class list/count, adapter-registry digest, publication
 policy, or parallel security-policy intent. Every source entry carries an exact
@@ -293,9 +335,17 @@ artifact and requires an exact one-to-one match. Entry presence is the exact
 lifecycle authority; there is no single-value decision tag or duplicated
 preserved-entry counter. Only actual executed argv captured at the provider
 process boundary can become selected-root or generation mutation authority.
-Revision 18 accepts neither earlier nor unknown revisions: pre-alpha artifacts
-and installed rows must be reconverted, rebuilt, or discarded instead of
-migrated. Every executable source entry remains preserved; adding a lowering
+Revision 20 cuts the persisted scriptlet contract: `RpmRuntimeMetadata`
+carries no `critical` boolean (its effective `criticality` projection is the
+only stamp, and `deny_unknown_fields` rejects a manifest that still names the
+deleted field), and `native_slot` is the typed `RpmScriptletSlot` class with
+exact RPM scriptlet tag strings instead of a free string. Formats without a
+declared class table persist no slot: their class authority lives in their
+typed format metadata, and every RPM entry persists its typed class so the
+install runtime is told the class it needs.
+Revision 19 and earlier accept neither earlier nor unknown revisions: pre-alpha
+artifacts and installed rows must be reconverted, rebuilt, or discarded instead
+of migrated. Every executable source entry remains preserved; adding a lowering
 requires a later typed schema contract with its own execution proof.
 
 Revision 18 also names the exact package-origin authority `source_profile`.
@@ -345,16 +395,17 @@ The planner consumes a complete transaction change set:
 - lifecycle bundles for installing, removing, and trigger-owning packages.
 
 Every installed package row has one mandatory typed version scheme.
-Conary-authored packages are constructed with `conary`; RPM, Debian, and Arch
-packages are constructed with `rpm`, `debian`, or `arch` from the parser or
+Conary-authored packages are constructed with `conary`; RPM, Debian, Arch, and
+eopkg packages are constructed with `rpm`, `debian`, `arch`, or `eopkg` from the parser or
 selected repository contract. There is no placeholder scheme to patch after
 construction. Repository provenance, parsed package identity, install
 semantics, and an adopted package's exact native identity must agree before
 insertion. Missing or contradictory scheme provenance is invalid state, not a
 cue to guess from a distro, filename, repository, or version string. Changeset
-metadata schema `conary.changeset.metadata.v6` is the only rollback-snapshot
-contract accepted by the current pre-alpha build; superseded metadata is reset
-with the database rather than adapted. Its typed installed-authority snapshot
+metadata schema `conary.changeset.metadata.v7` plus the changeset's
+foreign-keyed selected-root snapshot is the only rollback contract accepted by
+the current pre-alpha build; superseded metadata and databases are rebuilt
+rather than adapted. The typed installed-authority metadata
 retains the trove selection, pin, source, label, repository, versioning, and
 native identity; components and their file bindings and relations; package
 requirements and provides; config authority; package and file capabilities;
@@ -441,14 +492,14 @@ must be rebuilt; export does not guess missing carrier authority. A bootstrap
 target that is not running yet projects the same fact from its exact captured
 `/usr` manifest node instead of inspecting or inheriting the build host.
 
-A generation-aware root mutation records a typed selected-root publication
-debt and durably installs its cumulative candidate before committing the
-package database transaction. Every later root-changing transaction starts
-from the newest committed cumulative authority and produces a replacement
-candidate. Retry must fail closed if that candidate is missing or invalid; it
-must never fall back to a database-only reconstruction. Completion,
-abandonment, and rollback own deterministic candidate cleanup. Database-only
-publication input is not part of the current contract.
+A generation-aware root mutation records typed publication debt and appends its
+cumulative selected-root snapshot in the same SQLite transaction as package
+state. Every later root-changing transaction starts from the newest committed
+snapshot and appends only its normalized changed paths. Retry fails closed if
+the referenced snapshot is missing or invalid; it never reconstructs mutation
+authority from package rows. Publication and rollback reference the same
+snapshot lineage, while complete manifests are derived only for artifact,
+recovery, rollback publication, and GC consumers.
 
 Every normal event, exact-argv command, event-failure recovery branch, and
 payload-failure recovery branch is preflighted before the first lifecycle
@@ -549,6 +600,7 @@ directory is handled:
 | RPM | Apply the incoming directory metadata |
 | Debian/dpkg | Preserve the existing directory metadata |
 | Arch/libalpm | Preserve the existing directory metadata |
+| eopkg | Apply the incoming directory metadata |
 | Conary-authored CCS | Apply the incoming directory metadata |
 
 These choices are encoded from immutable upstream inputs in
@@ -563,7 +615,7 @@ and libalpm
 Their revisions, paths, SHA-256 digests, and typed results are one production
 contract. A CCS archive converted from a native package remains governed by
 its validated `native_lifecycle.source_format` and matching version scheme;
-the CCS container does not erase the RPM, Debian, or Arch source ABI.
+the CCS container does not erase the RPM, Debian, Arch, or eopkg source ABI.
 
 Compatible overlap materializes the path once. Removing or upgrading a package
 deletes only its claims while peers remain. Each affected `files` row is
@@ -600,11 +652,13 @@ commits each package's files, payload claims, requirements, and provides
 atomically under `AdoptedTrack` or `AdoptedFull`; package names and partial
 warning paths are not ownership authority.
 
-Schema revision 26 is a pre-alpha hard cut: it retains revision 25's exact
-provider provenance, source-authority representation, and fail-closed trigger
-and derived-package states, and requires an explicit mixing policy for every
-persisted source pin. It does not migrate earlier databases. Operators rebuild
-disposable local state from authoritative package and repository inputs.
+Schema revision 34 is a pre-alpha hard cut: it retains exact provider
+provenance, source-authority representation, and fail-closed trigger and
+derived-package states while removing global distro-pin and allowlist
+authority. Repository-scoped opaque source identity owns selection; optional
+named feed profiles remain lifecycle projections only. It does not migrate
+earlier databases. Operators rebuild disposable local state from authoritative
+package and repository inputs.
 
 A complete unfiltered full-system adoption also performs one exact global
 selected-root capture after every native package capture succeeds. Existing
@@ -645,7 +699,7 @@ remove-on-upgrade. Verified CCS construction projects those signed values into
 the named fallible `PackageFormat::config_declarations()` transaction
 projection used by direct native installation. Each declaration retains its
 source kind and matched/absent payload association; the signed native source
-format must agree and selects the exact RPM, Debian, or Arch transaction table
+format must agree and selects the exact RPM, Debian, Arch, or eopkg transaction table
 below. An absent ALPM backup declaration is durable authority but performs no
 filesystem mutation and supplies no content identity.
 
@@ -759,9 +813,101 @@ Native install, upgrade, removal, config, lifecycle, and trigger work is one
 selected-root transaction. Before SQLite commits, any failure discards the
 isolated root and rolls back package state; Conary does not persist a second
 native-upgrade rollback schema or mutate a host root and compensate afterward.
-Once SQLite commits, the exact selected-root candidate and typed publication
+Once SQLite commits, the exact selected-root snapshot and typed publication
 debt are the retry authority. Config auxiliary ownership remains defined by the
 documented suffix grammar and the forward `GenerationConfigTransaction`.
+
+### Ordering Witness Universe
+
+A transaction certifies its dependency edges against a set of package
+identities. That set is the transaction's end state, not the installed database
+as it stands while planning runs. An identity the transaction itself deletes
+cannot witness an edge the transaction relies on: the capability is gone at
+commit, so the edge was certified against something that never coexists with
+the packages it was certified for.
+
+The admitted universe is `(installed - outgoing) + incoming`, where `outgoing`
+is every installed trove this transaction deletes:
+
+- the pre-upgrade trove each incoming package supersedes, whose ordinary
+  provides and promised paths the incoming version is free to drop; and
+- every installed trove an incoming negative relation removes.
+
+Outgoing identities are named by exact installed trove identity, never by
+package name: parallel-installed identities can share a name, and only the
+trove this transaction deletes is leaving. Withholding an outgoing identity
+never costs a correct transaction an edge. A capability the incoming version
+carries forward is admitted as an incoming identity instead, and the edge it
+certifies then also orders the provider before its dependent, which the stale
+installed identity had been silently excusing.
+
+Which installed packages leave is a property of the batch's composition and the
+installed state, so relation planning answers that question before the batch is
+ordered. Where each removal is sequenced is a different question with a
+different answer: a removal runs immediately before the earliest incoming
+element that triggers it, and "earliest" exists only once the transaction has an
+execution order, so relation planning answers that one against the ordered
+batch.
+
+Withholding an identity must never make a transaction quieter than admitting it
+would have been. Every `Depends`/`PreDepends` requirement of every incoming
+package is certified against the end-state universe, and a requirement the end
+state cannot satisfy fails the transaction with one typed diagnostic. A batch of
+one package is not excused: it has no edges to order, but its requirements are
+certified against the same universe, whether or not any promised path is in
+play. Nothing downstream would report an unsatisfiable requirement instead --
+with no holder left there is no promised-path obligation to record, and the
+transaction layer does not assume an upstream layer (the solver) already caught
+it, so the post-condition below would have nothing to re-ask.
+
+The promised-path post-condition plans and re-evaluates against this same
+universe.
+
+### Promised-Path Post-Condition
+
+A promised path is a path a package owns without shipping content for it
+(RPM `%ghost`; `source-promised-path` in
+[`source-package-authority.md`](source-package-authority.md)). Dependency
+resolution admits it as a provider, so a transaction can certify a dependency
+edge against a path no payload record creates.
+
+`%ghost` means owned if present. It is not a claim that the package's lifecycle
+creates the path, so a transaction may not require every declared promise to
+exist; `/etc/fstab`, log files, and generated certificate links are legitimately
+absent. What a transaction may require is that its own reasoning survives
+contact with the assembled root.
+
+The unit of both decisions is the requirement, never the individual promise.
+A promise-at-a-time test is unsound in both directions: two packages promising
+one path, or one expression offering two promised paths, each excuse the other
+when removed singly, so nothing looks load-bearing and an unusable dependency
+commits.
+
+Planning: for each `Depends`/`PreDepends` requirement, remove every promise for
+every path the expression names from the identities the transaction admits. If
+the expression still holds, no promise was relied on and the transaction owes
+nothing. If it falls, the requirement is recorded together with those paths and
+every package promising each of them.
+
+Post-condition: after the native lifecycle graph completes, including
+post-transaction slots, each recorded requirement is re-evaluated with promised
+paths admitted only where the path exists in the selected root. Existence is the
+whole test, symlinks included and content unread: the promise states that the
+path exists, never what it resolves to. A requirement that no longer holds fails
+the transaction. This is deliberately weaker than demanding every promised path
+exist -- an expression satisfied by either of two promised alternatives needs
+only one -- and deliberately stronger than checking promises individually. The
+check ignores the declaring lifecycle entry's criticality, because a
+warning-only slot that fails or silently does nothing is precisely the case that
+would otherwise pass unnoticed.
+
+Both promise holders are in scope, and one failure may name several. A batch
+member's unmaterialized promise fails the incoming package. An already installed
+package's promise -- reachable because a later transaction's requirement can
+lean on an earlier transaction's promise -- names the installed holder to repair
+or reinstall, because the incoming package is not the defect. A path both sides
+promised names both remedies. A promise no requirement in the current
+transaction relied on is never checked.
 
 ## RPM
 
@@ -863,15 +1009,87 @@ interpreters such as `<lua>`. Those are executable ABI semantics. A plain
 process executor cannot run such an entry; the corresponding RPM expansion or
 embedded-interpreter contract is required Conary implementation.
 
-The persisted effective critical flag owns RPM script-result handling. Matching
-the pinned RPM
+### Lifecycle Failure Posture
+
+The source package format owns its lifecycle ABI, so a lifecycle failure is
+exactly as fatal as that format's own contract says it is, in both directions.
+Conary neither aborts where the format proceeds nor proceeds where the format
+aborts. The posture is a typed per-scriptlet-class table, not a judgment about
+the entry's name, body, or apparent importance.
+
+The table below is the declared authority. `conary-core`'s
+`scriptlet::failure_policy` module is its single implementation: conversion
+consults it to stamp each entry's effective criticality, and the install runtime
+consults it to decide whether a failed entry aborts its transaction. The
+runtime is told the entry's typed class by the persisted contract (`native_slot`
+carries the typed `RpmScriptletSlot`, and a trigger entry carries its exact
+family and action) plus the persisted raw header flag word; it re-derives the
+posture through the current table at failure time, so a posture correction
+applies to already-converted artifacts without reconversion. Neither side
+matches a scriptlet name at decision time.
+
+#### RPM Scriptlet Failure Posture
+
+Derived from pinned RPM
+[`lib/rpmscript.cc` `scriptInfo[]`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmscript.cc#L54-L99),
+whose per-tag `deflags` column sets `RPMSCRIPT_FLAG_CRITICAL`, and dispatched by
 [`runScript()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/transaction.cc#L1709-L1762),
-a failed non-critical script is reported but does not fail its transaction
-element, while a critical script failure remains fatal. Conary applies that
-source policy only to a program exit or timeout after exact preflight and the
-selected-root enforcement boundary have succeeded. Missing interpreters,
-malformed contracts, process or sandbox setup failures, and enforcement
-failures remain fatal; RPM criticality is not a security-boundary bypass.
+where `warn_only = !(rpmScriptFlags(script) & RPMSCRIPT_FLAG_CRITICAL)` and a
+warn-only failure is mapped back to `RPMRC_OK` after notifying the callback.
+RPM's own comment there records that the return code "only reflects whether the
+condition prevented install/erase (which is only happens with %prein and %preun
+scriptlets)".
+
+| Scriptlet class | Class default | Failure posture | Note |
+| --- | --- | --- | --- |
+| `%pretrans` | `CRITICAL` | aborts transaction | runs before any payload for the element lands |
+| `%pre` | `CRITICAL` | aborts transaction | runs before this package's payload lands |
+| `%post` | none | warn and continue | payload is already on disk |
+| `%posttrans` | none | warn and continue | |
+| `%preuntrans` | `CRITICAL` | aborts transaction | |
+| `%preun` | `CRITICAL` | aborts transaction | RPM prevents the erase |
+| `%postun` | none | warn and continue | |
+| `%postuntrans` | none | warn and continue | |
+| `%verify` | `CRITICAL` | aborts transaction | |
+| `%sysusers` | `CRITICAL` | aborts transaction | RPM's synthesized sysusers class |
+| `%triggerprein` | `CRITICAL` | aborts transaction | |
+| `%triggerun` | `CRITICAL` | aborts transaction | |
+| `%triggerin` | none | warn and continue | |
+| `%triggerpostun` | none | warn and continue | |
+| `%filetrigger*`, `%transfiletrigger*` | cleared | warn and continue | RPM clears `CRITICAL`; no header flag can promote a file trigger |
+
+A package header may carry `RPMSCRIPT_FLAG_CRITICAL` on an entry whose class
+defaults to none, which promotes that entry to aborting the transaction. Only
+the file-trigger classes refuse promotion, because RPM clears the bit for them
+unconditionally. The promotion outcome is persisted as the entry's effective
+criticality: `header`, `slot-default`, `warning-only`, or
+`forced-warning-only`.
+
+Conary applies a warn-and-continue posture only to a program exit or timeout
+after exact preflight and the selected-root enforcement boundary have succeeded.
+Missing interpreters, malformed contracts, process or sandbox setup failures,
+and enforcement failures remain fatal for every class: criticality is a source
+lifecycle contract, not a security-boundary bypass.
+
+A warn-and-continue failure is typed evidence, not a success. The transaction
+retains each one and reports it on the user-facing channel, and the promised-path
+post-condition in the shared transaction model remains the backstop: a
+warn-and-continue entry that fails to materialize a path the transaction relied
+on as a dependency witness still fails the transaction.
+
+#### Debian And Arch Failure Posture
+
+| Source format | Failure posture | Status |
+| --- | --- | --- |
+| Debian maintainer scripts | aborts transaction | pending the Debian lifecycle-posture slice |
+| Arch `.INSTALL` functions and ALPM hooks | aborts transaction | pending the ALPM lifecycle-posture slice |
+
+Neither format's table is declared yet, so every failure aborts, which is the
+strict direction. Debian's real contract is not RPM's: `dpkg` leaves a package
+whose `postinst` failed in an errored, unconfigured state and reports the
+transaction as failed rather than proceeding as if configured, so the Debian row
+must be replaced by a per-script table stating which script failures leave which
+`dpkg` package state before that format can claim class-accurate posture.
 
 ### RPM Runtime Compatibility
 
@@ -1418,9 +1636,12 @@ Current ownership:
   `db/models/repository_capability.rs`, and `resolver/provider/matching.rs`;
 - Arch extraction: `crates/conary-core/src/packages/arch.rs`,
   `packages/arch/install_script.rs`, and `packages/arch/alpm_hook.rs`;
+- eopkg archive, installed-state, and configuration extraction:
+  `crates/conary-core/src/packages/eopkg/`; its pinned upstream mapping is
+  [`eopkg-source-abi.md`](eopkg-source-abi.md);
 - durable CCS bundle: `crates/conary-core/src/ccs/native_lifecycle.rs`;
 - typed planner: `crates/conary-core/src/ccs/native_transaction.rs` with
-  RPM, Debian, and Arch ownership modules under `ccs/native_transaction/`;
+  RPM, Debian, Arch, and eopkg ownership modules under `ccs/native_transaction/`;
 - install-stage executor: `apps/conary/src/commands/install/native_events.rs`;
 - closed systemd activation grammar and durable generation projection:
   `crates/conary-core/src/activation/systemd.rs` and
@@ -1439,6 +1660,10 @@ Current ownership:
 - exact CCS authority removed by native upgrades or relations:
   `apps/conary/src/commands/install/ccs_removal_hooks.rs` and
   `apps/conary/src/commands/remove/ccs_hook.rs`;
+- exact adopted-artifact resolution, payload equivalence, verified CCS
+  publication, and installed-conversion persistence:
+  `apps/conary/src/commands/adopt/convert.rs` and
+  `apps/conary/src/commands/adopt/convert/tests/`;
 - shared config decisions and durable snapshot:
   `crates/conary-core/src/config_transaction.rs`;
 - selected-root config planner:
@@ -1480,3 +1705,10 @@ package manager and compares the observable lifecycle trace with an
 authoritative source-manager fixture. A green command-classification corpus,
 same-distro run, hand-picked pairwise converter, or adoption flow is not
 lifecycle proof.
+
+The adopted bridge additionally proves cache reuse and authenticated fetch;
+unavailable, ambiguous, identity-mismatched, and path-specific payload drift;
+directory, symlink, and hardlink topology; lifecycle-bearing conversion; and
+failure-atomic publication for each source format. Its target-root test must
+consume the published signed CCS through install, update, rollback, and remove
+for RPM, Debian, Arch, and eopkg without entering any native query or mutation module.

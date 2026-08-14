@@ -200,11 +200,9 @@ fn published_or_pending_generation_has_path(db_path: &std::path::Path, path: &st
         .unwrap()
         .pop()
         .expect("converted install should retain exact publication debt");
-    let captured = crate::commands::generation::selected_root::load_publication_candidate(
-        &runtime_root,
-        &debt,
-    )
-    .unwrap();
+    let captured =
+        crate::commands::generation::selected_root::load_publication_selected_root(&conn, &debt)
+            .unwrap();
     captured
         .generation
         .entries
@@ -331,6 +329,7 @@ fn insert_static_repository_with_keys(
 fn static_provenance(repository_id: i64) -> RepositoryInstallProvenance {
     RepositoryInstallProvenance {
         repository_id,
+        source_identity: None,
         source_profile: None,
         version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
         source_kind: RepositorySourceKind::Static,
@@ -388,7 +387,7 @@ async fn try_convert_to_ccs_does_not_guess_capability_policy() {
         &native_path,
         PackageFormatType::Rpm,
         db_path_str,
-        &test_resolution_policy(),
+        None,
     )
     .await
     .expect("conversion without declared capabilities must not require policy approval");
@@ -655,6 +654,7 @@ async fn non_static_repo_ccs_install_requires_repository_package_authority() {
     let repo_id = insert_static_repository_with_keys(db_path_str, &[]);
     let provenance = RepositoryInstallProvenance {
         repository_id: repo_id,
+        source_identity: Some("fedora-44".to_string()),
         source_profile: Some("fedora-44".to_string()),
         version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
         source_kind: RepositorySourceKind::Remi,
