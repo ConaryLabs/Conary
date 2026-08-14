@@ -427,6 +427,15 @@ test_max_owned_version_in_fixture() {
     assert_eq "0.7.0" "$output" "fixture repo should report the workspace-owned suite version"
 }
 
+test_workspace_version_in_fixture() {
+    local repo
+    local output
+
+    repo="$(create_release_fixture)"
+    output="$(run_repo_matrix "$repo" workspace-version)"
+    assert_eq "0.7.0" "$output" "fixture repo should expose the root workspace version"
+}
+
 test_assert_owned_version_accepts_matching_manifests() {
     local repo
 
@@ -817,6 +826,40 @@ test_check_release_matrix_rejects_unpinned_arch_toolchain() {
         'rustup default stable'
 
     assert_check_release_matrix_fails "$repo" "release-build Arch builder pinned Rust toolchain"
+}
+
+test_check_release_matrix_rejects_leaf_manifest_native_versions() {
+    local format label repo
+
+    for format in rpm deb arch; do
+        case "$format" in
+            rpm) label="RPM" ;;
+            deb) label="DEB" ;;
+            arch) label="Arch" ;;
+        esac
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/packaging/$format/build.sh" \
+            'VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"' \
+            'VERSION=$(grep '\''^version'\'' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1)'
+
+        assert_check_release_matrix_fails \
+            "$repo" \
+            "$label build must use and validate the root workspace version authority"
+    done
+}
+
+test_check_release_matrix_rejects_product_scoped_ccs_version() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/ccs/build.sh" \
+        'assert-owned-version suite "$VERSION"' \
+        'assert-owned-version conary "$VERSION"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "CCS build must validate the root workspace version authority"
 }
 
 test_check_release_matrix_rejects_moving_release_preparation_toolchain() {
@@ -1225,6 +1268,7 @@ main() {
         test_unknown_tag_prefix_fails
         test_historical_tag_prefixes_are_rejected
         test_latest_version_from_git_in_fixture
+        test_workspace_version_in_fixture
         test_max_owned_version_in_fixture
         test_assert_owned_version_accepts_matching_manifests
         test_assert_owned_version_rejects_mismatched_manifest
@@ -1248,6 +1292,8 @@ main() {
         test_check_release_matrix_rejects_unverified_rustup_init
         test_check_release_matrix_rejects_unpinned_ccs_toolchain
         test_check_release_matrix_rejects_unpinned_arch_toolchain
+        test_check_release_matrix_rejects_leaf_manifest_native_versions
+        test_check_release_matrix_rejects_product_scoped_ccs_version
         test_check_release_matrix_rejects_moving_release_preparation_toolchain
         test_check_release_matrix_rejects_untyped_workspace_toolchain_setup
         test_check_release_matrix_rejects_missing_live_version_assertion

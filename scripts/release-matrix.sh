@@ -19,6 +19,7 @@ Usage:
   scripts/release-matrix.sh canonical-tag <release> <version>
   scripts/release-matrix.sh latest-version-from-list <release> <tag...>
   scripts/release-matrix.sh latest-version-from-git <release>
+  scripts/release-matrix.sh workspace-version
   scripts/release-matrix.sh max-owned-version <release>
   scripts/release-matrix.sh assert-owned-version <release> <version>
   scripts/release-matrix.sh owned-paths <release>
@@ -458,6 +459,10 @@ main() {
             [[ $# -eq 1 ]] || usage
             is_release_unit "$1" || die "unknown release: $1"
             latest_version_from_git "$1"
+            ;;
+        workspace-version)
+            [[ $# -eq 0 ]] || usage
+            extract_version_from_authority_file Cargo.toml
             ;;
         max-owned-version)
             [[ $# -eq 1 ]] || usage
