@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-13
-revision: 23
+revision: 24
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and retired Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -279,6 +279,10 @@ old process. That can fail with `Text file busy`.
   follows the terminal workflow result.
 - conaryd and conary-test are first-class suite artifacts with explicit
   `deploy_mode=none`; no runtime deployment job may start for either product.
+- Native builders explicitly disable distro-default debug split packages
+  because the suite defines no debug artifact product. Upload and bundle steps
+  do not filter unexpected native outputs; an extra package fails exact asset
+  validation.
 - Exact-main `deploy-remi-candidate` remains available between suite releases
   for bounded hard cuts. It creates no tag or release and does not change suite
   version authority.

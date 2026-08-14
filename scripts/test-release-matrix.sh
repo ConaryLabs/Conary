@@ -285,6 +285,7 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/packaging/rpm/conary.spec" "$repo/packaging/rpm/conary.spec"
     cp "$REPO_ROOT/packaging/deb/Containerfile.build" "$repo/packaging/deb/Containerfile.build"
     cp "$REPO_ROOT/packaging/arch/Containerfile.build" "$repo/packaging/arch/Containerfile.build"
+    cp "$REPO_ROOT/packaging/arch/PKGBUILD" "$repo/packaging/arch/PKGBUILD"
     cp "$REPO_ROOT/packaging/rpm/build.sh" "$repo/packaging/rpm/build.sh"
     cp "$REPO_ROOT/packaging/deb/build.sh" "$repo/packaging/deb/build.sh"
     cp "$REPO_ROOT/packaging/arch/build.sh" "$repo/packaging/arch/build.sh"
@@ -796,6 +797,39 @@ test_check_release_matrix_rejects_unpinned_arch_builder_image() {
     assert_check_release_matrix_fails "$repo" "release-build Arch builder must use the pinned Arch image"
 }
 
+test_check_release_matrix_rejects_rpm_debug_subpackage_generation() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/rpm/conary.spec" \
+        '%global debug_package %{nil}' \
+        '%global debug_package 1'
+
+    assert_check_release_matrix_fails "$repo" "RPM spec must explain and disable debug subpackage generation"
+}
+
+test_check_release_matrix_rejects_arch_debug_split_package_generation() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/arch/PKGBUILD" \
+        'options=(!debug !lto)' \
+        'options=(debug !lto)'
+
+    assert_check_release_matrix_fails "$repo" "Arch package must explicitly disable debug split-package generation"
+}
+
+test_check_release_matrix_rejects_hidden_native_debug_outputs() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '          path: packaging/rpm/output/*.rpm' \
+        $'          path: |\n            packaging/rpm/output/*.rpm\n            !packaging/rpm/output/*debug*'
+
+    assert_check_release_matrix_fails "$repo" "native debug artifact filtering"
+}
+
 test_check_release_matrix_rejects_unverified_rustup_init() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1159,6 +1193,28 @@ test_check_release_matrix_rejects_stale_native_output_policy() {
     assert_check_release_matrix_fails "$repo" "RPM build must clean stale package output"
 }
 
+test_check_release_matrix_rejects_rpm_extra_output_blind_spot() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/rpm/build.sh" \
+        'rpm_outputs=("$OUTPUT"/*.rpm)' \
+        'rpm_outputs=("$OUTPUT/$NAME-$VERSION-"*.x86_64.rpm)'
+
+    assert_check_release_matrix_fails "$repo" "RPM build must reject every extra package output"
+}
+
+test_check_release_matrix_rejects_arch_extra_output_blind_spot() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/arch/build.sh" \
+        'package_outputs=("$OUTPUT"/*.pkg.tar.zst)' \
+        'package_outputs=("$EXPECTED_PACKAGE")'
+
+    assert_check_release_matrix_fails "$repo" "Arch build must reject every extra package output"
+}
+
 test_check_release_matrix_rejects_direct_release_publication() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1289,6 +1345,9 @@ main() {
         test_check_release_matrix_rejects_unpinned_rpm_builder_image
         test_check_release_matrix_rejects_unpinned_deb_builder_image
         test_check_release_matrix_rejects_unpinned_arch_builder_image
+        test_check_release_matrix_rejects_rpm_debug_subpackage_generation
+        test_check_release_matrix_rejects_arch_debug_split_package_generation
+        test_check_release_matrix_rejects_hidden_native_debug_outputs
         test_check_release_matrix_rejects_unverified_rustup_init
         test_check_release_matrix_rejects_unpinned_ccs_toolchain
         test_check_release_matrix_rejects_unpinned_arch_toolchain
@@ -1318,6 +1377,8 @@ main() {
         test_check_release_matrix_rejects_unstable_ccs_release_name
         test_check_release_matrix_rejects_ambiguous_ccs_target_directory
         test_check_release_matrix_rejects_stale_native_output_policy
+        test_check_release_matrix_rejects_rpm_extra_output_blind_spot
+        test_check_release_matrix_rejects_arch_extra_output_blind_spot
         test_check_release_matrix_rejects_direct_release_publication
         test_check_release_matrix_rejects_moved_tag_publication
         test_check_release_matrix_rejects_mutable_publication_result

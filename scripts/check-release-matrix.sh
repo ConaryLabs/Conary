@@ -19,6 +19,7 @@ rpm_containerfile="packaging/rpm/Containerfile.build"
 rpm_spec="packaging/rpm/conary.spec"
 deb_containerfile="packaging/deb/Containerfile.build"
 arch_containerfile="packaging/arch/Containerfile.build"
+arch_pkgbuild="packaging/arch/PKGBUILD"
 rpm_build_script="packaging/rpm/build.sh"
 deb_build_script="packaging/deb/build.sh"
 arch_build_script="packaging/arch/build.sh"
@@ -149,6 +150,7 @@ for required_file in \
     "$rpm_spec" \
     "$deb_containerfile" \
     "$arch_containerfile" \
+    "$arch_pkgbuild" \
     "$rpm_build_script" \
     "$deb_build_script" \
     "$arch_build_script" \
@@ -196,6 +198,9 @@ require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Contain
 require_match "$rpm_spec" '^BuildRequires:[[:space:]]+systemd-rpm-macros$' 'RPM spec systemd macro build dependency'
 require_job_match "$release_build" build-rpm 'dnf install -y[\s\S]*systemd-rpm-macros' 'release-build RPM systemd macro dependency'
 require_match "$rpm_containerfile" 'systemd-rpm-macros[\s\S]*rpm --eval '\''%\{_unitdir\}'\''[\s\S]*/usr/lib/systemd/system' 'RPM Containerfile systemd macro dependency and expansion proof'
+require_match "$rpm_spec" '# Suite releases publish one installable RPM and no separate debug artifact;[\s\S]*^%global debug_package %\{nil\}$' 'RPM spec must explain and disable debug subpackage generation'
+require_match "$arch_pkgbuild" '# Suite releases publish one installable package and no discarded debug split package\.[\s\S]*^options=\(!debug !lto\)$' 'Arch package must explicitly disable debug split-package generation'
+forbid_match "$release_build" '\*debug(source|info)?\*' 'native debug artifact filtering'
 
 rustup_flow_pattern="${rustup_init_url}[\\s\\S]*${rustup_init_sha256}  /tmp/rustup-init[\\s\\S]*sha256sum -c -[\\s\\S]*/tmp/rustup-init -y --default-toolchain 1\\.97\\.1 --profile minimal[\\s\\S]*rm -f /tmp/rustup-init"
 require_job_match "$release_build" build-rpm "$rustup_flow_pattern" 'release-build RPM builder checksum-pinned rustup-init flow'
@@ -266,6 +271,7 @@ forbid_match "$release_build" 'gh release create "\$TAG_NAME" (release|suite)-pa
 
 require_match "$rpm_build_script" 'find "\$OUTPUT".*\*\.rpm.*-delete' 'RPM build must clean stale package output'
 require_match "$rpm_build_script" 'VERSION="\$\(bash "\$REPO_ROOT/scripts/release-matrix\.sh" workspace-version\)"[\s\S]*assert-owned-version suite "\$VERSION"' 'RPM build must use and validate the root workspace version authority'
+require_match "$rpm_build_script" 'rpm_outputs=\("\$OUTPUT"/\*\.rpm\)[\s\S]*versioned_rpm_outputs=\("\$OUTPUT/\$NAME-\$VERSION-"\*\.x86_64\.rpm\)[\s\S]*\$\{#rpm_outputs\[@\]\} -ne 1[\s\S]*\$\{#versioned_rpm_outputs\[@\]\} -ne 1' 'RPM build must reject every extra package output'
 require_match "$rpm_build_script" 'Expected exactly one \$NAME \$VERSION x86_64 RPM' 'RPM build must fail without its expected package'
 require_match "$rpm_build_script" 'rpm --eval '\''%\{_unitdir\}'\''[\s\S]*systemd-rpm-macros build dependency' 'RPM build must fail fast without systemd macro authority'
 require_match "$deb_build_script" 'find "\$OUTPUT".*\*\.deb.*-delete' 'DEB build must clean stale package output'
@@ -273,7 +279,7 @@ require_match "$deb_build_script" 'VERSION="\$\(bash "\$REPO_ROOT/scripts/releas
 require_match "$deb_build_script" 'EXPECTED_DEB="\$OUTPUT/\$\{NAME\}_\$\{VERSION\}-1_amd64\.deb"[\s\S]*\[\[ ! -s "\$EXPECTED_DEB"' 'DEB build must require its expected package'
 require_match "$arch_build_script" 'find "\$OUTPUT".*\*\.pkg\.tar\.zst.*-delete' 'Arch build must clean stale package output'
 require_match "$arch_build_script" 'VERSION="\$\(bash "\$REPO_ROOT/scripts/release-matrix\.sh" workspace-version\)"[\s\S]*assert-owned-version suite "\$VERSION"' 'Arch build must use and validate the root workspace version authority'
-require_match "$arch_build_script" 'EXPECTED_PACKAGE="\$OUTPUT/\$\{NAME\}-\$\{VERSION\}-1-x86_64\.pkg\.tar\.zst"[\s\S]*\[\[ ! -s "\$EXPECTED_PACKAGE"' 'Arch build must require its expected package'
+require_match "$arch_build_script" 'EXPECTED_PACKAGE="\$OUTPUT/\$\{NAME\}-\$\{VERSION\}-1-x86_64\.pkg\.tar\.zst"[\s\S]*package_outputs=\("\$OUTPUT"/\*\.pkg\.tar\.zst\)[\s\S]*\$\{#package_outputs\[@\]\} -ne 1[\s\S]*"\$\{package_outputs\[0\]:-\}" != "\$EXPECTED_PACKAGE"' 'Arch build must reject every extra package output'
 require_match "$ccs_build_script" 'find "\$OUTPUT".*\*\.ccs.*-delete' 'CCS build must clean stale package output'
 require_match "$ccs_build_script" 'assert-owned-version suite "\$VERSION"' 'CCS build must validate the root workspace version authority'
 require_match "$ccs_build_script" 'SIGNING_KEY=""[\s\S]*--key\)[\s\S]*SIGNING_KEY="\$2"[\s\S]*CCS release signing key must be a regular, non-symlink file' 'CCS wrapper must require an explicit regular signing key'

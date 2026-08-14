@@ -266,9 +266,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: rpm-package
-          path: |
-            packaging/rpm/output/*.rpm
-            !packaging/rpm/output/*debug*
+          path: packaging/rpm/output/*.rpm
           if-no-files-found: error
           retention-days: 5
 
@@ -383,9 +381,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: arch-package
-          path: |
-            packaging/arch/output/*.pkg.tar.zst
-            !packaging/arch/output/*debug*
+          path: packaging/arch/output/*.pkg.tar.zst
           if-no-files-found: error
           retention-days: 5
 
@@ -408,7 +404,6 @@ jobs:
           mkdir -p release-packages
           find release-artifacts -type f \
             \( -name '*.ccs' -o -name '*.rpm' -o -name '*.deb' -o -name '*.pkg.tar.zst' \) \
-            ! -name '*debuginfo*' ! -name '*debugsource*' \
             -exec cp {} release-packages/ \;
           cp release-artifacts/release-metadata/metadata.json release-packages/metadata.json
 

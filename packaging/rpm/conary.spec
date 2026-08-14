@@ -1,3 +1,6 @@
+# Suite releases publish one installable RPM and no separate debug artifact;
+# the workspace release profile owns stripping, so do not generate discarded subpackages.
+%global debug_package %{nil}
 %global crate conary
 
 Name:           conary
