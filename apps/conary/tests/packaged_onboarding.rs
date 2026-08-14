@@ -145,6 +145,11 @@ fn native_release_packages_disable_unpublished_debug_subpackages() {
         }) && spec.lines().any(|line| line.trim() == "%set_build_flags"),
         "RPM spec must retain Fedora frame-pointer, package-note, and native build flags"
     );
+    assert_eq!(
+        spec.matches("%set_build_flags").count(),
+        1,
+        "RPM macros expand inside comments; the build-flag macro must appear only as its command"
+    );
     assert!(
         !spec.contains("-Cdebuginfo")
             && !spec.contains("-Cstrip=none")

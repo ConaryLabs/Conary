@@ -832,6 +832,19 @@ test_check_release_matrix_rejects_rpm_debug_rust_flags() {
     assert_check_release_matrix_fails "$repo" "RPM spec debug-oriented Rust flag override"
 }
 
+test_check_release_matrix_rejects_rpm_macro_expansion_in_comment() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/rpm/conary.spec" \
+        '# the manual distro macro below populates native dependency toolchain flags.' \
+        '# %set_build_flags populates native dependency toolchain flags.'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "RPM spec manual build-flag macro invocation expected 1 occurrences"
+}
+
 test_check_release_matrix_rejects_arch_debug_split_package_generation() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1372,6 +1385,7 @@ main() {
         test_check_release_matrix_rejects_rpm_debug_subpackage_generation
         test_check_release_matrix_rejects_automatic_rpm_rust_flags
         test_check_release_matrix_rejects_rpm_debug_rust_flags
+        test_check_release_matrix_rejects_rpm_macro_expansion_in_comment
         test_check_release_matrix_rejects_arch_debug_split_package_generation
         test_check_release_matrix_rejects_hidden_native_debug_outputs
         test_check_release_matrix_rejects_unverified_rustup_init

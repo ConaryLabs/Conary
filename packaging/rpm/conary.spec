@@ -53,7 +53,7 @@ EOF
 %build
 # Cargo.toml owns release optimization, LTO, codegen units, and stripping.
 # Retain Fedora's x86_64 frame pointers and embedded RPM package note, while
-# %set_build_flags continues to populate the native dependency toolchain flags.
+# the manual distro macro below populates native dependency toolchain flags.
 RUSTFLAGS="-Cforce-frame-pointers=yes -Clink-arg=%{_package_note_flags}"
 export RUSTFLAGS
 %set_build_flags
