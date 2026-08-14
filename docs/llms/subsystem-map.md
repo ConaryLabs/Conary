@@ -78,7 +78,7 @@ commands.
   `apps/conary/src/commands/generation/config_transaction.rs`,
   `apps/conary/src/commands/generation/selected_root.rs`,
   `apps/conary/src/commands/generation/selected_root/overlay_session.rs`,
-  `apps/conary/src/commands/generation/selected_root/publication_candidate.rs`, and
+  `apps/conary/src/commands/generation/selected_root/publication_authority.rs`, and
   `apps/conary/src/commands/generation/publication.rs`. Single-package install
   execution starts in
   `apps/conary/src/commands/install/transaction/selected_root.rs`; declarative
@@ -157,6 +157,8 @@ commands.
 - Generation, bootstrap, and QEMU proof:
   `docs/modules/feature-ownership.md` slugs `generation` and `bootstrap`, plus
   `crates/conary-core/src/generation/root_manifest.rs`,
+  `crates/conary-core/src/generation/root_manifest/authority.rs`,
+  `crates/conary-core/src/generation/root_manifest/overlay/indexed.rs`,
   `crates/conary-core/src/generation/builder/carrier_capabilities.rs`,
   `crates/conary-core/src/generation/artifact.rs`,
   `crates/conary-core/src/generation/export.rs`,
@@ -216,9 +218,9 @@ commands.
 
 ## Stable Patterns
 
-- Generation-aware mutation authority is the exact cumulative selected root,
-  materialized only after the runtime mutation lock is held, captured and
-  persisted before its SQLite transaction commits, and published before the
+- Generation-aware mutation authority is the exact cumulative indexed
+  selected-root snapshot, materialized only after the runtime mutation lock is
+  held, appended and bound before its SQLite transaction commits, and published before the
   lock owner is released. Publication never reconstructs filesystem effects
   from a database-only snapshot. Forward changesets and rollback changesets
   carry distinct typed lineage so compensating rows do not become LIFO

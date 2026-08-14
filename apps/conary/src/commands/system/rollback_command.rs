@@ -18,7 +18,6 @@ use tracing::info;
 struct CommittedRollback {
     rollback_id: i64,
     publication_debt: GenerationPublication,
-    forward_debts: Vec<GenerationPublication>,
     summary: String,
     snapshots: Vec<crate::commands::TroveSnapshot>,
     removed_troves: Vec<Trove>,
@@ -35,7 +34,7 @@ pub(super) async fn cmd_rollback_with_forced_precommit_failure(
     db_path: &str,
 ) -> Result<()> {
     rollback_changeset(changeset_id, db_path, || {
-        bail!("forced rollback failure after publication candidate persistence")
+        bail!("forced rollback failure after publication snapshot persistence")
     })
 }
 
@@ -62,10 +61,9 @@ where
     require_active_generation(changeset_id, &runtime_root)?;
     let mut conn = crate::commands::open_db(db_path)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let mut staged_candidate = None;
     let execution = (|| -> Result<CommittedRollback> {
         let changeset = require_effective_rollback_target(&tx, changeset_id)?;
-        let authority = exact_rollback_authority(&changeset)?;
+        let authority = exact_rollback_authority(&tx, &changeset)?;
         let crate::commands::RollbackAuthority {
             removed_troves: snapshots,
             selected_root: rollback_root,
@@ -85,7 +83,7 @@ where
         validate_rollback_removal_targets(&tx, &removed_troves)?;
         let summary = rollback_summary(changeset_id, &snapshots, &removed_troves);
         let pending_debts = GenerationPublication::pending_recoverable(&tx)?;
-        let (forward_debts, unrelated_debts): (Vec<_>, Vec<_>) = pending_debts
+        let (_forward_debts, unrelated_debts): (Vec<_>, Vec<_>) = pending_debts
             .into_iter()
             .partition(|debt| debt.trigger_changeset_id == Some(changeset_id));
         if !unrelated_debts.is_empty() {
@@ -138,18 +136,16 @@ where
                         conary_core::config_transaction::GenerationConfigTransaction::default(),
                 },
             )?;
-        crate::commands::generation::selected_root::persist_captured_publication_candidate(
-            &runtime_root,
+        crate::commands::generation::selected_root::persist_publication_snapshot(
+            &tx,
             &publication_debt,
-            &rollback_root,
+            rollback_root,
         )?;
-        staged_candidate = Some(publication_debt.clone());
         precommit_probe()?;
 
         Ok(CommittedRollback {
             rollback_id,
             publication_debt,
-            forward_debts,
             summary,
             snapshots,
             removed_troves,
@@ -160,29 +156,13 @@ where
         Ok(committed) => committed,
         Err(error) => {
             drop(tx);
-            if let Some(debt) = staged_candidate.as_ref() {
-                let _ = crate::commands::generation::selected_root::remove_publication_candidate(
-                    &runtime_root,
-                    debt,
-                );
-            }
             return Err(error);
         }
     };
     if let Err(error) = tx.commit() {
-        let _ = crate::commands::generation::selected_root::remove_publication_candidate(
-            &runtime_root,
-            &committed.publication_debt,
-        );
         return Err(error.into());
     }
 
-    for forward_debt in &committed.forward_debts {
-        crate::commands::generation::selected_root::remove_publication_candidate(
-            &runtime_root,
-            forward_debt,
-        )?;
-    }
     let publication = crate::commands::generation::publication::publish_recorded_selected_root(
         &conn,
         db_path,
@@ -271,16 +251,19 @@ fn require_effective_rollback_target(
     Ok(changeset)
 }
 
-fn exact_rollback_authority(changeset: &Changeset) -> Result<crate::commands::RollbackAuthority> {
+fn exact_rollback_authority(
+    conn: &rusqlite::Connection,
+    changeset: &Changeset,
+) -> Result<crate::commands::RollbackAuthority> {
     let changeset_id = changeset.id.unwrap_or_default();
     let json = changeset.metadata.as_deref().ok_or_else(|| {
         anyhow!(
-            "Changeset {changeset_id} has no exact v5 rollback authority; current-schema rollback refuses retired or incomplete mutations"
+            "Changeset {changeset_id} has no exact v7 rollback authority; current-schema rollback refuses retired or incomplete mutations"
         )
     })?;
-    crate::commands::parse_rollback_authority(json)?.ok_or_else(|| {
+    crate::commands::parse_rollback_authority(conn, changeset_id, json)?.ok_or_else(|| {
         anyhow!(
-            "Changeset {changeset_id} metadata has no exact v5 rollback authority; current-schema rollback refuses retired or incomplete mutations"
+            "Changeset {changeset_id} metadata has no exact v7 rollback authority; current-schema rollback refuses retired or incomplete mutations"
         )
     })
 }

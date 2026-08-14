@@ -37,7 +37,7 @@ impl BatchInstaller<'_> {
         native_transaction: &PreparedNativeTransaction,
         native_execution_mode: &ExecutionMode,
         selected: &mut crate::commands::generation::selected_root::SelectedRootSession,
-        rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
+        rollback_root: conary_core::generation::root_manifest::SelectedRootSnapshot,
         ccs_hook_executors: &mut [Option<conary_core::ccs::HookExecutor>],
         promise_plan: &mut super::promises::PromiseWitnessPlan,
     ) -> Result<(i64, Vec<i64>, Vec<i64>)> {
@@ -148,20 +148,12 @@ impl BatchInstaller<'_> {
                 return Err(error);
             }
         };
-        if let Err(error) = selected.persist_for_publication(&runtime_root, &publication_debt) {
+        if let Err(error) = selected.persist_for_publication(&tx, &runtime_root, &publication_debt)
+        {
             drop(tx);
-            let _ = crate::commands::generation::selected_root::remove_publication_candidate(
-                &runtime_root,
-                &publication_debt,
-            );
             return Err(error.context("failed to persist exact selected-root publication input"));
         }
         if let Err(error) = tx.commit() {
-            crate::commands::generation::selected_root::remove_publication_candidate(
-                &runtime_root,
-                &publication_debt,
-            )
-            .context("failed to discard selected-root candidate after database commit error")?;
             return Err(error.into());
         }
 

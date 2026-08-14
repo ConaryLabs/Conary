@@ -144,7 +144,9 @@ crates/conary-core/      Core library crate
     |   +-- builder/sysroot.rs CAS-backed runtime sysroot materialization
     |   +-- builder/runtime_inputs.rs CAS-backed runtime input classification, validation, and security.capability xattr attachment for persisted file capabilities
     |   +-- root_manifest.rs Exact immutable-root and mutable-state manifest contract
-    |   +-- root_manifest/delta.rs Normalized changed-path manifest delta and deterministic application
+    |   +-- root_manifest/authority.rs Indexed append-only selected-root snapshot authority
+    |   +-- root_manifest/delta.rs Normalized changed-path manifest delta
+    |   +-- root_manifest/overlay/indexed.rs Indexed OverlayFS delta decoding
     |   +-- root_manifest/scan.rs Selected-root capture and CAS ingestion
     |   +-- root_manifest/materialize.rs Exact typed-root reconstruction
     |   +-- root_manifest/composefs.rs Typed manifest to EROFS serialization
@@ -465,7 +467,7 @@ Generation-aware package mutation
        |
   +-----------+
   |  Decode   |-- Freeze/unmount, scan changed upper paths, apply typed delta
-  +-----------+-- Manifest-only candidate is durable before SQLite commit
+  +-----------+-- Indexed snapshot is durable before SQLite commit
        |
   +-----------+
   |  EROFS    |-- composefs-rs serializes the generation-root manifest
@@ -486,12 +488,15 @@ Generation-aware package mutation
 
 ### Generation Lifecycle
 
-`root_manifest/delta.rs` owns the normalized changed-path contract used by the
-delta-sized selected-root transition. Overlay artifacts must be decoded into
-exact removals, opaque-directory replacement, complete node upserts, and
-optional root metadata before this boundary. Applying a delta preserves prior
-CAS identities for unchanged content, routes changed paths through the finite
-publication domains, and revalidates the complete resulting manifests. Normal
+`root_manifest/delta.rs` owns the normalized changed-path contract and
+`root_manifest/authority.rs` owns its indexed, append-only SQLite snapshot
+authority. Overlay artifacts must be decoded into exact removals,
+opaque-directory replacement, complete node upserts, and optional root
+metadata before this boundary. Applying a delta resolves only changed paths,
+changed subtrees, and affected hardlink groups; unchanged entries remain in
+the parent snapshot without enumeration or cloning. Complete sorted manifests
+are derived only for generation artifacts, retained materialization, recovery,
+rollback publication, and GC reachability. Normal
 runtime selected-root sessions mount the functionally proven OverlayFS profile
 over exact immutable lower authority, freeze and strictly unmount before
 decoding the transaction upper, and never perform complete before/after
@@ -499,25 +504,26 @@ selected-root scans. With no pending publication debt, the current verified
 generation `root.erofs` mounts directly as the immutable-content lower and the
 typed `/etc`, `/var`, and `/srv` manifest is the top lower layer; the session
 strictly unmounts the transaction overlay before that nested composefs mount.
-Recoverable candidates and first-generation database authority still use an
+Recoverable snapshots and first-generation database authority still use an
 explicit materialized lower. Retained try-session trees remain a separate
 materialization consumer until their namespace contract is migrated; they are
 not a fallback for normal mutation.
 
-Publication candidates are now manifest-only. A pre-alpha candidate carrying
-the retired copied `root/` tree fails closed and must be discarded and rebuilt
-from current typed generation/database authority; runtime code does not retain
-a dual reader for the superseded storage shape.
+Publication and rollback rows reference the same SQLite-selected-root snapshot
+lineage by foreign key. The retired filesystem candidate and complete
+`rollback_root` JSON copy have no current-schema reader. Revision 38 is a
+pre-alpha hard cut: older databases must be rebuilt from authoritative package
+and repository inputs.
 
-1. **Select**: Use the latest cumulative selected-root candidate as lower authority when publication debt is pending. Otherwise mount the current generation's verified composefs image directly beneath its typed mutable-state layer; only first-generation database authority still reconstructs the complete lower
+1. **Select**: Use the latest cumulative selected-root snapshot as lower authority when publication debt is pending. Otherwise mount the current generation's verified composefs image directly beneath its typed mutable-state layer; only first-generation database authority still reconstructs the complete lower
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
-3. **Record**: Freeze and strictly unmount, decode the upper into a typed changed-path delta, apply it to the prior manifests, persist a manifest-only selected-root candidate, and record recoverable publication debt before committing package state
+3. **Record**: Freeze and strictly unmount, decode the upper into a typed changed-path delta, validate and append only affected indexed authority, and bind recoverable publication debt to that child snapshot before committing package state
 4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content
 5. **Materialize state**: Project `/etc/...` manifest paths into the generation-local `/etc` overlay upper without retaining the `/etc` prefix, then apply the ordered typed config transactions; `/var` and `/srv` remain live mutable-root state
 6. **Publish**: Advance one persisted replay phase at a time: artifact ready, current link durable, configuration status projected, matching system state active, and generation-bound database backup durable. Only the final phase makes publication debt terminal
 7. **Recover**: Under the runtime mutation lock, resume at the persisted phase and replay each remaining idempotent effect. A matching `/conary/current` link proves only link publication; it never implies configuration projection or database backup completion
-8. **Compensate**: Rollback records a new exact compensating selected root and removes terminal candidates
-9. **GC**: Remove old generations only after retaining every recoverable publication candidate and its typed CAS roots
+8. **Compensate**: Rollback binds its publication debt to the exact pre-mutation snapshot and records a new compensating changeset
+9. **GC**: Remove old generations and CAS objects only after resolving every recoverable publication and effective rollback snapshot
 
 Raw, qcow2, and ISO export copy both typed manifests and their manifest-listed
 CAS objects. Export reconstructs `/var` and `/srv` in the carrier root and
@@ -555,7 +561,7 @@ The primary builder for composefs generations. Uses the composefs-rs crate
 (v0.3.0) to serialize validated exact `GenerationRootManifest` input to EROFS.
 Explicit generation builds project installed state into the same typed root
 contract. Package mutation publication accepts only its persisted cumulative
-selected-root candidate; there is no database-snapshot publication fallback.
+selected-root snapshot; there is no reconstruction fallback.
 Submodules: builder.rs (public
 generation-builder hub),
 builder/create.rs and builder/rebuild.rs (generation creation and recovery
@@ -702,15 +708,15 @@ selected-generation boundary.
 **Composefs-native transactions**: Every package mutation follows one linear
 pipeline: resolve -> fetch -> materialize an isolated selected root -> run typed
 lifecycle, payload, config, and trigger work inside that root and one SQLite
-transaction -> persist the exact selected-root candidate -> commit SQLite ->
-publish the recorded generation. The selected root starts from the latest
-retryable candidate, the current generation artifact, or authoritative DB/CAS
+transaction -> append and bind the exact selected-root snapshot -> commit
+SQLite -> publish the recorded generation. The selected root starts from the
+latest retryable snapshot, the current generation artifact, or authoritative DB/CAS
 state when no generation exists. There is no mutable-host package execution
 path.
 
 Before the SQLite commit, any lifecycle, payload, config, trigger, or validation
 failure rolls back the database transaction and discards the selected root.
-After commit, a publication failure leaves typed debt plus the exact candidate
+After commit, a publication failure leaves typed debt plus the exact snapshot
 for deterministic retry. `LiveRootTransaction` remains an internal journal for
 the disposable selected-root session; it is not authority to mutate the host
 root. DB backups remain recovery artifacts, not a second mutable source of

@@ -443,6 +443,7 @@ mod tests {
             status: GenerationPublicationStatus::Failed,
             state_number: None,
             generation_number: None,
+            selected_root_snapshot_id: None,
             summary: "fixture".to_string(),
             config_transaction: Default::default(),
             last_error: Some("forced".to_string()),

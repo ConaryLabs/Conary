@@ -63,6 +63,7 @@ pub struct GenerationPublication {
     pub trigger_changeset_id: Option<i64>,
     pub published_through_changeset_id: Option<i64>,
     pub tx_uuid: Option<String>,
+    pub selected_root_snapshot_id: Option<i64>,
     pub db_path: String,
     pub runtime_root: String,
     pub phase: GenerationPublicationPhase,
@@ -81,7 +82,7 @@ pub struct GenerationPublication {
 
 impl GenerationPublication {
     const COLUMNS: &'static str = "id, trigger_changeset_id, published_through_changeset_id, \
-        tx_uuid, db_path, runtime_root, phase, status, state_number, \
+        tx_uuid, selected_root_snapshot_id, db_path, runtime_root, phase, status, state_number, \
         generation_number, summary, config_transaction_json, last_error, retry_count, \
         recoverable, created_at, updated_at, completed_at";
 
@@ -141,6 +142,26 @@ impl GenerationPublication {
             .map_err(Into::into)
     }
 
+    pub fn bind_selected_root_snapshot(&self, conn: &Connection, snapshot_id: i64) -> Result<()> {
+        let id = self
+            .id
+            .ok_or_else(|| crate::error::Error::MissingId("publication id missing".to_string()))?;
+        let updated = conn.execute(
+            "UPDATE generation_publications
+             SET selected_root_snapshot_id = ?1,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2
+               AND (selected_root_snapshot_id IS NULL OR selected_root_snapshot_id = ?1)",
+            params![snapshot_id, id],
+        )?;
+        if updated != 1 {
+            return Err(crate::error::Error::RecoveryFailed(format!(
+                "publication debt {id} is already bound to different selected-root authority"
+            )));
+        }
+        Ok(())
+    }
+
     pub fn pending_for_changeset(conn: &Connection, changeset_id: i64) -> Result<Option<Self>> {
         let sql = format!(
             "SELECT {} FROM generation_publications
@@ -154,6 +175,24 @@ impl GenerationPublication {
             .query_row([changeset_id], Self::from_row)
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn selected_root_snapshot_for_generation(
+        conn: &Connection,
+        generation_number: i64,
+    ) -> Result<Option<i64>> {
+        conn.query_row(
+            "SELECT selected_root_snapshot_id
+             FROM generation_publications
+             WHERE generation_number = ?1
+               AND selected_root_snapshot_id IS NOT NULL
+             ORDER BY id DESC
+             LIMIT 1",
+            [generation_number],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
     }
 
     /// Retire forward publication debt when its package changeset is rolled
@@ -295,13 +334,13 @@ impl GenerationPublication {
     }
 
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let phase_raw: String = row.get(6)?;
-        let status_raw: String = row.get(7)?;
+        let phase_raw: String = row.get(7)?;
+        let status_raw: String = row.get(8)?;
         let phase = phase_raw
             .parse::<GenerationPublicationPhase>()
             .map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    6,
+                    7,
                     rusqlite::types::Type::Text,
                     Box::new(e),
                 )
@@ -310,49 +349,50 @@ impl GenerationPublication {
             .parse::<GenerationPublicationStatus>()
             .map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    7,
+                    8,
                     rusqlite::types::Type::Text,
                     Box::new(e),
                 )
             })?;
-        let config_transaction_json: String = row.get(11)?;
+        let config_transaction_json: String = row.get(12)?;
         let config_transaction = serde_json::from_str::<GenerationConfigTransaction>(
             &config_transaction_json,
         )
         .map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                11,
+                12,
                 rusqlite::types::Type::Text,
                 Box::new(error),
             )
         })?;
         config_transaction.validate().map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                11,
+                12,
                 rusqlite::types::Type::Text,
                 Box::new(error),
             )
         })?;
-        let recoverable: i32 = row.get(14)?;
+        let recoverable: i32 = row.get(15)?;
         Ok(Self {
             id: Some(row.get(0)?),
             trigger_changeset_id: row.get(1)?,
             published_through_changeset_id: row.get(2)?,
             tx_uuid: row.get(3)?,
-            db_path: row.get(4)?,
-            runtime_root: row.get(5)?,
+            selected_root_snapshot_id: row.get(4)?,
+            db_path: row.get(5)?,
+            runtime_root: row.get(6)?,
             phase,
             status,
-            state_number: row.get(8)?,
-            generation_number: row.get(9)?,
-            summary: row.get(10)?,
+            state_number: row.get(9)?,
+            generation_number: row.get(10)?,
+            summary: row.get(11)?,
             config_transaction,
-            last_error: row.get(12)?,
-            retry_count: row.get(13)?,
+            last_error: row.get(13)?,
+            retry_count: row.get(14)?,
             recoverable: recoverable != 0,
-            created_at: row.get(15)?,
-            updated_at: row.get(16)?,
-            completed_at: row.get(17)?,
+            created_at: row.get(16)?,
+            updated_at: row.get(17)?,
+            completed_at: row.get(18)?,
         })
     }
 }

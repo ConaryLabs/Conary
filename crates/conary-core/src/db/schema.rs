@@ -12,11 +12,12 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 36 of the current-only schema epoch.
+/// Revision 38 of the current-only schema epoch.
 ///
-/// Revision 36 adds an exact captured-OpenRC activation source kind. Earlier
-/// pre-alpha databases must be rebuilt; no compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 37;
+/// Revision 38 hard-cuts selected-root transaction authority to indexed,
+/// append-only SQLite snapshots. Earlier pre-alpha databases must be rebuilt;
+/// no compatibility migration is provided.
+pub const SCHEMA_VERSION: i32 = 38;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -218,6 +219,8 @@ mod tests {
             "converted_packages",
             "installed_file_capabilities",
             "generation_publications",
+            "selected_root_snapshots",
+            "selected_root_snapshot_entries",
             "activation_requests",
             "lifecycle_events",
             "generation_activation_intents",
@@ -236,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_36_requires_rebuild_for_revision_37() {
+    fn revision_37_requires_rebuild_for_revision_38() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -244,19 +247,19 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 36);
+                VALUES ('conary-current-v1', 37);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (36);",
+            INSERT INTO schema_version (version) VALUES (37);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 36; this pre-alpha build supports only schema epoch conary-current-v1 revision 37"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 37; this pre-alpha build supports only schema epoch conary-current-v1 revision 38"
         );
     }
 

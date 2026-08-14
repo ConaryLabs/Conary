@@ -2,11 +2,12 @@
 
 //! Normalized changed-path authority for selected-root transactions.
 
+#[cfg(test)]
 use super::{
-    CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry,
-    GenerationRootManifest, MutableStateManifest, RootPathDomain, classify_root_path,
-    validate_root_path,
+    CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootManifest,
+    MutableStateManifest,
 };
+use super::{GenerationRootEntry, RootPathDomain, classify_root_path, validate_root_path};
 use crate::payload::{PayloadNodeKind, ResolvedPayloadNode};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -80,13 +81,13 @@ impl SelectedRootManifestDelta {
         Ok(())
     }
 
-    /// Apply this delta to one complete prior selected-root capture.
-    ///
-    /// The resulting complete manifests remain the publication authority.
-    /// Validation runs after every operation, so missing parents, invalid
-    /// hardlinks, cross-domain links, and incomplete special nodes fail before
-    /// callers can persist or publish the result.
-    pub fn apply(&self, prior: &CapturedSelectedRoot) -> crate::Result<CapturedSelectedRoot> {
+    /// Materialize a complete projection for unit-level contract proof.
+    /// Production mutation authority is [`super::SelectedRootSnapshot`].
+    #[cfg(test)]
+    pub(super) fn apply(
+        &self,
+        prior: &CapturedSelectedRoot,
+    ) -> crate::Result<CapturedSelectedRoot> {
         self.validate()?;
         prior.generation.validate()?;
         prior.state.validate()?;
@@ -199,6 +200,7 @@ fn reject_redundant_removals(removals: &[String]) -> crate::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn remove_path_and_descendants(
     entries: &mut BTreeMap<String, GenerationRootEntry>,
     path: &str,

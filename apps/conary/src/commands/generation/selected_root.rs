@@ -4,15 +4,12 @@
 
 mod deferred_ima;
 mod overlay_session;
-mod publication_candidate;
+mod publication_authority;
 
-pub(crate) use publication_candidate::{
-    load_publication_candidate, persist_captured_publication_candidate,
-    remove_backed_up_publication_candidates, remove_publication_candidate,
-};
 #[cfg(test)]
-pub(crate) use publication_candidate::{
-    publication_candidate_dir, remove_terminal_publication_candidates,
+pub(crate) use publication_authority::persist_captured_publication_snapshot;
+pub(crate) use publication_authority::{
+    load_publication_selected_root, persist_publication_snapshot,
 };
 
 use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
@@ -21,7 +18,8 @@ use conary_core::db::models::GenerationPublication;
 use conary_core::filesystem::CasStore;
 use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::root_manifest::{
-    CapturedSelectedRoot, materialize_captured_selected_root, scan_selected_root,
+    CapturedSelectedRoot, SelectedRootSnapshot, materialize_captured_selected_root,
+    scan_selected_root,
 };
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
@@ -30,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use deferred_ima::DeferredImaAuthority;
 use overlay_session::SelectedRootOverlaySession;
-use publication_candidate::{latest_selected_root_candidate, persist_publication_candidate};
+use publication_authority::latest_selected_root_snapshot;
 
 enum SelectedRootBacking {
     Overlay(SelectedRootOverlaySession),
@@ -40,17 +38,31 @@ enum SelectedRootBacking {
 }
 
 enum PreparedSelectedRoot {
-    Materialized(CapturedSelectedRoot),
+    Materialized {
+        captured: CapturedSelectedRoot,
+        snapshot: SelectedRootSnapshot,
+    },
     CurrentGeneration {
         artifact: Box<GenerationArtifact>,
         captured: CapturedSelectedRoot,
+        snapshot: SelectedRootSnapshot,
     },
 }
 
 impl PreparedSelectedRoot {
     fn captured(&self) -> &CapturedSelectedRoot {
         match self {
-            Self::Materialized(captured) | Self::CurrentGeneration { captured, .. } => captured,
+            Self::Materialized { captured, .. } | Self::CurrentGeneration { captured, .. } => {
+                captured
+            }
+        }
+    }
+
+    fn snapshot(&self) -> SelectedRootSnapshot {
+        match self {
+            Self::Materialized { snapshot, .. } | Self::CurrentGeneration { snapshot, .. } => {
+                *snapshot
+            }
         }
     }
 }
@@ -66,7 +78,7 @@ pub(crate) struct SelectedRootSession {
     transaction: Option<LiveRootTransaction>,
     transaction_engine: TransactionEngine,
     deferred_ima: DeferredImaAuthority,
-    prior: CapturedSelectedRoot,
+    prior_snapshot: SelectedRootSnapshot,
     backing: SelectedRootBacking,
 }
 
@@ -112,7 +124,7 @@ impl LockedRuntimeRoot {
     ) -> Result<Self> {
         // The runtime transaction lock is acquired before reading either
         // SQLite package authority or the selected generation. Holding it
-        // through candidate persistence and the caller-owned DB commit makes
+        // through snapshot persistence and the caller-owned DB commit makes
         // the prepared root a serializable mutation base.
         let mut transaction_engine =
             TransactionEngine::new(TransactionConfig::for_runtime_root(&runtime_root))?;
@@ -166,20 +178,21 @@ impl LockedRuntimeRoot {
                     return Err(error);
                 }
             };
-        let prior = prepared.captured().clone();
-        let deferred_ima = match DeferredImaAuthority::from_captured(&prior) {
+        let prior_snapshot = prepared.snapshot();
+        let prior = prepared.captured();
+        let deferred_ima = match DeferredImaAuthority::from_captured(prior) {
             Ok(authority) => authority,
             Err(error) => {
                 let _ = fs::remove_dir_all(&session_dir);
                 return Err(error);
             }
         };
-        let mut backing = match prepared {
-            PreparedSelectedRoot::Materialized(_) if materialized_backing => {
+        let mut backing = match &prepared {
+            PreparedSelectedRoot::Materialized { .. } if materialized_backing => {
                 SelectedRootBacking::Materialized
             }
-            PreparedSelectedRoot::Materialized(_) => {
-                match SelectedRootOverlaySession::begin_materialized(&session_dir, &prior) {
+            PreparedSelectedRoot::Materialized { .. } => {
+                match SelectedRootOverlaySession::begin_materialized(&session_dir, prior) {
                     Ok(overlay) => SelectedRootBacking::Overlay(overlay),
                     Err(error) => {
                         let _ = fs::remove_dir_all(&session_dir);
@@ -191,8 +204,8 @@ impl LockedRuntimeRoot {
                 let cas = transaction_engine.cas();
                 match SelectedRootOverlaySession::begin_current_generation(
                     &session_dir,
-                    &prior,
-                    &artifact,
+                    prior,
+                    artifact,
                     cas,
                 ) {
                     Ok(overlay) => SelectedRootBacking::Overlay(overlay),
@@ -232,7 +245,7 @@ impl LockedRuntimeRoot {
             transaction: Some(transaction),
             transaction_engine,
             deferred_ima,
-            prior,
+            prior_snapshot,
             backing,
         })
     }
@@ -302,8 +315,8 @@ impl SelectedRootSession {
     ///
     /// The lower is immutable, so rollback needs neither a complete scan nor a
     /// reconstruction from package rows.
-    pub(crate) fn capture_rollback_authority(&self) -> Result<CapturedSelectedRoot> {
-        Ok(self.prior.clone())
+    pub(crate) fn capture_rollback_authority(&self) -> Result<SelectedRootSnapshot> {
+        Ok(self.prior_snapshot)
     }
 
     pub(crate) fn apply_install_files(&mut self, files: &[LiveRootFile]) -> Result<()> {
@@ -351,29 +364,35 @@ impl SelectedRootSession {
     /// Commit and durably persist the selected-root publication authority.
     ///
     /// The database transaction that created `debt` is still caller-owned.
-    /// Persisting this candidate before that transaction commits means a
+    /// Persisting this snapshot before that transaction commits means a
     /// committed selected-root mutation always has a retryable typed root.
     pub(crate) fn persist_for_publication(
         &mut self,
+        conn: &rusqlite::Connection,
         runtime_root: &ConaryRuntimeRoot,
         debt: &GenerationPublication,
-    ) -> Result<CapturedSelectedRoot> {
+    ) -> Result<SelectedRootSnapshot> {
         let result = (|| {
             self.transaction
                 .take()
                 .context("selected-root transaction already completed")?
                 .commit()?;
             let cas = CasStore::new(runtime_root.objects_dir())?;
-            let mut captured = match &mut self.backing {
-                SelectedRootBacking::Overlay(overlay) => overlay
-                    .freeze_and_decode(&self.prior, &cas)?
-                    .apply(&self.prior)?,
-                SelectedRootBacking::Materialized => scan_selected_root(&self.selected_root, &cas)?,
+            let snapshot = match &mut self.backing {
+                SelectedRootBacking::Overlay(overlay) => {
+                    let mut delta = overlay.freeze_and_decode(conn, self.prior_snapshot, &cas)?;
+                    self.deferred_ima.restore_into_delta(&mut delta)?;
+                    self.prior_snapshot.apply_delta(conn, &delta)?
+                }
+                SelectedRootBacking::Materialized => {
+                    let mut captured = scan_selected_root(&self.selected_root, &cas)?;
+                    self.deferred_ima.restore_into(&mut captured)?;
+                    SelectedRootSnapshot::capture(conn, &captured)?
+                }
             };
-            self.deferred_ima.restore_into(&mut captured)?;
-            persist_publication_candidate(runtime_root, debt, &captured)?;
+            persist_publication_snapshot(conn, debt, snapshot)?;
             remove_session_dir(&self.session_dir)?;
-            Ok(captured)
+            Ok(snapshot)
         })();
         if result.is_err() {
             let _ = remove_session_dir(&self.session_dir);
@@ -426,11 +445,11 @@ fn prepare_current_root(
     require_materialized: bool,
 ) -> Result<PreparedSelectedRoot> {
     let cas = CasStore::new(runtime_root.objects_dir())?;
-    if let Some(candidate) = latest_selected_root_candidate(conn, runtime_root)? {
+    if let Some((snapshot, captured)) = latest_selected_root_snapshot(conn)? {
         let selected_root =
             selected_root_materialization_destination(session_dir, require_materialized)?;
-        materialize_captured_selected_root(&candidate, &cas, &selected_root)?;
-        return Ok(PreparedSelectedRoot::Materialized(candidate));
+        materialize_captured_selected_root(&captured, &cas, &selected_root)?;
+        return Ok(PreparedSelectedRoot::Materialized { captured, snapshot });
     }
 
     if let Some(generation) =
@@ -448,14 +467,26 @@ fn prepare_current_root(
             generation: artifact.generation_root.clone(),
             state: artifact.mutable_state.clone(),
         };
+        let snapshot = match GenerationPublication::selected_root_snapshot_for_generation(
+            conn,
+            generation,
+        )? {
+            Some(snapshot_id) => SelectedRootSnapshot::find(conn, snapshot_id)?.with_context(|| {
+                format!(
+                    "generation {generation} references missing selected-root snapshot {snapshot_id}"
+                )
+            })?,
+            None => SelectedRootSnapshot::capture(conn, &captured)?,
+        };
         if require_materialized {
             let selected_root = selected_root_materialization_destination(session_dir, true)?;
             materialize_captured_selected_root(&captured, &cas, &selected_root)?;
-            return Ok(PreparedSelectedRoot::Materialized(captured));
+            return Ok(PreparedSelectedRoot::Materialized { captured, snapshot });
         }
         return Ok(PreparedSelectedRoot::CurrentGeneration {
             artifact: Box::new(artifact),
             captured,
+            snapshot,
         });
     }
 
@@ -467,7 +498,8 @@ fn prepare_current_root(
             &runtime_root.objects_dir(),
             &selected_root,
         )?;
-    Ok(PreparedSelectedRoot::Materialized(captured))
+    let snapshot = SelectedRootSnapshot::capture(conn, &captured)?;
+    Ok(PreparedSelectedRoot::Materialized { captured, snapshot })
 }
 
 fn selected_root_materialization_destination(
@@ -649,6 +681,8 @@ mod tests {
         assert_eq!(session.capture_rollback_authority().unwrap(), before);
         assert!(
             !before
+                .materialize(&conn)
+                .unwrap()
                 .generation
                 .entries
                 .iter()
@@ -657,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_root_candidate_is_retryable_until_debt_driven_cleanup() {
+    fn selected_root_snapshot_is_retryable_after_publication_becomes_terminal() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("conary.db");
         conary_core::db::init(&db_path).unwrap();
@@ -684,14 +718,9 @@ mod tests {
             .unwrap();
 
         session
-            .persist_for_publication(&runtime_root, &debt)
+            .persist_for_publication(&conn, &runtime_root, &debt)
             .unwrap();
-        let candidate = publication_candidate_dir(&runtime_root, &debt).unwrap();
-        assert!(!candidate.join("root").exists());
-        fs::create_dir(candidate.join("root")).unwrap();
-        assert!(load_publication_candidate(&runtime_root, &debt).is_err());
-        fs::remove_dir(candidate.join("root")).unwrap();
-        let captured = load_publication_candidate(&runtime_root, &debt).unwrap();
+        let captured = load_publication_selected_root(&conn, &debt).unwrap();
         let entry = captured
             .generation
             .entries
@@ -700,9 +729,6 @@ mod tests {
             .unwrap();
         assert_eq!(entry.content.as_ref().map(|content| content.size), Some(22));
 
-        remove_terminal_publication_candidates(&conn, &runtime_root, std::slice::from_ref(&debt))
-            .unwrap();
-        assert!(candidate.exists());
         debt.set_phase(
             &conn,
             conary_core::db::models::GenerationPublicationPhase::DatabaseBackedUp,
@@ -712,12 +738,11 @@ mod tests {
         )
         .unwrap();
         debt.mark_complete_through(&conn, None, 1, 1).unwrap();
-        remove_terminal_publication_candidates(&conn, &runtime_root, &[debt]).unwrap();
-        assert!(!candidate.exists());
+        assert!(load_publication_selected_root(&conn, &debt).is_ok());
     }
 
     #[test]
-    fn later_selected_root_candidate_cumulates_prior_pending_effects() {
+    fn later_selected_root_snapshot_cumulates_prior_pending_effects() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("conary.db");
         conary_core::db::init(&db_path).unwrap();
@@ -740,7 +765,7 @@ mod tests {
         )
         .unwrap();
         first
-            .persist_for_publication(&runtime_root, &first_debt)
+            .persist_for_publication(&conn, &runtime_root, &first_debt)
             .unwrap();
         first_debt
             .mark_failed(&conn, "forced first publication failure")
@@ -767,10 +792,10 @@ mod tests {
         )
         .unwrap();
         second
-            .persist_for_publication(&runtime_root, &second_debt)
+            .persist_for_publication(&conn, &runtime_root, &second_debt)
             .unwrap();
 
-        let latest = load_publication_candidate(&runtime_root, &second_debt).unwrap();
+        let latest = load_publication_selected_root(&conn, &second_debt).unwrap();
         let paths = latest
             .generation
             .entries
@@ -792,7 +817,7 @@ mod tests {
             .unwrap();
         assert_eq!(retried.status, GenerationPublicationStatus::Failed);
         assert_eq!(retried.retry_count, 1);
-        let still_retryable = load_publication_candidate(&runtime_root, &retried).unwrap();
+        let still_retryable = load_publication_selected_root(&conn, &retried).unwrap();
         let retry_paths = still_retryable
             .generation
             .entries
@@ -877,7 +902,9 @@ mod tests {
             &Default::default(),
         )
         .unwrap();
-        first.persist_for_publication(&runtime_root, &debt).unwrap();
+        first
+            .persist_for_publication(&tx, &runtime_root, &debt)
+            .unwrap();
         tx.commit().unwrap();
         drop(first);
 
@@ -893,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn abandoned_selected_root_candidate_is_removed_deterministically() {
+    fn abandoned_selected_root_snapshot_remains_valid_for_history() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("conary.db");
         conary_core::db::init(&db_path).unwrap();
@@ -921,16 +948,22 @@ mod tests {
             .apply_install_files(&[live_regular("/opt/forward", b"forward", 0o644)])
             .unwrap();
         session
-            .persist_for_publication(&runtime_root, &debt)
+            .persist_for_publication(&conn, &runtime_root, &debt)
             .unwrap();
-        let candidate = publication_candidate_dir(&runtime_root, &debt).unwrap();
-        assert!(candidate.is_dir());
+        let snapshot_id = GenerationPublication::find_by_id(&conn, debt.id.unwrap())
+            .unwrap()
+            .unwrap()
+            .selected_root_snapshot_id
+            .unwrap();
 
         assert_eq!(
             GenerationPublication::abandon_recoverable_for_changeset(&conn, changeset_id).unwrap(),
             1
         );
-        remove_terminal_publication_candidates(&conn, &runtime_root, &[debt]).unwrap();
-        assert!(!candidate.exists());
+        assert!(
+            SelectedRootSnapshot::find(&conn, snapshot_id)
+                .unwrap()
+                .is_some()
+        );
     }
 }

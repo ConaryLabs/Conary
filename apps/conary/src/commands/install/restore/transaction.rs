@@ -290,12 +290,14 @@ fn execute_locked_restore(
         let metadata = crate::commands::metadata_with_removed_troves(
             snapshots,
             rollback_materialized_directories.clone(),
-            rollback_root.clone(),
+            rollback_root,
             rollback_system.clone(),
         )?;
         tx.execute(
-            "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-            rusqlite::params![metadata, changeset_id],
+            "UPDATE changesets
+             SET metadata = ?1, rollback_selected_root_snapshot_id = ?2
+             WHERE id = ?3",
+            rusqlite::params![metadata, rollback_root.id(), changeset_id],
         )?;
         config_transaction.validate()?;
         changeset.update_status(&tx, ChangesetStatus::Applied)?;
@@ -324,20 +326,12 @@ fn execute_locked_restore(
         }
     };
 
-    if let Err(error) = selected_root.persist_for_publication(&runtime_root, &publication_debt) {
+    if let Err(error) = selected_root.persist_for_publication(&tx, &runtime_root, &publication_debt)
+    {
         drop(tx);
-        let _ = crate::commands::generation::selected_root::remove_publication_candidate(
-            &runtime_root,
-            &publication_debt,
-        );
         return Err(error.context("failed to persist exact state-restore selected root"));
     }
     if let Err(error) = tx.commit() {
-        crate::commands::generation::selected_root::remove_publication_candidate(
-            &runtime_root,
-            &publication_debt,
-        )
-        .context("failed to discard state-restore candidate after database commit error")?;
         return Err(error.into());
     }
 

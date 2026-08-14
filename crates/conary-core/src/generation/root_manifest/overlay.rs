@@ -2,8 +2,10 @@
 
 //! OverlayFS upper-tree decoding for delta-sized selected-root transactions.
 
+mod indexed;
 mod probe;
 
+pub use indexed::decode_selected_root_overlay_upper_indexed;
 pub use probe::{
     MountedSelectedRootOverlay, OverlayHardlinkCopyUp, OverlayLowerDirectoryRename,
     OverlayMetadataCopyUp, OverlayOpaqueDirectory, OverlayWhiteoutEncoding,
@@ -11,15 +13,17 @@ pub use probe::{
     probe_selected_root_overlay_profile,
 };
 
+#[cfg(test)]
 use super::scan::scan_selected_root_overlay_upper;
-use super::{
-    CapturedSelectedRoot, GenerationRootEntry, SELECTED_ROOT_MANIFEST_DELTA_VERSION,
-    SelectedRootManifestDelta,
-};
+#[cfg(test)]
+use super::{CapturedSelectedRoot, SelectedRootSnapshot};
+use super::{GenerationRootEntry, SELECTED_ROOT_MANIFEST_DELTA_VERSION, SelectedRootManifestDelta};
+#[cfg(test)]
 use crate::filesystem::PrivateCasWriter;
 use crate::payload::{PayloadNodeKind, ResolvedPayloadNode};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
 use std::path::Path;
 
 pub const SELECTED_ROOT_OVERLAY_PROFILE_VERSION: u32 = 1;
@@ -144,7 +148,8 @@ pub fn encode_selected_root_overlay_upper_node(
 /// Callers seed the upper root metadata from `prior` before mounting. A root
 /// metadata difference can then be represented without guessing whether it
 /// was transaction-owned.
-pub fn decode_selected_root_overlay_upper(
+#[cfg(test)]
+fn decode_selected_root_overlay_upper(
     upper: &Path,
     prior: &CapturedSelectedRoot,
     cas: &dyn PrivateCasWriter,
@@ -170,12 +175,79 @@ enum OpaqueMarker {
     WhiteoutScan,
 }
 
+#[cfg(test)]
 fn decode_captured_upper(
-    mut root: ResolvedPayloadNode,
+    root: ResolvedPayloadNode,
     entries: Vec<GenerationRootEntry>,
     prior: &CapturedSelectedRoot,
     profile: &SelectedRootOverlayProfile,
 ) -> crate::Result<SelectedRootManifestDelta> {
+    let decoded = decode_upper_operations(root, entries, profile, |path| {
+        Ok(prior_directory_exists(prior, path))
+    })?;
+    let mut delta = decoded.into_delta(&prior.generation.root);
+    expand_prior_hardlink_authority(
+        prior,
+        &delta.removals,
+        &delta.opaque_directories,
+        &delta.copied_up_origins,
+        &mut delta.upserts,
+    )?;
+    let delta = delta.finish()?;
+    // The complete-capture entrypoint remains an explicit materialization
+    // boundary for tests and retained roots.
+    delta.apply(prior)?;
+    Ok(delta)
+}
+
+pub(super) struct DecodedUpper {
+    root: ResolvedPayloadNode,
+    removals: Vec<String>,
+    opaque_directories: Vec<String>,
+    upserts: BTreeMap<String, GenerationRootEntry>,
+    copied_up_origins: BTreeSet<String>,
+}
+
+pub(super) struct PendingDelta {
+    pub(super) root: Option<ResolvedPayloadNode>,
+    pub(super) removals: Vec<String>,
+    pub(super) opaque_directories: Vec<String>,
+    pub(super) upserts: BTreeMap<String, GenerationRootEntry>,
+    pub(super) copied_up_origins: BTreeSet<String>,
+}
+
+impl DecodedUpper {
+    pub(super) fn into_delta(self, prior_root: &ResolvedPayloadNode) -> PendingDelta {
+        PendingDelta {
+            root: (self.root != *prior_root).then_some(self.root),
+            removals: self.removals,
+            opaque_directories: self.opaque_directories,
+            upserts: self.upserts,
+            copied_up_origins: self.copied_up_origins,
+        }
+    }
+}
+
+impl PendingDelta {
+    pub(super) fn finish(self) -> crate::Result<SelectedRootManifestDelta> {
+        let delta = SelectedRootManifestDelta {
+            version: SELECTED_ROOT_MANIFEST_DELTA_VERSION,
+            root: self.root,
+            removals: self.removals,
+            opaque_directories: self.opaque_directories,
+            upserts: self.upserts.into_values().collect(),
+        };
+        delta.validate()?;
+        Ok(delta)
+    }
+}
+
+pub(super) fn decode_upper_operations(
+    mut root: ResolvedPayloadNode,
+    entries: Vec<GenerationRootEntry>,
+    profile: &SelectedRootOverlayProfile,
+    mut prior_directory_exists: impl FnMut(&str) -> crate::Result<bool>,
+) -> crate::Result<DecodedUpper> {
     let root_markers = decode_overlay_xattrs("/", &mut root, profile)?;
     if root_markers.whiteout || root_markers.opaque.is_some() {
         return Err(crate::Error::InvalidPath(
@@ -214,7 +286,7 @@ fn decode_captured_upper(
                     entry.path
                 )));
             }
-            if opaque == OpaqueMarker::Logical && prior_directory_exists(prior, &entry.path) {
+            if opaque == OpaqueMarker::Logical && prior_directory_exists(&entry.path)? {
                 opaque_directories.push(entry.path.clone());
             }
         }
@@ -225,28 +297,16 @@ fn decode_captured_upper(
     }
 
     normalize_removals(&mut removals);
-    expand_prior_hardlink_authority(
-        prior,
-        &removals,
-        &opaque_directories,
-        &copied_up_origins,
-        &mut upserts,
-    )?;
-
-    let delta = SelectedRootManifestDelta {
-        version: SELECTED_ROOT_MANIFEST_DELTA_VERSION,
-        root: (root != prior.generation.root).then_some(root),
+    Ok(DecodedUpper {
+        root,
         removals,
         opaque_directories,
-        upserts: upserts.into_values().collect(),
-    };
-    delta.validate()?;
-    // Validate the complete resulting authority now, before a caller can
-    // persist this changed-path representation.
-    delta.apply(prior)?;
-    Ok(delta)
+        upserts,
+        copied_up_origins,
+    })
 }
 
+#[cfg(test)]
 fn prior_directory_exists(prior: &CapturedSelectedRoot, path: &str) -> bool {
     prior
         .generation
@@ -369,6 +429,7 @@ fn normalize_removals(removals: &mut Vec<String>) {
     *removals = normalized;
 }
 
+#[cfg(test)]
 fn expand_prior_hardlink_authority(
     prior: &CapturedSelectedRoot,
     removals: &[String],
@@ -376,15 +437,8 @@ fn expand_prior_hardlink_authority(
     copied_up_origins: &BTreeSet<String>,
     upserts: &mut BTreeMap<String, GenerationRootEntry>,
 ) -> crate::Result<()> {
-    let prior_entries = prior
-        .generation
-        .entries
-        .iter()
-        .chain(&prior.state.entries)
-        .map(|entry| (entry.path.as_str(), entry))
-        .collect::<BTreeMap<_, _>>();
-    let mut groups = BTreeMap::<String, Vec<&GenerationRootEntry>>::new();
-    for entry in prior_entries.values() {
+    let mut groups = BTreeMap::<String, Vec<GenerationRootEntry>>::new();
+    for entry in prior.generation.entries.iter().chain(&prior.state.entries) {
         let identity = match &entry.node.source.kind {
             PayloadNodeKind::Regular {
                 hardlink_identity: Some(identity),
@@ -392,10 +446,37 @@ fn expand_prior_hardlink_authority(
             | PayloadNodeKind::Hardlink { identity, .. } => identity,
             _ => continue,
         };
-        groups.entry(identity.clone()).or_default().push(entry);
+        groups
+            .entry(identity.clone())
+            .or_default()
+            .push(entry.clone());
     }
+    expand_prior_hardlink_groups(
+        groups.into_values().collect(),
+        removals,
+        opaque_directories,
+        copied_up_origins,
+        upserts,
+    )
+}
 
-    for (identity, mut members) in groups {
+pub(super) fn expand_prior_hardlink_groups(
+    groups: Vec<Vec<GenerationRootEntry>>,
+    removals: &[String],
+    opaque_directories: &[String],
+    copied_up_origins: &BTreeSet<String>,
+    upserts: &mut BTreeMap<String, GenerationRootEntry>,
+) -> crate::Result<()> {
+    for mut members in groups {
+        let identity = members
+            .first()
+            .and_then(entry_hardlink_identity)
+            .ok_or_else(|| {
+                crate::Error::InvalidPath(
+                    "indexed selected-root hardlink group has no typed identity".to_string(),
+                )
+            })?
+            .to_string();
         members.sort_by(|left, right| left.path.cmp(&right.path));
         let copied_prior_paths = members
             .iter()
@@ -473,7 +554,7 @@ fn expand_prior_hardlink_authority(
             members
                 .iter()
                 .find(|member| member.content.is_some())
-                .map(|entry| (*entry).clone())
+                .cloned()
                 .ok_or_else(|| {
                     crate::Error::InvalidPath(format!(
                         "prior hardlink group {identity} has no content primary"
@@ -520,7 +601,7 @@ fn expand_prior_hardlink_authority(
     Ok(())
 }
 
-fn entry_hardlink_identity(entry: &GenerationRootEntry) -> Option<&str> {
+pub(super) fn entry_hardlink_identity(entry: &GenerationRootEntry) -> Option<&str> {
     match &entry.node.source.kind {
         PayloadNodeKind::Regular {
             hardlink_identity: Some(identity),
@@ -608,6 +689,17 @@ mod tests {
 
         let delta =
             decode_selected_root_overlay_upper(&upper, &prior, &cas, &user_profile()).unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+        let snapshot = SelectedRootSnapshot::capture(&conn, &prior).unwrap();
+        let indexed = decode_selected_root_overlay_upper_indexed(
+            &upper,
+            &conn,
+            snapshot,
+            &cas,
+            &user_profile(),
+        )
+        .unwrap();
 
         assert!(
             delta
@@ -621,6 +713,7 @@ mod tests {
                 .iter()
                 .all(|entry| !entry.path.starts_with("/run"))
         );
+        assert_eq!(indexed, delta);
     }
 
     #[test]
@@ -808,6 +901,79 @@ mod tests {
             PayloadNodeKind::Hardlink { target, identity: found }
                 if target == "/usr/lib/a" && found == identity
         ));
+    }
+
+    #[test]
+    fn indexed_decoder_matches_complete_projection_for_affected_hardlink_group() {
+        let identity = "prior:hardlink:indexed";
+        let mut primary = regular_entry("/usr/lib/a", content('a', 4));
+        primary.node.source.kind = PayloadNodeKind::Regular {
+            hardlink_identity: Some(identity.into()),
+        };
+        let mut alias = primary.clone();
+        alias.path = "/usr/lib/b".into();
+        alias.content = None;
+        alias.node.source.kind = PayloadNodeKind::Hardlink {
+            target: primary.path.clone(),
+            identity: identity.into(),
+        };
+        let prior = captured(vec![
+            directory_entry("/usr"),
+            directory_entry("/usr/lib"),
+            primary,
+            alias,
+        ]);
+        let mut changed = regular_entry("/usr/lib/b", content('c', 7));
+        changed
+            .node
+            .source
+            .xattrs
+            .insert("user.overlay.origin".into(), b"opaque-handle".to_vec());
+
+        let expected = decode_captured_upper(
+            directory_node(),
+            vec![changed.clone()],
+            &prior,
+            &user_profile(),
+        )
+        .unwrap()
+        .apply(&prior)
+        .unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+        let snapshot = SelectedRootSnapshot::capture(&conn, &prior).unwrap();
+        let decoded =
+            decode_upper_operations(directory_node(), vec![changed], &user_profile(), |path| {
+                Ok(snapshot.entry(&conn, path)?.is_some_and(|entry| {
+                    matches!(entry.node.source.kind, PayloadNodeKind::Directory)
+                }))
+            })
+            .unwrap();
+        let mut pending = decoded.into_delta(&snapshot.root(&conn).unwrap());
+        let groups = indexed::affected_hardlink_groups(
+            &conn,
+            snapshot,
+            &pending.removals,
+            &pending.opaque_directories,
+            &pending.copied_up_origins,
+            &pending.upserts,
+        )
+        .unwrap();
+        expand_prior_hardlink_groups(
+            groups,
+            &pending.removals,
+            &pending.opaque_directories,
+            &pending.copied_up_origins,
+            &mut pending.upserts,
+        )
+        .unwrap();
+        let actual = snapshot
+            .apply_delta(&conn, &pending.finish().unwrap())
+            .unwrap()
+            .materialize(&conn)
+            .unwrap();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

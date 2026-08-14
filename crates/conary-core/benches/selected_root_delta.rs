@@ -9,7 +9,7 @@ use std::time::Duration;
 use conary_core::generation::root_manifest::{
     CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry,
     GenerationRootManifest, MutableStateManifest, SELECTED_ROOT_MANIFEST_DELTA_VERSION,
-    SelectedRootManifestDelta,
+    SelectedRootManifestDelta, SelectedRootSnapshot,
 };
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
@@ -107,15 +107,24 @@ fn benchmark_installed_path_scaling(criterion: &mut Criterion) {
 
     for installed_files in INSTALLED_FILE_COUNTS {
         let prior = prior_with_installed_files(installed_files);
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        let snapshot = SelectedRootSnapshot::capture(&conn, &prior).unwrap();
         let delta = fixed_one_path_upsert();
         delta.validate().unwrap();
-        delta.apply(&prior).unwrap();
+        snapshot.apply_delta(&conn, &delta).unwrap();
 
         group.bench_with_input(
             BenchmarkId::from_parameter(installed_files),
             &installed_files,
             |bencher, _| {
-                bencher.iter(|| black_box(delta.apply(black_box(&prior)).unwrap()));
+                bencher.iter(|| {
+                    black_box(
+                        snapshot
+                            .apply_delta(black_box(&conn), black_box(&delta))
+                            .unwrap(),
+                    )
+                });
             },
         );
     }
