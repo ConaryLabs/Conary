@@ -15,7 +15,7 @@ pub(super) struct PersistConversionInput {
     pub(super) source_profile: String,
     pub(super) metadata: ForeignConversionInput,
     pub(super) format: &'static str,
-    pub(super) original_checksum: String,
+    pub(super) source_checksum: String,
     pub(super) conversion_result: ConversionResult,
     pub(super) repo_pkg: RepositoryPackage,
     pub(super) repository_provides_digest: String,
@@ -39,7 +39,7 @@ impl ConversionService {
         conn: &Connection,
         source_profile: &str,
         repo_pkg: &RepositoryPackage,
-        original_checksum: &str,
+        source_checksum: &str,
         repository_provides_digest: &str,
     ) -> Result<CacheInspection> {
         let repository_package_id = repo_pkg
@@ -52,7 +52,7 @@ impl ConversionService {
             "repository package identity changed during conversion cache lookup"
         );
         let Some(existing) =
-            ConvertedPackage::find_repository_by_checksum(conn, source_profile, original_checksum)?
+            ConvertedPackage::find_repository_by_checksum(conn, source_profile, source_checksum)?
         else {
             return Ok(CacheInspection::Missing);
         };
@@ -90,13 +90,13 @@ impl ConversionService {
         &self,
         source_profile: &str,
         repo_pkg: &RepositoryPackage,
-        original_checksum: &str,
+        source_checksum: &str,
         repository_provides_digest: &str,
     ) -> Result<Option<ServerConversionResult>> {
         let service = self.clone();
         let source_profile = source_profile.to_string();
         let repo_pkg = repo_pkg.clone();
-        let original_checksum = original_checksum.to_string();
+        let source_checksum = source_checksum.to_string();
         let repository_provides_digest = repository_provides_digest.to_string();
 
         tokio::task::spawn_blocking(move || {
@@ -106,13 +106,13 @@ impl ConversionService {
                 &tx,
                 &source_profile,
                 &repo_pkg,
-                &original_checksum,
+                &source_checksum,
                 &repository_provides_digest,
             )?;
             tx.commit()?;
             match inspection {
                 CacheInspection::Current(result) => {
-                    info!("Package already converted (checksum: {})", original_checksum);
+                    info!("Package already converted (checksum: {})", source_checksum);
                     return Ok(Some(*result));
                 }
                 CacheInspection::Missing => return Ok(None),
@@ -127,7 +127,7 @@ impl ConversionService {
                     &tx,
                     &source_profile,
                     &repo_pkg,
-                    &original_checksum,
+                    &source_checksum,
                     &repository_provides_digest,
                 )?;
                 let result = match inspection {
@@ -140,7 +140,7 @@ impl ConversionService {
                         ConvertedPackage::delete_repository_by_checksum(
                             &tx,
                             &source_profile,
-                            &original_checksum,
+                            &source_checksum,
                         )?;
                         None
                     }
@@ -161,7 +161,7 @@ impl ConversionService {
             source_profile,
             metadata,
             format,
-            original_checksum,
+            source_checksum,
             conversion_result,
             repo_pkg,
             repository_provides_digest,
@@ -198,7 +198,7 @@ impl ConversionService {
             metadata.version().to_string(),
             package_architecture.clone(),
             format.to_string(),
-            original_checksum.clone(),
+            source_checksum.clone(),
             &chunk_hashes,
             persisted_total_size,
             content_hash_text.clone(),
@@ -215,7 +215,7 @@ impl ConversionService {
                 &tx,
                 &source_profile,
                 &repo_pkg,
-                &original_checksum,
+                &source_checksum,
                 converted.repository_artifact()?.repository_provides_digest,
             )? {
                 CacheInspection::Current(result) => {
@@ -226,7 +226,7 @@ impl ConversionService {
                     ConvertedPackage::delete_repository_by_checksum(
                         &tx,
                         &source_profile,
-                        &original_checksum,
+                        &source_checksum,
                     )?;
                 }
                 CacheInspection::Missing => {}
@@ -307,7 +307,7 @@ impl ConversionService {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{create_test_db, insert_package, insert_repo};
+    use super::super::test_support::{create_test_db, insert_repo};
     use super::*;
     use conary_core::db::models::RepositoryProvide;
     use conary_core::repository::versioning::VersionScheme;
@@ -322,9 +322,52 @@ mod tests {
         String,
         String,
     ) {
+        cache_fixture_for_source(
+            bind_current_digest,
+            "fedora-base",
+            "fedora",
+            "rpm",
+            VersionScheme::Rpm,
+            "sha256:systemd-udev-259.5-1.fc44",
+        )
+    }
+
+    fn cache_fixture_for_source(
+        bind_current_digest: bool,
+        repository_name: &str,
+        profile: &str,
+        format: &str,
+        version_scheme: VersionScheme,
+        source_checksum: &str,
+    ) -> (
+        tempfile::NamedTempFile,
+        tempfile::TempDir,
+        ConversionService,
+        RepositoryPackage,
+        String,
+        String,
+    ) {
         let (database, conn) = create_test_db();
-        let repository_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repository_id, "systemd-udev", "259.5-1.fc44", 42);
+        let repository_id = insert_repo(&conn, repository_name, profile);
+        let exact_profile =
+            conary_core::repository::supported_profiles::profile_by_public_id(profile)
+                .or_else(|| {
+                    conary_core::repository::supported_profiles::profile_for_remi_route(profile)
+                })
+                .unwrap()
+                .id();
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            "systemd-udev".to_string(),
+            "259.5-1.fc44".to_string(),
+            version_scheme,
+            source_checksum.to_string(),
+            42,
+            "https://example.com/systemd-udev.pkg".to_string(),
+        );
+        package.architecture = Some("x86_64".to_string());
+        package.source_profile = Some(exact_profile.to_string());
+        package.insert(&conn).unwrap();
         let package = RepositoryPackage::find_by_name(&conn, "systemd-udev")
             .unwrap()
             .pop()
@@ -337,7 +380,7 @@ mod tests {
             None,
             "file".to_string(),
             Some("/usr/bin/kernel-install".to_string()),
-            VersionScheme::Rpm,
+            version_scheme,
         );
         provide.insert(&conn).unwrap();
         let current_digest =
@@ -354,11 +397,11 @@ mod tests {
             conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string()
         };
         let mut converted = ConvertedPackage::new_repository(
-            "fedora-44".to_string(),
+            exact_profile.to_string(),
             "systemd-udev".to_string(),
             "259.5-1.fc44".to_string(),
             "x86_64".to_string(),
-            "rpm".to_string(),
+            format.to_string(),
             source_checksum.clone(),
             &[],
             8,
@@ -471,6 +514,30 @@ mod tests {
 
         assert_eq!(result.cache_state, "hot");
         assert_eq!(result.name, "systemd-udev");
+    }
+
+    #[tokio::test]
+    async fn cache_hit_preserves_eopkg_sha1_source_authority() {
+        let source_checksum = "sha1:1826421aded2a344b7864ffff2fae2430778b1f0";
+        let (_database, _storage, service, package, persisted_checksum, current_digest) =
+            cache_fixture_for_source(
+                true,
+                "solus-polaris",
+                "solus",
+                "eopkg",
+                VersionScheme::Eopkg,
+                source_checksum,
+            );
+
+        let result = service
+            .cached_conversion_result_async("solus", &package, &persisted_checksum, &current_digest)
+            .await
+            .unwrap()
+            .expect("exact SHA-1 conversion cache hit");
+
+        assert_eq!(persisted_checksum, source_checksum);
+        assert_eq!(result.source_profile.as_deref(), Some("solus"));
+        assert_eq!(result.cache_state, "hot");
     }
 
     #[tokio::test]

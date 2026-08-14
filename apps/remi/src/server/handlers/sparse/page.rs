@@ -24,6 +24,7 @@ pub(super) fn build_package_list(
 
     Ok(RemiSparsePackageList {
         distro: distro.to_string(),
+        source_profile: selection.source_profile,
         packages: selection.names,
         total: selection.total,
         page,
@@ -88,6 +89,7 @@ pub(super) fn build_package_page(
 
     Ok(RemiSparsePackagePage {
         distro: distro.to_string(),
+        source_profile: selection.source_profile,
         packages: entries,
         total: selection.total,
         page,
@@ -122,6 +124,7 @@ fn build_resolution_version(
 }
 
 struct SparseNamePageSelection {
+    source_profile: String,
     repo_ids: Vec<i64>,
     names: Vec<String>,
     total: usize,
@@ -143,6 +146,7 @@ fn select_sparse_name_page(
         .collect::<anyhow::Result<Vec<_>>>()?;
     if repo_ids.is_empty() {
         return Ok(SparseNamePageSelection {
+            source_profile: source_profile.id().to_string(),
             repo_ids,
             names: Vec::new(),
             total: 0,
@@ -203,6 +207,7 @@ fn select_sparse_name_page(
     }
 
     Ok(SparseNamePageSelection {
+        source_profile: source_profile.id().to_string(),
         repo_ids,
         names: packages,
         total,

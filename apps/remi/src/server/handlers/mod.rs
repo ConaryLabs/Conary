@@ -21,7 +21,6 @@ pub mod chunks;
 pub mod derivations;
 pub mod detail;
 pub mod federation;
-pub mod index;
 pub mod jobs;
 pub mod models;
 pub mod oci;

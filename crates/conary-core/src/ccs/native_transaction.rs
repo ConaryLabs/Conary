@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 
 mod arch;
 mod deb;
+mod eopkg;
 mod graph;
 mod rpm;
 
@@ -288,6 +289,7 @@ pub enum NativeEventStage {
     RpmTransactionFileTriggerInstall,
     DebTriggerProcessing,
     ArchPostTransaction,
+    EopkgSystemConfiguration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -393,6 +395,7 @@ pub fn plan_native_transaction(
         rpm::plan(view, changes, state, &mut events)?;
     }
     arch::plan(bundles, changes, state, &mut events)?;
+    eopkg::plan(bundles, changes, &mut events)?;
     let deb = deb::plan(bundles, changes, state, &mut events)?;
     let graph = graph::build(&mut events, changes)?;
     Ok(NativeTransactionPlan { events, graph, deb })
@@ -438,7 +441,7 @@ fn plan_regular_lifecycle_events(
                 ensure_rpm_program_available(entry)?;
                 rpm_runtime(entry)?;
             }
-            "arch" | "deb" => {}
+            "arch" | "deb" | "eopkg" => {}
             other => bail!(
                 "native lifecycle bundle for '{}' has unsupported source format '{other}'",
                 view.package_name
@@ -669,6 +672,7 @@ fn regular_entry_invocation(
             deb::regular_invocation(view, change, changes, metadata)
         }),
         "arch" => arch::regular_invocation(view, change, entry),
+        "eopkg" => Ok(None),
         other => bail!(
             "native lifecycle bundle for '{}' has unsupported source format '{other}'",
             view.package_name

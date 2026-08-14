@@ -3,6 +3,8 @@
 use super::*;
 use std::path::PathBuf;
 
+mod release_roots;
+
 fn remi_manifest_path(file_name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../conary/tests/integration/remi/manifests")
@@ -54,6 +56,7 @@ fn minimal_manifest_with_id(id: &str) -> TestManifest {
             group: None,
             skip: None,
             requires: Vec::new(),
+            corpus: None,
         }],
         distro_overrides: Default::default(),
     }
@@ -372,7 +375,7 @@ test_packages = [{ package = "tree", binary = "/usr/bin/tree" }]
 [distros."ubuntu-26.04"]
 remi_distro = "ubuntu-26.04"
 repo_name = "remi-ubuntu-26.04"
-build_context = "workspace-source"
+build_context = "static-binary"
 test_packages = [{ package = "tree", binary = "/usr/bin/tree" }]
 
 [fixtures]
@@ -402,7 +405,7 @@ ccs_file = "conary-test-fixture-1.0.0-1.ccs"
     );
     assert_eq!(
         config.distros["ubuntu-26.04"].build_context,
-        DistroBuildContext::WorkspaceSource
+        DistroBuildContext::StaticBinary
     );
 
     let fixtures = config.fixtures.as_ref().unwrap();
@@ -484,9 +487,28 @@ repo_name = "custom"
         .expect_err("build context must use the typed contract")
         .to_string();
     assert!(
-        invalid_error.contains("binary") && invalid_error.contains("workspace-source"),
+        invalid_error.contains("binary") && invalid_error.contains("static-binary"),
         "invalid capability should list typed values: {invalid_error}"
     );
+}
+
+/// The shipped integration config is what CI parses, so hold it to the typed
+/// contract directly rather than to a copy of it.
+#[test]
+fn shipped_integration_config_stages_the_static_binary_everywhere() {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../conary/tests/integration/remi/config.toml");
+    let contents = std::fs::read_to_string(&config_path).expect("read integration config");
+    let config: GlobalConfig = toml::from_str(&contents).expect("parse integration config");
+
+    assert!(!config.distros.is_empty(), "config must declare distros");
+    for (distro, distro_config) in &config.distros {
+        assert_eq!(
+            distro_config.build_context,
+            DistroBuildContext::StaticBinary,
+            "{distro} must stage the host-independent static artifact"
+        );
+    }
 }
 
 #[test]
@@ -754,26 +776,56 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
 
     let manifest = load_manifest(&path).expect("load focused native lifecycle manifest");
     assert_eq!(manifest.suite.phase, 4);
-    assert_eq!(manifest.test.len(), 1);
-    let test = &manifest.test[0];
-    assert_eq!(test.id, "TNPMX01");
-    assert_eq!(test.fatal, Some(true));
-    assert_eq!(test.skip, None);
-    assert_eq!(test.flaky, None);
+    assert_eq!(manifest.test.len(), 4);
+    for (test, expected_id, expected_profile, expected_format) in [
+        (&manifest.test[0], "TNPMX01R", "fedora-44", "rpm"),
+        (&manifest.test[1], "TNPMX01D", "ubuntu-26.04", "deb"),
+        (&manifest.test[2], "TNPMX01A", "arch", "alpm"),
+    ] {
+        assert_eq!(test.id, expected_id);
+        assert_eq!(test.fatal, Some(false));
+        assert_eq!(test.skip, None);
+        assert_eq!(test.flaky, None);
 
-    let rendered = format!("{test:?}");
+        let corpus = test.corpus.as_ref().expect("typed corpus declaration");
+        assert_eq!(corpus.source_profile, expected_profile);
+        assert_eq!(corpus.source_format.as_str(), expected_format);
+        assert_eq!(
+            corpus.digest_source,
+            conary_core::corpus::SourceArtifactDigestSource::FixtureBuildManifest
+        );
+        assert_eq!(corpus.stages.len(), 4);
+
+        let rendered = format!("{test:?}");
+        assert!(
+            rendered.contains("run-cross-source-lifecycle-matrix.sh"),
+            "focused manifest must execute the shared lifecycle contract"
+        );
+        assert!(
+            rendered.contains("${native_lifecycle_oracle_format}"),
+            "focused manifest must pass an explicit typed native-oracle format"
+        );
+        for operation in ["install", "update", "rollback", "remove"] {
+            assert!(
+                test.description.contains(operation),
+                "focused manifest should name {operation} in its contract"
+            );
+        }
+    }
+    let openrc = &manifest.test[3];
+    assert_eq!(openrc.id, "TNPMX02O");
+    assert_eq!(openrc.fatal, Some(false));
+    assert!(openrc.corpus.is_none());
     assert!(
-        rendered.contains("run-cross-source-lifecycle-matrix.sh"),
-        "focused manifest must execute the shared lifecycle contract"
+        format!("{openrc:?}").contains("run-openrc-service-lifecycle.sh ${target_init_system}")
     );
-    assert!(
-        rendered.contains("${native_lifecycle_oracle_format}"),
-        "focused manifest must pass an explicit typed native-oracle format"
-    );
-    for (distro, expected_format) in [
-        ("fedora44", "rpm"),
-        ("ubuntu-26.04", "deb"),
-        ("arch", "arch"),
+    for (distro, expected_format, expected_init) in [
+        ("fedora44", "rpm", "systemd"),
+        ("ubuntu-26.04", "deb", "systemd"),
+        ("arch", "arch", "systemd"),
+        ("artix", "arch", "openrc"),
+        ("linux-mint-22.3", "deb", "systemd"),
+        ("pop-os-24.04", "deb", "systemd"),
     ] {
         let overrides = manifest
             .distro_overrides
@@ -786,11 +838,34 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
             Some(expected_format),
             "{distro} must select its native lifecycle oracle explicitly"
         );
+        assert_eq!(
+            overrides.get("target_init_system").map(String::as_str),
+            Some(expected_init),
+            "{distro} must declare its target init authority explicitly"
+        );
     }
-    for operation in ["install", "update", "rollback", "remove"] {
+}
+
+#[test]
+fn derivative_acceptance_manifest_covers_takeover_and_native_apt() {
+    let path = remi_manifest_path("debian-derivative-acceptance.toml");
+    let manifest = load_manifest(&path).expect("load Debian derivative acceptance manifest");
+    assert_eq!(manifest.suite.phase, 4);
+    assert_eq!(manifest.test.len(), 2);
+    assert_eq!(manifest.test[0].id, "TNPMD01");
+    assert_eq!(manifest.test[1].id, "TNPMD02");
+    let rendered = format!("{:?}", manifest.test);
+    for required in [
+        "run-apt-repository-takeover.py",
+        "system adopt jq",
+        "system adopt --refresh",
+        "system takeover",
+        "system unadopt jq",
+        "apt-get remove",
+    ] {
         assert!(
-            test.description.contains(operation),
-            "focused manifest should name {operation} in its contract"
+            rendered.contains(required),
+            "manifest must exercise {required}"
         );
     }
 }

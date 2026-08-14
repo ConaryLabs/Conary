@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// The CCS-authored hook that must run before its owning trove is removed.
 ///
-/// CCS defines this hook as a POSIX shell script. Native RPM, Debian, and Arch
+/// CCS defines this hook as a POSIX shell script. Native RPM, Debian, Arch, and eopkg
 /// lifecycle entries are persisted separately in
 /// `installed_native_lifecycle_bundles` and must never be projected into this
 /// model.

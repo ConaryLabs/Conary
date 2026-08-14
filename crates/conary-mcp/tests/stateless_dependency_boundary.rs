@@ -39,12 +39,11 @@ fn stateless_modules_do_not_use_rmcp_or_live_http_framework_types() {
 }
 
 #[test]
-fn remi_and_legacy_mcp_files_do_not_contain_draft_stateless_identifiers() {
+fn remi_mcp_files_do_not_contain_draft_stateless_identifiers() {
     let root = repo_root();
     for path in [
         "apps/remi/src/server/mcp.rs",
         "apps/remi/src/server/routes/mcp.rs",
-        "apps/conary-test/src/server/mcp.rs",
     ] {
         let source =
             fs::read_to_string(root.join(path)).expect("live MCP server file should be readable");
@@ -64,57 +63,10 @@ fn remi_and_legacy_mcp_files_do_not_contain_draft_stateless_identifiers() {
 }
 
 #[test]
-fn conary_test_routes_only_mounts_stateless_adapter() {
+fn conary_test_has_no_live_server_adapter() {
     let root = repo_root();
-    let path = "apps/conary-test/src/server/routes.rs";
-    let source = fs::read_to_string(root.join(path)).expect("routes file should be readable");
-
     assert!(
-        source.contains("\"/mcp/stateless\""),
-        "{path} should mount the stateless discovery route"
+        !root.join("apps/conary-test/src/server").exists(),
+        "conary-test must not retain a live server adapter directory"
     );
-    assert!(
-        source.contains("stateless_mcp::handle"),
-        "{path} should delegate stateless protocol handling to stateless_mcp"
-    );
-
-    for forbidden in [
-        "MCP-Protocol-Version",
-        "Mcp-Method",
-        "Mcp-Name",
-        "DRAFT-2026-v1",
-        "io.modelcontextprotocol/",
-        "handle_stateless_http_request",
-        "handle_stateless_http_bytes",
-        "server/discover",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "{path} must only mount the stateless adapter, not contain protocol logic '{forbidden}'"
-        );
-    }
-}
-
-#[test]
-fn conary_test_stateless_adapter_does_not_use_rmcp_session_types() {
-    let root = repo_root();
-    let path = "apps/conary-test/src/server/stateless_mcp.rs";
-    let source =
-        fs::read_to_string(root.join(path)).expect("stateless MCP adapter file should be readable");
-
-    for forbidden in [
-        "use rmcp",
-        "rmcp::",
-        "RoleServer",
-        "ServerHandler",
-        "StreamableHttpService",
-        "LocalSessionManager",
-        "Mcp-Session-Id",
-        "InitializeResult",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "{path} must not depend on legacy/session type {forbidden}"
-        );
-    }
 }

@@ -16,6 +16,7 @@ pub enum CommandRisk {
     HookRefreshDbMutation,
     DbMutation,
     DestructiveDbMutation,
+    SelectedRootMutation,
     /// Internal boot continuation authorized by an exact generation artifact
     /// and kernel command-line contract rather than an interactive `--yes`.
     GenerationBootActivation,
@@ -40,6 +41,7 @@ impl CommandRiskPolicy {
         matches!(
             self.risk,
             CommandRisk::DestructiveDbMutation
+                | CommandRisk::SelectedRootMutation
                 | CommandRisk::ActiveHostMutation
                 | CommandRisk::AlwaysLive
         ) && !self.dry_run
@@ -55,6 +57,7 @@ impl CommandRiskPolicy {
             CommandRisk::DbMutation | CommandRisk::DestructiveDbMutation => {
                 Some(LiveMutationClass::LiveConaryState)
             }
+            CommandRisk::SelectedRootMutation => Some(LiveMutationClass::SelectedRootState),
             CommandRisk::ActiveHostMutation => {
                 Some(LiveMutationClass::CurrentlyLiveEvenWithRootArguments)
             }
@@ -271,6 +274,12 @@ fn classify_system(command: &cli::SystemCommands) -> Option<CommandRiskPolicy> {
             "conary system rebuild-db",
             CommandRisk::DestructiveDbMutation,
             false,
+            *yes,
+        )),
+        cli::SystemCommands::RepositoryTakeover { dry_run, yes, .. } => Some(policy_with_intent(
+            "conary system repository-takeover",
+            CommandRisk::SelectedRootMutation,
+            *dry_run,
             *yes,
         )),
         cli::SystemCommands::Completions { .. }
@@ -545,9 +554,6 @@ fn classify_distro(command: &cli::DistroCommands) -> CommandRiskPolicy {
         cli::DistroCommands::List { .. } | cli::DistroCommands::Info { .. } => {
             read_only("conary distro read-only command")
         }
-        cli::DistroCommands::Set { .. }
-        | cli::DistroCommands::Remove { .. }
-        | cli::DistroCommands::Mixing { .. } => local_state("conary distro"),
     }
 }
 

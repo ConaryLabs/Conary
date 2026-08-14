@@ -326,7 +326,7 @@ description = "native lifecycles"
 
 [native_lifecycle]
 schema = "conary.native-lifecycles.v1"
-schema_revision = 19
+schema_revision = 20
 source_format = "rpm"
 source_family = "fedora-rhel"
 source_profile = "fedora-44"
@@ -354,7 +354,7 @@ body = "{body}"
 native_invocation = {{ args = ["1"], environment = ["RPM_INSTALL_PREFIX=/"], stdin = "none", chroot = "install-root" }}
 transaction_order = {{ position = "after-payload", after = ["payload"] }}
 timeout_ms = 30000
-rpm_runtime = {{ program = "external", critical = false, criticality = "warning-only", raw_flags = 0 }}
+rpm_runtime = {{ program = "external", criticality = "warning-only", raw_flags = 0 }}
 "#
         );
 

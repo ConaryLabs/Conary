@@ -135,7 +135,7 @@ pub async fn cmd_adopt_refresh(
     let pkg_mgr = SystemPackageManager::resolve(requested_manager)?;
     if !pkg_mgr.is_available() {
         return Err(anyhow::anyhow!(
-            "No supported package manager found. Conary supports RPM, dpkg, and pacman."
+            "No supported package manager found. Conary supports RPM, dpkg, pacman, and eopkg."
         ));
     }
 
@@ -516,15 +516,19 @@ fn replace_refresh_children_for_package(
         let native_identity_json = serde_json::to_string(native_identity)?;
         tx.execute(
             "UPDATE troves SET version = ?1, architecture = ?2, description = ?3,
-             installed_by_changeset_id = ?4, native_package_identity_json = ?5
-             WHERE id = ?6",
+             installed_by_changeset_id = ?4, native_package_identity_json = ?5,
+             debian_multi_arch = ?6
+             WHERE id = ?7",
             rusqlite::params![
                 sys_ver,
                 sys_arch,
                 sys_desc,
                 changeset_id,
                 native_identity_json,
-                trove_id
+                native_identity
+                    .debian_multi_arch()
+                    .map(conary_core::repository::dependency_model::DebianMultiArch::as_str),
+                trove_id,
             ],
         )?;
 
@@ -627,6 +631,13 @@ fn query_all_current(pkg_mgr: SystemPackageManager) -> Result<Vec<CurrentNativeP
                 description: record.info.description,
             })
             .collect(),
+        SystemPackageManager::Eopkg => conary_core::packages::eopkg::query::query_all_packages()?
+            .into_iter()
+            .map(|record| CurrentNativePackage {
+                identity: record.identity,
+                description: record.info.description,
+            })
+            .collect(),
         _ => return Err(anyhow::anyhow!("Unsupported package manager")),
     };
     Ok(packages)
@@ -644,6 +655,10 @@ fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<
             .map_err(|e| anyhow::anyhow!("DPKG file query failed for '{name}': {e}"))?,
         SystemPackageManager::Pacman => pacman_query::query_package_files(name)
             .map_err(|e| anyhow::anyhow!("Pacman file query failed for '{name}': {e}"))?,
+        SystemPackageManager::Eopkg => {
+            conary_core::packages::eopkg::query::query_package_files(name)
+                .map_err(|e| anyhow::anyhow!("eopkg file query failed for '{name}': {e}"))?
+        }
         _ => return Ok(Vec::new()),
     };
     Ok(raw
@@ -802,21 +817,43 @@ mod tests {
             VersionScheme::Debian,
         );
         trove.architecture = Some(architecture.to_string());
-        trove.native_package_identity =
-            Some(InstalledPackageIdentity::dpkg(selector, "libc6", version, architecture).unwrap());
+        trove.debian_multi_arch =
+            Some(conary_core::repository::dependency_model::DebianMultiArch::Same);
+        trove.native_package_identity = Some(
+            InstalledPackageIdentity::dpkg(
+                selector,
+                "libc6",
+                version,
+                architecture,
+                conary_core::repository::dependency_model::DebianMultiArch::Same,
+            )
+            .unwrap(),
+        );
         trove
     }
 
     #[test]
     fn multiarch_refresh_matches_the_intended_native_variant() {
         let amd64 = CurrentNativePackage {
-            identity: InstalledPackageIdentity::dpkg("libc6:amd64", "libc6", "2.42-1", "amd64")
-                .unwrap(),
+            identity: InstalledPackageIdentity::dpkg(
+                "libc6:amd64",
+                "libc6",
+                "2.42-1",
+                "amd64",
+                conary_core::repository::dependency_model::DebianMultiArch::Same,
+            )
+            .unwrap(),
             description: None,
         };
         let i386 = CurrentNativePackage {
-            identity: InstalledPackageIdentity::dpkg("libc6:i386", "libc6", "2.41-1", "i386")
-                .unwrap(),
+            identity: InstalledPackageIdentity::dpkg(
+                "libc6:i386",
+                "libc6",
+                "2.41-1",
+                "i386",
+                conary_core::repository::dependency_model::DebianMultiArch::Same,
+            )
+            .unwrap(),
             description: None,
         };
         let current = vec![amd64, i386];

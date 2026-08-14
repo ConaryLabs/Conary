@@ -1,11 +1,12 @@
 [package]
 name = "remi"
-version = "0.9.5"
-edition = "2024"
-rust-version = "1.96"
-authors = ["Conary Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
 description = "Remi package server for Conary"
-license = "MIT"
+license.workspace = true
 
 [dependencies]
 conary-bootstrap = { path = "../../crates/conary-bootstrap" }
@@ -73,6 +74,8 @@ flate2.workspace = true
 
 [dev-dependencies]
 tar.workspace = true
+liblzma.workspace = true
+zip.workspace = true
 
 [[bin]]
 name = "remi"

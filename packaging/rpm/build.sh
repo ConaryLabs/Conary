@@ -14,7 +14,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SPEC="$SCRIPT_DIR/conary.spec"
 OUTPUT="$SCRIPT_DIR/output"
 
-VERSION=$(grep '^version' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"
+bash "$REPO_ROOT/scripts/release-matrix.sh" assert-owned-version suite "$VERSION"
 NAME="conary"
 TARNAME="$NAME-$VERSION"
 
@@ -123,8 +124,13 @@ else
 fi
 
 shopt -s nullglob
-rpm_outputs=("$OUTPUT/$NAME-$VERSION-"*.x86_64.rpm)
-if [[ ${#rpm_outputs[@]} -ne 1 || ! -s "${rpm_outputs[0]:-}" || -L "${rpm_outputs[0]:-}" ]]; then
+rpm_outputs=("$OUTPUT"/*.rpm)
+versioned_rpm_outputs=("$OUTPUT/$NAME-$VERSION-"*.x86_64.rpm)
+if [[ ${#rpm_outputs[@]} -ne 1 ||
+      ${#versioned_rpm_outputs[@]} -ne 1 ||
+      "${rpm_outputs[0]:-}" != "${versioned_rpm_outputs[0]:-}" ||
+      ! -s "${rpm_outputs[0]:-}" ||
+      -L "${rpm_outputs[0]:-}" ]]; then
     echo "Expected exactly one $NAME $VERSION x86_64 RPM, found ${#rpm_outputs[@]}" >&2
     exit 1
 fi

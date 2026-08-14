@@ -491,14 +491,6 @@ pub struct CompositeChunkFetcher {
 }
 
 impl CompositeChunkFetcher {
-    /// Create a new composite fetcher
-    pub fn new(fetchers: Vec<Arc<dyn ChunkFetcher>>) -> Self {
-        Self {
-            fetchers,
-            cache: None,
-        }
-    }
-
     /// Create with automatic caching of fetched chunks
     pub fn with_cache(fetchers: Vec<Arc<dyn ChunkFetcher>>, cache_dir: impl AsRef<Path>) -> Self {
         Self {
@@ -625,68 +617,6 @@ impl ChunkFetcher for CompositeChunkFetcher {
     }
 }
 
-/// Builder for creating chunk fetcher chains
-pub struct ChunkFetcherBuilder {
-    fetchers: Vec<Arc<dyn ChunkFetcher>>,
-    cache_dir: Option<PathBuf>,
-}
-
-impl ChunkFetcherBuilder {
-    /// Create a new builder
-    pub fn new() -> Self {
-        Self {
-            fetchers: Vec::new(),
-            cache_dir: None,
-        }
-    }
-
-    /// Add a local cache as the first fetcher
-    pub fn with_local_cache(mut self, cache_dir: impl AsRef<Path>) -> Self {
-        let cache = LocalCacheFetcher::new(&cache_dir);
-        self.fetchers.insert(0, Arc::new(cache));
-        self.cache_dir = Some(cache_dir.as_ref().to_path_buf());
-        self
-    }
-
-    /// Add an HTTP fetcher
-    pub fn with_http(mut self, base_url: &str) -> Result<Self> {
-        let fetcher = HttpChunkFetcher::new(base_url)?;
-        self.fetchers.push(Arc::new(fetcher));
-        Ok(self)
-    }
-
-    /// Add an HTTP fetcher with custom concurrency
-    pub fn with_http_concurrent(mut self, base_url: &str, max_concurrent: usize) -> Result<Self> {
-        let fetcher = HttpChunkFetcher::builder(base_url)
-            .max_concurrent(max_concurrent)
-            .verify_hashes(true)
-            .build()?;
-        self.fetchers.push(Arc::new(fetcher));
-        Ok(self)
-    }
-
-    /// Add a custom fetcher
-    pub fn with_fetcher(mut self, fetcher: Arc<dyn ChunkFetcher>) -> Self {
-        self.fetchers.push(fetcher);
-        self
-    }
-
-    /// Build the composite fetcher
-    pub fn build(self) -> CompositeChunkFetcher {
-        if let Some(cache_dir) = self.cache_dir {
-            CompositeChunkFetcher::with_cache(self.fetchers, cache_dir)
-        } else {
-            CompositeChunkFetcher::new(self.fetchers)
-        }
-    }
-}
-
-impl Default for ChunkFetcherBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,15 +656,6 @@ mod tests {
         assert!(HttpChunkFetcher::verify_hash("wrong", data).is_err());
     }
 
-    #[test]
-    fn test_builder() {
-        let builder = ChunkFetcherBuilder::new().with_local_cache("/tmp/test-cache");
-
-        let composite = builder.build();
-        assert_eq!(composite.fetchers.len(), 1);
-        assert_eq!(composite.fetchers[0].name(), "local-cache");
-    }
-
     #[tokio::test]
     async fn test_local_cache_store_and_fetch() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -766,7 +687,7 @@ mod tests {
         cache.store(&hash, data).await.unwrap();
 
         // Create composite with just cache (no network)
-        let composite = CompositeChunkFetcher::new(vec![Arc::new(cache)]);
+        let composite = CompositeChunkFetcher::with_cache(vec![Arc::new(cache)], temp_dir.path());
 
         // Should find cached chunk
         let result = composite.fetch(&hash).await.unwrap();

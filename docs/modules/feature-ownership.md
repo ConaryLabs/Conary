@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-06
-revision: 65
-summary: Route feature ownership through typed database rebuilds, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
+last_updated: 2026-08-13
+revision: 71
+summary: Route feature ownership through typed database rebuilds, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -189,6 +189,8 @@ mutation flows for local package operations.
 `apps/conary/src/commands/install/batch.rs`;
 `apps/conary/src/commands/install/batch/config.rs`;
 `apps/conary/src/commands/install/batch/execution.rs`;
+`apps/conary/src/commands/install/batch/promises.rs`;
+`apps/conary/src/commands/install/batch/witness_universe.rs`;
 `apps/conary/src/commands/generation/selected_root.rs`;
 `apps/conary/src/commands/generation/config_transaction.rs`;
 `apps/conary/src/commands/generation/publication.rs`;
@@ -204,7 +206,6 @@ mutation flows for local package operations.
 `apps/conary/src/commands/install/restore/`;
 `apps/conary/src/commands/update/mod.rs`;
 `apps/conary/src/commands/update/package.rs`;
-`apps/conary/src/commands/update/source_policy.rs`;
 `apps/conary/src/commands/update/selection.rs`;
 `apps/conary/src/commands/update/adopted_authority.rs`;
 `apps/conary/src/commands/update/collection.rs`;
@@ -314,8 +315,11 @@ redaction, the old-only payload visibility boundary, and execution without a
 source package manager or its database. Diagnostic shell or command
 classifications must not select, suppress, or reorder lifecycle events.
 The selected-root session owns the single runtime mutation lock before it
-materializes database or generation authority and retains that lock through
-candidate persistence, SQLite commit, and publication. Rollback is one
+prepares database or generation authority. A debt-free current generation uses
+its verified composefs artifact plus typed mutable state directly; recoverable
+candidates, first-generation database state, and retained try sessions keep
+explicit materialization boundaries. The lock remains held through candidate
+persistence, SQLite commit, and publication. Rollback is one
 serialized immediate SQLite transaction: forward mutations and compensating
 rollback rows have distinct typed lineage, and applied rollback rows never
 block the next effective LIFO rollback.
@@ -336,8 +340,10 @@ directory-materialization contracts.
 
 **Capability:** preserve migration continuity for existing native
 package-manager state, support explicit takeover, recover selected-generation
-handoff state, and provide non-destructive escape hatches. Adoption is not the
-foreign-package acquisition or cross-distro execution path.
+handoff state, provide non-destructive escape hatches, and convert an adopted
+package only after exact native-artifact re-resolution and payload equivalence.
+Adoption itself is not the foreign-package acquisition or cross-distro
+execution path; the verified resulting CCS enters that path separately.
 
 **Start here:** `apps/conary/src/cli/system.rs` ->
 `apps/conary/src/dispatch/system.rs` ->
@@ -350,14 +356,13 @@ foreign-package acquisition or cross-distro execution path.
 `apps/conary/src/commands/adopt/status.rs`;
 `apps/conary/src/commands/adopt/unadopt.rs`;
 `apps/conary/src/commands/adopt/native_handoff.rs`;
-`docs/modules/source-selection.md`; `docs/ARCHITECTURE.md`. Reintroducing
-adopted-package CCS conversion requires exact native-artifact re-resolution
-and is tracked by GitHub issue #68; installed state alone is not lifecycle
-authority.
+`apps/conary/src/commands/adopt/convert.rs` and
+`apps/conary/src/commands/adopt/convert/tests/`;
+`docs/modules/source-selection.md`; `docs/ARCHITECTURE.md`. Installed state
+alone is never lifecycle authority.
 
 **Neighbor systems:** `apps/conary/src/commands/update/mod.rs`;
 `apps/conary/src/commands/update/package.rs`;
-`apps/conary/src/commands/update/source_policy.rs`;
 `apps/conary/src/commands/update/selection.rs`;
 `apps/conary/src/commands/update/adopted_authority.rs`;
 `apps/conary/src/commands/update/collection.rs`;
@@ -368,7 +373,8 @@ authority.
 **Paths:** `apps/conary/src/commands/adopt/*`.
 
 **Focused proof:** `cargo test -p conary --lib adopt::native_handoff`;
-`cargo test -p conary --lib adopt::unadopt`.
+`cargo test -p conary --lib adopt::unadopt`;
+`cargo test -p conary --lib commands::adopt::convert`.
 
 **Interaction gate:** `cargo run -p conary-test -- list`;
 `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3`
@@ -378,15 +384,19 @@ when selected-generation handoff behavior changes.
 `docs/llms/subsystem-map.md`; `docs/INTEGRATION-TESTING.md`.
 
 **Safety notes:** do not silently take over adopted packages or erase native
-package-manager authority without an explicit takeover path.
+package-manager authority without an explicit takeover path. Adopted
+conversion must hold the runtime mutation lock before installed authority
+reads; accept only exact enrolled source/trust/stream authority; verify identity
+and the complete payload before conversion; and publish the signed CCS path and
+database record atomically.
 
 ## Declarative System Models And Replatform Planning
 
 **Slug:** model
 
 **Capability:** diff, apply, check, snapshot, publish, lock, update, and
-remote-diff declarative system model files while preserving source-policy and
-replatform convergence behavior.
+remote-diff declarative system model files while preserving package ownership
+convergence and reproducible planning behavior.
 
 **Start here:** `apps/conary/src/commands/model.rs`;
 `apps/conary/src/commands/model/context.rs`;
@@ -404,7 +414,7 @@ replatform convergence behavior.
 `crates/conary-core/src/model/replatform.rs`;
 `docs/modules/source-selection.md`.
 
-**Neighbor systems:** install/remove execution, update source-policy selection,
+**Neighbor systems:** install/remove execution, exact-source update selection,
 repository remote include cache, derived package builds, live-host mutation
 acknowledgement, and conaryd package-job mutation intent.
 
@@ -422,10 +432,10 @@ behavior or live-mutation safety changes.
 **Docs to update:** `docs/modules/source-selection.md`;
 `docs/llms/subsystem-map.md`; `docs/ARCHITECTURE.md`.
 
-**Safety notes:** preserve `model check` drift exit code 2, source-policy
-persistence semantics, executable replatform planning boundaries, lockfile
+**Safety notes:** preserve `model check` drift exit code 2, package ownership
+convergence, executable replatform planning boundaries, lockfile
 reproducibility, remote include cache behavior, and refusal-before-live-mutation
-gates.
+gates. Declarative models do not own global repository source state.
 
 ## Repository Metadata, Requirements, And SAT Resolution
 
@@ -434,13 +444,24 @@ gates.
 **Capability:** authenticate and parse native repository metadata into
 source-scheme-aware relations, persist exact requirement groups, resolve
 providers through the SAT solver, and carry the selected relation graph into
-package transactions.
+package transactions. Discover, preview, and transactionally take ownership of
+native repository declarations as drift-detected selected-root projections.
 
 **Start here:** `crates/conary-core/src/repository/trust.rs`;
+`crates/conary-core/src/repository/declarations/`;
+`docs/specs/native-repository-declarations.md`;
+`docs/specs/native-repository-trust-import.md`;
+`docs/specs/native-source-identity-policy.md`;
+`docs/specs/native-repository-takeover.md`;
+`crates/conary-core/src/repository/declarations/takeover.rs`;
+`apps/conary/src/commands/repository_takeover.rs`;
 `crates/conary-core/src/repository/trust/openpgp.rs`;
 `crates/conary-core/src/repository/trust/openpgp/arch/`;
 `crates/conary-core/src/repository/parsers/`;
 `crates/conary-core/src/repository/parsers/fedora/metalink.rs`;
+`crates/conary-core/src/repository/parsers/fedora/repomd.rs`;
+`crates/conary-core/src/repository/parsers/fedora/files.rs`;
+`crates/conary-core/src/repository/parsers/fedora/filelists.rs`;
 `crates/conary-core/src/repository/parsers/fedora/provides.rs`;
 `crates/conary-core/src/repository/sync.rs`;
 `crates/conary-core/src/repository/download.rs`;
@@ -456,6 +477,8 @@ package transactions.
 `crates/conary-core/src/resolver/sat.rs`;
 `crates/conary-core/src/resolver/sat/`;
 `crates/conary-core/src/transaction/package_relations.rs`;
+`crates/conary-core/src/db/models/repository/source.rs`;
+`crates/conary-core/src/db/models/repository/source/`;
 `crates/conary-core/src/db/models/repository/`;
 `crates/conary-core/src/db/models/installed_requirement_atom.rs`;
 `crates/conary-core/src/db/models/installed_requirement_group.rs`;
@@ -466,15 +489,21 @@ selection; installed package state; model replatform planning; Remi repository
 manifests, admin routes, and hosted feed configuration.
 
 **Paths:** `crates/conary-core/src/repository/*`;
+`crates/conary-core/tests/fixtures/repository_declarations/*`;
 `crates/conary-core/tests/fixtures/rpm/*`;
 `crates/conary-core/src/resolver/*`;
 `crates/conary-core/src/transaction/package_relations.rs`;
 `crates/conary-core/src/transaction/package_relations/*`;
+`crates/conary-core/src/db/models/repository/source.rs`;
+`crates/conary-core/src/db/models/repository/source/*`;
 `crates/conary-core/src/db/models/repository/*`;
 `crates/conary-core/src/db/models/installed_requirement_atom.rs`;
-`crates/conary-core/src/db/models/installed_requirement_group.rs`.
+`crates/conary-core/src/db/models/installed_requirement_group.rs`;
+`apps/conary/src/commands/repository_takeover.rs`.
 
 **Focused proof:** `cargo test -p conary-core repository::trust`;
+`cargo test -p conary-core repository::declarations`;
+`cargo test -p conary-core repository::declarations::takeover`;
 `cargo test -p conary-core repository::parsers`;
 `cargo test -p conary-core repository::download`;
 `cargo test -p conary-core repository::sync`;
@@ -492,6 +521,12 @@ output changes.
 
 **Docs to update:** `docs/modules/source-selection.md`;
 `docs/llms/subsystem-map.md`; `docs/ARCHITECTURE.md`;
+`docs/specs/native-repository-declarations.md` when declaration grammar,
+selected-root discovery, or its no-enrollment boundary changes;
+`docs/specs/native-repository-trust-import.md` when trust-import disposition,
+evidence, or selected-root key planning changes;
+`docs/specs/native-repository-takeover.md` when enrollment preview, projection
+ownership, drift, or rollback changes;
 `docs/specs/foreign-package-lifecycle-contracts.md` when native relation
 semantics change.
 
@@ -515,6 +550,7 @@ and export raw/qcow2/ISO carriers.
 
 **Start here:** `crates/conary-core/src/generation/builder.rs`;
 `crates/conary-core/src/generation/root_manifest.rs`;
+`crates/conary-core/src/generation/root_manifest/delta.rs`;
 `crates/conary-core/src/generation/root_manifest/scan.rs`;
 `crates/conary-core/src/generation/root_manifest/materialize.rs`;
 `crates/conary-core/src/generation/root_manifest/composefs.rs`;
@@ -623,15 +659,15 @@ OVMF firmware, currently remi-dev.
 **Safety notes:** generation state and artifact formats are persisted behavior;
 schema or format changes require explicit compatibility decisions. Runtime
 generation GC resolves and validates surviving generation manifests,
-recoverable publication candidates, the complete unreversed rollback stack,
+recoverable publication snapshots, the complete unreversed rollback stack,
 current installed/config/derived roots, current converted/public native chunk
 authority, and seed images before any deletion; every live digest must exist
 in the local CAS. `conary system generation gc` is the sole GC surface and
 runs under the canonical mutation lock. Runtime
 Selected-root mutation reads are serialized by the lock owned in
-`apps/conary/src/commands/generation/selected_root.rs`; a candidate may not be
-materialized before that lock is held, and it remains held until the matching
-database state and publication outcome are durable. Runtime
+`apps/conary/src/commands/generation/selected_root.rs`; lower authority may not
+be prepared or mounted before that lock is held, and it remains held until the
+matching database state and publication outcome are durable. Runtime
 lifecycle work is consumed only for the single generation proven by the kernel
 command line, matching artifact, and database state; skipped generations must
 carry forward unapplied requests. Booted-generation host-interface drift is
@@ -735,6 +771,7 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `crates/conary-core/src/packages/rpm/*`;
 `crates/conary-core/src/packages/deb/*`;
 `crates/conary-core/src/packages/arch/*`;
+`crates/conary-core/src/packages/eopkg/*`;
 `crates/conary-core/src/scriptlet/*`;
 `crates/conary-core/tests/native_abi.rs`;
 `apps/conary/src/commands/ccs/*`;
@@ -743,7 +780,8 @@ metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
 `packaging/ccs/*`;
 `docs/specs/ccs-format-v3.md`;
 `docs/specs/source-package-authority.md`;
-`docs/specs/foreign-package-lifecycle-contracts.md`.
+`docs/specs/foreign-package-lifecycle-contracts.md`;
+`docs/specs/eopkg-source-abi.md`.
 
 **Focused proof:** `cargo test -p conary-core ccs::budget`;
 `cargo test -p conary-core ccs::v3`;
@@ -1006,7 +1044,7 @@ versioned canonical-map exchange.
 `crates/conary-core/src/repository/sync/remi.rs`;
 `docs/modules/source-selection.md`; `docs/modules/remi.md`.
 
-**Neighbor systems:** repository feed profiles, source-policy request scope,
+**Neighbor systems:** repository feed profiles, exact-source request scope,
 Remi repository sync, AppStream and Repology discovery caches, resolver
 canonical expansion, and current-schema rebuilds.
 
@@ -1071,8 +1109,8 @@ or native release upload.
 `docs/llms/subsystem-map.md`.
 
 **Safety notes:** configured public feed IDs are exact and narrow:
-`fedora-44`, `ubuntu-26.04`, and `arch`. Remi route slugs are
-`fedora`, `ubuntu`, and `arch`; generic route slugs such as `fedora` and
+`fedora-44`, `ubuntu-26.04`, `arch`, and `solus`. Remi route slugs are
+`fedora`, `ubuntu`, `arch`, and `solus`; generic route slugs such as `fedora` and
 `ubuntu` are not feed IDs. This catalog is not a list of destination distros
 Conary supports.
 
@@ -1128,7 +1166,8 @@ feed profiles.
 `cargo test -p remi conversion`;
 `cargo test -p remi test_upload_fixture`;
 `cargo test -p remi test_public_fixture_get_and_head`;
-`bash scripts/test-remi-deploy-helper.sh`.
+`bash scripts/test-remi-deploy-helper.sh`;
+`bash scripts/test-remi-health.sh`.
 
 **Interaction gate:** `cargo test -p remi`;
 `cargo test -p conary --test conversion_integration golden_conversion` when
@@ -1259,13 +1298,15 @@ task explicitly needs live image proof.
 
 **Slug:** release
 
-**Capability:** construct exact-tag release artifacts, bind CCS and detached
-signatures to the release authority, publish immutable GitHub releases, route
-serialized deployment, and prove installed or live behavior independently.
+**Capability:** synchronize one workspace version, construct four artifact
+products from one exact suite tag, bind CCS and detached signatures to that
+release authority, publish one immutable GitHub release, route serialized
+deployment, and prove installed or live behavior independently.
 
 **Start here:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
 `.github/workflows/release-artifact-proof.yml`;
+`Cargo.toml`; workspace member `Cargo.toml` manifests; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
@@ -1280,6 +1321,7 @@ static-site deployment, and production health proof.
 **Paths:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
 `.github/workflows/release-artifact-proof.yml`;
+`Cargo.toml`; `apps/*/Cargo.toml`; `crates/*/Cargo.toml`; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
@@ -1304,19 +1346,25 @@ claimed.
 `docs/roadmaps/external-tester-milestone.md`;
 `docs/llms/subsystem-map.md`.
 
-**Safety notes:** published tags and releases are immutable evidence. A live
-release must come from the exact canonical tag at a reviewed commit; dry-run
-artifact proof is not publication or production proof. Release signing secrets
-must never be logged or persisted in artifacts. A successful workflow dispatch
-is not deployment proof: wait for terminal CI, then verify installed binaries,
-served artifacts, signatures, and live health independently.
+**Safety notes:** published tags and releases are immutable evidence. The
+workspace has one suite version and one current `vMAJOR.MINOR.PATCH` tag route;
+artifact products do not own independent version baselines or Cargo-registry
+publication. A live release must come from the exact canonical tag at a
+reviewed commit already reachable from `main`. The active suite-tag rule must
+reject updates and deletions of `v*` tags from creation onward; GitHub's
+immutable-release enforcement must then lock the published tag and assets.
+Dry-run artifact proof is not publication or production proof. Release signing
+secrets must never be logged or persisted in artifacts. A successful workflow
+dispatch is not deployment proof: wait for terminal CI, then verify installed
+binaries, served artifacts, signatures, and live health independently.
 
 ## conary-test Integration Execution
 
 **Slug:** conary-test
 
 **Capability:** list, validate, and execute declarative integration suites,
-including slow QEMU/KVM proof when release evidence needs it.
+including slow QEMU/KVM proof when release evidence needs it. `conary-test` is
+a local CLI and engine; Remi owns networked test-data and MCP surfaces.
 
 **Start here:** `apps/conary-test/src/`;
 `apps/conary-test/src/suite_inventory.rs`;
@@ -1331,6 +1379,9 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `apps/conary/tests/fixtures/*`;
 `apps/conary/tests/integration/remi/containers/*`;
 `apps/conary/tests/integration/remi/manifests/*`;
+`scripts/build-static-conary.sh`;
+`scripts/kernel-header-roots.sh`;
+`.github/actions/build-static-conary/action.yml`;
 `.github/workflows/pr-gate.yml`.
 
 **Focused proof:** `cargo run -p conary-test -- list`;
@@ -1339,7 +1390,8 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
 `cargo test -p conary-test native_cross_source_`.
 
-**Interaction gate:** `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
+**Interaction gate:** `bash scripts/build-static-conary.sh`;
+`cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
 `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3`;
 run `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro <distro> --phase 4`
 for each configured distro when native conversion/lifecycle behavior or image
@@ -1352,32 +1404,39 @@ build-context staging changes.
 need parser proof and migration or defaulting decisions. Suite names in
 `--suite` arguments use the manifest filename stem, such as
 `phase4-native-pm-parity`, not the human-readable title shown by
-`cargo run -p conary-test -- list`. Distro image source staging is selected by
-the typed `build_context` field, never by matching the distro key.
+`cargo run -p conary-test -- list`. Which Conary binary a distro image stages is
+selected by the typed `build_context` field, never by matching the distro key.
+The static choice fails closed rather than falling back to the host build, so an
+image build requires `scripts/build-static-conary.sh` to have produced its
+artifact first. Corpus cases
+must carry versioned runtime evidence with exact role-tagged artifact digests,
+typed digest authority, target capabilities, and canonically ordered stage
+checkpoints; report aggregation uses typed stage/failure discriminants and
+never diagnostic text. The declared and emitted case counts must agree.
 
 ## Agent/MCP Operation Surfaces
 
 **Slug:** agent-mcp
 
 **Capability:** expose transport-neutral operation vocabulary and MCP adapters
-for Conary, Remi, and `conary-test` automation.
+for Conary and Remi automation. `conary-test` no longer owns a network or MCP
+server.
 
 **Start here:** `crates/conary-agent-contract/src/`;
 `crates/conary-mcp/src/`; `apps/remi/src/server/mcp.rs`;
-`apps/conary-test/src/server/mcp.rs`; `docs/operations/infrastructure.md`.
+`docs/operations/infrastructure.md`.
 
-**Neighbor systems:** HTTP handlers, service-layer methods, operation risk
-labels, resource references, and authentication.
+**Neighbor systems:** Remi HTTP handlers, operation risk labels, resource
+references, and authentication.
 
 **Paths:** `crates/conary-agent-contract/*`;
-`crates/conary-mcp/*`; `apps/remi/src/server/mcp.rs`;
-`apps/conary-test/src/server/mcp.rs`.
+`crates/conary-mcp/*`; `apps/remi/src/server/mcp.rs`.
 
 **Focused proof:** `cargo test -p conary-agent-contract`;
 `cargo test -p conary-mcp`.
 
-**Interaction gate:** `cargo test -p remi`;
-`cargo test -p conary-test` when adapter changes call service behavior.
+**Interaction gate:** `cargo test -p remi` when adapter changes call service
+behavior.
 
 **Docs to update:** `docs/operations/infrastructure.md`;
 `docs/llms/README.md`; `docs/llms/subsystem-map.md`.

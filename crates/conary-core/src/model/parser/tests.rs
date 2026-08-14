@@ -3,7 +3,6 @@
 //! Focused parser and model-policy tests.
 
 use super::*;
-use crate::repository::resolution_policy::DependencyMixingPolicy;
 
 fn minimal_model_toml() -> &'static str {
     r#"
@@ -416,56 +415,6 @@ mixing = "guarded"
 }
 
 #[test]
-fn test_parse_source_policy_allowlist_and_pin() {
-    let input = r#"
-[model]
-version = 1
-
-[system]
-allowed_distros = ["fedora-44", "arch"]
-
-[system.pin]
-distro = "arch"
-strength = "strict"
-"#;
-    let model: SystemModel = toml::from_str(input).unwrap();
-    assert_eq!(
-        model.system.allowed_distros,
-        vec!["fedora-44".to_string(), "arch".to_string()]
-    );
-    let pin = model.system.effective_pin().expect("expected source pin");
-    assert_eq!(pin.distro, "arch");
-    assert_eq!(pin.strength, DependencyMixingPolicy::Strict);
-}
-
-#[test]
-fn source_policy_allowlist_requires_unique_exact_public_profiles() {
-    for allowed_distros in [
-        r#"["fedora"]"#,
-        r#"["rpm"]"#,
-        r#"["fedora-44", "fedora-44"]"#,
-    ] {
-        let input = format!(
-            r#"
-[model]
-version = 1
-
-[system]
-allowed_distros = {allowed_distros}
-"#
-        );
-        let error = toml::from_str::<SystemModel>(&input)
-            .expect_err("invalid source allowlist must fail")
-            .to_string();
-        assert!(
-            error.contains("unsupported public distro profile")
-                || error.contains("duplicate public distro profile"),
-            "{allowed_distros}: {error}"
-        );
-    }
-}
-
-#[test]
 fn removed_package_overrides_are_rejected() {
     let input = r#"
 [model]
@@ -487,8 +436,7 @@ fn test_default_source_policy_has_no_pin() {
 version = 1
 "#;
     let model: SystemModel = toml::from_str(input).unwrap();
-    assert!(model.system.allowed_distros.is_empty());
-    assert!(model.system.effective_pin().is_none());
+    assert_eq!(model.system.convergence, ConvergenceIntent::CasBacked);
 }
 
 #[test]
@@ -528,43 +476,13 @@ convergence = "full-ownership"
 }
 
 #[test]
-fn test_parse_convergence_with_pin_and_allowlist() {
-    let input = r#"
-[model]
-version = 1
-
-[system]
-convergence = "full-ownership"
-allowed_distros = ["arch", "fedora-44"]
-
-[system.pin]
-distro = "arch"
-strength = "strict"
-"#;
-    let model: SystemModel = toml::from_str(input).unwrap();
-    assert_eq!(model.system.convergence, ConvergenceIntent::FullOwnership);
-    assert_eq!(model.system.allowed_distros, ["arch", "fedora-44"]);
-    let pin = model.system.effective_pin().unwrap();
-    assert_eq!(pin.distro, "arch");
-    assert_eq!(pin.strength, DependencyMixingPolicy::Strict);
-}
-
-#[test]
 fn test_convergence_intent_roundtrip_via_toml() {
     let mut model = SystemModel::new();
     model.system.convergence = ConvergenceIntent::CasBacked;
-    model.system.pin = Some(SourcePinConfig {
-        distro: "arch".to_string(),
-        strength: DependencyMixingPolicy::Strict,
-    });
-
     let toml = model.to_toml().unwrap();
     let parsed = parse_model_string(&toml).unwrap();
 
     assert_eq!(parsed.system.convergence, ConvergenceIntent::CasBacked);
-    let pin = parsed.system.effective_pin().unwrap();
-    assert_eq!(pin.distro, "arch");
-    assert_eq!(pin.strength, DependencyMixingPolicy::Strict);
 }
 
 #[test]
@@ -624,81 +542,9 @@ fn removed_selection_mode_is_rejected() {
 }
 
 #[test]
-fn test_source_policy_with_distro_pin_is_configured() {
-    let config = SystemConfig {
-        pin: Some(SourcePinConfig {
-            distro: "arch".to_string(),
-            strength: DependencyMixingPolicy::Strict,
-        }),
-        ..SystemConfig::default()
-    };
-    assert!(config.is_source_policy_configured());
-}
-
-#[test]
-fn unsupported_source_pin_strength_is_rejected() {
-    let input = r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "arch"
-strength = "hard"
-"#;
-    let error = toml::from_str::<SystemModel>(input)
-        .expect_err("source pin strength must be one exact typed policy")
-        .to_string();
-    assert!(error.contains("unknown variant `hard`"), "{error}");
-}
-
-#[test]
-fn source_pin_requires_explicit_strength() {
-    let input = r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "arch"
-"#;
-    let error = toml::from_str::<SystemModel>(input)
-        .expect_err("a source pin without typed strength must fail")
-        .to_string();
-    assert!(error.contains("missing field `strength`"), "{error}");
-}
-
-#[test]
-fn unsupported_source_pin_profile_is_rejected() {
-    let input = r#"
-[model]
-version = 1
-
-[system.pin]
-distro = "fedora"
-strength = "guarded"
-"#;
-    let error = toml::from_str::<SystemModel>(input)
-        .expect_err("source pin must name one exact public profile")
-        .to_string();
-    assert!(
-        error.contains("unsupported public distro profile 'fedora'"),
-        "{error}"
-    );
-}
-
-#[test]
 fn test_source_policy_with_track_only_convergence_is_configured() {
     let config = SystemConfig {
         convergence: ConvergenceIntent::TrackOnly,
-        ..SystemConfig::default()
-    };
-    assert!(config.is_source_policy_configured());
-}
-
-#[test]
-fn test_source_policy_with_allowed_distros_is_configured() {
-    let config = SystemConfig {
-        allowed_distros: vec!["fedora-44".to_string()],
-        ..SystemConfig::default()
     };
     assert!(config.is_source_policy_configured());
 }

@@ -9,7 +9,7 @@ fn catalog_contains_exact_public_profiles() {
         .iter()
         .map(|profile| profile.id())
         .collect();
-    assert_eq!(ids, vec!["fedora-44", "ubuntu-26.04", "arch"]);
+    assert_eq!(ids, vec!["fedora-44", "ubuntu-26.04", "arch", "solus"]);
 }
 
 #[test]
@@ -48,6 +48,9 @@ fn route_lookup_returns_route_metadata_and_matching_profile_ids() {
     let arch = route_by_slug("arch").expect("arch route");
     assert_eq!(arch.public_profile_ids(), &["arch"]);
 
+    let solus = route_by_slug("solus").expect("solus route");
+    assert_eq!(solus.public_profile_ids(), &["solus"]);
+
     assert!(route_by_slug("debian").is_none());
     assert_eq!(
         profile_for_remi_route("fedora").map(SupportedProfile::id),
@@ -65,6 +68,13 @@ fn remi_target_lookup_requires_exact_public_ids() {
     assert!(profile_for_remi_target("fedora").is_none());
     assert!(profile_for_remi_target("ubuntu").is_none());
     assert!(profile_for_remi_target("debian").is_none());
+}
+
+#[test]
+fn solus_profile_uses_eopkg_format_and_version_scheme() {
+    let profile = profile_by_public_id("solus").expect("Solus profile");
+    assert_eq!(profile.package_format(), ProfilePackageFormat::Eopkg);
+    assert_eq!(profile.version_scheme(), VersionScheme::Eopkg);
 }
 
 #[test]

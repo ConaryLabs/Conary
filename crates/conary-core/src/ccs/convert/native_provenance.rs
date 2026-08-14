@@ -8,6 +8,7 @@
 
 use crate::packages::arch::ArchPackage;
 use crate::packages::deb::DebPackage;
+use crate::packages::eopkg::EopkgPackage;
 use crate::packages::rpm::RpmPackage;
 use crate::packages::traits::PackageFormat;
 use crate::provenance::{
@@ -306,7 +307,7 @@ impl NativeProvenance {
     /// provenance metadata.
     ///
     /// # Arguments
-    /// * `format` - Package format ("rpm", "deb", "arch")
+    /// * `format` - Package format ("rpm", "deb", "arch", "eopkg")
     /// * `checksum` - Checksum of the original package
     /// * `path` - Path to the package file
     ///
@@ -337,6 +338,13 @@ impl NativeProvenance {
                 let package = ArchPackage::parse(path_str)
                     .with_context(|| format!("failed to parse Arch provenance from {path:?}"))?;
                 Ok(Self::from_arch(&package, checksum))
+            }
+            "eopkg" => {
+                EopkgPackage::parse(path_str)
+                    .with_context(|| format!("failed to parse eopkg provenance from {path:?}"))?;
+                let mut provenance = Self::new("eopkg", checksum);
+                provenance.signature = NativeSignatureEvidence::NotObserved;
+                Ok(provenance)
             }
             _ => bail!("unsupported native provenance format {format:?}"),
         }
@@ -607,7 +615,7 @@ mod tests {
 
     #[test]
     fn test_native_provenance_all_formats() {
-        for format in &["rpm", "deb", "arch"] {
+        for format in &["rpm", "deb", "arch", "eopkg"] {
             let prov = NativeProvenance::new(format, "sha256:test");
             assert_eq!(prov.format, *format);
         }

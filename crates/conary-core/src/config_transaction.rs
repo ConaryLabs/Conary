@@ -50,12 +50,13 @@ pub enum ConfigSuffix {
     DpkgOld,
     PacNew,
     PacSave,
+    EopkgNew,
     ConaryNew,
     ConarySave,
 }
 
 impl ConfigSuffix {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::RpmNew,
         Self::RpmSave,
         Self::RpmOrig,
@@ -63,6 +64,7 @@ impl ConfigSuffix {
         Self::DpkgOld,
         Self::PacNew,
         Self::PacSave,
+        Self::EopkgNew,
         Self::ConaryNew,
         Self::ConarySave,
     ];
@@ -77,6 +79,7 @@ impl ConfigSuffix {
             Self::DpkgOld => ".dpkg-old",
             Self::PacNew => ".pacnew",
             Self::PacSave => ".pacsave",
+            Self::EopkgNew => ".newconfig",
             Self::ConaryNew => ".conary-new",
             Self::ConarySave => ".conary-save",
         }
@@ -136,6 +139,9 @@ pub fn decide_config_install(
             ConfigSource::Rpm => ConfigInstallDecision::InstallAlternative(ConfigSuffix::RpmNew),
             ConfigSource::Deb => ConfigInstallDecision::InstallAlternative(ConfigSuffix::DpkgDist),
             ConfigSource::Arch => ConfigInstallDecision::InstallAlternative(ConfigSuffix::PacNew),
+            ConfigSource::Eopkg => {
+                ConfigInstallDecision::InstallAlternative(ConfigSuffix::EopkgNew)
+            }
             ConfigSource::Auto if noreplace => {
                 ConfigInstallDecision::InstallAlternative(ConfigSuffix::ConaryNew)
             }
@@ -154,6 +160,7 @@ fn conflicting_update(source: ConfigSource, noreplace: bool) -> ConfigInstallDec
         ConfigSource::Rpm => ConfigInstallDecision::InstallAlternative(ConfigSuffix::RpmNew),
         ConfigSource::Deb => ConfigInstallDecision::InstallAlternative(ConfigSuffix::DpkgDist),
         ConfigSource::Arch => ConfigInstallDecision::InstallAlternative(ConfigSuffix::PacNew),
+        ConfigSource::Eopkg => ConfigInstallDecision::InstallAlternative(ConfigSuffix::EopkgNew),
         ConfigSource::Auto if noreplace => {
             ConfigInstallDecision::InstallAlternative(ConfigSuffix::ConaryNew)
         }
@@ -194,6 +201,7 @@ pub fn decide_config_removal(
     match source {
         ConfigSource::Rpm => ConfigRemovalDecision::SaveCurrent(ConfigSuffix::RpmSave),
         ConfigSource::Arch => ConfigRemovalDecision::RotatePacsaveAndSaveCurrent,
+        ConfigSource::Eopkg => ConfigRemovalDecision::KeepResidual,
         ConfigSource::Auto => ConfigRemovalDecision::SaveCurrent(ConfigSuffix::ConarySave),
         ConfigSource::Deb => ConfigRemovalDecision::KeepResidual,
     }

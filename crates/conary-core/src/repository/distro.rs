@@ -51,7 +51,10 @@ mod tests {
     #[test]
     fn source_feed_names_come_from_exact_public_profile_catalog() {
         let catalog_ids: Vec<_> = source_feeds().into_iter().map(|distro| distro.id).collect();
-        assert_eq!(catalog_ids, vec!["fedora-44", "ubuntu-26.04", "arch"]);
+        assert_eq!(
+            catalog_ids,
+            vec!["fedora-44", "ubuntu-26.04", "arch", "solus"]
+        );
     }
 
     #[test]

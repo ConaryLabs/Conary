@@ -1,0 +1,4 @@
+#!/sbin/openrc-run
+
+description="Conary OpenRC lifecycle conformance fixture"
+command="/bin/true"

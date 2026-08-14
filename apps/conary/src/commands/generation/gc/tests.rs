@@ -1,6 +1,6 @@
 // apps/conary/src/commands/generation/gc/tests.rs
 
-use super::super::selected_root::persist_captured_publication_candidate;
+use super::super::selected_root::persist_captured_publication_snapshot;
 use super::*;
 use crate::commands::{
     FileSnapshot, RollbackSystemAuthority, TroveSnapshot, metadata_with_removed_troves,
@@ -9,6 +9,7 @@ use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::filesystem::CasStore;
 use conary_core::generation::root_manifest::{
     CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry,
+    SelectedRootSnapshot,
 };
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
@@ -139,18 +140,21 @@ fn insert_rollback_bearing_mutation(
             component: None,
         }],
     );
+    let root = SelectedRootSnapshot::capture(conn, &empty_selected_root()).unwrap();
     let metadata = metadata_with_removed_troves(
         vec![snapshot],
         Vec::new(),
-        empty_selected_root(),
+        root,
         RollbackSystemAuthority::default(),
     )
     .unwrap();
     let mut changeset = Changeset::new(description.to_string());
     let id = changeset.insert(conn).unwrap();
     conn.execute(
-        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        rusqlite::params![metadata, id],
+        "UPDATE changesets
+         SET metadata = ?1, rollback_selected_root_snapshot_id = ?2
+         WHERE id = ?3",
+        rusqlite::params![metadata, root.id(), id],
     )
     .unwrap();
     changeset
@@ -198,9 +202,9 @@ fn lifecycle_only_mutable_state_content_survives_generation_gc() {
 }
 
 #[test]
-fn old_recoverable_publication_candidate_content_survives_generation_gc() {
+fn old_recoverable_publication_snapshot_content_survives_generation_gc() {
     let (_temporary, db_path, conn, runtime_root, cas) = fixture();
-    let bytes = b"recoverable candidate state";
+    let bytes = b"recoverable snapshot state";
     let hash = cas.store(bytes).unwrap();
     let root = selected_root_with_mutable_file(&hash, bytes.len() as u64);
     let debt = GenerationPublication::create_pending(
@@ -213,7 +217,7 @@ fn old_recoverable_publication_candidate_content_survives_generation_gc() {
         &Default::default(),
     )
     .unwrap();
-    persist_captured_publication_candidate(&runtime_root, &debt, &root).unwrap();
+    persist_captured_publication_snapshot(&conn, &debt, &root).unwrap();
     let path = object_path(&runtime_root, &hash);
     make_object_older_than_gc_grace(&path);
 
@@ -244,18 +248,21 @@ fn rollback_only_content_survives_generation_gc() {
             component: None,
         }],
     );
+    let root = SelectedRootSnapshot::capture(&conn, &empty_selected_root()).unwrap();
     let metadata = metadata_with_removed_troves(
         vec![snapshot],
         Vec::new(),
-        empty_selected_root(),
+        root,
         RollbackSystemAuthority::default(),
     )
     .unwrap();
     let mut changeset = Changeset::new("remove fixture".to_string());
     let changeset_id = changeset.insert(&conn).unwrap();
     conn.execute(
-        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        rusqlite::params![metadata, changeset_id],
+        "UPDATE changesets
+         SET metadata = ?1, rollback_selected_root_snapshot_id = ?2
+         WHERE id = ?3",
+        rusqlite::params![metadata, root.id(), changeset_id],
     )
     .unwrap();
     changeset

@@ -33,7 +33,6 @@ mod converted;
 mod debian_debconf_state;
 mod delta;
 mod derived;
-mod distro_pin;
 mod download_stats;
 mod file_entry;
 mod flavor;
@@ -45,6 +44,7 @@ mod installed_native_lifecycle_bundle;
 mod installed_requirement_atom;
 mod installed_requirement_group;
 mod label;
+mod lifecycle_event;
 mod metadata;
 mod native_lifecycle_residual_state;
 mod native_publication;
@@ -63,6 +63,7 @@ mod repository_requirement;
 mod resolution;
 mod state;
 mod subpackage;
+mod system_affinity;
 mod trigger;
 mod trigger_engine;
 mod trove;
@@ -88,7 +89,6 @@ pub use converted::{
 pub use debian_debconf_state::DebianDebconfState;
 pub use delta::{DeltaStats, PackageDelta};
 pub use derived::{DerivedOverride, DerivedPackage, DerivedPatch, DerivedStatus, VersionPolicy};
-pub use distro_pin::{DistroPin, SystemAffinity};
 pub use download_stats::{DownloadCount, DownloadStat, GlobalDownloadStats};
 pub use file_entry::{ExistingDirectoryMaterialization, FileEntry};
 pub use flavor::Flavor;
@@ -105,6 +105,7 @@ pub use installed_native_lifecycle_bundle::InstalledNativeLifecycleBundle;
 pub use installed_requirement_atom::InstalledRequirementAtom;
 pub use installed_requirement_group::InstalledRequirementGroup;
 pub use label::{LabelEntry, LabelPathEntry, add_to_path, get_label_path, remove_from_path};
+pub use lifecycle_event::{LifecycleEvent, NewLifecycleEvent};
 pub use metadata::{MetadataTable, get_metadata, set_metadata};
 pub use native_lifecycle_residual_state::NativeLifecycleResidualState;
 pub use native_publication::{
@@ -119,13 +120,18 @@ pub use redirect::{Redirect, RedirectType, ResolveResult};
 pub use remote_collection::{DEFAULT_CACHE_TTL_SECS, RemoteCollection};
 pub use repology_cache::RepologyCacheEntry;
 pub(crate) use repository::version_scheme_from_row;
-pub use repository::{Repository, RepositoryOwnership, RepositoryPackage, SecurityAdvisorySupport};
+pub use repository::{
+    AuthenticatedSnapshotIdentity, NativeSourceEcosystem, NativeSourceStream, Repository,
+    RepositoryOwnership, RepositoryPackage, RepositoryPolicyScope, RepositorySourcePolicy,
+    RepositoryUpdateMode, SecurityAdvisorySupport,
+};
 pub use repository_capability::RepositoryProvide;
 pub use repository_package_key::{RepositoryPackageKey, RepositoryPackageKeyStatus};
 pub use repository_requirement::{RepositoryRequirement, RepositoryRequirementGroup};
 pub use resolution::{CacheTier, PackageResolution, PrimaryStrategy, ResolutionStrategy};
 pub use state::{RestorePlan, StateDiff, StateEngine, StateMember, SystemState};
 pub use subpackage::{RelatedPackages, SubpackageRelationship, show_subpackage_guidance};
+pub use system_affinity::SystemAffinity;
 pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerStatus};
 pub use trigger_engine::TriggerEngine;
 pub use trove::{InstallReason, InstallSource, Trove, TroveType};

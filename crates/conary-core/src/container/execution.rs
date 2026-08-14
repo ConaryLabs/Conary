@@ -2,7 +2,12 @@
 
 use super::*;
 
+mod process_wait;
 mod root_setup;
+
+use process_wait::{
+    ChildWaitOutcome, terminate_and_reap, wait_for_child_until, wait_until_readable,
+};
 
 fn execution_error(kind: ScriptletFailureKind, message: impl Into<String>) -> Error {
     Error::scriptlet(kind, message)
@@ -20,9 +25,36 @@ struct ChildExecution<'a> {
     args: &'a [String],
     env: &'a [(&'a str, &'a str)],
     userns_sync: Option<UserNamespaceSync>,
+    deadline: Instant,
+    enforcement: Option<enforcement::PreparedEnforcement<'a>>,
+}
+
+struct ForkedChild<'a> {
+    stdin_fd: std::os::fd::RawFd,
+    stdout_read_fd: std::os::fd::OwnedFd,
+    stdout_write_fd: std::os::fd::OwnedFd,
+    stderr_read_fd: std::os::fd::OwnedFd,
+    stderr_write_fd: std::os::fd::OwnedFd,
+    userns_request_read_fd: std::os::fd::OwnedFd,
+    userns_ack_write_fd: std::os::fd::OwnedFd,
+    execution: ChildExecution<'a>,
 }
 
 impl Sandbox {
+    fn prepare_enforcement(&self) -> Result<Option<enforcement::PreparedEnforcement<'_>>> {
+        self.config
+            .capability_policy
+            .as_ref()
+            .map(enforcement::prepare_enforcement)
+            .transpose()
+            .map_err(|error| {
+                execution_error(
+                    ScriptletFailureKind::EnforcementSetupFailed,
+                    format!("Capability enforcement preparation failed: {error}"),
+                )
+            })
+    }
+
     /// Create a new sandbox with the given configuration
     pub fn new(config: ContainerConfig) -> Self {
         Self { config }
@@ -227,6 +259,7 @@ impl Sandbox {
         let stdin_path = root_dir.path().join(".conary-stdin");
         fs::write(&stdin_path, stdin)?;
         let stdin_file = File::open(&stdin_path)?;
+        let prepared_enforcement = self.prepare_enforcement()?;
 
         // Set up pipes before fork to capture child stdout/stderr
         let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
@@ -240,6 +273,7 @@ impl Sandbox {
 
         // Fork and execute in isolated namespaces
         let start = Instant::now();
+        let deadline = start.checked_add(self.config.timeout).unwrap_or(start);
 
         match fork_process() {
             Ok(ForkResult::Parent { child }) => {
@@ -253,12 +287,13 @@ impl Sandbox {
                     child,
                     &userns_request_read_fd,
                     &userns_ack_write_fd,
+                    deadline,
                 )?;
                 drop(userns_request_read_fd);
                 drop(userns_ack_write_fd);
 
                 // Wait for child, then read captured output
-                let (code, _, _) = self.wait_for_child(child, start)?;
+                let (code, _, _) = self.wait_for_child(child, deadline)?;
 
                 // Read stdout from pipe
                 let mut stdout_str = String::new();
@@ -273,65 +308,29 @@ impl Sandbox {
                 Ok((code, stdout_str, stderr_str))
             }
             Ok(ForkResult::Child) => {
-                // Child: close read ends of pipes
-                drop(stdout_read_fd);
-                drop(stderr_read_fd);
-                drop(userns_request_read_fd);
-                drop(userns_ack_write_fd);
-
-                if unsafe { libc::dup2(stdin_file.as_raw_fd(), 0) } < 0 {
-                    eprintln!(
-                        "failed to attach sandbox stdin: {}",
-                        std::io::Error::last_os_error()
-                    );
-                    std::process::exit(127);
-                }
-
-                // Redirect stdout and stderr to pipe write ends
-                let mut stdout_target = match adopt_raw_fd(1) {
-                    Ok(fd) => fd,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        std::process::exit(127);
-                    }
-                };
-                let mut stderr_target = match adopt_raw_fd(2) {
-                    Ok(fd) => fd,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        std::process::exit(127);
-                    }
-                };
-                let _ = nix::unistd::dup2(&stdout_write_fd, &mut stdout_target);
-                let _ = nix::unistd::dup2(&stderr_write_fd, &mut stderr_target);
-                // Prevent OwnedFd from closing stdout/stderr when dropped
-                std::mem::forget(stdout_target);
-                std::mem::forget(stderr_target);
-                drop(stdout_write_fd);
-                drop(stderr_write_fd);
-
-                // Child: set up namespaces and execute
-                let result = self.child_setup_and_execute(ChildExecution {
-                    root: root_dir.path(),
-                    program: interpreter,
-                    interpreter_args,
-                    script_path: Some(&script_path),
-                    args,
-                    env,
-                    userns_sync: Some(UserNamespaceSync {
-                        request_fd: userns_request_write_fd,
-                        ack_fd: userns_ack_read_fd,
-                    }),
+                self.run_forked_child(ForkedChild {
+                    stdin_fd: stdin_file.as_raw_fd(),
+                    stdout_read_fd,
+                    stdout_write_fd,
+                    stderr_read_fd,
+                    stderr_write_fd,
+                    userns_request_read_fd,
+                    userns_ack_write_fd,
+                    execution: ChildExecution {
+                        root: root_dir.path(),
+                        program: interpreter,
+                        interpreter_args,
+                        script_path: Some(&script_path),
+                        args,
+                        env,
+                        userns_sync: Some(UserNamespaceSync {
+                            request_fd: userns_request_write_fd,
+                            ack_fd: userns_ack_read_fd,
+                        }),
+                        deadline,
+                        enforcement: prepared_enforcement,
+                    },
                 });
-
-                // Exit with appropriate code
-                match result {
-                    Ok(code) => std::process::exit(code),
-                    Err(err) => {
-                        eprintln!("{err}");
-                        std::process::exit(127);
-                    }
-                }
             }
             Err(e) => {
                 drop(stdout_read_fd);
@@ -360,6 +359,7 @@ impl Sandbox {
         let stdin_path = root_dir.path().join(".conary-stdin");
         fs::write(&stdin_path, stdin)?;
         let stdin_file = File::open(&stdin_path)?;
+        let prepared_enforcement = self.prepare_enforcement()?;
 
         let (stdout_read_fd, stdout_write_fd) = nix::unistd::pipe()
             .map_err(|e| sandbox_error(format!("Failed to create stdout pipe: {e}")))?;
@@ -371,6 +371,7 @@ impl Sandbox {
             .map_err(|e| sandbox_error(format!("Failed to create userns ack pipe: {e}")))?;
 
         let start = Instant::now();
+        let deadline = start.checked_add(self.config.timeout).unwrap_or(start);
 
         match fork_process() {
             Ok(ForkResult::Parent { child }) => {
@@ -383,11 +384,12 @@ impl Sandbox {
                     child,
                     &userns_request_read_fd,
                     &userns_ack_write_fd,
+                    deadline,
                 )?;
                 drop(userns_request_read_fd);
                 drop(userns_ack_write_fd);
 
-                let (code, _, _) = self.wait_for_child(child, start)?;
+                let (code, _, _) = self.wait_for_child(child, deadline)?;
 
                 let mut stdout_str = String::new();
                 let mut stdout_file = std::fs::File::from(stdout_read_fd);
@@ -400,60 +402,29 @@ impl Sandbox {
                 Ok((code, stdout_str, stderr_str))
             }
             Ok(ForkResult::Child) => {
-                drop(stdout_read_fd);
-                drop(stderr_read_fd);
-                drop(userns_request_read_fd);
-                drop(userns_ack_write_fd);
-
-                if unsafe { libc::dup2(stdin_file.as_raw_fd(), 0) } < 0 {
-                    eprintln!(
-                        "failed to attach sandbox stdin: {}",
-                        std::io::Error::last_os_error()
-                    );
-                    std::process::exit(127);
-                }
-
-                let mut stdout_target = match adopt_raw_fd(1) {
-                    Ok(fd) => fd,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        std::process::exit(127);
-                    }
-                };
-                let mut stderr_target = match adopt_raw_fd(2) {
-                    Ok(fd) => fd,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        std::process::exit(127);
-                    }
-                };
-                let _ = nix::unistd::dup2(&stdout_write_fd, &mut stdout_target);
-                let _ = nix::unistd::dup2(&stderr_write_fd, &mut stderr_target);
-                std::mem::forget(stdout_target);
-                std::mem::forget(stderr_target);
-                drop(stdout_write_fd);
-                drop(stderr_write_fd);
-
-                let result = self.child_setup_and_execute(ChildExecution {
-                    root: root_dir.path(),
-                    program,
-                    interpreter_args: &[],
-                    script_path: None,
-                    args,
-                    env,
-                    userns_sync: Some(UserNamespaceSync {
-                        request_fd: userns_request_write_fd,
-                        ack_fd: userns_ack_read_fd,
-                    }),
+                self.run_forked_child(ForkedChild {
+                    stdin_fd: stdin_file.as_raw_fd(),
+                    stdout_read_fd,
+                    stdout_write_fd,
+                    stderr_read_fd,
+                    stderr_write_fd,
+                    userns_request_read_fd,
+                    userns_ack_write_fd,
+                    execution: ChildExecution {
+                        root: root_dir.path(),
+                        program,
+                        interpreter_args: &[],
+                        script_path: None,
+                        args,
+                        env,
+                        userns_sync: Some(UserNamespaceSync {
+                            request_fd: userns_request_write_fd,
+                            ack_fd: userns_ack_read_fd,
+                        }),
+                        deadline,
+                        enforcement: prepared_enforcement,
+                    },
                 });
-
-                match result {
-                    Ok(code) => std::process::exit(code),
-                    Err(err) => {
-                        eprintln!("{err}");
-                        std::process::exit(127);
-                    }
-                }
             }
             Err(e) => {
                 drop(stdout_read_fd);
@@ -596,39 +567,21 @@ impl Sandbox {
     }
 
     /// Wait for child process with timeout
-    fn wait_for_child(&self, child: Pid, start: Instant) -> Result<(i32, String, String)> {
-        loop {
-            // Check timeout
-            if start.elapsed() > self.config.timeout {
-                // Kill the child
-                let _ = kill(child, Signal::SIGKILL);
-                return Err(execution_error(
-                    ScriptletFailureKind::ScriptTimedOut,
-                    format!("Script timed out after {:?}", self.config.timeout),
-                ));
-            }
-
-            // Non-blocking wait
-            match waitpid(child, Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::Exited(_, code)) => {
-                    return Ok((code, String::new(), String::new()));
-                }
-                Ok(WaitStatus::Signaled(_, sig, _)) => {
-                    return Err(execution_error(
-                        ScriptletFailureKind::ScriptExited,
-                        format!("Script killed by signal {sig:?}"),
-                    ));
-                }
-                Ok(WaitStatus::StillAlive) | Ok(_) => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => {
-                    return Err(execution_error(
-                        ScriptletFailureKind::ProcessSetupFailed,
-                        format!("Wait failed: {e}"),
-                    ));
-                }
-            }
+    fn wait_for_child(&self, child: Pid, deadline: Instant) -> Result<(i32, String, String)> {
+        match wait_for_child_until(child, deadline) {
+            Ok(ChildWaitOutcome::Exited(code)) => Ok((code, String::new(), String::new())),
+            Ok(ChildWaitOutcome::Signaled(signal)) => Err(execution_error(
+                ScriptletFailureKind::ScriptExited,
+                format!("Script killed by signal {signal:?}"),
+            )),
+            Ok(ChildWaitOutcome::TimedOut) => Err(execution_error(
+                ScriptletFailureKind::ScriptTimedOut,
+                format!("Script timed out after {:?}", self.config.timeout),
+            )),
+            Err(error) => Err(execution_error(
+                ScriptletFailureKind::ProcessSetupFailed,
+                format!("Wait failed: {error}"),
+            )),
         }
     }
 
@@ -637,7 +590,39 @@ impl Sandbox {
         child: Pid,
         request_fd: &std::os::fd::OwnedFd,
         ack_fd: &std::os::fd::OwnedFd,
+        deadline: Instant,
     ) -> Result<()> {
+        let result =
+            self.complete_user_namespace_handshake_inner(child, request_fd, ack_fd, deadline);
+        if let Err(error) = result {
+            if let Err(cleanup_error) = terminate_and_reap(child) {
+                return Err(execution_error(
+                    ScriptletFailureKind::ProcessSetupFailed,
+                    format!(
+                        "{error}; additionally failed to terminate and reap sandbox child: {cleanup_error}"
+                    ),
+                ));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn complete_user_namespace_handshake_inner(
+        &self,
+        child: Pid,
+        request_fd: &std::os::fd::OwnedFd,
+        ack_fd: &std::os::fd::OwnedFd,
+        deadline: Instant,
+    ) -> Result<()> {
+        if !wait_until_readable(request_fd.as_fd(), deadline).map_err(|error| {
+            sandbox_error(format!("User namespace handshake poll failed: {error}"))
+        })? {
+            return Err(execution_error(
+                ScriptletFailureKind::ScriptTimedOut,
+                format!("Sandbox setup timed out after {:?}", self.config.timeout),
+            ));
+        }
         let mut message = [0_u8; 1];
         let bytes_read = nix::unistd::read(request_fd, &mut message)
             .map_err(|e| sandbox_error(format!("User namespace handshake failed: {e}")))?;
@@ -664,5 +649,47 @@ impl Sandbox {
         nix::unistd::write(ack_fd, b"O")
             .map_err(|e| sandbox_error(format!("User namespace handshake ack failed: {e}")))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handshake_timeout_terminates_and_reaps_child() {
+        let sandbox = Sandbox::new(ContainerConfig::minimal(Duration::from_millis(20)));
+        let (request_read, request_write) = nix::unistd::pipe().expect("request pipe");
+        let (ack_read, ack_write) = nix::unistd::pipe().expect("ack pipe");
+
+        // SAFETY: the child closes owned descriptors, then performs only
+        // async-signal-safe pause/_exit calls.
+        match unsafe { nix::unistd::fork() }.expect("test fork should succeed") {
+            ForkResult::Child => {
+                drop(request_read);
+                drop(ack_write);
+                drop(ack_read);
+                loop {
+                    unsafe { libc::pause() };
+                }
+            }
+            ForkResult::Parent { child } => {
+                drop(request_write);
+                drop(ack_read);
+                let error = sandbox
+                    .complete_user_namespace_handshake(
+                        child,
+                        &request_read,
+                        &ack_write,
+                        Instant::now() + Duration::from_millis(20),
+                    )
+                    .expect_err("silent child must hit the handshake deadline");
+                assert!(error.to_string().contains("Sandbox setup timed out"));
+                assert_eq!(
+                    waitpid(child, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+                    Err(nix::errno::Errno::ECHILD)
+                );
+            }
+        }
     }
 }

@@ -18,16 +18,11 @@ maintainer pivot may close the milestone instead only when a reproducible
 systemic blocker is documented with the affected attempts and chosen next
 action.
 
-The enabling sequence is:
-
-1. W0 Neutral Planning Migration
-2. W1 Integrated Release-Green Baseline
-3. W2 Preview Release and Remi Readiness
-4. W3 First External Tester Loop
-
-W3 is active, but outreach has not started. Its W3a public-readiness gate must
-publish and verify the current onboarding release before the manual tester
-posts begin.
+The synchronized `v0.15.0` suite and its released-package proof are complete.
+The active workstream is W6 Authority Audit Closure; W7 then owns the
+ordinary-package corpus gate in #110. Outreach remains at 0/10 and moves only
+after that engineering gate plus the separate cached-history and venue checks
+close. Release publication alone does not assign tester authority.
 
 Detailed maturity, workstream status, proof, blockers, and longer horizons live
 in the [development roadmap](docs/roadmaps/development-roadmap.md).

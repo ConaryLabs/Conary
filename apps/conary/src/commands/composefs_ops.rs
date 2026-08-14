@@ -529,9 +529,18 @@ mod tests {
         ));
 
         drop(first);
+        // Serialization is what the two assertions above prove, and they hold
+        // regardless of scheduling because `first` is still held. This last wait
+        // only proves liveness -- the worker does eventually acquire -- so its
+        // bound is an anti-hang backstop, not a contract. `TEST_MOUNT_SKIP_LOCK`
+        // is a plain `std::sync::Mutex` with no fairness guarantee, and every
+        // install test in this process contends for it, so the worker can be
+        // passed over for as long as those tests keep the guard. Do not tighten
+        // this into a latency assertion: it would fail whenever the suite grows
+        // a test that holds the guard across more transactions.
         assert_eq!(
             acquired_rx
-                .recv_timeout(std::time::Duration::from_secs(5))
+                .recv_timeout(std::time::Duration::from_secs(120))
                 .unwrap(),
             None
         );

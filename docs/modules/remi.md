@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-06
-revision: 16
-summary: Document Remi source, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
+last_updated: 2026-08-12
+revision: 21
+summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
 ---
 
 # Remi
@@ -26,6 +26,15 @@ exact public profile and carries typed parser construction data: RPM declares
 architecture; Debian declares distribution, component, and architecture; Arch
 declares the repository database name; JSON is explicit when a source actually
 serves Conary JSON metadata.
+
+Repository manifest schema 3 also requires each native source's exact source
+identity, distinct repository identity, release/channel/rolling stream, and
+closed follow-or-pin policy. An optional policy group shares one normalized
+source policy while each repository retains its own authenticated snapshot and
+pin. Reconciliation replaces a repository transactionally when those source
+inputs change; ordinary enabled, priority, and expiry changes preserve the
+enrollment. The same contract is persisted by the core repository source model
+and is not inferred from the profile, URL, or display name.
 
 Every native source also carries the matching `RepositoryTrustPolicy`. Fedora
 uses its official metalink to authenticate the exact `repomd.xml` and a
@@ -97,14 +106,22 @@ version plus the exact normalized provides and grouped native requirements
 needed for offline resolution, together with persisted package metadata such
 as explicitly trusted security advisories. Conversion-cache state, diagnostic
 scriptlet summaries, and content hashes stay on other public projections
-because sync does not consume them.
-`GET /v1/{distro}/metadata` is not a client-sync fallback.
+because sync does not consume them. Both sparse list projections identify the
+exact `source_profile` behind the stable family route, and the client rejects a
+page whose profile disagrees with its configured target. The former unbounded
+`GET /v1/{distro}/metadata` route has been removed; health and sync use bounded
+sparse pages rather than constructing repository-wide JSON.
 
-For Fedora, normalized provides include every generator-selected `<file>`
-record from authenticated `primary.xml` as `kind = "file"` with exact
-`source-derived-file` provenance. The sparse page and per-name lookup project
-that persisted typed row unchanged; Remi does not derive file providers from
-package names or filter them through its own path rules.
+For Fedora, normalized provides include every package-owned `<file>` record
+from authenticated `primary.xml` and `filelists.xml` as `kind = "file"` with
+exact `source-derived-file` provenance. The sparse page and per-name lookup
+project that persisted typed row unchanged; Remi does not derive file
+providers from package names or filter them through its own path rules.
+Complete file ownership is what makes a path dependency outside createrepo's
+primary filter solvable, and it is the dominant row population: Fedora 44
+`Everything/x86_64` carries 9.5M file providers against 76,354 packages, so
+sparse pages, their wire payload, and the replace transaction all scale with
+it.
 
 Remi opens SQLite once for each HTTP page, selects all visible package/version
 rows for the page together, and batch-loads their normalized provides and
@@ -163,7 +180,7 @@ Conversion and recipe builds load `targets` by the persisted exact source
 profile. Public native-release and timestamp routes first resolve their route
 slug through the supported-profile registry, then load the exact profile's
 role keys. `fedora` and `ubuntu` are therefore never key-directory aliases for
-`fedora-44` and `ubuntu-26.04`.
+`fedora-44`, `ubuntu-26.04`, and `solus`.
 
 The public half of each deployed `targets` key is the client-side CCS package
 authority. Conary releases track the current canonical
@@ -254,7 +271,7 @@ returns a conflict with the available releases instead of guessing.
 
 ## Native Lifecycle Metadata
 
-RPM, Debian, and Arch conversions embed the current `native_lifecycle` bundle
+RPM, Debian, Arch, and eopkg conversions embed the current `native_lifecycle` bundle
 in the generated CCS manifest and persist its aggregate summary on
 `converted_packages`. The row records lifecycle fidelity, evidence digest,
 formal unknown-command evidence, and diagnostic classes. Entry presence in the
@@ -271,12 +288,11 @@ the authenticated source artifact. Public, OCI, index, search, chunk, and
 garbage-collection paths validate that typed artifact instead of filling
 missing fields with guesses or empty values. Architecture and the repository
 provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 26 retains
-revision 25's source-authority and fail-closed state constraints while requiring
-an explicit mixing policy for every persisted source pin. It is a pre-alpha
-hard cut: prior databases are rebuilt and re-ingested from configured
-repository authority rather than migrated. Local conversion tracking is
-written only after the CCS install transaction commits.
+schema rejects missing, empty, or malformed values. Schema revision 33 retains
+fail-closed source and takeover authority and adds package-owned repository
+enrollment plus retained ownership. It is a pre-alpha hard cut: prior databases are rebuilt and
+re-ingested from configured repository authority rather than migrated. Local
+conversion tracking is written only after the CCS install transaction commits.
 
 Ready conversion means the artifact carries a source-independent Conary
 lifecycle contract. A client may install it on any target whose typed
@@ -291,8 +307,8 @@ or a missing CCS object is data corruption or stale conversion state and
 returns an error or triggers reconversion. It is not converted into a human
 review outcome.
 
-Package detail, monolithic metadata, generated indexes, search, OCI, delta, and
-download routes expose the sanitized `scriptlets` projection. Sparse index
+Package detail, generated indexes, search, OCI, delta, and download routes
+expose the sanitized `scriptlets` projection. Sparse index
 documents carry resolution authority—versions, provides, requirements,
 architecture, size, persisted package metadata, conversion state, and public
 content hash—rather than the diagnostic scriptlet summary. Program bodies and
@@ -308,6 +324,11 @@ metadata refresh removes mismatched conversion rows in the same SQLite
 transaction. Cold conversion carries one immutable repository-metadata digest
 through cache lookup and persistence, then revalidates it under the database
 write transaction so a concurrent refresh cannot publish stale source input.
+Repository conversion cache identity is the exact algorithm-prefixed checksum
+from authenticated repository metadata. The downloader verifies bytes against
+that checksum before conversion. Remi separately computes SHA-256 over the
+downloaded artifact for CCS provenance and emission; that CCS digest never
+replaces the repository checksum used for cache and refresh authority.
 CCS identity and capabilities come solely from the downloaded artifact. CCS
 cache files use their emitted content hash as the local filename
 instead of a mutable package-name/version slot. Lifecycle program content,
@@ -422,3 +443,39 @@ local experiments unless you intentionally want to warm a real Remi cache.
 The former scan-only corpus tokenizer was removed because line splitting and
 manual command lists duplicated the formal shell/parser pipeline and produced
 non-authoritative evidence that required ongoing heuristic maintenance.
+
+## Chunk Garbage Collection
+
+`apps/remi/src/server/chunk_gc.rs` owns the referenced-set computation and the
+local/R2 deletion pass. `admin_service::run_chunk_gc_op` is the single caller:
+it resolves the database path, chunk objects directory, and optional R2 store
+from server state, applies the one-hour grace period that protects chunks of
+in-flight conversions, and returns the typed report.
+
+Two surfaces call that one function, so neither can drift from the other. The
+MCP tool `chunk_gc` is the agent surface, and `POST /v1/admin/chunk-gc` on the
+external admin router is the operator surface; both require the `admin` scope.
+Deletion requires an explicit `dry_run: false`, so an omitted body, an omitted
+field, or an absent MCP parameter previews the run instead of deleting.
+
+## MCP
+
+The external admin `/mcp` endpoint is a modern-only, stateless Streamable HTTP
+surface using rmcp 3.1.2 and protocol revision `2026-07-28`. Every POST carries
+the protocol version and client metadata in `_meta`; Remi does not negotiate an
+`initialize` session, issue `Mcp-Session-Id`, retain session state, or serve the
+MCP GET and DELETE operations. The per-request handler shares Remi's state
+through the existing `Arc<RwLock<ServerState>>`, and every request remains
+behind the admin Bearer-token middleware.
+
+Origin validation permits `http://localhost` and `http://127.0.0.1`, including
+the default internal `8081` and external `8082` admin-port variants. The
+allowlist is fixed at these defaults; an operator who moves the admin ports in
+`remi.toml` must extend it in `create_mcp_router` (browser origins on other
+ports are rejected; CLI and curl clients send no `Origin` and are
+unaffected). A
+missing `Origin` is accepted for CLI and curl clients. Host validation keeps
+rmcp's default loopback allowlist; public hostnames are intentionally not added
+without a separately reviewed exposure decision. Changes to this MCP contract
+must update this module's frontmatter `revision` and its router-level protocol
+tests together.

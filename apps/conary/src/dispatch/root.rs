@@ -108,7 +108,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                         convert_to_ccs,
                         ownership,
                         yes,
-                        from_profile: from,
+                        from_source: from,
                         repository_provenance: None,
                     },
                 )

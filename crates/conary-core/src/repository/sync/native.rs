@@ -1,8 +1,8 @@
 // conary-core/src/repository/sync/native.rs
 
 use crate::db::models::{
-    ConvertedPackage, Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
-    RepositoryRequirementGroup as DbRequirementGroup,
+    AuthenticatedSnapshotIdentity, ConvertedPackage, Repository, RepositoryPackage,
+    RepositoryProvide, RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
@@ -19,6 +19,7 @@ pub(super) fn persist_native_sync_rows(
     conn: &Connection,
     repo: &mut Repository,
     synced_packages: Vec<SyncedPackageRow>,
+    snapshot: AuthenticatedSnapshotIdentity,
 ) -> Result<usize> {
     let repo_id = repo
         .id
@@ -27,6 +28,7 @@ pub(super) fn persist_native_sync_rows(
 
     let tx = conn.unchecked_transaction()?;
 
+    repo.admit_authenticated_snapshot(snapshot)?;
     persist_synced_package_rows(&tx, repo_id, synced_packages)?;
     link_canonical_ids(&tx, repo_id)?;
     if let Some(source_profile) = repo.source_profile.as_deref() {
@@ -41,7 +43,7 @@ pub(super) fn persist_native_sync_rows(
     Ok(count)
 }
 
-pub(super) fn persist_synced_package_rows(
+pub(in crate::repository) fn persist_synced_package_rows(
     conn: &Connection,
     repo_id: i64,
     synced_packages: Vec<SyncedPackageRow>,
@@ -122,6 +124,64 @@ pub(super) fn append_synced_package_rows(
     Ok(count)
 }
 
+/// Build the complete normalized row set for one parsed package.
+///
+/// Native sync and its tests share this owner so the capability projection,
+/// requirement conversion, and reference-mirror rebasing that turn one parsed
+/// package into persistable rows cannot drift apart.
+pub(in crate::repository) fn synced_package_row(
+    repo_id: i64,
+    source_profile: Option<&str>,
+    repo_url: &str,
+    content_url: Option<&str>,
+    pkg_meta: PackageMetadata,
+) -> SyncedPackageRow {
+    let provides = normalized_repository_capabilities(&pkg_meta);
+    let download_url = super::rebase_download_url(&pkg_meta.download_url, repo_url, content_url);
+    let version_scheme = pkg_meta.version_scheme;
+    let checksum = match pkg_meta.checksum_type {
+        crate::repository::parsers::ChecksumType::Sha1 => {
+            format!("sha1:{}", pkg_meta.checksum.trim_start_matches("sha1:"))
+        }
+        crate::repository::parsers::ChecksumType::Sha256 => {
+            format!("sha256:{}", pkg_meta.checksum.trim_start_matches("sha256:"))
+        }
+        crate::repository::parsers::ChecksumType::Sha512
+        | crate::repository::parsers::ChecksumType::Md5 => pkg_meta.checksum,
+    };
+    let mut repo_pkg = RepositoryPackage::new(
+        repo_id,
+        pkg_meta.name,
+        pkg_meta.version,
+        version_scheme,
+        checksum,
+        pkg_meta.size as i64,
+        download_url,
+    );
+
+    repo_pkg.architecture = pkg_meta.architecture;
+    repo_pkg.debian_multi_arch = pkg_meta.debian_multi_arch;
+    repo_pkg.description = pkg_meta.description;
+    repo_pkg.metadata = match &pkg_meta.extra_metadata {
+        serde_json::Value::Null => None,
+        value => Some(value.to_string()),
+    };
+
+    // Persist the exact repository profile. Package format remains a separate
+    // typed field and is never promoted to distro authority.
+    repo_pkg.source_profile = source_profile.map(str::to_string);
+
+    let (requirement_groups, requirement_group_clauses) =
+        convert_requirement_groups(0, &pkg_meta.requirements);
+
+    SyncedPackageRow {
+        package: repo_pkg,
+        provides,
+        requirement_groups,
+        requirement_group_clauses,
+    }
+}
+
 pub(super) fn normalized_repository_capabilities(
     pkg_meta: &PackageMetadata,
 ) -> Vec<RepositoryProvide> {
@@ -167,6 +227,8 @@ pub(in crate::repository) fn capability_kind_to_db(kind: RepositoryCapabilityKin
         RepositoryCapabilityKind::Path => "path".to_string(),
         RepositoryCapabilityKind::Binary => "binary".to_string(),
         RepositoryCapabilityKind::PkgConfig => "pkgconfig".to_string(),
+        RepositoryCapabilityKind::PkgConfig32 => "pkgconfig32".to_string(),
+        RepositoryCapabilityKind::Comar => "comar".to_string(),
         RepositoryCapabilityKind::Generic => "generic".to_string(),
     }
 }

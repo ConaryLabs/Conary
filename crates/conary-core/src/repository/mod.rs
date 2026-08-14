@@ -31,8 +31,12 @@ pub mod supported_profiles;
 mod sync;
 pub mod trust;
 
+pub mod declarations;
 pub mod dependency_model;
+mod dependency_source;
 pub mod effective_policy;
+pub mod enrollment;
+mod eopkg_version;
 pub mod package_relation;
 pub mod parsers;
 pub mod requirement;
@@ -51,19 +55,17 @@ pub(crate) use client::{MAX_BYTES_RESPONSE_SIZE, read_response_bytes_with_limit}
 pub use dependencies::download_dependencies;
 pub use download::{
     DownloadOptions, DownloadProgress, download_delta, download_package_verified,
-    download_package_verified_with_progress, download_static_package_verified,
-    download_static_package_verified_with_progress, verify_checksum,
+    download_package_verified_with_progress, download_package_with_authority_verified,
+    download_static_package_verified, download_static_package_verified_with_progress,
+    verify_cached_package_verified, verify_checksum,
 };
-pub use effective_policy::{
-    EffectiveSourcePolicy, SETTINGS_KEY_ALLOWED_DISTROS, load_effective_policy,
-};
+pub use effective_policy::{EffectiveSourcePolicy, load_effective_policy};
 pub use management::{add_repository, remove_repository, search_packages, set_repository_enabled};
 pub use metadata::{DeltaInfo, PackageMetadata, RepositoryMetadata};
 pub use mirror_health::{MirrorHealth, MirrorHealthTracker};
 pub use mirror_selector::{MirrorSelector, MirrorStrategy};
 pub use parsers::{ChecksumType, RepositoryParser};
 pub use registry::{RepositoryFormat, RepositoryParserConfig, create_parser};
-pub use remi::AsyncRemiClient;
 pub use remi::{PackageManifest, RemiClient};
 pub use resolution::{
     PackageResolver, PackageSource, RepositorySourceKind, RepositorySourceMetadata,
@@ -82,17 +84,20 @@ pub use sync::{
 pub use trust::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,
     OpenPgpTrustRoot, RepositoryTrustPolicy, RpmMetadataAuthority, TrustRole,
+    eopkg_origin_from_index_url,
 };
 
 pub use chunk_fetcher::{
-    ChunkData, ChunkFetcher, ChunkFetcherBuilder, CompositeChunkFetcher, HttpChunkFetcher,
-    LocalCacheFetcher,
+    ChunkData, ChunkFetcher, CompositeChunkFetcher, HttpChunkFetcher, LocalCacheFetcher,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::Repository;
+    use crate::db::models::{
+        NativeSourceEcosystem, NativeSourceStream, Repository, RepositoryPolicyScope,
+        RepositorySourcePolicy, RepositoryUpdateMode,
+    };
     use crate::db::testing::create_test_db;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -198,10 +203,10 @@ mod tests {
     }
 
     #[test]
-    fn disabled_native_repository_requires_trust_before_enable() {
+    fn native_repository_cannot_be_persisted_before_exact_enrollment() {
         let (_temp, conn) = create_test_db();
 
-        let repo = add_repository(
+        let error = add_repository(
             &conn,
             "arch-pending-trust".to_string(),
             "https://mirror.example.test/arch".to_string(),
@@ -212,21 +217,16 @@ mod tests {
             false,
             10,
         )
-        .unwrap();
-        assert!(!repo.enabled);
-        assert!(repo.trust_policy.is_none());
-
-        let error = set_repository_enabled(&conn, "arch-pending-trust", true).unwrap_err();
+        .unwrap_err();
         assert!(
             error
                 .to_string()
                 .contains("has no ecosystem-native trust policy")
         );
         assert!(
-            !Repository::find_by_name(&conn, "arch-pending-trust")
+            Repository::find_by_name(&conn, "arch-pending-trust")
                 .unwrap()
-                .unwrap()
-                .enabled
+                .is_none()
         );
     }
 
@@ -275,6 +275,19 @@ mod tests {
                 fingerprint: "A".repeat(40),
             }],
         })
+        .unwrap();
+        repo.set_native_source_policy(
+            RepositorySourcePolicy::new(
+                "example-debian",
+                RepositoryPolicyScope::repository("stable:main:amd64").unwrap(),
+                NativeSourceEcosystem::Deb,
+                NativeSourceStream::release("stable").unwrap(),
+                RepositoryUpdateMode::Follow,
+            )
+            .unwrap(),
+            "stable:main:amd64",
+            None,
+        )
         .unwrap();
         repo.insert(&conn).unwrap();
 

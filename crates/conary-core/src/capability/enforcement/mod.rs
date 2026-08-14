@@ -20,6 +20,7 @@ pub mod landlock_enforce;
 pub mod seccomp_enforce;
 
 use crate::capability::{FilesystemCapabilities, NetworkCapabilities, SyscallCapabilities};
+use seccompiler::BpfProgram;
 use std::fmt;
 
 /// Enforcement mode for capability restrictions
@@ -92,6 +93,24 @@ pub struct EnforcementWarning {
     pub message: String,
 }
 
+/// Enforcement work prepared in the parent before `fork()`.
+///
+/// Syscall validation, native-name resolution, and BPF compilation may touch
+/// process-global library state, so none of them belongs in the child. The
+/// child retains only the compiled program and the policy facts Landlock must
+/// apply after its mount namespace exists.
+pub(crate) struct PreparedEnforcement<'a> {
+    policy: &'a EnforcementPolicy,
+    seccomp_filter: Option<BpfProgram>,
+    warnings: Vec<EnforcementWarning>,
+}
+
+impl PreparedEnforcement<'_> {
+    pub(crate) fn mode(&self) -> EnforcementMode {
+        self.policy.mode
+    }
+}
+
 impl fmt::Display for EnforcementWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}] {}", self.category, self.message)
@@ -106,6 +125,82 @@ impl fmt::Display for EnforcementWarning {
 pub fn apply_enforcement(
     policy: &EnforcementPolicy,
 ) -> std::result::Result<EnforcementReport, EnforcementError> {
+    apply_prepared_enforcement(prepare_enforcement(policy)?)
+}
+
+/// Validate and compile every enforcement fact that does not depend on the
+/// child's completed mount namespace.
+pub(crate) fn prepare_enforcement(
+    policy: &EnforcementPolicy,
+) -> std::result::Result<PreparedEnforcement<'_>, EnforcementError> {
+    let mut warnings = Vec::new();
+    if let Some(network) = &policy.network
+        && let Err(error) = network.validate()
+    {
+        let error = EnforcementError::Landlock(error.to_string());
+        if policy.mode == EnforcementMode::Enforce {
+            return Err(error);
+        }
+        warnings.push(EnforcementWarning {
+            category: "landlock".to_string(),
+            message: format!("Landlock not applied: {error}"),
+        });
+    }
+    if (policy.filesystem.is_some() || policy.network.is_some())
+        && policy.mode != EnforcementMode::Enforce
+    {
+        warnings.push(EnforcementWarning {
+            category: "landlock".to_string(),
+            message: "Landlock has no non-blocking audit mode; exact filesystem/TCP rules were described but not applied".to_string(),
+        });
+    }
+
+    let seccomp_filter = if let Some(syscalls) = &policy.syscalls {
+        if !seccomp_enforce::check_seccomp_support() {
+            let error = EnforcementError::Unsupported {
+                feature: "seccomp".to_string(),
+            };
+            if policy.mode == EnforcementMode::Enforce {
+                return Err(error);
+            }
+            warnings.push(EnforcementWarning {
+                category: "seccomp".to_string(),
+                message: error.to_string(),
+            });
+            None
+        } else {
+            match seccomp_enforce::build_seccomp_filter(syscalls, policy.mode) {
+                Ok(filter) => Some(filter),
+                Err(error) if policy.mode != EnforcementMode::Enforce => {
+                    warnings.push(EnforcementWarning {
+                        category: "seccomp".to_string(),
+                        message: format!("Seccomp not applied: {error}"),
+                    });
+                    None
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(PreparedEnforcement {
+        policy,
+        seccomp_filter,
+        warnings,
+    })
+}
+
+/// Apply a parent-prepared policy after namespace setup and before `exec()`.
+pub(crate) fn apply_prepared_enforcement(
+    prepared: PreparedEnforcement<'_>,
+) -> std::result::Result<EnforcementReport, EnforcementError> {
+    let PreparedEnforcement {
+        policy,
+        seccomp_filter,
+        warnings,
+    } = prepared;
     let mut report = EnforcementReport {
         mode: policy.mode,
         landlock_applied: false,
@@ -115,19 +210,14 @@ pub fn apply_enforcement(
         connect_tcp_rules: Vec::new(),
         bind_tcp_rules: Vec::new(),
         deny_conflicts_count: 0,
-        warnings: Vec::new(),
+        warnings,
     };
 
     // Apply one Landlock ruleset for filesystem and exact TCP restrictions.
     if (policy.filesystem.is_some() || policy.network.is_some())
-        && policy.mode != EnforcementMode::Enforce
+        && policy.mode == EnforcementMode::Enforce
     {
-        report.warnings.push(EnforcementWarning {
-            category: "landlock".to_string(),
-            message: "Landlock has no non-blocking audit mode; exact filesystem/TCP rules were described but not applied".to_string(),
-        });
-    } else if policy.filesystem.is_some() || policy.network.is_some() {
-        match landlock_enforce::apply_landlock_rules(
+        match landlock_enforce::apply_prepared_landlock_rules(
             policy.filesystem.as_ref(),
             policy.network.as_ref(),
             policy.mode,
@@ -153,8 +243,8 @@ pub fn apply_enforcement(
 
     // Apply seccomp syscall filter LAST — once active, some syscalls
     // needed for landlock setup would be blocked
-    if let Some(ref syscall_caps) = policy.syscalls {
-        match seccomp_enforce::apply_seccomp_filter(syscall_caps, policy.mode) {
+    if let Some(filter) = seccomp_filter {
+        match seccomp_enforce::install_seccomp_filter(&filter) {
             Ok(()) => {
                 report.seccomp_applied = true;
             }
@@ -330,5 +420,26 @@ mod tests {
 
         let error = apply_enforcement(&policy).expect_err("enforce mode should fail closed");
         assert!(error.to_string().contains("not an exact name"));
+    }
+
+    #[test]
+    fn seccomp_filter_is_compiled_during_parent_preparation() {
+        if !seccomp_enforce::check_seccomp_support() {
+            return;
+        }
+        let policy = EnforcementPolicy {
+            mode: EnforcementMode::Audit,
+            filesystem: None,
+            network: None,
+            syscalls: Some(SyscallCapabilities {
+                allow: vec!["read".to_string()],
+                deny: Vec::new(),
+            }),
+            syscall_contract: None,
+            network_isolation: false,
+        };
+
+        let prepared = prepare_enforcement(&policy).expect("preparation should compile BPF");
+        assert!(prepared.seccomp_filter.is_some());
     }
 }

@@ -42,7 +42,13 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag_name }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.97.1
       - name: Require the hosted container runtime
         run: docker info
       - name: Resolve the published native package
@@ -57,10 +63,11 @@ jobs:
           mkdir -p "$metadata_dir"
 
           resolved="$(bash scripts/release-matrix.sh resolve-tag "$RELEASE_TAG" --format shell)"
-          product="$(sed -n 's/^product=//p' <<< "$resolved")"
+          release="$(sed -n 's/^release=//p' <<< "$resolved")"
           resolved_tag="$(sed -n 's/^tag_name=//p' <<< "$resolved")"
-          [[ "$product" == "conary" && "$resolved_tag" == "$RELEASE_TAG" ]] || {
-            echo "tag does not resolve to the canonical Conary release track" >&2
+          resolved_version="$(sed -n 's/^version=//p' <<< "$resolved")"
+          [[ "$release" == "suite" && "$resolved_tag" == "$RELEASE_TAG" ]] || {
+            echo "tag does not resolve to the canonical Conary suite release" >&2
             exit 1
           }
 
@@ -73,6 +80,19 @@ jobs:
           tag_tree="${RUNNER_TEMP}/conary-release-tag"
           git worktree add --detach "$tag_tree" "${RELEASE_TAG}^{}"
 
+          release_state="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GH_REPO}/releases/tags/${RELEASE_TAG}"
+          )"
+          [[ "$(jq -r '.tag_name' <<< "$release_state")" == "$RELEASE_TAG" &&
+             "$(jq -r '.draft' <<< "$release_state")" == "false" &&
+             "$(jq -r '.immutable' <<< "$release_state")" == "true" ]] || {
+            echo "${RELEASE_TAG} is not an exact published immutable GitHub release" >&2
+            exit 1
+          }
+
           gh release download "$RELEASE_TAG" \
             --repo "$GH_REPO" \
             --pattern metadata.json \
@@ -83,24 +103,32 @@ jobs:
             echo "release metadata is missing, empty, or symlinked" >&2
             exit 1
           }
+          jq -e '.schema_version == 1 and (.dry_run | type) == "boolean"' "$metadata" >/dev/null || {
+            echo "release metadata must use schema_version 1 and a boolean dry_run" >&2
+            exit 1
+          }
 
-          product="$(jq -r '.product' "$metadata")"
+          release="$(jq -r '.release' "$metadata")"
           tag_name="$(jq -r '.tag_name' "$metadata")"
           version="$(jq -r '.version' "$metadata")"
           dry_run="$(jq -r '.dry_run' "$metadata")"
-          [[ "$product" == "conary" ]] || {
-            echo "release metadata product is ${product}, expected conary" >&2
+          [[ "$release" == "suite" ]] || {
+            echo "release metadata release is ${release}, expected suite" >&2
             exit 1
           }
           [[ "$tag_name" == "$RELEASE_TAG" ]] || {
             echo "release metadata tag is ${tag_name}, expected ${RELEASE_TAG}" >&2
             exit 1
           }
+          [[ "$version" == "$resolved_version" ]] || {
+            echo "release metadata version is ${version}, expected ${resolved_version} from ${RELEASE_TAG}" >&2
+            exit 1
+          }
           [[ "$dry_run" == "false" ]] || {
             echo "release metadata is not a live publication" >&2
             exit 1
           }
-          bash "$tag_tree/scripts/release-matrix.sh" assert-owned-version conary "$version"
+          bash "$tag_tree/scripts/release-matrix.sh" assert-owned-version suite "$version"
 
           case "$NATIVE_FORMAT" in
             rpm) asset="conary-${version}-1.fc44.x86_64.rpm" ;;
@@ -151,8 +179,12 @@ jobs:
 
           echo "native_package=${package}" >> "$GITHUB_OUTPUT"
           echo "asset=${asset}" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/build-static-conary
       - name: Build the lifecycle harness
         run: cargo build -p conary -p conary-test
+      - uses: ./.github/actions/cache-base-image
+        with:
+          distro: ${{ matrix.distro }}
       - name: Install the published native package in the test image
         run: >-
           cargo run -p conary-test --
@@ -168,6 +200,11 @@ jobs:
           --distro "${{ matrix.distro }}"
           --phase 4
           --suite native-cross-source-lifecycle
+      - name: Verify attributable published-binary corpus evidence
+        run: |
+          result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
+          bash scripts/check-conary-test-result-gate.sh "$result"
+          bash scripts/check-conary-corpus-result-gate.sh "$result"
 
   release-artifact-proof:
     name: release-artifact-proof

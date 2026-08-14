@@ -122,6 +122,15 @@ impl NativePackageSource for DetectedNativePackageSource {
                     description: record.info.description,
                 })
             }
+            SystemPackageManager::Eopkg => {
+                conary_core::packages::eopkg::query::query_package(requested).map(|record| {
+                    ResolvedNativePackage {
+                        requested: requested.to_string(),
+                        native: record.identity,
+                        description: record.info.description,
+                    }
+                })
+            }
             SystemPackageManager::Unknown => {
                 return PackageLookup::Unsupported {
                     reason: "no supported native package manager is available".to_string(),
@@ -155,6 +164,10 @@ impl NativePackageSource for DetectedNativePackageSource {
                 .with_context(|| format!("dpkg file query failed for '{query_name}'"))?,
             SystemPackageManager::Pacman => pacman_query::query_package_files(query_name)
                 .with_context(|| format!("pacman file query failed for '{query_name}'"))?,
+            SystemPackageManager::Eopkg => {
+                conary_core::packages::eopkg::query::query_package_files(query_name)
+                    .with_context(|| format!("eopkg file query failed for '{query_name}'"))?
+            }
             SystemPackageManager::Unknown => Vec::new(),
         };
         Ok(files
@@ -299,11 +312,11 @@ pub async fn cmd_adopt(
         bail!("No packages specified");
     }
 
-    super::super::hint_unconfigured_source_policy();
+    super::super::hint_default_convergence();
 
     let manager = SystemPackageManager::resolve(requested_manager)?;
     if !manager.is_available() {
-        bail!("No supported package manager found. Conary supports RPM, dpkg, and pacman.");
+        bail!("No supported package manager found. Conary supports RPM, dpkg, pacman, and eopkg.");
     }
     let source = DetectedNativePackageSource::new(manager);
     cmd_adopt_with_source(packages, db_path, full, dry_run, &source)
@@ -402,7 +415,7 @@ fn build_adoption_plan(
                     }
                     Err(error) => outcomes.push(PackagePlanOutcome::Unsupported {
                         requested: requested.clone(),
-                        reason: error.to_string(),
+                        reason: format!("{error:#}"),
                     }),
                 }
             }
@@ -820,6 +833,7 @@ fn execute_adoption_plan(
             &package.files,
             if plan.mode == AdoptionMode::Full {
                 cas.as_ref()
+                    .map(|cas| cas as &dyn conary_core::filesystem::PrivateCasWriter)
             } else {
                 None
             },
@@ -856,6 +870,7 @@ fn execute_adoption_plan(
                 plan.version_scheme,
             );
             trove.architecture = Some(identity.native.architecture().to_string());
+            trove.debian_multi_arch = identity.native.debian_multi_arch();
             trove.description = identity.description.clone();
             trove.installed_by_changeset_id = Some(changeset_id);
             trove.selection_reason = Some("Adopted from the native package manager".to_string());

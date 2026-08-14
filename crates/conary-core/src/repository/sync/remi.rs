@@ -818,7 +818,7 @@ mod tests {
                 let body = if attempt == 0 {
                     r#"{"distro":"fedora""#
                 } else {
-                    r#"{"distro":"fedora","packages":[{"name":"qemu-img","distro":"fedora","versions":[{"version":"2:10.1.0-7.fc44","architecture":"x86_64","provides":[],"requirement_groups":[],"size":1024}]}],"total":1,"page":1,"per_page":128}"#
+                    r#"{"distro":"fedora","source_profile":"fedora-44","packages":[{"name":"qemu-img","distro":"fedora","versions":[{"version":"2:10.1.0-7.fc44","architecture":"x86_64","provides":[],"requirement_groups":[],"size":1024}]}],"total":1,"page":1,"per_page":128}"#
                 };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -859,6 +859,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let body = serde_json::to_string(&RemiSparsePackagePage {
             distro: "fedora".to_string(),
+            source_profile: "fedora-44".to_string(),
             packages: vec![sparse_test_entry("alpha"), sparse_test_entry("beta")],
             total: 2,
             page: 1,
@@ -936,6 +937,7 @@ mod tests {
             .collect();
         fetcher.consume_page(RemiSparsePackagePage {
             distro: "fedora".to_string(),
+            source_profile: "fedora-44".to_string(),
             packages: entries,
             total: package_count,
             page,
@@ -947,6 +949,7 @@ mod tests {
     fn sparse_wire_contract_round_trips_complete_resolution_page() {
         let emitted = serde_json::json!({
             "distro": "fedora",
+            "source_profile": "fedora-44",
             "packages": [{
                 "name": "hello",
                 "distro": "fedora",

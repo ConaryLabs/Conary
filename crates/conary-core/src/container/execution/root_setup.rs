@@ -1,10 +1,59 @@
 // conary-core/src/container/execution/root_setup.rs
 
 //! Selected-root, namespace, mount, and enforcement setup for sandboxed children.
+//!
+//! Everything below [`Sandbox::child_setup_and_execute`] runs after `fork()` and
+//! before `exec()`, in a process that inherited the parent's lock state. No
+//! `tracing` macro and no subprocess spawn may appear on that path: see
+//! [`crate::container::child_safety`] for why, and `child_fork_safety` in the
+//! container tests for the check that keeps it true.
 
 use super::*;
+use crate::container::child_safety::{bring_loopback_up, child_diag, format_int, int_buffer};
+use std::os::unix::ffi::OsStrExt;
 
 impl Sandbox {
+    pub(super) fn run_forked_child(&self, child: ForkedChild<'_>) -> ! {
+        let ForkedChild {
+            stdin_fd,
+            stdout_read_fd,
+            stdout_write_fd,
+            stderr_read_fd,
+            stderr_write_fd,
+            userns_request_read_fd,
+            userns_ack_write_fd,
+            execution,
+        } = child;
+        drop(stdout_read_fd);
+        drop(stderr_read_fd);
+        drop(userns_request_read_fd);
+        drop(userns_ack_write_fd);
+
+        if unsafe { libc::dup2(stdin_fd, 0) } < 0 {
+            child_diag(&[b"failed to attach sandbox stdin"]);
+            unsafe { libc::_exit(127) };
+        }
+        if unsafe { libc::dup2(stdout_write_fd.as_raw_fd(), 1) } < 0 {
+            child_diag(&[b"failed to attach sandbox stdout"]);
+            unsafe { libc::_exit(127) };
+        }
+        if unsafe { libc::dup2(stderr_write_fd.as_raw_fd(), 2) } < 0 {
+            child_diag(&[b"failed to attach sandbox stderr"]);
+            unsafe { libc::_exit(127) };
+        }
+        drop(stdout_write_fd);
+        drop(stderr_write_fd);
+
+        match self.child_setup_and_execute(execution) {
+            Ok(code) => unsafe { libc::_exit(code) },
+            Err(error) => {
+                let message = error.to_string();
+                child_diag(&[message.as_bytes()]);
+                unsafe { libc::_exit(127) };
+            }
+        }
+    }
+
     /// Set up the container filesystem with bind mounts.
     pub(super) fn setup_container_fs(&self, root: &Path) -> Result<()> {
         for dir in &[
@@ -44,6 +93,8 @@ impl Sandbox {
             args,
             env,
             userns_sync,
+            deadline,
+            enforcement,
         } = execution;
         let script_in_container = script_path.map(|path| {
             path.strip_prefix(root)
@@ -66,10 +117,12 @@ impl Sandbox {
 
         if !flags_with_user.is_empty() {
             if let Err(userns_error) = unshare(flags_with_user) {
-                warn!(
-                    "User namespace isolation unavailable ({}); continuing with existing namespace isolation",
-                    userns_error
-                );
+                let mut digits = int_buffer();
+                child_diag(&[
+                    b"user namespace isolation unavailable (errno ",
+                    format_int(&mut digits, userns_error as i64),
+                    b"); continuing with existing namespace isolation",
+                ]);
                 unshare(flags).map_err(|e| sandbox_error(format!("Unshare failed: {e}")))?;
                 signal_parent_user_namespace_ready(userns_sync.as_ref(), false)?;
             } else {
@@ -82,7 +135,9 @@ impl Sandbox {
             match fork_process()
                 .map_err(|error| sandbox_error(format!("PID namespace fork failed: {error}")))?
             {
-                ForkResult::Parent { child } => return wait_for_pid_namespace_init(child),
+                ForkResult::Parent { child } => {
+                    return wait_for_pid_namespace_init(child, deadline);
+                }
                 ForkResult::Child => {
                     let parent = unsafe { libc::getppid() };
                     set_parent_death_signal(libc::SIGKILL).map_err(|error| {
@@ -100,12 +155,13 @@ impl Sandbox {
         }
 
         if self.config.isolate_network
-            && let Ok(status) = std::process::Command::new("ip")
-                .args(["link", "set", "lo", "up"])
-                .status()
-            && !status.success()
+            && let Err(errno) = bring_loopback_up()
         {
-            debug!("Failed to bring up loopback interface");
+            let mut digits = int_buffer();
+            child_diag(&[
+                b"failed to bring up loopback interface: errno ",
+                format_int(&mut digits, errno as i64),
+            ]);
         }
 
         if self.config.isolate_uts && !self.config.hostname.is_empty() {
@@ -116,7 +172,11 @@ impl Sandbox {
                 )
             })?;
             if let Err(err) = sethostname_syscall(&hostname, self.config.hostname.len()) {
-                warn!("sethostname failed: {err}");
+                let mut digits = int_buffer();
+                child_diag(&[
+                    b"sethostname failed: errno ",
+                    format_int(&mut digits, err.raw_os_error().unwrap_or(-1) as i64),
+                ]);
             }
         }
 
@@ -126,31 +186,27 @@ impl Sandbox {
 
         self.apply_resource_limits()?;
 
-        if let Some(ref policy) = self.config.capability_policy {
-            match enforcement::apply_enforcement(policy) {
+        if let Some(prepared) = enforcement {
+            let mode = prepared.mode();
+            match enforcement::apply_prepared_enforcement(prepared) {
                 Ok(report) => {
                     for warning in &report.warnings {
-                        warn!("Enforcement setup: {warning}");
-                    }
-                    if report.landlock_applied {
-                        debug!(
-                            connect_tcp = ?report.connect_tcp_rules,
-                            bind_tcp = ?report.bind_tcp_rules,
-                            "Landlock filesystem/network enforcement active"
-                        );
-                    }
-                    if report.seccomp_applied {
-                        debug!("Seccomp syscall enforcement active");
+                        child_diag(&[
+                            b"enforcement setup: [",
+                            warning.category.as_bytes(),
+                            b"] ",
+                            warning.message.as_bytes(),
+                        ]);
                     }
                 }
                 Err(error) => {
-                    if policy.mode == EnforcementMode::Enforce {
+                    if mode == EnforcementMode::Enforce {
                         return Err(execution_error(
                             ScriptletFailureKind::EnforcementSetupFailed,
                             format!("Capability enforcement failed: {error}"),
                         ));
                     }
-                    warn!("Capability enforcement skipped: {error}");
+                    child_diag(&[b"capability enforcement skipped"]);
                 }
             }
         }
@@ -192,10 +248,13 @@ impl Sandbox {
 
         for bind_mount in &self.config.bind_mounts {
             if !bind_mount.source.exists() {
-                debug!(
-                    "Skipping bind mount, source doesn't exist: {:?}",
-                    bind_mount.source
-                );
+                // The hot path: a missing optional bind source is ordinary, and
+                // this ran on essentially every sandbox start. It was the most
+                // frequently executed `tracing` call in the post-fork child.
+                child_diag(&[
+                    b"skipping bind mount, source does not exist: ",
+                    bind_mount.source.as_os_str().as_bytes(),
+                ]);
                 continue;
             }
 
@@ -224,10 +283,15 @@ impl Sandbox {
                 None,
             )
             .map_err(|e| {
-                debug!(
-                    "Bind mount {:?} -> {:?} failed: {}",
-                    bind_mount.source, target, e
-                );
+                let mut digits = int_buffer();
+                child_diag(&[
+                    b"bind mount ",
+                    bind_mount.source.as_os_str().as_bytes(),
+                    b" -> ",
+                    target.as_os_str().as_bytes(),
+                    b" failed: errno ",
+                    format_int(&mut digits, e as i64),
+                ]);
                 sandbox_error(format!("Bind mount failed: {e}"))
             })?;
 
@@ -260,10 +324,10 @@ impl Sandbox {
                     "pivot_root failed ({error}) and chroot fallback is not allowed in Enforce mode"
                 )));
             }
-            warn!(
-                "pivot_root failed ({error}), falling back to chroot. \
-                 This is less secure -- chroot can be escaped by a privileged process."
-            );
+            child_diag(&[
+                b"pivot_root failed, falling back to chroot. ",
+                b"This is less secure -- chroot can be escaped by a privileged process.",
+            ]);
             self.chroot_into(root)?;
         }
 
@@ -302,10 +366,11 @@ impl Sandbox {
         let mut permissions = fs::metadata(target)?.permissions();
         permissions.set_mode(0o444);
         fs::set_permissions(target, permissions)?;
-        warn!(
-            "Falling back to copied read-only {} inside sandbox",
-            target.display()
-        );
+        child_diag(&[
+            b"falling back to copied read-only ",
+            target.as_os_str().as_bytes(),
+            b" inside sandbox",
+        ]);
         Ok(true)
     }
 
@@ -321,7 +386,7 @@ impl Sandbox {
                 message,
             ));
         }
-        warn!("{message}");
+        child_diag(&[message.as_bytes()]);
         Ok(())
     }
 
@@ -368,18 +433,16 @@ impl Sandbox {
     }
 }
 
-fn wait_for_pid_namespace_init(child: Pid) -> Result<i32> {
-    loop {
-        match waitpid(child, None) {
-            Ok(WaitStatus::Exited(_, code)) => return Ok(code),
-            Ok(WaitStatus::Signaled(_, signal, _)) => return Ok(128 + signal as i32),
-            Ok(_) => {}
-            Err(nix::errno::Errno::EINTR) => {}
-            Err(error) => {
-                return Err(sandbox_error(format!(
-                    "failed to wait for PID namespace init: {error}"
-                )));
-            }
-        }
+fn wait_for_pid_namespace_init(child: Pid, deadline: Instant) -> Result<i32> {
+    match wait_for_child_until(child, deadline) {
+        Ok(ChildWaitOutcome::Exited(code)) => Ok(code),
+        Ok(ChildWaitOutcome::Signaled(signal)) => Ok(128 + signal as i32),
+        Ok(ChildWaitOutcome::TimedOut) => Err(execution_error(
+            ScriptletFailureKind::ScriptTimedOut,
+            "PID namespace init timed out",
+        )),
+        Err(error) => Err(sandbox_error(format!(
+            "failed to wait for PID namespace init: {error}"
+        ))),
     }
 }

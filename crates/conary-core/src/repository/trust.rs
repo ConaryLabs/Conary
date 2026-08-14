@@ -14,6 +14,34 @@ use url::Url;
 
 pub mod openpgp;
 
+const MAX_EMBEDDED_OPENPGP_BYTES: usize = 4 * 1024 * 1024;
+const MAX_EMBEDDED_OPENPGP_BASE64: usize = MAX_EMBEDDED_OPENPGP_BYTES.div_ceil(3) * 4;
+
+pub(crate) fn decode_embedded_openpgp_source(source: &str) -> Option<Result<Vec<u8>>> {
+    let encoded = source.strip_prefix("data:application/pgp-keys;base64,")?;
+    Some((|| {
+        if encoded.is_empty() || encoded.len() > MAX_EMBEDDED_OPENPGP_BASE64 {
+            return Err(Error::ConfigError(format!(
+                "embedded OpenPGP trust root must encode 1 to {MAX_EMBEDDED_OPENPGP_BYTES} bytes"
+            )));
+        }
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| {
+                Error::ConfigError(format!(
+                    "embedded OpenPGP trust root is invalid base64: {error}"
+                ))
+            })?;
+        if bytes.is_empty() || bytes.len() > MAX_EMBEDDED_OPENPGP_BYTES {
+            return Err(Error::ConfigError(format!(
+                "embedded OpenPGP trust root must contain 1 to {MAX_EMBEDDED_OPENPGP_BYTES} bytes"
+            )));
+        }
+        Ok(bytes)
+    })())
+}
+
 /// One explicitly pinned OpenPGP certificate source.
 ///
 /// The downloaded object may be an OpenPGP keyring, but only the certificate
@@ -34,6 +62,17 @@ impl OpenPgpTrustRoot {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(bytes) = decode_embedded_openpgp_source(&self.url) {
+            bytes?;
+            let fingerprint = self.normalized_fingerprint()?;
+            if fingerprint != self.fingerprint {
+                return Err(Error::ConfigError(format!(
+                    "OpenPGP fingerprint '{}' must be uppercase hexadecimal without separators",
+                    self.fingerprint
+                )));
+            }
+            return Ok(());
+        }
         let parsed = Url::parse(&self.url).map_err(|error| {
             Error::ConfigError(format!(
                 "OpenPGP trust-root URL '{}' is invalid: {error}",
@@ -42,7 +81,7 @@ impl OpenPgpTrustRoot {
         })?;
         if !matches!(parsed.scheme(), "https" | "file") {
             return Err(Error::ConfigError(format!(
-                "OpenPGP trust-root URL '{}' must use https:// or file://",
+                "OpenPGP trust-root URL '{}' must use https://, file://, or an exact embedded application/pgp-keys data URL",
                 self.url
             )));
         }
@@ -237,6 +276,45 @@ pub enum RepositoryTrustPolicy {
         keyring: ArchKeyringTrust,
         sig_level: ArchSigLevel,
     },
+    /// Current eopkg repositories publish no signature. The exact HTTPS
+    /// origin authenticates its SHA-256 sidecar, which authenticates the
+    /// compressed index and its per-package SHA-1 identities.
+    Eopkg { origin: String },
+}
+
+/// Derive the exact HTTPS repository origin from eopkg's native index URL.
+pub fn eopkg_origin_from_index_url(index_url: &str) -> Result<String> {
+    let mut url = Url::parse(index_url)
+        .map_err(|error| Error::ConfigError(format!("eopkg index URL is invalid: {error}")))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(Error::ConfigError(
+            "eopkg index URL must be an absolute HTTPS URL without credentials, query, or fragment"
+                .to_string(),
+        ));
+    }
+    let origin_path = url
+        .path()
+        .strip_suffix("eopkg-index.xml.xz")
+        .ok_or_else(|| {
+            Error::ConfigError(
+                "eopkg index URL must end with exact eopkg-index.xml.xz basename".to_string(),
+            )
+        })?
+        .to_string();
+    if !origin_path.ends_with('/') {
+        return Err(Error::ConfigError(
+            "eopkg index URL must place eopkg-index.xml.xz below a repository directory"
+                .to_string(),
+        ));
+    }
+    url.set_path(&origin_path);
+    Ok(url.to_string())
 }
 
 impl RepositoryTrustPolicy {
@@ -245,6 +323,7 @@ impl RepositoryTrustPolicy {
             Self::Debian { .. } => RepositoryFormat::Debian,
             Self::Rpm { .. } => RepositoryFormat::Fedora,
             Self::Arch { .. } => RepositoryFormat::Arch,
+            Self::Eopkg { .. } => RepositoryFormat::Eopkg,
         }
     }
 
@@ -263,6 +342,24 @@ impl RepositoryTrustPolicy {
             Self::Arch { keyring, sig_level } => {
                 keyring.validate()?;
                 sig_level.validate()?;
+            }
+            Self::Eopkg { origin } => {
+                let url = Url::parse(origin).map_err(|error| {
+                    Error::ConfigError(format!("eopkg repository origin is invalid: {error}"))
+                })?;
+                if url.scheme() != "https" || url.host_str().is_none() || !url.path().ends_with('/')
+                {
+                    return Err(Error::ConfigError(
+                        "eopkg trust origin must be an absolute HTTPS base URL ending in '/'"
+                            .to_string(),
+                    ));
+                }
+                let index_url = format!("{origin}eopkg-index.xml.xz");
+                if eopkg_origin_from_index_url(&index_url)? != *origin {
+                    return Err(Error::ConfigError(
+                        "eopkg trust origin is not canonical".to_string(),
+                    ));
+                }
             }
         }
         Ok(())
@@ -307,7 +404,8 @@ impl RepositoryTrustPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum TrustRole {
     DebianRelease,
     RpmMetadata,
@@ -360,7 +458,7 @@ fn validate_fingerprint(fingerprint: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_https_or_file_url(value: &str, label: &str) -> Result<()> {
+pub(crate) fn validate_https_or_file_url(value: &str, label: &str) -> Result<()> {
     let parsed = Url::parse(value).map_err(|error| {
         Error::ConfigError(format!("{label} URL '{value}' is invalid: {error}"))
     })?;
@@ -391,6 +489,34 @@ mod tests {
             url: "https://keys.example.test/archive.asc".to_string(),
             fingerprint: "A".repeat(40),
         }
+    }
+
+    #[test]
+    fn bounded_embedded_openpgp_data_authority_is_exact() {
+        use base64::Engine;
+        let embedded = OpenPgpTrustRoot {
+            url: format!(
+                "data:application/pgp-keys;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(b"certificate bytes")
+            ),
+            fingerprint: "A".repeat(40),
+        };
+        embedded.validate().unwrap();
+
+        let malformed = OpenPgpTrustRoot {
+            url: "data:application/pgp-keys;base64,%%%".to_string(),
+            fingerprint: "A".repeat(40),
+        };
+        assert!(malformed.validate().is_err());
+
+        let oversized = OpenPgpTrustRoot {
+            url: format!(
+                "data:application/pgp-keys;base64,{}",
+                "A".repeat(MAX_EMBEDDED_OPENPGP_BASE64 + 1)
+            ),
+            fingerprint: "A".repeat(40),
+        };
+        assert!(oversized.validate().is_err());
     }
 
     #[test]

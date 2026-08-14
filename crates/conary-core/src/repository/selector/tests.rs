@@ -341,7 +341,7 @@ fn strict_policy_rejects_cross_profile_dep() {
 
     let policy = ResolutionPolicy::new()
         .with_mixing(DependencyMixingPolicy::Strict)
-        .with_primary_profile("fedora-44");
+        .with_primary_source_identity("fedora-44");
 
     let options = SelectionOptions {
         policy: Some(policy),
@@ -387,7 +387,7 @@ fn strict_policy_accepts_candidate_by_exact_repository_profile() {
             policy: Some(
                 ResolutionPolicy::new()
                     .with_mixing(DependencyMixingPolicy::Strict)
-                    .with_primary_profile("ubuntu-26.04"),
+                    .with_primary_source_identity("ubuntu-26.04"),
             ),
             is_root: false,
             ..Default::default()
@@ -428,7 +428,7 @@ fn permissive_policy_allows_cross_profile_dep() {
 
     let policy = ResolutionPolicy::new()
         .with_mixing(DependencyMixingPolicy::Permissive)
-        .with_primary_profile("fedora-44");
+        .with_primary_source_identity("fedora-44");
 
     let options = SelectionOptions {
         policy: Some(policy),
@@ -469,7 +469,7 @@ fn guarded_policy_allows_cross_profile_dep() {
     // Guarded policy allows cross-profile candidates.
     let policy = ResolutionPolicy::new()
         .with_mixing(DependencyMixingPolicy::Guarded)
-        .with_primary_profile("fedora-44");
+        .with_primary_source_identity("fedora-44");
 
     let options = SelectionOptions {
         policy: Some(policy),
@@ -651,81 +651,6 @@ fn repology_signal_cannot_override_exact_repository_priority() {
     .unwrap();
 
     assert_eq!(selected.repository.name, "fedora-remi");
-}
-
-#[test]
-fn search_packages_respects_allowed_distros_by_distro_identifier() {
-    let conn = test_db();
-
-    let mut fedora_repo = Repository::new(
-        "fedora-remi".to_string(),
-        "https://example.invalid".to_string(),
-    );
-    fedora_repo.source_profile = Some("fedora-44".to_string());
-    fedora_repo.insert(&conn).unwrap();
-
-    let mut arch_repo = Repository::new(
-        "arch-core".to_string(),
-        "https://example.invalid".to_string(),
-    );
-    arch_repo.source_profile = Some("arch".to_string());
-    arch_repo.insert(&conn).unwrap();
-
-    let mut fedora_pkg = RepositoryPackage::new(
-        fedora_repo.id.unwrap(),
-        "python".into(),
-        "3.12.2-1.fc44".into(),
-        crate::repository::versioning::VersionScheme::Rpm,
-        "sha256:fedora".into(),
-        1,
-        "https://example.invalid/python-fedora.rpm".into(),
-    );
-    fedora_pkg.architecture = Some("x86_64".to_string());
-    fedora_pkg.source_profile = Some("fedora-44".to_string());
-    fedora_pkg.insert(&conn).unwrap();
-
-    let mut arch_pkg = RepositoryPackage::new(
-        arch_repo.id.unwrap(),
-        "python".into(),
-        "3.13.0-1".into(),
-        crate::repository::versioning::VersionScheme::Arch,
-        "sha256:arch".into(),
-        1,
-        "https://example.invalid/python-arch.pkg.tar.zst".into(),
-    );
-    arch_pkg.architecture = Some("x86_64".to_string());
-    arch_pkg.source_profile = Some("arch".to_string());
-    arch_pkg.insert(&conn).unwrap();
-
-    let candidates = PackageSelector::search_packages(
-        &conn,
-        "python",
-        &SelectionOptions {
-            policy: Some(ResolutionPolicy::new().with_allowed_distros(vec!["arch".to_string()])),
-            is_root: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].repository.name, "arch-core");
-
-    let candidates = PackageSelector::search_packages(
-        &conn,
-        "python",
-        &SelectionOptions {
-            policy: Some(
-                ResolutionPolicy::new().with_allowed_distros(vec!["fedora-44".to_string()]),
-            ),
-            is_root: true,
-            ..Default::default()
-        },
-    )
-    .unwrap();
-
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].repository.name, "fedora-remi");
 }
 
 #[test]

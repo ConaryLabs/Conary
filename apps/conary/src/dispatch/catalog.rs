@@ -9,17 +9,8 @@ use crate::commands;
 
 pub(super) async fn dispatch_distro_command(distro_cmd: cli::DistroCommands) -> Result<()> {
     match distro_cmd {
-        cli::DistroCommands::Set { distro, mixing, db } => {
-            commands::distro::cmd_distro_set(&db.db_path, &distro, &mixing).await
-        }
-        cli::DistroCommands::Remove { db } => {
-            commands::distro::cmd_distro_remove(&db.db_path).await
-        }
         cli::DistroCommands::List { db } => commands::distro::cmd_distro_list(&db.db_path).await,
         cli::DistroCommands::Info { db } => commands::distro::cmd_distro_info(&db.db_path).await,
-        cli::DistroCommands::Mixing { policy, db } => {
-            commands::distro::cmd_distro_mixing(&db.db_path, &policy).await
-        }
     }
 }
 

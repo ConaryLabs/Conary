@@ -17,6 +17,14 @@ use std::path::{Path, PathBuf};
 
 const MAX_IDENTITY_DATABASE_SIZE: u64 = 16 * 1024 * 1024;
 
+pub(crate) fn resolve_native_payload_nodes(
+    root: &Path,
+    nodes: impl IntoIterator<Item = PayloadNode>,
+    format: PackageFormatType,
+) -> Result<Vec<ResolvedPayloadNode>> {
+    resolve_payload_nodes(root, nodes, InstallSemantics::native_package(format))
+}
+
 pub(super) fn resolve_payload_nodes(
     root: &Path,
     nodes: impl IntoIterator<Item = PayloadNode>,

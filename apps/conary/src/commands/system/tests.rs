@@ -1,9 +1,9 @@
 // apps/conary/src/commands/system/tests.rs
 
 use super::{
-    NATIVE_REPOSITORY_SEEDS, cmd_init, cmd_rebuild_database, cmd_rollback,
-    cmd_rollback_with_forced_precommit_failure, paths_refer_to_same_location, restore_snapshot,
-    restore_snapshots_to_live_root, validate_init_privileges,
+    cmd_init, cmd_rebuild_database, cmd_rollback, cmd_rollback_with_forced_precommit_failure,
+    paths_refer_to_same_location, restore_snapshot, restore_snapshots_to_live_root,
+    validate_init_privileges,
 };
 use crate::commands::{
     FileSnapshot, NativeLifecycleSnapshot, RollbackSystemAuthority, TroveSnapshot,
@@ -28,10 +28,6 @@ use conary_core::generation::root_manifest::{
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
     ResolvedPayloadNode,
-};
-use conary_core::repository::{
-    ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,
-    RepositoryTrustPolicy,
 };
 use rusqlite::params;
 use std::collections::BTreeMap;
@@ -108,7 +104,7 @@ async fn rebuild_database_resolves_retired_schema_and_seeds_current_authority() 
 }
 
 #[tokio::test]
-async fn init_seeds_every_builtin_source_feed_without_a_host_distro() {
+async fn init_seeds_every_builtin_remi_feed_without_incomplete_native_enrollment() {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
@@ -152,12 +148,18 @@ async fn init_seeds_every_builtin_source_feed_without_a_host_distro() {
         );
     }
 
-    for seed in NATIVE_REPOSITORY_SEEDS {
-        let repo = Repository::find_by_name(&conn, seed.name).unwrap().unwrap();
-        assert!(!repo.enabled, "{} should start disabled", repo.name);
-        assert_eq!(repo.source_profile.as_deref(), Some(seed.source_feed));
-        assert_eq!(repo.parser_config, Some(seed.parser.config()));
-    }
+    assert!(
+        Repository::list_all(&conn)
+            .unwrap()
+            .iter()
+            .all(|repository| !matches!(
+                repository.package_format,
+                conary_core::repository::RepositoryFormat::Arch
+                    | conary_core::repository::RepositoryFormat::Debian
+                    | conary_core::repository::RepositoryFormat::Fedora
+            )),
+        "system init must not persist native repositories before exact trust and policy enrollment"
+    );
 }
 
 #[tokio::test]
@@ -169,20 +171,17 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
     cmd_init(db_path_str).await.unwrap();
     {
         let conn = conary_core::db::open(db_path_str).unwrap();
-        let mut ubuntu = Repository::find_by_name(&conn, "ubuntu-26.04")
+        let mut ubuntu = Repository::find_by_name(&conn, "remi-ubuntu-26.04")
             .unwrap()
             .unwrap();
         ubuntu.last_sync = Some("2026-07-18T00:00:00Z".to_string());
         ubuntu.update(&conn).unwrap();
         let ubuntu_id = ubuntu.id.unwrap();
-        let corrupt_parser = conary_core::repository::RepositoryParserConfig::Rpm {
-            architecture: "x86_64".to_string(),
-        };
         conn.execute(
             "UPDATE repositories
-             SET package_format = 'rpm', parser_config_json = ?1
-             WHERE id = ?2",
-            params![serde_json::to_string(&corrupt_parser).unwrap(), ubuntu_id],
+             SET source_profile = 'arch'
+             WHERE id = ?1",
+            params![ubuntu_id],
         )
         .unwrap();
         let mut package = RepositoryPackage::new(
@@ -272,9 +271,10 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
         vec![expected_key]
     );
 
-    let ubuntu = Repository::find_by_name(&conn, "ubuntu-26.04")
+    let ubuntu = Repository::find_by_name(&conn, "remi-ubuntu-26.04")
         .unwrap()
         .unwrap();
+    assert_eq!(ubuntu.source_profile.as_deref(), Some("ubuntu-26.04"));
     assert!(ubuntu.last_sync.is_none());
     assert!(
         RepositoryPackage::find_by_repository(&conn, ubuntu.id.unwrap())
@@ -297,33 +297,6 @@ async fn init_rerun_preserves_operator_repository_choices() {
     cmd_init(db_path_str).await.unwrap();
     {
         let conn = conary_core::db::open(db_path_str).unwrap();
-
-        let mut arch_core = Repository::find_by_name(&conn, "arch-core")
-            .unwrap()
-            .unwrap();
-        arch_core
-            .set_trust_policy(RepositoryTrustPolicy::Arch {
-                keyring: ArchKeyringTrust {
-                    url: "https://keys.example.invalid/archlinux.gpg".to_string(),
-                    format: ArchKeyringFormat::OpenPgp,
-                    master_fingerprints: vec!["A".repeat(40)],
-                    packager_key_threshold: 1,
-                },
-                sig_level: ArchSigLevel {
-                    database: ArchSignatureRequirement::Optional,
-                    package: ArchSignatureRequirement::Required,
-                    trust: ArchTrustLevel::TrustedOnly,
-                },
-            })
-            .unwrap();
-        arch_core.enabled = true;
-        arch_core.update(&conn).unwrap();
-
-        let mut arch_extra = Repository::find_by_name(&conn, "arch-extra")
-            .unwrap()
-            .unwrap();
-        arch_extra.url = "https://mirror.example.invalid/arch-extra".to_string();
-        arch_extra.update(&conn).unwrap();
 
         let mut remi = Repository::find_by_name(&conn, "remi-arch")
             .unwrap()
@@ -349,14 +322,6 @@ async fn init_rerun_preserves_operator_repository_choices() {
     cmd_init(db_path_str).await.unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
-    let arch_core = Repository::find_by_name(&conn, "arch-core")
-        .unwrap()
-        .unwrap();
-    assert!(arch_core.enabled);
-    let arch_extra = Repository::find_by_name(&conn, "arch-extra")
-        .unwrap()
-        .unwrap();
-    assert_eq!(arch_extra.url, "https://mirror.example.invalid/arch-extra");
     let remi = Repository::find_by_name(&conn, "remi-arch")
         .unwrap()
         .unwrap();

@@ -14,10 +14,10 @@ use crate::packages::traits::{
     NativeStdinContract, NativeTransactionOrder, NativeTransactionPosition, PackageFile,
     PackageFormat, RpmHeaderContextMetadata, RpmHeaderFactMetadata, RpmHeaderFactSource,
     RpmHeaderValueMetadata, RpmMacroContextMetadata, RpmMacroDefinitionMetadata,
-    RpmMacroDefinitionSource, RpmNativeScriptletMetadata, RpmScriptletCriticality,
-    RpmScriptletFlagsMetadata, RpmScriptletProgram, RpmScriptletRuntimeMetadata, RpmScriptletSlot,
-    RpmSysusersDirective, RpmSysusersMetadata, RpmTriggerAction, RpmTriggerCondition,
-    RpmTriggerFamily, RpmTriggerMetadata,
+    RpmMacroDefinitionSource, RpmNativeScriptletMetadata, RpmScriptletFlagsMetadata,
+    RpmScriptletProgram, RpmScriptletRuntimeMetadata, RpmScriptletSlot, RpmSysusersDirective,
+    RpmSysusersMetadata, RpmTriggerAction, RpmTriggerCondition, RpmTriggerFamily,
+    RpmTriggerMetadata,
 };
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementGroup, RepositoryRequirementKind,
@@ -450,6 +450,7 @@ impl PackageFormat for RpmPackage {
         // Extract exact native lifecycle entries and config-file policy.
         let native_scriptlet_abi = Self::extract_native_scriptlet_abi(&pkg)?;
         let config = authority::parse_config_declarations(&pkg)?;
+        let promised_paths = authority::parse_promised_paths(&pkg)?;
 
         debug!(
             "Parsed RPM: {} version {} ({} files, {} dependencies, {} native lifecycle entries, {} config files)",
@@ -470,6 +471,7 @@ impl PackageFormat for RpmPackage {
             architecture: architecture.clone().expect("RPM architecture is required"),
             provides,
             config,
+            promised_paths,
         };
 
         Ok(Self {

@@ -28,7 +28,7 @@ fn package_key(id: &str, public_key: &str, status: PackageKeyStatus) -> PackageK
 #[test]
 fn accepted_signers_include_only_active_package_keys() {
     let keys = PackageKeysFile {
-        schema: 1,
+        schema: crate::repository::static_repo::SCHEMA_VERSION,
         keys: vec![
             package_key("active", "pub-active", PackageKeyStatus::Active),
             package_key("retired", "pub-retired", PackageKeyStatus::Retired),
@@ -43,7 +43,7 @@ fn accepted_signers_include_only_active_package_keys() {
 #[test]
 fn retired_signer_cannot_authorize_new_publish() {
     let keys = PackageKeysFile {
-        schema: 1,
+        schema: crate::repository::static_repo::SCHEMA_VERSION,
         keys: vec![package_key(
             "retired",
             "pub-retired",
@@ -58,7 +58,7 @@ fn retired_signer_cannot_authorize_new_publish() {
 #[test]
 fn duplicate_active_signers_fail_closed() {
     let keys = PackageKeysFile {
-        schema: 1,
+        schema: crate::repository::static_repo::SCHEMA_VERSION,
         keys: vec![
             package_key("dup", "pub-one", PackageKeyStatus::Active),
             package_key("dup", "pub-two", PackageKeyStatus::Active),

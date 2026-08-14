@@ -1,0 +1,9 @@
+X-Repolib-Name: Pop_OS System Sources
+Enabled: yes
+Types: deb deb-src
+URIs: http://apt.pop-os.org/ubuntu
+Suites: noble noble-security noble-updates noble-backports
+Components: main restricted universe multiverse
+Signed-By: /etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
+X-Repolib-ID: system
+X-Repolib-Default-Mirror: http://apt.pop-os.org/ubuntu

@@ -31,6 +31,7 @@ impl NativeLifecycleInstallState {
             PackageFormatType::Rpm => "rpm",
             PackageFormatType::Deb => "deb",
             PackageFormatType::Arch => "arch",
+            PackageFormatType::Eopkg => "eopkg",
         };
         let bundle = conary_core::ccs::convert::build_direct_native_lifecycle_bundle(
             package,

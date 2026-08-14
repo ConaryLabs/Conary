@@ -123,14 +123,22 @@ fn rpm_lifecycle_entry(
             slot,
             runtime: RpmScriptletRuntimeMetadata {
                 program: RpmScriptletProgram::External,
-                flags: RpmScriptletFlagsMetadata {
-                    names: Vec::new(),
-                    raw_bits: 0,
-                    unknown_bits: 0,
-                    expand: false,
-                    query_format: false,
-                    critical: false,
-                    criticality: RpmScriptletCriticality::WarningOnly,
+                flags: {
+                    // Derive the stamp as the parser does: the slot's class
+                    // authority with no CRITICAL header flag. Hand-set
+                    // combinations the parser cannot emit are rejected by the
+                    // bundle's class cross-check.
+                    let criticality = conary_core::scriptlet::rpm_package_slot_authority(slot)
+                        .effective_criticality(false);
+                    RpmScriptletFlagsMetadata {
+                        names: Vec::new(),
+                        raw_bits: 0,
+                        unknown_bits: 0,
+                        expand: false,
+                        query_format: false,
+                        critical: criticality.is_critical(),
+                        criticality,
+                    }
                 },
                 install_prefixes: Vec::new(),
                 macro_context: Default::default(),

@@ -160,6 +160,7 @@ async fn test_runner_qemu_boot_step_skips_when_tooling_missing() {
         group: None,
         skip: None,
         requires: Vec::new(),
+        corpus: None,
     }]);
 
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -260,6 +261,7 @@ async fn test_cancel_flag_stops_runner() {
             group: None,
             skip: None,
             requires: Vec::new(),
+            corpus: None,
         },
         TestDef {
             id: "T02".to_string(),
@@ -276,6 +278,7 @@ async fn test_cancel_flag_stops_runner() {
             group: None,
             skip: None,
             requires: Vec::new(),
+            corpus: None,
         },
     ]);
 
@@ -331,6 +334,7 @@ async fn test_suite_timeout_cancels_remaining() {
                 group: None,
                 skip: None,
                 requires: Vec::new(),
+                corpus: None,
             },
             TestDef {
                 id: "T02".to_string(),
@@ -347,6 +351,7 @@ async fn test_suite_timeout_cancels_remaining() {
                 group: None,
                 skip: None,
                 requires: Vec::new(),
+                corpus: None,
             },
         ],
         distro_overrides: HashMap::new(),
@@ -408,6 +413,7 @@ async fn test_step_timeout_overrides_test_timeout() {
         group: None,
         skip: None,
         requires: Vec::new(),
+        corpus: None,
     }]);
 
     let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
@@ -452,6 +458,7 @@ async fn test_concurrent_runs_independent() {
         group: None,
         skip: None,
         requires: Vec::new(),
+        corpus: None,
     }]);
 
     let manifest_b = make_manifest(vec![TestDef {
@@ -472,6 +479,7 @@ async fn test_concurrent_runs_independent() {
         group: None,
         skip: None,
         requires: Vec::new(),
+        corpus: None,
     }]);
 
     let (suite_a, suite_b) = tokio::join!(

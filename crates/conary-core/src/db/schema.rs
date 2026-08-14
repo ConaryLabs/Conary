@@ -12,12 +12,12 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 26 of the current-only schema epoch.
+/// Revision 38 of the current-only schema epoch.
 ///
-/// Revision 26 retains revision 25's fail-closed persisted states and requires
-/// every source pin to persist an explicit dependency-mixing policy. Earlier
-/// pre-alpha databases must be rebuilt; no compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 26;
+/// Revision 38 hard-cuts selected-root transaction authority to indexed,
+/// append-only SQLite snapshots. Earlier pre-alpha databases must be rebuilt;
+/// no compatibility migration is provided.
+pub const SCHEMA_VERSION: i32 = 38;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -79,6 +79,30 @@ pub fn get_schema_version(conn: &Connection) -> Result<i32> {
     .optional()
     .map(|version| version.unwrap_or(0))
     .map_err(Into::into)
+}
+
+/// Require the current schema epoch without creating or migrating any state.
+pub fn require_current(conn: &Connection) -> Result<()> {
+    let current_version = get_schema_version(conn)?;
+    match get_schema_identity(conn)? {
+        Some((epoch, revision)) if epoch == SCHEMA_EPOCH && revision == SCHEMA_VERSION => {
+            if current_version == SCHEMA_VERSION {
+                Ok(())
+            } else {
+                Err(rebuild_required(&format!(
+                    "schema epoch {epoch} with inconsistent version {current_version}"
+                )))
+            }
+        }
+        Some((epoch, revision)) => Err(rebuild_required(&format!(
+            "schema epoch {epoch} revision {revision}"
+        ))),
+        None if database_is_fresh(conn)? => Err(rebuild_required("fresh database")),
+        None if current_version == 0 => Err(rebuild_required("unversioned non-empty")),
+        None => Err(rebuild_required(&format!(
+            "retired migration-chain schema version {current_version}"
+        ))),
+    }
 }
 
 /// Initialize a fresh database or validate that it already uses this epoch.
@@ -195,7 +219,10 @@ mod tests {
             "converted_packages",
             "installed_file_capabilities",
             "generation_publications",
+            "selected_root_snapshots",
+            "selected_root_snapshot_entries",
             "activation_requests",
+            "lifecycle_events",
             "generation_activation_intents",
             "debian_alternative_groups",
         ] {
@@ -212,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_25_requires_rebuild_for_revision_26() {
+    fn revision_37_requires_rebuild_for_revision_38() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -220,19 +247,78 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 25);
+                VALUES ('conary-current-v1', 37);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (25);",
+            INSERT INTO schema_version (version) VALUES (37);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 25; this pre-alpha build supports only schema epoch conary-current-v1 revision 26"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 37; this pre-alpha build supports only schema epoch conary-current-v1 revision 38"
+        );
+    }
+
+    /// The revision, not the table text, is what separates the two provenance
+    /// shapes. `provides.provenance` is JSON inside a UNIQUE contract index and
+    /// no resync rebuilds installed rows, so a database carrying the previous
+    /// revision must be refused rather than silently mixed.
+    #[test]
+    fn a_database_holding_duplicated_path_provenance_cannot_pass_the_version_gate() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+
+        // Exactly the shape revision 26 wrote for one package-owned path.
+        let retired =
+            r#"{"role":"source-derived-file","format":"rpm","source_path":"/usr/bin/sh"}"#;
+        let current = r#"{"role":"source-derived-file","format":"rpm"}"#;
+        conn.execute(
+            "INSERT INTO troves
+             (name, version, type, install_source, install_reason, version_scheme)
+             VALUES ('tool', '1', 'package', 'repository', 'explicit', 'rpm')",
+            [],
+        )
+        .unwrap();
+        let trove_id = conn.last_insert_rowid();
+        for provenance in [retired, current] {
+            conn.execute(
+                "INSERT INTO provides
+                 (trove_id, capability, kind, version_scheme, architecture_qualifier_kind, provenance)
+                 VALUES (?1, '/usr/bin/sh', 'file', 'rpm', 'implicit', ?2)",
+                params![trove_id, provenance],
+            )
+            .unwrap();
+        }
+
+        // The UNIQUE contract index admits both, so one path has two providers:
+        // this is the state the version gate exists to keep out.
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM provides WHERE trove_id = ?1 AND capability = '/usr/bin/sh'",
+                params![trove_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            2,
+        );
+
+        // Revision 26 is the last revision that wrote this shape. Naming it
+        // absolutely keeps the test pinned to that database, not to whatever
+        // revision happens to sit one below the current constant.
+        conn.execute("UPDATE schema_identity SET revision = 26", [])
+            .unwrap();
+        conn.execute("UPDATE schema_version SET version = 26", [])
+            .unwrap();
+
+        let error = ensure_current(&conn).unwrap_err();
+        assert!(
+            matches!(error, Error::SchemaRebuildRequired { supported_revision, .. }
+                if supported_revision == SCHEMA_VERSION),
+            "{error}"
         );
     }
 
@@ -548,6 +634,20 @@ mod tests {
         )
         .unwrap();
 
+        conn.execute(
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 source_profile, version_scheme, native_package_identity_json
+             ) VALUES (
+                 'jq', '1.8.2-13', 'package', 'x86_64',
+                 'adopted-full', 'explicit', 'solus', 'eopkg',
+                 '{\"manager\":\"eopkg\",\"selector\":\"jq\",\"name\":\"jq\",
+                   \"version\":\"1.8.2\",\"release\":13,\"architecture\":\"x86_64\"}'
+             )",
+            [],
+        )
+        .unwrap();
+
         for sql in [
             "INSERT INTO troves (
                  name, version, type, architecture, install_source, install_reason,
@@ -584,6 +684,26 @@ mod tests {
                  'adopted-track', 'explicit', 'debian',
                  '{\"manager\":\"dpkg\",\"selector\":\"libc6:amd64\",\"name\":\"libc6\",
                    \"version\":\"2.41-12\",\"architecture\":\"i386\"}'
+             )",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 source_profile, version_scheme, native_package_identity_json
+             ) VALUES (
+                 'missing-eopkg-release', '1.0-1', 'package', 'x86_64',
+                 'adopted-full', 'explicit', 'solus', 'eopkg',
+                 '{\"manager\":\"eopkg\",\"selector\":\"missing-eopkg-release\",
+                   \"name\":\"missing-eopkg-release\",\"version\":\"1.0\",
+                   \"architecture\":\"x86_64\"}'
+             )",
+            "INSERT INTO troves (
+                 name, version, type, architecture, install_source, install_reason,
+                 source_profile, version_scheme, native_package_identity_json
+             ) VALUES (
+                 'wrong-eopkg-release', '1.0-2', 'package', 'x86_64',
+                 'adopted-full', 'explicit', 'solus', 'eopkg',
+                 '{\"manager\":\"eopkg\",\"selector\":\"wrong-eopkg-release\",
+                   \"name\":\"wrong-eopkg-release\",\"version\":\"1.0\",\"release\":1,
+                   \"architecture\":\"x86_64\"}'
              )",
         ] {
             assert!(conn.execute(sql, []).is_err(), "{sql}");

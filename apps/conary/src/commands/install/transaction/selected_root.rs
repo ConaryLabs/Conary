@@ -81,6 +81,12 @@ where
     )
     .context("Package relation transaction preflight failed")?;
     super::preflight_generation_file_capabilities_for_install(ctx, extraction)?;
+    conary_core::repository::enrollment::transaction::preflight_transition(
+        conn,
+        ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
+        ctx.repository_enrollments,
+    )
+    .context("Package repository enrollment preflight failed")?;
     inner::preflight_file_ownership(
         conn,
         extraction
@@ -122,7 +128,7 @@ fn execute_selected_root_inner<F>(
     selected_root: &mut SelectedRootSession,
     native_transaction: &PreparedNativeTransaction,
     native_execution_mode: &ExecutionMode,
-    rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
+    rollback_root: conary_core::generation::root_manifest::SelectedRootSnapshot,
     post_graph: F,
 ) -> Result<InstallTransactionResult>
 where
@@ -200,6 +206,7 @@ where
     };
     drive_native_graph(
         &tx,
+        changeset_id,
         native_transaction,
         &selected_path,
         native_execution_mode,
@@ -242,21 +249,13 @@ where
                     config_transaction,
                 },
             )?;
-        if let Err(error) = selected_root.persist_for_publication(&runtime_root, &publication_debt)
+        if let Err(error) =
+            selected_root.persist_for_publication(&tx, &runtime_root, &publication_debt)
         {
             drop(tx);
-            let _ = crate::commands::generation::selected_root::remove_publication_candidate(
-                &runtime_root,
-                &publication_debt,
-            );
             return Err(error.context("failed to persist exact selected-root install input"));
         }
         if let Err(error) = tx.commit() {
-            crate::commands::generation::selected_root::remove_publication_candidate(
-                &runtime_root,
-                &publication_debt,
-            )
-            .context("failed to discard install candidate after database commit error")?;
             return Err(error.into());
         }
         let outcome = crate::commands::generation::publication::publish_recorded_selected_root(
@@ -386,6 +385,15 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
         if let Some(capabilities) = self.ctx.ccs_capabilities {
             conary_core::capability::store_capabilities(self.tx, installed.trove_id, capabilities)?;
         }
+        conary_core::repository::enrollment::transaction::apply_transition(
+            self.tx,
+            self.ctx.old_trove_to_upgrade.and_then(|trove| trove.id),
+            installed.trove_id,
+            self.pkg.name(),
+            self.pkg.version(),
+            self.ctx.repository_enrollments,
+        )
+        .context("Failed to apply package repository enrollment")?;
         self.native_transaction
             .mark_install_payload_applied_for(self.tx, &self.installing_identity)?;
         self.config_transaction = Some(config_transaction);
@@ -412,6 +420,15 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
         if let Some(Some(package)) = self.removing_deb_identities.get(change_index) {
             self.native_transaction
                 .mark_remove_payload_started_for(self.tx, package)?;
+        }
+        if self
+            .ctx
+            .relation_removals
+            .iter()
+            .any(|removal| removal.trove_id == *trove_id)
+        {
+            conary_core::repository::enrollment::transaction::apply_removal(self.tx, *trove_id)
+                .context("Failed to release relation-removed package repository enrollment")?;
         }
         let selected_path = self.selected_root.selected_root().to_path_buf();
         finalize_owned_trove(

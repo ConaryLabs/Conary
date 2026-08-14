@@ -149,7 +149,7 @@ end
 "#;
     let entry = NativeLifecycleEntry {
         id: "rpm:%post".to_string(),
-        native_slot: "%post".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::Post),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PostInstall,
         lifecycle_paths: vec!["install:post".to_string()],
@@ -179,9 +179,8 @@ end
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::EmbeddedLua,
             body_transforms: Vec::new(),
-            critical: true,
             criticality: RpmCriticality::Header,
-            raw_flags: 0,
+            raw_flags: conary_core::ccs::native_lifecycle::RPM_SCRIPTLET_FLAG_CRITICAL,
             unknown_flags: 0,
             install_prefixes: Vec::new(),
             macro_context: Default::default(),
@@ -286,7 +285,7 @@ fn typed_rpm_replatform_upgrade_entry() -> NativeLifecycleEntry {
     let body = "print('replatform-upgrade-new-pre')\n";
     NativeLifecycleEntry {
         id: "rpm:%pre".to_string(),
-        native_slot: "%pre".to_string(),
+        native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::Pre),
         kind: NativeLifecycleEntryKind::Executable,
         phase: LifecyclePath::PreUpgrade,
         lifecycle_paths: vec!["upgrade:new-pre".to_string()],
@@ -312,9 +311,8 @@ fn typed_rpm_replatform_upgrade_entry() -> NativeLifecycleEntry {
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::EmbeddedLua,
             body_transforms: Vec::new(),
-            critical: true,
             criticality: RpmCriticality::Header,
-            raw_flags: 0,
+            raw_flags: conary_core::ccs::native_lifecycle::RPM_SCRIPTLET_FLAG_CRITICAL,
             unknown_flags: 0,
             install_prefixes: Vec::new(),
             macro_context: Default::default(),
@@ -330,20 +328,29 @@ fn typed_rpm_replatform_upgrade_entry() -> NativeLifecycleEntry {
 }
 
 pub(super) fn serve_test_file(file_path: PathBuf) -> (String, std::thread::JoinHandle<()>) {
+    serve_test_file_n(file_path, 1)
+}
+
+pub(super) fn serve_test_file_n(
+    file_path: PathBuf,
+    request_count: usize,
+) -> (String, std::thread::JoinHandle<()>) {
     let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
     let bytes = std::fs::read(&file_path).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0_u8; 1024];
-        let _ = stream.read(&mut request);
-        let headers = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
-            bytes.len()
-        );
-        stream.write_all(headers.as_bytes()).unwrap();
-        stream.write_all(&bytes).unwrap();
+        for _ in 0..request_count {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            );
+            stream.write_all(headers.as_bytes()).unwrap();
+            stream.write_all(&bytes).unwrap();
+        }
     });
     (format!("http://{addr}/{filename}"), handle)
 }

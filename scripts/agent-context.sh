@@ -562,7 +562,7 @@ mode_run() {
 
     for cmd in "${cmds[@]}"; do
         printf '+ %s\n' "$cmd"
-        bash -lc "$cmd" || fail "command failed: $cmd"
+        bash -c "$cmd" || fail "command failed: $cmd"
     done
     printf 'All %s %s command(s) passed for %s.\n' "${#cmds[@]}" "$run_kind" "$heading"
 }

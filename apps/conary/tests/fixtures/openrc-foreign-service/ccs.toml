@@ -1,0 +1,25 @@
+[package]
+name = "conary-openrc-foreign-lifecycle-fixture"
+version = "1.0.0"
+version_scheme = "conary"
+release = "1"
+kind = "package"
+description = "Foreign RPM lifecycle fixture for typed OpenRC capture"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["conary-openrc-foreign-lifecycle-fixture"]
+binaries = []
+
+[components]
+default = ["runtime"]
+
+[hooks.post_install]
+script = '''
+rc-service --ifexists --ifstarted conary-openrc-foreign-fixture restart
+'''

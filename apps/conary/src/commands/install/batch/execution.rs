@@ -21,6 +21,7 @@ struct GraphExecutionInputs {
     finalization_troves: Vec<Option<i64>>,
     installing_deb_identities: Vec<Option<NativePackageIdentity>>,
     removing_deb_identities: Vec<Option<NativePackageIdentity>>,
+    relation_removal_trove_ids: BTreeSet<i64>,
 }
 
 impl BatchInstaller<'_> {
@@ -36,10 +37,25 @@ impl BatchInstaller<'_> {
         native_transaction: &PreparedNativeTransaction,
         native_execution_mode: &ExecutionMode,
         selected: &mut crate::commands::generation::selected_root::SelectedRootSession,
-        rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
+        rollback_root: conary_core::generation::root_manifest::SelectedRootSnapshot,
         ccs_hook_executors: &mut [Option<conary_core::ccs::HookExecutor>],
+        promise_plan: &mut super::promises::PromiseWitnessPlan,
     ) -> Result<(i64, Vec<i64>, Vec<i64>)> {
         let graph_inputs = self.prepare_graph_execution(conn, packages)?;
+        let repository_transitions = packages
+            .iter()
+            .map(|package| {
+                Ok((
+                    package.old_trove_id()?,
+                    package.repository_enrollments.as_slice(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        conary_core::repository::enrollment::transaction::preflight_batch(
+            conn,
+            &repository_transitions,
+        )
+        .context("Atomic package repository enrollment preflight failed")?;
         let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(
             std::path::PathBuf::from(self.db_path),
         );
@@ -76,6 +92,7 @@ impl BatchInstaller<'_> {
                 &graph_inputs,
                 &retained_upgrade_trove_ids,
             )?;
+            super::promises::verify_promised_paths_materialized(promise_plan, &selected_root)?;
             let mut activation_requests = native_transaction.take_activation_requests();
             for (package, executor) in packages.iter().zip(ccs_hook_executors.iter()) {
                 let (Some(ccs), Some(executor)) = (package.ccs.as_ref(), executor.as_ref()) else {
@@ -131,20 +148,12 @@ impl BatchInstaller<'_> {
                 return Err(error);
             }
         };
-        if let Err(error) = selected.persist_for_publication(&runtime_root, &publication_debt) {
+        if let Err(error) = selected.persist_for_publication(&tx, &runtime_root, &publication_debt)
+        {
             drop(tx);
-            let _ = crate::commands::generation::selected_root::remove_publication_candidate(
-                &runtime_root,
-                &publication_debt,
-            );
             return Err(error.context("failed to persist exact selected-root publication input"));
         }
         if let Err(error) = tx.commit() {
-            crate::commands::generation::selected_root::remove_publication_candidate(
-                &runtime_root,
-                &publication_debt,
-            )
-            .context("failed to discard selected-root candidate after database commit error")?;
             return Err(error.into());
         }
 
@@ -192,6 +201,11 @@ impl BatchInstaller<'_> {
                     .map(|removal| Some(removal.trove_id)),
             )
             .collect::<Vec<_>>();
+        let relation_removal_trove_ids = packages
+            .iter()
+            .flat_map(|package| package.relation_removals.iter())
+            .map(|removal| removal.trove_id)
+            .collect::<BTreeSet<_>>();
         let installing_deb_identities = packages
             .iter()
             .map(|package| {
@@ -223,6 +237,7 @@ impl BatchInstaller<'_> {
             finalization_troves,
             installing_deb_identities,
             removing_deb_identities,
+            relation_removal_trove_ids,
         })
     }
 
@@ -262,6 +277,7 @@ impl BatchInstaller<'_> {
         };
         super::super::native_graph::drive_native_graph(
             tx,
+            changeset_id,
             native_transaction,
             selected_root,
             native_execution_mode,
@@ -386,6 +402,23 @@ where
                 &resolved_files,
                 &directory_plan,
             )?;
+            conary_core::repository::enrollment::transaction::apply_transition(
+                self.tx,
+                old_trove_id,
+                *self
+                    .trove_ids
+                    .get(change_index)
+                    .context("batch payload has no installed trove identity")?,
+                &package.name,
+                &package.version,
+                &package.repository_enrollments,
+            )
+            .with_context(|| {
+                format!(
+                    "Failed to apply package repository enrollment for {}",
+                    package.name
+                )
+            })?;
             if let Some(Some(package)) = self.inputs.installing_deb_identities.get(change_index) {
                 self.native_transaction
                     .mark_install_payload_applied_for(self.tx, package)?;
@@ -408,6 +441,10 @@ where
         if let Some(Some(package)) = self.inputs.removing_deb_identities.get(change_index) {
             self.native_transaction
                 .mark_remove_payload_started_for(self.tx, package)?;
+        }
+        if self.inputs.relation_removal_trove_ids.contains(trove_id) {
+            conary_core::repository::enrollment::transaction::apply_removal(self.tx, *trove_id)
+                .context("Failed to release relation-removed package repository enrollment")?;
         }
         super::super::native_graph::finalize_owned_trove(
             self.tx,

@@ -78,7 +78,7 @@ fn rpm_pretransaction_absence_bundle(
         scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
         entries: vec![NativeLifecycleEntry {
             id: "rpm:%pretrans".to_string(),
-            native_slot: "%pretrans".to_string(),
+            native_slot: Some(conary_core::packages::native_abi::RpmScriptletSlot::PreTrans),
             kind: NativeLifecycleEntryKind::Executable,
             phase: LifecyclePath::PreTransaction,
             lifecycle_paths: vec![LifecyclePath::PreTransaction.as_str().to_string()],
@@ -102,8 +102,7 @@ fn rpm_pretransaction_absence_bundle(
             rpm_runtime: Some(RpmRuntimeMetadata {
                 program: RpmProgram::EmbeddedLua,
                 body_transforms: Vec::new(),
-                critical: true,
-                criticality: RpmCriticality::Header,
+                criticality: RpmCriticality::SlotDefault,
                 raw_flags: 0,
                 unknown_flags: 0,
                 install_prefixes: Vec::new(),
@@ -154,6 +153,7 @@ fn selected_rpm_dependency() -> SatPackage {
 fn selected_remi_provenance() -> RepositoryInstallProvenance {
     RepositoryInstallProvenance {
         repository_id: 7,
+        source_identity: Some("fedora-44".to_string()),
         source_profile: Some("fedora-44".to_string()),
         version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
         source_kind: RepositorySourceKind::Remi,
@@ -451,7 +451,7 @@ async fn repository_ccs_closure_runs_root_pretransaction_before_dependency_paylo
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
-        resolution_policy: test_resolution_policy().with_primary_profile("fedora-44"),
+        resolution_policy: test_resolution_policy().with_primary_source_identity("fedora-44"),
     })
     .await
     .unwrap()

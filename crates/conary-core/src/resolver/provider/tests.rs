@@ -28,6 +28,7 @@ fn insert_repo_fixture(conn: &rusqlite::Connection, package: &mut RepositoryPack
         VersionScheme::Rpm => "fedora-44",
         VersionScheme::Debian => "ubuntu-26.04",
         VersionScheme::Arch => "arch",
+        VersionScheme::Eopkg => "solus",
         VersionScheme::Conary => {
             package.architecture = Some("x86_64".to_string());
             package.insert(conn).unwrap();

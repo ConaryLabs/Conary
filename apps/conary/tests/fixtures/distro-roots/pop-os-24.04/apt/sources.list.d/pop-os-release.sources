@@ -1,0 +1,7 @@
+X-Repolib-Name: Pop_OS Release Sources
+Enabled: yes
+Types: deb deb-src
+URIs: http://apt.pop-os.org/release
+Suites: noble
+Components: main
+Signed-By: /etc/apt/trusted.gpg.d/pop-keyring-2017-archive.gpg

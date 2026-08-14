@@ -11,7 +11,8 @@ use tokio::sync::RwLock;
 
 use crate::server::ServerState;
 use crate::server::admin_service::{
-    self, CreateRepoInput, RepoRefreshBatch, RepoRefreshBatchState, UpdateRepoInput,
+    self, CreateRepoInput, NativeSourcePolicyInput, RepoRefreshBatch, RepoRefreshBatchState,
+    UpdateRepoInput,
 };
 use crate::server::auth::{Scope, TokenScopes, json_error};
 use conary_core::db::models::RepositoryOwnership;
@@ -31,6 +32,7 @@ pub struct CreateRepoRequest {
     pub metadata_expire: Option<i32>,
     pub parser: RepositoryParserConfig,
     pub trust: Option<RepositoryTrustPolicy>,
+    pub native_source: Option<NativeSourcePolicyRequest>,
 }
 
 /// Request body for replacing a repository's mutable configuration.
@@ -44,6 +46,49 @@ pub struct UpdateRepoRequest {
     pub metadata_expire: Option<i32>,
     pub parser: RepositoryParserConfig,
     pub trust: Option<RepositoryTrustPolicy>,
+    pub native_source: Option<NativeSourcePolicyRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeSourcePolicyRequest {
+    pub source_identity: String,
+    pub repository_identity: String,
+    pub stream_kind: String,
+    pub stream_identity: String,
+    pub policy_group: Option<String>,
+    pub update_mode: String,
+    pub pinned_snapshot_sha256: Option<String>,
+}
+
+impl From<NativeSourcePolicyRequest> for NativeSourcePolicyInput {
+    fn from(value: NativeSourcePolicyRequest) -> Self {
+        Self {
+            source_identity: value.source_identity,
+            repository_identity: value.repository_identity,
+            stream_kind: value.stream_kind,
+            stream_identity: value.stream_identity,
+            policy_group: value.policy_group,
+            update_mode: value.update_mode,
+            pinned_snapshot_sha256: value.pinned_snapshot_sha256,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct NativeSourcePolicyResponse {
+    pub source_identity: String,
+    pub repository_identity: String,
+    pub scope_kind: &'static str,
+    pub scope_identity: String,
+    pub ecosystem: &'static str,
+    pub version_scheme: &'static str,
+    pub stream_kind: &'static str,
+    pub stream_identity: String,
+    pub update_mode: &'static str,
+    pub stream_binding_sha256: String,
+    pub authenticated_snapshot_sha256: Option<String>,
+    pub pinned_snapshot_sha256: Option<String>,
 }
 
 /// Response body for repository endpoints.
@@ -62,6 +107,7 @@ pub struct RepoResponse {
     pub package_format: RepositoryFormat,
     pub parser: Option<RepositoryParserConfig>,
     pub managed_by: &'static str,
+    pub native_source: Option<NativeSourcePolicyResponse>,
 }
 
 /// Query parameters for refresh endpoints.
@@ -75,6 +121,36 @@ impl TryFrom<conary_core::db::models::Repository> for RepoResponse {
     type Error = anyhow::Error;
 
     fn try_from(r: conary_core::db::models::Repository) -> Result<Self, Self::Error> {
+        let native_source = match (
+            r.source_policy.as_ref(),
+            r.repository_identity.as_ref(),
+            r.stream_binding_sha256.as_ref(),
+        ) {
+            (Some(policy), Some(repository_identity), Some(stream_binding_sha256)) => {
+                Some(NativeSourcePolicyResponse {
+                    source_identity: policy.source_identity.clone(),
+                    repository_identity: repository_identity.clone(),
+                    scope_kind: policy.scope.kind(),
+                    scope_identity: policy.scope.identity().to_string(),
+                    ecosystem: policy.ecosystem.as_str(),
+                    version_scheme: policy.version_scheme.as_str(),
+                    stream_kind: policy.stream.kind(),
+                    stream_identity: policy.stream.identity().to_string(),
+                    update_mode: policy.update_mode.as_str(),
+                    stream_binding_sha256: stream_binding_sha256.clone(),
+                    authenticated_snapshot_sha256: r
+                        .authenticated_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.sha256().to_string()),
+                    pinned_snapshot_sha256: r
+                        .pinned_snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.sha256().to_string()),
+                })
+            }
+            (None, None, None) => None,
+            _ => anyhow::bail!("repository '{}' has incomplete native source state", r.name),
+        };
         Ok(Self {
             id: r.id.ok_or_else(|| {
                 anyhow::anyhow!(
@@ -96,7 +172,10 @@ impl TryFrom<conary_core::db::models::Repository> for RepoResponse {
             managed_by: match r.managed_by {
                 RepositoryOwnership::Operator => "operator",
                 RepositoryOwnership::RemiConfig => "remi-config",
+                RepositoryOwnership::NativeProjection => "native-projection",
+                RepositoryOwnership::PackageProjection => "package-projection",
             },
+            native_source,
         })
     }
 }
@@ -182,6 +261,7 @@ pub async fn create_repo(
         metadata_expire: body.metadata_expire.unwrap_or(3600),
         parser: body.parser,
         trust: body.trust,
+        native_source: body.native_source.map(Into::into),
     };
 
     match admin_service::create_repo(&state, input).await {
@@ -276,6 +356,7 @@ pub async fn update_repo(
         metadata_expire: body.metadata_expire,
         parser: body.parser,
         trust: body.trust,
+        native_source: body.native_source.map(Into::into),
     };
 
     match admin_service::update_repo(&state, &name, input).await {
@@ -580,6 +661,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn native_repo_create_requires_and_returns_exact_source_policy() {
+        let (app, _db_path) = test_app().await;
+        let root = serde_json::json!({
+            "url": "https://93.184.216.34/keys/repository.gpg",
+            "fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        });
+        let create_body = serde_json::json!({
+            "name": "third-party-rpm",
+            "url": "https://93.184.216.34/rpm",
+            "parser": {"package_format": "rpm", "architecture": "x86_64"},
+            "trust": {
+                "ecosystem": "rpm",
+                "metadata": {"kind": "open-pgp", "keys": [root.clone()]},
+                "package_keys": [root]
+            },
+            "native_source": {
+                "source_identity": "third-party:widgets",
+                "repository_identity": "widgets:x86_64",
+                "stream_kind": "channel",
+                "stream_identity": "stable",
+                "update_mode": "follow"
+            }
+        });
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/repos")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(create_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["native_source"]["source_identity"],
+            "third-party:widgets"
+        );
+        assert_eq!(body["native_source"]["update_mode"], "follow");
+        assert_eq!(
+            body["native_source"]["stream_binding_sha256"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
     }
 
     #[tokio::test]

@@ -12,8 +12,8 @@
 use super::process::{TargetCommandBindMount, TargetRootScript};
 use crate::activation::{
     ActivationExecutableIdentity, RuntimeActivationInvocation, SecurityPolicyInvocationDisposition,
-    parse_security_policy_invocation, parse_systemctl_activation_invocation,
-    systemctl_proxy_shell_scan,
+    parse_openrc_activation_invocation, parse_security_policy_invocation,
+    parse_systemctl_activation_invocation, systemctl_proxy_shell_scan,
 };
 use crate::error::{Error, Result, ScriptletFailureKind};
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 const DEFAULT_SCRIPTLET_PATH: &str = "/usr/sbin:/usr/bin:/sbin:/bin";
 const CAPTURE_COMMANDS: &[&str] = &[
     "systemctl",
+    "rc-service",
     "restorecon",
     "semanage",
     "setsebool",
@@ -115,6 +116,21 @@ impl ActivationCaptureSession {
                                 ScriptletFailureKind::ContractViolation,
                                 format!(
                                     "captured systemctl invocation is outside the generation activation contract: {error}"
+                                ),
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                if command == "rc-service" {
+                    match parse_openrc_activation_invocation(&record.argv) {
+                        Ok(Some(invocation)) => invocations.push(invocation.into()),
+                        Ok(None) => {}
+                        Err(error) => {
+                            return Err(Error::scriptlet(
+                                ScriptletFailureKind::ContractViolation,
+                                format!(
+                                    "captured rc-service invocation is outside the generation activation contract: {error}"
                                 ),
                             ));
                         }
@@ -275,6 +291,12 @@ fn proxy_script(capture: &Path, original: &Path) -> String {
                  ;;\n\
              aa-enforce|aa-complain|aa-disable)\n\
                  {original} --no-reload \"$@\"\n\
+                 conary_status=$?\n\
+                 conary_record \"$conary_status\" \"$@\"\n\
+                 exit \"$conary_status\"\n\
+                 ;;\n\
+             rc-service)\n\
+                 {original} --dry-run \"$@\"\n\
                  conary_status=$?\n\
                  conary_record \"$conary_status\" \"$@\"\n\
                  exit \"$conary_status\"\n\
@@ -533,6 +555,57 @@ mod tests {
         assert!(proxy.contains("reload-or-try-restart"));
         assert!(!proxy.contains("grep"));
         assert!(!proxy.contains("sed"));
+    }
+
+    #[test]
+    fn openrc_proxy_uses_target_dry_run_and_captures_exact_runtime_argv() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let temp = tempfile::tempdir().unwrap();
+        let capture = temp.path().join("capture");
+        let calls = temp.path().join("calls");
+        let original = temp.path().join("rc-service.original");
+        fs::write(
+            &original,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit 0\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        let proxy_path = temp.path().join("rc-service");
+        fs::write(&proxy_path, proxy_script(&capture, &original)).unwrap();
+        for path in [&original, &proxy_path] {
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(path, permissions).unwrap();
+        }
+
+        assert!(
+            Command::new("/bin/sh")
+                .arg(&proxy_path)
+                .args(["--ifstarted", "sshd", "restart"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            fs::read_to_string(calls).unwrap(),
+            "--dry-run --ifstarted sshd restart\n"
+        );
+        let record = decode_records(&fs::read(capture).unwrap())
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            record.argv,
+            ["--ifstarted", "sshd", "restart"].map(str::to_string)
+        );
+        assert!(
+            parse_openrc_activation_invocation(&record.argv)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

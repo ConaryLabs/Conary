@@ -3,8 +3,8 @@
 use super::*;
 use crate::ccs::manifest::FileCapability;
 use crate::ccs::v3::schema::{
-    ComponentAuthorityV3, ConfigSemanticsV3, ConflictPolicyV3, LifecycleScriptExecutionV3,
-    LifecycleScriptV3, PackageDataV3,
+    ComponentAuthorityV3, ConfigSemanticsV3, ConflictPolicyV3, FileContentLayoutV3,
+    LifecycleScriptExecutionV3, LifecycleScriptV3, PackageDataV3,
 };
 use crate::payload::{PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadTimestamp};
 use std::collections::BTreeMap;
@@ -24,6 +24,7 @@ fn file_at(path: &str) -> FileAuthorityV3 {
             sha256: crate::hash::sha256(path.as_bytes()),
             size: 4096,
         }),
+        content_layout: FileContentLayoutV3::WholeObject,
         component: "main".to_string(),
         config: None,
         conflict: ConflictPolicyV3::Error,
@@ -117,6 +118,7 @@ fn file_authority_fixed_bytes_is_an_upper_bound() {
                 sha256: "f".repeat(64),
                 size: u64::MAX,
             }),
+            content_layout: FileContentLayoutV3::WholeObject,
             component: String::new(),
             config: Some(ConfigSemanticsV3 {
                 noreplace: true,
@@ -154,6 +156,17 @@ fn every_structural_dimension_fails_one_over_its_own_limit() {
         .unwrap_err()
         .dimension,
         BudgetDimension::FileCount
+    );
+    assert_eq!(
+        admit(
+            BudgetDimension::PayloadReferenceCount,
+            "kind.package.files.content_layout",
+            budget.max_payload_references() + 1,
+            budget.max_payload_references(),
+        )
+        .unwrap_err()
+        .dimension,
+        BudgetDimension::PayloadReferenceCount
     );
 
     // Path length.
@@ -454,12 +467,16 @@ fn derived_ceilings_are_stated_in_terms_of_structural_dimensions() {
     let budget = CCS_BUDGET;
     let expected = AUTHORITY_ENVELOPE_BYTES
         + budget.max_files * FILE_AUTHORITY_FIXED_BYTES
+        + budget.max_payload_references() * PAYLOAD_OBJECT_REFERENCE_BYTES
         + budget.max_total_path_bytes
         + budget.max_total_xattr_bytes
         + budget.max_non_payload_authority_bytes;
 
     assert_eq!(budget.max_authority_bytes(), expected);
-    assert_eq!(budget.max_archive_entries(), budget.max_files + 256 + 1 + 8);
+    assert_eq!(
+        budget.max_archive_entries(),
+        budget.max_payload_objects() + 256 + 1 + 8
+    );
 
     let archive = budget.archive_decode_bounds().unwrap();
     assert_eq!(

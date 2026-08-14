@@ -4,7 +4,7 @@ use super::*;
 use crate::repository::dependency_model::RepositoryCapabilityKind;
 use crate::repository::dependency_model::{ConditionalRequirementBehavior, ProvideVersionRelation};
 
-fn parser() -> FedoraParser {
+pub(super) fn parser() -> FedoraParser {
     let trust = PreparedOpenPgpTrust::for_test(RepositoryTrustPolicy::Rpm {
         metadata: RpmMetadataAuthority::Metalink {
             url: "https://mirrors.example.test/metalink".to_string(),
@@ -29,6 +29,19 @@ fn valid_builder() -> PackageBuilder {
     builder.size = Some("1024".to_string());
     builder.location = Some("Packages/t/test-package-2.3.4-5.fc44.x86_64.rpm".to_string());
     builder
+}
+
+#[test]
+fn snapshot_identity_owns_the_authenticated_repomd_bytes() {
+    let repomd = b"<repomd revision='one'/>";
+    assert_eq!(
+        authenticated_repomd_snapshot(repomd),
+        AuthenticatedSnapshotIdentity::for_bytes(repomd)
+    );
+    assert_ne!(
+        authenticated_repomd_snapshot(repomd),
+        AuthenticatedSnapshotIdentity::for_bytes(b"primary.xml bytes")
+    );
 }
 
 fn primary_package_with_format(format_body: &str) -> String {
@@ -278,7 +291,6 @@ fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
         && provide.provenance
             == crate::repository::dependency_model::CapabilityProvenance::SourceDerivedFile {
                 format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
-                source_path: provide.name.clone(),
             }));
 }
 

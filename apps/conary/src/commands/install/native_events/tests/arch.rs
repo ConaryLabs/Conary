@@ -15,7 +15,7 @@ fn arch_hook_bundle_with_dependency(package_name: &str, dependency: &str) -> Nat
 
     let entry = &mut bundle.entries[0];
     entry.id = "arch:alpm-hook:40-cache.hook".to_string();
-    entry.native_slot = "alpm-hook:40-cache.hook".to_string();
+    entry.native_slot = None;
     entry.kind = NativeLifecycleEntryKind::ControlArtifact;
     entry.phase = LifecyclePath::Trigger;
     entry.lifecycle_paths = vec![LifecyclePath::Trigger.as_str().to_string()];

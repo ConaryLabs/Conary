@@ -52,6 +52,7 @@ mod remove;
 mod replatform_rendering;
 mod repo;
 mod repo_static;
+mod repository_takeover;
 mod restore;
 mod rollback_system_authority;
 mod self_update;
@@ -69,8 +70,8 @@ pub mod verify;
 // Re-export all command handlers
 pub use adopt::{
     NativeHandoffOptions, NativeHandoffOutcome, NativeHandoffSummary, UnadoptOptions, cmd_adopt,
-    cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_conflicts, cmd_native_handoff,
-    cmd_sync_hook_install, cmd_unadopt,
+    cmd_adopt_convert, cmd_adopt_refresh, cmd_adopt_status, cmd_adopt_system, cmd_conflicts,
+    cmd_native_handoff, cmd_sync_hook_install, cmd_unadopt,
 };
 pub use automation::{
     cmd_automation_apply, cmd_automation_check, cmd_automation_configure, cmd_automation_daemon,
@@ -174,6 +175,7 @@ pub use repo::{
     cmd_repo_remove, cmd_repo_sync, cmd_search,
 };
 pub use repo_static::cmd_repo_reset_trust;
+pub use repository_takeover::cmd_repository_takeover;
 pub use restore::{cmd_restore, cmd_restore_all};
 pub(crate) use rollback_system_authority::RollbackSystemAuthority;
 pub use self_update::{SelfUpdateOptions, cmd_self_update};
@@ -223,14 +225,14 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
     conary_core::util::format_bytes(bytes)
 }
 
-/// Emit a one-time hint when source policy is not explicitly configured.
+/// Emit a one-time hint when ownership convergence is not explicitly configured.
 ///
-/// Checks whether a system model exists and, if so, whether the source policy
-/// section has been explicitly set. When running with pure defaults, emits an
-/// informational message guiding the user to configure their source policy.
+/// Checks whether a system model exists and, if so, whether convergence has
+/// been explicitly set. Repository source selection is deliberately not owned
+/// by this model-level hint.
 ///
 /// This is a non-blocking hint -- it never prevents the operation from proceeding.
-pub(crate) fn hint_unconfigured_source_policy() {
+pub(crate) fn hint_default_convergence() {
     use conary_core::model;
 
     if !model::model_exists(None) {
@@ -239,9 +241,10 @@ pub(crate) fn hint_unconfigured_source_policy() {
     }
     match model::load_model(None) {
         Ok(m) if !m.system.is_source_policy_configured() => {
-            eprintln!("hint: Source policy is using defaults (cas-backed, any distro).");
-            eprintln!("      Configure [system] in /etc/conary/system.toml to set convergence,",);
-            eprintln!("      distro pin, or allowed distros. See 'conary model diff' for details.",);
+            eprintln!("hint: Package ownership convergence is using the cas-backed default.");
+            eprintln!(
+                "      Configure [system] convergence in /etc/conary/system.toml if a different ownership level is required."
+            );
         }
         _ => {}
     }

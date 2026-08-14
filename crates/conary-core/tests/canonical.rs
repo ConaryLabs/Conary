@@ -3,14 +3,12 @@
 //! Integration tests for canonical package identity system
 //!
 //! These tests exercise the full pipeline: schema setup, canonical package
-//! creation, implementation registration, distro pinning, and resolution.
+//! creation, implementation registration, exact source selection, and resolution.
 
 use conary_core::Error;
 use conary_core::canonical::rules::parse_contract;
-use conary_core::db::models::{
-    CanonicalMappingAuthority, CanonicalPackage, DistroPin, PackageImplementation,
-};
-use conary_core::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
+use conary_core::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
+use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::resolver::canonical::CanonicalResolver;
 use rusqlite::Connection;
 use tempfile::NamedTempFile;
@@ -28,7 +26,7 @@ fn setup_test_db() -> (NamedTempFile, Connection) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_full_canonical_resolution_pinned() {
+fn test_full_canonical_resolution_uses_exact_source_identity() {
     let (_t, conn) = setup_test_db();
 
     let mut pkg = CanonicalPackage::new("apache-httpd".into(), "package".into());
@@ -59,14 +57,15 @@ fn test_full_canonical_resolution_pinned() {
     .insert_or_verify(&conn)
     .unwrap();
 
-    DistroPin::set(&conn, "ubuntu-26.04", DependencyMixingPolicy::Guarded).unwrap();
-
     let resolver = CanonicalResolver::new(&conn);
 
     let candidates = resolver.expand("apache-httpd").unwrap();
     assert_eq!(candidates.len(), 3);
 
-    let ranked = resolver.rank_candidates(&candidates).unwrap();
+    let policy = ResolutionPolicy::new().with_primary_source_identity("ubuntu-26.04");
+    let ranked = resolver
+        .rank_candidates_with_policy(&candidates, &policy)
+        .unwrap();
     assert_eq!(ranked[0].distro, "ubuntu-26.04");
     assert_eq!(ranked[0].distro_name, "apache2");
 }
@@ -96,7 +95,7 @@ fn test_unpinned_multi_profile_resolution_is_ambiguous_despite_affinity() {
     .unwrap();
 
     conn.execute(
-        "INSERT INTO system_affinity (distro, package_count, percentage, updated_at) \
+        "INSERT INTO system_affinity (source_identity, package_count, percentage, updated_at) \
          VALUES ('fedora-44', 80, 80.0, '2026-03-05')",
         [],
     )
@@ -179,11 +178,12 @@ fn test_group_resolution() {
     .insert_or_verify(&conn)
     .unwrap();
 
-    DistroPin::set(&conn, "fedora-44", DependencyMixingPolicy::Guarded).unwrap();
-
     let resolver = CanonicalResolver::new(&conn);
     let candidates = resolver.expand("dev-tools").unwrap();
-    let ranked = resolver.rank_candidates(&candidates).unwrap();
+    let policy = ResolutionPolicy::new().with_primary_source_identity("fedora-44");
+    let ranked = resolver
+        .rank_candidates_with_policy(&candidates, &policy)
+        .unwrap();
     assert_eq!(ranked[0].distro_name, "@development-tools");
 }
 

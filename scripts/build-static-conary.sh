@@ -14,6 +14,9 @@ set -euo pipefail
 # libseccomp for musl once and caches it, then points the crate at it through
 # the two environment variables its build script reads.
 
+# shellcheck source=scripts/kernel-header-roots.sh
+source "$(dirname "${BASH_SOURCE[0]}")/kernel-header-roots.sh"
+
 LIBSECCOMP_VERSION="2.6.0"
 LIBSECCOMP_SHA256="83b6085232d1588c379dc9b9cae47bb37407cf262e6e74993c61ba72d2a784dc"
 LIBSECCOMP_URL="https://github.com/seccomp/libseccomp/releases/download/v${LIBSECCOMP_VERSION}/libseccomp-${LIBSECCOMP_VERSION}.tar.gz"
@@ -35,8 +38,9 @@ Options:
   --help             Show this help text
 
 Host requirements: a Rust toolchain with the x86_64-unknown-linux-musl target
-(`rustup target add x86_64-unknown-linux-musl`), `musl-gcc`, Linux kernel
-headers under /usr/include, plus curl, tar, make, and gperf.
+(`rustup target add x86_64-unknown-linux-musl`), `musl-gcc`, the Linux kernel
+UAPI headers (linux-libc-dev, kernel-headers, or linux-api-headers), plus
+curl, tar, make, and gperf.
 
 Debug profile only. Conary is pre-alpha and this binary is a test-staging
 artifact, not a release artifact.
@@ -93,12 +97,17 @@ if ! rustup target list --installed 2>/dev/null | grep -qx "$TARGET"; then
     fail "target $TARGET is not installed; run: rustup target add $TARGET"
 fi
 
-# musl-gcc compiles with musl's headers only. libseccomp needs the Linux UAPI
-# headers (linux/audit.h, asm/unistd.h), which are not part of musl. -idirafter
-# adds them at the end of the search path so they are found without shadowing
-# any musl header of the same name.
-[[ -d /usr/include/linux && -d /usr/include/asm ]] ||
-    fail "Linux kernel headers not found under /usr/include; libseccomp cannot be built for musl without them"
+# musl-gcc compiles with musl's headers only, and libseccomp needs the Linux
+# UAPI headers, which are not part of musl. Where those headers live, and
+# whether they even live together, is distribution-specific; the probe owns
+# that knowledge and returns every directory that has to be searched.
+mapfile -t KERNEL_HEADER_CANDIDATES < <(kernel_header_candidates)
+if ! kernel_header_root_lines="$(kernel_header_roots "${KERNEL_HEADER_CANDIDATES[@]}")"; then
+    exit 1
+fi
+mapfile -t KERNEL_HEADER_ROOTS <<< "$kernel_header_root_lines"
+KERNEL_HEADER_FLAGS="$(kernel_header_include_flags "${KERNEL_HEADER_ROOTS[@]}")"
+log "kernel UAPI headers: ${KERNEL_HEADER_ROOTS[*]}"
 
 PREFIX="$CACHE_DIR/libseccomp-$LIBSECCOMP_VERSION-musl"
 if [[ "$REBUILD_DEPS" == "yes" ]]; then
@@ -128,7 +137,7 @@ The cached download has been removed; re-run to fetch it again."
     tar xzf "$tarball" -C "$BUILD_DIR"
     (
         cd "$BUILD_DIR/libseccomp-$LIBSECCOMP_VERSION"
-        CC=musl-gcc CFLAGS="-O2 -idirafter /usr/include" \
+        CC=musl-gcc CFLAGS="-O2 $KERNEL_HEADER_FLAGS" \
             ./configure --prefix="$PREFIX" --enable-static --disable-shared
         make -j"$(nproc)"
         make install
@@ -148,7 +157,7 @@ log "building conary for $TARGET"
     LIBSECCOMP_LIB_PATH="$PREFIX/lib" \
     LIBSECCOMP_LINK_TYPE=static \
     CC_x86_64_unknown_linux_musl=musl-gcc \
-    CFLAGS_x86_64_unknown_linux_musl="-idirafter /usr/include" \
+    CFLAGS_x86_64_unknown_linux_musl="$KERNEL_HEADER_FLAGS" \
         cargo build -p conary --target "$TARGET"
 )
 

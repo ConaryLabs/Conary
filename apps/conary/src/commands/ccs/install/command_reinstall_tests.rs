@@ -68,6 +68,184 @@ async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
 }
 
 #[tokio::test]
+async fn ccs_noarch_replacement_uses_transaction_trove_for_dependent_validation() {
+    use conary_core::ccs::{BuildResult, CcsManifest, TrustPolicy};
+    use conary_core::db::models::{InstalledRequirementGroup, ProvideEntry, Trove, TroveType};
+    use conary_core::repository::dependency_model::{
+        ProvideArchitectureQualifier, RepositoryCapabilityKind, RepositoryRequirementKind,
+    };
+    use conary_core::repository::versioning::VersionScheme;
+
+    fn upgrade_trove_id(upgrade: &crate::commands::install::UpgradeCheck) -> i64 {
+        match upgrade {
+            crate::commands::install::UpgradeCheck::Upgrade(trove)
+            | crate::commands::install::UpgradeCheck::Downgrade(trove)
+            | crate::commands::install::UpgradeCheck::Replatform(trove) => {
+                trove.id.expect("upgrade trove must have a database id")
+            }
+            crate::commands::install::UpgradeCheck::FreshInstall
+            | crate::commands::install::UpgradeCheck::AlreadyInstalled(_) => {
+                panic!("expected a replacing upgrade trove")
+            }
+        }
+    }
+
+    fn insert_provider(
+        conn: &rusqlite::Connection,
+        name: &str,
+        version: &str,
+        architecture: &str,
+        capability: Option<&str>,
+    ) -> i64 {
+        let mut trove = Trove::new(
+            name.to_string(),
+            version.to_string(),
+            TroveType::Package,
+            VersionScheme::Conary,
+        );
+        trove.package_release = Some("1".to_string());
+        trove.architecture = Some(architecture.to_string());
+        let trove_id = trove.insert(conn).unwrap();
+
+        let mut identity = ProvideEntry::new(
+            trove_id,
+            name.to_string(),
+            Some(version.to_string()),
+            VersionScheme::Conary,
+        );
+        identity.insert(conn).unwrap();
+        if let Some(capability) = capability {
+            let mut declared = ProvideEntry::new_typed(
+                trove_id,
+                RepositoryCapabilityKind::Generic,
+                capability.to_string(),
+                None,
+                VersionScheme::Conary,
+                ProvideArchitectureQualifier::Implicit,
+            );
+            declared.insert(conn).unwrap();
+        }
+        trove_id
+    }
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let package_path = temp_dir.path().join("same-name-noarch.ccs");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+
+    let native_architecture = conary_core::repository::registry::detect_system_arch();
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    // Insert the native slot first so the old first-compatible-row selection
+    // chooses the wrong trove; the exact noarch rule must choose the second.
+    let native_id = insert_provider(
+        &conn,
+        "same-name-provider",
+        "1.0.0",
+        &native_architecture,
+        None,
+    );
+    let noarch_id = insert_provider(
+        &conn,
+        "same-name-provider",
+        "2.0.0",
+        conary_core::ccs::manifest::DEFAULT_CONARY_ARCHITECTURE,
+        Some("review-capability"),
+    );
+    let existing = Trove::find_by_name(&conn, "same-name-provider").unwrap();
+    assert_eq!(
+        existing.iter().map(|trove| trove.id).collect::<Vec<_>>(),
+        vec![Some(native_id), Some(noarch_id)],
+        "fixture must preserve the DB order that made the old selector wrong"
+    );
+
+    let mut dependent = Trove::new(
+        "same-name-dependent".to_string(),
+        "1.0.0".to_string(),
+        TroveType::Package,
+        VersionScheme::Conary,
+    );
+    dependent.architecture = Some(native_architecture.clone());
+    let dependent_id = dependent.insert(&conn).unwrap();
+    let requirement = conary_core::repository::requirement::parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Conary,
+        "review-capability",
+    )
+    .unwrap();
+    InstalledRequirementGroup::insert_groups(
+        &conn,
+        dependent_id,
+        VersionScheme::Conary,
+        &[requirement],
+    )
+    .unwrap();
+
+    let result = BuildResult {
+        manifest: CcsManifest::new_minimal("same-name-provider", "2.0.0"),
+        components: HashMap::new(),
+        files: Vec::new(),
+        payloads: Vec::new(),
+        total_size: 0,
+        chunked: false,
+        chunk_stats: None,
+    };
+    let trust_policy_path = super::test_support::write_signed_test_package(&result, &package_path);
+    let trust_policy = TrustPolicy::from_file(&trust_policy_path).unwrap();
+    let verification =
+        conary_core::ccs::verify::verify_package(&package_path, &trust_policy).unwrap();
+    let ccs_package = conary_core::ccs::CcsPackage::from_verified_archive(
+        package_path.to_str().unwrap(),
+        &verification,
+    )
+    .unwrap();
+
+    let command_upgrade =
+        super::command::check_ccs_install_upgrade_status(&conn, &ccs_package, true).unwrap();
+    let semantics =
+        crate::commands::install::install_semantics_for_ccs_manifest(ccs_package.manifest())
+            .unwrap();
+    let transaction_upgrade = crate::commands::install::check_ccs_upgrade_status(
+        &conn,
+        &ccs_package,
+        &semantics,
+        false,
+        crate::commands::install::InstallIntent::PackageChange,
+        true,
+    )
+    .unwrap();
+    assert_eq!(upgrade_trove_id(&command_upgrade), noarch_id);
+    assert_eq!(
+        upgrade_trove_id(&command_upgrade),
+        upgrade_trove_id(&transaction_upgrade),
+        "command validation and transaction must replace the same trove"
+    );
+    drop(conn);
+
+    let error = cmd_ccs_install(
+        package_path.to_str().unwrap(),
+        db_path_str,
+        install_root.to_str().unwrap(),
+        true,
+        Some(trust_policy_path.to_string_lossy().into_owned()),
+        None,
+        crate::commands::SandboxMode::Always,
+        true,
+        true,
+    )
+    .await
+    .expect_err("dropping the exact noarch provider must fail dependent validation");
+    assert!(
+        error
+            .to_string()
+            .contains("same-name-dependent requires review-capability"),
+        "unexpected validation error: {error:#}"
+    );
+}
+
+#[tokio::test]
 async fn default_authored_package_upgrades_with_explicit_architecture_authority() {
     use conary_core::ccs::{BuildResult, CcsManifest};
     use conary_core::db::models::InstalledRequirementGroup;

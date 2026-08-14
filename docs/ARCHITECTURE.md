@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-06
-revision: 40
-summary: Describe workspace architecture, source-authority projections, repository trust, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
+last_updated: 2026-08-13
+revision: 49
+summary: Describe workspace and release boundaries, exact native source authority, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -33,11 +33,41 @@ crates/conary-core/
 Supporting workspace members
   apps/remi/         public/admin package service, search, federation, MCP
   apps/conaryd/      local daemon, auth, job queue, REST/SSE routes, package execution
-  apps/conary-test/  integration harness, HTTP API, MCP, container runners
+  apps/conary-test/  integration harness, CLI, Remi result client, container runners
   crates/conary-bootstrap/ shared tracing/runtime/exit helpers for workspace binaries
   crates/conary-agent-contract/ transport-neutral agent operation contract
   crates/conary-mcp/ shared MCP adapter helpers
 ```
+
+## Workspace, Artifact, and Release Boundaries
+
+The Cargo workspace is organized by code ownership, not by publication unit.
+Its eight packages have focused dependency boundaries, while four packages
+produce shipped artifacts and the whole workspace shares one release authority:
+
+| Boundary | Count | Authority |
+| --- | ---: | --- |
+| Cargo package | 8 | Owns a focused code surface and dependency API |
+| Artifact product | 4 | Owns construction and deployment routing for `conary`, `remi`, `conaryd`, or `conary-test` |
+| Suite release | 1 | Owns the workspace version, reviewed source commit, canonical `vMAJOR.MINOR.PATCH` tag, and GitHub release |
+
+The root `[workspace.package]` table owns the version, Rust edition, minimum
+toolchain, authors, license, and disabled Cargo-registry publication policy
+inherited by every member. Conary publishes the synchronized source suite and
+its named artifacts through GitHub; workspace packages are not separate
+crates.io release tracks.
+`conary-core` owns shared package-management behavior;
+`conary-bootstrap` owns common binary startup;
+`conary-agent-contract` owns transport-neutral operation types; and
+`conary-mcp` adapts that contract to MCP. The application packages remain the
+artifact entrypoints. `conaryd` reuses Conary command behavior through the
+adapter boundary documented in `docs/modules/conaryd.md`, while `conary-test`
+consumes product contracts without owning runtime release authority.
+
+One synchronized release still preserves distinct operational behavior:
+Conary and Remi have protected deployment lanes, while conaryd and conary-test
+are build-only artifacts. Those routes are serialized in suite metadata; they
+do not create separate version or tag authorities.
 
 ## Core Concepts
 
@@ -114,6 +144,9 @@ crates/conary-core/      Core library crate
     |   +-- builder/sysroot.rs CAS-backed runtime sysroot materialization
     |   +-- builder/runtime_inputs.rs CAS-backed runtime input classification, validation, and security.capability xattr attachment for persisted file capabilities
     |   +-- root_manifest.rs Exact immutable-root and mutable-state manifest contract
+    |   +-- root_manifest/authority.rs Indexed append-only selected-root snapshot authority
+    |   +-- root_manifest/delta.rs Normalized changed-path manifest delta
+    |   +-- root_manifest/overlay/indexed.rs Indexed OverlayFS delta decoding
     |   +-- root_manifest/scan.rs Selected-root capture and CAS ingestion
     |   +-- root_manifest/materialize.rs Exact typed-root reconstruction
     |   +-- root_manifest/composefs.rs Typed manifest to EROFS serialization
@@ -130,6 +163,7 @@ crates/conary-core/      Core library crate
     +-- activation/      Exact runtime work projected onto immutable generations
     |   +-- systemd.rs   Typed systemctl invocation and canonical boot argv
     |   +-- systemd/grammar.rs Shared parser/proxy systemctl token grammar
+    |   +-- openrc.rs    Typed rc-service invocation and canonical boot argv
     |   +-- security_policy.rs SELinux/AppArmor provider union and live-edge split
     |   +-- security_policy/ Current upstream helper grammars and executable identity
     +-- scriptlet/       Exact selected-root lifecycle execution
@@ -146,6 +180,7 @@ crates/conary-core/      Core library crate
     |   +-- conflict.rs  Conflict reporting and policy support
     |   +-- identity.rs  Dependency identity normalization
     +-- repository/      Remote package sources
+    |   +-- declarations/ Lossless selected-root declarations and fail-closed native trust-import preview
     |   +-- static_repo/ Static repository format, publishing, sync, and key persistence
     |   +-- trust.rs     Tagged Debian, RPM, and Arch repository authority contracts
     |   +-- trust/openpgp.rs Trust-role dispatch over the pinned and Arch keyring owners
@@ -153,8 +188,8 @@ crates/conary-core/      Core library crate
     |   +-- parsers/     Authenticated RPM repodata, Debian Packages, and Arch DB grammars
     |   +-- sync.rs      Trust preparation and atomic repository metadata persistence
     |   +-- download.rs  Metadata checksum plus ecosystem package-signature termination
-    |   +-- remi.rs      Remi client hub (sync client)
-    |   +-- remi/        Remi protocol DTOs, refusal formatting, async client, and tests
+    |   +-- remi.rs      Remi client hub (the Remi client)
+    |   +-- remi/        Remi protocol DTOs, refusal formatting, and tests
     |   +-- chunk_fetcher.rs ChunkFetcher trait + HTTP/local/composite impls
     |   +-- mirror_health.rs Mirror health scoring
     |   +-- mirror_selector.rs Ranked mirror selection
@@ -164,6 +199,9 @@ crates/conary-core/      Core library crate
     |   +-- versioning.rs Cross-distro version scheme awareness
     |   +-- resolution_policy.rs Exact source scope, mixing, and eligibility policy
     |   +-- effective_policy.rs Shared runtime source-policy loading from pins + settings
+    +-- db/models/repository/
+    |   +-- source.rs    Native repository identity, validation, policy, and snapshot persistence
+    |   +-- source/policy.rs Exact ecosystem, stream, scope, follow/pin, and drift binding
     +-- filesystem/      Storage layer
     |   +-- cas.rs       Content-addressable store (SHA-256 keyed)
     |   +-- vfs/         Virtual filesystem tree (arena allocator)
@@ -187,7 +225,7 @@ crates/conary-core/      Core library crate
     |   +-- convert/     RPM/DEB/Arch-to-CCS conversion
     |   +-- enhancement/ Exact post-conversion provenance recording
     |   +-- export/      OCI image export
-    |   +-- hooks/       typed host capability inventory plus systemd, service, tmpfiles, sysctl, user/group, alternatives adapters
+    |   +-- hooks/       typed host capability inventory plus systemd/OpenRC service, tmpfiles, sysctl, user/group, alternatives adapters
     |   +-- policy.rs    Build policy engine
     +-- model/           Declarative system state
     |   +-- parser.rs    TOML model file parser
@@ -247,8 +285,8 @@ apps/conary-test/        Declarative test infrastructure (TOML manifests, contai
     +-- config/          TOML manifest and distro config parsing
     +-- engine/          Test suite, runner, assertions
     +-- container/       ContainerBackend trait, bollard implementation
-    +-- report/          JSON output, SSE event streaming
-    +-- server/          Axum HTTP API, MCP server (rmcp)
+    +-- report/          Typed JSON output and corpus aggregation
+    +-- remi_client.rs   Remi result and fixture client
     +-- cli.rs           Binary entrypoint
 
 apps/remi/               Remi server + federation
@@ -419,16 +457,17 @@ consulting a native package manager or its database.
 ```
 Generation-aware package mutation
        |
-  materialize latest authoritative selected root
+  select latest typed authority as immutable lower
+  (current root.erofs mounts directly; typed state layers above it)
        |
   +-----------+
-  | Isolated  |-- Apply payload, native lifecycle, CCS hooks, triggers,
-  | Root      |-- and config decisions without mutating the live root
+  | OverlayFS |-- Probed profile + transaction-owned upper/work
+  | Root      |-- Apply payload, lifecycle, hooks, triggers, and config
   +-----------+
        |
   +-----------+
-  | Capture   |-- Exact typed generation-root + mutable-state manifests
-  +-----------+-- Candidate is durable before the SQLite transaction commits
+  |  Decode   |-- Freeze/unmount, scan changed upper paths, apply typed delta
+  +-----------+-- Indexed snapshot is durable before SQLite commit
        |
   +-----------+
   |  EROFS    |-- composefs-rs serializes the generation-root manifest
@@ -449,15 +488,42 @@ Generation-aware package mutation
 
 ### Generation Lifecycle
 
-1. **Select**: Materialize the latest cumulative selected-root candidate, or the current generation when no publication debt is pending
+`root_manifest/delta.rs` owns the normalized changed-path contract and
+`root_manifest/authority.rs` owns its indexed, append-only SQLite snapshot
+authority. Overlay artifacts must be decoded into exact removals,
+opaque-directory replacement, complete node upserts, and optional root
+metadata before this boundary. Applying a delta resolves only changed paths,
+changed subtrees, and affected hardlink groups; unchanged entries remain in
+the parent snapshot without enumeration or cloning. Complete sorted manifests
+are derived only for generation artifacts, retained materialization, recovery,
+rollback publication, and GC reachability. Normal
+runtime selected-root sessions mount the functionally proven OverlayFS profile
+over exact immutable lower authority, freeze and strictly unmount before
+decoding the transaction upper, and never perform complete before/after
+selected-root scans. With no pending publication debt, the current verified
+generation `root.erofs` mounts directly as the immutable-content lower and the
+typed `/etc`, `/var`, and `/srv` manifest is the top lower layer; the session
+strictly unmounts the transaction overlay before that nested composefs mount.
+Recoverable snapshots and first-generation database authority still use an
+explicit materialized lower. Retained try-session trees remain a separate
+materialization consumer until their namespace contract is migrated; they are
+not a fallback for normal mutation.
+
+Publication and rollback rows reference the same SQLite-selected-root snapshot
+lineage by foreign key. The retired filesystem candidate and complete
+`rollback_root` JSON copy have no current-schema reader. Revision 38 is a
+pre-alpha hard cut: older databases must be rebuilt from authoritative package
+and repository inputs.
+
+1. **Select**: Use the latest cumulative selected-root snapshot as lower authority when publication debt is pending. Otherwise mount the current generation's verified composefs image directly beneath its typed mutable-state layer; only first-generation database authority still reconstructs the complete lower
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
-3. **Record**: Capture exact immutable and mutable-state manifests, persist the selected-root candidate, and record recoverable publication debt before committing package state
+3. **Record**: Freeze and strictly unmount, decode the upper into a typed changed-path delta, validate and append only affected indexed authority, and bind recoverable publication debt to that child snapshot before committing package state
 4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content
 5. **Materialize state**: Project `/etc/...` manifest paths into the generation-local `/etc` overlay upper without retaining the `/etc` prefix, then apply the ordered typed config transactions; `/var` and `/srv` remain live mutable-root state
 6. **Publish**: Advance one persisted replay phase at a time: artifact ready, current link durable, configuration status projected, matching system state active, and generation-bound database backup durable. Only the final phase makes publication debt terminal
 7. **Recover**: Under the runtime mutation lock, resume at the persisted phase and replay each remaining idempotent effect. A matching `/conary/current` link proves only link publication; it never implies configuration projection or database backup completion
-8. **Compensate**: Rollback records a new exact compensating selected root and removes terminal candidates
-9. **GC**: Remove old generations only after retaining every recoverable publication candidate and its typed CAS roots
+8. **Compensate**: Rollback binds its publication debt to the exact pre-mutation snapshot and records a new compensating changeset
+9. **GC**: Remove old generations and CAS objects only after resolving every recoverable publication and effective rollback snapshot
 
 Raw, qcow2, and ISO export copy both typed manifests and their manifest-listed
 CAS objects. Export reconstructs `/var` and `/srv` in the carrier root and
@@ -495,7 +561,7 @@ The primary builder for composefs generations. Uses the composefs-rs crate
 (v0.3.0) to serialize validated exact `GenerationRootManifest` input to EROFS.
 Explicit generation builds project installed state into the same typed root
 contract. Package mutation publication accepts only its persisted cumulative
-selected-root candidate; there is no database-snapshot publication fallback.
+selected-root snapshot; there is no reconstruction fallback.
 Submodules: builder.rs (public
 generation-builder hub),
 builder/create.rs and builder/rebuild.rs (generation creation and recovery
@@ -582,10 +648,15 @@ The schema itself is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 26 retains revision 25's fail-closed persisted-state
-constraints and requires every persisted source pin to carry an explicit
-`strict`, `guarded`, or `permissive` dependency-mixing policy. Omitting the
-policy never selects one on the operator's behalf.
+Schema revision 36 retains signed package-repository enrollment, fail-closed
+native source/takeover state, exact installed-artifact architecture authority,
+and the distinct captured-OpenRC generation-activation source kind. It removes
+the retired global distro pin and records diagnostic affinity by opaque source identity.
+Native repositories do not use the fixed public-profile catalog as repository
+identity, eligibility, or refresh authority. This is a current-schema hard cut: revision 35
+state must be rebuilt and native repositories re-enrolled
+from authoritative declarations, trust roots, source/repository identities,
+stream decisions, and pins.
 
 Databases from retired schema revisions are rejected with an exact recovery
 command. `conary system rebuild-db --discard-state --yes` consolidates the
@@ -598,7 +669,7 @@ not carry a compatibility chain or silently reset an existing database.
 
 The stable table families are:
 
-- Installed state: troves, changesets, files, components, dependencies, and provides
+- Installed state: troves, changesets, lifecycle events, files, components, dependencies, and provides
 - Repository and resolution state: repositories, synced package metadata, capability inputs, labels, and canonical mapping data
 - System state and configuration: state snapshots, config tracking, triggers, redirects, and settings
 - Try state: active/kept/rolled-back package try sessions and selected generation metadata
@@ -610,7 +681,8 @@ and the current ownership SQL instead of relying on this overview.
 
 ## Package Graph
 
-The root manifest is now a virtual workspace. Build the owning crate directly:
+The root manifest owns the virtual workspace and shared package metadata. Build
+the owning package directly:
 
 | Package | Purpose | Typical command |
 |---------|---------|-----------------|
@@ -636,15 +708,15 @@ selected-generation boundary.
 **Composefs-native transactions**: Every package mutation follows one linear
 pipeline: resolve -> fetch -> materialize an isolated selected root -> run typed
 lifecycle, payload, config, and trigger work inside that root and one SQLite
-transaction -> persist the exact selected-root candidate -> commit SQLite ->
-publish the recorded generation. The selected root starts from the latest
-retryable candidate, the current generation artifact, or authoritative DB/CAS
+transaction -> append and bind the exact selected-root snapshot -> commit
+SQLite -> publish the recorded generation. The selected root starts from the
+latest retryable snapshot, the current generation artifact, or authoritative DB/CAS
 state when no generation exists. There is no mutable-host package execution
 path.
 
 Before the SQLite commit, any lifecycle, payload, config, trigger, or validation
 failure rolls back the database transaction and discards the selected root.
-After commit, a publication failure leaves typed debt plus the exact candidate
+After commit, a publication failure leaves typed debt plus the exact snapshot
 for deterministic retry. `LiveRootTransaction` remains an internal journal for
 the disposable selected-root session; it is not authority to mutate the host
 root. DB backups remain recovery artifacts, not a second mutable source of

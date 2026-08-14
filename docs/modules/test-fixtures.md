@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-31
-revision: 30
-summary: Map fixture ownership, including supported-host generation export, Fedora guest regeneration, and cross-source lifecycle proof
+last_updated: 2026-08-12
+revision: 31
+summary: Map fixture ownership, including authenticated Debian-derivative roots and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -53,10 +53,10 @@ Each fixture family should record:
 
 - **Owner:** source ABI:
   `crates/conary-core/src/packages/native_abi.rs`; format parsers under
-  `crates/conary-core/src/packages/{rpm,deb,arch}/`; durable bundle:
+  `crates/conary-core/src/packages/{rpm,deb,arch,eopkg}/`; durable bundle:
   `crates/conary-core/src/ccs/native_lifecycle.rs`; transaction planner:
   `crates/conary-core/src/ccs/native_transaction.rs`.
-- **Purpose:** Preserve the complete RPM, Debian, and Arch lifecycle ABI and
+- **Purpose:** Preserve the complete RPM, Debian, Arch, and eopkg lifecycle ABI and
   prove exact event selection, order, arguments, trigger input, and payload
   boundaries without deriving correctness from program-text heuristics.
 - **Fixture sources:** parser fixtures beside each format implementation;
@@ -260,9 +260,10 @@ Each fixture family should record:
   `crates/conary-core/src/repository/supported_profiles/`; CLI smoke:
   `apps/conary/tests/packaging_m4d.rs`; Remi route proof:
   `apps/remi/src/server/handlers/`.
-- **Purpose:** Prove the three currently configured upstream feed IDs
-  (`fedora-44`, `ubuntu-26.04`, and `arch`), route/feed agreement for `fedora`,
-  `ubuntu`, and `arch`, and exact parser/version-scheme selection.
+- **Purpose:** Prove the four currently configured upstream feed IDs
+  (`fedora-44`, `ubuntu-26.04`, `arch`, and `solus`), route/feed
+  agreement for `fedora`, `ubuntu`, `arch`, and `solus`, and exact
+  parser/version-scheme selection.
 - **Fast proof:** `cargo test -p conary-core supported_profiles`;
   `cargo test -p conary --test packaging_m4d`;
   `cargo test -p remi route`.
@@ -369,14 +370,20 @@ Each fixture family should record:
 
 ### conary-test-remi-manifests
 
-- **Owner:** Integration harness: `apps/conary-test/src/config/` and
+- **Owner:** Integration harness: `apps/conary-test/src/config/`,
+  `apps/conary-test/src/engine/corpus.rs`, `apps/conary-test/src/report/`, and
   `apps/conary-test/src/suite_inventory.rs`.
-- **Purpose:** Declarative Remi and package-manager integration suites.
+- **Purpose:** Declarative Remi and package-manager integration suites. Corpus
+  tests declare exact source/target/stage and artifact-digest authority,
+  consume a versioned runtime evidence file, and emit `CorpusCaseResult` plus
+  typed aggregation with an exact declared-case count; generic stdout and
+  error messages remain diagnostics only.
 - **Fixture sources:** `apps/conary/tests/integration/remi/manifests/`;
   `apps/conary/tests/integration/remi/containers/`;
   `apps/conary/tests/fixtures/conary-test-fixture/`;
   `apps/conary/tests/fixtures/native/`;
   `apps/conary/tests/fixtures/native-lifecycle-parity/`;
+  `apps/conary/tests/fixtures/distro-roots/`;
   `apps/conary/tests/fixtures/phase4-runtime-fixture{,-v2}/`;
   `apps/conary/tests/fixtures/native-selected-root-layout/`;
   `apps/conary/tests/fixtures/adversarial/`; disposable signing authority and
@@ -395,10 +402,16 @@ Each fixture family should record:
   and
   `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro fedora44 --phase 4`
   when behavior changes require live integration proof. Run the focused
-  lifecycle suite on `fedora44`, `ubuntu-26.04`, and `arch` for complete target
-  image coverage. `fedora44` is the
-  existing `conary-test` runner distro key; public CCS target IDs remain
-  `fedora-44`, `ubuntu-26.04`, and `arch`.
+  lifecycle suite on every configured target for complete target-image
+  coverage. Linux Mint 22.3 and Pop!_OS 24.04 additionally run
+  `debian-derivative-acceptance`, which exercises their actual APT declarations,
+  trust roots, native package adoption, and repository takeover. CachyOS and
+  openSUSE Tumbleweed additionally run `rolling-derivative-acceptance`, which
+  authenticates their first-party image identity, native package versions,
+  repository declaration bytes, and signing roots before real pacman or Zypper
+  package adoption and exact repository takeover. `fedora44` is the existing
+  `conary-test` runner distro key; public CCS target IDs remain
+  `fedora-44`, `ubuntu-26.04`, `arch`, and `solus`.
   Published artifacts use
   `cargo run -p conary-test -- images build --distro <distro> --native-package <path>`
   before the same focused suite. Only
@@ -429,8 +442,18 @@ Each fixture family should record:
   all nine source-format/target-profile Conary rows. Each manifest lane supplies
   its native oracle format explicitly; fixture execution does not infer
   authority from distro-name matching. The typed workflow test owns the three
-  required target lanes and the stable all-lane aggregator context; do not
-  weaken either in workflow-only edits.
+  source-format cases across all six required target lanes and the stable
+  all-lane aggregator context; do not weaken either in workflow-only edits.
+  Derivative roots are assembled from digest-pinned transport images, exact
+  release identity/keyring packages, and byte-pinned APT declarations captured
+  from authenticated release media. Product code must not branch on their
+  distro names. A successful derivative run records typed `target_release`
+  artifact identities, signing fingerprints, and preflight stages; configuration
+  alone is not acceptance evidence. Artifact digest provenance remains typed as
+  pinned release authority, pinned build input, or running-target bytes.
+  The rolling Artix image is digest-pinned and configures the two official core
+  mirrors before package synchronization; normal-mirror lag must not determine
+  whether its required lifecycle lane can start.
 
 ### supported-host-generation-export
 

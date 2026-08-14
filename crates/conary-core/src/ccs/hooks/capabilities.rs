@@ -7,7 +7,7 @@
 //! document, and install preflight resolves source-independent lifecycle hooks
 //! against it before any payload mutation.
 
-use crate::ccs::manifest::{Hooks, ServiceAction};
+use crate::ccs::manifest::Hooks;
 use crate::db::models::settings;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 mod filesystem_security;
 #[path = "capabilities/interface_contract.rs"]
 mod interface_contract;
+#[path = "capabilities/openrc.rs"]
+mod openrc;
 
 pub use filesystem_security::{
     ImmutableBackingSecurity, ImmutableBackingSecurityError, ImmutableBackingSecurityMechanism,
@@ -25,14 +27,16 @@ use interface_contract::systemd_manager_responds;
 pub use interface_contract::{
     ExecutableInterface, HostExecutableContract, HostExecutableImplementation,
 };
+pub use openrc::OpenRcInterface;
 
-pub const HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION: u32 = 4;
+pub const HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION: u32 = 5;
 pub const HOST_CAPABILITY_INVENTORY_SETTING: &str = "system.host-capability-inventory";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum InitSystemCapability {
     Systemd,
+    OpenRc,
     Unsupported,
 }
 
@@ -114,6 +118,8 @@ pub struct HostCapabilityInventory {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub systemd: Option<SystemdInterface>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openrc: Option<OpenRcInterface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sysusers: Option<ExecutableInterface>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tmpfiles: Option<TmpfilesInterface>,
@@ -131,6 +137,7 @@ impl Default for HostCapabilityInventory {
             schema_version: HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION,
             init_system: InitSystemCapability::Unsupported,
             systemd: None,
+            openrc: None,
             sysusers: None,
             tmpfiles: None,
             sysctl: None,
@@ -153,29 +160,46 @@ impl HostCapabilityInventory {
 
     #[cfg(test)]
     fn discover_in_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
-        Self::discover_in_paths_with_security(paths, None)
+        Self::discover_in_paths_with_runtime(paths, None, false, false)
     }
 
     fn discover_in_paths_with_security(
         paths: impl IntoIterator<Item = PathBuf>,
         immutable_backing_security: Option<ImmutableBackingSecurity>,
     ) -> Self {
+        Self::discover_in_paths_with_runtime(
+            paths,
+            immutable_backing_security,
+            Path::new("/run/systemd/system").is_dir(),
+            Path::new("/run/openrc/softlevel").is_file(),
+        )
+    }
+
+    fn discover_in_paths_with_runtime(
+        paths: impl IntoIterator<Item = PathBuf>,
+        immutable_backing_security: Option<ImmutableBackingSecurity>,
+        systemd_booted: bool,
+        openrc_booted: bool,
+    ) -> Self {
         let paths = paths.into_iter().collect::<Vec<_>>();
-        let systemd_booted = Path::new("/run/systemd/system").is_dir();
         let systemd = discover_candidate("systemctl", &paths)
             .and_then(|executable| SystemdInterface::probe(executable, systemd_booted));
         let manager_running = systemd_booted
             && systemd
                 .as_ref()
                 .is_some_and(|interface| systemd_manager_responds(&interface.command.executable));
+        let openrc = discover_candidate("rc-service", &paths).and_then(OpenRcInterface::probe);
+        let init_system = if manager_running {
+            InitSystemCapability::Systemd
+        } else if openrc_booted && openrc.is_some() {
+            InitSystemCapability::OpenRc
+        } else {
+            InitSystemCapability::Unsupported
+        };
 
         Self {
             schema_version: HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION,
-            init_system: if manager_running {
-                InitSystemCapability::Systemd
-            } else {
-                InitSystemCapability::Unsupported
-            },
+            init_system,
             systemd: systemd.map(|mut interface| {
                 if !manager_running {
                     interface.operations.retain(|operation| {
@@ -190,6 +214,7 @@ impl HostCapabilityInventory {
                 }
                 interface
             }),
+            openrc,
             sysusers: discover_candidate("systemd-sysusers", &paths)
                 .and_then(ExecutableInterface::probe_sysusers),
             tmpfiles: discover_candidate("systemd-tmpfiles", &paths)
@@ -254,6 +279,7 @@ impl HostCapabilityInventory {
             capability.validate()?;
         }
         self.validate_systemd_shape()?;
+        self.validate_openrc_shape()?;
         Ok(())
     }
 
@@ -269,14 +295,7 @@ impl HostCapabilityInventory {
         }
 
         if !hooks.services.is_empty() {
-            self.require_systemd_target("hooks.services")?;
-            let interface =
-                self.require_interface(HostCapabilityRequirement::Systemd, "hooks.services")?;
-            for service in &hooks.services {
-                if let Some(operation) = operation_for_service_action(&service.action) {
-                    self.require_systemd_operation(interface, operation, "hooks.services")?;
-                }
-            }
+            self.preflight_services(&hooks.services)?;
         }
 
         if !hooks.systemd.is_empty() {
@@ -379,6 +398,9 @@ impl HostCapabilityInventory {
         if let Some(interface) = &self.systemd {
             paths.push(("systemd", interface.command.executable.as_path()));
         }
+        if let Some(interface) = &self.openrc {
+            paths.push(("openrc", interface.rc_service.executable.as_path()));
+        }
         if let Some(interface) = &self.sysusers {
             paths.push(("sysusers", interface.executable.as_path()));
         }
@@ -403,6 +425,13 @@ impl HostCapabilityInventory {
                 "systemd",
                 &interface.command,
                 HostExecutableContract::SystemdSystemctl,
+            ));
+        }
+        if let Some(interface) = &self.openrc {
+            descriptors.push((
+                "openrc",
+                &interface.rc_service,
+                HostExecutableContract::OpenRcService,
             ));
         }
         if let Some(interface) = &self.sysusers {
@@ -449,12 +478,12 @@ impl HostCapabilityInventory {
             {
                 Ok(())
             }
-            (InitSystemCapability::Unsupported, Some(interface))
+            (InitSystemCapability::OpenRc | InitSystemCapability::Unsupported, Some(interface))
                 if interface.operations == offline_operations =>
             {
                 Ok(())
             }
-            (InitSystemCapability::Unsupported, None) => Ok(()),
+            (InitSystemCapability::OpenRc | InitSystemCapability::Unsupported, None) => Ok(()),
             _ => Err(HostCapabilityInventoryError::InvalidSystemdShape),
         }
     }
@@ -532,6 +561,8 @@ pub enum HostCapabilityInventoryError {
     },
     #[error("host capability inventory init-system and systemd operation sets are inconsistent")]
     InvalidSystemdShape,
+    #[error("host capability inventory init-system and OpenRC interface are inconsistent")]
+    InvalidOpenRcShape,
     #[error(transparent)]
     ImmutableBackingSecurity(#[from] ImmutableBackingSecurityError),
     #[error(transparent)]
@@ -542,9 +573,12 @@ pub enum HostCapabilityInventoryError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostCapabilityRequirement {
+    ServiceManager,
     SystemdManager,
     Systemd,
     SystemdOperation(SystemdOperation),
+    OpenRc,
+    OpenRcCombinedReload,
     Sysusers,
     Tmpfiles,
     Sysctl,
@@ -554,11 +588,15 @@ pub enum HostCapabilityRequirement {
 impl std::fmt::Display for HostCapabilityRequirement {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ServiceManager => formatter.write_str("a typed service manager"),
             Self::SystemdManager => formatter.write_str("active systemd service manager"),
             Self::Systemd => formatter.write_str("systemctl command interface"),
             Self::SystemdOperation(operation) => {
                 write!(formatter, "systemctl {operation:?} operation")
             }
+            Self::OpenRc => formatter.write_str("rc-service command interface"),
+            Self::OpenRcCombinedReload => formatter
+                .write_str("an OpenRC provider for reload-or-restart and reload-or-try-restart"),
             Self::Sysusers => formatter.write_str("systemd-sysusers target interface"),
             Self::Tmpfiles => formatter.write_str("systemd-tmpfiles command interface"),
             Self::Sysctl => formatter.write_str("sysctl command interface"),
@@ -589,20 +627,6 @@ pub enum HostCapabilityPreflightError {
     InvalidExecutionRoot { root: PathBuf },
 }
 
-fn operation_for_service_action(action: &ServiceAction) -> Option<SystemdOperation> {
-    match action {
-        ServiceAction::Enable => Some(SystemdOperation::OfflineEnable),
-        ServiceAction::Disable => Some(SystemdOperation::OfflineDisable),
-        ServiceAction::Start
-        | ServiceAction::Stop
-        | ServiceAction::Reload
-        | ServiceAction::Restart
-        | ServiceAction::TryRestart
-        | ServiceAction::ReloadOrRestart
-        | ServiceAction::ReloadOrTryRestart => None,
-    }
-}
-
 fn discover_candidate(command: &str, paths: &[PathBuf]) -> Option<PathBuf> {
     paths
         .iter()
@@ -621,7 +645,7 @@ fn rooted_path(root: &Path, absolute_path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::manifest::Service;
+    use crate::ccs::manifest::{Service, ServiceAction};
     use crate::ccs::native_lifecycle::SourceFormat;
     use crate::test_support::{HostToolFixture, link_host_tool};
     use std::fs;
@@ -631,6 +655,7 @@ mod tests {
         let path = directory.join(name);
         let fixture = match name {
             "systemctl" | "systemd-sysusers" | "systemd-tmpfiles" => HostToolFixture::Systemd,
+            "rc-service" => HostToolFixture::OpenRc,
             "sysctl" => HostToolFixture::Sysctl406,
             "ldconfig" => HostToolFixture::Ldconfig,
             other => panic!("unknown fake interface {other}"),
@@ -664,6 +689,34 @@ mod tests {
         assert!(!encoded.contains("distro"));
         assert!(!encoded.contains("profile"));
         assert!(encoded.contains("\"tmpfiles\":{\"command\":{\"executable\":"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_manager_facts_select_openrc_and_prefer_running_systemd() {
+        let root = tempfile::tempdir().unwrap();
+        fake_interface(root.path(), "rc-service");
+
+        let openrc = HostCapabilityInventory::discover_in_paths_with_runtime(
+            [root.path().to_path_buf()],
+            None,
+            false,
+            true,
+        );
+        assert_eq!(openrc.init_system, InitSystemCapability::OpenRc);
+        assert!(openrc.openrc.is_some());
+        openrc.validate().unwrap();
+
+        fake_interface(root.path(), "systemctl");
+        let systemd = HostCapabilityInventory::discover_in_paths_with_runtime(
+            [root.path().to_path_buf()],
+            None,
+            true,
+            true,
+        );
+        assert_eq!(systemd.init_system, InitSystemCapability::Systemd);
+        assert!(systemd.openrc.is_some());
+        systemd.validate().unwrap();
     }
 
     #[cfg(unix)]
@@ -803,6 +856,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn artix_named_source_does_not_imply_a_systemd_target() {
+        let root = tempfile::tempdir().unwrap();
+        // Host capability inventory has no source-identity input. An Artix
+        // package therefore receives this exact target result rather than an
+        // Arch-profile-derived systemd assumption.
+        let inventory = HostCapabilityInventory::default();
+        let mut hooks = Hooks::default();
+        hooks.services.push(Service {
+            name: "portable.service".to_string(),
+            action: ServiceAction::Enable,
+            reversible: Some(true),
+        });
+
+        assert_eq!(inventory.init_system, InitSystemCapability::Unsupported);
+        assert!(inventory.systemd.is_none());
+        assert!(matches!(
+            inventory.preflight_hooks(root.path(), &hooks),
+            Err(HostCapabilityPreflightError::MissingCapability {
+                requirement: HostCapabilityRequirement::ServiceManager,
+                hook: "hooks.services"
+            })
+        ));
     }
 
     #[cfg(unix)]

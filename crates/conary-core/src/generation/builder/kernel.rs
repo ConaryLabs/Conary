@@ -53,6 +53,7 @@ pub(super) fn collect_boot_kernel_releases(
 
 pub(super) fn collect_module_kernel_releases(
     system_root: &Path,
+    boot_root: &Path,
     releases: &mut Vec<String>,
 ) -> crate::Result<()> {
     let mut found = Vec::new();
@@ -75,7 +76,9 @@ pub(super) fn collect_module_kernel_releases(
                 ))
             })?;
             validate_kernel_release(&release)?;
-            if regular_file_exists(&path.join("vmlinuz")) {
+            if regular_file_exists(&path.join("vmlinuz"))
+                || solus_kernel_path(boot_root, &release).is_some()
+            {
                 found.push(release);
             }
         }
@@ -106,6 +109,26 @@ pub(super) fn module_kernel_path(system_root: &Path, release: &str) -> Option<Pa
     kernel_module_dir(system_root, release)
         .map(|(module_dir, _module_dir_arg)| module_dir.join("vmlinuz"))
         .filter(|path| regular_file_exists(path))
+}
+
+/// Resolve Solus's exact kernel ABI pairing from a module release.
+///
+/// A module release such as `7.1.7-351.current` maps to the kernel artifact
+/// `com.solus-project.current.7.1.7-351`. The module directory remains release
+/// authority; a boot artifact without a matching module release is never a
+/// candidate.
+pub(super) fn solus_kernel_path(boot_root: &Path, release: &str) -> Option<PathBuf> {
+    let (version_release, flavor) = release.rsplit_once('.')?;
+    if version_release.is_empty()
+        || flavor.is_empty()
+        || !flavor
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return None;
+    }
+    let path = boot_root.join(format!("com.solus-project.{flavor}.{version_release}"));
+    regular_file_exists(&path).then_some(path)
 }
 
 pub(super) fn kernel_module_dir(
@@ -176,6 +199,30 @@ mod tests {
         collect_boot_kernel_releases(&boot, &mut releases).unwrap();
 
         assert_eq!(releases, ["6.19.10", "6.20.0"]);
+    }
+
+    #[test]
+    fn solus_kernel_requires_exact_module_release_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let boot = root.path().join("boot");
+        let modules = root.path().join("lib/modules/7.1.7-351.current");
+        std::fs::create_dir_all(&boot).unwrap();
+        std::fs::create_dir_all(&modules).unwrap();
+        std::fs::write(boot.join("com.solus-project.current.7.1.7-351"), b"kernel").unwrap();
+        std::fs::write(
+            boot.join("com.solus-project.current.6.18.21-333"),
+            b"stale kernel",
+        )
+        .unwrap();
+
+        let mut releases = Vec::new();
+        collect_module_kernel_releases(root.path(), &boot, &mut releases).unwrap();
+
+        assert_eq!(releases, ["7.1.7-351.current"]);
+        assert_eq!(
+            solus_kernel_path(&boot, &releases[0]),
+            Some(boot.join("com.solus-project.current.7.1.7-351"))
+        );
     }
 
     #[test]

@@ -15,7 +15,7 @@
 //! ```
 //!
 //! The point of no return is `Committed`: at that point the DB has the new
-//! package state and any selected-root publication candidate is already
+//! package state and any selected-root publication snapshot is already
 //! durable. Building the EROFS image and selecting it are idempotent recovery
 //! operations.
 

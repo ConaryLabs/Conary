@@ -10,7 +10,7 @@ use conary_core::db::models::{
     ExistingDirectoryMaterialization, FileEntry, InstallSource, PayloadClaim, ProvideEntry, Trove,
     TroveType,
 };
-use conary_core::filesystem::CasStore;
+use conary_core::filesystem::PrivateCasWriter;
 use conary_core::generation::root_manifest::{
     CapturedSelectedRoot, GenerationRootEntry, SelectedRootCaptureExclusions,
     scan_selected_root_with_exclusions,
@@ -19,7 +19,9 @@ use conary_core::repository::versioning::VersionScheme;
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use rusqlite::Transaction;
 
-use super::{CapturedAdoptionFile, LIVE_ROOT_PACKAGE_NAME};
+#[cfg(test)]
+use super::CapturedAdoptionFile;
+use super::LIVE_ROOT_PACKAGE_NAME;
 
 // This is a synthetic identity, not a changing snapshot serial. It still uses
 // Conary's SemVer-owned version scheme and must obey that grammar.
@@ -57,7 +59,7 @@ pub(super) fn ensure_complete_native_partition<'a>(
 
 pub(super) fn capture_live_selected_root(
     db_path: &str,
-    cas: &CasStore,
+    cas: &dyn PrivateCasWriter,
 ) -> Result<CapturedSelectedRoot> {
     let exclusions = capture_exclusions(db_path)?;
     scan_selected_root_with_exclusions(Path::new("/"), cas, &exclusions)
@@ -72,6 +74,7 @@ pub(super) fn capture_live_selected_root(
 /// therefore uses it only as preflight and CAS staging; the durable package
 /// claims are rebound here to the same global topology that owns unclaimed
 /// selected-root paths.
+#[cfg(test)]
 pub(super) fn bind_package_payloads_to_selected_root<'a>(
     captured: &CapturedSelectedRoot,
     files: impl IntoIterator<Item = &'a mut CapturedAdoptionFile>,
@@ -385,6 +388,7 @@ fn absolute_normalized(path: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use conary_core::db::models::{Changeset, ChangesetStatus};
+    use conary_core::filesystem::CasStore;
     use conary_core::generation::root_manifest::{
         SelectedRootCaptureExclusions, scan_selected_root_with_exclusions,
     };

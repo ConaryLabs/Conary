@@ -8,7 +8,7 @@
 
 use super::cleanup::remove_generation_etc_state;
 use super::metadata::is_generation_pending;
-use super::selected_root::load_publication_candidate;
+use super::selected_root::load_publication_selected_root;
 use crate::commands::changeset_metadata::parse_rollback_authority;
 use crate::commands::format_bytes;
 use anyhow::{Context, Result, anyhow};
@@ -134,18 +134,18 @@ fn build_gc_plan(
         protect_generation_manifests(&mut reachability, runtime_root, *generation)?;
     }
     for debt in &publication_debts {
-        let candidate = load_publication_candidate(runtime_root, debt).with_context(|| {
+        let selected_root = load_publication_selected_root(conn, debt).with_context(|| {
             format!(
-                "cannot resolve recoverable publication candidate {}; refusing generation GC",
+                "cannot resolve recoverable publication snapshot {}; refusing generation GC",
                 debt.id.unwrap_or_default()
             )
         })?;
         reachability.protect_selected_root(
             &format!(
-                "recoverable publication candidate {}",
+                "recoverable publication snapshot {}",
                 debt.id.unwrap_or_default()
             ),
-            &candidate,
+            &selected_root,
         )?;
         for content in debt.config_transaction.regular_content_authorities() {
             reachability.protect_content(
@@ -225,7 +225,8 @@ fn protect_effective_rollback_authority(
     reachability: &mut CasReachability,
 ) -> Result<()> {
     let mut stmt = conn.prepare(
-        "SELECT candidate.id, candidate.metadata
+        "SELECT candidate.id, candidate.metadata,
+                candidate.rollback_selected_root_snapshot_id
          FROM changesets AS candidate
          WHERE candidate.kind = 'mutation'
            AND candidate.status = 'applied'
@@ -236,10 +237,16 @@ fn protect_effective_rollback_authority(
     while let Some(row) = rows.next()? {
         let id = row.get::<_, i64>(0)?;
         let metadata = row.get::<_, Option<String>>(1)?;
+        let snapshot_id = row.get::<_, Option<i64>>(2)?;
         let Some(metadata) = metadata else {
+            if snapshot_id.is_some() {
+                return Err(anyhow!(
+                    "changeset {id} has selected-root rollback authority without metadata; refusing generation GC"
+                ));
+            }
             continue;
         };
-        let Some(authority) = parse_rollback_authority(&metadata).with_context(|| {
+        let Some(authority) = parse_rollback_authority(conn, id, &metadata).with_context(|| {
             format!("changeset {id} has invalid current rollback authority; refusing generation GC")
         })?
         else {
@@ -247,7 +254,8 @@ fn protect_effective_rollback_authority(
         };
 
         let context = format!("rollback-eligible changeset {id}");
-        reachability.protect_selected_root(&context, &authority.selected_root)?;
+        let selected_root = authority.selected_root.materialize(conn)?;
+        reachability.protect_selected_root(&context, &selected_root)?;
         for trove in &authority.removed_troves {
             for file in &trove.files {
                 if let Some(content) = &file.content {

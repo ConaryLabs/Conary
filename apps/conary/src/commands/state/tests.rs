@@ -117,8 +117,12 @@ fn typed_rpm_entry(
             _ => unreachable!("test fixture only builds install and remove entries"),
         },
         native_slot: match phase {
-            LifecyclePath::PreInstall => "%pre".to_string(),
-            LifecyclePath::PostRemove => "%postun".to_string(),
+            LifecyclePath::PreInstall => {
+                Some(conary_core::packages::native_abi::RpmScriptletSlot::Pre)
+            }
+            LifecyclePath::PostRemove => {
+                Some(conary_core::packages::native_abi::RpmScriptletSlot::PostUn)
+            }
             _ => unreachable!("test fixture only builds install and remove entries"),
         },
         kind: NativeLifecycleEntryKind::Executable,
@@ -144,8 +148,11 @@ fn typed_rpm_entry(
         rpm_runtime: Some(RpmRuntimeMetadata {
             program: RpmProgram::EmbeddedLua,
             body_transforms: Vec::new(),
-            critical: true,
-            criticality: RpmCriticality::Header,
+            criticality: match phase {
+                LifecyclePath::PreInstall => RpmCriticality::SlotDefault,
+                LifecyclePath::PostRemove => RpmCriticality::WarningOnly,
+                _ => unreachable!("test fixture only builds install and remove entries"),
+            },
             raw_flags: 0,
             unknown_flags: 0,
             install_prefixes: Vec::new(),

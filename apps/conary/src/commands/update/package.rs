@@ -17,7 +17,6 @@ use super::selection::{
     installed_troves_for_update, print_security_metadata_unavailable,
     render_security_update_marker, security_metadata_unavailable_error, select_update_candidate,
 };
-use super::source_policy::print_source_policy_update_preview;
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
 use conary_core::db::models::{DeltaStats, PackageDelta, Repository, RepositoryPackage, Trove};
@@ -46,19 +45,19 @@ fn resolution_options_for_selected_update(
     policy: &ResolutionPolicy,
 ) -> Result<ResolutionOptions> {
     let mut transaction_policy = policy.clone();
-    let exact_profile = conary_core::repository::selector::candidate_source_profile(
+    let exact_source_identity = conary_core::repository::selector::candidate_source_identity(
         repo_pkg, repo,
     )?
     .ok_or_else(|| {
         anyhow::anyhow!(
-            "selected update package '{}-{}' has no exact source profile",
+            "selected update package '{}-{}' has no exact source identity",
             repo_pkg.name,
             repo_pkg.version
         )
     })?;
-    transaction_policy.set_primary_profile(Some(exact_profile.to_string()));
+    transaction_policy.set_primary_source_identity(Some(exact_source_identity.to_string()));
     transaction_policy
-        .validate_profile_ids()
+        .validate_source_identities()
         .map_err(anyhow::Error::msg)?;
     Ok(ResolutionOptions {
         version: Some(repo_pkg.version.clone()),
@@ -280,10 +279,6 @@ pub async fn cmd_update(
         conary_core::repository::resolution_policy::RequestScope::Any,
     )?;
     let policy = effective_source_policy.resolution.clone();
-
-    if package.is_none() {
-        print_source_policy_update_preview(&conn)?;
-    }
 
     let objects_dir = objects_dir(db_path);
     let temp_dir = Path::new(db_path)

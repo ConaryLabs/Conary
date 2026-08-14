@@ -7,7 +7,6 @@ mod delta_stats;
 mod package;
 mod pinning;
 mod selection;
-mod source_policy;
 
 pub use collection::cmd_update_group;
 pub use delta_stats::cmd_delta_stats;

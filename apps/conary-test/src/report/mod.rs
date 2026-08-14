@@ -1,5 +1,6 @@
 // conary-test/src/report/mod.rs
 
+pub mod corpus;
 pub mod json;
 pub mod stream;
 

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-06
-revision: 27
-summary: Document exact profile-owned source policy, multi-root model authority, Remi CCS package authority, canonical map authority, native repository authority, package identity, full-adoption root continuity, and lifecycle handoff
+last_updated: 2026-08-12
+revision: 39
+summary: Document opaque native source identity, exact native trust takeover, capability-driven targets, Remi feed presets, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -17,87 +17,64 @@ logic in each flow.
 ## Data Flow
 
 ```text
-system.toml [system]
+repository declaration + authenticated trust
   |
-  +-- SystemConfig
-  |     allowed_distros
-  |     pin / distro / mixing
-  |     convergence
+  +-- RepositorySourcePolicy
+  |     opaque source_identity
+  |     ecosystem + native version scheme
+  |     stream + follow or authenticated pin
   |
-  +-- model apply mirrors explicit runtime state
-          |
-          +-- DistroPin table
-          |     current source pin + mixing policy
-          |
-          +-- settings table
-                source.allowed-distros
-                       |
-                       v
-              load_effective_policy()
-                       |
-                       v
-              EffectiveSourcePolicy
-                       |
-                       +-- ResolutionPolicy eligibility
-                       +-- root install / SAT ordering / update / replatform
+  +-- Repository
+        exact repository_identity
+        optional named feed projection
+                 |
+                 v
+        transaction provenance
+                 |
+                 v
+        ResolutionPolicy
+        root scope + exact source identity
+                 |
+                 +-- SAT selection / install / update
 ```
 
 ## Key Types
 
 | Type | File | Purpose |
 |------|------|---------|
-| `SystemConfig` | `model/parser/source_policy.rs` | Model-layer source-policy config from `[system]` |
-| `SourcePinConfig` | `model/parser/source_policy.rs` | Explicit source pin plus source strength |
+| `SystemConfig` | `model/parser/source_policy.rs` | Model-layer ownership convergence config from `[system]` |
 | `ConvergenceIntent` | `model/parser/source_policy.rs` | How aggressively Conary should move packages toward Conary-managed state |
 | `DependencyMixingPolicy` | `repository/resolution_policy.rs` | Closed `strict`/`guarded`/`permissive` dependency-mixing contract |
-| `ResolutionPolicy` | `repository/resolution_policy.rs` | Exact request scope, dependency mixing, and source allowlist used by the resolver |
-| `EffectiveSourcePolicy` | `repository/effective_policy.rs` | Runtime policy assembled from DB state with one exact transaction profile |
-| `SystemAffinity` | `db/models/distro_pin.rs` | Informational installed-provenance measurement used for display and replatform estimates |
+| `ResolutionPolicy` | `repository/resolution_policy.rs` | Exact repository/source request scope and transaction source identity used by the resolver |
+| `EffectiveSourcePolicy` | `repository/effective_policy.rs` | Request-scoped runtime policy with no ambient distro authority |
+| `DiscoveredRepositoryDeclarations` | `repository/declarations/discovery.rs` | Lossless, source-located APT, DNF5, libzypp, and ALPM declarations confined to an explicit selected root |
+| `NativeTrustImportPlan` | `repository/declarations/trust_import/` | Deterministic importable, ambiguous, or unsupported role-separated trust preview for discovered native repositories |
+| `NativeRepositoryTakeoverPlan` | `repository/declarations/takeover/` | Deterministic enrollment, owned-projection, follow/pin, ALPM keyring-binding, apply, and rollback authority |
+| `RepositorySourcePolicy` | `db/models/repository/source/policy.rs` | Exact native source, typed ecosystem/version ordering, stream, scope, and closed follow-or-pin decision |
+| `AuthenticatedSnapshotIdentity` | `repository/parsers/snapshot.rs` | SHA-256 identity of the exact top-level metadata bytes admitted by native trust |
+| `SystemAffinity` | `db/models/system_affinity.rs` | Informational installed-provenance measurement that never selects mutation authority |
 | `ReplatformExecutionPlan` | `model/replatform.rs` | Executable and blocked replatform transactions derived from planned replacements |
 
 ## Model Inputs
 
-The user-facing source-policy surface lives under `[system]` in `system.toml`.
-
-Important fields:
-
-- `allowed_distros`: allowlist of exact supported public profile IDs Conary may
-  use when selecting packages.
-- `pin`: the source-pin contract, with an exact supported public profile ID
-  plus typed dependency-mixing strength.
-- `convergence`: how aggressively package ownership should move during source
-  transitions.
-
-The only mixing values are `strict`, `guarded`, and `permissive`. A configured
-`[system.pin]` must name both its exact profile and its strength; omission is a
-parse error rather than an implicit `guarded` choice. Model parsing rejects
-unknown profile IDs, profile route aliases, unknown mixing values, and unknown
-source-pin fields. The CLI parses the same typed mixing enum before changing
-state, and the current schema independently requires and constrains both
-persisted profile IDs and mixing values. No omitted or invalid value silently
-becomes a default. Absence of the entire pin remains the distinct supported
-unpinned state.
-
-The removed flat `[system].distro` and `[system].mixing` aliases are rejected;
-write `[system.pin]` directly. The former `profile` and `selection_mode`
-surfaces are also rejected: after external ranking signals were removed from
-mutation authority, both fields became decorative aliases for the same exact
-selection algorithm.
+`[system]` owns only target ownership convergence. Distro pins, source
+allowlists, and mixing settings are rejected as unknown fields. Source choice
+belongs to enrolled repository identity and an explicit request scope, not to
+a global system label. The `conary distro` command is therefore diagnostic:
+`list` shows named feed presets and `info` shows measured installed affinity;
+neither mutates selection policy.
 
 ## Runtime Mirrors
 
-Conary persists the runtime source-policy mirror in SQLite:
-
-- `DistroPin`: one exact supported public profile ID plus a typed mixing policy
-- `settings["source.allowed-distros"]`: JSON-encoded allowlist
-
-`load_effective_policy()` merges those tables into one `EffectiveSourcePolicy`
-and carries the exact pinned profile into `ResolutionPolicy` for strict or
-guarded mixing. Package format is never a substitute for that profile: Fedora
-and openSUSE packages may both use RPM while remaining distinct source
-authorities. Strict policy rejects an unprofiled transitive candidate instead
-of inferring authority from its repository name or version scheme. A corrupt
-persisted mixing value is a read error, not a fallback policy.
+Conary persists source authority per repository through
+`RepositorySourcePolicy`. `load_effective_policy()` starts with no ambient
+source authority and binds one only from `--from`, `--repo`, or exact selected
+root provenance. A native repository supplies its opaque, stream-bound
+`source_identity`; static and Remi sources may project a named feed ID. Package
+format is never a substitute: Fedora, Tumbleweed, Mint, and MX may share an
+ecosystem with other sources without becoming interchangeable authorities.
+Strict dependency resolution rejects a transitive candidate until one exact
+transaction source identity is established.
 
 `SystemAffinity` is a measured summary of exact installed-package provenance.
 It is deliberately not an input to eligibility, candidate ranking, canonical
@@ -108,7 +85,7 @@ replatform may need to realign.
 The repository feed catalog makes
 `crates/conary-core/src/repository/supported_profiles/` the source of truth for
 configured feed IDs, package format, version scheme, and Remi route-family
-mapping. Fedora 44, Ubuntu 26.04, and Arch are the currently configured public
+mapping. Fedora 44, Ubuntu 26.04, Arch, and Solus are the currently configured public
 feeds, not the only destination systems Conary supports. Internal route slugs
 such as `fedora` and `ubuntu` are not feed IDs. The
 `repo add --source-profile` surface accepts only those exact public IDs and
@@ -123,17 +100,24 @@ previous offline-resolution snapshot. The page set is not yet pinned to one
 server revision; `docs/modules/remi.md` records that boundary and its tracked
 lease/revision fix. Sync never fetches the whole-distribution metadata
 document, retains a distribution-sized package vector, or issues one HTTP
-request per package. Persisted package identity requires the exact public ID;
-route slugs and generic `rpm`/`deb`/`arch` format labels are never accepted as
-source-identity aliases. Native repository sync writes the repository's exact
-profile into every package row and rejects a missing or conflicting profile.
-The superseded
+request per package. Persisted Remi package identity requires the exact public
+ID; route slugs and generic `rpm`/`deb`/`arch` format labels are never accepted
+as source-identity aliases. Native repository sync instead consumes the exact
+persisted native source policy described below. A configured public profile
+remains an optional feed preset during W10 and is copied into native package
+rows when present; it is not required for repository identity or refresh
+authority. The superseded
 `data/distros.toml` catalog was deleted in M4d.
 
 An accepted Remi conversion remains server-owned work until the typed job
 status reaches `ready` or `failed`. The client continues to observe `pending`
 and `converting` jobs; it does not turn elapsed wall time into conversion
 failure. Cancellation and complete-operation deadlines belong to the caller.
+`RemiClientCore` owns the one decision over the typed job state, so a status
+outside that contract is a typed rejection rather than an active job. Any
+future client rebuilds on that same authority instead of restating it. Bounded
+transport and 5xx retries stay separate from that decision: exhausting them is
+a transport failure, not a conversion failure.
 
 ## Remi CCS Package Authority
 
@@ -210,6 +194,83 @@ There is no persisted per-package override table. Cross-profile movement is an
 explicit scoped request or replatform transaction, not a decorative ranking
 side channel.
 
+## Native Repository Declaration Discovery
+
+`crates/conary-core/src/repository/declarations/` owns the lossless declaration
+grammars that precede native repository enrollment. It reads APT one-line and
+deb822 sources, DNF5 repo files, libzypp repository and service files, and ALPM
+configuration with ordered includes from an explicit selected root. Documents
+retain exact source and expose typed source locations, disabled state,
+duplicates, variables, endpoint precedence, and include order. Unknown
+authority, invalid UTF-8, and root escapes fail closed; libzypp extras that
+upstream preserves are retained as uninterpreted evidence and refused by
+authoritative discovery.
+
+This layer is not trust, enrollment, persistence, or enablement authority. It
+does not invoke a native manager or read a native database. The exact upstream
+pins, grammar inventory, and consumer boundary are recorded in
+[`docs/specs/native-repository-declarations.md`](../specs/native-repository-declarations.md).
+
+## Native Trust-Import Planning
+
+`repository/declarations/trust_import/` consumes discovered declarations and
+reads only their explicit local key material below the same selected root. Its
+strict JSON preview retains native declaration identity, enabled state, source
+locations, exact certificate fingerprints, and separate Debian Release, RPM
+metadata, RPM package, ALPM database, and ALPM package roles. An exact RPM
+metalink can authenticate metadata but never substitutes for package-signing
+authority.
+
+The only dispositions are `importable`, `ambiguous`, and `unsupported`.
+Implicit global trust, unpinned remote key sources, and an unbound ALPM keyring
+are ambiguous. Disabled verification, permissive trust, optional package
+signatures, missing or malformed key material, selector mismatches, and
+selected-root escapes are unsupported. Neither status can silently become an
+enabled persisted repository. This slice does not fetch, persist, enable, or
+mutate; the pinned semantics and consumer boundary live in
+[`docs/specs/native-repository-trust-import.md`](../specs/native-repository-trust-import.md).
+
+Takeover consumes that preview plus explicit enrollment authority. Strict ALPM
+declarations can proceed only when the sole ambiguity is the missing native
+keyring binding and enrollment supplies exact pinned masters, certification
+threshold, revocation input, and the same effective `SigLevel`. It never turns
+an unsafe declaration or unrelated ambiguity into trust. The same takeover
+path preserves enabled state, priority, parser inputs, projection bytes, and
+follow-or-pin source policy for APT, DNF5, Zypper, and ALPM repositories.
+
+## Native Source Identity And Update Policy
+
+After declaration and trust-import planning, a native RPM, Debian, or ALPM
+repository is enrolled with an exact source identity, a distinct repository
+identity, a typed release/channel/rolling stream, and one closed update mode.
+`RepositorySourcePolicy` is normalized in `repository_source_policies` and may
+be scoped to one repository or shared by an exact repository group. Each
+repository retains its own enabled state, priority, parser selectors, content
+URL, ownership, authenticated snapshot, and optional member pin.
+
+`crates/conary-core/src/db/models/repository/source.rs` owns repository
+validation and persistence;
+`crates/conary-core/src/db/models/repository/source/policy.rs` owns the typed
+policy and schema-revision-31 stream binding. The binding commits to the exact
+source/repository/stream identity, endpoints, parser configuration, and
+top-level metadata authority. Refresh recalculates it before network access,
+so an endpoint, parser selector, or metadata trust-root change requires
+explicit `repo add --replace` re-enrollment.
+
+Native parsers return package metadata together with the SHA-256 of the exact
+authenticated top-level bytes: ALPM's served compressed database, Debian's
+verified cleartext Release payload, or RPM's authenticated `repomd.xml`.
+`follow` admits a new authenticated identity only within the unchanged stream
+binding. `pin` additionally requires equality with the repository member's
+persisted digest. Admission and package-row replacement share one SQLite
+transaction, so refusal preserves the prior rows, snapshot, and `last_sync`.
+
+Public feed profiles remain presets and conformance fixtures, not native
+source identity. Native enrollment therefore works for uncatalogued
+third-party repositories without adding a profile. The complete persisted,
+CLI, hard-cut, and recovery contract is
+[`docs/specs/native-source-identity-policy.md`](../specs/native-source-identity-policy.md).
+
 ## Native Repository Authenticity
 
 Native source selection begins only after one typed trust contract authenticates
@@ -232,10 +293,12 @@ The supported chains are:
   package stanza's exact SHA-256 and size authenticate its `.deb`.
 - RPM: repository metadata and packages have distinct authorities. Either a
   detached OpenPGP signature or an exact HTTPS metalink identity authenticates
-  `repomd.xml`; its SHA-256 and size authenticate `primary.xml`; primary
-  metadata supplies exact package relations and generator-selected file
-  providers and authenticates the RPM bytes; and an independently pinned
-  package certificate verifies the RPM's embedded OpenPGP signature.
+  `repomd.xml`; its SHA-256 and size authenticate `primary.xml` and, by the
+  same discipline, `filelists.xml`; primary metadata supplies exact package
+  relations and generator-selected file providers and authenticates the RPM
+  bytes; filelists supplies complete package file ownership; and an
+  independently pinned package certificate verifies the RPM's embedded OpenPGP
+  signature.
 - Arch: one exact keyring source supplies the pinned master certificates,
   their certifications, packager certificates, and the companion
   `<keyring>-revoked` disabled-key list. An explicit threshold says how many
@@ -322,7 +385,7 @@ prerequisite. The Fedora parser preserves that marker as the typed
 name. Direct RPM parsing projects the corresponding header sense flags through
 the same relation kind.
 
-RPM primary-file authority is derived from `createrepo_c`
+RPM file authority is derived from `createrepo_c`
 `5cf41fe5d703901d78078ed18c67ab667e446c1a`: its
 [`cr_xml_dump_files()`](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_dump.c#L175-L225)
 selects and emits package-owned `<file>` records in `primary.xml`, and its
@@ -332,7 +395,85 @@ record as an unversioned typed file provider with `source-derived-file`
 provenance on the exact package. The projection is owned by
 `repository/parsers/fedora/provides.rs`. It does not reimplement createrepo's
 path-selection rule or infer providers from package names, payload guesses, or
-a curated path list.
+a curated path list. The provenance names the source format only: the
+capability is the path, so a path-owning provenance never restates it. At this
+scale that is not a stylistic point -- a duplicated path is one extra copy of
+every package-owned path in the distribution, in both the synced database and
+every converted artifact's signed capability list.
+
+That selection rule is a filter, so `primary.xml` is not complete file
+ownership: the same generator writes every owned path through the same
+`<file>` writer into `filelists.xml` with the filter off
+([`cr_xml_dump_filelists()`](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_dump_filelists.c)).
+Conary reads both documents. `repository/parsers/fedora/repomd.rs` admits the
+`primary` and `filelists` records with one size plus SHA-256 discipline;
+`repository/parsers/fedora/files.rs` owns the one `<file>` record grammar both
+parsers read, so a path one document admits is never a path the other rejects;
+`repository/parsers/fedora/filelists.rs` folds each `<package>` record into the
+package `primary.xml` published, joined on `pkgid` (the package SHA-256), and
+projects each path through the same `provides.rs` owner. A path both documents
+carry becomes exactly one capability. The join is total: both signed documents
+must name the same package set and agree on name, architecture, and EVR.
+Directory and `%ghost` records are owned paths in both documents, so the
+`type` attribute does not gate the projection.
+
+A repository that publishes no `filelists` record is refused at sync when any
+package carries a positive dependency that cannot be satisfied at all under
+that filter. An RPM dependency name beginning with `/` is a dependency on a
+path, so a path outside the filtered primary set has no possible repository
+provider. The decision evaluates the requirement's typed boolean expression,
+never its flattened alternatives: every unprovidable path atom is false, every
+other atom may hold, and no atom is guaranteed to hold, so a conditional stays
+satisfiable through its else branch. A group is refused only when the
+expression cannot hold under that optimistic assignment, which refuses
+`(cap and /unprovidable)` while admitting `(cap or /unprovidable)` and
+`(/unprovidable if cap)`. Repeated atoms are evaluated independently, which can
+only cost a warranted refusal and never invent one. The typed refusal names the
+repository, the package, the paths, and the missing document instead of
+surfacing later as an anonymous solver conflict. When filelists is published, a
+missing path is an ordinary unsatisfied dependency.
+
+Fedora 44 `Everything/x86_64` measures that cost exactly (repomd revision
+1776864872): 76,354 packages, 81,720 file providers from `primary.xml`, and
+9,416,909 more from `filelists.xml`, taking `repository_provides` from 657,873
+rows to 10,074,782 and the synced SQLite database from 0.61 GB to 3.90 GB. The
+829 MB decompressed document is never materialized: it is streamed from the
+verified compressed bytes under the ceiling the signed `<open-size>` declares.
+
+Dropping the duplicated path from file provenance is measured on that same
+corpus and revision: the synced database falls from 4.78 GB to 3.90 GB
+(-18.3%), the persist phase from 446.3 s to 392.3 s (-12.1%), and peak process
+RSS from 6.33 GiB to 5.15 GiB, with row counts identical. What remains is not
+provenance: at 4.78 GB the `repository_provides` table held 2,332 MB against
+1,684 MB of index (869 MB for `(kind, capability)`, 815 MB for `(capability)`,
+127 MB for the package key), so every path is still stored once in the table
+and twice more in indexes.
+
+Index consolidation is the lever that answered. `capability` was the second
+column of the `(kind, capability)` composite, so that index could never serve a
+capability-only seek -- which is what every provider lookup issues -- and only
+the single statement that also filters `kind` could use it. Schema revision 28
+retires it. Measured on the same corpus and revision, with row counts identical
+at 10,074,782: the synced database falls from 3,903,258,624 to 2,991,742,976
+bytes (-23.4%), and the difference is exactly the 911,515,648 bytes the retired
+index occupied, with the table (1,570,963,456), the capability index
+(854,863,872), and the package key (133,562,368) byte-identical across the
+pair. Peak process RSS is unchanged (0.2% across six runs): an index that is
+not read during a sync costs disk, not resident memory.
+
+The kind-filtering statement now seeks the capability index and filters the
+rows one capability holds. No statement in the inventory falls back to a table
+scan, before or after. The corpus bounds that filter exactly: its most-provided
+capability is `/usr/lib/.build-id` at 20,494 providers, and 9,498,629 of the
+10,074,782 rows are `file`, so the worst measured latency change is +6.7 ms on
+a hot capability whose kind does not match, while an ordinary package lookup is
+unchanged at 0.014 ms.
+
+Persist-phase timing is deliberately not quoted for this change. Five
+same-binary baseline syncs on this host ranged from 450.5 s to 952.4 s under
+concurrent build load, a spread far larger than any delta worth claiming, so
+the persist effect of maintaining one fewer index across 10M inserts remains
+unpriced rather than estimated.
 
 The contract was derived against the package managers' and repository
 generators' own documentation:
@@ -366,21 +507,20 @@ Eligibility inputs include:
 
 - root request scope (`--repo`, `--from`)
 - mixing policy (`strict`, `guarded`, `permissive`)
-- explicit allowlist from `allowed_distros`
 
-Strict mixing admits only the exact transaction profile supplied by an
-explicit source scope, persisted system pin, or the exact profile carried by
-the selected repository-backed root package. The policy-explicit SAT API
-rejects strict dependency solving when that profile has not been established;
-it never treats an empty profile as an empty candidate set and never derives
+Strict mixing admits only the exact transaction source identity supplied by an
+explicit source/repository scope or selected repository-backed root package.
+The policy-explicit SAT API rejects strict dependency solving when that
+identity has not been established; it never treats an absent identity as an
+empty candidate set and never derives
 one from a package name, repository label, URL, or package format. Local files
-with repository dependencies therefore require an explicit scope or system
-pin. A declarative multi-root package set has no privileged root: when no
-profile is already pinned, its only implicit authority is the one exact source
-profile common to every root's version-compatible repository candidates.
-Disjoint or ambiguous profile sets fail closed and require an explicit pin;
-model order never selects source authority. Guarded mixing prefers an
-established profile and may fall back; permissive mixing does not add a profile
+with repository dependencies therefore require an explicit scope. A
+declarative multi-root package set has no privileged root: its only implicit
+authority is the one exact source identity common to every root's
+version-compatible repository candidates. Disjoint or ambiguous identity sets
+fail closed and require an explicit source scope; model order never selects
+source authority. Guarded mixing prefers an established identity and may fall
+back; permissive mixing does not add a source
 preference. An exact installed
 package-name or declared capability provider that satisfies a transitive
 requirement is favored before repository ranking, so dependency planning does
@@ -402,8 +542,8 @@ version constraint semantics.
 
 Source policy decides which package artifact may satisfy a request. Once an RPM,
 Debian, or Arch artifact is selected, its typed package-manager lifecycle ABI is
-part of that artifact's identity and is not reinterpreted by `DistroPin`
-mixing policy.
+part of that artifact's identity and is not reinterpreted by repository source
+identity or a target distribution label.
 
 The lifecycle bundle records the exact source format, distro, release,
 architecture, and native version scheme. Packages with source lifecycle
@@ -429,6 +569,28 @@ order is never transaction authority.
 
 ### Native Package Adoption
 
+Native repository takeover is a separate authority transition from package
+adoption. `conary system repository-takeover --dry-run --root <selected-root>
+--manifest <enrollment.json>` serializes the complete declaration, trust,
+identity, policy, and projection plan without mutation. Apply requires that
+exact preview SHA-256 and `--yes`; rollback restores the persisted prior
+projection bytes and removes only takeover-owned repository rows. Native
+declaration paths remain byte-identical compatibility projections, and any
+missing or changed path is reported as drift rather than becoming new
+authority. Legacy APT declarations without `Signed-By` can proceed only when
+the enrollment manifest binds exact primary fingerprints to native global
+keyring bytes below the selected root; the keyring files then join the owned,
+rollback-safe projection set. The exact contract is
+[`native-repository-takeover.md`](../specs/native-repository-takeover.md).
+
+After takeover, repository declarations and trust roots installed by a package
+participate in the package's selected-root and SQLite transaction. CCS carries
+the signed desired-state intent; direct native installation derives the same
+intent from exact package payload grammars before mutation. Update, removal,
+explicit retention, shared ownership, and rollback follow
+[`package-repository-enrollment.md`](../specs/package-repository-enrollment.md).
+The completed filesystem is never scanned for repository-looking files.
+
 `conary system adopt <pkg> --dry-run` builds the same package-specific plan
 that apply consumes. The preview opens an existing current-schema database
 read-only and never migrates it. Native discovery resolves the exact installed
@@ -445,6 +607,29 @@ Adoption preserves migration continuity for a machine that already has native
 package-manager state. It is not Conary's foreign-package acquisition path and
 does not prove source-independent cross-distro conversion or lifecycle
 execution.
+
+`conary system adopt <pkg> --convert` is the explicit bridge from that
+migration state to a portable CCS artifact. It selects the adopted trove by
+exact name/version/architecture, requires its persisted native identity and
+complete `AdoptedFull` payload ownership (`conary system adopt <pkg> --full`
+establishes it), and resolves one exact package row from an enabled,
+stream-bound enrolled native repository. The artifact is acquired into the
+Conary cache under its typed authenticated source-digest authority; eopkg
+retains the index's SHA-1 while conversion separately computes the internal
+SHA-256 artifact identity. Cached RPM, Debian, Arch, and eopkg artifacts are
+reverified with their ecosystem-specific package authority before reuse. The
+parser identity and every adopted payload node,
+resolved owner, content digest, symlink, hardlink topology edge, and explicit
+directory must match before the canonical native converter runs.
+
+Conversion does not transfer ownership of the currently adopted trove. It
+publishes a separately installable signed CCS under the Conary runtime root and
+records that path only after immediate strict verification. Same-directory
+staging plus one SQLite transaction ensures a failed conversion or persistence
+step leaves neither a newly published artifact nor an applied changeset. A
+later install, update, rollback, or remove consumes that CCS through Conary's
+ordinary source-independent transaction path without consulting the source
+package manager or its database.
 
 System-wide adoption preserves the native manager's explicit-versus-dependency
 reason for every installed package. On RPM systems, Conary uses each
@@ -505,8 +690,9 @@ silently omit its paths.
 
 Install uses the shared effective policy and then layers root-only request
 scope such as `--repo` or `--from` on top of it. `--from` accepts only an
-exact public source-profile ID; Remi route slugs are not install aliases.
-Exact-name selection
+exact lexically valid source identity and does not consult the named feed
+catalog. A named feed ID may additionally enable canonical-name projection;
+unknown identities use exact package names. Exact-name selection
 and SAT ordering both respect the effective source-selection settings.
 
 ### Update
@@ -538,18 +724,16 @@ Update also enforces the limited-preview ownership boundary:
 
 ### Model Diff / Apply
 
-Model diff captures source-policy drift as structured actions such as:
+Model files do not own global source-selection state. Model diff/apply operate
+on packages, ownership convergence, and explicit replatform actions;
+repository enrollment and request-scoped selection remain source authority.
 
-- `SetSourcePin`
-- `ClearSourcePin`
-- `SetAllowedDistros`
-- `ClearAllowedDistros`
-- `ReplatformReplace`
-
-Model apply persists source-policy changes first, then executes any
-replatform transactions that are actually executable through the shared install
-path. Blocked transactions remain visible in the rendered plan and in follow-up
-warnings.
+`model apply --dry-run` resolves the complete incoming package set, downloads
+and authenticates its exact artifacts, and runs the same read-only batch
+ordering and relation planning that apply consumes. It stops before
+selected-root materialization, selected-root-relative payload normalization,
+lifecycle execution, CAS storage, or database mutation, and returns the same
+typed ordering error apply would return for an invalid prepared transaction.
 
 ### Replatform Planning
 
@@ -557,9 +741,9 @@ warnings.
 logic to find visible realignment targets and build a
 `ReplatformExecutionPlan`.
 
-Measured `SystemAffinity` contributes only the informational package-count
-estimate. The proposals and executable transactions are derived independently
-from the explicit target profile, authenticated repository metadata, exact
+Measured `SystemAffinity` contributes only diagnostic package counts. The
+proposals and executable transactions are derived independently from an
+explicit target source identity, authenticated repository metadata, exact
 package identity, dependency constraints, architecture compatibility, and
 available install routes. Affinity percentages never choose or rank a mutation
 candidate.
@@ -580,14 +764,14 @@ replatform replacements can execute immediately.
 The main CLI entry points are:
 
 ```bash
-conary distro set fedora-44 --mixing guarded
-conary distro mixing permissive
+conary distro list
 conary distro info
 ```
 
-`conary distro info` shows the exact pin, typed mixing policy, and measured
-source-affinity data. The affinity rows are informational; changing system
-state requires an explicit scoped install, update, or replatform operation.
+`conary distro list` shows named feed presets, not a destination support list.
+`conary distro info` shows measured source-affinity data. Both commands are
+informational; source choice requires enrolled repository authority and an
+explicit scoped install, update, or replatform operation.
 
 ## Where To Read Next
 
@@ -596,6 +780,11 @@ state requires an explicit scoped install, update, or replatform operation.
 - `crates/conary-core/src/repository/effective_policy.rs` for runtime policy loading
 - `crates/conary-core/src/repository/trust.rs` and
   `repository/trust/openpgp.rs` for native repository authority
+- `crates/conary-core/src/repository/declarations/` and
+  `docs/specs/native-repository-declarations.md` for lossless selected-root
+  declaration discovery, then
+  `docs/specs/native-repository-trust-import.md` for fail-closed trust planning
+  before enrollment
 - `crates/conary-core/src/repository/parsers/` and
   `repository/download.rs` for authenticated metadata and package intake
 - `crates/conary-core/src/repository/supported_profiles/` for configured feed
@@ -622,7 +811,7 @@ state requires an explicit scoped install, update, or replatform operation.
 - `apps/conary/src/commands/update/mod.rs` for update module routing
 - `apps/conary/src/commands/update/package.rs` for single-package update
   execution, delta/full update handling, and lifecycle execution preflight
-- `apps/conary/src/commands/update/source_policy.rs` for source-policy update
+- `apps/conary/src/commands/update/resolution.rs` for exact-source update selection
   preview and replatform update context
 - `apps/conary/src/commands/update/selection.rs` for exact-source update
   candidate behavior
@@ -633,8 +822,8 @@ state requires an explicit scoped install, update, or replatform operation.
 - `apps/conary/src/commands/model.rs` for the model command hub
 - `apps/conary/src/commands/model/context.rs` for model loading and diff
   enrichment
-- `apps/conary/src/commands/model/presentation.rs` for source-policy and
-  replatform summaries
+- `apps/conary/src/commands/model/presentation.rs` for ownership-convergence and
+  explicit replatform summaries
 - `apps/conary/src/commands/model/apply.rs` for model apply execution and
   replatform install dispatch
 - `apps/conary/src/commands/model/apply/packages.rs` for model package-set

@@ -1,6 +1,7 @@
 // conary-core/src/ccs/v3/validation.rs
 
 mod config;
+mod content_layout;
 mod file_capabilities;
 mod identity;
 
@@ -8,6 +9,7 @@ use super::diagnostics::{V3Diagnostic, V3DiagnosticCode, V3ValidationError};
 use super::schema::*;
 use crate::ccs::budget::{AuthorityCensus, CCS_BUDGET};
 use config::{validate_config_authority, validate_package_policy};
+use content_layout::validate_file_content_layout;
 use file_capabilities::validate_file_capabilities;
 use identity::{validate_capabilities, validate_identity};
 
@@ -126,6 +128,7 @@ fn validate_authority_common(
             validate_config_authority(data, authority, &mut diagnostics);
             validate_component_totals(data, authority, &mut diagnostics);
             validate_lifecycle(&authority.lifecycle, &mut diagnostics);
+            validate_repository_enrollment_files(data, authority, &mut diagnostics);
         }
         (PackageKindTagV3::Group, PackageKindV3::Group(data)) => {
             reject_group_redirect_payload_authority(authority, &mut diagnostics);
@@ -162,6 +165,47 @@ fn validate_authority_common(
         Ok(census)
     } else {
         Err(V3ValidationError { diagnostics })
+    }
+}
+
+fn validate_repository_enrollment_files(
+    package: &PackageDataV3,
+    authority: &AuthorityDocumentV3,
+    diagnostics: &mut Vec<V3Diagnostic>,
+) {
+    for intent in &authority.lifecycle.repository_enrollments {
+        for projection in &intent.projections {
+            let Some(file) = package.files.iter().find(|file| {
+                file.path.trim_start_matches('/') == projection.path.trim_start_matches('/')
+            }) else {
+                diagnostics.push(V3Diagnostic::error(
+                    V3DiagnosticCode::KindContractViolation,
+                    format!(
+                        "repository enrollment projection '{}' is absent from signed package files",
+                        projection.path
+                    ),
+                    Some("lifecycle.repository_enrollments".to_string()),
+                    "bind every repository projection to one exact signed regular file",
+                ));
+                continue;
+            };
+            let matches = file
+                .content
+                .as_ref()
+                .is_some_and(|content| content.sha256 == projection.sha256)
+                && file.node.mode & 0o7777 == projection.mode;
+            if !matches {
+                diagnostics.push(V3Diagnostic::error(
+                    V3DiagnosticCode::KindContractViolation,
+                    format!(
+                        "repository enrollment projection '{}' disagrees with signed file authority",
+                        projection.path
+                    ),
+                    Some("lifecycle.repository_enrollments".to_string()),
+                    "copy the exact file digest and mode into the repository projection",
+                ));
+            }
+        }
     }
 }
 
@@ -256,6 +300,7 @@ fn validate_files(
                 "attach digest and size only to regular payload nodes",
             ));
         }
+        validate_file_content_layout(file, diagnostics);
         if !authority.components.contains_key(&file.component) {
             diagnostics.push(V3Diagnostic::error(
                 V3DiagnosticCode::ComponentAuthorityMismatch,
@@ -329,6 +374,15 @@ fn validate_lifecycle(lifecycle: &LifecycleAuthorityV3, diagnostics: &mut Vec<V3
             "native_lifecycle",
             format!("invalid native lifecycle authority: {error}"),
         );
+    }
+
+    for enrollment in &lifecycle.repository_enrollments {
+        if let Err(error) = enrollment.validate() {
+            invalid(
+                "repository_enrollments",
+                format!("invalid package repository enrollment authority: {error}"),
+            );
+        }
     }
 
     for user in &lifecycle.users {
@@ -642,6 +696,54 @@ mod tests {
         }];
 
         validate_authority(&authority).unwrap();
+    }
+
+    #[test]
+    fn signed_authority_accepts_a_promised_path_the_package_does_not_ship() {
+        let mut authority = AuthorityDocumentV3::package_for_tests("crypto-policies");
+        authority.identity.version_scheme = VersionScheme::Rpm;
+        authority.identity.version = "20251128-3".to_string();
+        authority.provided_capabilities =
+            vec![promised_capability_v3("/etc/example/back-end.config")];
+
+        validate_authority(&authority).unwrap();
+    }
+
+    #[test]
+    fn signed_authority_refuses_a_promised_path_that_is_also_payload_content() {
+        let mut authority = AuthorityDocumentV3::package_for_tests("contradiction");
+        authority.identity.version_scheme = VersionScheme::Rpm;
+        authority.identity.version = "1-1".to_string();
+        // package_for_tests signs /usr/bin/hello as payload content.
+        authority.provided_capabilities = vec![promised_capability_v3("/usr/bin/hello")];
+
+        let error = validate_authority(&authority).unwrap_err();
+        assert!(
+            error.diagnostics.iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains("is also signed payload content")
+            }),
+            "{:?}",
+            error.diagnostics
+        );
+    }
+
+    fn promised_capability_v3(path: &str) -> ProvidedCapabilityV3 {
+        ProvidedCapabilityV3 {
+            kind: DependencyKindV3::File,
+            name: path.to_string(),
+            provider_version: None,
+            version_relation: None,
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance:
+                crate::repository::dependency_model::CapabilityProvenance::SourcePromisedPath {
+                    format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
+                },
+            target: None,
+            component: None,
+        }
     }
 
     #[test]

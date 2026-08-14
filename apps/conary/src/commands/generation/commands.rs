@@ -1,4 +1,4 @@
-// src/commands/generation/commands.rs
+// apps/conary/src/commands/generation/commands.rs
 //! CLI implementations for generation list, info, build, switch, rollback,
 //! and recover commands.
 
@@ -604,7 +604,8 @@ pub fn cmd_generation_switch(number: i64, reboot: bool) -> Result<()> {
         ));
     }
     validate_generation_activation_artifact(&runtime_root, number)?;
-    super::boot::write_boot_entry(number)
+    let bootloader = super::boot::detect_bootloader();
+    super::boot::write_boot_entry(number, &bootloader)
         .with_context(|| format!("Failed to prepare boot entry for generation {number}"))?;
 
     update_current_symlink(runtime_root.root(), number)
@@ -648,7 +649,8 @@ pub fn cmd_generation_rollback() -> Result<()> {
         .last()
         .ok_or_else(|| anyhow!("No previous generation to roll back to"))?;
     validate_generation_activation_artifact(&runtime_root, *previous)?;
-    super::boot::write_boot_entry(*previous)
+    let bootloader = super::boot::detect_bootloader();
+    super::boot::write_boot_entry(*previous, &bootloader)
         .with_context(|| format!("Failed to prepare boot entry for generation {previous}"))?;
 
     update_current_symlink(runtime_root.root(), *previous)

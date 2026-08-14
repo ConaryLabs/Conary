@@ -182,49 +182,6 @@ exit_code = 0
 stdout_not_contains = "panic"
 
 # --------------------------------------------------------------------------
-# T168: Distro set
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T168"
-name = "distro_set"
-description = "Set the distro to fedora and verify it took effect"
-timeout = 30
-
-[[test.step]]
-conary = "distro set fedora"
-
-[test.step.assert]
-exit_code = 0
-stdout_not_contains = "panic"
-
-# Verify the distro was set
-[[test.step]]
-conary = "distro info"
-
-[test.step.assert]
-exit_code = 0
-stdout_contains = "fedora"
-
-# --------------------------------------------------------------------------
-# T169: Distro remove
-# --------------------------------------------------------------------------
-
-[[test]]
-id = "T169"
-name = "distro_remove"
-description = "Clear distro setting"
-timeout = 30
-depends_on = ["T168"]
-
-[[test.step]]
-conary = "distro remove"
-
-[test.step.assert]
-exit_code = 0
-stdout_not_contains = "panic"
-
-# --------------------------------------------------------------------------
 # T170: Canonical search
 # --------------------------------------------------------------------------
 

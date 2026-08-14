@@ -1,7 +1,7 @@
 // apps/conary/src/commands/live_root.rs
 
 use anyhow::{Context, Result, bail};
-use conary_core::filesystem::durable::{sync_parent_directory, write_json_atomic};
+use conary_core::filesystem::durable::write_json_atomic;
 use conary_core::generation::root_manifest::{apply_resolved_payload_metadata, capture_root_node};
 use conary_core::payload::{PayloadNodeKind, ResolvedPayloadNode};
 use serde::{Deserialize, Serialize};
@@ -14,8 +14,12 @@ use std::os::unix::net::UnixListener;
 use std::path::{Component, Path, PathBuf};
 
 mod content;
+mod durability;
+mod path;
 mod recovery;
 pub(crate) use content::LiveRootContent;
+use durability::*;
+pub(crate) use path::target_path;
 pub(crate) use recovery::recover_pending_journals;
 #[cfg(test)]
 pub(crate) use recovery::recover_pending_journals_with_changesets;
@@ -70,39 +74,17 @@ pub(crate) struct LiveRootTransaction {
     created_paths: Vec<PathBuf>,
     removed_dirs: Vec<PathBuf>,
     modified_directories: Vec<DirectoryMetadataRecord>,
+    recovery: LiveRootRecovery,
     committed: bool,
 }
 
-pub(crate) fn target_path(root: &Path, package_path: &str) -> Result<PathBuf> {
-    let relative = package_path.strip_prefix('/').unwrap_or(package_path);
-    let relative_path = Path::new(relative);
-    let mut has_path_below_root = false;
-    for component in relative_path.components() {
-        match component {
-            Component::Normal(_) => has_path_below_root = true,
-            Component::CurDir => {
-                bail!(
-                    "package path {package_path} must name a file or directory below the target root"
-                );
-            }
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                bail!("package path {package_path} escapes the target root");
-            }
-        }
-    }
-    if !has_path_below_root {
-        bail!("package path {package_path} must name a file or directory below the target root");
-    }
-    Ok(root.join(relative_path))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveRootRecovery {
+    Journaled,
+    DisposableOverlay,
 }
 
-fn selected_root_target_path(root: &Path, package_path: &str) -> Result<PathBuf> {
-    let effective = conary_core::filesystem::selected_root::selected_root_effective_package_path(
-        root,
-        package_path,
-    )?;
-    target_path(root, &effective)
-}
+use path::selected_root_target_path;
 
 impl LiveRootTransaction {
     pub(crate) fn begin(
@@ -111,9 +93,47 @@ impl LiveRootTransaction {
         tx_uuid: String,
         operation: impl Into<String>,
     ) -> Result<Self> {
+        Self::begin_with_recovery(
+            runtime_root,
+            root,
+            tx_uuid,
+            operation,
+            LiveRootRecovery::Journaled,
+        )
+    }
+
+    /// Mutate a transaction-owned overlay without duplicating rollback state.
+    ///
+    /// The upper is the sole rollback record and its owner must discard it on
+    /// failure. Moving lower-backed nodes into an external journal would cross
+    /// filesystems and would duplicate authority even where rename succeeded.
+    pub(crate) fn begin_disposable_overlay(
+        runtime_root: &Path,
+        root: &Path,
+        tx_uuid: String,
+        operation: impl Into<String>,
+    ) -> Result<Self> {
+        Self::begin_with_recovery(
+            runtime_root,
+            root,
+            tx_uuid,
+            operation,
+            LiveRootRecovery::DisposableOverlay,
+        )
+    }
+
+    fn begin_with_recovery(
+        runtime_root: &Path,
+        root: &Path,
+        tx_uuid: String,
+        operation: impl Into<String>,
+        recovery: LiveRootRecovery,
+    ) -> Result<Self> {
         validate_tx_uuid(&tx_uuid)?;
         let journal_dir = runtime_root.join("live-root-journals");
-        create_dir_all_and_sync(&journal_dir)?;
+        if recovery == LiveRootRecovery::Journaled {
+            create_dir_all_and_sync(&journal_dir)?;
+        }
         let operation = operation.into();
         let journal_path = journal_dir.join(format!("{tx_uuid}.json"));
         let transaction = Self {
@@ -125,6 +145,7 @@ impl LiveRootTransaction {
             created_paths: Vec::new(),
             removed_dirs: Vec::new(),
             modified_directories: Vec::new(),
+            recovery,
             committed: false,
         };
         transaction.write_journal("pending")?;
@@ -213,10 +234,11 @@ impl LiveRootTransaction {
         self.ensure_parent(&target, stats)?;
         match fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.file_type().is_dir() => {
-                if !self
-                    .modified_directories
-                    .iter()
-                    .any(|record| record.path == target.to_string_lossy())
+                if self.recovery == LiveRootRecovery::Journaled
+                    && !self
+                        .modified_directories
+                        .iter()
+                        .any(|record| record.path == target.to_string_lossy())
                 {
                     self.modified_directories.push(DirectoryMetadataRecord {
                         path: target.to_string_lossy().into_owned(),
@@ -228,7 +250,9 @@ impl LiveRootTransaction {
             }
             Ok(_) => {
                 self.backup_existing(&target)?;
-                self.created_paths.push(target.clone());
+                if self.recovery == LiveRootRecovery::Journaled {
+                    self.created_paths.push(target.clone());
+                }
                 self.write_journal("in_progress")?;
                 create_dir_and_sync(&target)?;
                 stats.dirs_created += 1;
@@ -292,7 +316,9 @@ impl LiveRootTransaction {
         dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
         dirs.dedup();
         for dir in dirs {
-            self.removed_dirs.push(dir.clone());
+            if self.recovery == LiveRootRecovery::Journaled {
+                self.removed_dirs.push(dir.clone());
+            }
             self.write_journal("in_progress")?;
             match remove_dir_and_sync(&dir) {
                 Ok(()) => stats.dirs_removed += 1,
@@ -311,6 +337,10 @@ impl LiveRootTransaction {
     }
 
     pub(crate) fn rollback(&mut self) -> Result<()> {
+        if self.recovery == LiveRootRecovery::DisposableOverlay {
+            self.committed = true;
+            return Ok(());
+        }
         for created in self.created_paths.iter().rev() {
             if validate_existing_parent(&self.root, created).is_err() {
                 continue;
@@ -390,7 +420,9 @@ impl LiveRootTransaction {
                 }
                 Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    self.created_paths.push(full.clone());
+                    if self.recovery == LiveRootRecovery::Journaled {
+                        self.created_paths.push(full.clone());
+                    }
                     self.write_journal("in_progress")?;
                     create_dir_and_sync(&full)?;
                     stats.dirs_created += 1;
@@ -405,6 +437,17 @@ impl LiveRootTransaction {
     }
 
     fn backup_existing(&mut self, target: &Path) -> Result<()> {
+        if self.recovery == LiveRootRecovery::DisposableOverlay {
+            return match fs::symlink_metadata(target) {
+                Ok(metadata) if metadata.file_type().is_dir() => bail!(
+                    "disposable selected-root leaf {} became a directory",
+                    target.display()
+                ),
+                Ok(_) => remove_file_and_sync(target).map_err(Into::into),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.into()),
+            };
+        }
         if self.created_paths.iter().any(|created| created == target)
             || self
                 .backups
@@ -449,6 +492,9 @@ impl LiveRootTransaction {
     }
 
     fn write_journal(&self, state: &str) -> Result<()> {
+        if self.recovery == LiveRootRecovery::DisposableOverlay {
+            return Ok(());
+        }
         let journal = LiveRootJournal {
             schema: JOURNAL_SCHEMA.to_string(),
             tx_uuid: self.tx_uuid.clone(),
@@ -482,6 +528,9 @@ impl LiveRootTransaction {
     }
 
     fn cleanup_transaction_files(&self) -> Result<()> {
+        if self.recovery == LiveRootRecovery::DisposableOverlay {
+            return Ok(());
+        }
         match remove_file_and_sync(&self.journal_path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -940,55 +989,6 @@ fn ensure_safe_directory(root: &Path, dir: &Path) -> Result<()> {
             }
         }
     }
-    Ok(())
-}
-
-fn rename_and_sync(source: &Path, target: &Path) -> io::Result<()> {
-    fs::rename(source, target)?;
-    sync_parent_directory_io(target)?;
-    if let (Some(source_parent), Some(target_parent)) = (source.parent(), target.parent())
-        && source_parent != target_parent
-    {
-        sync_directory_io(source_parent)?;
-    }
-    Ok(())
-}
-
-fn remove_file_and_sync(path: &Path) -> io::Result<()> {
-    fs::remove_file(path)?;
-    sync_parent_directory_io(path)
-}
-
-fn remove_dir_and_sync(path: &Path) -> io::Result<()> {
-    fs::remove_dir(path)?;
-    sync_parent_directory_io(path)
-}
-
-fn remove_dir_all_and_sync(path: &Path) -> io::Result<()> {
-    fs::remove_dir_all(path)?;
-    sync_parent_directory_io(path)
-}
-
-fn create_dir_and_sync(path: &Path) -> io::Result<()> {
-    fs::create_dir(path)?;
-    sync_parent_directory_io(path)
-}
-
-fn create_dir_all_and_sync(path: &Path) -> io::Result<()> {
-    fs::create_dir_all(path)?;
-    sync_parent_directory_io(path)
-}
-
-fn sync_parent_directory_io(path: &Path) -> io::Result<()> {
-    sync_parent_directory(path).map_err(|error| io::Error::other(error.to_string()))
-}
-
-fn sync_directory_io(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
-}
-
-fn sync_directory(path: &Path) -> Result<()> {
-    sync_directory_io(path).with_context(|| format!("Failed to sync {}", path.display()))?;
     Ok(())
 }
 

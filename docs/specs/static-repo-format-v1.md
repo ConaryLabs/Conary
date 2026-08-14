@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-25
-revision: 6
+last_updated: 2026-08-08
+revision: 7
 summary: Standalone normative contract for the static Conary repository format, publisher behavior, client behavior, and operator key lifecycle
 ---
 
@@ -85,7 +85,7 @@ This file is **not** TUF-protected (it is what you read before trust exists);
 it MUST NOT carry key material, URLs, or anything a client uses after add.
 Everything security-relevant in it is cross-checked against root.json (§6.1).
 
-    schema = 1
+    schema = 2
 
     [repo]
     name = "acme-tools"
@@ -103,7 +103,7 @@ Everything security-relevant in it is cross-checked against root.json (§6.1).
 
 Field rules:
 
-- `schema` (integer) MUST be `1`. Clients MUST reject unknown majors.
+- `schema` (integer) MUST be `2`. Clients MUST reject unknown majors.
 - `repo.name`: `[a-z0-9][a-z0-9-]*`, max 64 chars. Shown at add time; the
   client-side repo name remains whatever the user passed to `repo add`.
 - `repo.description`: optional display text shown during trust establishment;
@@ -125,7 +125,7 @@ sha256+length against the verified `targets.json` entry for path
 index.
 
     {
-      "schema": 1,
+      "schema": 2,
       "name": "acme-tools",
       "index_version": 7,
       "generated": "2026-06-10T18:00:00Z",
@@ -183,7 +183,7 @@ index.
 
 Field rules:
 
-- `schema` (u64): MUST be `1`; reject unknown majors. On the wire this is a
+- `schema` (u64): MUST be `2`; reject unknown majors. On the wire this is a
   JSON number; implementations deserialize it to `u64` and reject
   non-integer or out-of-range values.
 - `name`: display identity matching `conary-repo.toml` `repo.name`; clients
@@ -225,7 +225,10 @@ Field rules:
   when a source declaration intentionally reuses the package name at another
   compatibility version. Each versioned capability carries a paired
   `version_relation`, and source-declared or source-derived entries carry their
-  exact source format plus record index or source path.
+  exact source format plus, for a source declaration, its record index. A
+  path-owning provenance (`source-derived-file`, `source-promised-path`)
+  carries its source format only: the capability name is the path, and the
+  document MUST NOT restate it.
   A publisher MUST project capability kinds from the verified CCS authority
   document or manifest field that declared them. It MUST NOT infer `File`,
   `Soname`, `Virtual`, or any other kind from punctuation, path shape, or a
@@ -310,7 +313,7 @@ Already-bootstrapped clients discover rotations by probing
 ### 4.4 Package-key distribution: `keys/package-keys.json`
 
     {
-      "schema": 1,
+      "schema": 2,
       "keys": [
         {
           "algorithm": "ed25519",
@@ -324,7 +327,7 @@ Already-bootstrapped clients discover rotations by probing
 
 Field rules:
 
-- `schema` (u64): MUST be `1`; reject unknown majors. On the wire this is a
+- `schema` (u64): MUST be `2`; reject unknown majors. On the wire this is a
   JSON number; implementations deserialize it to `u64` and reject
   non-integer or out-of-range values.
 - `keys`: array of package-signing public-key entries; empty is invalid for
@@ -584,7 +587,7 @@ for a future v2 consistent-snapshot upgrade.
    mismatch; only a strictly lower timestamp version is rollback.
 2. Fetch `<url>/index.json`; verify length and sha256 against the
    verified targets entry for path `index.json` **before parsing**.
-3. Parse; verify `schema == 1` and `index_version == targets.version`.
+3. Parse; verify `schema == 2` and `index_version == targets.version`.
 4. Fetch + verify `keys/package-keys.json` the same way (targets entry,
    then parse); reject any key entry whose `status` is not `"active"` or
    `"retired"`; update the repo's package trust policy with
@@ -762,7 +765,13 @@ this is load-bearing, not hygiene).
   semantics (§8).
 - Versioning: `schema` majors in `conary-repo.toml`/`index.json` gate
   breaking changes; TUF `spec_version` stays 1.0.31 per the in-tree
-  implementation.
+  implementation. The document major is a different axis from the repository
+  layout generation discussed above: major `2` is current because capability
+  provenance stopped restating the path it already names, and major `1` (which
+  carried that duplicated path) is retired and MUST be rejected. The major is
+  owned by `static_repo::format::SCHEMA_VERSION`, which the publisher stamps
+  and the parser gates on, so a published document and the client that admits
+  it cannot drift apart.
 - Remi (M2) MUST produce byte-format-identical repos (it is "one producer of
   the same format" per the parent spec); its DB-backed TUF serving and this
   file-based layout share `trust/` types and generation functions.

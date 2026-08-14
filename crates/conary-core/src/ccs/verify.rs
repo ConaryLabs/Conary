@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
+mod object_sink;
 mod stream;
 
 #[derive(Error, Debug)]
@@ -158,6 +159,7 @@ pub struct VerifiedCcsArchive {
     debug_toml: Option<Vec<u8>>,
     components: HashMap<String, crate::ccs::builder::ComponentData>,
     payload: crate::packages::payload::PackagePayload,
+    verified_object_metrics: Option<crate::filesystem::VerifiedObjectBatchMetrics>,
     files_checked: usize,
 }
 
@@ -180,6 +182,11 @@ impl VerifiedCcsArchive {
 
     pub fn files_checked(&self) -> usize {
         self.files_checked
+    }
+
+    /// Permanent-CAS work performed by install-oriented verification.
+    pub fn verified_object_metrics(&self) -> Option<crate::filesystem::VerifiedObjectBatchMetrics> {
+        self.verified_object_metrics
     }
 
     pub(crate) fn build_attestation(
@@ -210,8 +217,29 @@ impl VerifiedCcsArchive {
 /// Verify current CCS authority, signature trust, diagnostic projections, and
 /// every payload object before returning an install/publication capability.
 pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerifiedCcsArchive> {
+    verify_package_to(path, policy, object_sink::ObjectDestination::Spool)
+}
+
+/// Verify a current CCS archive directly into one permanent SHA-256 CAS.
+///
+/// The returned payload sources carry the committed batch capability, allowing
+/// installation to reference their canonical identities without reopening and
+/// re-ingesting the same bytes.
+pub fn verify_package_into_cas(
+    path: &Path,
+    policy: &TrustPolicy,
+    cas: &crate::filesystem::CasStore,
+) -> Result<VerifiedCcsArchive> {
+    verify_package_to(path, policy, object_sink::ObjectDestination::Permanent(cas))
+}
+
+fn verify_package_to(
+    path: &Path,
+    policy: &TrustPolicy,
+    destination: object_sink::ObjectDestination<'_>,
+) -> Result<VerifiedCcsArchive> {
     policy.validate()?;
-    let verified = stream::verify_archive(path, policy)
+    let verified = stream::verify_archive(path, policy, destination)
         .with_context(|| format!("verify streaming CCS v3 archive {}", path.display()))?;
     Ok(VerifiedCcsArchive {
         authority: verified.authority,
@@ -221,6 +249,7 @@ pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerifiedCcsAr
         debug_toml: verified.debug_toml,
         components: verified.components,
         payload: verified.payload,
+        verified_object_metrics: verified.verified_object_metrics,
         files_checked: verified.files_checked,
     })
 }
@@ -317,6 +346,7 @@ mod tests {
     use super::*;
     use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
     use crate::ccs::signing::SigningKeyPair;
+    use std::io::Read;
 
     fn package(signer: &SigningKeyPair) -> (tempfile::TempDir, std::path::PathBuf, TrustPolicy) {
         let temp = tempfile::tempdir().unwrap();
@@ -331,6 +361,56 @@ mod tests {
         (temp, path, policy)
     }
 
+    fn chunked_package(
+        signer: &SigningKeyPair,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        TrustPolicy,
+        Vec<u8>,
+        usize,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("chunked.ccs");
+        let bytes = (0..(crate::ccs::chunking::MAX_CHUNK_SIZE as usize * 4))
+            .map(|index| ((index * 19 + index / 97) % 256) as u8)
+            .collect::<Vec<_>>();
+        let chunks = crate::ccs::chunking::Chunker::new()
+            .chunk_bytes(&bytes)
+            .iter()
+            .map(crate::ccs::chunking::Chunk::reference)
+            .collect::<Vec<_>>();
+        let unique = chunks
+            .iter()
+            .map(|chunk| chunk.sha256.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let mut authority =
+            crate::ccs::v3::test_support::package_authority_with_one_file("chunked");
+        let crate::ccs::v3::PackageKindV3::Package(package) = &mut authority.kind else {
+            unreachable!()
+        };
+        let file = &mut package.files[0];
+        file.content = Some(crate::payload::PayloadContentAuthority {
+            sha256: crate::hash::sha256(&bytes),
+            size: bytes.len() as u64,
+        });
+        file.content_layout = crate::ccs::v3::FileContentLayoutV3::FastCdcV2020 {
+            min_size: crate::ccs::chunking::MIN_CHUNK_SIZE,
+            average_size: crate::ccs::chunking::AVG_CHUNK_SIZE,
+            max_size: crate::ccs::chunking::MAX_CHUNK_SIZE,
+            chunks,
+        };
+        authority.components.get_mut("main").unwrap().total_size = bytes.len() as u64;
+        let payloads = std::collections::BTreeMap::from([(file.path.clone(), bytes.clone())]);
+        write_v3_ccs_package_from_bounded_memory_for_tests(
+            &authority, &payloads, &path, signer, None, None, None,
+        )
+        .unwrap();
+        let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
+        (temp, path, policy, bytes, unique)
+    }
+
     #[test]
     fn verified_value_requires_current_signed_trusted_authority() {
         let signer = SigningKeyPair::generate().with_key_id("release");
@@ -340,6 +420,93 @@ mod tests {
         assert_eq!(verified.package_name(), "verified");
         assert_eq!(verified.files_checked(), 1);
         assert_eq!(verified.signature().key_id.as_deref(), Some("release"));
+        assert_eq!(verified.verified_object_metrics(), None);
+    }
+
+    #[test]
+    fn permanent_verification_writes_cold_objects_once_and_warm_objects_zero_times() {
+        let signer = SigningKeyPair::generate().with_key_id("release");
+        let (temp, path, policy) = package(&signer);
+        let cas = crate::filesystem::CasStore::new(temp.path().join("permanent-objects")).unwrap();
+
+        let cold = verify_package_into_cas(&path, &policy, &cas).unwrap();
+        let cold_metrics = cold.verified_object_metrics().unwrap();
+        assert_eq!(cold_metrics.misses, 1);
+        assert_eq!(cold_metrics.hits, 0);
+        assert_eq!(
+            cold_metrics.persistent_bytes_written,
+            cold_metrics.incoming_bytes_hashed
+        );
+        assert!(cold_metrics.persistent_bytes_written > 0);
+        let cold_file = &cold.payload().files()[0];
+        let content = cold_file.content_authority.as_ref().unwrap();
+        assert_eq!(
+            cold_file
+                .source()
+                .unwrap()
+                .verified_cas_identity_for(&cas, content)
+                .unwrap()
+                .as_deref(),
+            Some(content.sha256.as_str())
+        );
+
+        let warm = verify_package_into_cas(&path, &policy, &cas).unwrap();
+        let warm_metrics = warm.verified_object_metrics().unwrap();
+        assert_eq!(warm_metrics.hits, 1);
+        assert_eq!(warm_metrics.misses, 0);
+        assert_eq!(warm_metrics.persistent_bytes_written, 0);
+        assert_eq!(warm_metrics.canonical_bytes_reread, 0);
+        assert!(warm_metrics.incoming_bytes_hashed > 0);
+    }
+
+    #[test]
+    fn permanent_chunk_verification_reuses_objects_and_defers_whole_file_cas_to_installer() {
+        let signer = SigningKeyPair::generate().with_key_id("release");
+        let (temp, path, policy, bytes, unique) = chunked_package(&signer);
+        let cas = crate::filesystem::CasStore::new(temp.path().join("permanent-objects")).unwrap();
+
+        let cold = verify_package_into_cas(&path, &policy, &cas).unwrap();
+        let cold_metrics = cold.verified_object_metrics().unwrap();
+        assert_eq!(cold_metrics.misses, unique as u64);
+        assert_eq!(cold_metrics.hits, 0);
+        let file = &cold.payload().files()[0];
+        assert_eq!(
+            file.source()
+                .unwrap()
+                .verified_cas_identity_for(&cas, file.content_authority.as_ref().unwrap())
+                .unwrap(),
+            None,
+            "a chunk set is not the whole-file CAS identity generation needs"
+        );
+        let mut reconstructed = Vec::new();
+        file.open_content()
+            .unwrap()
+            .read_to_end(&mut reconstructed)
+            .unwrap();
+        assert_eq!(reconstructed, bytes);
+
+        let warm = verify_package_into_cas(&path, &policy, &cas).unwrap();
+        let warm_metrics = warm.verified_object_metrics().unwrap();
+        assert_eq!(warm_metrics.hits, unique as u64);
+        assert_eq!(warm_metrics.misses, 0);
+        assert_eq!(warm_metrics.persistent_bytes_written, 0);
+        assert_eq!(warm_metrics.canonical_bytes_reread, 0);
+    }
+
+    #[test]
+    fn permanent_payload_capability_fails_closed_for_another_cas() {
+        let signer = SigningKeyPair::generate();
+        let (temp, path, policy) = package(&signer);
+        let cas = crate::filesystem::CasStore::new(temp.path().join("objects")).unwrap();
+        let other = crate::filesystem::CasStore::new(temp.path().join("other-objects")).unwrap();
+        let verified = verify_package_into_cas(&path, &policy, &cas).unwrap();
+        let file = &verified.payload().files()[0];
+        let error = file
+            .source()
+            .unwrap()
+            .verified_cas_identity_for(&other, file.content_authority.as_ref().unwrap())
+            .unwrap_err();
+        assert!(error.to_string().contains("destination store"));
     }
 
     #[test]

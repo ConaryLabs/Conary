@@ -6,7 +6,9 @@ use super::{
     CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry,
     GenerationRootManifest, MutableStateManifest, RootPathDomain, classify_root_path,
 };
+#[cfg(test)]
 use crate::filesystem::CasStore;
+use crate::filesystem::PrivateCasWriter;
 use crate::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
     ResolvedPayloadNode,
@@ -14,7 +16,6 @@ use crate::payload::{
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fs::OpenOptions;
-use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
@@ -75,13 +76,16 @@ impl SelectedRootCaptureExclusions {
     }
 }
 
-pub fn scan_selected_root(root: &Path, cas: &CasStore) -> crate::Result<CapturedSelectedRoot> {
+pub fn scan_selected_root(
+    root: &Path,
+    cas: &dyn PrivateCasWriter,
+) -> crate::Result<CapturedSelectedRoot> {
     scan_selected_root_with_exclusions(root, cas, &SelectedRootCaptureExclusions::empty())
 }
 
 pub fn scan_selected_root_with_exclusions(
     root: &Path,
-    cas: &CasStore,
+    cas: &dyn PrivateCasWriter,
     exclusions: &SelectedRootCaptureExclusions,
 ) -> crate::Result<CapturedSelectedRoot> {
     let (root_node, candidates) =
@@ -123,7 +127,7 @@ pub fn scan_selected_root_with_exclusions(
 /// unique identifier for the captured output (normally its derivation ID).
 pub fn scan_payload_tree(
     root: &Path,
-    cas: &CasStore,
+    cas: &dyn PrivateCasWriter,
     hardlink_namespace: &str,
 ) -> crate::Result<(ResolvedPayloadNode, Vec<GenerationRootEntry>)> {
     let (root_node, candidates) = capture_payload_tree(
@@ -140,9 +144,34 @@ pub fn scan_payload_tree(
     Ok((root_node, entries))
 }
 
+/// Capture only publishable paths from one selected-root OverlayFS upper.
+///
+/// Runtime-only `/dev`, `/proc`, `/run`, `/sys`, `/tmp`, and user-domain
+/// mutations are deliberately absent from generation authority. Keeping this
+/// filter inside the scanner also prunes those subtrees before any node or
+/// content capture work occurs.
+pub(super) fn scan_selected_root_overlay_upper(
+    root: &Path,
+    cas: &dyn PrivateCasWriter,
+    hardlink_namespace: &str,
+) -> crate::Result<(ResolvedPayloadNode, Vec<GenerationRootEntry>)> {
+    let (root_node, candidates) = capture_payload_tree(
+        root,
+        cas,
+        false,
+        hardlink_namespace,
+        &SelectedRootCaptureExclusions::empty(),
+    )?;
+    let entries = candidates
+        .into_iter()
+        .map(|candidate| candidate.entry)
+        .collect();
+    Ok((root_node, entries))
+}
+
 fn capture_payload_tree(
     root: &Path,
-    cas: &CasStore,
+    cas: &dyn PrivateCasWriter,
     include_ephemeral: bool,
     hardlink_namespace: &str,
     exclusions: &SelectedRootCaptureExclusions,
@@ -154,6 +183,7 @@ fn capture_payload_tree(
     }
     let root_node = capture_root_node(root)?;
     let mut candidates = Vec::new();
+    let mut captured_regular_inodes = std::collections::BTreeSet::new();
     let walker = WalkDir::new(root)
         .follow_links(false)
         .sort_by(|left, right| {
@@ -193,12 +223,26 @@ fn capture_payload_tree(
         }
         // Capture beside discovery. Holding this metadata until the complete
         // walk ends makes ordinary mutable state inherently racy.
-        candidates.push(capture_path_stably(
+        let known_regular_inode = std::fs::symlink_metadata(entry.path())
+            .ok()
+            .filter(|metadata| metadata.file_type().is_file())
+            .map(|metadata| filesystem_identity(&metadata))
+            .filter(|identity| captured_regular_inodes.contains(identity));
+        let candidate = capture_path_stably_with_known_inode(
             path,
             entry.path().to_path_buf(),
             domain,
             cas,
-        )?);
+            known_regular_inode,
+        )?;
+        if matches!(
+            candidate.entry.node.source.kind,
+            PayloadNodeKind::Regular { .. }
+        ) && candidate.entry.content.is_some()
+        {
+            captured_regular_inodes.insert(candidate.identity);
+        }
+        candidates.push(candidate);
     }
     candidates.sort_by(|left, right| left.entry.path.cmp(&right.entry.path));
 
@@ -313,20 +357,29 @@ fn assign_hardlinks(
     Ok(())
 }
 
-fn capture_path_stably(
+fn capture_path_stably_with_known_inode(
     path: String,
     filesystem_path: PathBuf,
     domain: RootPathDomain,
-    cas: &CasStore,
+    cas: &dyn PrivateCasWriter,
+    known_regular_inode: Option<FilesystemIdentity>,
 ) -> crate::Result<CapturedCandidate> {
-    capture_path_stably_with_observer(path, filesystem_path, domain, cas, &mut |_, _| {})
+    capture_path_stably_with_observer(
+        path,
+        filesystem_path,
+        domain,
+        cas,
+        known_regular_inode,
+        &mut |_, _| {},
+    )
 }
 
 fn capture_path_stably_with_observer(
     path: String,
     filesystem_path: PathBuf,
     domain: RootPathDomain,
-    cas: &CasStore,
+    cas: &dyn PrivateCasWriter,
+    known_regular_inode: Option<FilesystemIdentity>,
     observer: &mut impl FnMut(usize, &Path),
 ) -> crate::Result<CapturedCandidate> {
     for attempt in 1..=STABLE_NODE_CAPTURE_ATTEMPTS {
@@ -336,7 +389,11 @@ fn capture_path_stably_with_observer(
                 filesystem_path.display()
             ))
         })?;
-        let captured = if before.file_type().is_file() {
+        let captured = if before.file_type().is_file()
+            && known_regular_inode == Some(filesystem_identity(&before))
+        {
+            capture_regular_alias_attempt(&filesystem_path, &before, attempt, observer)?
+        } else if before.file_type().is_file() {
             capture_regular_attempt(&filesystem_path, &before, cas, attempt, observer)?
         } else {
             capture_non_regular_attempt(&filesystem_path, &before)?
@@ -361,6 +418,69 @@ fn capture_path_stably_with_observer(
     )))
 }
 
+fn capture_regular_alias_attempt(
+    path: &Path,
+    discovered: &std::fs::Metadata,
+    attempt: usize,
+    observer: &mut impl FnMut(usize, &Path),
+) -> crate::Result<Option<CapturedNodeSnapshot>> {
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            if std::fs::symlink_metadata(path)
+                .is_ok_and(|after| !metadata_snapshot_matches(discovered, &after))
+            {
+                return Ok(None);
+            }
+            return Err(crate::Error::IoError(format!(
+                "failed to open selected-root hardlink alias {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    let before = file.metadata().map_err(|error| {
+        crate::Error::IoError(format!(
+            "failed to inspect open selected-root hardlink alias {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !before.file_type().is_file() || !same_filesystem_node(discovered, &before) {
+        return Ok(None);
+    }
+    let xattrs = read_xattrs_from_fd(&file, path)?;
+    observer(attempt, path);
+    let after = file.metadata().map_err(|error| {
+        crate::Error::IoError(format!(
+            "failed to re-inspect selected-root hardlink alias {}: {error}",
+            path.display()
+        ))
+    })?;
+    let Ok(path_after) = std::fs::symlink_metadata(path) else {
+        return Ok(None);
+    };
+    if !metadata_snapshot_matches(&before, &after)
+        || !metadata_snapshot_matches(&after, &path_after)
+    {
+        return Ok(None);
+    }
+    Ok(Some(CapturedNodeSnapshot {
+        node: node_from_metadata_and_xattrs(
+            path,
+            &before,
+            PayloadNodeKind::Regular {
+                hardlink_identity: None,
+            },
+            xattrs,
+        )?,
+        content: None,
+        identity: filesystem_identity(&before),
+    }))
+}
+
 #[derive(Debug)]
 struct CapturedNodeSnapshot {
     node: ResolvedPayloadNode,
@@ -371,7 +491,7 @@ struct CapturedNodeSnapshot {
 fn capture_regular_attempt(
     path: &Path,
     discovered: &std::fs::Metadata,
-    cas: &CasStore,
+    cas: &dyn PrivateCasWriter,
     attempt: usize,
     observer: &mut impl FnMut(usize, &Path),
 ) -> crate::Result<Option<CapturedNodeSnapshot>> {
@@ -408,16 +528,23 @@ fn capture_regular_attempt(
     let xattrs = read_xattrs_from_fd(&file, path)?;
     observer(attempt, path);
 
-    let mut bytes = Vec::new();
-    file.by_ref()
-        .take(before.len().saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| {
-            crate::Error::IoError(format!(
-                "failed to read selected-root regular file {}: {error}",
+    let digest = match cas.store_private_reader(&mut file, before.len()) {
+        Ok(digest) => digest,
+        Err(error) => {
+            let descriptor_changed = file
+                .metadata()
+                .is_ok_and(|after| !metadata_snapshot_matches(&before, &after));
+            let path_changed = std::fs::symlink_metadata(path)
+                .is_ok_and(|after| !metadata_snapshot_matches(&before, &after));
+            if descriptor_changed || path_changed {
+                return Ok(None);
+            }
+            return Err(crate::Error::IoError(format!(
+                "failed to capture selected-root regular file {} in CAS: {error}",
                 path.display()
-            ))
-        })?;
+            )));
+        }
+    };
     let after = file.metadata().map_err(|error| {
         crate::Error::IoError(format!(
             "failed to re-inspect open selected-root file {}: {error}",
@@ -427,15 +554,8 @@ fn capture_regular_attempt(
     let Ok(path_after) = std::fs::symlink_metadata(path) else {
         return Ok(None);
     };
-    let byte_count = u64::try_from(bytes.len()).map_err(|_| {
-        crate::Error::IoError(format!(
-            "selected-root regular file is too large to capture: {}",
-            path.display()
-        ))
-    })?;
     if !metadata_snapshot_matches(&before, &after)
         || !metadata_snapshot_matches(&after, &path_after)
-        || byte_count != before.len()
     {
         return Ok(None);
     }
@@ -448,17 +568,11 @@ fn capture_regular_attempt(
         },
         xattrs,
     )?;
-    let digest = cas.store_private_copy(&bytes).map_err(|error| {
-        crate::Error::IoError(format!(
-            "failed to capture selected-root regular file {} in CAS: {error}",
-            path.display()
-        ))
-    })?;
     Ok(Some(CapturedNodeSnapshot {
         node,
         content: Some(PayloadContentAuthority {
             sha256: digest,
-            size: byte_count,
+            size: before.len(),
         }),
         identity: filesystem_identity(&before),
     }))
@@ -809,6 +923,7 @@ mod tests {
             path,
             RootPathDomain::MutableState,
             &cas,
+            None,
             &mut |attempt, path| {
                 attempts += 1;
                 if attempt == 1 {
@@ -824,5 +939,59 @@ mod tests {
         let content = captured.entry.content.unwrap();
         assert_eq!(content.size, final_bytes.len() as u64);
         assert_eq!(cas.retrieve(&content.sha256).unwrap(), final_bytes);
+    }
+
+    #[test]
+    fn hardlink_aliases_read_shared_content_once() {
+        use std::cell::Cell;
+        use std::io::Read;
+
+        struct CountingWriter<'a> {
+            cas: &'a CasStore,
+            reader_calls: Cell<usize>,
+        }
+
+        impl PrivateCasWriter for CountingWriter<'_> {
+            fn store_private_copy(&self, content: &[u8]) -> crate::Result<String> {
+                self.cas.store_private_copy(content)
+            }
+
+            fn store_private_reader(
+                &self,
+                reader: &mut dyn Read,
+                expected_size: u64,
+            ) -> crate::Result<String> {
+                self.reader_calls.set(self.reader_calls.get() + 1);
+                self.cas.store_private_reader(reader, expected_size)
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        let cas = CasStore::new(temp.path().join("objects")).unwrap();
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::write(root.join("usr/lib/primary"), b"one inode").unwrap();
+        std::fs::hard_link(root.join("usr/lib/primary"), root.join("usr/lib/alias")).unwrap();
+        let writer = CountingWriter {
+            cas: &cas,
+            reader_calls: Cell::new(0),
+        };
+
+        let captured = scan_selected_root(&root, &writer).unwrap();
+        assert_eq!(writer.reader_calls.get(), 1);
+        let primary = captured
+            .generation
+            .entries
+            .iter()
+            .find(|entry| entry.path == "/usr/lib/alias")
+            .unwrap();
+        let alias = captured
+            .generation
+            .entries
+            .iter()
+            .find(|entry| entry.path == "/usr/lib/primary")
+            .unwrap();
+        assert!(primary.content.is_some());
+        assert!(alias.content.is_none());
     }
 }

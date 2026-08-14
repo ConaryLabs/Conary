@@ -19,7 +19,7 @@ use std::process::Command;
 use tracing::debug;
 
 const RPM_PACKAGE_RECORD_FORMAT: &str = "%{NEVRA}\x1e%{NAME}\x1e%{VERSION}\x1e%{RELEASE}\x1e%{EPOCH}\x1e%{ARCH}\x1e%{DESCRIPTION}\x1e%{SUMMARY}\x1e%{LICENSE}\x1e%{URL}\x1e%{VENDOR}\x1e%{SOURCERPM}\x1e%{BUILDHOST}\x1e%{INSTALLTIME}\x1f";
-const RPM_FILE_RECORD_FORMAT: &str = "[%{FILENAMES}\x1e%{LONGFILESIZES}\x1e%{FILEMTIMES}\x1e%{FILEDIGESTS}\x1e%{FILEMODES:octal}\x1e%{FILEUSERNAME}\x1e%{FILEGROUPNAME}\x1e%{FILELINKTOS}\x1e%{FILEFLAGS:hex}\x1f]";
+const RPM_FILE_RECORD_FORMAT: &str = "[%{FILENAMES}\x1e%{LONGFILESIZES}\x1e%{FILEMTIMES}\x1e%{FILEDIGESTS}\x1e%{FILEMODES:octal}\x1e%{FILEUSERNAME}\x1e%{FILEGROUPNAME}\x1e%{FILELINKTOS}\x1e%{FILEFLAGS:hex}\x1e%{FILESTATES}\x1f]";
 const RPM_REQUIREMENT_RECORD_FORMAT: &str =
     "[%{REQUIRENAME}\x1e%{REQUIREFLAGS:hex}\x1e%{REQUIREVERSION}\x1f]";
 const RPM_OWNER_RECORD_FORMAT: &str = "%{NAME}\x1f";
@@ -306,89 +306,106 @@ fn parse_rpm_file_records(output: &str) -> Result<Vec<InstalledFileInfo>> {
         .split('\x1f')
         .filter(|record| !record.is_empty())
         .enumerate()
-        .map(|(index, record)| {
-            let parts = record.split('\x1e').collect::<Vec<_>>();
-            if parts.len() != 9 {
-                return Err(Error::ParseError(format!(
-                    "RPM file record {} has {} fields; expected exactly 9",
-                    index + 1,
-                    parts.len()
-                )));
-            }
-            if parts[0].is_empty() {
-                return Err(Error::ParseError(format!(
-                    "RPM file record {} has an empty path",
-                    index + 1
-                )));
-            }
-            let size = parts[1].parse::<i64>().map_err(|error| {
-                Error::ParseError(format!(
-                    "RPM file record {} has invalid size {:?}: {error}",
-                    index + 1,
-                    parts[1]
-                ))
-            })?;
-            let mtime = parts[2].parse::<i64>().map_err(|error| {
-                Error::ParseError(format!(
-                    "RPM file record {} has invalid mtime {:?}: {error}",
-                    index + 1,
-                    parts[2]
-                ))
-            })?;
-            let digest = match parts[3] {
-                "" | "(none)" => None,
-                value
-                    if value.len() % 2 == 0
-                        && value.chars().all(|character| character.is_ascii_hexdigit()) =>
-                {
-                    Some(value.to_string())
-                }
-                value => {
-                    return Err(Error::ParseError(format!(
-                        "RPM file record {} has invalid digest {value:?}",
-                        index + 1
-                    )));
-                }
-            };
-            let mode = i32::from_str_radix(parts[4], 8).map_err(|error| {
-                Error::ParseError(format!(
-                    "RPM file record {} has invalid octal mode {:?}: {error}",
-                    index + 1,
-                    parts[4]
-                ))
-            })?;
-            let user = required_rpm_field(parts[5], index + 1, "FILEUSERNAME")?;
-            let group = required_rpm_field(parts[6], index + 1, "FILEGROUPNAME")?;
-            let flags = u32::from_str_radix(parts[8], 16).map_err(|error| {
-                Error::ParseError(format!(
-                    "RPM file record {} has invalid hexadecimal flags {:?}: {error}",
-                    index + 1,
-                    parts[8]
-                ))
-            })?;
-            let flags = FileFlags::from_bits_retain(flags);
-            let absence_policy = match (
-                flags.contains(FileFlags::GHOST),
-                flags.contains(FileFlags::MISSINGOK),
-            ) {
-                (false, false) => InstalledFileAbsencePolicy::Required,
-                (true, false) => InstalledFileAbsencePolicy::RpmGhost,
-                (false, true) => InstalledFileAbsencePolicy::RpmMissingOk,
-                (true, true) => InstalledFileAbsencePolicy::RpmGhostAndMissingOk,
-            };
-            Ok(InstalledFileInfo {
-                path: parts[0].to_string(),
-                size,
-                mode,
-                digest,
-                user: Some(user),
-                group: Some(group),
-                link_target: rpm_none_to_option(&parts[7]),
-                mtime: Some(mtime),
-                absence_policy,
-            })
-        })
+        .map(|(index, record)| parse_rpm_file_record(index + 1, record))
+        .filter_map(Result::transpose)
         .collect()
+}
+
+fn parse_rpm_file_record(record_number: usize, record: &str) -> Result<Option<InstalledFileInfo>> {
+    let parts = record.split('\x1e').collect::<Vec<_>>();
+    if parts.len() != 10 {
+        return Err(Error::ParseError(format!(
+            "RPM file record {record_number} has {} fields; expected exactly 10",
+            parts.len()
+        )));
+    }
+    if parts[0].is_empty() {
+        return Err(Error::ParseError(format!(
+            "RPM file record {record_number} has an empty path"
+        )));
+    }
+    let size = parts[1].parse::<i64>().map_err(|error| {
+        Error::ParseError(format!(
+            "RPM file record {record_number} has invalid size {:?}: {error}",
+            parts[1]
+        ))
+    })?;
+    let mtime = parts[2].parse::<i64>().map_err(|error| {
+        Error::ParseError(format!(
+            "RPM file record {record_number} has invalid mtime {:?}: {error}",
+            parts[2]
+        ))
+    })?;
+    let digest = match parts[3] {
+        "" | "(none)" => None,
+        value
+            if value.len() % 2 == 0
+                && value.chars().all(|character| character.is_ascii_hexdigit()) =>
+        {
+            Some(value.to_string())
+        }
+        value => {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} has invalid digest {value:?}"
+            )));
+        }
+    };
+    let mode = i32::from_str_radix(parts[4], 8).map_err(|error| {
+        Error::ParseError(format!(
+            "RPM file record {record_number} has invalid octal mode {:?}: {error}",
+            parts[4]
+        ))
+    })?;
+    let user = required_rpm_field(parts[5], record_number, "FILEUSERNAME")?;
+    let group = required_rpm_field(parts[6], record_number, "FILEGROUPNAME")?;
+    let flags = u32::from_str_radix(parts[8], 16).map_err(|error| {
+        Error::ParseError(format!(
+            "RPM file record {record_number} has invalid hexadecimal flags {:?}: {error}",
+            parts[8]
+        ))
+    })?;
+
+    // RPM persists the transaction result for every header file in FILESTATES.
+    // Only NORMAL (0) and NETSHARED (3) are installed payload according to
+    // RPM's own RPMFILE_IS_INSTALLED contract. REPLACED (1), NOTINSTALLED (2),
+    // and WRONGCOLOR (4) remain package metadata, not live ownership authority.
+    match parts[9].parse::<i32>() {
+        Ok(0 | 3) => {}
+        Ok(1 | 2 | 4) => return Ok(None),
+        Ok(state) => {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} has unsupported FILESTATES value {state}"
+            )));
+        }
+        Err(error) => {
+            return Err(Error::ParseError(format!(
+                "RPM file record {record_number} has invalid FILESTATES value {:?}: {error}",
+                parts[9]
+            )));
+        }
+    }
+
+    let flags = FileFlags::from_bits_retain(flags);
+    let absence_policy = match (
+        flags.contains(FileFlags::GHOST),
+        flags.contains(FileFlags::MISSINGOK),
+    ) {
+        (false, false) => InstalledFileAbsencePolicy::Required,
+        (true, false) => InstalledFileAbsencePolicy::RpmGhost,
+        (false, true) => InstalledFileAbsencePolicy::RpmMissingOk,
+        (true, true) => InstalledFileAbsencePolicy::RpmGhostAndMissingOk,
+    };
+    Ok(Some(InstalledFileInfo {
+        path: parts[0].to_string(),
+        size,
+        mode,
+        digest,
+        user: Some(user),
+        group: Some(group),
+        link_target: rpm_none_to_option(&parts[7]),
+        mtime: Some(mtime),
+        absence_policy,
+    }))
 }
 
 /// Query RPM's complete installed `Requires` entries as exact typed groups.
@@ -834,8 +851,8 @@ mod tests {
     #[test]
     fn file_query_uses_exact_parallel_array_records() {
         let records = parse_rpm_file_records(
-            "/usr/lib/libfixture.so\x1e42\x1e1700000000\x1eabcdef12\x1e0120777\x1eroot\x1eroot\x1elibfixture.so.1\x1e0\x1f\
-             /usr/share/fixture data\x1e0\x1e1700000001\x1e\x1e040755\x1eroot\x1eroot\x1e\x1e40\x1f",
+            "/usr/lib/libfixture.so\x1e42\x1e1700000000\x1eabcdef12\x1e0120777\x1eroot\x1eroot\x1elibfixture.so.1\x1e0\x1e0\x1f\
+             /usr/share/fixture data\x1e0\x1e1700000001\x1e\x1e040755\x1eroot\x1eroot\x1e\x1e40\x1e3\x1f",
         )
         .unwrap();
 
@@ -855,7 +872,7 @@ mod tests {
         );
 
         let zero_digest = parse_rpm_file_records(
-            "/usr/bin/zero\x1e1\x1e1700000002\x1e00000000\x1e0100755\x1eroot\x1eroot\x1e\x1e48\x1f",
+            "/usr/bin/zero\x1e1\x1e1700000002\x1e00000000\x1e0100755\x1eroot\x1eroot\x1e\x1e48\x1e0\x1f",
         )
         .unwrap();
         assert_eq!(zero_digest[0].digest.as_deref(), Some("00000000"));
@@ -865,7 +882,7 @@ mod tests {
         );
 
         let missing_ok = parse_rpm_file_records(
-            "/etc/optional\x1e1\x1e1700000002\x1e00000000\x1e0100644\x1eroot\x1eroot\x1e\x1e8\x1f",
+            "/etc/optional\x1e1\x1e1700000002\x1e00000000\x1e0100644\x1eroot\x1eroot\x1e\x1e8\x1e0\x1f",
         )
         .unwrap();
         assert_eq!(
@@ -875,17 +892,43 @@ mod tests {
     }
 
     #[test]
+    fn file_query_uses_rpms_persisted_installation_state_as_live_authority() {
+        let records = parse_rpm_file_records(
+            "/normal\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f\
+             /replaced\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e1\x1f\
+             /not-installed\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e2\x1f\
+             /net-shared\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e3\x1f\
+             /wrong-color\x1e1\x1e1\x1e00\x1e0100644\x1eroot\x1eroot\x1e\x1e0\x1e4\x1f",
+        )
+        .unwrap();
+
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/normal", "/net-shared"]
+        );
+    }
+
+    #[test]
     fn file_query_rejects_malformed_parallel_array_records() {
         assert!(parse_rpm_file_records("/usr/bin/fixture\x1e42\x1f").is_err());
         assert!(
             parse_rpm_file_records(
-                "/usr/bin/fixture\x1e42\x1e1700000000\x1enot-a-digest\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1f"
+                "/usr/bin/fixture\x1e42\x1e1700000000\x1enot-a-digest\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e0\x1f"
             )
             .is_err()
         );
         assert!(
             parse_rpm_file_records(
-                "/usr/bin/fixture\x1e42\x1e1700000000\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1enot-hex\x1f"
+                "/usr/bin/fixture\x1e42\x1e1700000000\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1enot-hex\x1e0\x1f"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_rpm_file_records(
+                "/usr/bin/fixture\x1e42\x1e1700000000\x1eabcdef12\x1e0100755\x1eroot\x1eroot\x1e\x1e0\x1e5\x1f"
             )
             .is_err()
         );

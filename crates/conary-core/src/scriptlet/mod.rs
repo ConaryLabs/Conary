@@ -30,6 +30,7 @@ mod arguments;
 mod boot_runtime_capture;
 mod boundary;
 mod executor;
+mod failure_policy;
 mod lifecycle_bridge;
 mod native_command;
 mod native_lifecycle;
@@ -45,6 +46,10 @@ mod types;
 
 pub use crate::activation::SystemdActivationInvocation;
 pub use executor::ScriptletExecutor;
+pub use failure_policy::{
+    FailurePosture, LifecycleFailureClass, RpmClassAuthority, rpm_package_slot_authority,
+    rpm_trigger_authority,
+};
 pub use lifecycle_bridge::{
     LifecycleBridgeConfig, LifecycleBridgeEndpoint, LifecycleBridgeHandler,
     LifecycleBridgeHandlerError, LifecycleBridgeRequest, LifecycleBridgeResponse,

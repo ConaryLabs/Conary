@@ -1,0 +1,101 @@
+# tests/integration/remi/manifests/rolling-derivative-acceptance.toml
+
+[suite]
+name = "Rolling Derivative Acceptance"
+phase = 4
+timeout = 2400
+
+[distro_overrides.cachyos]
+native_package_manager = "pacman"
+native_install = "pacman -Sy --noconfirm jq"
+native_query = "pacman -Q jq"
+native_remove = "pacman -Rns --noconfirm jq"
+
+[distro_overrides."opensuse-tumbleweed"]
+native_package_manager = "rpm"
+native_install = "zypper --non-interactive refresh && zypper --non-interactive install --no-recommends jq"
+native_query = "rpm -q jq"
+native_remove = "zypper --non-interactive remove --clean-deps jq"
+
+[[test]]
+id = "TNPMR01"
+name = "actual_native_repository_takeover_round_trip"
+description = "The target's real ALPM or Zypper declarations and signing roots pass typed preview, apply, repeat, and byte-exact rollback"
+timeout = 900
+fatal = true
+group = "rolling-derivative-acceptance"
+
+[[test.step]]
+run = "python3 /opt/remi-tests/fixtures/distro-roots/run-native-repository-takeover.py --conary ${CONARY_BIN} --config /opt/remi-tests/config.toml --target ${DISTRO} --db ${DB_PATH} --root / --evidence /tmp/conary-native-takeover-evidence.json"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "python3 -c 'import json; value=json.load(open(\"/tmp/conary-native-takeover-evidence.json\")); assert value[\"schema_version\"] == 1; assert value[\"target_profile\"] == \"${DISTRO}\"; assert value[\"repositories\"] > 0; assert value[\"stages\"] == [\"preview\", \"apply\", \"repeat\", \"rollback\"]'"
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TNPMR02"
+name = "native_query_adopt_refresh_unadopt_remove"
+description = "A real native package remains queryable across Conary adoption refresh, takeover preview, and unadoption, then native removal"
+timeout = 1200
+fatal = true
+group = "rolling-derivative-acceptance"
+depends_on = ["TNPMR01"]
+
+[[test.step]]
+run = "${native_install} && ${native_query}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system adopt jq --package-manager ${native_package_manager} --db-path ${DB_PATH} --dry-run"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system adopt jq --package-manager ${native_package_manager} --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system adopt --status --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system adopt --refresh --package-manager ${native_package_manager} --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system takeover --package-manager ${native_package_manager} --db-path ${DB_PATH} --dry-run"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system unadopt jq --db-path ${DB_PATH} --dry-run"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${CONARY_BIN} system unadopt jq --db-path ${DB_PATH} --yes"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "${native_remove} && ! ${native_query}"
+
+[test.step.assert]
+exit_code = 0

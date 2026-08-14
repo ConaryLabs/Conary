@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-31
-revision: 7
+last_updated: 2026-08-13
+revision: 9
 status: active
 current_result: 0/10
 summary: Outcome tracker for Conary's first cross-distro external tester milestone
@@ -35,22 +35,22 @@ but does not count as a completion.
 
 ## Release Gate
 
-The publication gate for `v0.14.0` is complete: the
-`docs/operations/release-artifact-matrix.md` records its annotated tag,
-immutable seven-asset release, checksums and GitHub digests, detached CCS
-signature, deployment, self-update endpoint, and three-distro
-released-package proof. Remi `0.9.5` is the current independently verified
-production authority.
+The publication gate for synchronized suite `v0.15.0` is complete. The
+`docs/operations/release-artifact-matrix.md` records its exact reviewed commit,
+annotated tag, immutable 13-asset release across four products, checksums and
+GitHub digests, release attestation, detached CCS signature, deployments,
+self-update endpoint, build-only routes, and three-distro released-package
+proof. Production Remi runs the exact tagged binary.
 
-`v0.14.0` is not the pinned tester release, however. Supported-host generation
-bring-up after that immutable tag exposed product defects whose fixes remain
-unreleased on issue #137 and PR #151. A subsequent immutable release must
-contain and independently prove those fixes before this tracker names a pinned
-tester version. No version is assigned in advance.
+That complete release closeout does not by itself open outreach. The
+ordinary-package corpus gate owned by #110/W7 must also pass before this
+tracker names a pinned tester version. No tester version is assigned in
+advance, and `v0.15.0` must not be presented as one merely because it is the
+current release authority.
 
 Release proof is not an external-user completion. The result therefore remains
-0/10, and broad outreach remains postponed by the unreleased-fix gate, the W7
-corpus gate, and the separate cached-history and venue-eligibility gates.
+0/10, and broad outreach remains postponed by the W7 corpus gate plus the
+separate cached-history and venue-eligibility gates.
 
 Supported tester hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
 Use a disposable VM, snapshot, spare system, or other non-critical host.

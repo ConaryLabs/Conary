@@ -28,7 +28,7 @@ pub fn materialize_generation_root(
     prepare_empty_destination(destination)?;
     materialize_entries(&manifest.entries, cas, destination)?;
     apply_resolved_payload_metadata(destination, &manifest.root)?;
-    sync_directory(destination)?;
+    sync_filesystem(destination)?;
     Ok(())
 }
 
@@ -44,7 +44,8 @@ pub fn materialize_state_root(
     manifest.validate()?;
     require_sha256_cas(cas)?;
     require_directory(destination)?;
-    materialize_entries(&manifest.entries, cas, destination)
+    materialize_entries(&manifest.entries, cas, destination)?;
+    sync_filesystem(destination)
 }
 
 /// Recreate the `/etc` subtree as an overlay upper directory.
@@ -101,7 +102,7 @@ pub fn materialize_config_state_upper(
     } else {
         fs::set_permissions(destination, fs::Permissions::from_mode(0o755))?;
     }
-    sync_directory(destination)
+    sync_filesystem(destination)
 }
 
 /// Recreate a complete selected root while preserving the captured root
@@ -116,7 +117,7 @@ pub fn materialize_captured_selected_root(
     materialize_generation_root(&captured.generation, cas, destination)?;
     materialize_state_root(&captured.state, cas, destination)?;
     apply_resolved_payload_metadata(destination, &captured.generation.root)?;
-    sync_directory(destination)
+    sync_filesystem(destination)
 }
 
 /// Overlay one validated package payload tree onto an existing root.
@@ -187,9 +188,8 @@ pub fn overlay_payload_entries(
     for entry in directories.iter().rev() {
         let path = destination_path(destination, &entry.path)?;
         apply_resolved_payload_metadata(&path, &entry.node)?;
-        sync_directory(&path)?;
     }
-    sync_directory(destination)?;
+    sync_filesystem(destination)?;
     u64::try_from(entries.len()).map_err(|_| {
         crate::Error::InvalidPath("payload entry count is not representable".to_string())
     })
@@ -307,7 +307,6 @@ fn materialize_entries(
     for entry in directories.iter().rev() {
         let path = destination_path(destination, &entry.path)?;
         apply_resolved_payload_metadata(&path, &entry.node)?;
-        sync_directory(&path)?;
     }
     Ok(())
 }
@@ -346,7 +345,6 @@ fn create_leaf(
             }
             let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
             file.write_all(&bytes)?;
-            file.sync_all()?;
         }
         PayloadNodeKind::Symlink { target } => {
             std::os::unix::fs::symlink(target, path)?;
@@ -639,7 +637,25 @@ fn c_path(path: &Path) -> crate::Result<CString> {
     })
 }
 
-fn sync_directory(path: &Path) -> crate::Result<()> {
+#[cfg(target_os = "linux")]
+fn sync_filesystem(path: &Path) -> crate::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    let directory = fs::File::open(path)?;
+    let result = unsafe { libc::syncfs(directory.as_raw_fd()) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(crate::Error::IoError(format!(
+            "failed to make materialized filesystem durable at {}: {}",
+            path.display(),
+            io::Error::last_os_error()
+        )))
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sync_filesystem(path: &Path) -> crate::Result<()> {
     fs::File::open(path)?.sync_all()?;
     Ok(())
 }
