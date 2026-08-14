@@ -1,6 +1,11 @@
 # Suite releases publish one installable RPM and no separate debug artifact;
 # the workspace release profile owns stripping, so do not generate discarded subpackages.
 %global debug_package %{nil}
+
+# Fedora's phase prelude otherwise exports Rust flags whose debug and strip
+# settings exist to feed split debuginfo. Reapply the distro build flags below
+# after selecting only the Rust additions that remain part of this package.
+%undefine _auto_set_build_flags
 %global crate conary
 
 Name:           conary
@@ -46,6 +51,13 @@ directory = "vendor"
 EOF
 
 %build
+# Cargo.toml owns release optimization, LTO, codegen units, and stripping.
+# Retain Fedora's x86_64 frame pointers and embedded RPM package note, while
+# %set_build_flags continues to populate the native dependency toolchain flags.
+RUSTFLAGS="-Cforce-frame-pointers=yes -Clink-arg=%{_package_note_flags}"
+export RUSTFLAGS
+%set_build_flags
+echo "Conary effective RUSTFLAGS: $RUSTFLAGS"
 cargo build --release --locked -p conary
 
 %install

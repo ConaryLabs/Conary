@@ -133,6 +133,24 @@ fn native_release_packages_disable_unpublished_debug_subpackages() {
         spec.contains("no separate debug artifact") && spec.contains("discarded subpackages"),
         "RPM spec must explain why automatic debug subpackages are disabled"
     );
+    assert!(
+        spec.lines()
+            .any(|line| line.trim() == "%undefine _auto_set_build_flags"),
+        "RPM spec must stop Fedora's automatic debug-oriented Rust flag injection"
+    );
+    assert!(
+        spec.lines().any(|line| {
+            line.trim()
+                == "RUSTFLAGS=\"-Cforce-frame-pointers=yes -Clink-arg=%{_package_note_flags}\""
+        }) && spec.lines().any(|line| line.trim() == "%set_build_flags"),
+        "RPM spec must retain Fedora frame-pointer, package-note, and native build flags"
+    );
+    assert!(
+        !spec.contains("-Cdebuginfo")
+            && !spec.contains("-Cstrip=none")
+            && !spec.contains("%{build_rustflags}"),
+        "RPM spec must leave release debuginfo and stripping authority in Cargo.toml"
+    );
 
     let pkgbuild = read_packaging_file("packaging/arch/PKGBUILD");
     let options = pkgbuild

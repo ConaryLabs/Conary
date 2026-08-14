@@ -41,7 +41,7 @@ require_match() {
     local pattern="$2"
     local description="$3"
 
-    rg -q --multiline "$pattern" "$file" || fail "$description missing in $file"
+    rg -q --multiline -- "$pattern" "$file" || fail "$description missing in $file"
 }
 
 forbid_match() {
@@ -49,7 +49,7 @@ forbid_match() {
     local pattern="$2"
     local description="$3"
 
-    if rg -q --multiline "$pattern" "$file"; then
+    if rg -q --multiline -- "$pattern" "$file"; then
         fail "$description unexpectedly present in $file"
     fi
 }
@@ -80,7 +80,7 @@ require_job_match() {
 
     block="$(extract_job_block "$file" "$job")"
     [[ -n "$block" ]] || fail "$job job missing in $file"
-    printf '%s\n' "$block" | rg -q --multiline "$pattern" ||
+    printf '%s\n' "$block" | rg -q --multiline -- "$pattern" ||
         fail "$description missing in $file job $job"
 }
 
@@ -199,6 +199,8 @@ require_match "$rpm_spec" '^BuildRequires:[[:space:]]+systemd-rpm-macros$' 'RPM 
 require_job_match "$release_build" build-rpm 'dnf install -y[\s\S]*systemd-rpm-macros' 'release-build RPM systemd macro dependency'
 require_match "$rpm_containerfile" 'systemd-rpm-macros[\s\S]*rpm --eval '\''%\{_unitdir\}'\''[\s\S]*/usr/lib/systemd/system' 'RPM Containerfile systemd macro dependency and expansion proof'
 require_match "$rpm_spec" '# Suite releases publish one installable RPM and no separate debug artifact;[\s\S]*^%global debug_package %\{nil\}$' 'RPM spec must explain and disable debug subpackage generation'
+require_match "$rpm_spec" '^%undefine _auto_set_build_flags$[\s\S]*^%build$[\s\S]*^RUSTFLAGS="-Cforce-frame-pointers=yes -Clink-arg=%\{_package_note_flags\}"$[\s\S]*^export RUSTFLAGS$[\s\S]*^%set_build_flags$[\s\S]*^cargo build --release --locked -p conary$' 'RPM spec must preserve non-debug Fedora Rust flags without overriding the workspace release profile'
+forbid_match "$rpm_spec" '-Cdebuginfo(=|[[:space:]])|-Cstrip=none|%\{build_rustflags\}' 'RPM spec debug-oriented Rust flag override'
 require_match "$arch_pkgbuild" '# Suite releases publish one installable package and no discarded debug split package\.[\s\S]*^options=\(!debug !lto\)$' 'Arch package must explicitly disable debug split-package generation'
 forbid_match "$release_build" '\*debug(source|info)?\*' 'native debug artifact filtering'
 

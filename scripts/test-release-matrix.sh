@@ -808,6 +808,30 @@ test_check_release_matrix_rejects_rpm_debug_subpackage_generation() {
     assert_check_release_matrix_fails "$repo" "RPM spec must explain and disable debug subpackage generation"
 }
 
+test_check_release_matrix_rejects_automatic_rpm_rust_flags() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/rpm/conary.spec" \
+        '%undefine _auto_set_build_flags' \
+        '%global _auto_set_build_flags 1'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "RPM spec must preserve non-debug Fedora Rust flags without overriding the workspace release profile"
+}
+
+test_check_release_matrix_rejects_rpm_debug_rust_flags() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/packaging/rpm/conary.spec" \
+        'echo "Conary effective RUSTFLAGS: $RUSTFLAGS"' \
+        $'RUSTFLAGS="$RUSTFLAGS -Cdebuginfo=2"\necho "Conary effective RUSTFLAGS: $RUSTFLAGS"'
+
+    assert_check_release_matrix_fails "$repo" "RPM spec debug-oriented Rust flag override"
+}
+
 test_check_release_matrix_rejects_arch_debug_split_package_generation() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1346,6 +1370,8 @@ main() {
         test_check_release_matrix_rejects_unpinned_deb_builder_image
         test_check_release_matrix_rejects_unpinned_arch_builder_image
         test_check_release_matrix_rejects_rpm_debug_subpackage_generation
+        test_check_release_matrix_rejects_automatic_rpm_rust_flags
+        test_check_release_matrix_rejects_rpm_debug_rust_flags
         test_check_release_matrix_rejects_arch_debug_split_package_generation
         test_check_release_matrix_rejects_hidden_native_debug_outputs
         test_check_release_matrix_rejects_unverified_rustup_init
