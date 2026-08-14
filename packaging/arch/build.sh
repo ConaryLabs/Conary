@@ -107,8 +107,13 @@ else
 fi
 
 EXPECTED_PACKAGE="$OUTPUT/${NAME}-${VERSION}-1-x86_64.pkg.tar.zst"
-if [[ ! -s "$EXPECTED_PACKAGE" || -L "$EXPECTED_PACKAGE" ]]; then
-    echo "Expected Arch package not found: $EXPECTED_PACKAGE" >&2
+shopt -s nullglob
+package_outputs=("$OUTPUT"/*.pkg.tar.zst)
+if [[ ${#package_outputs[@]} -ne 1 ||
+      "${package_outputs[0]:-}" != "$EXPECTED_PACKAGE" ||
+      ! -s "$EXPECTED_PACKAGE" ||
+      -L "$EXPECTED_PACKAGE" ]]; then
+    echo "Expected exactly one Arch package at $EXPECTED_PACKAGE, found ${#package_outputs[@]}" >&2
     exit 1
 fi
 

@@ -12,7 +12,8 @@ url='https://github.com/ConaryLabs/Conary'
 license=('MIT')
 depends=('openssl' 'xz' 'libseccomp')
 makedepends=('cargo' 'pkg-config' 'cmake' 'perl')
-options=(!lto)
+# Suite releases publish one installable package and no discarded debug split package.
+options=(!debug !lto)
 install=conary.install
 source=("$pkgname-$pkgver.tar.gz"
         "vendor.tar.gz")
