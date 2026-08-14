@@ -793,9 +793,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
           VERSION: ${{ needs.prepare.outputs.version }}
+          EXPECTED_COMMIT: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
+
+          verify_release_tag() {
+            local phase="$1"
+            local actual_commit
+            git fetch --force origin \
+              "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}"
+            [[ "$(git cat-file -t "refs/tags/${TAG_NAME}")" == "tag" ]] || {
+              echo "live suite tag ${TAG_NAME} is no longer annotated ${phase}" >&2
+              exit 1
+            }
+            actual_commit="$(git rev-parse "refs/tags/${TAG_NAME}^{}")"
+            [[ "$actual_commit" == "$EXPECTED_COMMIT" ]] || {
+              echo "live suite tag ${TAG_NAME} moved to ${actual_commit} ${phase}; expected ${EXPECTED_COMMIT}" >&2
+              exit 1
+            }
+          }
+
+          verify_release_tag "before draft mutation"
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             if [[ "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" != "true" ]]; then
@@ -883,4 +902,19 @@ jobs:
           done < "$local_names"
           rm -f -- "$remote_assets" "$local_names" "$remote_names"
 
+          verify_release_tag "before publication"
           gh release edit "$TAG_NAME" --draft=false
+
+          release_state="$(
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}"
+          )"
+          jq -e \
+            --arg tag "$TAG_NAME" \
+            '.tag_name == $tag and .draft == false and .immutable == true' \
+            <<< "$release_state" >/dev/null || {
+            echo "published release ${TAG_NAME} is not exact and immutable" >&2
+            exit 1
+          }

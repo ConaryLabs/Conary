@@ -29,7 +29,9 @@ free-form text. Every member also inherits `publish = false`; the workspace has
 no independent Cargo-registry publication track.
 GitHub release immutability is enabled: publishing the fully populated draft
 locks its tag and assets and creates the release attestation required by
-independent closeout proof.
+independent closeout proof. The `Protect suite tags` ruleset separately permits
+new `v*` tags while rejecting updates and deletions from the moment each tag is
+created.
 
 Version `0.15.0` is prepared by that issue but is not yet immutable release
 authority. It becomes authority only after the preparation PR is reviewed and

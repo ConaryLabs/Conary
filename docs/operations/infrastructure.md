@@ -250,9 +250,11 @@ old process. That can fail with `Text file busy`.
   suite changelog, but creates no commit or tag.
 - After exact-head CI and review complete, merge the preparation PR and prove
   local `main`, `origin/main`, and remote `main` agree. Only then create the
-  annotated `vMAJOR.MINOR.PATCH` tag at that reviewed commit and push it.
-  Live release construction rejects a tag commit that is not reachable from
-  `origin/main`.
+  annotated `vMAJOR.MINOR.PATCH` tag at that reviewed commit and push it. The
+  active `Protect suite tags` ruleset permits creation of `v*` tags but rejects
+  their update or deletion. Live release construction rejects a tag commit
+  that is not reachable from `origin/main` and revalidates the remote tag
+  immediately before draft mutation and publication.
 - Product-prefixed tags remain immutable historical evidence for their exact
   trees. They are not current baselines, version inputs, or workflow routes.
 - `release-build` constructs all four products from the exact suite tag,

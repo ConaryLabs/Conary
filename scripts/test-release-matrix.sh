@@ -1127,6 +1127,32 @@ test_check_release_matrix_rejects_direct_release_publication() {
     assert_check_release_matrix_fails "$repo" "direct published release creation with attached assets"
 }
 
+test_check_release_matrix_rejects_moved_tag_publication() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '          verify_release_tag "before draft mutation"' \
+        '          echo "tag revalidation removed"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "suite tag validation before draft mutation"
+}
+
+test_check_release_matrix_rejects_mutable_publication_result() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '.tag_name == $tag and .draft == false and .immutable == true' \
+        '.tag_name == $tag and .draft == false'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "suite publisher must prove exact immutable state after publication"
+}
+
 test_check_release_matrix_rejects_late_suite_release_notes() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1247,6 +1273,8 @@ main() {
         test_check_release_matrix_rejects_ambiguous_ccs_target_directory
         test_check_release_matrix_rejects_stale_native_output_policy
         test_check_release_matrix_rejects_direct_release_publication
+        test_check_release_matrix_rejects_moved_tag_publication
+        test_check_release_matrix_rejects_mutable_publication_result
         test_check_release_matrix_rejects_late_suite_release_notes
         test_check_release_matrix_rejects_missing_artifact_row
         test_check_release_matrix_rejects_unknown_deploy_route_pair

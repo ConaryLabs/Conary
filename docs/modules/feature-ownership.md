@@ -1350,12 +1350,13 @@ claimed.
 workspace has one suite version and one current `vMAJOR.MINOR.PATCH` tag route;
 artifact products do not own independent version baselines or Cargo-registry
 publication. A live release must come from the exact canonical tag at a
-reviewed commit already reachable from `main`; GitHub's immutable-release
-enforcement must lock the published tag and assets. Dry-run artifact proof is
-not publication or production proof. Release signing secrets must never be
-logged or persisted in artifacts. A successful workflow dispatch is not
-deployment proof: wait for terminal CI, then verify installed binaries, served
-artifacts, signatures, and live health independently.
+reviewed commit already reachable from `main`. The active suite-tag rule must
+reject updates and deletions of `v*` tags from creation onward; GitHub's
+immutable-release enforcement must then lock the published tag and assets.
+Dry-run artifact proof is not publication or production proof. Release signing
+secrets must never be logged or persisted in artifacts. A successful workflow
+dispatch is not deployment proof: wait for terminal CI, then verify installed
+binaries, served artifacts, signatures, and live health independently.
 
 ## conary-test Integration Execution
 
