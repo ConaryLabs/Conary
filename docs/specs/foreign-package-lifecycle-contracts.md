@@ -402,9 +402,10 @@ construction. Repository provenance, parsed package identity, install
 semantics, and an adopted package's exact native identity must agree before
 insertion. Missing or contradictory scheme provenance is invalid state, not a
 cue to guess from a distro, filename, repository, or version string. Changeset
-metadata schema `conary.changeset.metadata.v6` is the only rollback-snapshot
-contract accepted by the current pre-alpha build; superseded metadata is reset
-with the database rather than adapted. Its typed installed-authority snapshot
+metadata schema `conary.changeset.metadata.v7` plus the changeset's
+foreign-keyed selected-root snapshot is the only rollback contract accepted by
+the current pre-alpha build; superseded metadata and databases are rebuilt
+rather than adapted. The typed installed-authority metadata
 retains the trove selection, pin, source, label, repository, versioning, and
 native identity; components and their file bindings and relations; package
 requirements and provides; config authority; package and file capabilities;
@@ -491,14 +492,14 @@ must be rebuilt; export does not guess missing carrier authority. A bootstrap
 target that is not running yet projects the same fact from its exact captured
 `/usr` manifest node instead of inspecting or inheriting the build host.
 
-A generation-aware root mutation records a typed selected-root publication
-debt and durably installs its cumulative candidate before committing the
-package database transaction. Every later root-changing transaction starts
-from the newest committed cumulative authority and produces a replacement
-candidate. Retry must fail closed if that candidate is missing or invalid; it
-must never fall back to a database-only reconstruction. Completion,
-abandonment, and rollback own deterministic candidate cleanup. Database-only
-publication input is not part of the current contract.
+A generation-aware root mutation records typed publication debt and appends its
+cumulative selected-root snapshot in the same SQLite transaction as package
+state. Every later root-changing transaction starts from the newest committed
+snapshot and appends only its normalized changed paths. Retry fails closed if
+the referenced snapshot is missing or invalid; it never reconstructs mutation
+authority from package rows. Publication and rollback reference the same
+snapshot lineage, while complete manifests are derived only for artifact,
+recovery, rollback publication, and GC consumers.
 
 Every normal event, exact-argv command, event-failure recovery branch, and
 payload-failure recovery branch is preflighted before the first lifecycle
@@ -812,7 +813,7 @@ Native install, upgrade, removal, config, lifecycle, and trigger work is one
 selected-root transaction. Before SQLite commits, any failure discards the
 isolated root and rolls back package state; Conary does not persist a second
 native-upgrade rollback schema or mutate a host root and compensate afterward.
-Once SQLite commits, the exact selected-root candidate and typed publication
+Once SQLite commits, the exact selected-root snapshot and typed publication
 debt are the retry authority. Config auxiliary ownership remains defined by the
 documented suffix grammar and the forward `GenerationConfigTransaction`.
 

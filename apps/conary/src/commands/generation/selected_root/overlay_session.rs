@@ -8,9 +8,10 @@ use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::mount::{MountOptions, mount_generation};
 use conary_core::generation::root_manifest::{
     CapturedSelectedRoot, MountedSelectedRootOverlay, SelectedRootManifestDelta,
-    SelectedRootOverlayCapabilities, SelectedRootOverlayProfile, apply_resolved_payload_metadata,
-    decode_selected_root_overlay_upper, encode_selected_root_overlay_upper_node,
-    materialize_state_root, probe_selected_root_overlay_profile,
+    SelectedRootOverlayCapabilities, SelectedRootOverlayProfile, SelectedRootSnapshot,
+    apply_resolved_payload_metadata, decode_selected_root_overlay_upper_indexed,
+    encode_selected_root_overlay_upper_node, materialize_state_root,
+    probe_selected_root_overlay_profile,
 };
 use nix::mount::{MntFlags, umount2};
 use std::fs;
@@ -153,7 +154,8 @@ impl SelectedRootOverlaySession {
     /// Freeze the upper with a strict unmount, then decode changed paths only.
     pub(super) fn freeze_and_decode(
         &mut self,
-        prior: &CapturedSelectedRoot,
+        conn: &rusqlite::Connection,
+        prior: SelectedRootSnapshot,
         cas: &CasStore,
     ) -> Result<SelectedRootManifestDelta> {
         self.mounted
@@ -162,8 +164,14 @@ impl SelectedRootOverlaySession {
             .freeze(&self.upper)
             .context("failed to freeze selected-root OverlayFS session")?;
         self.unmount_generation_lower()?;
-        decode_selected_root_overlay_upper(&self.upper, prior, cas, &self.capabilities.profile)
-            .context("failed to decode selected-root OverlayFS upper")
+        decode_selected_root_overlay_upper_indexed(
+            &self.upper,
+            conn,
+            prior,
+            cas,
+            &self.capabilities.profile,
+        )
+        .context("failed to decode selected-root OverlayFS upper")
     }
 
     /// Strictly unmount without decoding; the caller then discards the

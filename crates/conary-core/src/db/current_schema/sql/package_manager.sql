@@ -748,6 +748,65 @@ ON state_members(
 );
 CREATE INDEX idx_state_members_state ON state_members(state_id);
 CREATE INDEX idx_state_members_name ON state_members(trove_name);
+CREATE TABLE selected_root_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_id INTEGER REFERENCES selected_root_snapshots(id) ON DELETE RESTRICT,
+            root_node_json TEXT NOT NULL CHECK(json_valid(root_node_json)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK(parent_id IS NULL OR parent_id < id)
+        );
+CREATE INDEX idx_selected_root_snapshots_parent
+            ON selected_root_snapshots(parent_id);
+CREATE TABLE selected_root_snapshot_entries (
+            snapshot_id INTEGER NOT NULL
+                REFERENCES selected_root_snapshots(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            remove_self INTEGER NOT NULL DEFAULT 0 CHECK(remove_self IN (0, 1)),
+            remove_descendants INTEGER NOT NULL DEFAULT 0
+                CHECK(remove_descendants IN (0, 1)),
+            entry_json TEXT CHECK(entry_json IS NULL OR json_valid(entry_json)),
+            hardlink_identity TEXT,
+            PRIMARY KEY (snapshot_id, path),
+            CHECK (
+                remove_self = 1
+                OR remove_descendants = 1
+                OR entry_json IS NOT NULL
+            ),
+            CHECK (
+                hardlink_identity IS NULL
+                OR (entry_json IS NOT NULL AND length(hardlink_identity) > 0)
+            ),
+            CHECK (substr(path, 1, 1) = '/'),
+            CHECK (
+                entry_json IS NULL
+                OR json_extract(entry_json, '$.path') = path
+            )
+        );
+CREATE INDEX idx_selected_root_entries_path
+            ON selected_root_snapshot_entries(path, snapshot_id);
+CREATE INDEX idx_selected_root_entries_hardlink
+            ON selected_root_snapshot_entries(hardlink_identity, snapshot_id, path)
+            WHERE hardlink_identity IS NOT NULL;
+CREATE TRIGGER selected_root_snapshots_no_update
+BEFORE UPDATE ON selected_root_snapshots
+BEGIN
+    SELECT RAISE(ABORT, 'selected-root snapshots are append-only');
+END;
+CREATE TRIGGER selected_root_snapshots_no_delete
+BEFORE DELETE ON selected_root_snapshots
+BEGIN
+    SELECT RAISE(ABORT, 'selected-root snapshots are append-only');
+END;
+CREATE TRIGGER selected_root_snapshot_entries_no_update
+BEFORE UPDATE ON selected_root_snapshot_entries
+BEGIN
+    SELECT RAISE(ABORT, 'selected-root snapshot entries are append-only');
+END;
+CREATE TRIGGER selected_root_snapshot_entries_no_delete
+BEFORE DELETE ON selected_root_snapshot_entries
+BEGIN
+    SELECT RAISE(ABORT, 'selected-root snapshot entries are append-only');
+END;
 CREATE TABLE "changesets" (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             description TEXT NOT NULL,
@@ -763,6 +822,8 @@ CREATE TABLE "changesets" (
             reversed_by_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
             reverts_changeset_id INTEGER REFERENCES changesets(id),
             tx_uuid TEXT,
+            rollback_selected_root_snapshot_id INTEGER
+                REFERENCES selected_root_snapshots(id) ON DELETE RESTRICT,
             metadata TEXT,
             CHECK (
                 (kind = 'mutation' AND reverts_changeset_id IS NULL)
@@ -783,6 +844,8 @@ CREATE TABLE generation_publications (
             trigger_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
             published_through_changeset_id INTEGER REFERENCES changesets(id) ON DELETE SET NULL,
             tx_uuid TEXT,
+            selected_root_snapshot_id INTEGER
+                REFERENCES selected_root_snapshots(id) ON DELETE RESTRICT,
             db_path TEXT NOT NULL,
             runtime_root TEXT NOT NULL,
             phase TEXT NOT NULL CHECK(phase IN (

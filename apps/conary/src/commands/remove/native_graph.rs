@@ -151,12 +151,14 @@ fn execute_selected_root_graph(
                 let snapshot_json = crate::commands::metadata_with_removed_troves(
                     vec![removal.snapshot.clone()],
                     Vec::new(),
-                    rollback_root.clone(),
+                    rollback_root,
                     rollback_system.clone(),
                 )?;
                 conn.execute(
-                    "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-                    rusqlite::params![snapshot_json, changeset_id],
+                    "UPDATE changesets
+                     SET metadata = ?1, rollback_selected_root_snapshot_id = ?2
+                     WHERE id = ?3",
+                    rusqlite::params![snapshot_json, rollback_root.id(), changeset_id],
                 )?;
                 output = Some((removal, root_stats));
                 config_transaction = Some(captured_config);
@@ -205,20 +207,11 @@ fn execute_selected_root_graph(
             config_transaction,
         },
     )?;
-    if let Err(error) = selected.persist_for_publication(&runtime_root, &publication_debt) {
+    if let Err(error) = selected.persist_for_publication(&tx, &runtime_root, &publication_debt) {
         drop(tx);
-        let _ = crate::commands::generation::selected_root::remove_publication_candidate(
-            &runtime_root,
-            &publication_debt,
-        );
         return Err(error.context("failed to persist exact selected-root removal input"));
     }
     if let Err(error) = tx.commit() {
-        crate::commands::generation::selected_root::remove_publication_candidate(
-            &runtime_root,
-            &publication_debt,
-        )
-        .context("failed to discard selected-root candidate after database commit error")?;
         return Err(error.into());
     }
 

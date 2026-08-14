@@ -659,7 +659,7 @@ OVMF firmware, currently remi-dev.
 **Safety notes:** generation state and artifact formats are persisted behavior;
 schema or format changes require explicit compatibility decisions. Runtime
 generation GC resolves and validates surviving generation manifests,
-recoverable publication candidates, the complete unreversed rollback stack,
+recoverable publication snapshots, the complete unreversed rollback stack,
 current installed/config/derived roots, current converted/public native chunk
 authority, and seed images before any deletion; every live digest must exist
 in the local CAS. `conary system generation gc` is the sole GC surface and

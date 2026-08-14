@@ -262,19 +262,17 @@ async fn reloaded_converted_formats_install_with_their_directory_contract() {
         let publication = GenerationPublication::pending_recoverable(&conn)
             .unwrap()
             .pop()
-            .expect("converted install publication candidate");
-        let runtime_root =
-            conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.clone());
-        let candidate = crate::commands::generation::selected_root::load_publication_candidate(
-            &runtime_root,
+            .expect("converted install publication snapshot");
+        let snapshot = crate::commands::generation::selected_root::load_publication_selected_root(
+            &conn,
             &publication,
         )
         .unwrap();
-        let selected_node = candidate
+        let selected_node = snapshot
             .generation
             .entries
             .iter()
-            .chain(&candidate.state.entries)
+            .chain(&snapshot.state.entries)
             .find(|entry| entry.path == "/shared")
             .expect("published selected root shared directory");
         assert_eq!(

@@ -50,16 +50,18 @@ pub struct Changeset {
     pub reverts_changeset_id: Option<i64>,
     /// Transaction UUID for crash recovery correlation
     pub tx_uuid: Option<String>,
-    /// Serialized trove metadata snapshot stored before removal operations,
-    /// enabling rollback of remove changesets.
-    /// JSON-encoded trove information; `None` for install/update changesets.
+    /// Exact selected-root snapshot captured before this mutation.
+    pub rollback_selected_root_snapshot_id: Option<i64>,
+    /// Versioned non-root rollback metadata and deferred follow-up evidence.
+    /// Selected-root authority is referenced separately by foreign key.
     pub metadata: Option<String>,
 }
 
 impl Changeset {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "id, description, kind, status, created_at, applied_at, \
-         rolled_back_at, reversed_by_changeset_id, reverts_changeset_id, tx_uuid, metadata";
+         rolled_back_at, reversed_by_changeset_id, reverts_changeset_id, tx_uuid, \
+         rollback_selected_root_snapshot_id, metadata";
 
     /// Create a new Changeset
     pub fn new(description: String) -> Self {
@@ -74,6 +76,7 @@ impl Changeset {
             reversed_by_changeset_id: None,
             reverts_changeset_id: None,
             tx_uuid: None,
+            rollback_selected_root_snapshot_id: None,
             metadata: None,
         }
     }
@@ -91,6 +94,7 @@ impl Changeset {
             reversed_by_changeset_id: None,
             reverts_changeset_id: None,
             tx_uuid: Some(tx_uuid),
+            rollback_selected_root_snapshot_id: None,
             metadata: None,
         }
     }
@@ -108,6 +112,7 @@ impl Changeset {
             reversed_by_changeset_id: None,
             reverts_changeset_id: Some(reverts_changeset_id),
             tx_uuid: None,
+            rollback_selected_root_snapshot_id: None,
             metadata: None,
         }
     }
@@ -219,7 +224,8 @@ impl Changeset {
             reversed_by_changeset_id: row.get(7)?,
             reverts_changeset_id: row.get(8)?,
             tx_uuid: row.get(9)?,
-            metadata: row.get(10)?,
+            rollback_selected_root_snapshot_id: row.get(10)?,
+            metadata: row.get(11)?,
         })
     }
 }

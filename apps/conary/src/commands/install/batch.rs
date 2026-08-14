@@ -508,7 +508,7 @@ impl<'a> BatchInstaller<'a> {
         packages: &[PreparedPackage],
         tx_description: &str,
         tx_uuid: Option<String>,
-        rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
+        rollback_root: conary_core::generation::root_manifest::SelectedRootSnapshot,
     ) -> Result<BatchDbRows> {
         let mut changeset = match tx_uuid {
             Some(tx_uuid) => Changeset::with_tx_uuid(tx_description.to_string(), tx_uuid),

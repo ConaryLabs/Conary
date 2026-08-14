@@ -191,6 +191,7 @@ mod tests {
             trigger_changeset_id: Some(8),
             published_through_changeset_id: None,
             tx_uuid: None,
+            selected_root_snapshot_id: None,
             db_path: "/tmp/db".to_string(),
             runtime_root: "/tmp/root".to_string(),
             phase: conary_core::db::models::GenerationPublicationPhase::PendingBuild,

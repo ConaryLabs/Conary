@@ -34,11 +34,9 @@ fn published_or_pending_generation_has_path(db_path: &std::path::Path, path: &st
         .unwrap()
         .pop()
         .expect("model package-set install should retain exact publication debt");
-    let captured = crate::commands::generation::selected_root::load_publication_candidate(
-        &runtime_root,
-        &debt,
-    )
-    .unwrap();
+    let captured =
+        crate::commands::generation::selected_root::load_publication_selected_root(&conn, &debt)
+            .unwrap();
     captured
         .generation
         .entries

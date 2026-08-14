@@ -128,7 +128,7 @@ fn execute_selected_root_inner<F>(
     selected_root: &mut SelectedRootSession,
     native_transaction: &PreparedNativeTransaction,
     native_execution_mode: &ExecutionMode,
-    rollback_root: conary_core::generation::root_manifest::CapturedSelectedRoot,
+    rollback_root: conary_core::generation::root_manifest::SelectedRootSnapshot,
     post_graph: F,
 ) -> Result<InstallTransactionResult>
 where
@@ -249,21 +249,13 @@ where
                     config_transaction,
                 },
             )?;
-        if let Err(error) = selected_root.persist_for_publication(&runtime_root, &publication_debt)
+        if let Err(error) =
+            selected_root.persist_for_publication(&tx, &runtime_root, &publication_debt)
         {
             drop(tx);
-            let _ = crate::commands::generation::selected_root::remove_publication_candidate(
-                &runtime_root,
-                &publication_debt,
-            );
             return Err(error.context("failed to persist exact selected-root install input"));
         }
         if let Err(error) = tx.commit() {
-            crate::commands::generation::selected_root::remove_publication_candidate(
-                &runtime_root,
-                &publication_debt,
-            )
-            .context("failed to discard install candidate after database commit error")?;
             return Err(error.into());
         }
         let outcome = crate::commands::generation::publication::publish_recorded_selected_root(

@@ -143,20 +143,14 @@ async fn rollback_generation_excludes_forward_activation_request() {
         }],
     )
     .unwrap()[0];
-    conn.execute(
-        "UPDATE changesets SET metadata = ?1 WHERE id = ?2",
-        params![
-            metadata_with_removed_troves(
-                Vec::new(),
-                Vec::new(),
-                active_rollback_root(&db_path_str),
-                authority,
-            )
-            .unwrap(),
-            changeset_id,
-        ],
-    )
-    .unwrap();
+    record_test_rollback_authority(
+        &conn,
+        changeset_id,
+        Vec::new(),
+        Vec::new(),
+        active_rollback_root(&db_path_str),
+        authority,
+    );
     changeset
         .update_status(&conn, ChangesetStatus::Applied)
         .unwrap();
