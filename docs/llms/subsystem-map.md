@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-14
-revision: 71
+revision: 72
 summary: Route workspace and release boundaries, typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
 ---
 
@@ -157,6 +157,7 @@ commands.
 - Generation, bootstrap, and QEMU proof:
   `docs/modules/feature-ownership.md` slugs `generation` and `bootstrap`, plus
   `crates/conary-core/src/db/backup.rs`,
+  `crates/conary-core/src/db/generation_backup_chain.rs`,
   `crates/conary-core/src/db/generation_delta.rs`,
   `crates/conary-core/src/db/generation_snapshot.rs`,
   `crates/conary-core/benches/generation_db_snapshot.rs`,

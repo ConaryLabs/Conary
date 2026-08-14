@@ -374,6 +374,15 @@ enum CheckpointOutcome {
 
 fn checkpoint_and_sync(source: &Connection, source_path: &Path) -> Result<CheckpointOutcome> {
     let journal_mode: String = source.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        File::open(source_path)?.sync_all()?;
+        sync_parent_directory(source_path)?;
+        return Ok(CheckpointOutcome::Complete(GenerationDbWalCheckpoint {
+            journal_mode,
+            log_frames: 0,
+            checkpointed_frames: 0,
+        }));
+    }
     let (busy, log_frames, checkpointed_frames): (i64, i64, i64) =
         source.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
@@ -544,6 +553,36 @@ mod tests {
             destination.metadata().unwrap().len()
         );
         assert!(snapshot.provenance.wal_checkpoint.is_some());
+    }
+
+    #[test]
+    fn rollback_journal_source_records_synchronized_zero_wal_frames() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("source.sqlite");
+        let destination = temp.path().join("snapshot.sqlite");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE authority (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO authority (value) VALUES ('committed');",
+        )
+        .unwrap();
+
+        let snapshot = GenerationDbSnapshotProvider::default()
+            .snapshot(&conn, &db_path, &destination)
+            .unwrap();
+        let checkpoint = snapshot.provenance.wal_checkpoint.unwrap();
+
+        assert_eq!(checkpoint.journal_mode, "delete");
+        assert_eq!(checkpoint.log_frames, 0);
+        assert_eq!(checkpoint.checkpointed_frames, 0);
+        assert_eq!(
+            Connection::open(destination)
+                .unwrap()
+                .query_row("SELECT value FROM authority", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "committed"
+        );
     }
 
     #[test]

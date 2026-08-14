@@ -47,12 +47,23 @@ pub struct GenerationDbBaselineToken {
 pub struct GenerationDbDelta {
     bytes: Vec<u8>,
     sha256: String,
+    source_baseline: GenerationDbBaselineToken,
+    result_baseline: GenerationDbBaselineToken,
 }
 
 impl GenerationDbDelta {
-    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+    pub fn from_bytes(
+        bytes: Vec<u8>,
+        source_baseline: GenerationDbBaselineToken,
+        result_baseline: GenerationDbBaselineToken,
+    ) -> Self {
         let sha256 = crate::hash::sha256(&bytes);
-        Self { bytes, sha256 }
+        Self {
+            bytes,
+            sha256,
+            source_baseline,
+            result_baseline,
+        }
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -65,6 +76,14 @@ impl GenerationDbDelta {
 
     pub fn payload_bytes(&self) -> u64 {
         self.bytes.len().try_into().unwrap_or(u64::MAX)
+    }
+
+    pub fn result_baseline(&self) -> &GenerationDbBaselineToken {
+        &self.result_baseline
+    }
+
+    pub fn source_baseline(&self) -> &GenerationDbBaselineToken {
+        &self.source_baseline
     }
 }
 
@@ -85,6 +104,7 @@ pub struct GenerationDbDeltaRecorder<'connection> {
     session: Session<'connection>,
     source: &'connection Connection,
     source_path: PathBuf,
+    source_baseline: GenerationDbBaselineToken,
     starting_data_version: i64,
     baseline_fallback: Option<GenerationDbDeltaFallbackReason>,
 }
@@ -93,13 +113,16 @@ impl<'connection> GenerationDbDeltaRecorder<'connection> {
     pub fn begin(source: &'connection Connection, source_path: impl AsRef<Path>) -> Result<Self> {
         let source_path = source_path.as_ref();
         validate_source_connection_path(source, source_path)?;
+        let source_baseline = read_baseline_token(source)?;
         let starting_data_version = data_version(source)?;
         let mut session = Session::new(source)?;
+        session.table_filter(Some(|table: &str| table != MUTATION_EPOCH_TABLE));
         session.attach::<&str>(None)?;
         Ok(Self {
             session,
             source,
             source_path: source_path.to_path_buf(),
+            source_baseline,
             starting_data_version,
             baseline_fallback: None,
         })
@@ -121,7 +144,13 @@ impl<'connection> GenerationDbDeltaRecorder<'connection> {
         Ok(recorder)
     }
 
-    pub fn finish(mut self) -> Result<GenerationDbDeltaCapture> {
+    /// Capture the cumulative changes observed since this recorder began.
+    ///
+    /// Calling this more than once does not reset the session. Publication can
+    /// therefore persist a recoverable pre-terminal checkpoint and later
+    /// replace its manifest with the exact terminal delta without reopening a
+    /// gap in crash recovery.
+    pub fn capture(&mut self) -> Result<GenerationDbDeltaCapture> {
         let mut bytes = Vec::new();
         self.session.changeset_strm(&mut bytes)?;
         let ending_data_version = data_version(self.source)?;
@@ -134,9 +163,15 @@ impl<'connection> GenerationDbDeltaRecorder<'connection> {
             ));
         }
 
+        let result_baseline = read_baseline_token(self.source)?;
+
         Ok(GenerationDbDeltaCapture::Captured(
-            GenerationDbDelta::from_bytes(bytes),
+            GenerationDbDelta::from_bytes(bytes, self.source_baseline.clone(), result_baseline),
         ))
+    }
+
+    pub fn finish(mut self) -> Result<GenerationDbDeltaCapture> {
+        self.capture()
     }
 
     pub fn source_path(&self) -> &Path {
@@ -296,8 +331,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let source_path = temp.path().join("source.sqlite");
         let base_path = temp.path().join("base.sqlite");
-        let source = create_fixture(&source_path);
-        let base = create_fixture(&base_path);
+        let source = create_epoch_fixture(&source_path);
+        let base = create_epoch_fixture(&base_path);
         let recorder = GenerationDbDeltaRecorder::begin(&source, &source_path).unwrap();
 
         source
@@ -320,6 +355,11 @@ mod tests {
             ConflictAction::SQLITE_CHANGESET_ABORT
         })
         .unwrap();
+        base.execute(
+            "UPDATE generation_db_mutation_epoch SET token = ?1 WHERE singleton = 1",
+            [&delta.result_baseline().mutation_token],
+        )
+        .unwrap();
         let rows = base
             .prepare("SELECT id, value FROM authority ORDER BY id")
             .unwrap()
@@ -339,8 +379,9 @@ mod tests {
     fn another_connection_commit_forces_typed_full_snapshot_fallback() {
         let temp = tempfile::tempdir().unwrap();
         let source_path = temp.path().join("source.sqlite");
-        let source = create_fixture(&source_path);
+        let source = create_epoch_fixture(&source_path);
         let writer = Connection::open(&source_path).unwrap();
+        configure_mutation_epoch(&writer).unwrap();
         let recorder = GenerationDbDeltaRecorder::begin(&source, &source_path).unwrap();
 
         writer
@@ -374,11 +415,62 @@ mod tests {
             )
             .unwrap();
 
-        assert!(matches!(
-            recorder.finish().unwrap(),
-            GenerationDbDeltaCapture::Captured(_)
-        ));
-        assert_ne!(read_baseline_token(&source).unwrap(), baseline);
+        let GenerationDbDeltaCapture::Captured(delta) = recorder.finish().unwrap() else {
+            panic!("matching mutation token unexpectedly required a full snapshot");
+        };
+        assert_ne!(delta.result_baseline(), &baseline);
+        assert_eq!(
+            delta.result_baseline(),
+            &read_baseline_token(&source).unwrap()
+        );
+    }
+
+    #[test]
+    fn cumulative_capture_excludes_internal_epoch_and_tracks_latest_token() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("source.sqlite");
+        let base_path = temp.path().join("base.sqlite");
+        let source = create_epoch_fixture(&source_path);
+        let base = create_epoch_fixture(&base_path);
+        let baseline = read_baseline_token(&source).unwrap();
+        let mut recorder =
+            GenerationDbDeltaRecorder::begin_against(&source, &source_path, baseline).unwrap();
+
+        source
+            .execute("INSERT INTO authority (id, value) VALUES (2, 'first')", [])
+            .unwrap();
+        let GenerationDbDeltaCapture::Captured(first) = recorder.capture().unwrap() else {
+            panic!("first cumulative capture unexpectedly required a full snapshot");
+        };
+        source
+            .execute("INSERT INTO authority (id, value) VALUES (3, 'second')", [])
+            .unwrap();
+        let GenerationDbDeltaCapture::Captured(second) = recorder.capture().unwrap() else {
+            panic!("second cumulative capture unexpectedly required a full snapshot");
+        };
+
+        assert!(second.payload_bytes() > first.payload_bytes());
+        let mut input = second.bytes();
+        base.apply_strm(&mut input, None::<fn(&str) -> bool>, |_conflict, _item| {
+            ConflictAction::SQLITE_CHANGESET_ABORT
+        })
+        .unwrap();
+        base.execute(
+            "UPDATE generation_db_mutation_epoch SET token = ?1 WHERE singleton = 1",
+            [&second.result_baseline().mutation_token],
+        )
+        .unwrap();
+
+        assert_eq!(
+            base.query_row("SELECT COUNT(*) FROM authority", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            read_baseline_token(&base).unwrap(),
+            *second.result_baseline()
+        );
     }
 
     #[test]

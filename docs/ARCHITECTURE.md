@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-14
-revision: 51
+revision: 52
 summary: Describe workspace and release boundaries, exact native source authority, package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
@@ -125,6 +125,9 @@ crates/conary-core/      Core library crate
     +-- db/              Database layer
     |   +-- schema.rs    Current pre-alpha schema epoch initializer and rebuild gate
     |   +-- rebuild.rs   Explicit retired-schema snapshot and active-state replacement
+    |   +-- generation_snapshot.rs Typed full-snapshot provider selection
+    |   +-- generation_delta.rs Transaction-scoped SQLite session capture
+    |   +-- generation_backup_chain.rs Bounded self-contained base-plus-delta recovery authority
     |   +-- current_schema/ One schema split into package-manager, repository, and Remi ownership files
     |   +-- models/      ORM-style model structs
     |   |   +-- try_session.rs M1b package try session state
@@ -726,6 +729,18 @@ from another connection while capture is active. Every Conary write connection
 registers the function before schema validation. An unconfigured writer fails
 closed at the trigger instead of changing authority without advancing the
 epoch. This is a pre-alpha hard cut: revision 38 databases must be rebuilt.
+
+`generation_backup_chain.rs` owns the staged replacement format: one
+content-addressed SQLite base plus at most 32 ordered, content-addressed session
+changesets. Each generation hard-links the complete base/delta set into its own
+state directory, so generation GC never leaves a surviving manifest dependent
+on an ancestor directory. The recursive chain identity binds the base digest,
+every ordered delta digest, and each resulting mutation token. Normal append
+writes and hashes only the new changeset; full payload hashing, changeset replay,
+SQLite integrity checking, and foreign-key checking occur when verification or
+recovery materializes the database. A schema change, chain limit, or mismatched
+source baseline requires a new full base. Until publication and recovery are
+wired to this owner, the v2 full-snapshot manifest remains active authority.
 
 **Composefs-native transactions**: Every package mutation follows one linear
 pipeline: resolve -> fetch -> materialize an isolated selected root -> run typed

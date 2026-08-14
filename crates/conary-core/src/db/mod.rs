@@ -10,6 +10,7 @@
 
 pub mod backup;
 pub mod current_schema;
+pub mod generation_backup_chain;
 pub mod generation_delta;
 pub mod generation_snapshot;
 pub mod models;

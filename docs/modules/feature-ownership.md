@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-14
-revision: 73
+revision: 74
 summary: Route feature ownership through typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
@@ -550,6 +550,7 @@ and export raw/qcow2/ISO carriers.
 
 **Start here:** `crates/conary-core/src/generation/builder.rs`;
 `crates/conary-core/src/db/backup.rs`;
+`crates/conary-core/src/db/generation_backup_chain.rs`;
 `crates/conary-core/src/db/generation_delta.rs`;
 `crates/conary-core/src/db/generation_snapshot.rs`;
 `crates/conary-core/src/generation/root_manifest.rs`;
@@ -606,6 +607,7 @@ state, image building, bootstrap validation, conaryd route history.
 
 **Paths:** `crates/conary-core/src/generation/*`;
 `crates/conary-core/src/db/backup.rs`;
+`crates/conary-core/src/db/generation_backup_chain.rs`;
 `crates/conary-core/src/db/generation_delta.rs`;
 `crates/conary-core/src/db/generation_snapshot.rs`;
 `crates/conary-core/benches/generation_db_snapshot.rs`;
