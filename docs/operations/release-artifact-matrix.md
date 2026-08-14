@@ -27,6 +27,9 @@ build-only artifacts with `deploy_mode=none`. Suite metadata is a schema-v1
 JSON resource; `dry_run` is a boolean rather than release authority encoded as
 free-form text. Every member also inherits `publish = false`; the workspace has
 no independent Cargo-registry publication track.
+GitHub release immutability is enabled: publishing the fully populated draft
+locks its tag and assets and creates the release attestation required by
+independent closeout proof.
 
 Version `0.15.0` is prepared by that issue but is not yet immutable release
 authority. It becomes authority only after the preparation PR is reviewed and

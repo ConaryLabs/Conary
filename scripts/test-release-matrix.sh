@@ -892,17 +892,17 @@ test_check_release_matrix_rejects_unbound_proof_metadata_version() {
         "published artifact proof must bind metadata to the annotated tag version and suite authority"
 }
 
-test_check_release_matrix_rejects_draft_artifact_proof() {
+test_check_release_matrix_rejects_mutable_artifact_proof() {
     local repo
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/release-artifact-proof.yml" \
-        '             "$(jq -r '\''.isDraft'\'' <<< "$release_state")" == "false" ]] || {' \
-        '             "$(jq -r '\''.isDraft'\'' <<< "$release_state")" == "true" ]] || {'
+        '             "$(jq -r '\''.immutable'\'' <<< "$release_state")" == "true" ]] || {' \
+        '             "$(jq -r '\''.immutable'\'' <<< "$release_state")" == "false" ]] || {'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "published artifact proof must reject a draft or mismatched GitHub release"
+        "published artifact proof must reject a draft, mutable, or mismatched GitHub release"
 }
 
 test_check_release_matrix_rejects_rehearsal_artifact_promotion() {
@@ -1215,7 +1215,7 @@ main() {
         test_check_release_matrix_rejects_lightweight_live_tag_guard
         test_check_release_matrix_rejects_unmerged_live_tag
         test_check_release_matrix_rejects_unbound_proof_metadata_version
-        test_check_release_matrix_rejects_draft_artifact_proof
+        test_check_release_matrix_rejects_mutable_artifact_proof
         test_check_release_matrix_rejects_rehearsal_artifact_promotion
         test_check_release_matrix_rejects_unverified_remi_suite_bundle
         test_check_release_matrix_rejects_merge_validation_production_probes

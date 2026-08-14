@@ -259,7 +259,11 @@ old process. That can fail with `Text file busy`.
   serializes their deployment modes in one schema-v1 metadata document with a
   typed rehearsal boolean, verifies raw and tar identities plus binary
   versions, generates one complete checksum set, and publishes one GitHub
-  release only after every product bundle succeeds.
+  release only after every product bundle succeeds. Repository release
+  immutability is enabled, so publishing the completed draft locks its tag and
+  assets and creates a GitHub release attestation. Released-artifact proof must
+  reject any draft or mutable release; closeout independently runs
+  `gh release verify` and `gh release verify-asset`.
 - `merge-validation` proves the current source tree through deterministic
   source, build, policy, and test checks. It must not probe mutable production
   endpoints, because production continues to serve the previously deployed
