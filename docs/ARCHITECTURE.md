@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-13
-revision: 49
-summary: Describe workspace and release boundaries, exact native source authority, package transactions, lifecycle execution, typed carrier security, generation GC, and service boundaries
+last_updated: 2026-08-14
+revision: 50
+summary: Describe workspace and release boundaries, exact native source authority, package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -703,7 +703,18 @@ database is the single source of truth, queryable with standard SQL tools.
 Conary writes SQLite-native checkpoint backups around first-wave
 adoption/unadoption mutations and writes a generation-bound SQLite backup under
 `/conary/generations/<n>/state/` when a generation publication reaches the
-selected-generation boundary.
+selected-generation boundary. Generation publication does not compact the
+complete database with `VACUUM INTO`. It holds mutation authority, establishes
+and synchronizes an exact WAL checkpoint, and selects a typed snapshot provider:
+reflink first, SQLite online backup as the portable fallback, and a full copy
+only when both faster providers are unavailable. The v2 generation-backup
+manifest records the selected method, typed fallback reasons, schema epoch,
+transaction high-water mark, page count, logical size, payload bytes written,
+and SHA-256 identity. Creation performs one full integrity/digest pass; explicit
+verification and recovery repeat the full check, while an uninterrupted
+publication does not immediately verify the same snapshot a second time.
+Recovery opens checkpointed snapshots through SQLite's immutable read-only
+mode so verification cannot create or consume WAL sidecars.
 
 **Composefs-native transactions**: Every package mutation follows one linear
 pipeline: resolve -> fetch -> materialize an isolated selected root -> run typed

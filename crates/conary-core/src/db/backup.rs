@@ -2,6 +2,9 @@
 
 //! Durable SQLite checkpoint backups for Conary live-state recovery.
 
+use crate::db::generation_snapshot::{
+    GenerationDbSnapshotMetrics, GenerationDbSnapshotProvenance, GenerationDbSnapshotProvider,
+};
 use crate::db::schema;
 use crate::filesystem::durable::{sync_parent_directory, write_file_atomic, write_json_atomic};
 use crate::hash::sha256_reader_hex;
@@ -15,8 +18,9 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 const BACKUP_FORMAT: &str = "conary.db-checkpoint.v1";
-const GENERATION_BACKUP_FORMAT: &str = "conary.generation-db-backup.v1";
-const MANIFEST_VERSION: u32 = 1;
+const GENERATION_BACKUP_FORMAT: &str = "conary.generation-db-backup.v2";
+const CHECKPOINT_MANIFEST_VERSION: u32 = 1;
+const GENERATION_MANIFEST_VERSION: u32 = 2;
 const DEFAULT_RETAIN_COUNT: usize = 5;
 const DEFAULT_RETAIN_DAYS: i64 = 14;
 const GENERATION_BACKUP_FILE: &str = "conary.db.backup";
@@ -70,6 +74,7 @@ pub struct BackupVerification {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GenerationDbBackupManifest {
     pub format: String,
     pub manifest_version: u32,
@@ -81,6 +86,8 @@ pub struct GenerationDbBackupManifest {
     pub compression: Option<String>,
     pub backup_sha256: String,
     pub sqlite_page_count: Option<i64>,
+    pub transaction_high_water_mark: Option<i64>,
+    pub snapshot: GenerationDbSnapshotProvenance,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +96,7 @@ pub struct GenerationDbBackupRecord {
     pub checksum_path: PathBuf,
     pub manifest_path: PathBuf,
     pub manifest: GenerationDbBackupManifest,
+    pub creation_metrics: Option<GenerationDbSnapshotMetrics>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,6 +109,8 @@ pub struct GenerationDbBackupVerification {
     pub integrity_check: String,
     pub backup_sha256: String,
     pub sqlite_page_count: Option<i64>,
+    pub transaction_high_water_mark: Option<i64>,
+    pub snapshot: GenerationDbSnapshotProvenance,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -189,7 +199,7 @@ pub fn create_checkpoint(
     let backup_sha256 = sha256_file(&backup_path)?;
     let manifest = DbBackupManifest {
         format: BACKUP_FORMAT.to_string(),
-        manifest_version: MANIFEST_VERSION,
+        manifest_version: CHECKPOINT_MANIFEST_VERSION,
         created_at: now.to_rfc3339(),
         source_db_path: db_path.to_path_buf(),
         backup_file: backup_path
@@ -266,7 +276,7 @@ pub fn verify_backup(record: &DbBackupRecord) -> Result<BackupVerification> {
             record.manifest.format
         )));
     }
-    if record.manifest.manifest_version != MANIFEST_VERSION {
+    if record.manifest.manifest_version != CHECKPOINT_MANIFEST_VERSION {
         return Err(Error::RecoveryFailed(format!(
             "unsupported DB backup manifest version: {}",
             record.manifest.manifest_version
@@ -372,6 +382,7 @@ pub fn recover_latest(
 }
 
 pub fn create_generation_db_backup(
+    source: &Connection,
     db_path: impl AsRef<Path>,
     generation_dir: impl AsRef<Path>,
     generation_number: i64,
@@ -391,10 +402,13 @@ pub fn create_generation_db_backup(
     let manifest_path = state_dir.join(GENERATION_BACKUP_MANIFEST_FILE);
 
     remove_if_exists(&tmp_backup_path)?;
-    let source = Connection::open(db_path)?;
-    let tmp_backup_string = tmp_backup_path.to_string_lossy().into_owned();
-    source.execute("VACUUM main INTO ?1", [tmp_backup_string.as_str()])?;
-    sync_file(&tmp_backup_path)?;
+    let transaction_high_water_mark =
+        crate::db::models::GenerationPublication::applied_high_water_changeset_id(source)?;
+    validate_generation_directory_number(generation_dir, generation_number)?;
+    verify_generation_artifact_identity(generation_dir, generation_number)?;
+
+    let snapshot =
+        GenerationDbSnapshotProvider::default().snapshot(source, db_path, &tmp_backup_path)?;
     std::fs::rename(&tmp_backup_path, &backup_path)?;
     sync_parent_directory(&backup_path)?;
 
@@ -406,10 +420,12 @@ pub fn create_generation_db_backup(
             schema::SCHEMA_VERSION
         )));
     }
+    verify_generation_publication_state_values(generation_number, state_number, &backup_path)?;
+    verify_transaction_high_water_mark(transaction_high_water_mark, &backup_path)?;
 
     let manifest = GenerationDbBackupManifest {
         format: GENERATION_BACKUP_FORMAT.to_string(),
-        manifest_version: MANIFEST_VERSION,
+        manifest_version: GENERATION_MANIFEST_VERSION,
         db_schema_version: verification.db_schema_version,
         generation_number,
         state_number,
@@ -418,6 +434,8 @@ pub fn create_generation_db_backup(
         compression: None,
         backup_sha256: verification.backup_sha256.clone(),
         sqlite_page_count: verification.sqlite_page_count,
+        transaction_high_water_mark,
+        snapshot: snapshot.provenance,
     };
 
     write_file_atomic(
@@ -431,8 +449,18 @@ pub fn create_generation_db_backup(
         checksum_path,
         manifest_path,
         manifest,
+        creation_metrics: Some(snapshot.metrics),
     };
-    verify_generation_db_backup_record(&record, None)?;
+    tracing::info!(
+        snapshot_method = record.manifest.snapshot.method.as_str(),
+        payload_bytes_written = record.manifest.snapshot.payload_bytes_written,
+        logical_size = record.manifest.snapshot.logical_size,
+        provider_elapsed_ns = record
+            .creation_metrics
+            .map(|metrics| metrics.provider_elapsed_ns)
+            .unwrap_or_default(),
+        "Created generation database snapshot"
+    );
     Ok(record)
 }
 
@@ -575,7 +603,16 @@ fn read_record_from_manifest(path: &Path) -> Result<DbBackupRecord> {
 }
 
 fn verify_sqlite_database(path: &Path) -> Result<BackupVerification> {
+    let conn = open_immutable_sqlite_snapshot(path)?;
+    verify_sqlite_connection(path, &conn)
+}
+
+fn verify_live_sqlite_database(path: &Path) -> Result<BackupVerification> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    verify_sqlite_connection(path, &conn)
+}
+
+fn verify_sqlite_connection(path: &Path, conn: &Connection) -> Result<BackupVerification> {
     let integrity_check: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if integrity_check != "ok" {
         return Err(Error::RecoveryFailed(format!(
@@ -596,6 +633,24 @@ fn verify_sqlite_database(path: &Path) -> Result<BackupVerification> {
     })
 }
 
+fn open_immutable_sqlite_snapshot(path: &Path) -> Result<Connection> {
+    let canonical = path.canonicalize()?;
+    let mut uri = url::Url::from_file_path(&canonical).map_err(|_| {
+        Error::InvalidPath(format!(
+            "SQLite snapshot path cannot be represented as a file URI: {}",
+            canonical.display()
+        ))
+    })?;
+    uri.query_pairs_mut().append_pair("immutable", "1");
+    Connection::open_with_flags(
+        uri.as_str(),
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(Into::into)
+}
+
 fn generation_state_backup_dir(generation_dir: &Path) -> PathBuf {
     generation_dir.join("state")
 }
@@ -613,6 +668,7 @@ fn read_generation_record(generation_dir: &Path) -> Result<GenerationDbBackupRec
         checksum_path,
         manifest_path,
         manifest,
+        creation_metrics: None,
     })
 }
 
@@ -632,7 +688,7 @@ fn verify_generation_db_backup_record(
             record.manifest.format
         )));
     }
-    if record.manifest.manifest_version != MANIFEST_VERSION {
+    if record.manifest.manifest_version != GENERATION_MANIFEST_VERSION {
         return Err(Error::RecoveryFailed(format!(
             "unsupported generation DB backup manifest version: {}",
             record.manifest.manifest_version
@@ -644,6 +700,7 @@ fn verify_generation_db_backup_record(
                 .to_string(),
         ));
     }
+    record.manifest.snapshot.validate()?;
     if record.manifest.backup_file != GENERATION_BACKUP_FILE {
         return Err(Error::InvalidPath(format!(
             "generation DB backup file must be {GENERATION_BACKUP_FILE}, got {}",
@@ -652,14 +709,7 @@ fn verify_generation_db_backup_record(
     }
     validate_generation_directory_number(generation_dir, record.manifest.generation_number)?;
 
-    let artifact =
-        crate::generation::artifact::load_generation_artifact_for_activation(generation_dir)?;
-    if artifact.generation != record.manifest.generation_number {
-        return Err(Error::RecoveryFailed(format!(
-            "generation artifact mismatch: backup is for generation {}, artifact declares {}",
-            record.manifest.generation_number, artifact.generation
-        )));
-    }
+    verify_generation_artifact_identity(generation_dir, record.manifest.generation_number)?;
     if let Some(root) = current_root {
         let selected = crate::generation::mount::current_generation(root)?;
         if selected != Some(record.manifest.generation_number) {
@@ -700,6 +750,10 @@ fn verify_generation_db_backup_record(
         )));
     }
     verify_generation_publication_state(&record.manifest, &record.backup_path)?;
+    verify_transaction_high_water_mark(
+        record.manifest.transaction_high_water_mark,
+        &record.backup_path,
+    )?;
 
     Ok(GenerationDbBackupVerification {
         backup_path: record.backup_path.clone(),
@@ -710,7 +764,24 @@ fn verify_generation_db_backup_record(
         integrity_check: verification.integrity_check,
         backup_sha256: record.manifest.backup_sha256.clone(),
         sqlite_page_count: verification.sqlite_page_count,
+        transaction_high_water_mark: record.manifest.transaction_high_water_mark,
+        snapshot: record.manifest.snapshot.clone(),
     })
+}
+
+fn verify_generation_artifact_identity(
+    generation_dir: &Path,
+    generation_number: i64,
+) -> Result<()> {
+    let artifact =
+        crate::generation::artifact::load_generation_artifact_for_activation(generation_dir)?;
+    if artifact.generation != generation_number {
+        return Err(Error::RecoveryFailed(format!(
+            "generation artifact mismatch: backup is for generation {generation_number}, artifact declares {}",
+            artifact.generation
+        )));
+    }
+    Ok(())
 }
 
 fn validate_generation_backup_file_name(file_name: &str) -> Result<&Path> {
@@ -765,20 +836,32 @@ fn verify_generation_publication_state(
     manifest: &GenerationDbBackupManifest,
     backup_path: &Path,
 ) -> Result<()> {
-    let conn = Connection::open_with_flags(backup_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    verify_generation_publication_state_values(
+        manifest.generation_number,
+        manifest.state_number,
+        backup_path,
+    )
+}
+
+fn verify_generation_publication_state_values(
+    generation_number: i64,
+    expected_state_number: i64,
+    backup_path: &Path,
+) -> Result<()> {
+    let conn = open_immutable_sqlite_snapshot(backup_path)?;
     let mut stmt = conn.prepare(
         "SELECT phase, status, recoverable, state_number
          FROM generation_publications
          WHERE generation_number = ?1
          ORDER BY id DESC",
     )?;
-    let mut rows = stmt.query([manifest.generation_number])?;
+    let mut rows = stmt.query([generation_number])?;
     while let Some(row) = rows.next()? {
         let phase: String = row.get(0)?;
         let status: String = row.get(1)?;
         let recoverable: i64 = row.get(2)?;
         let state_number: Option<i64> = row.get(3)?;
-        if state_number != Some(manifest.state_number) {
+        if state_number != Some(expected_state_number) {
             continue;
         }
         let complete = phase == "database_backed_up" && status == "complete" && recoverable == 0;
@@ -790,8 +873,23 @@ fn verify_generation_publication_state(
 
     Err(Error::RecoveryFailed(format!(
         "generation DB backup has no complete or active_marked/running publication state for generation {} state {}",
-        manifest.generation_number, manifest.state_number
+        generation_number, expected_state_number
     )))
+}
+
+fn verify_transaction_high_water_mark(expected: Option<i64>, backup_path: &Path) -> Result<()> {
+    let conn = open_immutable_sqlite_snapshot(backup_path)?;
+    let actual: Option<i64> = conn.query_row(
+        "SELECT MAX(id) FROM changesets WHERE status = 'applied'",
+        [],
+        |row| row.get(0),
+    )?;
+    if actual != expected {
+        return Err(Error::RecoveryFailed(format!(
+            "generation DB backup transaction high-water mark changed: manifest={expected:?}, backup={actual:?}"
+        )));
+    }
+    Ok(())
 }
 
 fn verify_generation_backup_copy(
@@ -815,7 +913,7 @@ fn verify_generation_backup_copy(
 }
 
 fn live_db_is_healthy(path: &Path) -> bool {
-    verify_sqlite_database(path).is_ok()
+    verify_live_sqlite_database(path).is_ok()
 }
 
 fn sqlite_database_paths(db_path: &Path) -> [PathBuf; 3] {

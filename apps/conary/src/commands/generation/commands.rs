@@ -511,22 +511,55 @@ pub fn cmd_generation_verify_db_backup(
     let current_root = current.then_some(runtime_root.root());
     let verification =
         conary_core::db::backup::verify_generation_db_backup(&gen_dir, current_root)?;
-    println!(
-        "Verified generation {} DB backup: {}",
-        verification.generation_number,
-        verification.backup_path.display()
+    crate::ui::status(
+        "Verified",
+        &format!(
+            "generation {} database backup",
+            verification.generation_number
+        ),
     );
-    println!(
-        "  schema={} integrity={} pages={}",
-        verification.db_schema_version,
-        verification.integrity_check,
-        verification
+    crate::ui::field("Backup", &verification.backup_path.display().to_string());
+    crate::ui::field(
+        "Manifest",
+        &verification.manifest_path.display().to_string(),
+    );
+    crate::ui::field("Schema", &verification.db_schema_version.to_string());
+    crate::ui::field("Integrity", &verification.integrity_check);
+    crate::ui::field(
+        "SQLite pages",
+        &verification
             .sqlite_page_count
             .map(|pages| pages.to_string())
-            .unwrap_or_else(|| "unknown".to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
     );
-    println!("  manifest={}", verification.manifest_path.display());
-    println!("  sha256={}", verification.backup_sha256);
+    crate::ui::field(
+        "Transaction high-water mark",
+        &verification
+            .transaction_high_water_mark
+            .map(|changeset| changeset.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    crate::ui::field("Snapshot method", verification.snapshot.method.as_str());
+    crate::ui::field(
+        "Snapshot payload bytes written",
+        &verification.snapshot.payload_bytes_written.to_string(),
+    );
+    let fallbacks = verification
+        .snapshot
+        .fallbacks
+        .iter()
+        .map(|fallback| format!("{}:{}", fallback.method.as_str(), fallback.reason.as_str()))
+        .collect::<Vec<_>>()
+        .join(",");
+    crate::ui::field(
+        "Snapshot fallbacks",
+        if fallbacks.is_empty() {
+            "none"
+        } else {
+            &fallbacks
+        },
+    );
+    crate::ui::field("SHA-256", &verification.backup_sha256);
     Ok(())
 }
 
