@@ -769,6 +769,18 @@ test_check_release_matrix_rejects_unpinned_arch_toolchain() {
     assert_check_release_matrix_fails "$repo" "release-build Arch builder pinned Rust toolchain"
 }
 
+test_check_release_matrix_rejects_ambient_release_preparation_toolchain() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    sed -i \
+        '/^  build-remi:/,/^  build-conaryd:/{/uses: \.\/\.github\/actions\/setup-rust-workspace/d;}' \
+        "$repo/.github/workflows/release-build.yml"
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "build-remi pinned workspace setup must precede Cargo-backed release preparation"
+}
+
 test_check_release_matrix_rejects_missing_live_version_assertion() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1106,6 +1118,7 @@ main() {
         test_check_release_matrix_rejects_unverified_rustup_init
         test_check_release_matrix_rejects_unpinned_ccs_toolchain
         test_check_release_matrix_rejects_unpinned_arch_toolchain
+        test_check_release_matrix_rejects_ambient_release_preparation_toolchain
         test_check_release_matrix_rejects_missing_live_version_assertion
         test_check_release_matrix_rejects_lightweight_live_tag_guard
         test_check_release_matrix_rejects_unbound_proof_metadata_version

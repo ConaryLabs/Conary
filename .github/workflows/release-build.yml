@@ -490,6 +490,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-rust-workspace
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -511,7 +512,6 @@ jobs:
           ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
-      - uses: ./.github/actions/setup-rust-workspace
       - name: Build remi release binary
         run: cargo build -p remi --release --verbose
       - name: Download metadata
@@ -551,6 +551,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-rust-workspace
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -572,7 +573,6 @@ jobs:
           ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
-      - uses: ./.github/actions/setup-rust-workspace
       - name: Build conaryd release binary
         run: cargo build -p conaryd --release --verbose
       - name: Download metadata
@@ -612,6 +612,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-rust-workspace
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -633,7 +634,6 @@ jobs:
           ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
-      - uses: ./.github/actions/setup-rust-workspace
       - name: Build conary-test release binary
         run: cargo build -p conary-test --release --verbose
       - name: Download metadata

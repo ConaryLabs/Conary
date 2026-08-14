@@ -182,6 +182,9 @@ require_job_match "$release_build" build-rpm "image: ${fedora_release_image}" 'r
 require_job_match "$release_build" build-deb "image: ${ubuntu_release_image}" 'release-build DEB builder must use the pinned Ubuntu 26.04 image'
 require_job_match "$release_build" build-arch "image: ${arch_release_image}" 'release-build Arch builder must use the pinned Arch image'
 require_job_match "$release_build" build-ccs 'name: Install build dependencies[\s\S]*name: Prepare dry-run release tree' 'release-build CCS dry-run prerequisites must be installed before release preparation'
+for product_job in build-remi build-conaryd build-conary-test; do
+    require_job_match "$release_build" "$product_job" 'uses: \./\.github/actions/setup-rust-workspace[\s\S]*name: Prepare dry-run release tree' "$product_job pinned workspace setup must precede Cargo-backed release preparation"
+done
 require_match "$rpm_containerfile" "^FROM ${fedora_release_image}$" 'RPM Containerfile must use the release-build Fedora image digest'
 require_match "$deb_containerfile" "^FROM ${ubuntu_release_image}$" 'DEB Containerfile must use the release-build Ubuntu image digest'
 require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Containerfile must use the release-build Arch image digest'
