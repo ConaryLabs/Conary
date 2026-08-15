@@ -6,6 +6,8 @@
 //! identities. This module only downloads those already-selected rows.
 
 use crate::error::{Error, Result};
+use futures::{StreamExt, stream};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -16,10 +18,41 @@ use super::download::{
 use super::remi::{RemiClient, RemiFetchRequest};
 use super::selector::PackageWithRepo;
 
-/// Download all dependencies to a directory in parallel
+const MAX_CONCURRENT_DEPENDENCY_ACQUISITIONS: usize = 8;
+
+struct PreparedDependencyAcquisition {
+    input_index: usize,
+    dependency_name: String,
+    package: crate::db::models::RepositoryPackage,
+    declared_size: u64,
+    strategy: PreparedDependencyStrategy,
+}
+
+enum PreparedDependencyStrategy {
+    Static,
+    Native {
+        trust: DownloadOptions,
+    },
+    Remi {
+        client: RemiClient,
+        route: String,
+        trust_policy: crate::ccs::TrustPolicy,
+    },
+}
+
+struct DependencyAcquisitionOutcome {
+    input_index: usize,
+    dependency_name: String,
+    declared_size: u64,
+    result: Result<PathBuf>,
+}
+
+/// Download all dependencies to a directory with bounded concurrency.
 ///
-/// Downloads are performed concurrently using rayon's parallel iterators.
-/// This significantly speeds up the download of multiple dependencies.
+/// All SQLite-backed repository and trust decisions are resolved into immutable
+/// plans before network or CAS work starts. Acquisitions may complete out of
+/// order, but the returned paths and any reported failures retain the exact
+/// resolver-selected input order.
 ///
 /// # Arguments
 /// * `dependencies` - List of (name, package info) tuples to download
@@ -39,11 +72,8 @@ pub async fn download_dependencies(
         return Ok(Vec::new());
     }
 
-    // Calculate total size for aggregate progress
-    let total_size: u64 = dependencies
-        .iter()
-        .map(|(_, pkg)| pkg.package.size as u64)
-        .sum();
+    let plans = prepare_dependency_acquisitions(conn, dependencies, keyring_dir)?;
+    let total_size = plans.iter().map(|plan| plan.declared_size).sum();
     let total_mb = total_size as f64 / 1_048_576.0;
 
     info!(
@@ -56,54 +86,41 @@ pub async fn download_dependencies(
     let progress = DownloadProgress::with_aggregate(dependencies.len(), total_size);
 
     // Pre-create progress bars for all downloads
-    let progress_bars: Vec<_> = dependencies
+    let progress_bars: Vec<_> = plans
         .iter()
-        .map(|(dep_name, pkg_with_repo)| {
-            progress.add_download(dep_name, pkg_with_repo.package.size as u64)
-        })
+        .map(|plan| progress.add_download(&plan.dependency_name, plan.declared_size))
         .collect();
 
-    // Use parallel iterator for concurrent downloads with progress
-    // Collect as Vec<Result<_>> to track individual successes/failures
-    let mut individual_results: Vec<Result<(String, PathBuf, u64)>> = Vec::new();
-    for ((dep_name, pkg_with_repo), pb) in dependencies.iter().zip(progress_bars.iter()) {
-        info!("Downloading dependency: {}", dep_name);
+    let individual_results = acquire_dependency_plans_with(
+        plans,
+        progress_bars,
+        MAX_CONCURRENT_DEPENDENCY_ACQUISITIONS,
+        |plan, progress_bar| async move {
+            acquire_prepared_dependency(&plan, dest_dir, cas, Some(&progress_bar)).await
+        },
+    )
+    .await;
 
-        let result = match download_dependency_package(
-            conn,
-            pkg_with_repo,
-            dest_dir,
-            keyring_dir,
-            cas,
-            Some(pb),
-        )
-        .await
-        {
-            Ok(path) => {
-                DownloadProgress::finish_download(pb, dep_name);
-                Ok((dep_name.clone(), path, pkg_with_repo.package.size as u64))
-            }
-            Err(e) => {
-                DownloadProgress::fail_download(pb, dep_name, &e.to_string());
-                Err(e)
-            }
-        };
-        individual_results.push(result);
-    }
+    finish_dependency_acquisitions(&progress, dependencies.len(), individual_results)
+}
 
-    // Calculate statistics and show summary
+fn finish_dependency_acquisitions(
+    progress: &DownloadProgress,
+    expected_count: usize,
+    individual_results: Vec<DependencyAcquisitionOutcome>,
+) -> Result<Vec<(String, PathBuf)>> {
     let mut succeeded_results = Vec::new();
     let mut failures = Vec::new();
     let mut bytes_downloaded: u64 = 0;
 
-    for result in individual_results {
-        match result {
-            Ok((name, path, size)) => {
-                bytes_downloaded += size;
-                succeeded_results.push((name, path));
+    for outcome in individual_results {
+        match outcome.result {
+            Ok(path) => {
+                bytes_downloaded += outcome.declared_size;
+                succeeded_results.push((outcome.dependency_name, path));
             }
             Err(e) => {
-                failures.push(e.to_string());
+                failures.push(format!("{}: {e}", outcome.dependency_name));
             }
         }
     }
@@ -126,58 +143,56 @@ pub async fn download_dependencies(
         };
         return Err(Error::DownloadError(format!(
             "{} of {} dependency downloads failed: {}{}",
-            failed_count,
-            dependencies.len(),
-            details,
-            suffix
+            failed_count, expected_count, details, suffix
         )));
     }
 
     Ok(succeeded_results)
 }
 
-async fn download_dependency_package(
+fn prepare_dependency_acquisitions(
     conn: &rusqlite::Connection,
-    pkg_with_repo: &PackageWithRepo,
-    dest_dir: &Path,
+    dependencies: &[(String, PackageWithRepo)],
     keyring_dir: &Path,
-    cas: &crate::filesystem::CasStore,
-    progress_bar: Option<&indicatif::ProgressBar>,
-) -> Result<PathBuf> {
-    match pkg_with_repo.repository.default_strategy.as_deref() {
-        Some("static") => {
-            download_static_package_verified_with_progress(
-                &pkg_with_repo.package,
-                dest_dir,
-                None,
-                progress_bar,
-            )
-            .await
-        }
-        Some("remi") => download_remi_dependency_package(conn, pkg_with_repo, dest_dir, cas).await,
-        None | Some("binary") => {
-            let trust = DownloadOptions::for_repository(&pkg_with_repo.repository, keyring_dir)?;
-            download_package_verified_with_progress(
-                &pkg_with_repo.package,
-                dest_dir,
-                &trust,
-                progress_bar,
-            )
-            .await
-        }
-        Some(strategy) => Err(Error::ConfigError(format!(
-            "repository '{}' has unsupported dependency download strategy '{}'",
-            pkg_with_repo.repository.name, strategy
-        ))),
-    }
+) -> Result<Vec<PreparedDependencyAcquisition>> {
+    dependencies
+        .iter()
+        .enumerate()
+        .map(|(input_index, (dependency_name, pkg_with_repo))| {
+            let declared_size = u64::try_from(pkg_with_repo.package.size).map_err(|_| {
+                Error::DownloadError(format!(
+                    "negative package size for dependency '{}'",
+                    dependency_name
+                ))
+            })?;
+            let strategy = match pkg_with_repo.repository.default_strategy.as_deref() {
+                Some("static") => PreparedDependencyStrategy::Static,
+                Some("remi") => prepare_remi_dependency(conn, pkg_with_repo)?,
+                None | Some("binary") => PreparedDependencyStrategy::Native {
+                    trust: DownloadOptions::for_repository(&pkg_with_repo.repository, keyring_dir)?,
+                },
+                Some(strategy) => {
+                    return Err(Error::ConfigError(format!(
+                        "repository '{}' has unsupported dependency download strategy '{}'",
+                        pkg_with_repo.repository.name, strategy
+                    )));
+                }
+            };
+            Ok(PreparedDependencyAcquisition {
+                input_index,
+                dependency_name: dependency_name.clone(),
+                package: pkg_with_repo.package.clone(),
+                declared_size,
+                strategy,
+            })
+        })
+        .collect()
 }
 
-async fn download_remi_dependency_package(
+fn prepare_remi_dependency(
     conn: &rusqlite::Connection,
     pkg_with_repo: &PackageWithRepo,
-    dest_dir: &Path,
-    cas: &crate::filesystem::CasStore,
-) -> Result<PathBuf> {
+) -> Result<PreparedDependencyStrategy> {
     let repository = &pkg_with_repo.repository;
     let endpoint = repository
         .default_strategy_endpoint
@@ -205,22 +220,106 @@ async fn download_remi_dependency_package(
                 pkg_with_repo.package.name, pkg_with_repo.package.version, source_profile
             ))
         })?;
-
     let repository_id = repository
         .id
         .ok_or_else(|| Error::ConfigError("Remi repository has no persisted identity".into()))?;
-    let policy = super::resolution::remi_transport_trust_policy(conn, repository_id)?;
-    RemiClient::new(endpoint)?
-        .fetch_package(RemiFetchRequest {
-            distro: profile.remi_route_slug(),
-            name: &pkg_with_repo.package.name,
-            version: Some(&pkg_with_repo.package.version),
-            architecture: pkg_with_repo.package.architecture.as_deref(),
-            output_dir: dest_dir,
-            cas,
-            trust_policy: &policy,
+
+    Ok(PreparedDependencyStrategy::Remi {
+        client: RemiClient::new(endpoint)?,
+        route: profile.remi_route_slug().to_string(),
+        trust_policy: super::resolution::remi_transport_trust_policy(conn, repository_id)?,
+    })
+}
+
+async fn acquire_prepared_dependency(
+    plan: &PreparedDependencyAcquisition,
+    dest_dir: &Path,
+    cas: &crate::filesystem::CasStore,
+    progress_bar: Option<&indicatif::ProgressBar>,
+) -> Result<PathBuf> {
+    match &plan.strategy {
+        PreparedDependencyStrategy::Static => {
+            download_static_package_verified_with_progress(
+                &plan.package,
+                dest_dir,
+                None,
+                progress_bar,
+            )
+            .await
+        }
+        PreparedDependencyStrategy::Native { trust } => {
+            download_package_verified_with_progress(&plan.package, dest_dir, trust, progress_bar)
+                .await
+        }
+        PreparedDependencyStrategy::Remi {
+            client,
+            route,
+            trust_policy,
+        } => {
+            client
+                .fetch_package(RemiFetchRequest {
+                    distro: route,
+                    name: &plan.package.name,
+                    version: Some(&plan.package.version),
+                    architecture: plan.package.architecture.as_deref(),
+                    output_dir: dest_dir,
+                    cas,
+                    trust_policy,
+                })
+                .await
+        }
+    }
+}
+
+async fn acquire_dependency_plans_with<F, Fut>(
+    plans: Vec<PreparedDependencyAcquisition>,
+    progress_bars: Vec<indicatif::ProgressBar>,
+    concurrency: usize,
+    acquire: F,
+) -> Vec<DependencyAcquisitionOutcome>
+where
+    F: Fn(PreparedDependencyAcquisition, indicatif::ProgressBar) -> Fut,
+    Fut: Future<Output = Result<PathBuf>>,
+{
+    assert!(
+        concurrency > 0,
+        "dependency acquisition bound must be nonzero"
+    );
+    assert_eq!(
+        plans.len(),
+        progress_bars.len(),
+        "every dependency acquisition must have one progress bar"
+    );
+    let mut outcomes = stream::iter(plans.into_iter().zip(progress_bars))
+        .map(|(plan, progress_bar)| {
+            let input_index = plan.input_index;
+            let dependency_name = plan.dependency_name.clone();
+            let declared_size = plan.declared_size;
+            info!("Downloading dependency: {}", dependency_name);
+            let acquisition = acquire(plan, progress_bar.clone());
+            async move {
+                let result = acquisition.await;
+                match &result {
+                    Ok(_) => DownloadProgress::finish_download(&progress_bar, &dependency_name),
+                    Err(error) => DownloadProgress::fail_download(
+                        &progress_bar,
+                        &dependency_name,
+                        &error.to_string(),
+                    ),
+                }
+                DependencyAcquisitionOutcome {
+                    input_index,
+                    dependency_name,
+                    declared_size,
+                    result,
+                }
+            }
         })
-        .await
+        .buffer_unordered(concurrency)
+        .collect::<Vec<DependencyAcquisitionOutcome>>()
+        .await;
+    outcomes.sort_by_key(|outcome| outcome.input_index);
+    outcomes
 }
 
 #[cfg(test)]
@@ -228,6 +327,9 @@ mod tests {
     use super::*;
     use crate::db::models::{Repository, RepositoryPackage};
     use crate::repository::versioning::VersionScheme;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     fn package_with_repository(
         strategy: Option<&str>,
@@ -263,12 +365,28 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn native_dependency_still_requires_ecosystem_trust() {
+    fn static_plan(index: usize) -> PreparedDependencyAcquisition {
+        let mut selected = package_with_repository(
+            Some("static"),
+            None,
+            None,
+            format!("https://static.example.invalid/package-{index}.ccs"),
+            format!("sha256:checksum-{index}"),
+            (index + 1) as i64,
+        );
+        selected.package.name = format!("package-{index}");
+        PreparedDependencyAcquisition {
+            input_index: index,
+            dependency_name: format!("dependency-{index}"),
+            package: selected.package,
+            declared_size: (index + 1) as u64,
+            strategy: PreparedDependencyStrategy::Static,
+        }
+    }
+
+    #[test]
+    fn native_dependency_still_requires_ecosystem_trust_during_serial_planning() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        let cas_root = tempfile::tempdir().unwrap();
-        let cas = crate::filesystem::CasStore::new(cas_root.path()).unwrap();
-        let destination = tempfile::tempdir().unwrap();
         let keyring = tempfile::tempdir().unwrap();
         let package = package_with_repository(
             Some("binary"),
@@ -279,16 +397,13 @@ mod tests {
             1,
         );
 
-        let error = download_dependency_package(
+        let error = prepare_dependency_acquisitions(
             &conn,
-            &package,
-            destination.path(),
+            &[("dbus-broker".to_string(), package)],
             keyring.path(),
-            &cas,
-            None,
         )
-        .await
-        .unwrap_err();
+        .err()
+        .expect("native dependency planning must reject missing trust");
 
         assert!(
             error
@@ -318,17 +433,150 @@ mod tests {
             bytes.len() as i64,
         );
 
-        let downloaded = download_dependency_package(
+        let plans = prepare_dependency_acquisitions(
             &conn,
-            &package,
-            destination.path(),
+            &[("dbus-broker".to_string(), package)],
             keyring.path(),
-            &cas,
-            None,
         )
-        .await
-        .expect("static dependency path must remain checksum verified");
+        .unwrap();
+        let downloaded = acquire_prepared_dependency(&plans[0], destination.path(), &cas, None)
+            .await
+            .expect("static dependency path must remain checksum verified");
 
         assert_eq!(std::fs::read(downloaded).unwrap(), bytes);
+    }
+
+    #[tokio::test]
+    async fn bounded_acquisition_runs_concurrently_and_preserves_input_identity_order() {
+        let package_count = MAX_CONCURRENT_DEPENDENCY_ACQUISITIONS + 4;
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let completion_order = Arc::new(Mutex::new(Vec::new()));
+        let observed_identity = Arc::new(Mutex::new(Vec::new()));
+        let plans = (0..package_count).map(static_plan).collect::<Vec<_>>();
+        let progress = (0..plans.len())
+            .map(|_| indicatif::ProgressBar::hidden())
+            .collect();
+
+        let outcomes = acquire_dependency_plans_with(
+            plans,
+            progress,
+            MAX_CONCURRENT_DEPENDENCY_ACQUISITIONS,
+            {
+                let in_flight = Arc::clone(&in_flight);
+                let maximum = Arc::clone(&maximum);
+                let completion_order = Arc::clone(&completion_order);
+                let observed_identity = Arc::clone(&observed_identity);
+                move |plan, _| {
+                    let in_flight = Arc::clone(&in_flight);
+                    let maximum = Arc::clone(&maximum);
+                    let completion_order = Arc::clone(&completion_order);
+                    let observed_identity = Arc::clone(&observed_identity);
+                    async move {
+                        let index = plan
+                            .dependency_name
+                            .strip_prefix("dependency-")
+                            .unwrap()
+                            .parse::<usize>()
+                            .unwrap();
+                        observed_identity
+                            .lock()
+                            .unwrap()
+                            .push((plan.dependency_name.clone(), plan.package.name.clone()));
+                        let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                        maximum.fetch_max(current, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(
+                            (package_count - index) as u64 * 5,
+                        ))
+                        .await;
+                        in_flight.fetch_sub(1, Ordering::SeqCst);
+                        completion_order.lock().unwrap().push(index);
+                        Ok(PathBuf::from(format!("package-{index}.ccs")))
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert!(maximum.load(Ordering::SeqCst) > 1);
+        assert!(maximum.load(Ordering::SeqCst) <= MAX_CONCURRENT_DEPENDENCY_ACQUISITIONS);
+        assert_ne!(
+            *completion_order.lock().unwrap(),
+            (0..package_count).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .map(|outcome| outcome.dependency_name.as_str())
+                .collect::<Vec<_>>(),
+            (0..package_count)
+                .map(|index| format!("dependency-{index}"))
+                .collect::<Vec<_>>()
+        );
+        let mut observed = observed_identity.lock().unwrap().clone();
+        observed.sort();
+        let mut expected = (0..package_count)
+            .map(|index| (format!("dependency-{index}"), format!("package-{index}")))
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(observed, expected);
+    }
+
+    #[tokio::test]
+    async fn bounded_acquisition_drains_and_reports_every_failure_in_input_order() {
+        let completed = Arc::new(AtomicUsize::new(0));
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let plans = (0..6).map(static_plan).collect::<Vec<_>>();
+        let progress_bars = (0..plans.len())
+            .map(|_| indicatif::ProgressBar::hidden())
+            .collect();
+
+        let outcomes = acquire_dependency_plans_with(plans, progress_bars, 2, {
+            let completed = Arc::clone(&completed);
+            let in_flight = Arc::clone(&in_flight);
+            let maximum = Arc::clone(&maximum);
+            move |plan, _| {
+                let completed = Arc::clone(&completed);
+                let in_flight = Arc::clone(&in_flight);
+                let maximum = Arc::clone(&maximum);
+                async move {
+                    let index = plan
+                        .dependency_name
+                        .strip_prefix("dependency-")
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap();
+                    let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(current, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    completed.fetch_add(1, Ordering::SeqCst);
+                    if index == 1 || index == 4 {
+                        Err(Error::DownloadError(format!("injected failure {index}")))
+                    } else {
+                        Ok(PathBuf::from(format!("package-{index}.ccs")))
+                    }
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(completed.load(Ordering::SeqCst), 6);
+        assert!(maximum.load(Ordering::SeqCst) > 1);
+        assert!(maximum.load(Ordering::SeqCst) <= 2);
+        let error =
+            finish_dependency_acquisitions(&DownloadProgress::with_aggregate(6, 21), 6, outcomes)
+                .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("2 of 6 dependency downloads failed"));
+        assert!(message.contains("injected failure 1"));
+        assert!(message.contains("injected failure 4"));
+        let first = message.find("dependency-1").unwrap();
+        let second = message.find("dependency-4").unwrap();
+        assert!(
+            first < second,
+            "failures must retain input order: {message}"
+        );
     }
 }
