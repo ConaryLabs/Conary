@@ -434,6 +434,13 @@ pub fn verify_checksum(path: &Path, expected: &str) -> Result<()> {
                 actual: format!("sha1:{actual}"),
             });
         }
+    } else if let Some(expected_sha256) = expected.strip_prefix("sha256:") {
+        crate::hash::verify_file_sha256(path, expected_sha256).map_err(|error| {
+            Error::ChecksumMismatch {
+                expected: expected.to_string(),
+                actual: format!("sha256:{}", error.actual),
+            }
+        })?;
     } else {
         crate::hash::verify_file_sha256(path, expected).map_err(|e| Error::ChecksumMismatch {
             expected: e.expected,
@@ -638,6 +645,32 @@ mod tests {
             size,
             url,
         )
+    }
+
+    #[test]
+    fn verify_checksum_accepts_canonical_sha256_identity() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let content = b"canonical repository checksum";
+        std::fs::write(file.path(), content).unwrap();
+
+        verify_checksum(file.path(), &format!("sha256:{}", sha256(content))).unwrap();
+    }
+
+    #[test]
+    fn verify_checksum_rejects_wrong_canonical_sha256_identity() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"canonical repository checksum").unwrap();
+        let expected = format!("sha256:{}", sha256(b"different content"));
+
+        let error = verify_checksum(file.path(), &expected).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::ChecksumMismatch {
+                expected: actual_expected,
+                actual,
+            } if actual_expected == expected && actual.starts_with("sha256:")
+        ));
     }
 
     #[cfg(unix)]
