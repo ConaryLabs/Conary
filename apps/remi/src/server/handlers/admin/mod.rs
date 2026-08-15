@@ -114,6 +114,15 @@ pub(crate) mod test_helpers {
     /// tests are short-lived and the OS reclaims the directory on process
     /// exit.
     pub async fn test_app() -> (axum::Router, std::path::PathBuf) {
+        let (app, db_path, _) = test_app_with_database_writer().await;
+        (app, db_path)
+    }
+
+    pub async fn test_app_with_database_writer() -> (
+        axum::Router,
+        std::path::PathBuf,
+        crate::server::database_writer::DatabaseWriter,
+    ) {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("test.db");
 
@@ -141,6 +150,7 @@ pub(crate) mod test_helpers {
                 .into_owned(),
         );
         let state = Arc::new(RwLock::new(server_state));
+        let database_writer = state.read().await.database_writer.clone();
 
         // Build the external admin router (includes auth middleware)
         let app = crate::server::routes::create_external_admin_router(state, None);
@@ -157,7 +167,7 @@ pub(crate) mod test_helpers {
         // Leak the TempDir so it outlives the test (cleaned up at process exit)
         std::mem::forget(tmp);
 
-        (app, db_path)
+        (app, db_path, database_writer)
     }
 
     /// Helper to rebuild a fresh router against an existing database path.

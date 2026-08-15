@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-15
-revision: 23
-summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, reproducible conversion profiling, publication, and serving authority
+revision: 24
+summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, database-writer ownership, reproducible conversion profiling, publication, and serving authority
 ---
 
 # Remi
@@ -95,6 +95,16 @@ exact-profile handoff from successful refresh results into configured prewarm
 jobs; `apps/remi/src/server/prewarm/scheduler.rs` owns their bounded fair
 execution and complete outcome collection. HTTP handlers only publish events
 and project the shared batch.
+
+`apps/remi/src/server/database_writer.rs` owns the process-local gate for short
+SQLite mutation phases. `ServerState` gives that same owner to repository CRUD,
+authentication-token touches, and conversion publication. Repository create,
+update, and delete acquire it before opening an immediate transaction, and the
+multi-statement source replacement commits before releasing it. Network,
+parsing, CCS emission, CAS work, and read-only lookups stay outside the gate.
+Analytics refresh versus repository-sync coordination remains tracked by
+[issue #443](https://github.com/ConaryLabs/Conary/issues/443); a caller is not
+coordinated merely because it opens the same SQLite file.
 
 ## Sparse Client Sync
 

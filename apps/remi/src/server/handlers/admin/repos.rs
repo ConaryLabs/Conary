@@ -536,7 +536,7 @@ mod tests {
     use axum::http::StatusCode;
     use tower::ServiceExt;
 
-    use super::super::test_helpers::{rebuild_app, test_app};
+    use super::super::test_helpers::{rebuild_app, test_app, test_app_with_database_writer};
     use super::{RepoRefreshBatchState, refresh_status_code};
 
     #[tokio::test]
@@ -626,10 +626,16 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        let status = resp.status();
         let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
             .unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "repository update response: {}",
+            String::from_utf8_lossy(&body_bytes)
+        );
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(body["priority"], 20);
 
@@ -661,6 +667,84 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn repository_update_waits_for_the_shared_database_writer() {
+        let (app, db_path, database_writer) = test_app_with_database_writer().await;
+        let create_body = serde_json::json!({
+            "name": "fedora",
+            "url": "https://93.184.216.34/fedora",
+            "parser": {"package_format": "json"}
+        });
+        let create_resp = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/repos")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(create_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_resp.status(), StatusCode::CREATED);
+
+        // Hold both the declared writer authority and SQLite's real write lock.
+        // The old repository path bypassed the former, waited out the five-second
+        // SQLite busy timeout on the latter, and returned HTTP 500. The corrected
+        // path must remain queued on the shared owner without touching SQLite.
+        let mut blocking_connection = conary_core::db::open_fast(&db_path).unwrap();
+        let blocking_transaction = blocking_connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        let writer_guard = database_writer.hold_for_test();
+        let update_body = serde_json::json!({
+            "url": "https://93.184.216.35/fedora",
+            "priority": 20,
+            "parser": {"package_format": "json"}
+        });
+        let mut update = tokio::spawn(
+            app.oneshot(
+                axum::http::Request::builder()
+                    .method("PUT")
+                    .uri("/v1/admin/repos/fedora")
+                    .header("Authorization", "Bearer test-admin-token-12345")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(update_body.to_string()))
+                    .unwrap(),
+            ),
+        );
+
+        if let Ok(completed) =
+            tokio::time::timeout(std::time::Duration::from_millis(5_500), &mut update).await
+        {
+            let response = completed.unwrap().unwrap();
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            panic!(
+                "repository update bypassed the shared database writer: {status} {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+        drop(blocking_transaction);
+        drop(writer_guard);
+
+        let response = update.await.unwrap().unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "repository update response: {}",
+            String::from_utf8_lossy(&body)
+        );
     }
 
     #[tokio::test]

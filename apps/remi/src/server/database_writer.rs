@@ -1,31 +1,34 @@
-// apps/remi/src/server/conversion/database.rs
-//! Process-local ownership for Remi conversion database mutations.
+// apps/remi/src/server/database_writer.rs
+//! Process-local ownership for Remi database mutations.
 
-use anyhow::{Result, anyhow};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
-/// Serializes the short SQLite mutation phases shared by conversion work.
+/// Serializes short SQLite mutation phases within one Remi server.
 ///
-/// SQLite admits one writer at a time. Conversion download, parsing, CCS
-/// emission, CAS storage, and R2 upload remain concurrent; only the database
-/// transactions that publish their results pass through this owner.
+/// Work that does not mutate SQLite stays outside this owner. Callers acquire
+/// it immediately before opening their write transaction and release it after
+/// commit so independent request and background paths cannot race SQLite's
+/// single-writer boundary.
 #[derive(Clone, Default)]
-pub(super) struct ConversionDatabaseWriter {
+pub(crate) struct DatabaseWriter {
     gate: Arc<Mutex<()>>,
 }
 
-impl ConversionDatabaseWriter {
-    pub(super) fn execute<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
-        let _guard = self
-            .gate
-            .lock()
-            .map_err(|_| anyhow!("conversion database writer lock is poisoned"))?;
+impl DatabaseWriter {
+    pub(crate) fn execute<T, E>(&self, operation: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+        let _guard = self.gate.lock();
         operation()
     }
 
     #[cfg(test)]
-    pub(super) fn shares_owner_with(&self, other: &Self) -> bool {
+    pub(crate) fn shares_owner_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.gate, &other.gate)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_for_test(&self) -> impl Drop + '_ {
+        self.gate.lock()
     }
 }
 
@@ -41,7 +44,7 @@ mod tests {
         conary_core::db::init(&db_path).unwrap();
         let conn = conary_core::db::open_fast(&db_path).unwrap();
         conn.execute_batch(
-            "CREATE TABLE conversion_writer_probe (
+            "CREATE TABLE database_writer_probe (
                 value INTEGER PRIMARY KEY
             );",
         )
@@ -53,7 +56,7 @@ mod tests {
     async fn shared_writer_serializes_tiny_timeout_sqlite_transactions() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let db_path = initialized_db(&temp_dir);
-        let writer = ConversionDatabaseWriter::default();
+        let writer = DatabaseWriter::default();
 
         let mut tasks = Vec::new();
         for value in 0..32_i64 {
@@ -65,12 +68,12 @@ mod tests {
                     conn.busy_timeout(Duration::from_millis(1))?;
                     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
                     tx.execute(
-                        "INSERT INTO conversion_writer_probe (value) VALUES (?1)",
+                        "INSERT INTO database_writer_probe (value) VALUES (?1)",
                         [value],
                     )?;
                     std::thread::sleep(Duration::from_millis(2));
                     tx.commit()?;
-                    Ok(())
+                    Ok::<_, conary_core::Error>(())
                 })
             }));
         }
@@ -81,7 +84,7 @@ mod tests {
 
         let conn = conary_core::db::open_fast(&db_path).unwrap();
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM conversion_writer_probe", [], |row| {
+            .query_row("SELECT COUNT(*) FROM database_writer_probe", [], |row| {
                 row.get(0)
             })
             .unwrap();
