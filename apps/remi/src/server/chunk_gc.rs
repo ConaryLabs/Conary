@@ -138,8 +138,7 @@ pub fn scan_local_chunks(objects_dir: &Path) -> Result<Vec<String>> {
             continue;
         }
 
-        // Skip .tmp files (in-flight writes)
-        if entry.path().extension().is_some_and(|ext| ext == "tmp") {
+        if conary_core::filesystem::is_temporary_object_name(entry.file_name()) {
             continue;
         }
 
@@ -639,8 +638,18 @@ mod tests {
         std::fs::write(prefix_dir.join("cdef0123456789"), b"chunk data").unwrap();
         std::fs::write(prefix_dir.join("9876543210fedc"), b"chunk data 2").unwrap();
 
-        // Create a .tmp file that should be skipped
+        // Create every private CAS staging shape that should be skipped.
         std::fs::write(prefix_dir.join("incomplete.tmp"), b"partial").unwrap();
+        std::fs::write(
+            prefix_dir.join("abcdef0123456789.tmp.307631.736105"),
+            b"interrupted atomic write",
+        )
+        .unwrap();
+        std::fs::write(
+            prefix_dir.join(".tmp.307631.private-batch"),
+            b"private batch",
+        )
+        .unwrap();
 
         // Create another prefix
         let prefix_dir2 = objects_dir.join("ff");

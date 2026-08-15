@@ -15,6 +15,7 @@
 
 use crate::error::Result;
 use crate::hash::{self, HashAlgorithm};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -30,6 +31,17 @@ pub use verified_batch::{
     VerifiedObjectBatch, VerifiedObjectBatchMetrics, VerifiedObjectDisposition, VerifiedObjectSet,
 };
 pub use write_batch::{PrivateCasWriter, PrivateCopyBatch};
+
+/// Return whether a filename belongs to the CAS private staging namespace.
+///
+/// Atomic writers use `{hash}.tmp.{pid}.{counter}`, while streaming and batch
+/// writers may use leading-dot private names. A plain `.tmp` suffix is retained
+/// for the older single-writer path. Scanners must never interpret any of these
+/// private names as content identities.
+pub fn is_temporary_object_name(name: &OsStr) -> bool {
+    let name = name.to_string_lossy();
+    name.starts_with('.') || name.contains(".tmp.") || name.ends_with(".tmp")
+}
 
 /// Compute the CAS object path for a hex hash under a root directory.
 ///
@@ -234,32 +246,27 @@ impl CasStore {
 
             if file_type.is_dir() {
                 self.cleanup_temps_in_dir(&entry.path(), now, max_age, removed)?;
-            } else if file_type.is_file() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
+            } else if file_type.is_file()
+                && is_temporary_object_name(&entry.file_name())
+                && let Ok(metadata) = entry.metadata()
+            {
+                let age = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|mtime| now.duration_since(mtime).ok());
 
-                // Match temp files: any file whose name contains ".tmp."
-                if name_str.contains(".tmp.")
-                    && let Ok(metadata) = entry.metadata()
-                {
-                    let age = metadata
-                        .modified()
-                        .ok()
-                        .and_then(|mtime| now.duration_since(mtime).ok());
-
-                    if age.is_some_and(|a| a > max_age) {
-                        match fs::remove_file(entry.path()) {
-                            Ok(()) => {
-                                *removed += 1;
-                                debug!("Removed orphaned temp file: {}", entry.path().display());
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Failed to remove orphaned temp file {}: {}",
-                                    entry.path().display(),
-                                    e
-                                );
-                            }
+                if age.is_some_and(|a| a > max_age) {
+                    match fs::remove_file(entry.path()) {
+                        Ok(()) => {
+                            *removed += 1;
+                            debug!("Removed orphaned temp file: {}", entry.path().display());
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to remove orphaned temp file {}: {}",
+                                entry.path().display(),
+                                e
+                            );
                         }
                     }
                 }
@@ -754,18 +761,12 @@ impl Iterator for CasIterator {
                     }
 
                     let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
 
-                    // Skip temp files: atomic_store() creates temps as
-                    // `{hash}.tmp.{pid}.{counter}` which end with a digit,
-                    // so we also match on the `.tmp.` interior marker.
-                    if name_str.starts_with('.')
-                        || name_str.contains(".tmp.")
-                        || name_str.ends_with(".tmp")
-                    {
+                    if is_temporary_object_name(&name) {
                         continue;
                     }
 
+                    let name_str = name.to_string_lossy();
                     let hash = format!("{}{}", self.current_prefix, name_str);
                     return Some(Ok((hash, entry.path())));
                 }
