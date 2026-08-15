@@ -19,7 +19,9 @@ use crate::repository::dependency_model::{
 };
 use crate::repository::requirement::parse_native_requirement;
 use crate::repository::versioning::VersionScheme;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::Command;
 use tracing::debug;
 
@@ -637,11 +639,19 @@ fn acquire_dpkg_lock(path: &str) -> Result<DpkgLockGuard> {
 /// lock-frontend then lock) per /usr/share/doc/dpkg/spec/frontend-api.txt,
 /// and uses atomic rename to prevent corruption from crashes.
 pub fn remove_from_db_only(name: &str) -> Result<()> {
-    use std::io::Write;
+    let record = query_package(name)?;
+    remove_batch_from_db_only(&[record.identity])
+}
 
-    debug!("Removing {} from dpkg database only", name);
-
-    let status_path = "/var/lib/dpkg/status";
+/// Remove exact dpkg identities in one locked database rewrite.
+pub fn remove_batch_from_db_only(identities: &[InstalledPackageIdentity]) -> Result<()> {
+    if identities.is_empty() {
+        return Ok(());
+    }
+    debug!(
+        "Removing {} package records from dpkg database only",
+        identities.len()
+    );
 
     // Acquire dpkg locks per the frontend protocol spec:
     // 1. lock-frontend (frontend mutex — excludes apt, aptitude, etc.)
@@ -649,68 +659,117 @@ pub fn remove_from_db_only(name: &str) -> Result<()> {
     // Both use POSIX fcntl F_SETLK write locks as dpkg expects.
     let _frontend_lock = acquire_dpkg_lock("/var/lib/dpkg/lock-frontend")?;
     let _db_lock = acquire_dpkg_lock("/var/lib/dpkg/lock")?;
+    remove_dpkg_records_at(
+        identities,
+        Path::new("/var/lib/dpkg/status"),
+        Path::new("/var/lib/dpkg/info"),
+    )
+}
 
-    // Read /var/lib/dpkg/status, filter out the target package stanza
-    let content = std::fs::read_to_string(status_path)
-        .map_err(|e| Error::InitError(format!("Failed to read {}: {}", status_path, e)))?;
-
-    let mut output_lines = Vec::new();
-    let mut in_target_stanza = false;
-
-    for line in content.lines() {
-        if line.starts_with("Package: ") {
-            let pkg = line.strip_prefix("Package: ").unwrap_or("").trim();
-            in_target_stanza = pkg == name;
-        } else if line.is_empty() && in_target_stanza {
-            in_target_stanza = false;
-            continue; // Skip the blank line after the removed stanza
+fn remove_dpkg_records_at(
+    identities: &[InstalledPackageIdentity],
+    status_path: &Path,
+    info_dir: &Path,
+) -> Result<()> {
+    let mut targets = BTreeSet::new();
+    let mut selectors = BTreeSet::new();
+    for identity in identities {
+        let InstalledPackageIdentity::Dpkg {
+            selector,
+            name,
+            architecture,
+            ..
+        } = identity
+        else {
+            return Err(Error::ConfigError(format!(
+                "dpkg authority removal received non-dpkg identity '{}'",
+                identity.selector()
+            )));
+        };
+        if !targets.insert((name.clone(), architecture.clone())) {
+            return Err(Error::ConflictError(format!(
+                "dpkg authority-removal batch repeated {name}:{architecture}"
+            )));
         }
-
-        if !in_target_stanza {
-            output_lines.push(line);
-        }
+        selectors.insert(selector.clone());
     }
 
-    // Atomic write: write to temp file in same directory, then rename
-    let new_content = output_lines.join("\n") + "\n";
-    let tmp_path = format!("{}.conary-tmp", status_path);
-
-    let mut tmp_file = std::fs::File::create(&tmp_path)
-        .map_err(|e| Error::InitError(format!("Failed to create temp file {}: {}", tmp_path, e)))?;
-    tmp_file
-        .write_all(new_content.as_bytes())
-        .map_err(|e| Error::InitError(format!("Failed to write temp file {}: {}", tmp_path, e)))?;
-    tmp_file
-        .sync_all()
-        .map_err(|e| Error::InitError(format!("Failed to sync temp file: {}", e)))?;
-    drop(tmp_file);
-
-    std::fs::rename(&tmp_path, status_path).map_err(|e| {
-        Error::InitError(format!(
-            "Failed to rename {} -> {}: {}",
-            tmp_path, status_path, e
-        ))
+    let content = std::fs::read_to_string(status_path).map_err(|error| {
+        Error::InitError(format!("Failed to read {}: {error}", status_path.display()))
     })?;
+    let filtered = filter_dpkg_status(&content, &targets)?;
+    let mode = std::fs::metadata(status_path)?.permissions().mode();
+    crate::filesystem::durable::write_file_atomic_with_mode(
+        status_path,
+        filtered.as_bytes(),
+        mode,
+    )?;
 
-    // Lock is released when lock_file is dropped
-
-    // Remove /var/lib/dpkg/info/<name>.* files
-    let info_dir = "/var/lib/dpkg/info";
-    if let Ok(entries) = std::fs::read_dir(info_dir) {
-        for entry in entries.flatten() {
-            let fname = entry.file_name();
-            let fname_str = fname.to_string_lossy();
-            // Match <name>.* and <name>:<arch>.*
-            if fname_str.starts_with(&format!("{}.", name))
-                || fname_str.starts_with(&format!("{}:", name))
-            {
-                let _ = std::fs::remove_file(entry.path());
-            }
+    for entry in std::fs::read_dir(info_dir)? {
+        let entry = entry?;
+        let name = entry.file_name().into_string().map_err(|_| {
+            Error::ParseError("dpkg info directory contains a non-UTF-8 filename".to_string())
+        })?;
+        if selectors
+            .iter()
+            .any(|selector| name.starts_with(&format!("{selector}.")))
+        {
+            std::fs::remove_file(entry.path())?;
         }
     }
+    std::fs::File::open(info_dir)?.sync_all()?;
 
-    debug!("Successfully removed {} from dpkg database", name);
+    debug!(
+        "Successfully removed {} package records from dpkg database",
+        identities.len()
+    );
     Ok(())
+}
+
+fn filter_dpkg_status(content: &str, targets: &BTreeSet<(String, String)>) -> Result<String> {
+    let mut retained = Vec::new();
+    let mut removed = BTreeSet::new();
+    for stanza in content
+        .split("\n\n")
+        .filter(|stanza| !stanza.trim().is_empty())
+    {
+        let package = control_field(stanza, "Package");
+        let architecture = control_field(stanza, "Architecture");
+        match (package, architecture) {
+            (Some(package), Some(architecture))
+                if targets.contains(&(package.to_string(), architecture.to_string())) =>
+            {
+                if !removed.insert((package.to_string(), architecture.to_string())) {
+                    return Err(Error::ConflictError(format!(
+                        "dpkg status repeated target stanza {package}:{architecture}"
+                    )));
+                }
+            }
+            _ => retained.push(stanza),
+        }
+    }
+    if removed != *targets {
+        let missing = targets
+            .difference(&removed)
+            .map(|(name, architecture)| format!("{name}:{architecture}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(Error::NotFound(format!(
+            "dpkg status is missing exact authority-removal target(s): {missing}"
+        )));
+    }
+    let mut output = retained.join("\n\n");
+    if !output.is_empty() {
+        output.push_str("\n\n");
+    }
+    Ok(output)
+}
+
+fn control_field<'a>(stanza: &'a str, field: &str) -> Option<&'a str> {
+    let prefix = format!("{field}: ");
+    stanza
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix).map(str::trim))
 }
 
 /// Check if dpkg is available on this system
@@ -725,6 +784,17 @@ pub fn is_dpkg_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dpkg_identity(selector: &str, architecture: &str) -> InstalledPackageIdentity {
+        InstalledPackageIdentity::dpkg(
+            selector,
+            "fixture",
+            "1.0-1",
+            architecture,
+            DebianMultiArch::Same,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn test_is_dpkg_available() {
@@ -748,6 +818,51 @@ mod tests {
 
         assert_eq!(info.full_version(), "1.0.0-1ubuntu1");
         assert_eq!(info.version_only(), "1.0.0-1ubuntu1");
+    }
+
+    #[test]
+    fn batch_removal_targets_exact_multiarch_stanzas_and_info_records() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let status = temp.path().join("status");
+        let info = temp.path().join("info");
+        std::fs::create_dir(&info).unwrap();
+        std::fs::write(
+            &status,
+            "Package: fixture\nArchitecture: amd64\nStatus: install ok installed\n\nPackage: fixture\nArchitecture: i386\nStatus: install ok installed\n\nPackage: retained\nArchitecture: amd64\nStatus: install ok installed\n\n",
+        )
+        .unwrap();
+        for name in [
+            "fixture:amd64.list",
+            "fixture:amd64.postinst",
+            "fixture:i386.list",
+            "retained.list",
+        ] {
+            std::fs::write(info.join(name), b"fixture").unwrap();
+        }
+
+        remove_dpkg_records_at(&[dpkg_identity("fixture:amd64", "amd64")], &status, &info).unwrap();
+
+        let remaining = std::fs::read_to_string(status).unwrap();
+        assert!(
+            !remaining
+                .contains("Architecture: amd64\nStatus: install ok installed\n\nPackage: fixture")
+        );
+        assert!(remaining.contains("Package: fixture\nArchitecture: i386"));
+        assert!(remaining.contains("Package: retained\nArchitecture: amd64"));
+        assert!(!info.join("fixture:amd64.list").exists());
+        assert!(!info.join("fixture:amd64.postinst").exists());
+        assert!(info.join("fixture:i386.list").exists());
+        assert!(info.join("retained.list").exists());
+    }
+
+    #[test]
+    fn batch_removal_rejects_a_missing_exact_variant_without_rewriting_status() {
+        let targets = BTreeSet::from([("fixture".to_string(), "arm64".to_string())]);
+        let status = "Package: fixture\nArchitecture: amd64\n\n";
+
+        let error = filter_dpkg_status(status, &targets).unwrap_err();
+
+        assert!(error.to_string().contains("fixture:arm64"));
     }
 
     #[test]

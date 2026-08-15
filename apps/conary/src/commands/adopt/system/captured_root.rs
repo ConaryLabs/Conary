@@ -12,8 +12,8 @@ use conary_core::db::models::{
 };
 use conary_core::filesystem::PrivateCasWriter;
 use conary_core::generation::root_manifest::{
-    CapturedSelectedRoot, GenerationRootEntry, SelectedRootCaptureExclusions,
-    scan_selected_root_with_exclusions,
+    CapturedSelectedRoot, GenerationRootEntry, SelectedRootCaptureExclusions, SelectedRootScanWork,
+    scan_selected_root_with_exclusions_and_work,
 };
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::runtime_root::ConaryRuntimeRoot;
@@ -60,9 +60,9 @@ pub(super) fn ensure_complete_native_partition<'a>(
 pub(super) fn capture_live_selected_root(
     db_path: &str,
     cas: &dyn PrivateCasWriter,
-) -> Result<CapturedSelectedRoot> {
+) -> Result<(CapturedSelectedRoot, SelectedRootScanWork)> {
     let exclusions = capture_exclusions(db_path)?;
-    scan_selected_root_with_exclusions(Path::new("/"), cas, &exclusions)
+    scan_selected_root_with_exclusions_and_work(Path::new("/"), cas, &exclusions)
         .map_err(anyhow::Error::from)
         .context("failed to capture exact selected-root continuity state")
 }

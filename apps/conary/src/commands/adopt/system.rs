@@ -25,7 +25,7 @@ use conary_core::packages::{
 };
 use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryRequirementGroup};
 use std::collections::HashMap;
-use tracing::warn;
+use tracing::{debug, warn};
 
 mod captured_root;
 mod live_root;
@@ -274,12 +274,19 @@ pub async fn cmd_adopt_system(
     };
     let cas_batch = cas.as_ref().map(|cas| cas.private_copy_batch());
     let captured_selected_root = if complete_full_root_scope {
-        Some(capture_live_selected_root(
+        let (captured, work) = capture_live_selected_root(
             db_path,
             cas_batch
                 .as_ref()
                 .expect("complete full-root capture requires an initialized CAS"),
-        )?)
+        )?;
+        debug!(
+            paths_examined = work.paths_examined,
+            regular_content_streams = work.regular_content_streams,
+            unique_regular_inodes = work.unique_regular_inodes,
+            "completed one selected-root adoption traversal"
+        );
+        Some(captured)
     } else {
         None
     };

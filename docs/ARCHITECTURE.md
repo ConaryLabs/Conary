@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-14
-revision: 53
-summary: Describe workspace and release boundaries, exact native source authority, package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
+revision: 54
+summary: Describe workspace and release boundaries, coherent native inventory adoption, exact native source authority, package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -440,6 +440,17 @@ publish gates land.
 Conary can build and select immutable system-generation artifacts using EROFS
 images and Linux composefs. This remains an advanced, explicitly gated path in
 the limited preview.
+
+Native adoption begins with the source-independent
+`packages::InstalledInventorySnapshot` authority. RPM, dpkg, pacman, and eopkg
+adapters each populate exact package identities, path owners, install reasons,
+relations, configuration/lifecycle evidence, fixed-work counters, and one
+deterministic snapshot token through a package-count-independent number of
+manager/database reads. Single-package adoption, bulk adoption, refresh, and
+takeover consume that authority rather than package-local queries. They
+reacquire it immediately before commit or ownership handoff; token drift aborts
+before authority changes. Takeover removes exact native identities as one
+database-only batch where the manager supports transactional batch removal.
 
 Full system adoption establishes the first complete generation input without
 turning unowned host state into package ownership. One exact selected-root scan

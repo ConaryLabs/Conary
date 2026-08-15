@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-12
-revision: 39
-summary: Document opaque native source identity, exact native trust takeover, capability-driven targets, Remi feed presets, and lifecycle handoff
+last_updated: 2026-08-14
+revision: 40
+summary: Document coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, Remi feed presets, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -593,9 +593,13 @@ The completed filesystem is never scanned for repository-looking files.
 
 `conary system adopt <pkg> --dry-run` builds the same package-specific plan
 that apply consumes. The preview opens an existing current-schema database
-read-only and never migrates it. Native discovery resolves the exact installed
-package identity, version, and architecture, then inventories files,
-dependencies, provides, existing Conary tracking, and tracked-file ownership.
+read-only and never migrates it. Native discovery captures one typed
+`InstalledInventorySnapshot` for the selected RPM, dpkg, pacman, or eopkg
+authority. Each backend uses a fixed number of manager processes and bulk
+database traversals independent of package count. The snapshot owns exact
+identities, versions, architectures, install reasons, files, dependencies,
+provides, configuration/lifecycle evidence, the complete path-to-owner map,
+and a deterministic token over every mutation-relevant field.
 
 Each requested package is classified as ready, already tracked, missing,
 ambiguous, unsupported, or blocked by a tracked-file conflict. Shared
@@ -633,23 +637,36 @@ package manager or its database.
 
 System-wide adoption preserves the native manager's explicit-versus-dependency
 reason for every installed package. On RPM systems, Conary uses each
-generation's documented DNF contract rather than reading DNF's internal state:
-DNF5's `repoquery --userinstalled` is itself an installed-only selector, while
-DNF4 composes `repoquery --installed --userinstalled`. Configured excludes are
-disabled through the corresponding generation's documented option. A missing
-manager or malformed result is a typed failure; Conary never treats every RPM
-as explicitly installed.
+generation's documented frontend authority. DNF5's
+`repoquery --userinstalled` is itself an installed-only selector, while DNF4
+composes `repoquery --installed --userinstalled`. Configured excludes are
+disabled through the corresponding generation's documented option. RPM hosts
+without DNF use libzypp's exact `/var/lib/zypp/AutoInstalled` `SolvIdentFile`;
+each listed package ident is dependency-installed and every absent installed
+ident is explicit. A missing authority or malformed result is a typed failure;
+Conary never treats every RPM as explicitly installed.
 
 Apply consumes that plan, rechecks file ownership inside its database
-transaction, and only then writes checkpoints, package metadata, CAS objects,
-changesets, and the state snapshot. Track and full adoption both preserve
-native package-manager authority until an explicit takeover or
-selected-generation handoff.
+transaction, and reacquires the complete native inventory immediately before
+commit. Any package, version, ownership, reason, relation, configuration, or
+lifecycle token change aborts the transaction before handoff. Only an unchanged
+snapshot may write checkpoints, package metadata, CAS objects, changesets, and
+the state snapshot. Track and full adoption both preserve native
+package-manager authority until an explicit takeover or selected-generation
+handoff. Takeover consumes the same snapshot from planning through CAS upgrade,
+revalidates it before transfer, and removes complete RPM, dpkg, pacman, or
+eopkg identity sets through one database-only batch transaction where the
+manager supports it.
 
-Complete, unfiltered `conary system adopt --system --full` additionally scans
-the selected root once, after all native package payload captures succeed. The
-scan captures each walked node through a bounded pointwise-stable descriptor
-window, then derives global hardlink topology from the captured snapshots. It
+Complete, unfiltered `conary system adopt --system --full` scans the selected
+root exactly once. Package claims bind to that one path-indexed capture rather
+than rereading their declared file lists. The scanner reports paths examined,
+unique regular inodes, and content streams; every hardlinked inode is read into
+CAS once, and its global typed topology is retained even when different native
+packages own different links. Shared directories retain every exact package
+owner, and unowned content is classified during the same traversal. The scan
+captures each walked node through a bounded pointwise-stable descriptor window,
+then derives global hardlink topology from the captured snapshots. It
 uses the same finite publication domains as generation construction: `/etc` is
 config state, `/var` and `/srv` are mutable state, and other retained top-level
 paths are immutable generation input. `/proc`, `/sys`, `/dev`, `/run`, `/tmp`,

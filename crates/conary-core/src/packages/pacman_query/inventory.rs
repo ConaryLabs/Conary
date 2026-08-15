@@ -282,20 +282,23 @@ fn project_package(
     })
 }
 
-fn parse_backup(records: &[String]) -> Result<BTreeMap<String, String>> {
+fn parse_backup(records: &[String]) -> Result<BTreeMap<String, Option<String>>> {
     let mut backup = BTreeMap::new();
     for record in records {
         let (path, digest) = record.split_once('\t').ok_or_else(|| {
             Error::ParseError("ALPM %BACKUP% record has no path/digest separator".to_string())
         })?;
-        if digest.len() != 32 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if !digest.is_empty()
+            && (digest.len() != 32 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
             return Err(Error::ParseError(format!(
                 "ALPM backup path {path:?} has an invalid MD5 digest"
             )));
         }
         let path = crate::packages::archive_utils::normalize_path(path)
             .map_err(|error| Error::ParseError(error.to_string()))?;
-        if backup.insert(path.clone(), digest.to_string()).is_some() {
+        let digest = (!digest.is_empty()).then(|| digest.to_string());
+        if backup.insert(path.clone(), digest).is_some() {
             return Err(Error::ConflictError(format!(
                 "ALPM database repeats backup path {path:?}"
             )));
@@ -383,5 +386,27 @@ mod tests {
             snapshot.package("fixture").unwrap().install_reason,
             NativeInstallReason::Explicit
         );
+    }
+
+    #[test]
+    fn absent_alpm_backup_digest_remains_exact_config_authority() {
+        let temp = tempfile::tempdir().unwrap();
+        write_package(temp.path(), "1.0-1", "0");
+        let files = temp.path().join("fixture-1.0-1/files");
+        let content = fs::read_to_string(&files).unwrap();
+        fs::write(
+            &files,
+            content.replace(
+                "etc/fixture.conf\t0123456789abcdef0123456789abcdef",
+                "etc/fixture.conf\t",
+            ),
+        )
+        .unwrap();
+
+        let snapshot = capture_local_root(temp.path(), 1).unwrap();
+        assert!(matches!(
+            snapshot.package("fixture").unwrap().files[0].config,
+            Some(InstalledConfigAuthority::Pacman { original_md5: None })
+        ));
     }
 }

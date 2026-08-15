@@ -14,7 +14,8 @@ use conary_core::db::models::{
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
 use conary_core::packages::{
-    InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+    InstalledInventoryPackage, InstalledInventorySnapshot, InstalledPackageIdentity,
+    SystemPackageManager, dpkg_query, pacman_query, rpm_query,
 };
 use rusqlite::params;
 use tracing::warn;
@@ -51,36 +52,25 @@ fn prepare_takeover_entry(
 pub(super) fn upgrade_to_cas_backed(
     db_path: &str,
     packages: &[String],
-    pm: &SystemPackageManager,
+    inventory: &InstalledInventorySnapshot,
 ) -> Result<Vec<String>> {
     let cas = CasStore::new(objects_dir(db_path))?;
-    let eopkg_database = if *pm == SystemPackageManager::Eopkg {
-        Some(conary_core::packages::eopkg::query::InstalledEopkgDatabase::load()?)
-    } else {
-        None
-    };
 
     let mut entries: Vec<PreparedTakeoverEntry> = Vec::with_capacity(packages.len());
     let mut skipped = Vec::new();
     for selector in packages {
-        let identity = match query_package_identity(*pm, selector, eopkg_database.as_ref()) {
-            Ok(identity) => identity,
-            Err(error) => {
-                warn!("Skipping CAS upgrade for '{selector}': {error}");
-                skipped.push(format!("{selector}: {error}"));
-                continue;
-            }
-        };
-        let files = match query_package_files(*pm, selector, eopkg_database.as_ref()) {
-            Ok(files) => files,
-            Err(error) => {
-                warn!("Skipping CAS upgrade for '{selector}': {error}");
-                skipped.push(format!("{selector}: {error}"));
-                continue;
-            }
+        let Some(package) = inventory.package(selector) else {
+            let error = "exact selector is absent from the coherent native inventory";
+            warn!("Skipping CAS upgrade for '{selector}': {error}");
+            skipped.push(format!("{selector}: {error}"));
+            continue;
         };
 
-        match prepare_takeover_entry(identity, files, &cas) {
+        match prepare_takeover_entry(
+            package.identity.clone(),
+            inventory_file_tuples(package),
+            &cas,
+        ) {
             Ok(entry) => entries.push(entry),
             Err(error) => {
                 warn!("Skipping CAS upgrade for '{selector}': {error}");
@@ -92,7 +82,10 @@ pub(super) fn upgrade_to_cas_backed(
         return Ok(skipped);
     }
 
-    // DB-only transaction: all PM queries and CAS writes are already done.
+    inventory.require_unchanged(&InstalledInventorySnapshot::capture(inventory.manager())?)?;
+
+    // DB-only transaction: the coherent native inventory and CAS writes are
+    // complete and the exact token was revalidated immediately above.
     let mut conn = open_db(db_path)?;
     conary_core::db::transaction(&mut conn, |tx| {
         let mut changeset = Changeset::new("Takeover: CAS-upgrade track-only packages".into());
@@ -148,30 +141,25 @@ pub(super) fn upgrade_to_cas_backed(
 pub(super) fn take_ownership(
     db_path: &str,
     packages: &[String],
-    pm: SystemPackageManager,
+    inventory: &InstalledInventorySnapshot,
 ) -> Result<OwnershipTransferReport> {
-    let eopkg_database = if pm == SystemPackageManager::Eopkg {
-        Some(conary_core::packages::eopkg::query::InstalledEopkgDatabase::load()?)
-    } else {
-        None
-    };
-
+    let pm = inventory.manager();
     let mut identities = Vec::with_capacity(packages.len());
     let mut report = OwnershipTransferReport::default();
     for selector in packages {
-        let identity = match query_package_identity(pm, selector, eopkg_database.as_ref()) {
-            Ok(identity) => identity,
-            Err(error) => {
-                warn!("Ownership identity query failed for '{selector}': {error}");
-                report.query_failures.push(format!("{selector}: {error}"));
-                continue;
-            }
+        let Some(package) = inventory.package(selector) else {
+            let error = "exact selector is absent from the coherent native inventory";
+            warn!("Ownership identity query failed for '{selector}': {error}");
+            report.query_failures.push(format!("{selector}: {error}"));
+            continue;
         };
-        identities.push(identity);
+        identities.push(package.identity.clone());
     }
     if !report.query_failures.is_empty() {
         return Ok(report);
     }
+
+    inventory.require_unchanged(&InstalledInventorySnapshot::capture(pm)?)?;
 
     // Mark first so a crash after successful PM removal cannot leave an
     // unowned payload. Reported removal failures are compensated below.
@@ -215,45 +203,77 @@ pub(super) fn take_ownership(
         })?;
     }
 
-    if pm == SystemPackageManager::Eopkg {
-        let selectors = identities
-            .iter()
-            .map(|identity| identity.selector().to_string())
-            .collect::<Vec<_>>();
-        if let Err(error) = conary_core::packages::eopkg::takeover::remove_all_from_db(&selectors) {
-            if conary_core::packages::eopkg::takeover::authority_removal_pending() {
-                return Err(anyhow!(
-                    "eopkg authority-removal batch is durably pending and will resume on the next takeover run: {error}"
-                ));
-            }
-            restore_native_manager_authority(db_path, &identities)?;
-            report
-                .pm_removal_failures
-                .push(format!("eopkg authority removal did not start: {error}"));
+    println!(
+        "  Removing {} package records from {} database in one batch ...",
+        identities.len(),
+        pm.display_name()
+    );
+    if let Err(error) = remove_batch_from_system_pm(pm, &identities) {
+        if pm == SystemPackageManager::Eopkg
+            && conary_core::packages::eopkg::takeover::authority_removal_pending()
+        {
+            return Err(anyhow!(
+                "eopkg authority-removal batch is durably pending and will resume on the next takeover run: {error}"
+            ));
         }
-        return Ok(report);
+        restore_native_manager_authority(db_path, &identities)?;
+        report.pm_removal_failures.push(format!(
+            "{} authority-removal batch failed for {} package(s): {error}",
+            pm.display_name(),
+            identities.len()
+        ));
     }
-
-    let mut failed_identities = Vec::new();
-    for identity in &identities {
-        println!(
-            "  Removing {} from {} database ...",
-            identity.selector(),
-            pm.display_name()
-        );
-        if let Err(error) = remove_from_system_pm(pm, identity.selector()) {
-            warn!("Failed to remove {} from PM: {error}", identity.selector());
-            report
-                .pm_removal_failures
-                .push(format!("{}: {error}", identity.selector()));
-            failed_identities.push(identity.clone());
-        }
-    }
-    if !failed_identities.is_empty() {
-        restore_native_manager_authority(db_path, &failed_identities)?;
-    }
-
     Ok(report)
+}
+
+fn inventory_file_tuples(package: &InstalledInventoryPackage) -> Vec<FileInfoTuple> {
+    package
+        .files
+        .iter()
+        .map(|file| {
+            let file = &file.file;
+            (
+                file.path.clone(),
+                file.size,
+                file.mode,
+                file.digest.clone(),
+                file.user.clone(),
+                file.group.clone(),
+                file.link_target.clone(),
+                file.absence_policy,
+            )
+        })
+        .collect()
+}
+
+fn remove_batch_from_system_pm(
+    package_manager: SystemPackageManager,
+    identities: &[InstalledPackageIdentity],
+) -> Result<()> {
+    let selectors = identities
+        .iter()
+        .map(InstalledPackageIdentity::selector)
+        .collect::<Vec<_>>();
+    match package_manager {
+        SystemPackageManager::Rpm => {
+            rpm_query::remove_batch_from_db_only(&selectors).map_err(|error| anyhow!("{error}"))
+        }
+        SystemPackageManager::Dpkg => {
+            dpkg_query::remove_batch_from_db_only(identities).map_err(|error| anyhow!("{error}"))
+        }
+        SystemPackageManager::Pacman => {
+            pacman_query::remove_batch_from_db_only(&selectors).map_err(|error| anyhow!("{error}"))
+        }
+        SystemPackageManager::Eopkg => {
+            let selectors = selectors
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            conary_core::packages::eopkg::takeover::remove_all_from_db(&selectors)
+                .map_err(|error| anyhow!("{error}"))
+        }
+        SystemPackageManager::Unknown => Err(anyhow!("No supported package manager")),
+    }
 }
 
 fn restore_native_manager_authority(
@@ -306,78 +326,6 @@ fn find_trove_for_identity(
             "native identity '{}' matches {count} Conary troves",
             identity.selector()
         ))),
-    }
-}
-
-fn query_package_identity(
-    package_manager: SystemPackageManager,
-    selector: &str,
-    eopkg_database: Option<&conary_core::packages::eopkg::query::InstalledEopkgDatabase>,
-) -> Result<InstalledPackageIdentity> {
-    match package_manager {
-        SystemPackageManager::Rpm => Ok(rpm_query::query_package(selector)?.identity),
-        SystemPackageManager::Dpkg => Ok(dpkg_query::query_package(selector)?.identity),
-        SystemPackageManager::Pacman => Ok(pacman_query::query_package(selector)?.identity),
-        SystemPackageManager::Eopkg => Ok(eopkg_database
-            .ok_or_else(|| anyhow!("eopkg installed database snapshot is absent"))?
-            .package(selector)?
-            .identity),
-        SystemPackageManager::Unknown => Err(anyhow!("No supported package manager")),
-    }
-}
-
-fn query_package_files(
-    package_manager: SystemPackageManager,
-    name: &str,
-    eopkg_database: Option<&conary_core::packages::eopkg::query::InstalledEopkgDatabase>,
-) -> Result<Vec<FileInfoTuple>> {
-    let raw_files = match package_manager {
-        SystemPackageManager::Rpm => rpm_query::query_package_files(name)
-            .map_err(|error| anyhow!("RPM file query failed for '{name}': {error}"))?,
-        SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
-            .map_err(|error| anyhow!("DPKG file query failed for '{name}': {error}"))?,
-        SystemPackageManager::Pacman => pacman_query::query_package_files(name)
-            .map_err(|error| anyhow!("Pacman file query failed for '{name}': {error}"))?,
-        SystemPackageManager::Eopkg => eopkg_database
-            .ok_or_else(|| anyhow!("eopkg installed database snapshot is absent"))?
-            .package_files(name)
-            .map_err(|error| anyhow!("eopkg file query failed for '{name}': {error}"))?,
-        SystemPackageManager::Unknown => {
-            return Err(anyhow!("No supported package manager"));
-        }
-    };
-    Ok(raw_files
-        .into_iter()
-        .map(|file| {
-            (
-                file.path,
-                file.size,
-                file.mode,
-                file.digest,
-                file.user,
-                file.group,
-                file.link_target,
-                file.absence_policy,
-            )
-        })
-        .collect())
-}
-
-fn remove_from_system_pm(package_manager: SystemPackageManager, name: &str) -> Result<()> {
-    match package_manager {
-        SystemPackageManager::Rpm => {
-            rpm_query::remove_from_db_only(name).map_err(|error| anyhow!("{error}"))
-        }
-        SystemPackageManager::Dpkg => {
-            dpkg_query::remove_from_db_only(name).map_err(|error| anyhow!("{error}"))
-        }
-        SystemPackageManager::Pacman => {
-            pacman_query::remove_from_db_only(name).map_err(|error| anyhow!("{error}"))
-        }
-        SystemPackageManager::Eopkg => Err(anyhow!(
-            "eopkg ownership removal must use its transaction-wide batch"
-        )),
-        SystemPackageManager::Unknown => Err(anyhow!("No supported package manager")),
     }
 }
 

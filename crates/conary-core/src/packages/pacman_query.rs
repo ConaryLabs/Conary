@@ -569,22 +569,37 @@ pub fn query_user_installed()
 /// from the pacman database without touching any files on disk. This transfers
 /// ownership of the files from pacman to Conary.
 pub fn remove_from_db_only(name: &str) -> Result<()> {
-    debug!("Removing {} from pacman database only (--dbonly)", name);
+    remove_batch_from_db_only(&[name])
+}
+
+/// Remove exact package records in one ALPM database-only transaction.
+pub fn remove_batch_from_db_only(selectors: &[&str]) -> Result<()> {
+    if selectors.is_empty() {
+        return Ok(());
+    }
+    debug!(
+        "Removing {} package records from pacman database only (--dbonly)",
+        selectors.len()
+    );
 
     let output = Command::new("pacman")
-        .args(["-Rdd", "--dbonly", "--noconfirm", name])
+        .args(["-Rdd", "--dbonly", "--noconfirm"])
+        .args(selectors)
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run pacman -Rdd --dbonly: {}", e)))?;
 
     if !output.status.success() {
         return Err(Error::InitError(format!(
-            "pacman -Rdd --dbonly {} failed: {}",
-            name,
+            "pacman -Rdd --dbonly batch failed for [{}]: {}",
+            selectors.join(", "),
             String::from_utf8_lossy(&output.stderr)
         )));
     }
 
-    debug!("Successfully removed {} from pacman database", name);
+    debug!(
+        "Successfully removed {} package records from pacman database",
+        selectors.len()
+    );
     Ok(())
 }
 

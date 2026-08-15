@@ -463,6 +463,52 @@ mod tests {
     }
 
     #[test]
+    fn complete_adoption_preserves_one_hardlink_topology_across_packages() {
+        let tmp = tempdir_in_target();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::write(root.join("usr/lib/primary"), b"shared inode").unwrap();
+        std::fs::hard_link(root.join("usr/lib/primary"), root.join("usr/lib/secondary")).unwrap();
+        let cas = CasStore::new(tmp.path().join("objects")).unwrap();
+        let captured_root =
+            conary_core::generation::root_manifest::scan_selected_root(&root, &cas).unwrap();
+        let index = SelectedRootPayloadIndex::new(&captured_root);
+
+        let primary = capture_package_files_from_selected_root(
+            "package-a",
+            &[file_tuple("/usr/lib/primary", 12, 0o100644, None, None)],
+            &index,
+            &cas,
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        let secondary = capture_package_files_from_selected_root(
+            "package-b",
+            &[file_tuple("/usr/lib/secondary", 12, 0o100644, None, None)],
+            &index,
+            &cas,
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+
+        let PayloadNodeKind::Regular {
+            hardlink_identity: Some(primary_identity),
+        } = primary.node.source.kind
+        else {
+            panic!("global hardlink primary did not retain its identity");
+        };
+        let PayloadNodeKind::Hardlink { identity, target } = secondary.node.source.kind else {
+            panic!("second package did not retain the global hardlink alias");
+        };
+        assert_eq!(identity, primary_identity);
+        assert_eq!(target, "/usr/lib/primary");
+        assert!(primary.content.is_some());
+        assert!(secondary.content.is_none());
+    }
+
+    #[test]
     #[cfg(unix)]
     fn full_adoption_regular_file_uses_private_cas_inode() {
         use std::os::unix::fs::MetadataExt;

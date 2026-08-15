@@ -34,7 +34,7 @@ pub enum InstalledConfigAuthority {
         obsolete: bool,
     },
     Pacman {
-        original_md5: String,
+        original_md5: Option<String>,
     },
     Eopkg {
         permanent: bool,

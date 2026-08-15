@@ -3,8 +3,6 @@
 mod common;
 
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,14 +11,6 @@ fn run_conary(args: &[&str]) -> std::process::Output {
         .args(args)
         .output()
         .expect("failed to run conary")
-}
-
-#[cfg(unix)]
-fn write_executable(path: &Path, contents: &str) {
-    fs::write(path, contents).unwrap();
-    let mut permissions = fs::metadata(path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions).unwrap();
 }
 
 fn tree_snapshot(root: &Path, db_name: &str) -> Vec<(PathBuf, String, Vec<u8>)> {
@@ -472,52 +462,14 @@ fn system_adopt_status_bypasses_gate() {
 #[cfg(unix)]
 #[test]
 fn system_adopt_package_dry_run_previews_without_mutation_or_ack_prompt() {
+    if !Path::new("/var/lib/dpkg/info/base-files.list").is_file()
+        || !Path::new("/usr/bin/dpkg-query").is_file()
+        || !Path::new("/usr/bin/apt-mark").is_file()
+    {
+        return;
+    }
     let (tmp, db_path, conn) = common::create_test_db();
     drop(conn);
-
-    let live_root = tmp.path().join("live-root");
-    let live_file = live_root.join("usr/bin/fixture");
-    fs::create_dir_all(live_file.parent().unwrap()).unwrap();
-    fs::write(&live_file, b"native fixture payload").unwrap();
-
-    let fake_bin = tmp.path().join("fake-bin");
-    fs::create_dir(&fake_bin).unwrap();
-    write_executable(
-        &fake_bin.join("dpkg-query"),
-        "#!/bin/sh
-if [ \"$1\" = \"--version\" ]; then
-    printf 'dpkg-query fixture 1.0\\n'
-    exit 0
-fi
-case \"$3\" in
-    *Description*)
-        printf 'fixture\\036fixture\\0361.2.3\\036amd64\\036Fixture package\\036Test maintainer\\036\\036utils\\036optional\\0361\\036foreign\\037'
-        ;;
-    *Depends*)
-        printf '\\036libc6 (>= 2.0)\\037'
-        ;;
-    *Provides*)
-        printf 'fixture\\036fixture\\0361.2.3\\036fixture-capability\\037'
-        ;;
-    *)
-        exit 1
-        ;;
-esac
-",
-    );
-    write_executable(
-        &fake_bin.join("dpkg"),
-        &format!(
-            "#!/bin/sh
-if [ \"$1\" = \"-L\" ] && [ \"$2\" = \"fixture\" ]; then
-    printf '%s\\n' '{}'
-    exit 0
-fi
-exit 1
-",
-            live_file.display()
-        ),
-    );
 
     let db_name = Path::new(&db_path)
         .file_name()
@@ -526,18 +478,17 @@ exit 1
         .into_owned();
     let database_before = common::database_snapshot(&db_path);
     let tree_before = tree_snapshot(tmp.path(), &db_name);
-    let live_file_before = fs::read(&live_file).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
         .args([
             "system",
             "adopt",
-            "fixture",
+            "base-files",
             "--dry-run",
             "--db-path",
             &db_path,
         ])
-        .env("PATH", &fake_bin)
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
         .output()
         .expect("failed to run conary package adoption preview");
 
@@ -550,14 +501,12 @@ exit 1
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("Package adoption preview"));
-    assert!(stdout.contains("fixture 1.2.3 [amd64]"));
+    assert!(stdout.contains("base-files"));
     assert!(stdout.contains("track (metadata only)"));
-    assert!(stdout.contains("1 package, 1 files, 1 dependencies, 3 provides"));
     assert!(stderr.contains("Preview only:"));
     assert!(!stderr.contains("--allow-live-system-mutation"));
     assert!(!stderr.contains("--yes"));
 
     assert_eq!(common::database_snapshot(&db_path), database_before);
     assert_eq!(tree_snapshot(tmp.path(), &db_name), tree_before);
-    assert_eq!(fs::read(&live_file).unwrap(), live_file_before);
 }

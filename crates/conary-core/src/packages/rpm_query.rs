@@ -515,22 +515,37 @@ fn query_user_installed_with(
 /// the RPM database without touching any files on disk. This is used
 /// during takeover to transfer ownership from RPM to Conary.
 pub fn remove_from_db_only(name: &str) -> Result<()> {
-    debug!("Removing {} from RPM database only (--justdb)", name);
+    remove_batch_from_db_only(&[name])
+}
+
+/// Remove exact package records in one RPM database-only transaction.
+pub fn remove_batch_from_db_only(selectors: &[&str]) -> Result<()> {
+    if selectors.is_empty() {
+        return Ok(());
+    }
+    debug!(
+        "Removing {} package records from RPM database only (--justdb)",
+        selectors.len()
+    );
 
     let output = Command::new("rpm")
-        .args(["-e", "--justdb", "--nodeps", name])
+        .args(["-e", "--justdb", "--nodeps"])
+        .args(selectors)
         .output()
         .map_err(|e| Error::InitError(format!("Failed to run rpm -e --justdb: {}", e)))?;
 
     if !output.status.success() {
         return Err(Error::InitError(format!(
-            "rpm -e --justdb {} failed: {}",
-            name,
+            "rpm -e --justdb batch failed for [{}]: {}",
+            selectors.join(", "),
             String::from_utf8_lossy(&output.stderr)
         )));
     }
 
-    debug!("Successfully removed {} from RPM database", name);
+    debug!(
+        "Successfully removed {} package records from RPM database",
+        selectors.len()
+    );
     Ok(())
 }
 

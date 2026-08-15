@@ -35,7 +35,7 @@ pub(super) fn adopt_live_root_as_full_package(
     }
 
     let cas = CasStore::new(conary_core::db::paths::objects_dir(db_path))?;
-    let captured = capture_live_selected_root(db_path, &cas)?;
+    let (captured, _work) = capture_live_selected_root(db_path, &cas)?;
     let mut conn = open_db(db_path)?;
     let mut changeset = Changeset::new(format!(
         "Synchronize selected-root authority ({LIVE_ROOT_PACKAGE_NAME})"

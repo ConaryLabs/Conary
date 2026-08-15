@@ -35,6 +35,14 @@ struct FilesystemIdentity {
     inode: u64,
 }
 
+/// Deterministic work performed by one complete selected-root traversal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectedRootScanWork {
+    pub paths_examined: u64,
+    pub regular_content_streams: u64,
+    pub unique_regular_inodes: u64,
+}
+
 // A live selected root has no global filesystem snapshot. Keep the retry budget
 // local to one node so unrelated paths are never read again after a conflict.
 const STABLE_NODE_CAPTURE_ATTEMPTS: usize = 8;
@@ -88,7 +96,16 @@ pub fn scan_selected_root_with_exclusions(
     cas: &dyn PrivateCasWriter,
     exclusions: &SelectedRootCaptureExclusions,
 ) -> crate::Result<CapturedSelectedRoot> {
-    let (root_node, candidates) =
+    scan_selected_root_with_exclusions_and_work(root, cas, exclusions)
+        .map(|(captured, _work)| captured)
+}
+
+pub fn scan_selected_root_with_exclusions_and_work(
+    root: &Path,
+    cas: &dyn PrivateCasWriter,
+    exclusions: &SelectedRootCaptureExclusions,
+) -> crate::Result<(CapturedSelectedRoot, SelectedRootScanWork)> {
+    let (root_node, candidates, work) =
         capture_payload_tree(root, cas, false, "selected-root", exclusions)?;
 
     let mut immutable = Vec::new();
@@ -116,7 +133,7 @@ pub fn scan_selected_root_with_exclusions(
     };
     captured.generation.validate()?;
     captured.state.validate()?;
-    Ok(captured)
+    Ok((captured, work))
 }
 
 /// Capture a complete package/build output tree without discarding any path
@@ -130,7 +147,7 @@ pub fn scan_payload_tree(
     cas: &dyn PrivateCasWriter,
     hardlink_namespace: &str,
 ) -> crate::Result<(ResolvedPayloadNode, Vec<GenerationRootEntry>)> {
-    let (root_node, candidates) = capture_payload_tree(
+    let (root_node, candidates, _work) = capture_payload_tree(
         root,
         cas,
         true,
@@ -155,7 +172,7 @@ pub(super) fn scan_selected_root_overlay_upper(
     cas: &dyn PrivateCasWriter,
     hardlink_namespace: &str,
 ) -> crate::Result<(ResolvedPayloadNode, Vec<GenerationRootEntry>)> {
-    let (root_node, candidates) = capture_payload_tree(
+    let (root_node, candidates, _work) = capture_payload_tree(
         root,
         cas,
         false,
@@ -175,7 +192,11 @@ fn capture_payload_tree(
     include_ephemeral: bool,
     hardlink_namespace: &str,
     exclusions: &SelectedRootCaptureExclusions,
-) -> crate::Result<(ResolvedPayloadNode, Vec<CapturedCandidate>)> {
+) -> crate::Result<(
+    ResolvedPayloadNode,
+    Vec<CapturedCandidate>,
+    SelectedRootScanWork,
+)> {
     if hardlink_namespace.is_empty() || hardlink_namespace.contains('\0') {
         return Err(crate::Error::InvalidPath(
             "payload-tree hardlink namespace must be non-empty and NUL-free".to_string(),
@@ -184,6 +205,7 @@ fn capture_payload_tree(
     let root_node = capture_root_node(root)?;
     let mut candidates = Vec::new();
     let mut captured_regular_inodes = std::collections::BTreeSet::new();
+    let mut work = SelectedRootScanWork::default();
     let walker = WalkDir::new(root)
         .follow_links(false)
         .sort_by(|left, right| {
@@ -213,6 +235,9 @@ fn capture_payload_tree(
         if entry.depth() == 0 {
             continue;
         }
+        work.paths_examined = work.paths_examined.checked_add(1).ok_or_else(|| {
+            crate::Error::InternalError("selected-root path counter overflowed u64".to_string())
+        })?;
         let path = root_manifest_path(root, entry.path())?;
         if exclusions.excludes(&path) {
             continue;
@@ -228,6 +253,7 @@ fn capture_payload_tree(
             .filter(|metadata| metadata.file_type().is_file())
             .map(|metadata| filesystem_identity(&metadata))
             .filter(|identity| captured_regular_inodes.contains(identity));
+        let reused_regular_inode = known_regular_inode.is_some();
         let candidate = capture_path_stably_with_known_inode(
             path,
             entry.path().to_path_buf(),
@@ -241,13 +267,24 @@ fn capture_payload_tree(
         ) && candidate.entry.content.is_some()
         {
             captured_regular_inodes.insert(candidate.identity);
+            if !reused_regular_inode {
+                work.regular_content_streams =
+                    work.regular_content_streams.checked_add(1).ok_or_else(|| {
+                        crate::Error::InternalError(
+                            "selected-root content-stream counter overflowed u64".to_string(),
+                        )
+                    })?;
+            }
         }
         candidates.push(candidate);
     }
     candidates.sort_by(|left, right| left.entry.path.cmp(&right.entry.path));
 
     assign_hardlinks(&mut candidates, hardlink_namespace)?;
-    Ok((root_node, candidates))
+    work.unique_regular_inodes = u64::try_from(captured_regular_inodes.len()).map_err(|_| {
+        crate::Error::InternalError("selected-root unique-inode count does not fit u64".to_string())
+    })?;
+    Ok((root_node, candidates, work))
 }
 
 /// Capture exact metadata authority for the selected-root directory itself.
@@ -977,8 +1014,16 @@ mod tests {
             reader_calls: Cell::new(0),
         };
 
-        let captured = scan_selected_root(&root, &writer).unwrap();
+        let (captured, work) = scan_selected_root_with_exclusions_and_work(
+            &root,
+            &writer,
+            &SelectedRootCaptureExclusions::empty(),
+        )
+        .unwrap();
         assert_eq!(writer.reader_calls.get(), 1);
+        assert_eq!(work.paths_examined, 4);
+        assert_eq!(work.regular_content_streams, 1);
+        assert_eq!(work.unique_regular_inodes, 1);
         let primary = captured
             .generation
             .entries

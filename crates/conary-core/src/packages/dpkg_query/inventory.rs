@@ -203,31 +203,38 @@ fn project_files(
     };
     list.lines()
         .enumerate()
-        .map(|(index, path)| {
+        .filter_map(|(index, path)| {
             if path.is_empty() {
-                return Err(Error::ParseError(format!(
+                return Some(Err(Error::ParseError(format!(
                     "dpkg ownership record {list_name:?} has an empty path at line {}",
                     index + 1
-                )));
+                ))));
             }
-            *ownership_records = ownership_records.checked_add(1).ok_or_else(|| {
-                Error::ParseError("dpkg ownership record count overflowed u64".to_string())
-            })?;
-            let path = crate::packages::archive_utils::normalize_path(path)
-                .map_err(|error| Error::ParseError(error.to_string()))?;
-            let digest_path = path.strip_prefix('/').unwrap_or(&path);
-            let digest = digests.get(digest_path).cloned();
-            Ok(InstalledFileInfo {
-                path,
-                size: 0,
-                mode: 0,
-                digest,
-                user: None,
-                group: None,
-                link_target: None,
-                mtime: None,
-                absence_policy: InstalledFileAbsencePolicy::Required,
-            })
+            // dpkg's installed `.list` grammar may carry `/.` as the root
+            // anchor. It is not a deployable package payload node.
+            if matches!(path, "/" | "/.") {
+                return None;
+            }
+            Some((|| {
+                *ownership_records = ownership_records.checked_add(1).ok_or_else(|| {
+                    Error::ParseError("dpkg ownership record count overflowed u64".to_string())
+                })?;
+                let path = crate::packages::archive_utils::normalize_path(path)
+                    .map_err(|error| Error::ParseError(error.to_string()))?;
+                let digest_path = path.strip_prefix('/').unwrap_or(&path);
+                let digest = digests.get(digest_path).cloned();
+                Ok(InstalledFileInfo {
+                    path,
+                    size: 0,
+                    mode: 0,
+                    digest,
+                    user: None,
+                    group: None,
+                    link_target: None,
+                    mtime: None,
+                    absence_policy: InstalledFileAbsencePolicy::Required,
+                })
+            })())
         })
         .collect()
 }
@@ -313,7 +320,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::write(
             root.path().join("fixture:amd64.list"),
-            "/etc/fixture.conf\n/usr/bin/fixture\n",
+            "/.\n/etc/fixture.conf\n/usr/bin/fixture\n",
         )
         .unwrap();
         fs::write(

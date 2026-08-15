@@ -3,6 +3,8 @@
 //! Fixed-process coherent RPM installed-inventory acquisition.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fs;
+use std::path::Path;
 
 use rpm::FileFlags;
 
@@ -29,6 +31,20 @@ const LIFECYCLE_FORMAT: &str = concat!(
     "[%{TRANSFILETRIGGERSCRIPTPROG}\x1e%{TRANSFILETRIGGERSCRIPTS}\x1f]",
 );
 
+enum RpmInstallReasonAuthority {
+    DnfExplicit(HashSet<String>),
+    LibzyppAutomatic(HashSet<String>),
+}
+
+impl RpmInstallReasonAuthority {
+    fn is_explicit(&self, identity: &crate::packages::InstalledPackageIdentity) -> bool {
+        match self {
+            Self::DnfExplicit(packages) => packages.contains(&identity.install_reason_selector()),
+            Self::LibzyppAutomatic(packages) => !packages.contains(identity.name()),
+        }
+    }
+}
+
 /// Query all installed header fields in one rpmdb iteration and DNF reason
 /// authority in at most two fixed probes.
 pub fn query_installed_inventory() -> Result<InstalledInventorySnapshot> {
@@ -44,19 +60,73 @@ pub fn query_installed_inventory() -> Result<InstalledInventorySnapshot> {
         "rpm",
         &["-qa", "--queryformat", &format],
     )?;
+    let (reasons, reason_processes, reason_reads) = query_install_reason_authority()?;
+    capture_from_output(&output, &reasons, 1 + reason_processes, 1 + reason_reads)
+}
+
+fn query_install_reason_authority() -> Result<(RpmInstallReasonAuthority, u64, u64)> {
     let mut reason_processes = 0_u64;
-    let explicit = super::query_user_installed_with(|authority, command, args| {
-        reason_processes += 1;
-        query_package_names(authority, command, args)
-    })
-    .map_err(|error| Error::InitError(error.to_string()))?;
-    capture_from_output(&output, &explicit, 1 + reason_processes)
+    let dnf = super::query_user_installed_with(|authority, command, args| {
+        let result = query_package_names(authority, command, args);
+        if !result
+            .as_ref()
+            .is_err_and(|error| error.is_command_unavailable())
+        {
+            reason_processes += 1;
+        }
+        result
+    });
+    match dnf {
+        Ok(explicit) => Ok((
+            RpmInstallReasonAuthority::DnfExplicit(explicit),
+            reason_processes,
+            0,
+        )),
+        Err(dnf_error) if dnf_error.is_command_unavailable() => {
+            let path = Path::new("/var/lib/zypp/AutoInstalled");
+            let content = fs::read_to_string(path).map_err(|error| {
+                Error::InitError(format!(
+                    "{dnf_error}; libzypp install-reason authority {} is unavailable: {error}",
+                    path.display()
+                ))
+            })?;
+            Ok((
+                RpmInstallReasonAuthority::LibzyppAutomatic(parse_libzypp_auto_installed(
+                    &content,
+                )?),
+                reason_processes,
+                1,
+            ))
+        }
+        Err(error) => Err(Error::InitError(error.to_string())),
+    }
+}
+
+/// Parse libzypp `SolvIdentFile`, pinned to upstream commit
+/// `bacd92ed16086b2e6af7182476dfba228a4a1bb5`.
+fn parse_libzypp_auto_installed(content: &str) -> Result<HashSet<String>> {
+    let mut packages = HashSet::new();
+    for (index, line) in content.lines().enumerate() {
+        let name = line.trim();
+        if name.is_empty() || name.starts_with('#') {
+            continue;
+        }
+        if name.chars().any(char::is_whitespace) {
+            return Err(Error::ParseError(format!(
+                "libzypp AutoInstalled line {} is not one exact package ident: {name:?}",
+                index + 1
+            )));
+        }
+        packages.insert(name.to_string());
+    }
+    Ok(packages)
 }
 
 fn capture_from_output(
     output: &str,
-    explicit: &HashSet<String>,
+    reasons: &RpmInstallReasonAuthority,
     manager_processes: u64,
+    database_bulk_reads: u64,
 ) -> Result<InstalledInventorySnapshot> {
     let mut packages = Vec::new();
     let mut ownership_records = 0_u64;
@@ -104,7 +174,7 @@ fn capture_from_output(
         let requirements = super::parse_rpm_requirement_records(sections[2])?;
         let provides = super::provides::parse_rpm_provide_records(&identity, sections[3])?;
         let lifecycle = parse_lifecycle(sections[4])?;
-        let is_explicit = explicit.contains(&identity.install_reason_selector());
+        let is_explicit = reasons.is_explicit(&identity);
         packages.push(InstalledInventoryPackage {
             identity,
             description: package_record
@@ -127,7 +197,7 @@ fn capture_from_output(
         packages,
         InstalledInventoryWork {
             manager_processes,
-            database_bulk_reads: 1,
+            database_bulk_reads,
             ownership_records,
         },
     )
@@ -283,7 +353,8 @@ mod tests {
     #[test]
     fn rpm_inventory_uses_a_fixed_process_count() {
         let explicit = HashSet::from(["fixture.x86_64".to_string()]);
-        let snapshot = capture_from_output(&output("1.0", "exit 0"), &explicit, 2).unwrap();
+        let reasons = RpmInstallReasonAuthority::DnfExplicit(explicit);
+        let snapshot = capture_from_output(&output("1.0", "exit 0"), &reasons, 2, 1).unwrap();
         let package = snapshot.package("fixture-1.0-1.x86_64").unwrap();
 
         assert_eq!(package.install_reason, NativeInstallReason::Explicit);
@@ -305,8 +376,20 @@ mod tests {
     #[test]
     fn rpm_version_reason_config_and_lifecycle_change_token() {
         let explicit = HashSet::from(["fixture.x86_64".to_string()]);
-        let first = capture_from_output(&output("1.0", "exit 0"), &explicit, 2).unwrap();
-        let second = capture_from_output(&output("2.0", "changed"), &HashSet::new(), 3).unwrap();
+        let first = capture_from_output(
+            &output("1.0", "exit 0"),
+            &RpmInstallReasonAuthority::DnfExplicit(explicit),
+            2,
+            1,
+        )
+        .unwrap();
+        let second = capture_from_output(
+            &output("2.0", "changed"),
+            &RpmInstallReasonAuthority::DnfExplicit(HashSet::new()),
+            2,
+            1,
+        )
+        .unwrap();
 
         assert_ne!(first.token(), second.token());
         assert_eq!(
@@ -316,5 +399,31 @@ mod tests {
                 .install_reason,
             NativeInstallReason::Dependency
         );
+    }
+
+    #[test]
+    fn libzypp_auto_installed_is_exact_dependency_authority() {
+        let automatic = parse_libzypp_auto_installed(
+            "# AutoInstalled generated by libzypp\nfixture\nother-package\n",
+        )
+        .unwrap();
+        let snapshot = capture_from_output(
+            &output("1.0", "exit 0"),
+            &RpmInstallReasonAuthority::LibzyppAutomatic(automatic),
+            1,
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(
+            snapshot
+                .package("fixture-1.0-1.x86_64")
+                .unwrap()
+                .install_reason,
+            NativeInstallReason::Dependency
+        );
+        assert_eq!(snapshot.work().manager_processes, 1);
+        assert_eq!(snapshot.work().database_bulk_reads, 2);
+        assert!(parse_libzypp_auto_installed("bad package\n").is_err());
     }
 }
