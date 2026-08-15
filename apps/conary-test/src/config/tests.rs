@@ -40,6 +40,7 @@ fn minimal_manifest_with_id(id: &str) -> TestManifest {
             setup: Vec::new(),
             mock_server: None,
             timeout: None,
+            corpus: None,
         },
         test: vec![manifest::TestDef {
             id: id.to_string(),
@@ -777,6 +778,20 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
     let manifest = load_manifest(&path).expect("load focused native lifecycle manifest");
     assert_eq!(manifest.suite.phase, 4);
     assert_eq!(manifest.test.len(), 4);
+    assert_eq!(
+        manifest
+            .suite
+            .corpus
+            .as_ref()
+            .expect("suite coverage authority")
+            .required,
+        [
+            conary_core::corpus::CorpusSemantic::IdentityExactVersion,
+            conary_core::corpus::CorpusSemantic::IdentityNativeArchitecture,
+            conary_core::corpus::CorpusSemantic::PayloadFiles,
+            conary_core::corpus::CorpusSemantic::LifecycleShell,
+        ]
+    );
     for (test, expected_id, expected_profile, expected_format) in [
         (&manifest.test[0], "TNPMX01R", "fedora-44", "rpm"),
         (&manifest.test[1], "TNPMX01D", "ubuntu-26.04", "deb"),
@@ -795,6 +810,12 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
             conary_core::corpus::SourceArtifactDigestSource::FixtureBuildManifest
         );
         assert_eq!(corpus.stages.len(), 4);
+        assert_eq!(corpus.coverage.len(), 4);
+        assert!(corpus.coverage.iter().all(|claim| claim.artifact_roles
+            == [
+                conary_core::corpus::SourceArtifactRole::InstallRequest,
+                conary_core::corpus::SourceArtifactRole::UpdateRequest,
+            ]));
 
         let rendered = format!("{test:?}");
         assert!(

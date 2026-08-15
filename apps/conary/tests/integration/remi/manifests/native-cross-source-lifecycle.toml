@@ -7,6 +7,14 @@ name = "Native Cross-Source Lifecycle"
 phase = 4
 timeout = 3600
 
+[suite.corpus]
+required = [
+    "identity_exact_version",
+    "identity_native_architecture",
+    "payload_files",
+    "lifecycle_shell",
+]
+
 [distro_overrides.fedora44]
 native_lifecycle_oracle_format = "rpm"
 target_init_system = "systemd"
@@ -59,6 +67,22 @@ architecture = "x86_64"
 init_system = "${target_init_system}"
 capabilities = ["native_lifecycle", "selected_root_generation"]
 
+[[test.corpus.coverage]]
+semantic = "identity_exact_version"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "identity_native_architecture"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "payload_files"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "lifecycle_shell"
+artifact_roles = ["install_request", "update_request"]
+
 [[test.step]]
 run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-rpm.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} rpm"
 
@@ -85,6 +109,22 @@ architecture = "x86_64"
 init_system = "${target_init_system}"
 capabilities = ["native_lifecycle", "selected_root_generation"]
 
+[[test.corpus.coverage]]
+semantic = "identity_exact_version"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "identity_native_architecture"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "payload_files"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "lifecycle_shell"
+artifact_roles = ["install_request", "update_request"]
+
 [[test.step]]
 run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-deb.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} deb"
 
@@ -110,6 +150,22 @@ stages = ["installation", "update", "rollback", "removal"]
 architecture = "x86_64"
 init_system = "${target_init_system}"
 capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "identity_exact_version"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "identity_native_architecture"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "payload_files"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "lifecycle_shell"
+artifact_roles = ["install_request", "update_request"]
 
 [[test.step]]
 run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-arch.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} arch"

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-14
-revision: 32
-summary: Map fixture ownership, including set-based package transaction scaling, authenticated Debian-derivative roots, and cross-source lifecycle proof
+last_updated: 2026-08-15
+revision: 33
+summary: Map fixture ownership, including typed semantic coverage, authenticated derivative roots, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -404,9 +404,12 @@ Each fixture family should record:
   `apps/conary-test/src/suite_inventory.rs`.
 - **Purpose:** Declarative Remi and package-manager integration suites. Corpus
   tests declare exact source/target/stage and artifact-digest authority,
-  consume a versioned runtime evidence file, and emit `CorpusCaseResult` plus
-  typed aggregation with an exact declared-case count; generic stdout and
-  error messages remain diagnostics only.
+  suite-level semantic requirements, and per-case claims bound to exact source
+  artifact roles. They consume a versioned runtime evidence file and emit
+  `CorpusCaseResult` plus typed result and semantic-coverage aggregation with
+  an exact declared-case count; generic stdout and error messages remain
+  diagnostics only. A property counts as covered only when every claimed role
+  resolves to one SHA-256-attributed runtime artifact and the case completes.
 - **Fixture sources:** `apps/conary/tests/integration/remi/manifests/`;
   `apps/conary/tests/integration/remi/containers/`;
   `apps/conary/tests/fixtures/conary-test-fixture/`;

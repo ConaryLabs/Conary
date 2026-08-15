@@ -3,7 +3,9 @@
 //! Persisted declarations for attributable just-works corpus cases.
 
 use anyhow::{Result, bail};
-use conary_core::corpus::{ConversionStage, SourceArtifactDigestSource};
+use conary_core::corpus::{
+    ConversionStage, CorpusSemantic, SourceArtifactDigestSource, SourceArtifactRole,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Component, Path};
@@ -36,6 +38,33 @@ pub struct CorpusTargetDef {
     pub capabilities: Vec<String>,
 }
 
+/// Suite-level semantic properties that its cases must collectively claim.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CorpusSuiteDef {
+    pub required: Vec<CorpusSemantic>,
+}
+
+impl CorpusSuiteDef {
+    pub fn validate(&self) -> Result<()> {
+        if self.required.is_empty() {
+            bail!("suite corpus required coverage must not be empty");
+        }
+        if !self.required.windows(2).all(|items| items[0] < items[1]) {
+            bail!("suite corpus required coverage must be unique and canonically ordered");
+        }
+        Ok(())
+    }
+}
+
+/// One persisted semantic claim bound to exact runtime artifact roles.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CorpusCoverageClaimDef {
+    pub semantic: CorpusSemantic,
+    pub artifact_roles: Vec<SourceArtifactRole>,
+}
+
 /// Manifest-owned authority for one attributable corpus case.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +75,7 @@ pub struct CorpusCaseDef {
     pub source_format: CorpusSourceFormat,
     pub digest_source: SourceArtifactDigestSource,
     pub target: CorpusTargetDef,
+    pub coverage: Vec<CorpusCoverageClaimDef>,
     /// Declared journey stages in their canonical execution order.
     pub stages: Vec<ConversionStage>,
 }
@@ -93,6 +123,37 @@ impl CorpusCaseDef {
                 context()
             );
         }
+        if self.coverage.is_empty() {
+            bail!(
+                "{}: at least one semantic coverage claim is required",
+                context()
+            );
+        }
+        if !self
+            .coverage
+            .windows(2)
+            .all(|claims| claims[0].semantic < claims[1].semantic)
+        {
+            bail!(
+                "{}: semantic coverage claims must be unique and canonically ordered",
+                context()
+            );
+        }
+        for claim in &self.coverage {
+            if claim.artifact_roles.is_empty() {
+                bail!("{}: coverage artifact_roles must not be empty", context());
+            }
+            if !claim
+                .artifact_roles
+                .windows(2)
+                .all(|roles| roles[0] < roles[1])
+            {
+                bail!(
+                    "{}: coverage artifact_roles must be unique and canonically ordered",
+                    context()
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -112,6 +173,10 @@ mod tests {
                 init_system: "systemd".into(),
                 capabilities: vec!["native_lifecycle".into()],
             },
+            coverage: vec![CorpusCoverageClaimDef {
+                semantic: CorpusSemantic::IdentityExactVersion,
+                artifact_roles: vec![SourceArtifactRole::InstallRequest],
+            }],
             stages: vec![
                 ConversionStage::Installation,
                 ConversionStage::Update,
@@ -174,5 +239,44 @@ capabilities = ["native_lifecycle"]
         let mut case = valid_case();
         case.stages = vec![ConversionStage::Rollback, ConversionStage::Update];
         assert!(case.validate("TC01").is_err());
+    }
+
+    #[test]
+    fn empty_or_duplicate_coverage_is_rejected() {
+        let mut case = valid_case();
+        case.coverage.clear();
+        assert!(case.validate("TC01").is_err());
+
+        let mut case = valid_case();
+        case.coverage.push(case.coverage[0].clone());
+        assert!(case.validate("TC01").is_err());
+
+        let mut case = valid_case();
+        case.coverage[0]
+            .artifact_roles
+            .push(SourceArtifactRole::InstallRequest);
+        assert!(case.validate("TC01").is_err());
+    }
+
+    #[test]
+    fn suite_requirements_are_nonempty_and_unique() {
+        assert!(
+            CorpusSuiteDef {
+                required: vec![CorpusSemantic::IdentityExactVersion]
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(CorpusSuiteDef { required: vec![] }.validate().is_err());
+        assert!(
+            CorpusSuiteDef {
+                required: vec![
+                    CorpusSemantic::IdentityExactVersion,
+                    CorpusSemantic::IdentityExactVersion,
+                ]
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

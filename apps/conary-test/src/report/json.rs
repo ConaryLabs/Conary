@@ -51,6 +51,7 @@ pub fn to_json_value(suite: &TestSuite) -> Result<serde_json::Value> {
         corpus: crate::report::corpus::CorpusReport::from_cases(
             &suite.corpus_cases,
             suite.corpus_expected(),
+            suite.corpus_required(),
         ),
         target_release: suite.target_release.as_ref(),
     };
@@ -73,8 +74,9 @@ mod tests {
     };
     use crate::engine::suite::{TestResult, TestStatus, TestSuite};
     use conary_core::corpus::{
-        ConversionStage, CorpusCaseResult, SourceArtifactDigestSource, SourceArtifactIdentity,
-        SourceArtifactRole, SourceProfileIdentity, StageResult, TargetCapabilitySnapshot,
+        ConversionStage, CorpusCaseResult, CorpusCoverageClaim, CorpusSemantic,
+        SourceArtifactDigestSource, SourceArtifactIdentity, SourceArtifactRole,
+        SourceProfileIdentity, StageResult, TargetCapabilitySnapshot,
     };
 
     #[test]
@@ -166,6 +168,7 @@ mod tests {
     fn corpus_report_is_attributable_and_fail_closed() {
         let mut suite = TestSuite::new("corpus", 4);
         suite.expect_corpus_cases(1);
+        suite.expect_corpus_coverage([CorpusSemantic::IdentityExactVersion]);
         suite.record_corpus(CorpusCaseResult::from_stages(
             "TC-RPM-FEDORA",
             SourceProfileIdentity {
@@ -186,15 +189,27 @@ mod tests {
                 init_system: "systemd".into(),
                 capabilities: vec!["native_lifecycle".into()],
             },
+            vec![CorpusCoverageClaim {
+                semantic: CorpusSemantic::IdentityExactVersion,
+                artifact_roles: vec![SourceArtifactRole::InstallRequest],
+            }],
             vec![StageResult::passed(ConversionStage::Installation)],
         ));
 
         let parsed: serde_json::Value =
             serde_json::from_str(&to_json_report(&suite).unwrap()).unwrap();
-        assert_eq!(parsed["corpus"]["schema_version"], 1);
+        assert_eq!(parsed["corpus"]["schema_version"], 2);
         assert_eq!(parsed["corpus"]["expected_cases"], 1);
         assert_eq!(parsed["corpus"]["aggregate"]["cases"], 1);
         assert_eq!(parsed["corpus"]["aggregate"]["completed"], 1);
+        assert_eq!(
+            parsed["corpus"]["coverage"]["covered"][0],
+            "identity_exact_version"
+        );
+        assert_eq!(
+            parsed["corpus"]["coverage"]["missing"],
+            serde_json::json!([])
+        );
         assert_eq!(parsed["corpus"]["cases"][0]["case_id"], "TC-RPM-FEDORA");
         assert_eq!(
             parsed["corpus"]["cases"][0]["source_artifacts"][0]["role"],
@@ -207,11 +222,16 @@ mod tests {
     fn missing_declared_corpus_case_is_published_and_blocks_success() {
         let mut suite = TestSuite::new("corpus", 4);
         suite.expect_corpus_cases(1);
+        suite.expect_corpus_coverage([CorpusSemantic::IdentityExactVersion]);
 
         let parsed: serde_json::Value =
             serde_json::from_str(&to_json_report(&suite).unwrap()).unwrap();
         assert_eq!(parsed["corpus"]["expected_cases"], 1);
         assert_eq!(parsed["corpus"]["aggregate"]["cases"], 0);
+        assert_eq!(
+            parsed["corpus"]["coverage"]["missing"][0],
+            "identity_exact_version"
+        );
         assert!(!suite.corpus_all_completed());
     }
 }

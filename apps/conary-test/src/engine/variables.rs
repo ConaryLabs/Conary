@@ -140,6 +140,7 @@ pub fn expand_corpus_case(
                 .map(|value| expand_variables(value, vars))
                 .collect(),
         },
+        coverage: definition.coverage.clone(),
         stages: definition.stages.clone(),
     }
 }
@@ -430,6 +431,7 @@ mod tests {
                 setup: Vec::new(),
                 mock_server: None,
                 timeout: None,
+                corpus: None,
             },
             test: Vec::new(),
             distro_overrides: HashMap::new(),
@@ -596,6 +598,10 @@ source_profile = "arch"
 source_format = "alpm"
 digest_source = "fixture_build_manifest"
 stages = ["installation"]
+
+[[coverage]]
+semantic = "identity_exact_version"
+artifact_roles = ["install_request"]
 
 [target]
 architecture = "x86_64"

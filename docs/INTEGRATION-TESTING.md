@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-13
-revision: 49
-summary: Document authenticated derivative targets, transport normalization, typed release evidence, and native lifecycle gates
+last_updated: 2026-08-15
+revision: 50
+summary: Document typed semantic corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -557,9 +557,16 @@ envelope carrying both install and update artifact digests, the typed fixture
 build-manifest authority that produced them, and stage checkpoints. It is
 projected by `conary-test` into a typed
 `CorpusCaseResult`. The suite JSON carries the typed aggregate beside the
-ordinary test results and records the manifest-declared case count; a missing,
-malformed, skipped, failed, or unclassified corpus case makes the command fail
-even if generic command output happened to look successful.
+ordinary test results and records the manifest-declared case count. The suite
+also declares an exact typed semantic requirement set, while each case binds
+its claims to install or update artifact roles. The report publishes required,
+covered, and missing properties; a claim counts only after its role resolves to
+one runtime artifact with fixture-build SHA-256 authority and the case
+completes. The current focused lifecycle suite claims exact version, native
+architecture, regular-file payload, and shell-lifecycle coverage only. It does
+not stand in for the remaining W7 dimension corpus. A missing, malformed,
+skipped, failed, unclassified, or semantically incomplete corpus case makes the
+command fail even if generic command output happened to look successful.
 
 The adopted-artifact bridge has a separate hermetic command test:
 
