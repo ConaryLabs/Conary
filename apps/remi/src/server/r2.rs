@@ -63,6 +63,13 @@ pub struct R2BatchDeleteOutcome {
     pub failure_samples: Vec<(String, String)>,
 }
 
+/// Exact object metadata returned by an R2 prefix inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct R2ChunkObject {
+    pub hash: String,
+    pub size_bytes: u64,
+}
+
 impl R2BatchDeleteOutcome {
     /// Number of keys that were not removed.
     pub fn failed(&self) -> usize {
@@ -245,29 +252,43 @@ impl R2Store {
         Ok(self.bucket.presign_get(&key, expiry_secs, None).await?)
     }
 
-    /// List all chunk hashes stored in R2.
+    /// List all chunk objects stored in R2 with their exact stored sizes.
     ///
     /// Paginates through all objects under the configured prefix,
-    /// stripping the prefix to return bare hash strings.
-    pub async fn list_chunks(&self) -> Result<Vec<String>> {
+    /// stripping the prefix to return bare hash identities.
+    pub async fn list_chunk_objects(&self) -> Result<Vec<R2ChunkObject>> {
         let results = self
             .bucket
             .list(self.prefix.clone(), None)
             .await
             .context("R2 list objects failed")?;
 
-        let mut hashes = Vec::new();
+        let mut objects = Vec::new();
         for page in &results {
             for object in &page.contents {
                 if let Some(hash) = object.key.strip_prefix(&self.prefix)
                     && !hash.is_empty()
                 {
-                    hashes.push(hash.to_string());
+                    objects.push(R2ChunkObject {
+                        hash: hash.to_string(),
+                        size_bytes: object.size,
+                    });
                 }
             }
         }
 
-        Ok(hashes)
+        objects.sort_by(|left, right| left.hash.cmp(&right.hash));
+        Ok(objects)
+    }
+
+    /// List all chunk hashes stored in R2.
+    pub async fn list_chunks(&self) -> Result<Vec<String>> {
+        Ok(self
+            .list_chunk_objects()
+            .await?
+            .into_iter()
+            .map(|object| object.hash)
+            .collect())
     }
 
     /// Return the configured prefix (e.g., `"chunks/"`).

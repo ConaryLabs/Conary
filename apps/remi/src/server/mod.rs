@@ -43,6 +43,7 @@ pub mod popularity;
 mod prewarm;
 pub mod publication;
 pub mod r2;
+pub mod r2_durability;
 pub mod rate_limit;
 pub mod readiness;
 pub mod release_publish;
