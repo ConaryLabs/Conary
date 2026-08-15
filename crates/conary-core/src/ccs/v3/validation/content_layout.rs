@@ -135,6 +135,18 @@ mod tests {
     }
 
     #[test]
+    fn explicit_whole_object_layout_remains_valid_above_the_default_chunk_threshold() {
+        let mut authority = authority_with_layout(FileContentLayoutV3::WholeObject);
+        let PackageKindV3::Package(package) = &mut authority.kind else {
+            unreachable!()
+        };
+        package.files[0].content.as_mut().unwrap().size = u64::from(MIN_CHUNK_SIZE);
+        let mut diagnostics = Vec::new();
+        validate_file_content_layout(&package.files[0], &mut diagnostics);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
     fn unknown_fastcdc_profile_fails_closed() {
         let authority = authority_with_layout(FileContentLayoutV3::FastCdcV2020 {
             min_size: MIN_CHUNK_SIZE,

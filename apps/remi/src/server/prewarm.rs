@@ -198,7 +198,7 @@ async fn run_prewarm_with_permits(
                     "Converted {} {}: {} chunks, {} bytes",
                     pkg.name,
                     pkg.version,
-                    conv_result.chunk_hashes.len(),
+                    conv_result.transport.objects.len(),
                     conv_result.total_size
                 );
                 result.packages_converted += 1;
@@ -473,6 +473,7 @@ mod tests {
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
         schema::ensure_current(&conn).unwrap();
 
+        let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut stale = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "pkg".to_string(),
@@ -480,7 +481,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:pkg-1.0-source".to_string(),
-            &[],
+            &transport,
             3,
             "sha256:pkg-1.0-content".to_string(),
             "/tmp/pkg-1.0.ccs".to_string(),
@@ -489,6 +490,7 @@ mod tests {
         stale.conversion_version = CONVERSION_VERSION - 1;
         stale.insert(&conn).unwrap();
 
+        let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut current = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "pkg".to_string(),
@@ -496,7 +498,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:pkg-2.0-source".to_string(),
-            &[],
+            &transport,
             3,
             "sha256:pkg-2.0-content".to_string(),
             "/tmp/pkg-2.0.ccs".to_string(),

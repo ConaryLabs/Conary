@@ -12,12 +12,13 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 39 of the current-only schema epoch.
+/// Revision 40 of the current-only schema epoch.
 ///
-/// Revision 39 adds the transaction-scoped mutation token used to prove an
-/// exact generation database delta base. Earlier pre-alpha databases must be
-/// rebuilt; no compatibility migration is provided.
-pub const SCHEMA_VERSION: i32 = 39;
+/// Revision 40 replaces repository publication chunk-list JSON with the signed
+/// CCS transport envelope that owns the exact object sequence and sizes.
+/// Earlier pre-alpha databases must be rebuilt; no compatibility migration is
+/// provided.
+pub const SCHEMA_VERSION: i32 = 40;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 
@@ -240,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_38_requires_rebuild_for_revision_39() {
+    fn revision_39_requires_rebuild_for_revision_40() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_identity (
@@ -248,19 +249,19 @@ mod tests {
                 revision INTEGER NOT NULL
             );
             INSERT INTO schema_identity (epoch, revision)
-                VALUES ('conary-current-v1', 38);
+                VALUES ('conary-current-v1', 39);
             CREATE TABLE schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            INSERT INTO schema_version (version) VALUES (38);",
+            INSERT INTO schema_version (version) VALUES (39);",
         )
         .unwrap();
 
         let error = ensure_current(&conn).unwrap_err();
         assert_eq!(
             error.to_string(),
-            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 38; this pre-alpha build supports only schema epoch conary-current-v1 revision 39"
+            "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 39; this pre-alpha build supports only schema epoch conary-current-v1 revision 40"
         );
     }
 
@@ -567,12 +568,12 @@ mod tests {
                 "INSERT INTO converted_packages (
                      artifact_kind, original_format, original_checksum,
                      package_name, package_version, source_profile, package_architecture,
-                     repository_provides_digest, chunk_hashes_json, total_size,
+                     repository_provides_digest, transport_json, total_size,
                      content_hash, ccs_path
                  ) VALUES (
                      'repository', 'rpm', ?1, 'fixture', '1.0-1', 'fedora-44',
                      ?2, 'sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
-                     '[\"sha256:chunk\"]', 42, 'sha256:content',
+                     '{}', 42, 'sha256:content',
                      '/tmp/fixture.ccs'
                  )",
                 params![checksum, architecture],
@@ -743,17 +744,17 @@ mod tests {
              ) VALUES ('installed', 1, 'rpm', 'sha256:installed-with-repo-field', 11, 'pkg')",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_version, source_profile, chunk_hashes_json, total_size, content_hash, ccs_path
+                 package_version, source_profile, transport_json, total_size, content_hash, ccs_path
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-name', 11,
-                 '1', 'fedora', '[]', 0, 'sha256:content', '/tmp/pkg.ccs'
+                 '1', 'fedora', '{}', 0, 'sha256:content', '/tmp/pkg.ccs'
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_name, source_profile, chunk_hashes_json, total_size, content_hash, ccs_path
+                 package_name, source_profile, transport_json, total_size, content_hash, ccs_path
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-version', 11,
-                 'pkg', 'fedora', '[]', 0, 'sha256:content', '/tmp/pkg.ccs'
+                 'pkg', 'fedora', '{}', 0, 'sha256:content', '/tmp/pkg.ccs'
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
@@ -764,24 +765,24 @@ mod tests {
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_name, package_version, source_profile, chunk_hashes_json, content_hash, ccs_path
+                 package_name, package_version, source_profile, transport_json, content_hash, ccs_path
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-size', 11,
-                 'pkg', '1', 'fedora', '[]', 'sha256:content', '/tmp/pkg.ccs'
+                 'pkg', '1', 'fedora', '{}', 'sha256:content', '/tmp/pkg.ccs'
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_name, package_version, source_profile, chunk_hashes_json, total_size, ccs_path
+                 package_name, package_version, source_profile, transport_json, total_size, ccs_path
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-hash', 11,
-                 'pkg', '1', 'fedora', '[]', 0, '/tmp/pkg.ccs'
+                 'pkg', '1', 'fedora', '{}', 0, '/tmp/pkg.ccs'
              )",
             "INSERT INTO converted_packages (
                  artifact_kind, original_format, original_checksum, conversion_version,
-                 package_name, package_version, source_profile, chunk_hashes_json, total_size, content_hash
+                 package_name, package_version, source_profile, transport_json, total_size, content_hash
              ) VALUES (
                  'repository', 'rpm', 'sha256:missing-path', 11,
-                 'pkg', '1', 'fedora', '[]', 0, 'sha256:content'
+                 'pkg', '1', 'fedora', '{}', 0, 'sha256:content'
              )",
         ] {
             assert!(conn.execute(sql, []).is_err(), "{sql}");

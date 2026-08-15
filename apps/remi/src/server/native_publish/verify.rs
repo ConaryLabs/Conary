@@ -134,6 +134,7 @@ pub(crate) fn verify_native_artifact(
 
     Ok(VerifiedNativeArtifact {
         package: candidate.package,
+        verification: candidate.verification,
         lint: candidate.lint,
         name,
         version,

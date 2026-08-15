@@ -189,23 +189,8 @@ fn default_negative_cache_ttl() -> String {
 
 /// CCS conversion configuration
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversionSection {
-    /// Enable content-defined chunking
-    #[serde(default = "default_true")]
-    pub chunking: bool,
-
-    /// Minimum chunk size
-    #[serde(default = "default_chunk_min")]
-    pub chunk_min: usize,
-
-    /// Average chunk size
-    #[serde(default = "default_chunk_avg")]
-    pub chunk_avg: usize,
-
-    /// Maximum chunk size
-    #[serde(default = "default_chunk_max")]
-    pub chunk_max: usize,
-
     /// Strip debug symbols from binaries
     #[serde(default)]
     pub strip_debug: bool,
@@ -218,26 +203,10 @@ pub struct ConversionSection {
 impl Default for ConversionSection {
     fn default() -> Self {
         Self {
-            chunking: true,
-            chunk_min: 16384,
-            chunk_avg: 65536,
-            chunk_max: 262144,
             strip_debug: false,
             max_concurrent: DEFAULT_MAX_CONVERSIONS,
         }
     }
-}
-
-fn default_chunk_min() -> usize {
-    16384
-}
-
-fn default_chunk_avg() -> usize {
-    65536
-}
-
-fn default_chunk_max() -> usize {
-    262144
 }
 
 fn default_max_conversions() -> usize {
@@ -703,14 +672,6 @@ impl RemiConfig {
                 "storage.eviction_threshold must be between 0.0 and 1.0, got {}",
                 self.storage.eviction_threshold
             );
-        }
-
-        // Validate chunk sizes
-        if self.conversion.chunk_min > self.conversion.chunk_avg {
-            anyhow::bail!("conversion.chunk_min must be <= conversion.chunk_avg");
-        }
-        if self.conversion.chunk_avg > self.conversion.chunk_max {
-            anyhow::bail!("conversion.chunk_avg must be <= conversion.chunk_max");
         }
 
         let prewarm_interval = parse_duration(&self.prewarm.metadata_sync_interval)

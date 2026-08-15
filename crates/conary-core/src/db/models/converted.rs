@@ -48,7 +48,7 @@ pub struct RepositoryConvertedArtifact<'a> {
     pub source_profile: &'a str,
     pub package_architecture: &'a str,
     pub repository_provides_digest: &'a str,
-    pub chunk_hashes: Vec<String>,
+    pub transport: crate::ccs::transport::CcsTransportEnvelopeV1,
     pub total_size: u64,
     pub content_hash: &'a str,
     pub ccs_path: &'a str,
@@ -94,8 +94,8 @@ pub struct ConvertedPackage {
     pub source_profile: Option<String>,
     /// Native package architecture for server-side conversion cache identity.
     pub package_architecture: Option<String>,
-    /// JSON array of chunk hashes
-    pub chunk_hashes_json: Option<String>,
+    /// Versioned signed-control and exact-object repository transport.
+    pub transport_json: Option<String>,
     /// Total size of the CCS package
     pub total_size: Option<i64>,
     /// Content hash of the CCS package
@@ -126,7 +126,7 @@ impl ConvertedPackage {
          repository_provides_digest, conversion_version, converted_at, \
          enhancement_version, extracted_provenance_json, \
          enhancement_status, enhancement_error, enhancement_attempted_at, \
-         package_name, package_version, source_profile, chunk_hashes_json, total_size, \
+         package_name, package_version, source_profile, transport_json, total_size, \
          content_hash, ccs_path, package_architecture, scriptlet_fidelity, \
          evidence_digest, scriptlet_summary_json";
 
@@ -156,7 +156,7 @@ impl ConvertedPackage {
             package_version: None,
             source_profile: None,
             package_architecture: None,
-            chunk_hashes_json: None,
+            transport_json: None,
             total_size: None,
             content_hash: None,
             ccs_path: None,
@@ -175,14 +175,14 @@ impl ConvertedPackage {
         package_architecture: String,
         original_format: String,
         original_checksum: String,
-        chunk_hashes: &[String],
+        transport: &crate::ccs::transport::CcsTransportEnvelopeV1,
         total_size: i64,
         content_hash: String,
         ccs_path: String,
         repository_provides_digest: String,
     ) -> Self {
-        let chunk_hashes_json =
-            serde_json::to_string(chunk_hashes).expect("a string list always serializes to JSON");
+        let transport_json =
+            serde_json::to_string(transport).expect("CCS transport always serializes to JSON");
         Self {
             id: None,
             artifact_kind: ConvertedArtifactKind::Repository,
@@ -201,7 +201,7 @@ impl ConvertedPackage {
             package_version: Some(package_version),
             source_profile: Some(source_profile),
             package_architecture: Some(package_architecture),
-            chunk_hashes_json: Some(chunk_hashes_json),
+            transport_json: Some(transport_json),
             total_size: Some(total_size),
             content_hash: Some(content_hash),
             ccs_path: Some(ccs_path),
@@ -244,7 +244,7 @@ impl ConvertedPackage {
             package_name: row.get(13)?,
             package_version: row.get(14)?,
             source_profile: row.get(15)?,
-            chunk_hashes_json: row.get(16)?,
+            transport_json: row.get(16)?,
             total_size: row.get(17)?,
             content_hash: row.get(18)?,
             ccs_path: row.get(19)?,
@@ -262,7 +262,7 @@ impl ConvertedPackage {
         conn.execute(
             "INSERT INTO converted_packages (artifact_kind, trove_id, original_format, original_checksum, repository_provides_digest, conversion_version,
                 enhancement_version, extracted_provenance_json, enhancement_status,
-                package_name, package_version, source_profile, chunk_hashes_json, total_size, content_hash, ccs_path, package_architecture,
+                package_name, package_version, source_profile, transport_json, total_size, content_hash, ccs_path, package_architecture,
                 scriptlet_fidelity, evidence_digest,
                 scriptlet_summary_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
@@ -279,7 +279,7 @@ impl ConvertedPackage {
                 &self.package_name,
                 &self.package_version,
                 &self.source_profile,
-                &self.chunk_hashes_json,
+                &self.transport_json,
                 self.total_size,
                 &self.content_hash,
                 &self.ccs_path,
@@ -470,21 +470,16 @@ impl ConvertedPackage {
         }
         let content_hash = self.required_repository_text("content_hash", &self.content_hash)?;
         let ccs_path = self.required_repository_text("ccs_path", &self.ccs_path)?;
-        let chunk_hashes_json =
-            self.required_repository_text("chunk_hashes_json", &self.chunk_hashes_json)?;
-        let chunk_hashes =
-            serde_json::from_str::<Vec<String>>(chunk_hashes_json).map_err(|error| {
+        let transport_json =
+            self.required_repository_text("transport_json", &self.transport_json)?;
+        let transport =
+            serde_json::from_str::<crate::ccs::transport::CcsTransportEnvelopeV1>(transport_json)
+                .map_err(|error| {
                 crate::Error::InternalError(format!(
-                    "repository converted package {} has malformed chunk_hashes_json: {error}",
+                    "repository converted package {} has malformed transport_json: {error}",
                     self.record_identity()
                 ))
             })?;
-        if chunk_hashes.iter().any(|hash| hash.is_empty()) {
-            return Err(crate::Error::InternalError(format!(
-                "repository converted package {} has an empty chunk identity",
-                self.record_identity()
-            )));
-        }
         let total_size = self.total_size.ok_or_else(|| {
             crate::Error::InternalError(format!(
                 "repository converted package {} is missing total_size",
@@ -507,7 +502,7 @@ impl ConvertedPackage {
                 .repository_provides_digest
                 .as_deref()
                 .expect("validated repository digest is present"),
-            chunk_hashes,
+            transport,
             total_size,
             content_hash,
             ccs_path,
@@ -539,7 +534,7 @@ impl ConvertedPackage {
                     || self.source_profile.is_some()
                     || self.package_architecture.is_some()
                     || self.repository_provides_digest.is_some()
-                    || self.chunk_hashes_json.is_some()
+                    || self.transport_json.is_some()
                     || self.total_size.is_some()
                     || self.content_hash.is_some()
                 {
@@ -605,9 +600,19 @@ impl ConvertedPackage {
         Ok(summary)
     }
 
-    pub fn parsed_chunk_hashes(&self) -> Result<Vec<String>> {
+    pub fn transport(&self) -> Result<crate::ccs::transport::CcsTransportEnvelopeV1> {
         self.repository_artifact()
-            .map(|artifact| artifact.chunk_hashes)
+            .map(|artifact| artifact.transport)
+    }
+
+    pub fn object_hashes(&self) -> Result<Vec<String>> {
+        self.transport().map(|transport| {
+            transport
+                .objects
+                .into_iter()
+                .map(|object| object.sha256)
+                .collect()
+        })
     }
 
     /// Classify whether a CAS chunk is reachable from a current conversion,
@@ -621,8 +626,8 @@ impl ConvertedPackage {
         let sql = format!(
             "SELECT {} FROM converted_packages
              WHERE artifact_kind = 'repository'
-               AND chunk_hashes_json IS NOT NULL
-               AND (chunk_hashes_json LIKE ?1 OR chunk_hashes_json LIKE ?2)",
+               AND transport_json IS NOT NULL
+               AND (transport_json LIKE ?1 OR transport_json LIKE ?2)",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -634,7 +639,7 @@ impl ConvertedPackage {
         let mut saw_converted_reference = false;
         for candidate in rows {
             let references_hash = candidate
-                .parsed_chunk_hashes()?
+                .object_hashes()?
                 .into_iter()
                 .any(|chunk_hash| chunk_hash == bare_hash || chunk_hash == prefixed_hash);
             if !references_hash {

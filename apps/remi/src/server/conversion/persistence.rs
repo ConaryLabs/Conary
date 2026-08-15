@@ -19,7 +19,7 @@ pub(super) struct PersistConversionInput {
     pub(super) conversion_result: ConversionResult,
     pub(super) repo_pkg: RepositoryPackage,
     pub(super) repository_provides_digest: String,
-    pub(super) chunk_hashes: Vec<String>,
+    pub(super) transport: conary_core::ccs::CcsTransportEnvelopeV1,
 }
 
 enum CacheInspection {
@@ -165,7 +165,7 @@ impl ConversionService {
             conversion_result,
             repo_pkg,
             repository_provides_digest,
-            chunk_hashes,
+            transport,
         } = input;
 
         let ccs_path = conversion_result
@@ -199,7 +199,7 @@ impl ConversionService {
             package_architecture.clone(),
             format.to_string(),
             source_checksum.clone(),
-            &chunk_hashes,
+            &transport,
             persisted_total_size,
             content_hash_text.clone(),
             final_ccs_path.to_string_lossy().to_string(),
@@ -272,7 +272,7 @@ impl ConversionService {
             name: metadata.name().to_string(),
             version: metadata.version().to_string(),
             source_profile: Some(source_profile),
-            chunk_hashes,
+            transport,
             total_size,
             content_hash: content_hash_text,
             ccs_path: final_ccs_path,
@@ -289,12 +289,11 @@ impl ConversionService {
     ) -> Result<ServerConversionResult> {
         let artifact = existing.repository_artifact()?;
         let scriptlet_summary = existing.scriptlet_summary()?;
-
         Ok(ServerConversionResult {
             name: artifact.package_name.to_string(),
             version: artifact.package_version.to_string(),
             source_profile: Some(artifact.source_profile.to_string()),
-            chunk_hashes: artifact.chunk_hashes,
+            transport: artifact.transport,
             total_size: artifact.total_size,
             content_hash: artifact.content_hash.to_string(),
             ccs_path: PathBuf::from(artifact.ccs_path),
@@ -396,6 +395,7 @@ mod tests {
         } else {
             conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string()
         };
+        let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut converted = ConvertedPackage::new_repository(
             exact_profile.to_string(),
             "systemd-udev".to_string(),
@@ -403,7 +403,7 @@ mod tests {
             "x86_64".to_string(),
             format.to_string(),
             source_checksum.clone(),
-            &[],
+            &transport,
             8,
             "sha256:content".to_string(),
             ccs_path.to_string_lossy().to_string(),

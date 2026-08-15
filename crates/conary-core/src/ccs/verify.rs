@@ -14,8 +14,18 @@ use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
+pub(crate) mod content;
 mod object_sink;
 mod stream;
+
+#[derive(Debug, Clone)]
+pub(crate) struct RawControlDocuments {
+    pub manifest: Vec<u8>,
+    pub signature: String,
+    pub debug_toml: Option<Vec<u8>>,
+    pub build_attestation: Option<String>,
+    pub foreign_conversion_boundary: Option<String>,
+}
 
 #[derive(Error, Debug)]
 pub enum VerifyError {
@@ -159,8 +169,10 @@ pub struct VerifiedCcsArchive {
     debug_toml: Option<Vec<u8>>,
     components: HashMap<String, crate::ccs::builder::ComponentData>,
     payload: crate::packages::payload::PackagePayload,
+    object_sources: HashMap<String, crate::packages::payload::ReopenablePayload>,
     verified_object_metrics: Option<crate::filesystem::VerifiedObjectBatchMetrics>,
     files_checked: usize,
+    raw: RawControlDocuments,
 }
 
 impl VerifiedCcsArchive {
@@ -187,6 +199,16 @@ impl VerifiedCcsArchive {
     /// Permanent-CAS work performed by install-oriented verification.
     pub fn verified_object_metrics(&self) -> Option<crate::filesystem::VerifiedObjectBatchMetrics> {
         self.verified_object_metrics
+    }
+
+    pub(crate) fn object_sources(
+        &self,
+    ) -> &HashMap<String, crate::packages::payload::ReopenablePayload> {
+        &self.object_sources
+    }
+
+    pub(crate) fn raw_control_documents(&self) -> &RawControlDocuments {
+        &self.raw
     }
 
     pub(crate) fn build_attestation(
@@ -249,8 +271,10 @@ fn verify_package_to(
         debug_toml: verified.debug_toml,
         components: verified.components,
         payload: verified.payload,
+        object_sources: verified.object_sources,
         verified_object_metrics: verified.verified_object_metrics,
         files_checked: verified.files_checked,
+        raw: verified.raw,
     })
 }
 

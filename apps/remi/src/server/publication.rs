@@ -11,7 +11,7 @@ use std::path::Path;
 /// is surfaced by the model as a data error.
 pub fn local_chunk_servable(db_path: &Path, hash: &str) -> anyhow::Result<bool> {
     let conn = crate::server::open_runtime_db(db_path)?;
-    if NativePackagePublication::active_by_content_hash(&conn, hash)?.is_some() {
+    if NativePackagePublication::active_referencing_object(&conn, hash)?.is_some() {
         return Ok(true);
     }
     Ok(matches!(

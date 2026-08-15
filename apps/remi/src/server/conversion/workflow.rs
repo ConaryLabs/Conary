@@ -165,19 +165,22 @@ impl ConversionService {
         timing.phases.extend(parsed.phase_timings.clone());
         timing.skipped_phases.extend(parsed.skipped_phases.clone());
 
-        let stored_chunks = self
-            .store_chunks_with_timing(&parsed.conversion_result)
+        let stored_transport = self
+            .store_transport_with_timing(&parsed.conversion_result, source_feed.id())
             .await?;
-        timing.record(ConversionPhase::Chunking, stored_chunks.chunking_duration);
-        timing.record(ConversionPhase::CasWrite, stored_chunks.cas_duration);
-        if let Some(duration) = stored_chunks.r2_duration {
+        timing.record(
+            ConversionPhase::TransportVerification,
+            stored_transport.verification_duration,
+        );
+        timing.record(ConversionPhase::CasWrite, stored_transport.cas_duration);
+        if let Some(duration) = stored_transport.r2_duration {
             timing.record(ConversionPhase::R2WriteThrough, duration);
         } else {
             timing.record_skipped(ConversionPhase::R2WriteThrough, "r2 store not configured");
         }
         info!(
-            "Stored {} emitted-artifact chunks",
-            stored_chunks.chunk_hashes.len()
+            "Stored {} signed CCS objects",
+            stored_transport.transport.objects.len()
         );
 
         let persist_service = self.clone();
@@ -192,7 +195,7 @@ impl ConversionService {
                 conversion_result: parsed.conversion_result,
                 repo_pkg: parsed.repo_pkg,
                 repository_provides_digest: parsed.repository_provides_digest,
-                chunk_hashes: stored_chunks.chunk_hashes,
+                transport: stored_transport.transport,
             })
         })
         .await
@@ -206,7 +209,7 @@ impl ConversionService {
             ConversionPhase::NativeShellAstExtraction,
             ConversionPhase::AdapterDispatch,
             ConversionPhase::CcsEmission,
-            ConversionPhase::Chunking,
+            ConversionPhase::TransportVerification,
             ConversionPhase::CasWrite,
             ConversionPhase::R2WriteThrough,
             ConversionPhase::Persistence,

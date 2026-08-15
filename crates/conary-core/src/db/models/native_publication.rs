@@ -3,7 +3,7 @@
 //! Native CCS publication model.
 
 use crate::error::Result;
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, Row, params};
 
 pub const NATIVE_NOARCH: &str = "noarch";
 
@@ -59,7 +59,7 @@ pub struct NativePackagePublication {
     pub authority_format_version: i64,
     pub status: NativePublicationStatus,
     pub content_hash: String,
-    pub chunk_hashes_json: String,
+    pub transport_json: String,
     pub total_size: i64,
     pub package_path: String,
     pub target_path: String,
@@ -69,7 +69,7 @@ pub struct NativePackagePublication {
 impl NativePackagePublication {
     const COLUMNS: &'static str = "id, repository_id, repository_package_id, source_profile, name, \
          version, package_release, architecture, package_kind, authority_format_version, \
-         status, content_hash, chunk_hashes_json, total_size, package_path, target_path, \
+         status, content_hash, transport_json, total_size, package_path, target_path, \
          trust_status";
 
     pub fn find_active(
@@ -106,15 +106,39 @@ impl NativePackagePublication {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub fn active_by_content_hash(conn: &Connection, content_hash: &str) -> Result<Option<Self>> {
+    pub fn transport(&self) -> Result<crate::ccs::CcsTransportEnvelopeV1> {
+        serde_json::from_str(&self.transport_json).map_err(|error| {
+            crate::Error::InternalError(format!(
+                "native package publication {} has malformed transport_json: {error}",
+                self.id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| self.content_hash.clone())
+            ))
+        })
+    }
+
+    pub fn active_referencing_object(conn: &Connection, sha256: &str) -> Result<Option<Self>> {
+        let pattern = format!("%\"{sha256}\"%");
         let sql = format!(
             "SELECT {} FROM native_package_publications \
-             WHERE status = 'public' AND content_hash = ?1",
+             WHERE status = 'public' AND transport_json LIKE ?1",
             Self::COLUMNS
         );
-        conn.query_row(&sql, [content_hash], Self::from_row)
-            .optional()
-            .map_err(Into::into)
+        let mut stmt = conn.prepare(&sql)?;
+        let candidates = stmt
+            .query_map([pattern], Self::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for candidate in candidates {
+            if candidate
+                .transport()?
+                .objects
+                .iter()
+                .any(|object| object.sha256 == sha256)
+            {
+                return Ok(Some(candidate));
+            }
+        }
+        Ok(None)
     }
 
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
@@ -123,7 +147,7 @@ impl NativePackagePublication {
             "INSERT INTO native_package_publications (
                 repository_id, repository_package_id, source_profile, name, version, package_release,
                 architecture, package_kind, authority_format_version, status, content_hash,
-                chunk_hashes_json, total_size, package_path, target_path, trust_status
+                transport_json, total_size, package_path, target_path, trust_status
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 self.repository_id,
@@ -137,7 +161,7 @@ impl NativePackagePublication {
                 self.authority_format_version,
                 self.status.as_str(),
                 &self.content_hash,
-                &self.chunk_hashes_json,
+                &self.transport_json,
                 self.total_size,
                 &self.package_path,
                 &self.target_path,
@@ -173,7 +197,7 @@ impl NativePackagePublication {
             authority_format_version: row.get(9)?,
             status: NativePublicationStatus::from_db(&raw_status, 10)?,
             content_hash: row.get(11)?,
-            chunk_hashes_json: row.get(12)?,
+            transport_json: row.get(12)?,
             total_size: row.get(13)?,
             package_path: row.get(14)?,
             target_path: row.get(15)?,

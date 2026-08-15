@@ -46,14 +46,6 @@ negative_cache_ttl = "15m"
 max_cache_size = "700GB"
 
 [conversion]
-# Enable content-defined chunking for cross-package deduplication
-chunking = true
-
-# Chunk size parameters (bytes) - FastCDC boundaries
-chunk_min = 16384    # 16 KB minimum
-chunk_avg = 65536    # 64 KB average
-chunk_max = 262144   # 256 KB maximum
-
 # Strip debug symbols from ELF binaries (reduces storage ~30%)
 strip_debug = false
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use conary_core::db::models::{
-    NativePackagePublication, NativePublicationStatus, Repository, RepositoryPackage,
+    ChunkAccess, NativePackagePublication, NativePublicationStatus, Repository, RepositoryPackage,
 };
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::trust::{
@@ -290,7 +290,16 @@ fn insert_native_publication(
     artifact: &VerifiedNativeArtifact,
     promoted: &PromotedNativeArtifact,
 ) -> Result<()> {
-    let chunk_hashes_json = serde_json::to_string(std::slice::from_ref(&artifact.content_hash))?;
+    let transport =
+        conary_core::ccs::CcsTransportEnvelopeV1::from_verified_archive(&artifact.verification)?;
+    for object in &transport.objects {
+        ChunkAccess::new(
+            object.sha256.clone(),
+            i64::try_from(object.size).context("native CCS object size exceeds i64")?,
+        )
+        .upsert(conn)?;
+    }
+    let transport_json = serde_json::to_string(&transport)?;
     let mut publication = NativePackagePublication {
         id: None,
         repository_id: repo_id,
@@ -304,7 +313,7 @@ fn insert_native_publication(
         authority_format_version: artifact.authority_format_version,
         status: NativePublicationStatus::Public,
         content_hash: artifact.content_hash.clone(),
-        chunk_hashes_json,
+        transport_json,
         total_size: i64::try_from(artifact.total_size)
             .context("native artifact size exceeds i64")?,
         package_path: promoted.package_path.to_string_lossy().to_string(),

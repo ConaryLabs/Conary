@@ -60,8 +60,8 @@ pub enum JobStatus {
 /// Conversion result data for completed jobs
 #[derive(Debug, Clone)]
 pub struct ConversionResult {
-    /// List of chunk hashes
-    pub chunk_hashes: Vec<String>,
+    /// Signed controls and exact canonical object set served to clients.
+    pub transport: conary_core::ccs::CcsTransportEnvelopeV1,
     /// Total size when reassembled
     pub total_size: u64,
     /// SHA-256 of the complete content

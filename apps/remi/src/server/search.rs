@@ -671,6 +671,9 @@ mod tests {
             conary_core::repository::supported_profiles::profile_for_remi_route(distro)
                 .unwrap_or_else(|| panic!("test route '{distro}' must be supported"))
                 .id();
+        let transport = crate::server::conversion::test_support::test_transport(&[format!(
+            "sha256:{package}-{version}-chunk"
+        )]);
         let mut converted = ConvertedPackage::new_repository(
             source_profile.to_string(),
             package.to_string(),
@@ -678,7 +681,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:{package}-{version}-source"),
-            &[format!("sha256:{package}-{version}-chunk")],
+            &transport,
             42,
             format!("sha256:{package}-{version}-content"),
             format!("/tmp/{package}-{version}.ccs"),

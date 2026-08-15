@@ -65,10 +65,6 @@ enabled = true
 external_bind = "127.0.0.1:8082"
 
 [conversion]
-chunking = true
-chunk_min = 16384
-chunk_avg = 65536
-chunk_max = 262144
 strip_debug = false
 max_concurrent = 4
 

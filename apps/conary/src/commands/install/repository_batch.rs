@@ -73,15 +73,23 @@ pub(super) async fn prepare_repository_batch(
         .collect::<Vec<_>>();
     let conn = super::super::open_db(db_path)?;
     let to_download = dep_resolution::exact_repository_downloads(&conn, &selected)?;
-    drop(conn);
 
     let download_root = TempDir::new()?;
+    let transport_cas = if matches!(mode, RepositoryBatchMode::Install) {
+        let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path);
+        conary_core::filesystem::CasStore::new(runtime_root.objects_dir())?
+    } else {
+        conary_core::filesystem::CasStore::new(download_root.path().join("objects"))?
+    };
     let downloaded = repository::download_dependencies(
+        &conn,
         &to_download,
         download_root.path(),
         &keyring_dir(db_path),
+        &transport_cas,
     )
     .await?;
+    drop(conn);
     if downloaded.len() != selections.len() || to_download.len() != selections.len() {
         anyhow::bail!(
             "repository package-set downloader returned {} artifacts for {} exact selections",
@@ -90,12 +98,7 @@ pub(super) async fn prepare_repository_batch(
         );
     }
 
-    let permanent_cas = matches!(mode, RepositoryBatchMode::Install)
-        .then(|| {
-            let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path);
-            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
-        })
-        .transpose()?;
+    let permanent_cas = matches!(mode, RepositoryBatchMode::Install).then(|| transport_cas.clone());
 
     let mut packages = Vec::with_capacity(selections.len());
     for (((expected_name, package_with_repo), (downloaded_name, path)), selection) in

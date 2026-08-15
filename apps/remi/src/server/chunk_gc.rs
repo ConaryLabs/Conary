@@ -48,17 +48,17 @@ pub struct GcResult {
 /// marked as protected in `chunk_access`.
 ///
 /// The referenced set is the union of:
-/// 1. All hashes from `converted_packages.chunk_hashes_json` columns
+/// 1. All signed object hashes from current package transport envelopes
 /// 2. All hashes from `chunk_access WHERE protected = 1`
 pub fn build_referenced_set(conn: &Connection) -> Result<HashSet<String>> {
     let mut referenced = HashSet::new();
 
-    // Collect hashes from converted_packages.chunk_hashes_json
+    // Collect exact signed objects from converted package transports.
     let mut stmt = conn
         .prepare(
-            "SELECT id, chunk_hashes_json
+            "SELECT id, transport_json
              FROM converted_packages
-             WHERE chunk_hashes_json IS NOT NULL",
+             WHERE transport_json IS NOT NULL",
         )
         .context("prepare converted_packages query")?;
 
@@ -66,22 +66,22 @@ pub fn build_referenced_set(conn: &Connection) -> Result<HashSet<String>> {
         .query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })
-        .context("query converted_packages chunk hashes")?;
+        .context("query converted_packages transports")?;
 
     for row in rows {
-        let (id, json_str) = row.context("read converted chunk_hashes_json row")?;
-        let hashes = serde_json::from_str::<Vec<String>>(&json_str)
-            .with_context(|| format!("converted package {id} has malformed chunk_hashes_json"))?;
-        for hash in hashes {
-            referenced.insert(hash);
+        let (id, json_str) = row.context("read converted transport_json row")?;
+        let transport = serde_json::from_str::<conary_core::ccs::CcsTransportEnvelopeV1>(&json_str)
+            .with_context(|| format!("converted package {id} has malformed transport_json"))?;
+        for object in transport.objects {
+            referenced.insert(object.sha256);
         }
     }
 
     // Collect hashes from active native publications.
     let mut stmt = conn
         .prepare(
-            "SELECT id, chunk_hashes_json FROM native_package_publications
-             WHERE status = 'public' AND chunk_hashes_json IS NOT NULL",
+            "SELECT id, transport_json FROM native_package_publications
+             WHERE status = 'public' AND transport_json IS NOT NULL",
         )
         .context("prepare native_package_publications chunk query")?;
 
@@ -89,15 +89,16 @@ pub fn build_referenced_set(conn: &Connection) -> Result<HashSet<String>> {
         .query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })
-        .context("query native_package_publications chunk hashes")?;
+        .context("query native_package_publications transports")?;
 
     for row in rows {
-        let (id, json_str) = row.context("read native chunk_hashes_json row")?;
-        let hashes = serde_json::from_str::<Vec<String>>(&json_str).with_context(|| {
-            format!("native package publication {id} has malformed chunk_hashes_json")
-        })?;
-        for hash in hashes {
-            referenced.insert(hash);
+        let (id, json_str) = row.context("read native transport_json row")?;
+        let transport = serde_json::from_str::<conary_core::ccs::CcsTransportEnvelopeV1>(&json_str)
+            .with_context(|| {
+                format!("native package publication {id} has malformed transport_json")
+            })?;
+        for object in transport.objects {
+            referenced.insert(object.sha256);
         }
     }
 
@@ -664,6 +665,11 @@ mod tests {
         conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
 
+        let first_transport = crate::server::conversion::test_support::test_transport(&[
+            "hash_a".to_string(),
+            "hash_b".to_string(),
+            "hash_c".to_string(),
+        ]);
         let mut first = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "first".to_string(),
@@ -671,11 +677,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:test1".to_string(),
-            &[
-                "hash_a".to_string(),
-                "hash_b".to_string(),
-                "hash_c".to_string(),
-            ],
+            &first_transport,
             3,
             "sha256:first".to_string(),
             "/tmp/first.ccs".to_string(),
@@ -683,6 +685,10 @@ mod tests {
         );
         first.insert(&conn).unwrap();
 
+        let second_transport = crate::server::conversion::test_support::test_transport(&[
+            "hash_b".to_string(),
+            "hash_d".to_string(),
+        ]);
         let mut second = ConvertedPackage::new_repository(
             "ubuntu-26.04".to_string(),
             "second".to_string(),
@@ -690,7 +696,7 @@ mod tests {
             "amd64".to_string(),
             "deb".to_string(),
             "sha256:test2".to_string(),
-            &["hash_b".to_string(), "hash_d".to_string()],
+            &second_transport,
             2,
             "sha256:second".to_string(),
             "/tmp/second.ccs".to_string(),
@@ -699,6 +705,11 @@ mod tests {
         second.insert(&conn).unwrap();
 
         // Insert a protected chunk_access row
+        let native_transport =
+            serde_json::to_string(&crate::server::conversion::test_support::test_transport(&[
+                "native-chunk".to_string(),
+            ]))
+            .unwrap();
         conn.execute(
             "INSERT INTO chunk_access (hash, size_bytes, access_count, protected) VALUES ('hash_e', 1024, 1, 1)",
             [],
@@ -729,11 +740,11 @@ mod tests {
             "INSERT INTO native_package_publications (
                 repository_id, repository_package_id, source_profile, name, version, package_release,
                 architecture, package_kind, authority_format_version, status, content_hash,
-                chunk_hashes_json, total_size, package_path, target_path, trust_status
+                transport_json, total_size, package_path, target_path, trust_status
             ) VALUES (1, 1, 'fedora-44', 'hello', '1.0.0', '1', 'noarch', 'package', 2,
-                      'public', 'native-content', '[\"native-chunk\"]', 42,
+                      'public', 'native-content', ?1, 42,
                       '/tmp/hello.ccs', 'packages/fedora/hello.ccs', 'verified')",
-            [],
+            [native_transport],
         )
         .unwrap();
 
@@ -750,11 +761,13 @@ mod tests {
     }
 
     #[test]
-    fn referenced_set_rejects_malformed_converted_chunk_authority() {
+    fn referenced_set_rejects_malformed_converted_transport_authority() {
         use conary_core::db::models::ConvertedPackage;
 
         let conn = Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
+        let transport =
+            crate::server::conversion::test_support::test_transport(&["hash".to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "broken".to_string(),
@@ -762,7 +775,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:source".to_string(),
-            &["hash".to_string()],
+            &transport,
             1,
             "sha256:content".to_string(),
             "/tmp/broken.ccs".to_string(),
@@ -772,7 +785,7 @@ mod tests {
         conn.execute_batch("PRAGMA ignore_check_constraints = ON;")
             .unwrap();
         conn.execute(
-            "UPDATE converted_packages SET chunk_hashes_json = '{bad' WHERE id = ?1",
+            "UPDATE converted_packages SET transport_json = '{bad' WHERE id = ?1",
             [id],
         )
         .unwrap();
@@ -782,16 +795,18 @@ mod tests {
         let error = build_referenced_set(&conn).unwrap_err().to_string();
         assert!(
             error.contains(&format!(
-                "converted package {id} has malformed chunk_hashes_json"
+                "converted package {id} has malformed transport_json"
             )),
             "{error}"
         );
     }
 
     #[test]
-    fn referenced_set_rejects_malformed_public_native_chunk_authority() {
+    fn referenced_set_rejects_malformed_public_native_transport_authority() {
         let conn = Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
+        conn.execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
         conn.execute(
             "INSERT INTO repositories (name, url, source_profile)
              VALUES ('fedora', 'remi-release://fedora', 'fedora-44')",
@@ -809,19 +824,21 @@ mod tests {
             "INSERT INTO native_package_publications (
                 repository_id, repository_package_id, source_profile, name, version, package_release,
                 architecture, package_kind, authority_format_version, status, content_hash,
-                chunk_hashes_json, total_size, package_path, target_path, trust_status
+                transport_json, total_size, package_path, target_path, trust_status
             ) VALUES (1, 1, 'fedora-44', 'broken', '1', '1', 'noarch', 'package', 2,
                       'public', 'sha256:broken', '{bad', 1,
                       '/tmp/broken.ccs', 'packages/fedora/broken.ccs', 'verified')",
             [],
         )
         .unwrap();
+        conn.execute_batch("PRAGMA ignore_check_constraints = OFF;")
+            .unwrap();
         let id = conn.last_insert_rowid();
 
         let error = build_referenced_set(&conn).unwrap_err().to_string();
         assert!(
             error.contains(&format!(
-                "native package publication {id} has malformed chunk_hashes_json"
+                "native package publication {id} has malformed transport_json"
             )),
             "{error}"
         );

@@ -404,6 +404,25 @@ mod tests {
             crate::server::handlers::cas_object_path(&self.chunk_dir, content_hash).exists()
         }
 
+        fn public_transport_objects_exist(&self, package: &str) -> bool {
+            let conn = crate::server::open_runtime_db(&self.db_path).unwrap();
+            let transport_json: String = conn
+                .query_row(
+                    "SELECT transport_json FROM native_package_publications
+                     WHERE source_profile = ?1 AND name = ?2 AND status = 'public'",
+                    params![TEST_PROFILE, package],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let transport: conary_core::ccs::CcsTransportEnvelopeV1 =
+                serde_json::from_str(&transport_json).unwrap();
+            !transport.objects.is_empty()
+                && transport.objects.iter().all(|object| {
+                    crate::server::handlers::cas_object_path(&self.chunk_dir, &object.sha256)
+                        .exists()
+                })
+        }
+
         fn tuf_target_exists(&self, package: &str) -> bool {
             let conn = crate::server::open_runtime_db(&self.db_path).unwrap();
             let count: i64 = conn
@@ -494,7 +513,7 @@ mod tests {
         assert!(!fixture.converted_package_row_exists("hello"));
         assert!(fixture.native_publication_row_exists("hello", "1"));
         assert!(fixture.public_package_detail_exists("hello"));
-        assert!(fixture.public_chunk_exists(&artifact.content_hash));
+        assert!(fixture.public_transport_objects_exist("hello"));
         assert!(fixture.tuf_target_exists("hello"));
     }
 
@@ -527,7 +546,7 @@ mod tests {
         );
         assert!(fixture.native_publication_row_exists("service-ok", "1"));
         assert!(fixture.public_package_detail_exists("service-ok"));
-        assert!(fixture.public_chunk_exists(&artifact.content_hash));
+        assert!(fixture.public_transport_objects_exist("service-ok"));
         assert!(fixture.tuf_target_exists("service-ok"));
     }
 
@@ -560,7 +579,7 @@ mod tests {
         );
         assert!(fixture.native_publication_row_exists("service-arbitrary", "1"));
         assert!(fixture.public_package_detail_exists("service-arbitrary"));
-        assert!(fixture.public_chunk_exists(&artifact.content_hash));
+        assert!(fixture.public_transport_objects_exist("service-arbitrary"));
         assert!(fixture.tuf_target_exists("service-arbitrary"));
     }
 
@@ -643,7 +662,7 @@ mod tests {
         assert_eq!(fixture.native_status_count("hello", "public"), 1);
         assert!(fixture.tuf_target_hash_exists(&first.content_hash));
         assert!(!fixture.tuf_target_hash_exists(&second.content_hash));
-        assert!(fixture.public_chunk_exists(&first.content_hash));
+        assert!(fixture.public_transport_objects_exist("hello"));
         assert!(!fixture.public_chunk_exists(&second.content_hash));
     }
 

@@ -91,6 +91,9 @@ It extends the ChunkFetcher trait used by the Remi app, adding a
 peer layer between local CAS and upstream origin. Manifests reuse
 the CCS Ed25519 signing infrastructure, while peer admission layers on
 allowlists, TLS pinning, and optional mDNS discovery.
+The resource hashes requested through that layer are the exact object
+identities authenticated from `CcsTransportEnvelopeV1`; federation does not
+derive a second package chunking scheme or rechunk a `.ccs` carrier.
 
 ## CLI Notes
 

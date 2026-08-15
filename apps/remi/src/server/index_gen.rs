@@ -439,6 +439,8 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
 
+        let transport =
+            crate::server::conversion::test_support::test_transport(&["sha256:chunk".to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "pkg".to_string(),
@@ -446,7 +448,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:source".to_string(),
-            &["sha256:chunk".to_string()],
+            &transport,
             3,
             "sha256:content".to_string(),
             "/cache/pkg.ccs".to_string(),
@@ -486,6 +488,9 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
 
+        let transport = crate::server::conversion::test_support::test_transport(&[
+            "sha256:stale-only-chunk".to_string(),
+        ]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "stale-only".to_string(),
@@ -493,7 +498,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:stale-only-source".to_string(),
-            &["sha256:stale-only-chunk".to_string()],
+            &transport,
             42,
             "sha256:stale-only-content".to_string(),
             "/tmp/stale-only.ccs".to_string(),

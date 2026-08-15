@@ -328,6 +328,7 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
         .unwrap();
     let digest =
         RepositoryProvide::conversion_capabilities_digest(&conn, repository_package_id).unwrap();
+    let transport = crate::ccs::transport::test_transport(&[]);
     let mut converted = ConvertedPackage::new_repository(
         "fedora-44".to_string(),
         "systemd-udev".to_string(),
@@ -335,7 +336,7 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
         "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:systemd-udev".to_string(),
-        &[],
+        &transport,
         1,
         "sha256:converted".to_string(),
         "/tmp/systemd-udev.ccs".to_string(),

@@ -55,7 +55,7 @@ use crate::db::models::{
 };
 use crate::error::{Error, Result};
 use crate::label::Label;
-use crate::repository::remi::RemiClient;
+use crate::repository::remi::{RemiClient, RemiFetchRequest};
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
 use crate::repository::versioning::{VersionScheme, resolve_package_version_scheme};
@@ -83,6 +83,8 @@ pub struct ResolutionOptions {
     pub architecture: Option<String>,
     /// Output directory for downloads
     pub output_dir: Option<PathBuf>,
+    /// Permanent SHA-256 CAS used by repository CCS transport.
+    pub objects_dir: Option<PathBuf>,
     /// Whether to skip the exact-installed-state short circuit
     pub skip_installed: bool,
     /// Resolution policy controlling cross-distro selection.
@@ -535,14 +537,24 @@ impl<'a> PackageResolver<'a> {
             .ok_or_else(|| Error::ConfigError(format!("unsupported Remi target: {distro}")))?;
 
         let client = RemiClient::new(endpoint)?;
+        let objects_dir = options.objects_dir.as_ref().ok_or_else(|| {
+            Error::ConfigError("Remi resolution requires a permanent CAS object directory".into())
+        })?;
+        let cas = crate::filesystem::CasStore::new(objects_dir)?;
+        let repository_id = pkg_with_repo.repository.id.ok_or_else(|| {
+            Error::ConfigError("Remi repository has no persisted identity".into())
+        })?;
+        let policy = remi_transport_trust_policy(self.conn, repository_id)?;
         let path = client
-            .fetch_package(
-                profile.remi_route_slug(),
+            .fetch_package(RemiFetchRequest {
+                distro: profile.remi_route_slug(),
                 name,
                 version,
                 architecture,
-                &output_dir,
-            )
+                output_dir: &output_dir,
+                cas: &cas,
+                trust_policy: &policy,
+            })
             .await?;
 
         Ok(PackageSource::Ccs {
@@ -717,6 +729,26 @@ impl<'a> PackageResolver<'a> {
             repository_provenance: Some(repository_source_metadata(pkg_with_repo)?),
         })
     }
+}
+
+pub(super) fn remi_transport_trust_policy(
+    conn: &Connection,
+    repository_id: i64,
+) -> Result<crate::ccs::TrustPolicy> {
+    let mut keys =
+        crate::db::models::RepositoryPackageKey::trusted_keys_for_repository(conn, repository_id)?;
+    if keys.is_empty() {
+        keys = crate::db::models::RepositoryPackageKey::trusted_tuf_targets_keys_for_repository(
+            conn,
+            repository_id,
+        )?;
+    }
+    if keys.is_empty() {
+        return Err(Error::ConfigError(format!(
+            "Remi repository {repository_id} has no active package signing keys"
+        )));
+    }
+    Ok(crate::ccs::TrustPolicy::strict(keys))
 }
 
 fn repository_source_metadata(pkg_with_repo: &PackageWithRepo) -> Result<RepositorySourceMetadata> {

@@ -69,7 +69,10 @@ impl ConversionService {
             cook_result.warnings.len()
         );
 
-        // Step 4: Store chunks
+        // Step 4: verify and store the exact signed CCS objects.
+        let stored = self
+            .store_signed_ccs_path_with_timing(&cook_result.package_path, profile.id())
+            .await?;
         let ccs_data = tokio::fs::read(&cook_result.package_path)
             .await
             .context("Failed to read cooked CCS package")?;
@@ -85,16 +88,13 @@ impl ConversionService {
         }
         tokio::fs::copy(&cook_result.package_path, &final_ccs_path).await?;
 
-        // Extract chunk hashes from the CCS package
-        // For now, we'll just report the package itself
-        let chunk_hashes = vec![content_hash.clone()];
         let total_size = ccs_data.len() as u64;
 
         Ok(ServerConversionResult {
             name: recipe.package.name,
             version: recipe.package.version,
             source_profile: None,
-            chunk_hashes,
+            transport: stored.transport,
             total_size,
             content_hash,
             ccs_path: final_ccs_path,

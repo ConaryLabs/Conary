@@ -15,7 +15,7 @@ use crate::ccs::attestation::{
     compute_build_output_identity_from_v3,
 };
 use crate::ccs::builder::{
-    BuildResult, ComponentData, FileEntry, write_v3_ccs_package_from_sources,
+    BuildResult, ChunkStats, ComponentData, FileEntry, write_v3_ccs_package_from_sources,
 };
 use crate::ccs::convert::native_provenance::NativeProvenance;
 use crate::ccs::convert::scriptlet_bundle::{
@@ -39,7 +39,7 @@ use crate::repository::versioning::VersionScheme;
 use crate::security::command_risk::{
     COMMAND_RISK_CLASSIFIER_VERSION, CommandRiskReport, CommandRiskSeverity, classify_shell_text,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -457,6 +457,8 @@ fn build_streaming_result(
 ) -> Result<BuildResult, ConversionError> {
     let mut files = Vec::with_capacity(payloads.len());
     let mut total_size = 0_u64;
+    let mut chunk_stats = ChunkStats::default();
+    let mut unique_chunks = HashSet::new();
     for payload in payloads {
         payload
             .node
@@ -467,12 +469,56 @@ fn build_streaming_result(
                 ConversionError::BuildError("CCS payload size arithmetic overflow".to_string())
             })?;
         }
+        let chunks = match &payload.content_authority {
+            Some(content) if content.size >= u64::from(crate::ccs::chunking::MIN_CHUNK_SIZE) => {
+                let mut references = Vec::new();
+                let processed = crate::ccs::chunking::Chunker::new()
+                    .visit_reader_chunks(payload.open_content().map_err(|error| {
+                        ConversionError::BuildError(format!(
+                            "failed to open conversion payload {} for canonical chunking: {error}",
+                            payload.path
+                        ))
+                    })?, |chunk| {
+                        let reference = chunk.reference();
+                        chunk_stats.total_chunks += 1;
+                        if !unique_chunks.insert(reference.sha256.clone()) {
+                            chunk_stats.dedup_savings = chunk_stats
+                                .dedup_savings
+                                .checked_add(u64::from(reference.size))
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("conversion chunk dedup savings overflow")
+                                })?;
+                        }
+                        references.push(reference);
+                        Ok(())
+                    })
+                    .map_err(|error| {
+                        ConversionError::BuildError(format!(
+                            "failed to derive canonical chunks for {}: {error}",
+                            payload.path
+                        ))
+                    })?;
+                if processed != content.size {
+                    return Err(ConversionError::BuildError(format!(
+                        "conversion payload {} changed while chunking: expected {} bytes, read {processed}",
+                        payload.path, content.size
+                    )));
+                }
+                chunk_stats.chunked_files += 1;
+                Some(references)
+            }
+            Some(_) => {
+                chunk_stats.whole_files += 1;
+                None
+            }
+            None => None,
+        };
         files.push(FileEntry {
             path: payload.path.clone(),
             node: payload.node.clone(),
             content: payload.content_authority.clone(),
             component: "runtime".to_string(),
-            chunks: None,
+            chunks,
         });
     }
     let component_hash = crate::hash::sha256_prefixed(
@@ -492,14 +538,15 @@ fn build_streaming_result(
             },
         )])
     };
+    chunk_stats.unique_chunks = unique_chunks.len();
     Ok(BuildResult {
         manifest,
         components,
         files,
         payloads: payloads.to_vec(),
         total_size,
-        chunked: false,
-        chunk_stats: None,
+        chunked: chunk_stats.chunked_files > 0,
+        chunk_stats: Some(chunk_stats),
     })
 }
 

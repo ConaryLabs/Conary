@@ -1,7 +1,6 @@
 // apps/remi/src/server/conversion/test_support.rs
 //! Shared test helpers for Remi conversion child modules.
 
-use conary_core::ccs::convert::{ConversionResult, ScriptletBundleSummary};
 use conary_core::db::models::{ConvertedPackage, Repository, RepositoryPackage, RepositoryProvide};
 use conary_core::db::schema;
 use std::fs;
@@ -10,6 +9,24 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
+
+pub(crate) fn test_transport(hashes: &[String]) -> conary_core::ccs::CcsTransportEnvelopeV1 {
+    conary_core::ccs::CcsTransportEnvelopeV1 {
+        schema_version: conary_core::ccs::transport::CCS_TRANSPORT_SCHEMA_V1,
+        manifest_base64: String::new(),
+        signature_json: "{}".to_string(),
+        debug_toml_base64: None,
+        build_attestation_json: None,
+        foreign_conversion_boundary_json: None,
+        objects: hashes
+            .iter()
+            .map(|sha256| conary_core::ccs::CcsTransportObjectV1 {
+                sha256: sha256.clone(),
+                size: 1,
+            })
+            .collect(),
+    }
+}
 
 pub(super) fn create_test_db() -> (NamedTempFile, rusqlite::Connection) {
     let temp_file = NamedTempFile::new().unwrap();
@@ -212,63 +229,4 @@ pub(super) fn production_rust_sources(relative_root: &str) -> Vec<(PathBuf, Stri
         .collect::<Vec<_>>();
     sources.sort_by(|left, right| left.0.cmp(&right.0));
     sources
-}
-
-pub(super) fn make_conversion_result(package_path: Option<std::path::PathBuf>) -> ConversionResult {
-    use conary_core::ccs::builder::{BuildResult, FileEntry};
-    use conary_core::ccs::manifest::{CcsManifest, Hooks, Package};
-
-    let manifest = CcsManifest {
-        package: Package {
-            name: "test".to_string(),
-            version: "1.0".to_string(),
-            version_scheme: conary_core::repository::versioning::VersionScheme::Conary,
-            release: "1".to_string(),
-            kind: conary_core::ccs::v3::PackageKindTagV3::Package,
-            debian_multi_arch: None,
-            description: "test package".to_string(),
-            license: None,
-            homepage: None,
-            repository: None,
-            platform: None,
-            authors: None,
-        },
-        provides: Default::default(),
-        requirements: Vec::new(),
-        relations: Vec::new(),
-        suggests: Default::default(),
-        components: Default::default(),
-        hooks: Hooks::default(),
-        scriptlets: Default::default(),
-        native_lifecycle: None,
-        config: Default::default(),
-        build: None,
-        native_export: None,
-        policy: Default::default(),
-        file_capabilities: Vec::new(),
-        provenance: None,
-        capabilities: None,
-        redirects: Default::default(),
-    };
-
-    let build_result = BuildResult {
-        manifest,
-        components: std::collections::HashMap::new(),
-        files: Vec::<FileEntry>::new(),
-        payloads: Vec::new(),
-        total_size: 0,
-        chunked: false,
-        chunk_stats: None,
-    };
-
-    ConversionResult {
-        build_result,
-        package_path,
-        original_format: "rpm".to_string(),
-        original_checksum: "sha256:test".to_string(),
-        signing_public_key: conary_core::ccs::SigningKeyPair::generate().public_key_base64(),
-        native_provenance: None,
-        native_lifecycle: None,
-        scriptlet_metadata: ScriptletBundleSummary::default(),
-    }
 }

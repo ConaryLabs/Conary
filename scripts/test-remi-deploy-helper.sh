@@ -27,7 +27,6 @@ write_config() {
 bind = "127.0.0.1:8080"
 
 [conversion]
-chunking = true
 max_concurrent = 4
 
 [r2]

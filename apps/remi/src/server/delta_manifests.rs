@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use conary_core::db::models::ConvertedPackage;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use tracing::{debug, info};
 
 /// A pre-computed delta between two versions of a package
@@ -65,22 +65,33 @@ impl DeltaManifest {
     }
 }
 
-/// Get chunk hashes and their sizes for a specific converted package version.
+/// Get signed CCS object identities and sizes for a converted package version.
 ///
-/// Returns `(chunk_hashes, total_size)` from the `converted_packages` table
-/// and `chunk_access` for individual chunk sizes.
+/// Both identities and sizes come from the persisted authenticated transport
+/// descriptor; `chunk_access` is cache bookkeeping, never delta authority.
 fn get_version_chunks(
     conn: &Connection,
     source_profile: &str,
     package_name: &str,
     version: &str,
-) -> Result<(Vec<String>, u64)> {
+) -> Result<(BTreeMap<String, u64>, u64)> {
     match find_current_conversion(conn, source_profile, package_name, version)? {
         Some(converted) => {
             let artifact = converted.repository_artifact()?;
-            Ok((artifact.chunk_hashes, artifact.total_size))
+            let objects = artifact
+                .transport
+                .objects
+                .into_iter()
+                .map(|object| (object.sha256, object.size))
+                .collect::<BTreeMap<_, _>>();
+            let total = objects.values().try_fold(0_u64, |total, size| {
+                total
+                    .checked_add(*size)
+                    .context("delta object-size sum overflow")
+            })?;
+            Ok((objects, total))
         }
-        None => Ok((Vec::new(), 0)),
+        None => Ok((BTreeMap::new(), 0)),
     }
 }
 
@@ -116,39 +127,12 @@ fn current_conversion_versions(
     Ok(versions)
 }
 
-/// Look up chunk sizes from the chunk_access table.
-///
-/// Returns a map of hash -> size_bytes for all requested hashes found in the DB.
-fn get_chunk_sizes(conn: &Connection, hashes: &[String]) -> Result<HashMap<String, u64>> {
-    let mut sizes = HashMap::new();
-    if hashes.is_empty() {
-        return Ok(sizes);
-    }
-
-    let mut stmt = conn.prepare("SELECT hash, size_bytes FROM chunk_access WHERE hash = ?1")?;
-
-    for hash in hashes {
-        if let Some(size) = stmt
-            .query_row([hash], |row| row.get::<_, i64>(1))
-            .optional()?
-        {
-            sizes.insert(
-                hash.clone(),
-                u64::try_from(size)
-                    .with_context(|| format!("chunk {hash} has negative size_bytes {size}"))?,
-            );
-        }
-    }
-
-    Ok(sizes)
-}
-
 /// Compute the delta manifest between two versions of a package.
 ///
-/// Queries chunk hashes for both versions from `converted_packages`,
+/// Queries signed object references for both versions from `converted_packages`,
 /// computes the set difference (new_chunks = in to_version but not from_version,
 /// removed_chunks = in from_version but not to_version), calculates download_size
-/// from chunk sizes in `chunk_access`, and inserts the result into `delta_manifests`.
+/// from descriptor-owned sizes, and inserts the result into `delta_manifests`.
 pub fn compute_delta(
     conn: &Connection,
     source_profile: &str,
@@ -166,8 +150,8 @@ pub fn compute_delta(
         get_version_chunks(conn, source_profile, package_name, from_version)?;
     let (to_chunks, to_size) = get_version_chunks(conn, source_profile, package_name, to_version)?;
 
-    let from_set: HashSet<&str> = from_chunks.iter().map(String::as_str).collect();
-    let to_set: HashSet<&str> = to_chunks.iter().map(String::as_str).collect();
+    let from_set: BTreeSet<&str> = from_chunks.keys().map(String::as_str).collect();
+    let to_set: BTreeSet<&str> = to_chunks.keys().map(String::as_str).collect();
 
     // New chunks: in to_version but not from_version
     let new_chunks: Vec<String> = to_set
@@ -182,15 +166,13 @@ pub fn compute_delta(
         .collect();
 
     // Calculate download size from new chunk sizes
-    let chunk_sizes = get_chunk_sizes(conn, &new_chunks)?;
     let download_size = new_chunks
         .iter()
         .map(|hash| {
-            chunk_sizes.get(hash).copied().with_context(|| {
-                format!(
-                    "delta {source_profile}/{package_name} {from_version} -> {to_version} references chunk {hash} without persisted size authority"
-                )
-            })
+            to_chunks
+                .get(hash)
+                .copied()
+                .context("delta object lost signed size authority")
         })
         .sum::<Result<u64>>()?;
 
@@ -458,6 +440,7 @@ mod tests {
         conversion_version: i32,
     ) {
         let chunk_strings: Vec<String> = chunks.iter().map(|s| (*s).to_string()).collect();
+        let transport = crate::server::conversion::test_support::test_transport(&chunk_strings);
         let mut pkg = ConvertedPackage::new_repository(
             source_profile.to_string(),
             name.to_string(),
@@ -465,7 +448,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:{name}-{version}"),
-            &chunk_strings,
+            &transport,
             total_size,
             format!("sha256:content-{name}-{version}"),
             format!("/data/{name}-{version}.ccs"),
@@ -487,6 +470,7 @@ mod tests {
         total_size: i64,
     ) {
         let chunk_strings: Vec<String> = chunks.iter().map(|s| (*s).to_string()).collect();
+        let transport = crate::server::conversion::test_support::test_transport(&chunk_strings);
         let mut pkg = ConvertedPackage::new_repository(
             source_profile.to_string(),
             name.to_string(),
@@ -494,7 +478,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:{name}-{version}"),
-            &chunk_strings,
+            &transport,
             total_size,
             format!("sha256:content-{name}-{version}"),
             format!("/data/{name}-{version}.ccs"),
@@ -508,6 +492,37 @@ mod tests {
         use conary_core::db::models::ChunkAccess;
         let chunk = ChunkAccess::new(hash.to_string(), size);
         chunk.upsert(conn).unwrap();
+        let rows = {
+            let mut statement = conn
+                .prepare(
+                    "SELECT id, transport_json FROM converted_packages
+                     WHERE transport_json LIKE ?1",
+                )
+                .unwrap();
+            statement
+                .query_map([format!("%\"{hash}\"%")], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        for (id, json) in rows {
+            let mut transport: conary_core::ccs::CcsTransportEnvelopeV1 =
+                serde_json::from_str(&json).unwrap();
+            if let Some(object) = transport
+                .objects
+                .iter_mut()
+                .find(|object| object.sha256 == hash)
+            {
+                object.size = u64::try_from(size).unwrap();
+                conn.execute(
+                    "UPDATE converted_packages SET transport_json = ?1 WHERE id = ?2",
+                    params![serde_json::to_string(&transport).unwrap(), id],
+                )
+                .unwrap();
+            }
+        }
     }
 
     #[test]
@@ -873,17 +888,12 @@ mod tests {
     }
 
     #[test]
-    fn compute_delta_rejects_missing_chunk_size_authority() {
+    fn compute_delta_uses_signed_size_without_chunk_access_side_authority() {
         let (_temp, conn) = create_test_db();
         insert_converted(&conn, "fedora-44", "nginx", "1.0", &["chunkA"], 1000);
 
-        let error = compute_delta(&conn, "fedora-44", "nginx", "0.9", "1.0")
-            .unwrap_err()
-            .to_string();
-
-        assert!(
-            error.contains("without persisted size authority"),
-            "{error}"
-        );
+        let delta = compute_delta(&conn, "fedora-44", "nginx", "0.9", "1.0").unwrap();
+        assert_eq!(delta.download_size, 1);
+        assert_eq!(delta.full_size, 1);
     }
 }

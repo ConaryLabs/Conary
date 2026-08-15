@@ -15,7 +15,7 @@ pub enum ConversionPhase {
     NativeShellAstExtraction,
     AdapterDispatch,
     CcsEmission,
-    Chunking,
+    TransportVerification,
     CasWrite,
     R2WriteThrough,
     Persistence,

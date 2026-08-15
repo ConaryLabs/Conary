@@ -74,16 +74,10 @@ pub async fn get_job_status(
         job.result.as_ref().map(|r| {
             serde_json::json!({
                 "name": job.package_name,
-                "version": job.version.as_deref().unwrap_or("latest"),
+                "version": &r.actual_version,
                 "distro": job.distro,
                 "architecture": job.architecture,
-                "chunks": r.chunk_hashes.iter().enumerate().map(|(i, hash)| {
-                    serde_json::json!({
-                        "hash": hash,
-                        "size": 0,  // Size not tracked per-chunk yet
-                        "offset": i
-                    })
-                }).collect::<Vec<_>>(),
+                "transport": &r.transport,
                 "total_size": r.total_size,
                 "content_hash": r.content_hash,
                 "scriptlets": &r.scriptlets

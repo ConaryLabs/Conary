@@ -106,7 +106,7 @@ impl CasReachability {
     /// Protect exact current-schema roots outside generation manifests.
     ///
     /// Each query is mandatory for the current schema. A missing table,
-    /// malformed hash, or malformed chunk list aborts before callers may
+    /// malformed hash, or malformed transport descriptor aborts before callers may
     /// delete anything.
     pub fn protect_current_database(&mut self, conn: &Connection) -> crate::Result<()> {
         for (context, sql) in [
@@ -174,19 +174,34 @@ impl CasReachability {
             }
             converted.scriptlet_summary()?;
             let id = converted.id.unwrap_or_default();
-            for hash in converted.parsed_chunk_hashes()? {
+            for hash in converted.object_hashes()? {
                 self.protect_hash(
-                    &format!("current converted package chunk list row {id}"),
+                    &format!("current converted package transport row {id}"),
                     &hash,
                 )?;
             }
         }
-        self.protect_hash_array_query(
-            conn,
-            "native package publication chunk list",
-            "SELECT id, chunk_hashes_json FROM native_package_publications
+        let mut stmt = conn.prepare(
+            "SELECT id, transport_json FROM native_package_publications
              WHERE status = 'public'",
         )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let id = row.get::<_, i64>(0)?;
+            let json = row.get::<_, String>(1)?;
+            let transport = serde_json::from_str::<crate::ccs::CcsTransportEnvelopeV1>(&json)
+                .map_err(|error| {
+                    crate::Error::ConfigError(format!(
+                        "malformed native package publication transport for row {id}; refusing CAS GC: {error}"
+                    ))
+                })?;
+            for object in transport.objects {
+                self.protect_hash(
+                    &format!("native package publication transport row {id}"),
+                    &object.sha256,
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -266,29 +281,6 @@ impl CasReachability {
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         for hash in rows {
             self.protect_hash(context, &hash?)?;
-        }
-        Ok(())
-    }
-
-    fn protect_hash_array_query(
-        &mut self,
-        conn: &Connection,
-        context: &str,
-        sql: &str,
-    ) -> crate::Result<()> {
-        let mut stmt = conn.prepare(sql)?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let id = row.get::<_, i64>(0)?;
-            let json = row.get::<_, String>(1)?;
-            let hashes = serde_json::from_str::<Vec<String>>(&json).map_err(|error| {
-                crate::Error::ConfigError(format!(
-                    "malformed {context} for row {id}; refusing CAS GC: {error}"
-                ))
-            })?;
-            for hash in hashes {
-                self.protect_hash(&format!("{context} row {id}"), &hash)?;
-            }
         }
         Ok(())
     }
@@ -535,6 +527,7 @@ mod tests {
     #[test]
     fn malformed_explicit_chunk_authority_fails_closed() {
         let conn = create_test_db();
+        let transport = crate::ccs::transport::test_transport(&["NOT-A-HASH".to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "pkg".to_string(),
@@ -542,7 +535,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "checksum".to_string(),
-            &["NOT-A-HASH".to_string()],
+            &transport,
             1,
             "content".to_string(),
             "/tmp/pkg.ccs".to_string(),
@@ -562,6 +555,8 @@ mod tests {
         let current = "5".repeat(64);
         let stale = "6".repeat(64);
         let public_native = "7".repeat(64);
+        let current_transport =
+            crate::ccs::transport::test_transport(std::slice::from_ref(&current));
         let mut current_conversion = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "current".to_string(),
@@ -569,7 +564,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "current-checksum".to_string(),
-            std::slice::from_ref(&current),
+            &current_transport,
             1,
             current.clone(),
             "/tmp/current.ccs".to_string(),
@@ -577,6 +572,7 @@ mod tests {
         );
         seed_repository_source(&conn, &mut current_conversion);
         current_conversion.insert(&conn).unwrap();
+        let stale_transport = crate::ccs::transport::test_transport(std::slice::from_ref(&stale));
         let mut stale_conversion = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "stale".to_string(),
@@ -584,7 +580,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "stale-checksum".to_string(),
-            std::slice::from_ref(&stale),
+            &stale_transport,
             1,
             stale.clone(),
             "/tmp/stale.ccs".to_string(),
@@ -610,24 +606,34 @@ mod tests {
         )
         .unwrap();
         let package = conn.last_insert_rowid();
-        for (name, status, chunks) in [
+        for (name, status, transport) in [
             (
                 "native",
                 "public",
-                serde_json::to_string(std::slice::from_ref(&public_native)).unwrap(),
+                serde_json::to_string(&crate::ccs::transport::test_transport(
+                    std::slice::from_ref(&public_native),
+                ))
+                .unwrap(),
             ),
-            ("retired", "superseded", "[\"NOT-A-CAS-HASH\"]".to_string()),
+            (
+                "retired",
+                "superseded",
+                serde_json::to_string(&crate::ccs::transport::test_transport(&[
+                    "NOT-A-CAS-HASH".to_string()
+                ]))
+                .unwrap(),
+            ),
         ] {
             conn.execute(
                 "INSERT INTO native_package_publications
                  (repository_id, repository_package_id, source_profile, name, version,
                   package_release, architecture, package_kind, authority_format_version,
-                  status, content_hash, chunk_hashes_json, total_size, package_path,
+                  status, content_hash, transport_json, total_size, package_path,
                   target_path, trust_status)
                  VALUES (?1, ?2, 'fedora-44', ?3, '1', '1', 'x86_64', 'rpm', 1,
                          ?4, 'content', ?5, 1, '/tmp/native.rpm',
                          'Packages/native.rpm', 'verified')",
-                rusqlite::params![repository, package, name, status, chunks],
+                rusqlite::params![repository, package, name, status, transport],
             )
             .unwrap();
         }

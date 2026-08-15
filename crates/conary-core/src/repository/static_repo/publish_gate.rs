@@ -115,6 +115,7 @@ pub struct PublishGateFailure {
 pub struct StaticArtifactPublishCandidate {
     pub package: CcsPackage,
     pub lint: PublishLintReport,
+    pub verification: VerifiedCcsArchive,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -198,7 +199,11 @@ pub fn verify_static_artifact_publish_candidate(
         accepted_signers,
         accepted_policy_digest,
     )?;
-    Ok(StaticArtifactPublishCandidate { package, lint })
+    Ok(StaticArtifactPublishCandidate {
+        package,
+        lint,
+        verification,
+    })
 }
 
 fn verify_package_for_static_gate(

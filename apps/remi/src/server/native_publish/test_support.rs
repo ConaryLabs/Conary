@@ -37,6 +37,7 @@ pub fn seed_native_publication(
         .unwrap();
     let content_hash = format!("sha256:{name}-{version}-{package_release}-{architecture}");
     let chunk_hash = format!("sha256:{name}-{version}-{package_release}-{architecture}-chunk");
+    let transport = crate::server::conversion::test_support::test_transport(&[chunk_hash]);
     let metadata = serde_json::json!({
         "source_kind": "native-ccs",
         "native": true,
@@ -76,7 +77,7 @@ pub fn seed_native_publication(
         "INSERT INTO native_package_publications (
             repository_id, repository_package_id, source_profile, name, version, package_release,
             architecture, package_kind, authority_format_version, status, content_hash,
-            chunk_hashes_json, total_size, package_path, target_path, trust_status
+            transport_json, total_size, package_path, target_path, trust_status
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'package', 2, 'public', ?8, ?9,
                    42, ?10, ?11, 'verified')",
         params![
@@ -88,7 +89,7 @@ pub fn seed_native_publication(
             package_release,
             architecture,
             content_hash,
-            serde_json::to_string(&[chunk_hash]).unwrap(),
+            serde_json::to_string(&transport).unwrap(),
             package_path,
             format!("packages/{distro}/{name}-{version}-{package_release}-{architecture}.ccs"),
         ],
