@@ -16,6 +16,8 @@ pub enum InstalledFileAbsencePolicy {
     RpmMissingOk,
     /// The RPM record carries both `%ghost` and `missingok`.
     RpmGhostAndMissingOk,
+    /// A dpkg conffile declaration survives intentional local deletion.
+    DpkgConffile,
     /// An eopkg permanent record may remain declared without live payload.
     EopkgPermanent,
 }

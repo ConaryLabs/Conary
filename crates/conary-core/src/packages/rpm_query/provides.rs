@@ -169,4 +169,29 @@ mod tests {
         assert!(parse_rpm_provide_records(&identity, "\x1e8\x1e108\x1f").is_err());
         assert!(parse_rpm_provide_records(&identity, "dracut\x1enope\x1e108\x1f").is_err());
     }
+
+    #[test]
+    fn installed_provides_admit_rpm_dependency_boundary_characters() {
+        let identity = InstalledPackageIdentity::rpm(
+            "openSUSE-release-20260811-1.1.x86_64",
+            "openSUSE-release",
+            None,
+            "20260811",
+            "1.1",
+            "x86_64",
+        )
+        .unwrap();
+        let cpe = "cpe%3A%2Fo%3Aopensuse%3Aopensuse%3A20260811";
+        let output = format!("product-cpeid()\x1e8\x1e{cpe}\x1f");
+
+        let provides = parse_rpm_provide_records(&identity, &output).unwrap();
+
+        assert_eq!(provides.len(), 2);
+        assert_eq!(provides[1].name, "product-cpeid()");
+        assert_eq!(provides[1].version.as_deref(), Some(cpe));
+        assert_eq!(
+            provides[1].version_relation,
+            Some(ProvideVersionRelation::Equal)
+        );
+    }
 }

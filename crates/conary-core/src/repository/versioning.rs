@@ -193,6 +193,20 @@ pub fn validate_repo_version(scheme: VersionScheme, raw: &str) -> VersionResult<
     }
 }
 
+/// Validate an RPM dependency EVR boundary.
+///
+/// RPM dependency records deliberately admit a broader version and release
+/// alphabet than package identity fields. Keep that source grammar separate
+/// so native capability authority is not narrowed to the package-header
+/// `VERSION`/`RELEASE` grammar.
+pub fn validate_rpm_dependency_boundary(raw: &str) -> VersionResult<()> {
+    validate_rpm_dependency_evr(raw).map_err(|reason| VersionComparisonError::InvalidVersion {
+        scheme: VersionScheme::Rpm.as_str(),
+        version: raw.to_string(),
+        reason,
+    })
+}
+
 /// Compare two versions using only the parser and comparator owned by `scheme`.
 pub fn compare_repo_versions(scheme: VersionScheme, a: &str, b: &str) -> VersionResult<Ordering> {
     match scheme {
@@ -289,12 +303,15 @@ pub fn parse_repo_constraint(
             reason: "missing version operand".to_string(),
         });
     }
-    validate_repo_version(scheme, version).map_err(|error| {
-        VersionComparisonError::InvalidConstraint {
-            scheme: scheme.as_str(),
-            constraint: raw.to_string(),
-            reason: error.to_string(),
-        }
+    let validation = if scheme == VersionScheme::Rpm {
+        validate_rpm_dependency_boundary(version)
+    } else {
+        validate_repo_version(scheme, version)
+    };
+    validation.map_err(|error| VersionComparisonError::InvalidConstraint {
+        scheme: scheme.as_str(),
+        constraint: raw.to_string(),
+        reason: error.to_string(),
     })?;
 
     Ok(operator.build(version.to_string()))
@@ -355,7 +372,13 @@ pub fn repo_version_satisfies(
         | RepoVersionConstraint::NotEqual(expected) => expected,
         RepoVersionConstraint::Eopkg(_) => unreachable!("handled above"),
     };
-    let ordering = compare_repo_versions(scheme, version, expected)?;
+    let ordering = if scheme == VersionScheme::Rpm {
+        validate_repo_version(scheme, version)?;
+        validate_rpm_dependency_boundary(expected)?;
+        rpm_dependency_boundary_cmp(&rpm_evr_parts(version), &rpm_evr_parts(expected))?
+    } else {
+        compare_repo_versions(scheme, version, expected)?
+    };
     Ok(match constraint {
         RepoVersionConstraint::Any => unreachable!("handled above"),
         RepoVersionConstraint::Exact(_) => ordering == Ordering::Equal,
@@ -404,7 +427,11 @@ pub fn provided_range_matches_requirement(
         });
     };
     let provide_version = provide_version.expect("relation and version pairing checked above");
-    validate_repo_version(scheme, provide_version)?;
+    if scheme == VersionScheme::Rpm {
+        validate_rpm_dependency_boundary(provide_version)?;
+    } else {
+        validate_repo_version(scheme, provide_version)?;
+    }
 
     if matches!(requirement, RepoVersionConstraint::Any) {
         return Ok(true);
@@ -455,7 +482,7 @@ fn rpm_provided_range_overlaps_requirement(
     };
     let requirement_version = constraint_boundary(requirement)
         .expect("all non-Any requirement relations above have a boundary");
-    validate_repo_version(VersionScheme::Rpm, requirement_version)?;
+    validate_rpm_dependency_boundary(requirement_version)?;
 
     let provide = rpm_evr_parts(provide_version);
     let required = rpm_evr_parts(requirement_version);
@@ -536,7 +563,14 @@ fn rpm_dependency_boundary_cmp(
     right: &RpmEvrParts<'_>,
 ) -> VersionResult<Ordering> {
     let epoch = match (left.epoch, right.epoch) {
-        (Some(left), Some(right)) => compare_repo_versions(VersionScheme::Rpm, left, right)?,
+        (Some(left), Some(right)) => left
+            .parse::<u64>()
+            .expect("validated RPM dependency epoch")
+            .cmp(
+                &right
+                    .parse::<u64>()
+                    .expect("validated RPM dependency epoch"),
+            ),
         (Some(left), None) if left.parse::<u64>().expect("validated RPM epoch") > 0 => {
             Ordering::Greater
         }
@@ -548,12 +582,12 @@ fn rpm_dependency_boundary_cmp(
     if epoch != Ordering::Equal {
         return Ok(epoch);
     }
-    let version = compare_repo_versions(VersionScheme::Rpm, left.version, right.version)?;
+    let version = rpm_version::rpm_evr_compare(left.version, right.version);
     if version != Ordering::Equal {
         return Ok(version);
     }
     match (left.release, right.release) {
-        (Some(left), Some(right)) => compare_repo_versions(VersionScheme::Rpm, left, right),
+        (Some(left), Some(right)) => Ok(rpm_version::rpm_evr_compare(left, right)),
         _ => Ok(Ordering::Equal),
     }
 }
@@ -754,6 +788,64 @@ fn validate_rpm_evr(raw: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// Validate RPM's documented dependency `[epoch:]version[-release]` grammar.
+fn validate_rpm_dependency_evr(raw: &str) -> std::result::Result<(), String> {
+    if raw.is_empty() {
+        return Err("version is empty".to_string());
+    }
+    if raw.trim() != raw {
+        return Err("leading or trailing whitespace is not allowed".to_string());
+    }
+
+    let version_release = match raw.split_once(':') {
+        Some((epoch, rest)) => {
+            if epoch.is_empty() || !epoch.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("epoch must be a non-empty decimal integer".to_string());
+            }
+            epoch
+                .parse::<u64>()
+                .map_err(|_| "epoch exceeds the supported integer range".to_string())?;
+            rest
+        }
+        None => raw,
+    };
+    if version_release.contains(':') {
+        return Err("multiple epoch separators are not allowed".to_string());
+    }
+    let (version, release) = match version_release.split_once('-') {
+        Some((version, release)) => {
+            if release.contains('-') {
+                return Err("release must not contain '-'".to_string());
+            }
+            (version, Some(release))
+        }
+        None => (version_release, None),
+    };
+    validate_rpm_dependency_component(version, "version")?;
+    if let Some(release) = release {
+        validate_rpm_dependency_component(release, "release")?;
+    }
+    Ok(())
+}
+
+fn validate_rpm_dependency_component(
+    component: &str,
+    name: &str,
+) -> std::result::Result<(), String> {
+    if component.is_empty() {
+        return Err(format!("{name} component is empty"));
+    }
+    if component
+        .chars()
+        .any(|character| character == '-' || character.is_whitespace() || character.is_control())
+    {
+        return Err(format!(
+            "{name} contains a hyphen, whitespace, or control character"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_rpm_component(component: &str, name: &str) -> std::result::Result<(), String> {
     if component.is_empty() {
         return Err(format!("{name} component is empty"));
@@ -866,6 +958,32 @@ mod tests {
         assert!(!repo_version_satisfies(VersionScheme::Arch, "1.0-9", &arch).unwrap());
 
         assert!(parse_repo_constraint(VersionScheme::Rpm, ">= broken:1.0").is_err());
+    }
+
+    #[test]
+    fn rpm_dependency_boundaries_keep_their_broader_source_grammar() {
+        let cpe = "cpe%3A%2Fo%3Aopensuse%3Aopensuse%3A20260811";
+
+        assert!(validate_repo_version(VersionScheme::Rpm, cpe).is_err());
+        validate_rpm_dependency_boundary(cpe).unwrap();
+        let requirement = parse_repo_constraint(VersionScheme::Rpm, &format!("= {cpe}"))
+            .expect("RPM dependency constraint");
+        assert!(
+            provided_range_matches_requirement(
+                VersionScheme::Rpm,
+                Some(ProvideVersionRelation::Equal),
+                Some(cpe),
+                &requirement,
+            )
+            .unwrap()
+        );
+
+        for invalid in ["", " 1", "1 ", "1 2", "1-", "1-2-3", "bad:1", "1:2:3"] {
+            assert!(
+                validate_rpm_dependency_boundary(invalid).is_err(),
+                "RPM dependency boundary admitted {invalid:?}"
+            );
+        }
     }
 
     #[test]

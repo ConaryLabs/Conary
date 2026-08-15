@@ -30,8 +30,9 @@ pub enum InstalledConfigAuthority {
         ghost: bool,
     },
     Dpkg {
-        md5: String,
+        original_md5: Option<String>,
         obsolete: bool,
+        remove_on_upgrade: bool,
     },
     Pacman {
         original_md5: Option<String>,

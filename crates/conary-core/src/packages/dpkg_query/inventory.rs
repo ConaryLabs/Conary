@@ -73,8 +73,11 @@ fn capture_from_authority(
         let config = parse_conffiles(fields[15])?;
         let mut files = package_files
             .into_iter()
-            .map(|file| {
+            .map(|mut file| {
                 let authority = config.get(&file.path).cloned();
+                if authority.is_some() {
+                    file.absence_policy = InstalledFileAbsencePolicy::DpkgConffile;
+                }
                 InstalledInventoryFile {
                     file,
                     config: authority,
@@ -97,14 +100,16 @@ fn capture_from_authority(
                         mode: i32::try_from(libc::S_IFREG | 0o644)
                             .expect("portable dpkg discovery mode fits i32"),
                         digest: match authority {
-                            InstalledConfigAuthority::Dpkg { md5, .. } => Some(md5.clone()),
+                            InstalledConfigAuthority::Dpkg { original_md5, .. } => {
+                                original_md5.clone()
+                            }
                             _ => unreachable!("dpkg config parser emits dpkg authority"),
                         },
                         user: None,
                         group: None,
                         link_target: None,
                         mtime: None,
-                        absence_policy: InstalledFileAbsencePolicy::Required,
+                        absence_policy: InstalledFileAbsencePolicy::DpkgConffile,
                     },
                     config: Some(authority.clone()),
                 });
@@ -243,30 +248,41 @@ fn parse_conffiles(field: &str) -> Result<BTreeMap<String, InstalledConfigAuthor
     let mut config = BTreeMap::new();
     for (index, line) in field.lines().filter(|line| !line.is_empty()).enumerate() {
         let value = line.trim();
+        let (value, remove_on_upgrade) = value
+            .strip_suffix(" remove-on-upgrade")
+            .map(|value| (value, true))
+            .unwrap_or((value, false));
         let (value, obsolete) = value
             .strip_suffix(" obsolete")
             .map(|value| (value, true))
             .unwrap_or((value, false));
-        let (path, md5) = value.rsplit_once(' ').ok_or_else(|| {
+        let (path, digest) = value.rsplit_once(' ').ok_or_else(|| {
             Error::ParseError(format!(
                 "dpkg Conffiles record {} has no path/digest separator",
                 index + 1
             ))
         })?;
-        if md5.len() != 32 || !md5.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(Error::ParseError(format!(
-                "dpkg Conffiles record {} has an invalid MD5 digest",
-                index + 1
-            )));
-        }
+        let original_md5 = match digest {
+            "newconffile" => None,
+            md5 if md5.len() == 32 && md5.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+                Some(md5.to_string())
+            }
+            _ => {
+                return Err(Error::ParseError(format!(
+                    "dpkg Conffiles record {} has an invalid digest authority",
+                    index + 1
+                )));
+            }
+        };
         let path = crate::packages::archive_utils::normalize_path(path)
             .map_err(|error| Error::ParseError(error.to_string()))?;
         if config
             .insert(
                 path.clone(),
                 InstalledConfigAuthority::Dpkg {
-                    md5: md5.to_string(),
+                    original_md5,
                     obsolete,
+                    remove_on_upgrade,
                 },
             )
             .is_some()
@@ -345,7 +361,16 @@ mod tests {
 
         assert_eq!(package.install_reason, NativeInstallReason::Explicit);
         assert_eq!(package.files.len(), 2);
-        assert!(package.files[0].config.is_some());
+        let config = package
+            .files
+            .iter()
+            .find(|file| file.file.path == "/etc/fixture.conf")
+            .unwrap();
+        assert!(config.config.is_some());
+        assert_eq!(
+            config.file.absence_policy,
+            InstalledFileAbsencePolicy::DpkgConffile
+        );
         assert_eq!(package.requirements.len(), 2);
         assert_eq!(package.provides.len(), 2);
         assert_eq!(package.lifecycle.len(), 1);
@@ -376,6 +401,55 @@ mod tests {
         assert_eq!(
             second.package("fixture:amd64").unwrap().install_reason,
             NativeInstallReason::Dependency
+        );
+    }
+
+    #[test]
+    fn dpkg_conffiles_preserve_digest_sentinels_and_ordered_flags() {
+        let config = parse_conffiles(concat!(
+            " /etc/ordinary.conf 0123456789abcdef0123456789abcdef\n",
+            " /etc/path with spaces.conf fedcba9876543210fedcba9876543210 obsolete\n",
+            " /etc/removed.conf newconffile remove-on-upgrade\n",
+            " /etc/both.conf newconffile obsolete remove-on-upgrade\n",
+        ))
+        .unwrap();
+
+        assert_eq!(
+            config.get("/etc/ordinary.conf"),
+            Some(&InstalledConfigAuthority::Dpkg {
+                original_md5: Some("0123456789abcdef0123456789abcdef".to_string()),
+                obsolete: false,
+                remove_on_upgrade: false,
+            })
+        );
+        assert_eq!(
+            config.get("/etc/path with spaces.conf"),
+            Some(&InstalledConfigAuthority::Dpkg {
+                original_md5: Some("fedcba9876543210fedcba9876543210".to_string()),
+                obsolete: true,
+                remove_on_upgrade: false,
+            })
+        );
+        assert_eq!(
+            config.get("/etc/removed.conf"),
+            Some(&InstalledConfigAuthority::Dpkg {
+                original_md5: None,
+                obsolete: false,
+                remove_on_upgrade: true,
+            })
+        );
+        assert_eq!(
+            config.get("/etc/both.conf"),
+            Some(&InstalledConfigAuthority::Dpkg {
+                original_md5: None,
+                obsolete: true,
+                remove_on_upgrade: true,
+            })
+        );
+
+        assert!(parse_conffiles(" /etc/fixture.conf newconffile unknown\n").is_err());
+        assert!(
+            parse_conffiles(" /etc/fixture.conf newconffile remove-on-upgrade obsolete\n").is_err()
         );
     }
 }

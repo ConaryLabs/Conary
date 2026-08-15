@@ -220,15 +220,20 @@ impl ProvidedCapability {
             )));
         }
         if let Some(version) = self.version.as_deref() {
-            super::versioning::validate_repo_version(self.version_scheme, version).map_err(
-                |error| {
-                    crate::error::Error::ParseError(format!(
-                        "provided capability '{}' has invalid {} provider version: {error}",
-                        self.name,
-                        self.version_scheme.as_str()
-                    ))
-                },
-            )?;
+            let validation = if self.version_scheme == VersionScheme::Rpm
+                && !matches!(&self.provenance, CapabilityProvenance::ExactIdentity)
+            {
+                super::versioning::validate_rpm_dependency_boundary(version)
+            } else {
+                super::versioning::validate_repo_version(self.version_scheme, version)
+            };
+            validation.map_err(|error| {
+                crate::error::Error::ParseError(format!(
+                    "provided capability '{}' has invalid {} provider version: {error}",
+                    self.name,
+                    self.version_scheme.as_str()
+                ))
+            })?;
         }
         if self.version_scheme != VersionScheme::Rpm
             && self
