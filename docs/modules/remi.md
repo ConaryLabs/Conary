@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-15
-revision: 25
+revision: 26
 summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, database-writer ownership, reproducible conversion profiling, R2 durability inventory, publication, and serving authority
 ---
 
@@ -520,16 +520,26 @@ contradictory size, or a non-canonical chunk key fails the inventory instead of
 silently reducing the required set.
 
 The operator surface is `POST /v1/admin/r2-durability`; the agent surface is
-the MCP `r2_durability` tool. Both require admin authority and emit schema-v1
-reports with exact total and required object counts and bytes. An omitted body
-or mode is read-only `plan`. `apply` uploads only required local objects absent
-from R2, or required objects whose R2 size disagrees with local storage, with 1
-to 64 concurrent PUT requests. Each local object is SHA-256 verified against
-its path before upload. Apply then lists R2 again, and `r2_complete` is true
-only when every required identity has the exact authority-declared size in that
-fresh listing. Missing-from-both identities, unrepairable size contradictions,
-and upload failures are counted in full with at most ten bounded diagnostic
-samples per class.
+the MCP `r2_durability` tool. The external HTTP and MCP routes require admin
+authority. The internal admin listener exposes the same typed operation only
+through its loopback transport boundary, allowing host-local automation to
+operate without copying a bearer token. All surfaces emit schema-v1 reports
+with exact total and required object counts and bytes. An omitted body or mode
+is read-only `plan`. `apply` uploads only required local objects absent from R2,
+or required objects whose R2 size disagrees with local storage, with 1 to 64
+concurrent PUT requests. Each local object is SHA-256 verified against its path
+before upload. Apply then lists R2 again, and `r2_complete` is true only when
+every required identity has the exact authority-declared size in that fresh
+listing. Missing-from-both identities, unrepairable size contradictions, and
+upload failures are counted in full with at most ten bounded diagnostic samples
+per class.
+
+`.github/workflows/remi-r2-durability.yml` is the production operator adapter.
+It accepts only an exact commit already merged into `main`, runs through the
+protected production environment and SSH boundary, invokes the loopback route,
+and retains a public-sanitized aggregate report with all diagnostic samples
+removed. Apply fails the workflow unless the fresh post-upload report is
+`applied_complete` with `r2_complete: true`.
 
 This inventory/backfill slice does not switch storage authority. Local CAS
 remains durable and R2 remains write-through until #116 separately proves the

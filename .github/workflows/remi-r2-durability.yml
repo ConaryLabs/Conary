@@ -1,0 +1,158 @@
+name: remi-r2-durability
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact commit already merged into main and deployed to production.
+        required: true
+        type: string
+      mode:
+        description: Plan is read-only; apply uploads the exact planned missing set.
+        required: true
+        default: plan
+        type: choice
+        options:
+          - plan
+          - apply
+      concurrency:
+        description: R2 PUT concurrency for apply, from 1 through 64.
+        required: true
+        default: "16"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remi-r2-durability-production
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    name: ${{ inputs.mode }} production R2 durability
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    steps:
+      - name: Check out exact main commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate exact deployed-main inputs
+        env:
+          CANDIDATE_SHA: ${{ inputs.commit_sha }}
+          MODE: ${{ inputs.mode }}
+          BACKFILL_CONCURRENCY: ${{ inputs.concurrency }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "commit_sha must be a full lowercase commit SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]] || {
+            echo "checkout does not match requested commit SHA" >&2
+            exit 1
+          }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main || {
+            echo "candidate must already be merged into origin/main" >&2
+            exit 1
+          }
+          [[ "$MODE" == plan || "$MODE" == apply ]] || {
+            echo "mode must be plan or apply" >&2
+            exit 1
+          }
+          [[ "$BACKFILL_CONCURRENCY" =~ ^[0-9]+$ ]] \
+            && (( 10#$BACKFILL_CONCURRENCY >= 1 && 10#$BACKFILL_CONCURRENCY <= 64 )) || {
+              echo "concurrency must be an integer from 1 through 64" >&2
+              exit 1
+            }
+
+      - name: Run typed host-local durability operation
+        env:
+          MODE: ${{ inputs.mode }}
+          BACKFILL_CONCURRENCY: ${{ inputs.concurrency }}
+          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${REMI_SSH_KEY:-}" ]] || {
+            echo "REMI_SSH_KEY is required" >&2
+            exit 1
+          }
+
+          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
+          mkdir -p ~/.ssh
+          trap 'rm -f ~/.ssh/remi_key' EXIT
+          echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
+          chmod 600 ~/.ssh/remi_key
+          ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh_opts="-i ~/.ssh/remi_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          report="$({
+            ssh $ssh_opts "$target" bash -s -- "$MODE" "$BACKFILL_CONCURRENCY" <<'REMOTE_EOF'
+          set -euo pipefail
+          mode="$1"
+          concurrency="$((10#$2))"
+          request="$(jq -nc --arg mode "$mode" --argjson concurrency "$concurrency" \
+            '{mode:$mode,concurrency:$concurrency}')"
+          curl --fail-with-body --silent --show-error --max-time 5400 \
+            -H 'Content-Type: application/json' \
+            --data "$request" \
+            http://127.0.0.1:8081/v1/admin/r2-durability
+          REMOTE_EOF
+          } 2>&1)" || {
+            printf '%s\n' "$report" >&2
+            exit 1
+          }
+
+          jq -e --arg mode "$MODE" '
+            .schema_version == 1
+            and .mode == $mode
+            and (.outcome | type == "string")
+            and (.r2_complete | type == "boolean")
+          ' <<<"$report" >/dev/null
+
+          jq 'del(.unrepairable_samples, .missing_from_both_samples, .failure_samples)' \
+            <<<"$report" > r2-durability-public-sanitized.json
+
+          {
+            echo "### Production R2 durability"
+            echo
+            echo "- commit: \`${{ inputs.commit_sha }}\`"
+            echo "- mode: \`$MODE\`"
+            jq -r '
+              "- outcome: `\(.outcome)`",
+              "- R2 complete: `\(.r2_complete)`",
+              "- required: \(.required_objects) objects / \(.required_bytes) bytes",
+              "- local: \(.local.objects) objects / \(.local.bytes) bytes; required missing: \(.local.required_missing)",
+              "- R2: \(.r2.objects) objects / \(.r2.bytes) bytes; required missing: \(.r2.required_missing)",
+              "- planned uploads: \(.planned_uploads) objects / \(.planned_upload_bytes) bytes",
+              "- attempted/uploaded/failed: \(.attempted_uploads) / \(.uploaded_objects) / \(.failed_uploads)",
+              "- unrepairable/missing-from-both: \(.unrepairable_objects) / \(.missing_from_both)"
+            ' <<<"$report"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload public-sanitized durability evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: r2-durability-${{ inputs.mode }}-${{ github.run_id }}
+          path: r2-durability-public-sanitized.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Require complete applied durability
+        if: ${{ inputs.mode == 'apply' }}
+        shell: bash
+        run: |
+          jq -e '.outcome == "applied_complete" and .r2_complete == true' \
+            r2-durability-public-sanitized.json >/dev/null || {
+              echo "apply did not establish complete R2 durability" >&2
+              exit 1
+            }

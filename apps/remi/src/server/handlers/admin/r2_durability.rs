@@ -45,8 +45,27 @@ pub async fn r2_durability(
         return error;
     }
 
+    run_r2_durability_request(&state, body).await
+}
+
+/// Loopback-only variant for host-local operator automation.
+///
+/// The internal admin router enforces the loopback transport boundary. Keeping
+/// this separate from [`r2_durability`] preserves explicit scope checks on the
+/// externally reachable route.
+pub async fn r2_durability_local(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    body: Option<Json<R2DurabilityRequest>>,
+) -> Response {
+    run_r2_durability_request(&state, body).await
+}
+
+async fn run_r2_durability_request(
+    state: &Arc<RwLock<ServerState>>,
+    body: Option<Json<R2DurabilityRequest>>,
+) -> Response {
     let request = body.map_or_else(R2DurabilityRequest::default, |Json(body)| body);
-    match admin_service::run_r2_durability_op(&state, request.mode(), request.concurrency()).await {
+    match admin_service::run_r2_durability_op(state, request.mode(), request.concurrency()).await {
         Ok(report) => Json(report).into_response(),
         Err(ServiceError::BadRequest(message)) => json_error(400, &message, "BAD_REQUEST"),
         Err(error) => {
@@ -60,7 +79,9 @@ pub async fn r2_durability(
 mod tests {
     use super::*;
     use axum::body::Body;
+    use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode};
+    use std::net::SocketAddr;
     use tower::ServiceExt;
 
     use super::super::test_helpers::test_app;
@@ -118,6 +139,48 @@ mod tests {
             .unwrap();
         let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(error["code"], "BAD_REQUEST");
+    }
+
+    #[tokio::test]
+    async fn loopback_router_exposes_plan_without_bearer_scope() {
+        let state = Arc::new(RwLock::new(
+            ServerState::new(crate::server::ServerConfig::default()).unwrap(),
+        ));
+        let remote_app = crate::server::routes::create_admin_router(Arc::clone(&state));
+        let mut remote_request = Request::builder()
+            .method("POST")
+            .uri("/v1/admin/r2-durability")
+            .body(Body::empty())
+            .unwrap();
+        remote_request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([192, 0, 2, 1], 12345))));
+        let remote_response = remote_app.oneshot(remote_request).await.unwrap();
+        assert_eq!(remote_response.status(), StatusCode::FORBIDDEN);
+
+        let app = crate::server::routes::create_admin_router(state);
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/v1/admin/r2-durability")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))));
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error["code"], "BAD_REQUEST");
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("R2 storage is not configured")
+        );
     }
 
     #[tokio::test]

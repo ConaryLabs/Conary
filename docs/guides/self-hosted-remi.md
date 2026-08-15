@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-15
-revision: 4
+revision: 5
 summary: Run your own Remi conversion server in about 30 minutes
 ---
 
@@ -239,6 +239,15 @@ Archive the schema-v1 response. Only `outcome: "applied_complete"` together
 with `r2_complete: true` proves the required set was present in the fresh R2
 listing after upload. This command does not itself enable R2 redirects or local
 eviction; those remain separate serving-policy changes.
+
+Host-local automation can submit the same request to
+`http://127.0.0.1:8081/v1/admin/r2-durability` without copying an external
+admin token onto the host. That route is owned by the loopback-only internal
+admin listener; do not proxy or bind it to a non-loopback address. The Conary
+production workflow `.github/workflows/remi-r2-durability.yml` uses this path
+only for an exact commit already merged into `main` and deployed through the
+protected production environment. Its retained artifact removes diagnostic
+samples and contains aggregate, public-sanitized evidence only.
 
 See `deploy/CLOUDFLARE.md` for the CDN-backed origin setup.
 
