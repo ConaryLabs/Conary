@@ -56,7 +56,10 @@ pub use analytics::AnalyticsRecorder;
 pub use bloom::{BloomStats, ChunkBloomFilter};
 pub use cache::ChunkCache;
 pub use config::RemiConfig;
-pub use conversion::{ConversionBenchmarkEvidence, ConversionService, ServerConversionResult};
+pub use conversion::{
+    ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkSample,
+    ConversionBenchmarkSampleClass, ConversionService, ServerConversionResult,
+};
 pub use index_gen::{IndexGenConfig, IndexGenResult, generate_indices};
 pub use jobs::{ConversionJob, JobManager, JobStatus};
 pub use lite::{ProxyConfig, run_proxy};

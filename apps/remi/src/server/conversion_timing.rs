@@ -4,6 +4,61 @@
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
+use conary_core::filesystem::VerifiedObjectBatchMetrics;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConversionSourceIdentity {
+    pub source_profile: String,
+    pub version: String,
+    pub architecture: Option<String>,
+    pub checksum: String,
+    pub declared_size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ConversionR2Work {
+    pub head_requests: u64,
+    pub hits: u64,
+    pub misses: u64,
+    pub put_requests: u64,
+    pub bytes_written: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ConversionWorkMetrics {
+    pub downloaded_bytes: u64,
+    pub source_bytes_hashed: u64,
+    pub ccs_output_bytes: u64,
+    pub signed_object_count: u64,
+    pub signed_object_bytes: u64,
+    pub cas_incoming_bytes_hashed: u64,
+    pub cas_persistent_bytes_written: u64,
+    pub cas_objects_hashed: u64,
+    pub cas_hits: u64,
+    pub cas_misses: u64,
+    pub cas_race_losers: u64,
+    pub cas_object_syncs: u64,
+    pub cas_shard_syncs: u64,
+    pub cas_root_syncs: u64,
+    pub cas_canonical_bytes_reread: u64,
+    pub r2: ConversionR2Work,
+}
+
+impl ConversionWorkMetrics {
+    pub fn record_cas(&mut self, metrics: VerifiedObjectBatchMetrics) {
+        self.cas_incoming_bytes_hashed = metrics.incoming_bytes_hashed;
+        self.cas_persistent_bytes_written = metrics.persistent_bytes_written;
+        self.cas_objects_hashed = metrics.objects_hashed;
+        self.cas_hits = metrics.hits;
+        self.cas_misses = metrics.misses;
+        self.cas_race_losers = metrics.race_losers;
+        self.cas_object_syncs = metrics.object_syncs;
+        self.cas_shard_syncs = metrics.shard_syncs;
+        self.cas_root_syncs = metrics.root_syncs;
+        self.cas_canonical_bytes_reread = metrics.canonical_bytes_reread;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionPhase {
@@ -39,8 +94,11 @@ pub struct ConversionTimingReport {
     pub package: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<ConversionSourceIdentity>,
     pub phases: Vec<ConversionPhaseTiming>,
     pub skipped_phases: Vec<ConversionSkippedPhase>,
+    pub work: ConversionWorkMetrics,
     pub total_ms: u128,
     pub success: bool,
     #[serde(skip)]
@@ -53,8 +111,10 @@ impl ConversionTimingReport {
             distro: distro.to_string(),
             package: package.to_string(),
             version: version.map(ToString::to_string),
+            source: None,
             phases: Vec::new(),
             skipped_phases: Vec::new(),
+            work: ConversionWorkMetrics::default(),
             total_ms: 0,
             success: false,
             started_at: Instant::now(),
@@ -100,6 +160,7 @@ mod tests {
         assert_eq!(value["package"], json!("nginx"));
         assert_eq!(value["version"], json!("1.28.0"));
         assert_eq!(value["success"], json!(true));
+        assert_eq!(value["work"]["downloaded_bytes"], json!(0));
         assert_eq!(value["phases"][0]["phase"], json!("package_lookup"));
         assert_eq!(value["phases"][0]["duration_ms"], json!(11));
         assert_eq!(value["phases"][1]["phase"], json!("download"));

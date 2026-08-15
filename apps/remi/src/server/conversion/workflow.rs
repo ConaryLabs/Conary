@@ -6,7 +6,8 @@ use super::lookup::PackageDownloadRefresh;
 use super::metadata::RepositoryConversionMetadata;
 use super::persistence::PersistConversionInput;
 use crate::server::conversion_timing::{
-    ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionTimingReport,
+    ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionSourceIdentity,
+    ConversionTimingReport,
 };
 use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow};
@@ -30,6 +31,22 @@ struct ParsedConversion {
 }
 
 impl ConversionService {
+    fn record_source_identity(
+        timing: &mut ConversionTimingReport,
+        source_profile: &str,
+        repo_pkg: &RepositoryPackage,
+    ) -> Result<()> {
+        timing.source = Some(ConversionSourceIdentity {
+            source_profile: source_profile.to_string(),
+            version: repo_pkg.version.clone(),
+            architecture: repo_pkg.architecture.clone(),
+            checksum: repo_pkg.checksum.clone(),
+            declared_size_bytes: u64::try_from(repo_pkg.size)
+                .context("repository package size is negative")?,
+        });
+        Ok(())
+    }
+
     fn public_feed_for_route(
         route: &str,
     ) -> Result<&'static conary_core::repository::supported_profiles::SupportedProfile> {
@@ -53,6 +70,14 @@ impl ConversionService {
 
         match result {
             Ok(mut result) => {
+                timing.work.ccs_output_bytes = result.total_size;
+                timing.work.signed_object_count = result.transport.objects.len() as u64;
+                timing.work.signed_object_bytes = result
+                    .transport
+                    .objects
+                    .iter()
+                    .map(|object| object.size)
+                    .sum();
                 timing.finish(true);
                 Self::log_conversion_timing(&timing);
                 result.timing = Some(timing);
@@ -90,6 +115,7 @@ impl ConversionService {
             )
             .await?;
         timing.record(ConversionPhase::PackageLookup, started.elapsed());
+        Self::record_source_identity(timing, source_feed.id(), &repo_pkg)?;
         if timing.version.is_none() {
             timing.version = Some(repo_pkg.version.clone());
         }
@@ -97,6 +123,26 @@ impl ConversionService {
             "Found package: {} {} from repo {}",
             repo_pkg.name, repo_pkg.version, repo_pkg.repository_id
         );
+
+        let source_checksum = repo_pkg.checksum.clone();
+        let started = Instant::now();
+        let repository_metadata = self
+            .load_repository_conversion_metadata_async(&repo_pkg)
+            .await?;
+        if let Some(existing) = self
+            .cached_conversion_result_async(
+                source_feed.id(),
+                &repo_pkg,
+                &source_checksum,
+                &repository_metadata.digest,
+            )
+            .await?
+        {
+            timing.record(ConversionPhase::CacheLookup, started.elapsed());
+            Self::record_cache_hit_skips(timing);
+            return Ok(existing);
+        }
+        timing.record(ConversionPhase::CacheLookup, started.elapsed());
 
         let cache_dir = self
             .cache_dir
@@ -117,6 +163,8 @@ impl ConversionService {
             .await
             .map_err(|e| anyhow!("Failed to download package: {}", e))?;
         timing.record(ConversionPhase::Download, started.elapsed());
+        timing.work.downloaded_bytes = tokio::fs::metadata(&pkg_path).await?.len();
+        Self::record_source_identity(timing, source_feed.id(), &repo_pkg)?;
         info!("Downloaded to: {:?}", pkg_path);
 
         let checksum_path = pkg_path.clone();
@@ -126,26 +174,14 @@ impl ConversionService {
                 .await
                 .map_err(|e| anyhow!("checksum task panicked: {e}"))??;
         timing.record(ConversionPhase::Checksum, started.elapsed());
-        let source_checksum = repo_pkg.checksum.clone();
+        timing.work.source_bytes_hashed = timing.work.downloaded_bytes;
 
-        let started = Instant::now();
+        // A one-shot upstream refresh can replace the repository row after the
+        // pre-download cache miss. Reload its capability digest so cold
+        // conversion remains bound to the exact row that supplied the bytes.
         let repository_metadata = self
             .load_repository_conversion_metadata_async(&repo_pkg)
             .await?;
-        if let Some(existing) = self
-            .cached_conversion_result_async(
-                source_feed.id(),
-                &repo_pkg,
-                &source_checksum,
-                &repository_metadata.digest,
-            )
-            .await?
-        {
-            timing.record(ConversionPhase::CacheLookup, started.elapsed());
-            Self::record_cache_hit_skips(timing);
-            return Ok(existing);
-        }
-        timing.record(ConversionPhase::CacheLookup, started.elapsed());
 
         let parse_service = self.clone();
         let source_profile = source_feed.id().to_string();
@@ -173,6 +209,8 @@ impl ConversionService {
             stored_transport.verification_duration,
         );
         timing.record(ConversionPhase::CasWrite, stored_transport.cas_duration);
+        timing.work.record_cas(stored_transport.cas_metrics);
+        timing.work.r2 = stored_transport.r2_work;
         if let Some(duration) = stored_transport.r2_duration {
             timing.record(ConversionPhase::R2WriteThrough, duration);
         } else {
@@ -205,6 +243,8 @@ impl ConversionService {
 
     fn record_cache_hit_skips(timing: &mut ConversionTimingReport) {
         for phase in [
+            ConversionPhase::Download,
+            ConversionPhase::Checksum,
             ConversionPhase::ArchiveExtraction,
             ConversionPhase::NativeShellAstExtraction,
             ConversionPhase::AdapterDispatch,
@@ -314,10 +354,13 @@ impl ConversionService {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{eopkg_fixture, production_rust_sources};
+    use super::super::test_support::{
+        create_test_db, eopkg_fixture, insert_repo, production_rust_sources, test_transport,
+    };
     use super::{ConversionService, RepositoryConversionMetadata};
+    use crate::server::conversion_timing::ConversionPhase;
     use conary_core::ccs::SigningKeyPair;
-    use conary_core::db::models::RepositoryPackage;
+    use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
     use conary_core::repository::versioning::VersionScheme;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -338,6 +381,83 @@ mod tests {
         let feed =
             ConversionService::public_feed_for_route("fedora").expect("fedora repository feed");
         assert_eq!(feed.id(), "fedora-44");
+    }
+
+    #[tokio::test]
+    async fn exact_hot_cache_hit_does_not_read_the_source_artifact() {
+        let (database, conn) = create_test_db();
+        let repository_id = insert_repo(&conn, "fedora-base", "fedora");
+        let source_checksum = format!("sha256:{}", "a".repeat(64));
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            "systemd-udev".to_string(),
+            "259.5-1.fc44".to_string(),
+            VersionScheme::Rpm,
+            source_checksum.clone(),
+            42,
+            "http://127.0.0.1:9/unreachable.rpm".to_string(),
+        );
+        package.architecture = Some("x86_64".to_string());
+        package.source_profile = Some("fedora-44".to_string());
+        let package_id = package.insert(&conn).unwrap();
+        let repository_digest =
+            RepositoryProvide::conversion_capabilities_digest(&conn, package_id).unwrap();
+
+        let storage = tempfile::tempdir().unwrap();
+        let cache_dir = storage.path().join("cache");
+        let ccs_path = cache_dir.join("packages/existing.ccs");
+        fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
+        fs::write(&ccs_path, b"existing").unwrap();
+        let transport = test_transport(&[]);
+        let mut converted = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
+            "systemd-udev".to_string(),
+            "259.5-1.fc44".to_string(),
+            "x86_64".to_string(),
+            "rpm".to_string(),
+            source_checksum,
+            &transport,
+            8,
+            "sha256:content".to_string(),
+            ccs_path.to_string_lossy().to_string(),
+            repository_digest,
+        );
+        converted.insert(&conn).unwrap();
+        drop(conn);
+
+        let service = ConversionService::new(
+            storage.path().join("chunks"),
+            cache_dir,
+            database.path().to_path_buf(),
+            None,
+        );
+        let result = service
+            .convert_package_async(
+                "fedora",
+                "systemd-udev",
+                Some("259.5-1.fc44"),
+                Some("x86_64"),
+            )
+            .await
+            .unwrap();
+        let timing = result.timing.expect("conversion timing evidence");
+
+        assert_eq!(result.cache_state, "hot");
+        assert_eq!(timing.work.downloaded_bytes, 0);
+        assert_eq!(timing.work.source_bytes_hashed, 0);
+        for phase in [ConversionPhase::Download, ConversionPhase::Checksum] {
+            assert!(
+                timing
+                    .skipped_phases
+                    .iter()
+                    .any(|skipped| skipped.phase == phase),
+                "{phase:?} must be recorded as skipped"
+            );
+            assert!(
+                timing.phases.iter().all(|recorded| recorded.phase != phase),
+                "{phase:?} must not run on an exact cache hit"
+            );
+        }
     }
 
     #[test]
