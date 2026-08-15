@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use rusqlite::Connection;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::r2::{R2ChunkObject, R2Store};
@@ -19,7 +20,7 @@ const FAILURE_SAMPLE_LIMIT: usize = 10;
 pub const DEFAULT_BACKFILL_CONCURRENCY: usize = 16;
 pub const MAX_BACKFILL_CONCURRENCY: usize = 64;
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum R2DurabilityMode {
     Plan,
@@ -120,7 +121,7 @@ pub async fn run_r2_durability<S: DurableChunkStore + ?Sized + 'static>(
         .await
         .context("join local chunk inventory task")??;
     let initial_r2 = map_r2_objects(store.list_chunk_objects().await?)?;
-    let planned = planned_uploads(&local, &initial_r2);
+    let planned = planned_uploads(&required, &local, &initial_r2);
 
     let mut attempted_uploads = 0usize;
     let mut uploaded_objects = 0usize;
@@ -221,12 +222,20 @@ fn inventory(
 }
 
 fn planned_uploads(
+    required: &BTreeMap<String, u64>,
     local: &BTreeMap<String, u64>,
     r2: &BTreeMap<String, u64>,
 ) -> BTreeMap<String, u64> {
-    local
+    required
         .iter()
-        .filter(|(hash, size)| r2.get(*hash).is_none_or(|r2_size| r2_size != *size))
+        .filter(|(hash, required_size)| {
+            local
+                .get(*hash)
+                .is_some_and(|local_size| local_size == *required_size)
+                && r2
+                    .get(*hash)
+                    .is_none_or(|r2_size| r2_size != *required_size)
+        })
         .map(|(hash, size)| (hash.clone(), *size))
         .collect()
 }
@@ -371,6 +380,7 @@ mod tests {
     struct FakeStore {
         objects: Mutex<BTreeMap<String, Vec<u8>>>,
         puts: Mutex<Vec<String>>,
+        discard_puts: bool,
     }
 
     #[async_trait]
@@ -390,10 +400,12 @@ mod tests {
 
         async fn put_chunk(&self, hash: &str, data: &[u8]) -> Result<()> {
             self.puts.lock().unwrap().push(hash.to_string());
-            self.objects
-                .lock()
-                .unwrap()
-                .insert(hash.to_string(), data.to_vec());
+            if !self.discard_puts {
+                self.objects
+                    .lock()
+                    .unwrap()
+                    .insert(hash.to_string(), data.to_vec());
+            }
             Ok(())
         }
     }
@@ -466,6 +478,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plan_does_not_backfill_unreferenced_local_objects() {
+        let (_temp, db_path, objects_dir, _hash, _data) = fixture();
+        let unreferenced_data = b"unreferenced cache object";
+        let unreferenced_hash = conary_core::hash::sha256(unreferenced_data);
+        let unreferenced_path = chunk_path(&objects_dir, &unreferenced_hash);
+        std::fs::create_dir_all(unreferenced_path.parent().unwrap()).unwrap();
+        std::fs::write(unreferenced_path, unreferenced_data).unwrap();
+        let store = Arc::new(FakeStore::default());
+
+        let report = run_r2_durability(&db_path, &objects_dir, store, R2DurabilityMode::Plan, 2)
+            .await
+            .unwrap();
+
+        assert_eq!(report.local.objects, 2);
+        assert_eq!(report.required_objects, 1);
+        assert_eq!(report.planned_uploads, 1);
+    }
+
+    #[tokio::test]
     async fn apply_uploads_verified_bytes_and_rechecks_r2() {
         let (_temp, db_path, objects_dir, hash, data) = fixture();
         let store = Arc::new(FakeStore::default());
@@ -492,7 +523,7 @@ mod tests {
     #[tokio::test]
     async fn apply_refuses_corrupt_local_object() {
         let (_temp, db_path, objects_dir, hash, _data) = fixture();
-        std::fs::write(chunk_path(&objects_dir, &hash), b"corrupt").unwrap();
+        std::fs::write(chunk_path(&objects_dir, &hash), b"corrupt chunk").unwrap();
         let store = Arc::new(FakeStore::default());
 
         let report = run_r2_durability(
@@ -511,6 +542,50 @@ mod tests {
         assert_eq!(report.uploaded_objects, 0);
         assert!(report.failure_samples[0].error.contains("digest"));
         assert!(store.puts.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn apply_repairs_r2_size_disagreement_from_verified_local_bytes() {
+        let (_temp, db_path, objects_dir, hash, data) = fixture();
+        let store = Arc::new(FakeStore::default());
+        store
+            .objects
+            .lock()
+            .unwrap()
+            .insert(hash.clone(), b"wrong-size".to_vec());
+
+        let report = run_r2_durability(
+            &db_path,
+            &objects_dir,
+            Arc::clone(&store),
+            R2DurabilityMode::Apply,
+            2,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.outcome, R2DurabilityOutcome::AppliedComplete);
+        assert_eq!(report.planned_uploads, 1);
+        assert_eq!(report.uploaded_objects, 1);
+        assert_eq!(store.objects.lock().unwrap().get(&hash), Some(&data));
+    }
+
+    #[tokio::test]
+    async fn apply_does_not_trust_successful_put_without_post_inventory() {
+        let (_temp, db_path, objects_dir, _hash, _data) = fixture();
+        let store = Arc::new(FakeStore {
+            discard_puts: true,
+            ..Default::default()
+        });
+
+        let report = run_r2_durability(&db_path, &objects_dir, store, R2DurabilityMode::Apply, 2)
+            .await
+            .unwrap();
+
+        assert_eq!(report.uploaded_objects, 1);
+        assert_eq!(report.failed_uploads, 0);
+        assert_eq!(report.outcome, R2DurabilityOutcome::AppliedIncomplete);
+        assert!(!report.r2_complete);
     }
 
     #[tokio::test]

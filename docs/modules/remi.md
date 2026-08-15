@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-15
-revision: 24
-summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, database-writer ownership, reproducible conversion profiling, publication, and serving authority
+revision: 25
+summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, database-writer ownership, reproducible conversion profiling, R2 durability inventory, publication, and serving authority
 ---
 
 # Remi
@@ -509,6 +509,33 @@ MCP tool `chunk_gc` is the agent surface, and `POST /v1/admin/chunk-gc` on the
 external admin router is the operator surface; both require the `admin` scope.
 Deletion requires an explicit `dry_run: false`, so an omitted body, an omitted
 field, or an absent MCP parameter previews the run instead of deleting.
+
+## R2 Durability Inventory And Backfill
+
+`apps/remi/src/server/r2_durability.rs` owns the typed comparison between the
+local CAS, R2, and the object identities and sizes named by persisted converted
+and public-native transport envelopes. It does not infer durability from the
+`chunk_access` cache index. A malformed transport, a repeated object with a
+contradictory size, or a non-canonical chunk key fails the inventory instead of
+silently reducing the required set.
+
+The operator surface is `POST /v1/admin/r2-durability`; the agent surface is
+the MCP `r2_durability` tool. Both require admin authority and emit schema-v1
+reports with exact total and required object counts and bytes. An omitted body
+or mode is read-only `plan`. `apply` uploads only required local objects absent
+from R2, or required objects whose R2 size disagrees with local storage, with 1
+to 64 concurrent PUT requests. Each local object is SHA-256 verified against
+its path before upload. Apply then lists R2 again, and `r2_complete` is true
+only when every required identity has the exact authority-declared size in that
+fresh listing. Missing-from-both identities and upload failures are counted in
+full with at most ten bounded diagnostic samples.
+
+This inventory/backfill slice does not switch storage authority. Local CAS
+remains durable and R2 remains write-through until #116 separately proves the
+redirect, range, missing-object, eviction-then-install, bounded-cache, and host
+egress acceptance criteria. Operators must not enable `r2_redirect` or evict
+required local objects merely because an apply request was submitted; retain
+the schema-v1 `applied_complete` report as the prerequisite evidence.
 
 ## MCP
 

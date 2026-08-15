@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-29
-revision: 3
+last_updated: 2026-08-15
+revision: 4
 summary: Run your own Remi conversion server in about 30 minutes
 ---
 
@@ -209,6 +209,35 @@ Provide credentials through environment variables, not the config file:
 CONARY_R2_ACCESS_KEY=...
 CONARY_R2_SECRET_KEY=...
 ```
+
+Before relying on R2 for durable retrieval, inventory it against local CAS and
+the persisted package-object authority. The authenticated admin operation
+defaults to a read-only plan:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer $REMI_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"plan"}' \
+  "$REMI_ADMIN_ENDPOINT/v1/admin/r2-durability"
+```
+
+Review `planned_uploads`, `planned_upload_bytes`, and
+`missing_from_both_samples` before applying. Apply is explicit and concurrency
+is bounded between 1 and 64:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer $REMI_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"apply","concurrency":16}' \
+  "$REMI_ADMIN_ENDPOINT/v1/admin/r2-durability"
+```
+
+Archive the schema-v1 response. Only `outcome: "applied_complete"` together
+with `r2_complete: true` proves the required set was present in the fresh R2
+listing after upload. This command does not itself enable R2 redirects or local
+eviction; those remain separate serving-policy changes.
 
 See `deploy/CLOUDFLARE.md` for the CDN-backed origin setup.
 
