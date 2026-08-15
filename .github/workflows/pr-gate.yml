@@ -283,6 +283,57 @@ jobs:
             exit 1
           fi
 
+  native-daily-driver-corpus:
+    name: native-daily-driver-corpus (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora44, ubuntu-26.04, arch]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+      - name: Require the hosted container runtime
+        run: docker info
+      - uses: ./.github/actions/build-static-conary
+      - name: Build the daily-driver harness
+        run: cargo build -p conary -p conary-test
+      - uses: ./.github/actions/cache-base-image
+        with:
+          distro: ${{ matrix.distro }}
+      - name: Build the ${{ matrix.distro }} daily-driver image
+        run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
+      - name: Run the attributable daily-driver corpus
+        env:
+          CONARY_TEST_REUSE_IMAGE: "1"
+        run: >-
+          cargo run -p conary-test --
+          run
+          --distro "${{ matrix.distro }}"
+          --phase 4
+          --suite phase4-native-pm-parity
+      - name: Verify daily-driver corpus evidence
+        run: |
+          result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
+          bash scripts/check-conary-test-result-gate.sh "$result"
+          bash scripts/check-conary-corpus-result-gate.sh "$result"
+
+  native-daily-driver-corpus-gate:
+    name: native-daily-driver-corpus
+    if: ${{ always() }}
+    needs: native-daily-driver-corpus
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every daily-driver corpus job
+        env:
+          MATRIX_RESULT: ${{ needs.native-daily-driver-corpus.result }}
+        run: |
+          if [[ "$MATRIX_RESULT" != "success" ]]; then
+            echo "native daily-driver corpus matrix result: $MATRIX_RESULT" >&2
+            exit 1
+          fi
+
   doctests:
     name: doctests
     runs-on: ubuntu-latest

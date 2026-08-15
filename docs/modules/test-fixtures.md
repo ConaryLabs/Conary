@@ -489,6 +489,9 @@ Each fixture family should record:
   source-trigger, activation, target-helper, or declared-relation coverage from
   the chain's 2 MiB file, out-of-band trigger, disabled unit, adjacent helper
   path, or file-collision negative.
+  PRs run that chain on Fedora 44, Ubuntu 26.04, and Arch behind the stable
+  `native-daily-driver-corpus` aggregate context; every lane applies both the
+  ordinary suite-result and typed corpus-result gates.
   Derivative roots are assembled from digest-pinned transport images, exact
   release identity/keyring packages, and byte-pinned APT declarations captured
   from authenticated release media. Product code must not branch on their

@@ -10,6 +10,8 @@ use std::{
 const MATRIX_JOB_ID: &str = "native-cross-source-lifecycle";
 const MATRIX_GATE_ID: &str = "native-cross-source-lifecycle-gate";
 const STABLE_CHECK_CONTEXT: &str = "native-cross-source-lifecycle";
+const DAILY_DRIVER_JOB_ID: &str = "native-daily-driver-corpus";
+const DAILY_DRIVER_GATE_ID: &str = "native-daily-driver-corpus-gate";
 const RELEASE_ARTIFACT_MATRIX_JOB_ID: &str = "native-package-lifecycle";
 const RELEASE_ARTIFACT_GATE_ID: &str = "release-artifact-proof";
 
@@ -317,6 +319,61 @@ fn native_cross_source_gate_is_a_stable_all_lane_required_context() {
             "matrix gate produced the wrong result for `{result}`"
         );
     }
+}
+
+#[test]
+fn native_daily_driver_gate_executes_the_three_attributable_lanes() {
+    let workflow = load_workflow();
+    let job: MatrixJob = parse_job(&workflow, DAILY_DRIVER_JOB_ID);
+
+    assert_eq!(
+        job.name,
+        "native-daily-driver-corpus (${{ matrix.distro }})"
+    );
+    assert_eq!(job.timeout_minutes, 90);
+    assert!(!job.continue_on_error);
+    assert_eq!(job.condition, None);
+    assert!(!job.strategy.fail_fast);
+    assert_eq!(
+        job.strategy.matrix.distro,
+        ["fedora44", "ubuntu-26.04", "arch"]
+    );
+
+    let runtime = named_step(&job.steps, "Require the hosted container runtime");
+    assert_eq!(runtime.run.as_deref(), Some("docker info"));
+
+    let run = named_step(&job.steps, "Run the attributable daily-driver corpus");
+    assert_eq!(
+        run.run.as_deref(),
+        Some(
+            "cargo run -p conary-test -- run --distro \"${{ matrix.distro }}\" --phase 4 --suite phase4-native-pm-parity"
+        )
+    );
+    assert_eq!(
+        run.env.get("CONARY_TEST_REUSE_IMAGE").map(String::as_str),
+        Some("1")
+    );
+    assert!(!run.continue_on_error);
+
+    let evidence = named_step(&job.steps, "Verify daily-driver corpus evidence");
+    let evidence_run = evidence
+        .run
+        .as_deref()
+        .expect("daily-driver evidence command");
+    assert!(evidence_run.contains("check-conary-test-result-gate.sh"));
+    assert!(evidence_run.contains("check-conary-corpus-result-gate.sh"));
+    assert!(!evidence.continue_on_error);
+
+    let gate: GateJob = parse_job(&workflow, DAILY_DRIVER_GATE_ID);
+    assert_eq!(gate.name, "native-daily-driver-corpus");
+    assert_eq!(gate.condition, "${{ always() }}");
+    assert_eq!(gate.needs, DAILY_DRIVER_JOB_ID);
+    assert!(!gate.continue_on_error);
+    let gate_step = named_step(&gate.steps, "Require every daily-driver corpus job");
+    assert_eq!(
+        gate_step.env.get("MATRIX_RESULT").map(String::as_str),
+        Some("${{ needs.native-daily-driver-corpus.result }}")
+    );
 }
 
 #[test]

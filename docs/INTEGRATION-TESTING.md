@@ -555,6 +555,12 @@ helper; and an overlapping-file refusal is not a declared native relation
 conflict. Those properties still require fixtures that prove their exact
 contracts.
 
+The PR gate runs the complete `phase4-native-pm-parity` manifest on Fedora 44,
+Ubuntu 26.04, and Arch in a non-fail-fast matrix, then applies both the generic
+suite-result checker and the typed corpus-coverage checker to every lane. The
+stable `native-daily-driver-corpus` aggregate context fails unless all three
+source-format/target pairs complete.
+
 Corpus coverage boundaries (not product support exemptions):
 
 - native alternatives registration is still a foreign-format conversion note
