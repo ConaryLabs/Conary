@@ -23,7 +23,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
-use tracing::debug;
+use tracing::{debug, warn};
 
 mod inventory;
 pub use inventory::query_installed_inventory;
@@ -705,11 +705,29 @@ fn remove_dpkg_records_at(
         mode,
     )?;
 
+    // The status database is dpkg's installed-package authority. Once its
+    // durable rewrite succeeds, ancillary info-file cleanup must not turn the
+    // completed authority transfer into a reported failure: takeover would
+    // otherwise compensate Conary back to AdoptedFull even though dpkg no
+    // longer has the package stanza. Keep cleanup best-effort and visible.
+    if let Err(error) = cleanup_dpkg_info_records(&selectors, info_dir) {
+        warn!(
+            "dpkg authority removal committed, but ancillary info cleanup under {} failed: {error}",
+            info_dir.display()
+        );
+    }
+
+    debug!(
+        "Successfully removed {} package records from dpkg database",
+        identities.len()
+    );
+    Ok(())
+}
+
+fn cleanup_dpkg_info_records(selectors: &BTreeSet<String>, info_dir: &Path) -> Result<()> {
     for entry in std::fs::read_dir(info_dir)? {
         let entry = entry?;
-        let name = entry.file_name().into_string().map_err(|_| {
-            Error::ParseError("dpkg info directory contains a non-UTF-8 filename".to_string())
-        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
         if selectors
             .iter()
             .any(|selector| name.starts_with(&format!("{selector}.")))
@@ -718,11 +736,6 @@ fn remove_dpkg_records_at(
         }
     }
     std::fs::File::open(info_dir)?.sync_all()?;
-
-    debug!(
-        "Successfully removed {} package records from dpkg database",
-        identities.len()
-    );
     Ok(())
 }
 
@@ -863,6 +876,27 @@ mod tests {
         let error = filter_dpkg_status(status, &targets).unwrap_err();
 
         assert!(error.to_string().contains("fixture:arm64"));
+    }
+
+    #[test]
+    fn committed_status_removal_is_not_rejected_by_ancillary_cleanup_failure() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let status = temp.path().join("status");
+        let missing_info = temp.path().join("missing-info");
+        std::fs::write(
+            &status,
+            "Package: fixture\nArchitecture: amd64\nStatus: install ok installed\n\n",
+        )
+        .unwrap();
+
+        remove_dpkg_records_at(
+            &[dpkg_identity("fixture:amd64", "amd64")],
+            &status,
+            &missing_info,
+        )
+        .unwrap();
+
+        assert!(std::fs::read_to_string(status).unwrap().is_empty());
     }
 
     #[test]
