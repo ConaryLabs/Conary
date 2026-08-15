@@ -188,6 +188,9 @@ impl SubstituterChain {
                     ));
                 }
                 Err(e) => {
+                    if matches!(e, Error::DurableChunkUnavailable { .. }) {
+                        return Err(e);
+                    }
                     debug!(
                         "Source {} ({}) could not provide chunk {}: {}",
                         idx, name, hash, e
@@ -252,6 +255,9 @@ impl SubstituterChain {
                         newly_resolved.insert((*hash).as_str());
                     }
                     Err(e) => {
+                        if matches!(e, Error::DurableChunkUnavailable { .. }) {
+                            return Err(e);
+                        }
                         debug!("Source {} could not provide chunk {}: {}", name, hash, e);
                     }
                 }

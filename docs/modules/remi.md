@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-15
-revision: 26
+revision: 27
 summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, database-writer ownership, reproducible conversion profiling, R2 durability inventory, publication, and serving authority
 ---
 
@@ -10,7 +10,7 @@ Remi is Conary's on-demand conversion and package-serving service. For the
 limited public preview, its configured public repository feeds are Fedora 44,
 Ubuntu 26.04, and Arch. It converts upstream RPM, DEB, and Arch packages into
 CCS artifacts, stores converted content in the local content-addressed store,
-and can write chunks through to R2 when configured.
+and publishes every chunk to R2 when that durable authority is configured.
 
 M4d routes every `{distro}` path parameter through repository-feed profile
 validation before DB queries, cache/key filesystem paths, or release-upload
@@ -476,8 +476,9 @@ are regression inputs; they do not weaken verification or storage authority.
 The first committed small/median/multi-GiB baseline and its measured
 optimization are recorded in [performance evidence](../performance/README.md).
 
-When R2 flags are omitted, benchmark JSON records `r2_write_through` as skipped.
-To measure cloud write-through, pass `--r2-endpoint`, `--r2-bucket`,
+When benchmark R2 arguments are omitted, benchmark JSON records the historical
+schema-v1 phase name `r2_write_through` as skipped. To measure cloud durability,
+pass `--r2-endpoint`, `--r2-bucket`,
 `--r2-prefix`, and `--r2-region` with `CONARY_R2_ACCESS_KEY` and
 `CONARY_R2_SECRET_KEY` set in the environment.
 
@@ -541,12 +542,26 @@ and retains a public-sanitized aggregate report with all diagnostic samples
 removed. Apply fails the workflow unless the fresh post-upload report is
 `applied_complete` with `r2_complete: true`.
 
-This inventory/backfill slice does not switch storage authority. Local CAS
-remains durable and R2 remains write-through until #116 separately proves the
-redirect, range, missing-object, eviction-then-install, bounded-cache, and host
-egress acceptance criteria. Operators must not enable `r2_redirect` or evict
-required local objects merely because an apply request was submitted; retain
-the schema-v1 `applied_complete` report as the prerequisite evidence.
+When `[r2].enabled = true`, R2 is the only durable chunk authority. Startup
+requires an explicit endpoint and usable credentials; it does not continue in
+a local-durable mode when R2 initialization fails. Conversion publishes chunks
+to R2 before it publishes converted-package state. Public chunk `GET` requests
+return an R2 presigned redirect, including requests carrying `Range`; `HEAD`
+and missing-object checks query R2. Local presence never masks an absent or
+unreachable R2 object. Such disagreement returns HTTP 503 with the stable
+`x-conary-error: durable-chunk-unavailable` marker, which the core client maps
+to `DurableChunkUnavailable` without trying another repository.
+
+The local chunk directory is a bounded LRU cache owned by
+`apps/remi/src/server/bounded_cache.rs`. Conversion completion and the hourly
+maintenance loop enforce `storage.max_cache_size`; each candidate is checked
+against R2 immediately before unlink. Missing or unreachable durable state
+fails closed, protected objects remain local, and failure to reach the exact
+byte bound is an error. The retired `r2_redirect`, `write_through`,
+`eviction_threshold`, eviction-age, and batch-chunk modes are rejected instead
+of preserving multiple storage policies. With R2 disabled, Remi is an explicit
+local-only deployment and bounded eviction is unavailable because no second
+durable copy exists.
 
 ## MCP
 

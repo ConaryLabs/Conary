@@ -107,6 +107,11 @@ pub enum Error {
     #[error("Download failed: {0}")]
     DownloadError(String),
 
+    /// A repository declared a chunk servable but its durable object authority
+    /// could not provide that exact object.
+    #[error("Durable chunk {hash} is unavailable from {authority}")]
+    DurableChunkUnavailable { hash: String, authority: String },
+
     /// HTTP response status from an exact repository URL
     #[error("HTTP {status} from {url}")]
     HttpStatus { status: u16, url: String },

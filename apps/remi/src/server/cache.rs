@@ -1,11 +1,8 @@
 // apps/remi/src/server/cache.rs
-//! LRU chunk cache management
+//! Local chunk cache storage and access bookkeeping.
 //!
-//! Tracks chunk access times and evicts old chunks when storage
-//! exceeds the configured threshold or chunks exceed TTL.
-//!
-//! Uses a database-backed LRU index (chunk_access table) for O(1) stats
-//! and efficient eviction queries, replacing legacy mtime-based scanning.
+//! Eviction is owned by `bounded_cache`, which verifies durable R2 presence
+//! before removing any local object.
 
 use crate::server::ServerState;
 use crate::server::handlers::human_bytes;
@@ -24,8 +21,6 @@ pub struct ChunkCache {
     chunk_dir: PathBuf,
     /// Maximum cache size in bytes
     max_bytes: u64,
-    /// Chunk TTL in days (chunks not accessed in this period are candidates for eviction)
-    ttl_days: u32,
     /// Path to database for tracking access
     db_path: PathBuf,
 }
@@ -45,39 +40,25 @@ pub struct CacheStats {
     pub chunk_count: usize,
     /// Percentage of cache used
     pub usage_percent: f64,
-    /// Number of chunks older than TTL
-    pub stale_chunks: usize,
-    /// Bytes in stale chunks
-    pub stale_bytes: u64,
     /// Number of protected chunks (immune to eviction)
     pub protected_chunks: usize,
-    /// TTL in days
-    pub ttl_days: u32,
-}
-
-/// Result of an eviction run
-#[derive(Debug, Clone, Serialize)]
-pub struct EvictionResult {
-    /// Number of chunks evicted
-    pub chunks_evicted: usize,
-    /// Total bytes freed
-    pub bytes_freed: u64,
-    /// Human-readable bytes freed
-    pub bytes_freed_human: String,
-    /// Reason for eviction
-    pub reason: String,
-    /// Number of chunks skipped (protected/error)
-    pub chunks_skipped: usize,
 }
 
 impl ChunkCache {
-    pub fn new(chunk_dir: PathBuf, max_bytes: u64, ttl_days: u32, db_path: PathBuf) -> Self {
+    pub fn new(chunk_dir: PathBuf, max_bytes: u64, db_path: PathBuf) -> Self {
         Self {
             chunk_dir,
             max_bytes,
-            ttl_days,
             db_path,
         }
+    }
+
+    pub(crate) fn max_bytes(&self) -> u64 {
+        self.max_bytes
+    }
+
+    pub(crate) fn db_path(&self) -> &std::path::Path {
+        &self.db_path
     }
 
     /// Get the filesystem path for a chunk
@@ -193,11 +174,6 @@ impl ChunkCache {
             0.0
         };
 
-        // TODO: Efficiently get stale stats from DB without full scan?
-        // For now reporting 0 for stale to keep this fast O(1)
-        // A full stale count would require `SELECT COUNT(*) WHERE last_accessed < ...`
-        // which is fast enough with index, let's add it if needed.
-
         Ok(CacheStats {
             total_bytes: stats.total_bytes,
             total_size_human: human_bytes(stats.total_bytes),
@@ -205,174 +181,44 @@ impl ChunkCache {
             max_size_human: human_bytes(self.max_bytes),
             chunk_count: stats.total_chunks,
             usage_percent,
-            stale_chunks: 0, // Not querying this to keep stats extremely fast
-            stale_bytes: 0,
             protected_chunks: stats.protected_chunks,
-            ttl_days: self.ttl_days,
         })
-    }
-
-    /// Run LRU eviction
-    ///
-    /// Evicts chunks based on two criteria:
-    /// 1. Stale chunks: older than ttl_days
-    /// 2. Size limit: if cache > max_bytes, evict oldest chunks until under limit
-    ///
-    /// Uses DB index for efficient candidate selection.
-    pub async fn run_eviction(&self) -> Result<EvictionResult> {
-        tracing::info!("Starting DB-backed LRU eviction check");
-
-        let db_path = self.db_path.clone();
-        let max_bytes = self.max_bytes;
-        let ttl_days = self.ttl_days;
-        let self_clone = self.clone();
-
-        tokio::task::spawn_blocking(move || {
-            let conn = crate::server::open_runtime_db(&db_path)?;
-
-            let mut freed = 0u64;
-            let mut evicted = 0usize;
-            let mut skipped = 0usize;
-            let mut reason = String::new();
-
-            // Phase 1: Evict stale chunks
-            // Calculate cutoff time
-            let now = std::time::SystemTime::now();
-            let cutoff = now - Duration::from_secs(ttl_days as u64 * 24 * 3600);
-            let datetime: chrono::DateTime<chrono::Utc> = cutoff.into();
-            let cutoff_str = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
-
-            let stale_chunks = ChunkAccess::get_stale_chunks(&conn, &cutoff_str)?;
-
-            if !stale_chunks.is_empty() {
-                reason = format!(
-                    "TTL eviction ({} chunks older than {} days)",
-                    stale_chunks.len(),
-                    ttl_days
-                );
-
-                for chunk in stale_chunks {
-                    // Delete file first
-                    let path = self_clone.chunk_path(&chunk.hash);
-                    if path.exists()
-                        && let Err(e) = std::fs::remove_file(&path)
-                    {
-                        tracing::warn!("Failed to delete chunk file {}: {}", chunk.hash, e);
-                        skipped += 1;
-                        continue;
-                    }
-
-                    // Delete from DB
-                    if let Err(e) = ChunkAccess::delete(&conn, &chunk.hash) {
-                        tracing::warn!("Failed to delete chunk db record {}: {}", chunk.hash, e);
-                        // If file is gone but DB record remains, it's a "ghost" record.
-                        // Ideally we should handle this, but for now just warn.
-                    } else {
-                        freed += chunk.size_bytes as u64;
-                        evicted += 1;
-                    }
-                }
-            }
-
-            // Phase 2: Size-based eviction
-            let stats = ChunkAccess::get_stats(&conn)?;
-            let current_size = stats.total_bytes;
-
-            if current_size > max_bytes {
-                let bytes_to_free = current_size - max_bytes;
-                tracing::info!(
-                    "Cache size {} exceeds limit {}, need to free {}",
-                    human_bytes(current_size),
-                    human_bytes(max_bytes),
-                    human_bytes(bytes_to_free)
-                );
-
-                let size_reason = format!(
-                    "Size limit exceeded (need {} freed)",
-                    human_bytes(bytes_to_free)
-                );
-                if reason.is_empty() {
-                    reason = size_reason;
-                } else {
-                    reason = format!("{}; {}", reason, size_reason);
-                }
-
-                // Get LRU chunks - fetch enough to cover the deficit + buffer
-                // Estimate count based on avg chunk size (say 64KB)
-                let avg_size = if stats.total_chunks > 0 {
-                    current_size / stats.total_chunks as u64
-                } else {
-                    65536
-                };
-                let chunks_needed = (bytes_to_free / avg_size) as usize + 100;
-
-                let lru_chunks = ChunkAccess::get_lru_chunks(&conn, chunks_needed)?;
-                let mut size_freed_phase2 = 0u64;
-
-                for chunk in lru_chunks {
-                    if size_freed_phase2 >= bytes_to_free {
-                        break;
-                    }
-
-                    let path = self_clone.chunk_path(&chunk.hash);
-                    if path.exists()
-                        && let Err(e) = std::fs::remove_file(&path)
-                    {
-                        tracing::warn!("Failed to delete chunk file {}: {}", chunk.hash, e);
-                        skipped += 1;
-                        continue;
-                    }
-
-                    if let Err(e) = ChunkAccess::delete(&conn, &chunk.hash) {
-                        tracing::warn!("Failed to delete chunk db record {}: {}", chunk.hash, e);
-                    } else {
-                        size_freed_phase2 += chunk.size_bytes as u64;
-                        freed += chunk.size_bytes as u64;
-                        evicted += 1;
-                    }
-                }
-            }
-
-            if evicted == 0 && skipped == 0 {
-                reason = "No eviction needed".to_string();
-            }
-
-            Ok(EvictionResult {
-                chunks_evicted: evicted,
-                bytes_freed: freed,
-                bytes_freed_human: human_bytes(freed),
-                reason,
-                chunks_skipped: skipped,
-            })
-        })
-        .await?
     }
 }
 
 /// Background eviction loop
 ///
-/// Runs every hour to check cache size and evict old chunks.
+/// Runs every hour to enforce the configured local cache bound.
 pub async fn run_eviction_loop(state: Arc<RwLock<ServerState>>) {
     let interval = Duration::from_secs(3600); // 1 hour
 
     loop {
         tokio::time::sleep(interval).await;
 
-        // Run chunk eviction
-        {
+        let (bounded_cache, r2_store, bloom_filter) = {
             let state_guard = state.read().await;
-            match state_guard.chunk_cache.run_eviction().await {
+            (
+                state_guard.bounded_cache.clone(),
+                state_guard.r2_store.clone(),
+                state_guard.bloom_filter.clone(),
+            )
+        };
+        if let Some(r2_store) = r2_store {
+            match bounded_cache.enforce(r2_store.as_ref()).await {
                 Ok(result) => {
-                    if result.chunks_evicted > 0 {
+                    if result.objects_evicted > 0 {
+                        if let Some(bloom) = bloom_filter {
+                            bloom.mark_dirty();
+                        }
                         tracing::info!(
-                            "Scheduled eviction: {} chunks, {} freed",
-                            result.chunks_evicted,
-                            result.bytes_freed_human
+                            "Scheduled bounded eviction: {} chunks, {} bytes freed",
+                            result.objects_evicted,
+                            result.bytes_freed
                         );
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Eviction loop error: {}", e);
+                    tracing::error!("Bounded cache enforcement error: {}", e);
                 }
             }
         }
@@ -410,7 +256,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             1024 * 1024,
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -431,7 +276,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             1024 * 1024,
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -455,7 +299,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             1024 * 1024,
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -475,7 +318,6 @@ mod tests {
         let cache = ChunkCache::new(
             PathBuf::from("/data/chunks"),
             1024 * 1024,
-            30,
             PathBuf::from("/data/db.sqlite"),
         );
 
@@ -494,7 +336,6 @@ mod tests {
         let cache = ChunkCache::new(
             PathBuf::from("/data/chunks"),
             1024 * 1024,
-            30,
             PathBuf::from("/data/db.sqlite"),
         );
 
@@ -511,7 +352,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             1024 * 1024,
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -545,7 +385,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             max_bytes,
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -556,7 +395,6 @@ mod tests {
         let stats = cache.stats().await.unwrap();
         assert_eq!(stats.max_bytes, max_bytes);
         assert!((stats.usage_percent - 50.0).abs() < 0.1);
-        assert_eq!(stats.ttl_days, 30);
     }
 
     #[tokio::test]
@@ -566,7 +404,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             0, // zero max
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -581,7 +418,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             1024 * 1024,
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -610,7 +446,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             1024 * 1024,
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -629,98 +464,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_eviction_no_eviction_needed() {
-        let db_file = create_test_db();
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let cache = ChunkCache::new(
-            temp_dir.path().to_path_buf(),
-            1024 * 1024, // 1MB max
-            30,
-            db_file.path().to_path_buf(),
-        );
-
-        // Store a small chunk - well within limits
-        let data = b"small chunk";
-        cache.store_chunk(&test_hash(data), data).await.unwrap();
-
-        let result = cache.run_eviction().await.unwrap();
-        assert_eq!(result.chunks_evicted, 0);
-        assert_eq!(result.bytes_freed, 0);
-        assert_eq!(result.reason, "No eviction needed");
-    }
-
-    #[tokio::test]
-    async fn test_eviction_size_based() {
-        let db_file = create_test_db();
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let cache = ChunkCache::new(
-            temp_dir.path().to_path_buf(),
-            500, // Very small max: 500 bytes
-            365, // Long TTL so we don't trigger TTL eviction
-            db_file.path().to_path_buf(),
-        );
-
-        // Store chunks totaling more than 500 bytes
-        let chunk_a = vec![0u8; 200];
-        let chunk_b = vec![1u8; 200];
-        let chunk_c = vec![2u8; 200];
-        cache
-            .store_chunk(&test_hash(&chunk_a), &chunk_a)
-            .await
-            .unwrap();
-        cache
-            .store_chunk(&test_hash(&chunk_b), &chunk_b)
-            .await
-            .unwrap();
-        cache
-            .store_chunk(&test_hash(&chunk_c), &chunk_c)
-            .await
-            .unwrap();
-
-        // Total: 600 bytes, max: 500 bytes => should evict at least 100 bytes
-        let result = cache.run_eviction().await.unwrap();
-        assert!(result.chunks_evicted > 0);
-        assert!(result.bytes_freed > 0);
-        assert!(result.reason.contains("Size limit exceeded"));
-    }
-
-    #[tokio::test]
-    async fn test_eviction_skips_protected_chunks() {
-        let db_file = create_test_db();
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let cache = ChunkCache::new(
-            temp_dir.path().to_path_buf(),
-            300, // Very small max
-            365,
-            db_file.path().to_path_buf(),
-        );
-
-        let chunk_a = vec![0u8; 200];
-        let chunk_b = vec![1u8; 200];
-        let hash1 = test_hash(&chunk_a);
-        let hash2 = test_hash(&chunk_b);
-
-        cache.store_chunk(&hash1, &chunk_a).await.unwrap();
-        cache.store_chunk(&hash2, &chunk_b).await.unwrap();
-
-        // Protect one chunk
-        cache.protect_chunks(std::slice::from_ref(&hash1)).await;
-
-        // Total: 400 bytes, max: 300 bytes
-        let _result = cache.run_eviction().await.unwrap();
-
-        // The protected chunk should still exist
-        assert!(cache.has_chunk(&hash1).await);
-    }
-
-    #[tokio::test]
     async fn test_store_chunk_atomic_write() {
         let db_file = create_test_db();
         let temp_dir = tempfile::TempDir::new().unwrap();
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             1024 * 1024,
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -743,7 +492,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             1024 * 1024,
-            30,
             db_file.path().to_path_buf(),
         );
 
@@ -772,7 +520,6 @@ mod tests {
         let cache = ChunkCache::new(
             temp_dir.path().to_path_buf(),
             max_bytes,
-            30,
             db_file.path().to_path_buf(),
         );
 

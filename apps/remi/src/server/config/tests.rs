@@ -73,7 +73,6 @@ fn test_default_remi_config_to_server_config_regression() {
     assert_eq!(runtime.cache_dir, PathBuf::from("/conary/cache"));
     assert_eq!(runtime.max_concurrent_conversions, 32);
     assert_eq!(runtime.cache_max_bytes, 700 * 1024 * 1024 * 1024);
-    assert_eq!(runtime.chunk_ttl_days, 30);
     assert!(runtime.enable_bloom_filter);
     assert_eq!(runtime.bloom_expected_chunks, 1_000_000);
     assert_eq!(runtime.upstream_url, None);
@@ -175,7 +174,6 @@ workers = 4
 
 [storage]
 root = "/conary"
-eviction_threshold = 0.90
 negative_cache_ttl = "15m"
 
 [conversion]
@@ -262,13 +260,35 @@ forgejo_token = "secret"
 }
 
 #[test]
-fn test_invalid_eviction_threshold() {
-    let toml_str = r#"
-[storage]
-eviction_threshold = 1.5
-"#;
-    let config: RemiConfig = toml::from_str(toml_str).unwrap();
-    assert!(config.validate().is_err());
+fn retired_eviction_policy_is_rejected() {
+    for (field, value) in [
+        ("eviction_threshold", "1.5"),
+        ("eviction_min_age", "\"1h\""),
+    ] {
+        let toml_str = format!("[storage]\n{field} = {value}\n");
+        let error = toml::from_str::<RemiConfig>(&toml_str)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(field), "{error}");
+    }
+}
+
+#[test]
+fn retired_r2_mode_flags_are_rejected() {
+    for field in ["write_through", "r2_redirect", "account_id"] {
+        let toml_str = format!("[r2]\n{field} = true\n");
+        let error = toml::from_str::<RemiConfig>(&toml_str)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(field), "{error}");
+    }
+}
+
+#[test]
+fn enabled_r2_requires_an_endpoint() {
+    let config: RemiConfig = toml::from_str("[r2]\nenabled = true\n").unwrap();
+    let error = config.validate().unwrap_err().to_string();
+    assert!(error.contains("r2.endpoint"), "{error}");
 }
 
 #[test]

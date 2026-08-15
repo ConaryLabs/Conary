@@ -128,6 +128,12 @@ workflow.
   `apply` fails unless a fresh post-upload R2 listing proves complete, and the
   retained artifact is aggregate `public-sanitized` evidence with diagnostic
   samples removed.
+- After completeness is established, `[r2].enabled = true` is the single
+  authority switch: startup requires usable R2 configuration, public chunk
+  reads use presigned redirects, and local chunks are an R2-verified LRU cache
+  bounded by `storage.max_cache_size`. Missing durable objects fail closed;
+  operators do not restore retired redirect, write-through, threshold, or age
+  flags.
 - Conary release artifact publication through the same helper verifies the
   CI-produced `SHA256SUMS` file from the staging directory before installing
   files into `/conary/releases/<version>`. The helper copies that verified

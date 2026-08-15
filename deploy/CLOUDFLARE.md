@@ -130,17 +130,20 @@ Update `remi.toml`:
 ```toml
 [r2]
 enabled = true
-account_id = "your-cloudflare-account-id"
 endpoint = "https://your-account-id.r2.cloudflarestorage.com"
 bucket = "conary-chunks"
 prefix = "chunks/"
-write_through = true
 ```
 
-### Inventory and backfill before authority changes
+`enabled = true` makes R2 the durable chunk authority. Remi fails startup if
+the endpoint or credentials cannot initialize the store, writes every converted
+chunk before publication, redirects public chunk reads to presigned R2 URLs,
+and treats local storage only as the `storage.max_cache_size` bounded cache.
 
-Write-through covers only objects stored after it was enabled. Before enabling
-redirect serving or evicting local chunks, use the authenticated
+### Inventory and backfill before enabling R2 authority
+
+An existing deployment may contain objects created before R2 was configured.
+Before enabling R2 authority and bounded local eviction, use the authenticated
 `POST /v1/admin/r2-durability` operation described in
 `docs/guides/self-hosted-remi.md`. Run `mode=plan`, record its exact object and
 byte gap, then explicitly run `mode=apply` and retain the schema-v1 report.

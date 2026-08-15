@@ -122,6 +122,14 @@ fn delete_failures(prefix: &str, response: &DeleteObjectsResult) -> Vec<(String,
         .collect()
 }
 
+fn classify_head_status(key: &str, status: u16) -> Result<bool> {
+    match status {
+        200..=299 => Ok(true),
+        404 => Ok(false),
+        _ => anyhow::bail!("R2 HEAD failed for {key}: HTTP {status}"),
+    }
+}
+
 /// Cloudflare R2 object storage backend for CAS chunks
 #[derive(Debug)]
 pub struct R2Store {
@@ -200,7 +208,7 @@ impl R2Store {
         let key = self.chunk_key(hash);
 
         match self.bucket.head_object(&key).await {
-            Ok((_, code)) => Ok(code < 300),
+            Ok((_, code)) => classify_head_status(&key, code),
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("404") || msg.contains("NoSuchKey") {
@@ -313,6 +321,18 @@ mod tests {
         assert_eq!(config.prefix, "chunks/");
         assert_eq!(config.region, "auto");
         assert!(config.endpoint.is_empty());
+    }
+
+    #[test]
+    fn head_status_distinguishes_absence_from_authority_failure() {
+        assert!(classify_head_status("chunks/hash", 200).unwrap());
+        assert!(!classify_head_status("chunks/hash", 404).unwrap());
+        for status in [401, 403, 429, 500, 503] {
+            let error = classify_head_status("chunks/hash", status)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(&status.to_string()), "{error}");
+        }
     }
 
     #[test]

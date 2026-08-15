@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-15
-revision: 5
+revision: 6
 summary: Run your own Remi conversion server in about 30 minutes
 ---
 
@@ -55,8 +55,6 @@ audit_log = true
 
 [storage]
 root = "/conary"
-eviction_threshold = 0.90
-eviction_min_age = "1h"
 negative_cache_ttl = "15m"
 max_cache_size = "50GB"
 
@@ -198,10 +196,15 @@ section. Enable it only after the local path works:
 ```toml
 [r2]
 enabled = true
+endpoint = "https://your-account-id.r2.cloudflarestorage.com"
 bucket = "conary-chunks"
 prefix = "chunks/"
-write_through = true
 ```
+
+Enabling R2 is an authority switch, not an optional write mode: startup then
+requires the endpoint and credentials, every converted chunk is durably
+published there, and public chunk reads use presigned R2 redirects. The local
+chunk directory becomes an LRU cache bounded by `storage.max_cache_size`.
 
 Provide credentials through environment variables, not the config file:
 
@@ -237,8 +240,10 @@ curl --fail-with-body \
 
 Archive the schema-v1 response. Only `outcome: "applied_complete"` together
 with `r2_complete: true` proves the required set was present in the fresh R2
-listing after upload. This command does not itself enable R2 redirects or local
-eviction; those remain separate serving-policy changes.
+listing after upload. This command does not itself enable R2 authority. Set
+`r2.enabled = true` only after inventory reports `r2_complete: true`; restarting
+with that setting makes R2 authoritative and activates R2-verified local cache
+eviction.
 
 Host-local automation can submit the same request to
 `http://127.0.0.1:8081/v1/admin/r2-durability` without copying an external

@@ -313,6 +313,15 @@ fn build_current_config(
         "max_concurrent".to_string(),
         toml::Value::Integer(options.max_concurrent as i64),
     );
+    if let Some(storage) = root.get_mut("storage").and_then(toml::Value::as_table_mut) {
+        storage.remove("eviction_threshold");
+        storage.remove("eviction_min_age");
+    }
+    if let Some(r2) = root.get_mut("r2").and_then(toml::Value::as_table_mut) {
+        r2.remove("account_id");
+        r2.remove("write_through");
+        r2.remove("r2_redirect");
+    }
     let release_publish = root
         .entry("release_publish")
         .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
@@ -731,6 +740,15 @@ admin_bind = "127.0.0.1:8081"
 
 [storage]
 root = "{}"
+eviction_threshold = 0.90
+eviction_min_age = "1h"
+
+[r2]
+enabled = true
+endpoint = "https://r2.example.test"
+account_id = "retired"
+write_through = true
+r2_redirect = false
 
 [upstream.old]
 base_url = "https://legacy.example.test"
@@ -817,6 +835,17 @@ fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         assert!(config.contains("repository_keys_dir"));
         assert!(config.contains("convert_top_n = 1000"));
         assert!(config.contains("distros = [\"fedora\"]"));
+        assert!(config.contains("enabled = true"));
+        assert!(config.contains("endpoint = \"https://r2.example.test\""));
+        for retired in [
+            "eviction_threshold",
+            "eviction_min_age",
+            "account_id",
+            "write_through",
+            "r2_redirect",
+        ] {
+            assert!(!config.contains(retired), "retired key survived: {retired}");
+        }
         assert_eq!(
             fs::read_to_string(&options.repository_manifest_target).unwrap(),
             repository_manifest()

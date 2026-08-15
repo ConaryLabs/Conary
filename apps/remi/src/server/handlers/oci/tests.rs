@@ -320,7 +320,6 @@ fn test_build_manifest() {
     let chunk_cache = crate::server::ChunkCache::new(
         chunk_dir.path().to_path_buf(),
         1024 * 1024 * 1024,
-        30,
         temp_file.path().to_path_buf(),
     );
     for (hash, bytes) in [
@@ -370,7 +369,6 @@ fn test_build_manifest_not_found() {
     let chunk_cache = crate::server::ChunkCache::new(
         chunk_dir.path().to_path_buf(),
         1024 * 1024 * 1024,
-        30,
         temp_file.path().to_path_buf(),
     );
 
@@ -400,7 +398,6 @@ fn oci_manifest_ignores_stale_converted_rows() {
     let chunk_cache = crate::server::ChunkCache::new(
         chunk_dir.path().to_path_buf(),
         1024 * 1024 * 1024,
-        30,
         temp_file.path().to_path_buf(),
     );
 
@@ -424,7 +421,6 @@ fn oci_tags_catalog_and_manifest_ignore_stale_rows() {
     let chunk_cache = crate::server::ChunkCache::new(
         chunk_dir.path().to_path_buf(),
         1024 * 1024 * 1024,
-        30,
         temp_file.path().to_path_buf(),
     );
 

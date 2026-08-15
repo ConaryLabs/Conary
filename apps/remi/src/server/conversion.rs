@@ -15,8 +15,8 @@ pub(crate) mod test_support;
 mod types;
 mod workflow;
 
-use crate::server::R2Store;
 use crate::server::database_writer::DatabaseWriter;
+use crate::server::{BoundedCache, R2Store};
 use std::path::PathBuf;
 use std::sync::Arc;
 pub use types::{
@@ -34,8 +34,10 @@ pub struct ConversionService {
     cache_dir: PathBuf,
     /// Database path
     db_path: PathBuf,
-    /// Optional R2 store for write-through
+    /// Optional R2 durable authority (absent for local-only deployments).
     r2_store: Option<Arc<R2Store>>,
+    /// Serialized owner for the R2-verified local cache bound.
+    bounded_cache: Option<BoundedCache>,
     /// Remi-owned per-distro TUF keys used to authenticate converted CCS.
     repository_keys_dir: Option<PathBuf>,
     /// Shared owner for the short SQLite mutation phases of conversion work.
@@ -54,6 +56,7 @@ impl ConversionService {
             cache_dir,
             db_path,
             r2_store,
+            bounded_cache: None,
             repository_keys_dir: None,
             database_writer: DatabaseWriter::default(),
         }
@@ -66,6 +69,11 @@ impl ConversionService {
 
     pub(crate) fn with_r2_store(mut self, r2_store: Option<Arc<R2Store>>) -> Self {
         self.r2_store = r2_store;
+        self
+    }
+
+    pub(crate) fn with_bounded_cache(mut self, bounded_cache: BoundedCache) -> Self {
+        self.bounded_cache = Some(bounded_cache);
         self
     }
 

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-14
-revision: 74
+last_updated: 2026-08-15
+revision: 75
 summary: Route workspace and release boundaries, coherent native inventory adoption, set-based package transaction persistence, typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
 ---
 
@@ -211,8 +211,12 @@ commands.
   wiring and validation start in `apps/remi/src/deployment.rs` and
   `deploy/remi-deploy-helper.sh`. Signed object transport authority starts in
   `crates/conary-core/src/ccs/transport.rs`; Remi persistence begins in
-  `apps/remi/src/server/conversion/storage.rs`, and client CAS reuse begins in
-  `crates/conary-core/src/repository/remi.rs`.
+  `apps/remi/src/server/conversion/storage.rs`. R2 durability and local cache
+  bounds start in `apps/remi/src/server/r2.rs` and
+  `apps/remi/src/server/bounded_cache.rs`; public chunk authority starts in
+  `apps/remi/src/server/handlers/chunks.rs`, and typed client retrieval starts
+  in `crates/conary-core/src/repository/chunk_fetcher.rs`. Client CAS reuse
+  begins in `crates/conary-core/src/repository/remi.rs`.
 - conaryd routes and package jobs: `docs/modules/feature-ownership.md` slug
   `conaryd`, plus `docs/modules/conaryd.md`.
 - Exact-tag release construction, signing, immutable publication, deployment,
