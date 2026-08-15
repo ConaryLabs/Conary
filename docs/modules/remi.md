@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-14
-revision: 22
+last_updated: 2026-08-15
+revision: 23
 summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, reproducible conversion profiling, publication, and serving authority
 ---
 
@@ -463,6 +463,8 @@ phase latency from deterministic work: downloaded and hashed source bytes,
 CCS and signed-object sizes, verified-CAS hits, misses, bytes, and durability
 calls, plus R2 HEAD hits/misses, PUT count, and bytes written. These counters
 are regression inputs; they do not weaken verification or storage authority.
+The first committed small/median/multi-GiB baseline and its measured
+optimization are recorded in [performance evidence](../performance/README.md).
 
 When R2 flags are omitted, benchmark JSON records `r2_write_through` as skipped.
 To measure cloud write-through, pass `--r2-endpoint`, `--r2-bucket`,
