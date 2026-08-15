@@ -12,8 +12,8 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow, bail};
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallReason,
-    InstallSource, Trove, TroveType,
+    Changeset, ChangesetStatus, FileEntry, InstallReason, InstallSource, PackageTransactionStaging,
+    StagedAnchorDisposition, StagedPayloadRow, Trove, TroveType,
 };
 use conary_core::packages::{
     InstalledInventorySnapshot, InstalledPackageIdentity, NativeInstallReason, SystemPackageManager,
@@ -868,20 +868,35 @@ fn execute_adoption_plan(
             let trove_id = trove.insert(tx)?;
 
             progress.set_phase(selector, AdoptPhase::Inserting);
+            let mut package_rows = PackageTransactionStaging::begin(tx)?;
             for captured in &captured_files {
                 let file_path = &captured.source.0;
-                let mut file_entry = captured.file_entry(trove_id);
-                file_entry
-                    .insert_or_replace(
-                        tx,
-                        ExistingDirectoryMaterialization::ApplyIncoming,
-                    )
+                package_rows
+                    .stage_payload(&StagedPayloadRow {
+                        entry: captured.file_entry(trove_id),
+                        package_name: identity.native.name().to_string(),
+                        component_name: None,
+                        directory_materialization:
+                            conary_core::db::models::ExistingDirectoryMaterialization::ApplyIncoming,
+                        disposition: StagedAnchorDisposition::Auto,
+                        selected_root_node: None,
+                        materialization_target_path: None,
+                        history: None,
+                    })
                     .map_err(|error| {
                         conary_core::Error::ConfigError(format!(
                             "failed to persist exact adopted payload authority for {file_path}: {error}"
                         ))
                     })?;
             }
+            package_rows.validate_and_reconcile()?;
+            let sqlite_work = package_rows.finish()?;
+            tracing::debug!(
+                rows_loaded = sqlite_work.rows_loaded,
+                statements = sqlite_work.total_statement_executions(),
+                query_shapes = sqlite_work.query_shapes,
+                "reconciled staged adoption package rows"
+            );
 
             super::requirements::insert_package_requirements(
                 tx,

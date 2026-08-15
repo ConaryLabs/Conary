@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-14
-revision: 73
-summary: Route workspace and release boundaries, coherent native inventory adoption, typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
+revision: 74
+summary: Route workspace and release boundaries, coherent native inventory adoption, set-based package transaction persistence, typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -104,7 +104,10 @@ commands.
   `apps/conary/src/commands/install/shared_directory.rs`; exact persisted
   claims and package-facing payload ownership start in
   `crates/conary-core/src/db/models/payload_claim.rs` and
-  `crates/conary-core/src/db/models/package_payload_ownership.rs`; bounded
+  `crates/conary-core/src/db/models/package_payload_ownership.rs`; transaction-local
+  payload/component/config/history staging and set-based canonical reconciliation
+  start in `crates/conary-core/src/db/models/package_transaction_staging.rs` and
+  `crates/conary-core/src/db/models/package_transaction_staging/`; bounded
   selected-root node inspection starts in
   `crates/conary-core/src/filesystem/selected_root.rs`. Debian dpkg process
   environment, administrative state, trigger/config capture, and

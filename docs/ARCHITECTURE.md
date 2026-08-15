@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-14
-revision: 54
-summary: Describe workspace and release boundaries, coherent native inventory adoption, exact native source authority, package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
+revision: 55
+summary: Describe workspace and release boundaries, coherent native inventory adoption, exact native source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -762,6 +762,16 @@ SQLite -> publish the recorded generation. The selected root starts from the
 latest retryable snapshot, the current generation artifact, or authoritative DB/CAS
 state when no generation exists. There is no mutable-host package execution
 path.
+
+Package persistence within that SQLite transaction uses transaction-local TEMP
+tables owned by `PackageTransactionStaging`. Cached load statements accept
+typed payload nodes/content, component membership, replacement-owner decisions,
+config projections, and history rows. Validation loads canonical claims as
+sets, derives deterministic anchor decisions, and then projects content,
+anchors, claims, hardlinks, components, configs, and history through a fixed
+family of ordered SQL statements. Install/update, adoption, remove, and
+rollback history share this authority; dropping or rolling back the transaction
+removes all staging state, so it cannot become a second persisted database.
 
 Before the SQLite commit, any lifecycle, payload, config, trigger, or validation
 failure rolls back the database transaction and discards the selected root.

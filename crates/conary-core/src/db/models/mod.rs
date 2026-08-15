@@ -49,6 +49,7 @@ mod metadata;
 mod native_lifecycle_residual_state;
 mod native_publication;
 mod package_payload_ownership;
+mod package_transaction_staging;
 mod payload_claim;
 mod persisted_value;
 mod provenance;
@@ -112,6 +113,10 @@ pub use native_publication::{
     NATIVE_NOARCH, NativePackagePublication, NativePublicationStatus, normalize_native_architecture,
 };
 pub use package_payload_ownership::{PackagePayloadEntry, PackagePayloadOwnership};
+pub use package_transaction_staging::{
+    PackageTransactionSqlWork, PackageTransactionStaging, StagedAnchorDisposition, StagedConfigRow,
+    StagedHistoryAction, StagedHistoryRow, StagedPayloadOutcome, StagedPayloadRow,
+};
 pub use payload_claim::{PayloadClaim, PayloadClaimAnchorPolicy};
 pub use persisted_value::{InvalidPersistedValue, PersistedValueCorruption};
 pub use provenance::Provenance;

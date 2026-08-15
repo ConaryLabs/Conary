@@ -7,8 +7,8 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use conary_core::db::models::{
-    ExistingDirectoryMaterialization, FileEntry, InstallSource, PayloadClaim, ProvideEntry, Trove,
-    TroveType,
+    ExistingDirectoryMaterialization, FileEntry, InstallSource, PackageTransactionStaging,
+    PayloadClaim, ProvideEntry, StagedAnchorDisposition, StagedPayloadRow, Trove, TroveType,
 };
 use conary_core::filesystem::PrivateCasWriter;
 use conary_core::generation::root_manifest::{
@@ -143,23 +143,32 @@ pub(super) fn synchronize_captured_root(
     }
 
     let captured_trove_id = insert_captured_root_trove(tx, changeset_id)?;
-    let mut captured_entries = 0;
-    let mut package_entries = 0;
+    let mut package_rows = PackageTransactionStaging::begin(tx)?;
     for entry in entries {
-        if FileEntry::find_by_path(tx, &entry.path)?.is_some() {
-            FileEntry::reconcile_selected_root_materialization(
-                tx,
-                &entry.path,
-                &entry.node,
-                entry.content.as_ref(),
-            )?;
-            package_entries += 1;
-        } else {
-            let mut file = FileEntry::new(entry.path, entry.node, entry.content, captured_trove_id);
-            file.insert_or_replace(tx, ExistingDirectoryMaterialization::ApplyIncoming)?;
-            captured_entries += 1;
-        }
+        package_rows.stage_payload(&StagedPayloadRow {
+            entry: FileEntry::new(entry.path, entry.node, entry.content, captured_trove_id),
+            package_name: LIVE_ROOT_PACKAGE_NAME.to_string(),
+            component_name: None,
+            directory_materialization: ExistingDirectoryMaterialization::ApplyIncoming,
+            disposition: StagedAnchorDisposition::ReconcileCapturedRoot,
+            selected_root_node: None,
+            materialization_target_path: None,
+            history: None,
+        })?;
     }
+    let outcomes = package_rows.validate_and_reconcile()?;
+    let captured_entries = outcomes
+        .values()
+        .filter(|outcome| outcome.materialized)
+        .count();
+    let package_entries = outcomes.len() - captured_entries;
+    let sqlite_work = package_rows.finish()?;
+    tracing::debug!(
+        rows_loaded = sqlite_work.rows_loaded,
+        statements = sqlite_work.total_statement_executions(),
+        query_shapes = sqlite_work.query_shapes,
+        "reconciled staged captured-root rows"
+    );
 
     Ok(CapturedRootSync {
         captured_entries,

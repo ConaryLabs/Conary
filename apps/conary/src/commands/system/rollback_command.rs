@@ -5,7 +5,8 @@
 use super::rollback_restore;
 use anyhow::{Context, Result, anyhow, bail};
 use conary_core::db::models::{
-    Changeset, ChangesetKind, ChangesetStatus, GenerationPublication, Trove,
+    Changeset, ChangesetKind, ChangesetStatus, GenerationPublication, PackageTransactionStaging,
+    StagedHistoryAction, StagedHistoryRow, Trove,
 };
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use conary_core::transaction::{TransactionConfig, TransactionEngine};
@@ -337,6 +338,7 @@ fn delete_reverted_trove(
         .iter()
         .map(|entry| (entry.path.as_str(), entry))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let mut package_rows = PackageTransactionStaging::begin(tx)?;
     for path in payload.materialized_removal_paths() {
         let entry = entries.get(path.as_str()).ok_or_else(|| {
             anyhow!(
@@ -345,19 +347,21 @@ fn delete_reverted_trove(
                 trove.name
             )
         })?;
-        tx.execute(
-            "INSERT INTO file_history (changeset_id, path, sha256_hash, action)
-             VALUES (?1, ?2, ?3, 'delete')",
-            rusqlite::params![
-                rollback_changeset_id,
-                path,
-                entry
-                    .content
-                    .as_ref()
-                    .map(|content| content.sha256.as_str())
-            ],
-        )?;
+        package_rows.stage_history(&StagedHistoryRow {
+            changeset_id: rollback_changeset_id,
+            path: path.clone(),
+            sha256_hash: entry.content.as_ref().map(|content| content.sha256.clone()),
+            action: StagedHistoryAction::Delete,
+        })?;
     }
+    package_rows.validate_and_reconcile()?;
+    let sqlite_work = package_rows.finish()?;
+    tracing::debug!(
+        rows_loaded = sqlite_work.rows_loaded,
+        statements = sqlite_work.total_statement_executions(),
+        query_shapes = sqlite_work.query_shapes,
+        "reconciled staged rollback removal rows"
+    );
     conary_core::db::models::ConfigFile::delete_by_trove(tx, trove_id)?;
     Trove::delete(tx, trove_id)?;
     Ok(())
