@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-13
-revision: 25
+last_updated: 2026-08-15
+revision: 26
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and retired Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -120,6 +120,14 @@ workflow.
   every exact source profile, and at least one validated converted artifact for
   every configured public profile; dispatch or a green health probe alone is
   not deployment proof.
+- Production R2 inventory and backfill use the manually dispatched
+  `remi-r2-durability` workflow after its exact `commit_sha` is merged into
+  `main` and deployed. The protected job enters through the normal Remi SSH
+  boundary and calls the typed operation on the loopback-only admin listener;
+  it does not copy an admin bearer token off the host. `plan` is read-only.
+  `apply` fails unless a fresh post-upload R2 listing proves complete, and the
+  retained artifact is aggregate `public-sanitized` evidence with diagnostic
+  samples removed.
 - Conary release artifact publication through the same helper verifies the
   CI-produced `SHA256SUMS` file from the staging directory before installing
   files into `/conary/releases/<version>`. The helper copies that verified

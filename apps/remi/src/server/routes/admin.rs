@@ -35,6 +35,10 @@ pub fn create_admin_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/admin/recipes/build", post(recipes::build_recipe))
         .route("/v1/admin/info", get(server_info))
         .route("/v1/admin/refresh", post(refresh_upstream))
+        .route(
+            "/v1/admin/r2-durability",
+            post(admin_handlers::r2_durability_local),
+        )
         .route("/v1/admin/models/{name}", put(models::put_model))
         .route(
             "/v1/admin/tuf/{distro}/refresh-timestamp",
