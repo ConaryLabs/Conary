@@ -32,7 +32,7 @@ enum Command {
     IndexGen(IndexGenArgs),
     /// Pre-warm the chunk cache by converting popular packages.
     Prewarm(PrewarmArgs),
-    /// Benchmark conversion latency and scriptlet corpus evidence.
+    /// Record reproducible conversion latency and work evidence.
     ConversionBenchmark(ConversionBenchmarkArgs),
     /// Remi-owned trust admin commands.
     Trust {
@@ -188,9 +188,13 @@ struct ConversionBenchmarkArgs {
     #[arg(long = "package")]
     packages: Vec<String>,
 
-    /// Maximum repository packages to scan when no package names are supplied.
-    #[arg(long, default_value = "25")]
-    max_packages: usize,
+    /// Stable operator-defined identity for the benchmark hardware.
+    #[arg(long)]
+    hardware_label: String,
+
+    /// Runs per exact package subject. Two records cold and warm behavior.
+    #[arg(long, default_value = "2")]
+    iterations: usize,
 
     /// Emit JSON lines instead of pretty JSON.
     #[arg(long)]
@@ -537,6 +541,7 @@ fn run_prewarm_command(args: PrewarmArgs) -> Result<()> {
 }
 
 fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()> {
+    anyhow::ensure!(args.iterations > 0, "--iterations must be at least 1");
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         let r2_store = if let Some(endpoint) = args.r2_endpoint.clone() {
@@ -559,45 +564,52 @@ fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()>
         )
         .with_repository_keys_dir(args.repository_keys_dir);
 
-        let packages = if args.packages.is_empty() {
-            service
-                .benchmark_package_sample(&args.distro, args.max_packages)
-                .await?
+        let samples = if args.packages.is_empty() {
+            service.benchmark_size_class_samples(&args.distro).await?
         } else {
-            args.packages
+            let mut samples = Vec::with_capacity(args.packages.len());
+            for package in &args.packages {
+                samples.push(
+                    service
+                        .benchmark_explicit_sample(&args.distro, package)
+                        .await?,
+                );
+            }
+            samples
         };
 
-        if packages.is_empty() {
-            eprintln!(
-                "No repository packages matched distro '{}'; run repo sync before benchmarking.",
-                args.distro
-            );
-        }
+        let environment =
+            remi::server::ConversionBenchmarkEnvironment::capture(args.hardware_label.clone());
 
-        for package in packages {
-            let result = service
-                .benchmark_package_conversion(&args.distro, &package, None, None)
-                .await;
+        for sample in samples {
+            for iteration in 1..=args.iterations {
+                let result = service
+                    .benchmark_package_conversion(&args.distro, &sample, iteration, &environment)
+                    .await;
 
-            match result {
-                Ok(evidence) => {
-                    if args.jsonl {
-                        println!("{}", serde_json::to_string(&evidence)?);
-                    } else {
-                        println!("{}", serde_json::to_string_pretty(&evidence)?);
+                match result {
+                    Ok(evidence) => {
+                        if args.jsonl {
+                            println!("{}", serde_json::to_string(&evidence)?);
+                        } else {
+                            println!("{}", serde_json::to_string_pretty(&evidence)?);
+                        }
                     }
-                }
-                Err(err) => {
-                    let evidence = serde_json::json!({
-                        "distro": &args.distro,
-                        "package": package,
-                        "converted": false,
-                        "error": err.to_string(),
-                    });
-                    if args.jsonl {
-                        println!("{}", serde_json::to_string(&evidence)?);
-                    } else {
-                        println!("{}", serde_json::to_string_pretty(&evidence)?);
+                    Err(err) => {
+                        let evidence = serde_json::json!({
+                            "schema_version": 1,
+                            "environment": &environment,
+                            "sample": &sample,
+                            "iteration": iteration,
+                            "distro": &args.distro,
+                            "converted": false,
+                            "error": err.to_string(),
+                        });
+                        if args.jsonl {
+                            println!("{}", serde_json::to_string(&evidence)?);
+                        } else {
+                            println!("{}", serde_json::to_string_pretty(&evidence)?);
+                        }
                     }
                 }
             }

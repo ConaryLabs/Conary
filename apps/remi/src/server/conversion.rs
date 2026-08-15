@@ -20,7 +20,11 @@ use crate::server::R2Store;
 use database::ConversionDatabaseWriter;
 use std::path::PathBuf;
 use std::sync::Arc;
-pub use types::{ConversionBenchmarkEvidence, ScriptletPackageMetadata, ServerConversionResult};
+pub use types::{
+    CONVERSION_BENCHMARK_SCHEMA_V1, ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence,
+    ConversionBenchmarkSample, ConversionBenchmarkSampleClass, ScriptletPackageMetadata,
+    ServerConversionResult,
+};
 
 /// Conversion service for Remi
 #[derive(Clone)]

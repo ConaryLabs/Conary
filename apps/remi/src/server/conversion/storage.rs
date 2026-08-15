@@ -5,7 +5,7 @@ use super::ConversionService;
 use anyhow::{Context, Result};
 use conary_core::ccs::convert::ConversionResult;
 use conary_core::db::models::ChunkAccess;
-use conary_core::filesystem::{CasStore, object_path};
+use conary_core::filesystem::{CasStore, VerifiedObjectBatchMetrics, object_path};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -14,7 +14,9 @@ pub(super) struct StoredTransport {
     pub(super) transport: conary_core::ccs::CcsTransportEnvelopeV1,
     pub(super) verification_duration: Duration,
     pub(super) cas_duration: Duration,
+    pub(super) cas_metrics: VerifiedObjectBatchMetrics,
     pub(super) r2_duration: Option<Duration>,
+    pub(super) r2_work: crate::server::conversion_timing::ConversionR2Work,
 }
 
 impl ConversionService {
@@ -72,31 +74,37 @@ impl ConversionService {
 
         let local_objects_dir = objects_dir.clone();
         let cas_started = Instant::now();
-        tokio::task::spawn_blocking(move || {
+        let verified_set = tokio::task::spawn_blocking(move || {
             let cas =
                 CasStore::new(local_objects_dir).context("initialize signed CCS object CAS")?;
             conary_core::ccs::transport::persist_verified_archive_objects(&verification, &cas)
-                .map(|_| ())
         })
         .await
         .context("join signed CCS object persistence task")??;
         let cas_duration = cas_started.elapsed();
+        let cas_metrics = verified_set.metrics();
 
         // The upsert also refreshes the GC grace authority for CAS hits.
         self.persist_chunk_sizes(&exact_sizes).await?;
 
+        let mut r2_work = crate::server::conversion_timing::ConversionR2Work::default();
         let r2_duration = if let Some(r2) = self.r2_store.clone() {
             let started = Instant::now();
             for object in &transport.objects {
+                r2_work.head_requests += 1;
                 if r2.head_chunk(&object.sha256).await? {
+                    r2_work.hits += 1;
                     continue;
                 }
+                r2_work.misses += 1;
                 let path = object_path(&objects_dir, &object.sha256)?;
                 let data = tokio::fs::read(&path)
                     .await
                     .with_context(|| format!("read signed CCS object {}", object.sha256))?;
                 conary_core::hash::verify_sha256(&data, &object.sha256)?;
                 r2.put_chunk(&object.sha256, &data).await?;
+                r2_work.put_requests += 1;
+                r2_work.bytes_written += object.size;
             }
             Some(started.elapsed())
         } else {
@@ -107,7 +115,9 @@ impl ConversionService {
             transport,
             verification_duration,
             cas_duration,
+            cas_metrics,
             r2_duration,
+            r2_work,
         })
     }
 

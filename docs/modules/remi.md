@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-12
-revision: 21
-summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, conversion, publication, and serving authority
+last_updated: 2026-08-14
+revision: 22
+summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, reproducible conversion profiling, publication, and serving authority
 ---
 
 # Remi
@@ -429,8 +429,13 @@ listing or lifecycle-summary behavior changes, also run `cargo test -p remi`.
 
 ## Conversion Benchmark Evidence
 
-Remi includes a local benchmark command for measuring cold-path conversion cost
-before making public latency claims:
+Remi includes a local benchmark command for measuring exact cold and warm
+conversion work before making public latency claims. With no `--package`
+arguments, it selects three distinct, not-currently-converted repository rows:
+the smallest positive-size artifact, the median artifact by size, and the
+largest artifact. The emitted source checksum, version, architecture, and byte
+size pin the subjects selected from the current authenticated repository
+snapshot.
 
 ```bash
 cargo run -p remi -- conversion-benchmark \
@@ -438,18 +443,37 @@ cargo run -p remi -- conversion-benchmark \
   --chunk-dir /var/lib/conary/data/chunks \
   --cache-dir /var/lib/conary/data/cache \
   --distro fedora \
-  --package nginx \
+  --hardware-label remi-production-i7-8700-raid1 \
+  --iterations 2 \
   --jsonl
 ```
+
+Explicit repeated `--package` arguments replace automatic size-class
+selection. An explicit package may already be converted, so its records are a
+cold baseline only when `cache_state` says `cold`; the tool never relabels a
+hot result. Each sample is resolved to one exact version and architecture
+before its iterations start, and the run fails if that source identity changes
+between selection and conversion.
+
+Schema-v1 evidence records the operator-defined hardware label, Remi version,
+source commit and dirty state, OS, kernel, CPU model, logical CPU count, and
+memory size. A commit-worthy baseline requires an exact `source_commit`,
+`source_dirty: false`, and the full JSONL output. Per-sample evidence separates
+phase latency from deterministic work: downloaded and hashed source bytes,
+CCS and signed-object sizes, verified-CAS hits, misses, bytes, and durability
+calls, plus R2 HEAD hits/misses, PUT count, and bytes written. These counters
+are regression inputs; they do not weaken verification or storage authority.
 
 When R2 flags are omitted, benchmark JSON records `r2_write_through` as skipped.
 To measure cloud write-through, pass `--r2-endpoint`, `--r2-bucket`,
 `--r2-prefix`, and `--r2-region` with `CONARY_R2_ACCESS_KEY` and
 `CONARY_R2_SECRET_KEY` set in the environment.
 
-The benchmark runs the real conversion contract and writes CCS/CAS cache
-artifacts under the supplied cache and chunk directories. Use scratch paths for
-local experiments unless you intentionally want to warm a real Remi cache.
+The benchmark runs the real conversion contract and writes CCS/CAS cache,
+conversion-database, and optional R2 state through the normal service path.
+Use a copied database plus scratch cache/chunk paths and a benchmark R2 prefix
+for experiments. Point it at live state only when the resulting conversions
+and cache warming are intentional operator actions.
 The former scan-only corpus tokenizer was removed because line splitting and
 manual command lists duplicated the formal shell/parser pipeline and produced
 non-authoritative evidence that required ongoing heuristic maintenance.

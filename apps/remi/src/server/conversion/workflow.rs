@@ -6,7 +6,8 @@ use super::lookup::PackageDownloadRefresh;
 use super::metadata::RepositoryConversionMetadata;
 use super::persistence::PersistConversionInput;
 use crate::server::conversion_timing::{
-    ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionTimingReport,
+    ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionSourceIdentity,
+    ConversionTimingReport,
 };
 use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow};
@@ -53,6 +54,14 @@ impl ConversionService {
 
         match result {
             Ok(mut result) => {
+                timing.work.ccs_output_bytes = result.total_size;
+                timing.work.signed_object_count = result.transport.objects.len() as u64;
+                timing.work.signed_object_bytes = result
+                    .transport
+                    .objects
+                    .iter()
+                    .map(|object| object.size)
+                    .sum();
                 timing.finish(true);
                 Self::log_conversion_timing(&timing);
                 result.timing = Some(timing);
@@ -90,6 +99,14 @@ impl ConversionService {
             )
             .await?;
         timing.record(ConversionPhase::PackageLookup, started.elapsed());
+        timing.source = Some(ConversionSourceIdentity {
+            source_profile: source_feed.id().to_string(),
+            version: repo_pkg.version.clone(),
+            architecture: repo_pkg.architecture.clone(),
+            checksum: repo_pkg.checksum.clone(),
+            declared_size_bytes: u64::try_from(repo_pkg.size)
+                .context("repository package size is negative")?,
+        });
         if timing.version.is_none() {
             timing.version = Some(repo_pkg.version.clone());
         }
@@ -117,6 +134,7 @@ impl ConversionService {
             .await
             .map_err(|e| anyhow!("Failed to download package: {}", e))?;
         timing.record(ConversionPhase::Download, started.elapsed());
+        timing.work.downloaded_bytes = tokio::fs::metadata(&pkg_path).await?.len();
         info!("Downloaded to: {:?}", pkg_path);
 
         let checksum_path = pkg_path.clone();
@@ -126,6 +144,7 @@ impl ConversionService {
                 .await
                 .map_err(|e| anyhow!("checksum task panicked: {e}"))??;
         timing.record(ConversionPhase::Checksum, started.elapsed());
+        timing.work.source_bytes_hashed = timing.work.downloaded_bytes;
         let source_checksum = repo_pkg.checksum.clone();
 
         let started = Instant::now();
@@ -173,6 +192,8 @@ impl ConversionService {
             stored_transport.verification_duration,
         );
         timing.record(ConversionPhase::CasWrite, stored_transport.cas_duration);
+        timing.work.record_cas(stored_transport.cas_metrics);
+        timing.work.r2 = stored_transport.r2_work;
         if let Some(duration) = stored_transport.r2_duration {
             timing.record(ConversionPhase::R2WriteThrough, duration);
         } else {
