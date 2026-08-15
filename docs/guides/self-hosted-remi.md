@@ -222,9 +222,10 @@ curl --fail-with-body \
   "$REMI_ADMIN_ENDPOINT/v1/admin/r2-durability"
 ```
 
-Review `planned_uploads`, `planned_upload_bytes`, and
-`missing_from_both_samples` before applying. Apply is explicit and concurrency
-is bounded between 1 and 64:
+Review `planned_uploads`, `planned_upload_bytes`, `unrepairable_samples`, and
+`missing_from_both_samples` before applying. Unrepairable samples distinguish
+missing-from-both objects from local or R2 size contradictions. Apply is
+explicit and concurrency is bounded between 1 and 64:
 
 ```bash
 curl --fail-with-body \

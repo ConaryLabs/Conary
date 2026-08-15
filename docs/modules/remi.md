@@ -527,8 +527,9 @@ from R2, or required objects whose R2 size disagrees with local storage, with 1
 to 64 concurrent PUT requests. Each local object is SHA-256 verified against
 its path before upload. Apply then lists R2 again, and `r2_complete` is true
 only when every required identity has the exact authority-declared size in that
-fresh listing. Missing-from-both identities and upload failures are counted in
-full with at most ten bounded diagnostic samples.
+fresh listing. Missing-from-both identities, unrepairable size contradictions,
+and upload failures are counted in full with at most ten bounded diagnostic
+samples per class.
 
 This inventory/backfill slice does not switch storage authority. Local CAS
 remains durable and R2 remains write-through until #116 separately proves the

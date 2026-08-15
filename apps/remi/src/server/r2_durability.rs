@@ -51,6 +51,23 @@ pub struct R2DurabilityFailure {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum R2DurabilityBlockerKind {
+    MissingFromBoth,
+    LocalSizeMismatch,
+    R2SizeMismatchWithoutLocal,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct R2DurabilityBlocker {
+    pub hash: String,
+    pub kind: R2DurabilityBlockerKind,
+    pub expected_size: u64,
+    pub local_size: Option<u64>,
+    pub r2_size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct R2DurabilityReport {
     pub schema_version: u32,
     pub mode: R2DurabilityMode,
@@ -66,6 +83,8 @@ pub struct R2DurabilityReport {
     pub uploaded_objects: usize,
     pub uploaded_bytes: u64,
     pub failed_uploads: usize,
+    pub unrepairable_objects: usize,
+    pub unrepairable_samples: Vec<R2DurabilityBlocker>,
     pub missing_from_both: usize,
     pub missing_from_both_samples: Vec<String>,
     pub failure_samples: Vec<R2DurabilityFailure>,
@@ -167,6 +186,7 @@ pub async fn run_r2_durability<S: DurableChunkStore + ?Sized + 'static>(
         .filter(|hash| !local.contains_key(*hash) && !final_r2.contains_key(*hash))
         .cloned()
         .collect::<Vec<_>>();
+    let unrepairable = unrepairable_objects(&required, &local, &final_r2);
     let r2_complete = required
         .iter()
         .all(|(hash, expected_size)| final_r2.get(hash).is_some_and(|size| size == expected_size));
@@ -192,6 +212,11 @@ pub async fn run_r2_durability<S: DurableChunkStore + ?Sized + 'static>(
         uploaded_objects,
         uploaded_bytes,
         failed_uploads,
+        unrepairable_objects: unrepairable.len(),
+        unrepairable_samples: unrepairable
+            .into_iter()
+            .take(FAILURE_SAMPLE_LIMIT)
+            .collect(),
         missing_from_both: missing_from_both.len(),
         missing_from_both_samples: missing_from_both
             .into_iter()
@@ -199,6 +224,35 @@ pub async fn run_r2_durability<S: DurableChunkStore + ?Sized + 'static>(
             .collect(),
         failure_samples,
     })
+}
+
+fn unrepairable_objects(
+    required: &BTreeMap<String, u64>,
+    local: &BTreeMap<String, u64>,
+    r2: &BTreeMap<String, u64>,
+) -> Vec<R2DurabilityBlocker> {
+    required
+        .iter()
+        .filter_map(|(hash, expected_size)| {
+            let local_size = local.get(hash).copied();
+            let r2_size = r2.get(hash).copied();
+            if r2_size == Some(*expected_size) || local_size == Some(*expected_size) {
+                return None;
+            }
+            let kind = match (local_size, r2_size) {
+                (None, None) => R2DurabilityBlockerKind::MissingFromBoth,
+                (Some(_), _) => R2DurabilityBlockerKind::LocalSizeMismatch,
+                (None, Some(_)) => R2DurabilityBlockerKind::R2SizeMismatchWithoutLocal,
+            };
+            Some(R2DurabilityBlocker {
+                hash: hash.clone(),
+                kind,
+                expected_size: *expected_size,
+                local_size,
+                r2_size,
+            })
+        })
+        .collect()
 }
 
 fn inventory(
@@ -600,7 +654,31 @@ mod tests {
 
         assert_eq!(report.outcome, R2DurabilityOutcome::PlanBlocked);
         assert_eq!(report.planned_uploads, 0);
+        assert_eq!(report.unrepairable_objects, 1);
+        assert_eq!(
+            report.unrepairable_samples[0].kind,
+            R2DurabilityBlockerKind::MissingFromBoth
+        );
         assert_eq!(report.missing_from_both, 1);
         assert_eq!(report.missing_from_both_samples, vec![hash]);
+    }
+
+    #[tokio::test]
+    async fn plan_explains_required_local_size_mismatch() {
+        let (_temp, db_path, objects_dir, hash, _data) = fixture();
+        std::fs::write(chunk_path(&objects_dir, &hash), b"short").unwrap();
+        let store = Arc::new(FakeStore::default());
+
+        let report = run_r2_durability(&db_path, &objects_dir, store, R2DurabilityMode::Plan, 2)
+            .await
+            .unwrap();
+
+        assert_eq!(report.planned_uploads, 0);
+        assert_eq!(report.unrepairable_objects, 1);
+        assert_eq!(
+            report.unrepairable_samples[0].kind,
+            R2DurabilityBlockerKind::LocalSizeMismatch
+        );
+        assert_eq!(report.unrepairable_samples[0].local_size, Some(5));
     }
 }
