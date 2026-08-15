@@ -13,6 +13,8 @@ use std::cmp::Ordering;
 use std::str::FromStr;
 use thiserror::Error;
 
+mod rpm_dependency;
+
 /// Which package ecosystem owns a version string's grammar and ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -200,7 +202,7 @@ pub fn validate_repo_version(scheme: VersionScheme, raw: &str) -> VersionResult<
 /// so native capability authority is not narrowed to the package-header
 /// `VERSION`/`RELEASE` grammar.
 pub fn validate_rpm_dependency_boundary(raw: &str) -> VersionResult<()> {
-    validate_rpm_dependency_evr(raw).map_err(|reason| VersionComparisonError::InvalidVersion {
+    rpm_dependency::validate(raw).map_err(|reason| VersionComparisonError::InvalidVersion {
         scheme: VersionScheme::Rpm.as_str(),
         version: raw.to_string(),
         reason,
@@ -375,7 +377,7 @@ pub fn repo_version_satisfies(
     let ordering = if scheme == VersionScheme::Rpm {
         validate_repo_version(scheme, version)?;
         validate_rpm_dependency_boundary(expected)?;
-        rpm_dependency_boundary_cmp(&rpm_evr_parts(version), &rpm_evr_parts(expected))?
+        rpm_dependency_boundary_cmp(version, expected)?
     } else {
         compare_repo_versions(scheme, version, expected)?
     };
@@ -484,9 +486,12 @@ fn rpm_provided_range_overlaps_requirement(
         .expect("all non-Any requirement relations above have a boundary");
     validate_rpm_dependency_boundary(requirement_version)?;
 
-    let provide = rpm_evr_parts(provide_version);
-    let required = rpm_evr_parts(requirement_version);
-    let ordering = rpm_dependency_boundary_cmp(&provide, &required)?;
+    let ordering = rpm_dependency_boundary_cmp(provide_version, requirement_version)?;
+
+    let provide =
+        rpm_dependency::parse(provide_version).expect("validated RPM provided capability boundary");
+    let required =
+        rpm_dependency::parse(requirement_version).expect("validated RPM requirement boundary");
 
     // rpmverOverlap treats a missing release as an intentionally partial EVR:
     // equality on the side without a release overlaps any release at the same
@@ -535,61 +540,14 @@ fn constraint_boundary(constraint: &RepoVersionConstraint) -> Option<&str> {
     }
 }
 
-#[derive(Debug)]
-struct RpmEvrParts<'a> {
-    epoch: Option<&'a str>,
-    version: &'a str,
-    release: Option<&'a str>,
-}
-
-fn rpm_evr_parts(raw: &str) -> RpmEvrParts<'_> {
-    let (epoch, version_release) = raw
-        .split_once(':')
-        .map_or((None, raw), |(epoch, rest)| (Some(epoch), rest));
-    let (version, release) = version_release
-        .split_once('-')
-        .map_or((version_release, None), |(version, release)| {
-            (version, Some(release))
-        });
-    RpmEvrParts {
-        epoch,
-        version,
-        release,
-    }
-}
-
-fn rpm_dependency_boundary_cmp(
-    left: &RpmEvrParts<'_>,
-    right: &RpmEvrParts<'_>,
-) -> VersionResult<Ordering> {
-    let epoch = match (left.epoch, right.epoch) {
-        (Some(left), Some(right)) => left
-            .parse::<u64>()
-            .expect("validated RPM dependency epoch")
-            .cmp(
-                &right
-                    .parse::<u64>()
-                    .expect("validated RPM dependency epoch"),
-            ),
-        (Some(left), None) if left.parse::<u64>().expect("validated RPM epoch") > 0 => {
-            Ordering::Greater
+fn rpm_dependency_boundary_cmp(left: &str, right: &str) -> VersionResult<Ordering> {
+    rpm_dependency::compare(left, right).map_err(|reason| {
+        VersionComparisonError::InvalidConstraint {
+            scheme: VersionScheme::Rpm.as_str(),
+            constraint: format!("{left:?} compared with {right:?}"),
+            reason,
         }
-        (None, Some(right)) if right.parse::<u64>().expect("validated RPM epoch") > 0 => {
-            Ordering::Less
-        }
-        _ => Ordering::Equal,
-    };
-    if epoch != Ordering::Equal {
-        return Ok(epoch);
-    }
-    let version = rpm_version::rpm_evr_compare(left.version, right.version);
-    if version != Ordering::Equal {
-        return Ok(version);
-    }
-    match (left.release, right.release) {
-        (Some(left), Some(right)) => Ok(rpm_version::rpm_evr_compare(left, right)),
-        _ => Ok(Ordering::Equal),
-    }
+    })
 }
 
 const fn relation_includes_less(relation: ProvideVersionRelation) -> bool {
@@ -788,64 +746,6 @@ fn validate_rpm_evr(raw: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// Validate RPM's documented dependency `[epoch:]version[-release]` grammar.
-fn validate_rpm_dependency_evr(raw: &str) -> std::result::Result<(), String> {
-    if raw.is_empty() {
-        return Err("version is empty".to_string());
-    }
-    if raw.trim() != raw {
-        return Err("leading or trailing whitespace is not allowed".to_string());
-    }
-
-    let version_release = match raw.split_once(':') {
-        Some((epoch, rest)) => {
-            if epoch.is_empty() || !epoch.bytes().all(|byte| byte.is_ascii_digit()) {
-                return Err("epoch must be a non-empty decimal integer".to_string());
-            }
-            epoch
-                .parse::<u64>()
-                .map_err(|_| "epoch exceeds the supported integer range".to_string())?;
-            rest
-        }
-        None => raw,
-    };
-    if version_release.contains(':') {
-        return Err("multiple epoch separators are not allowed".to_string());
-    }
-    let (version, release) = match version_release.split_once('-') {
-        Some((version, release)) => {
-            if release.contains('-') {
-                return Err("release must not contain '-'".to_string());
-            }
-            (version, Some(release))
-        }
-        None => (version_release, None),
-    };
-    validate_rpm_dependency_component(version, "version")?;
-    if let Some(release) = release {
-        validate_rpm_dependency_component(release, "release")?;
-    }
-    Ok(())
-}
-
-fn validate_rpm_dependency_component(
-    component: &str,
-    name: &str,
-) -> std::result::Result<(), String> {
-    if component.is_empty() {
-        return Err(format!("{name} component is empty"));
-    }
-    if component
-        .chars()
-        .any(|character| character == '-' || character.is_whitespace() || character.is_control())
-    {
-        return Err(format!(
-            "{name} contains a hyphen, whitespace, or control character"
-        ));
-    }
-    Ok(())
-}
-
 fn validate_rpm_component(component: &str, name: &str) -> std::result::Result<(), String> {
     if component.is_empty() {
         return Err(format!("{name} component is empty"));
@@ -977,8 +877,9 @@ mod tests {
             )
             .unwrap()
         );
+        validate_rpm_dependency_boundary("pattern-basis-addon").unwrap();
 
-        for invalid in ["", " 1", "1 ", "1 2", "1-", "1-2-3", "bad:1", "1:2:3"] {
+        for invalid in ["", " 1", "1 ", "1 2", "1-", "bad:1", "1:2:3"] {
             assert!(
                 validate_rpm_dependency_boundary(invalid).is_err(),
                 "RPM dependency boundary admitted {invalid:?}"

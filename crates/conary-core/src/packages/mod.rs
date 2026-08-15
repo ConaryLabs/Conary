@@ -32,7 +32,7 @@ pub use installed_inventory::{
     DpkgInstalledControlMember, InstalledConfigAuthority, InstalledInventoryFile,
     InstalledInventoryPackage, InstalledInventorySnapshot, InstalledInventoryToken,
     InstalledInventoryWork, InstalledLifecycleAuthority, NativeInstallReason,
-    PacmanInstalledLifecycleKind, RpmInstalledLifecycleSlot,
+    PacmanInstalledBackupDigest, PacmanInstalledLifecycleKind, RpmInstalledLifecycleSlot,
 };
 pub use registry::{PackageFormatType, detect_format, parse_package};
 

@@ -194,4 +194,28 @@ mod tests {
             Some(ProvideVersionRelation::Equal)
         );
     }
+
+    #[test]
+    fn installed_provides_use_rpm_last_hyphen_dependency_evr_split() {
+        let identity = InstalledPackageIdentity::rpm(
+            "patterns-base-base-20200505-58.1.x86_64",
+            "patterns-base-base",
+            None,
+            "20200505",
+            "58.1",
+            "x86_64",
+        )
+        .unwrap();
+        let output = "pattern-icon()\x1e8\x1epattern-basis-addon\x1f";
+
+        let provides = parse_rpm_provide_records(&identity, output).unwrap();
+
+        assert_eq!(provides.len(), 2);
+        assert_eq!(provides[1].name, "pattern-icon()");
+        assert_eq!(provides[1].version.as_deref(), Some("pattern-basis-addon"));
+        assert_eq!(
+            provides[1].version_relation,
+            Some(ProvideVersionRelation::Equal)
+        );
+    }
 }

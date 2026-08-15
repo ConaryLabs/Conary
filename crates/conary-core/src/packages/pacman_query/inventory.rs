@@ -12,7 +12,8 @@ use crate::packages::{
     InstalledConfigAuthority, InstalledFileAbsencePolicy, InstalledFileInfo,
     InstalledInventoryFile, InstalledInventoryPackage, InstalledInventorySnapshot,
     InstalledInventoryWork, InstalledLifecycleAuthority, InstalledPackageIdentity,
-    NativeInstallReason, PacmanInstalledLifecycleKind, SystemPackageManager,
+    NativeInstallReason, PacmanInstalledBackupDigest, PacmanInstalledLifecycleKind,
+    SystemPackageManager,
 };
 use crate::repository::dependency_model::{
     CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
@@ -195,7 +196,7 @@ fn project_package(
                 config: backup
                     .get(&path)
                     .map(|digest| InstalledConfigAuthority::Pacman {
-                        original_md5: digest.clone(),
+                        original_digest: digest.clone(),
                     }),
             })
         })
@@ -282,22 +283,31 @@ fn project_package(
     })
 }
 
-fn parse_backup(records: &[String]) -> Result<BTreeMap<String, Option<String>>> {
+fn parse_backup(records: &[String]) -> Result<BTreeMap<String, PacmanInstalledBackupDigest>> {
     let mut backup = BTreeMap::new();
     for record in records {
         let (path, digest) = record.split_once('\t').ok_or_else(|| {
             Error::ParseError("ALPM %BACKUP% record has no path/digest separator".to_string())
         })?;
-        if !digest.is_empty()
-            && (digest.len() != 32 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        {
-            return Err(Error::ParseError(format!(
-                "ALPM backup path {path:?} has an invalid MD5 digest"
-            )));
-        }
         let path = crate::packages::archive_utils::normalize_path(path)
             .map_err(|error| Error::ParseError(error.to_string()))?;
-        let digest = (!digest.is_empty()).then(|| digest.to_string());
+        // libalpm 7.1 normally stores the MD5 computed after extraction. If
+        // extraction is skipped by NoExtract (or digest computation otherwise
+        // fails), backup->hash remains NULL and glibc's `%s` serialization in
+        // _alpm_local_db_write() persists the exact `(null)` spelling:
+        // https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/lib/libalpm/be_local.c#L1119-1125
+        let digest = match digest {
+            "" => PacmanInstalledBackupDigest::Empty,
+            "(null)" => PacmanInstalledBackupDigest::Unavailable,
+            value if value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+                PacmanInstalledBackupDigest::Md5(value.to_string())
+            }
+            _ => {
+                return Err(Error::ParseError(format!(
+                    "ALPM backup path {path:?} has an invalid digest state"
+                )));
+            }
+        };
         if backup.insert(path.clone(), digest).is_some() {
             return Err(Error::ConflictError(format!(
                 "ALPM database repeats backup path {path:?}"
@@ -406,7 +416,49 @@ mod tests {
         let snapshot = capture_local_root(temp.path(), 1).unwrap();
         assert!(matches!(
             snapshot.package("fixture").unwrap().files[0].config,
-            Some(InstalledConfigAuthority::Pacman { original_md5: None })
+            Some(InstalledConfigAuthority::Pacman {
+                original_digest: PacmanInstalledBackupDigest::Empty
+            })
         ));
+    }
+
+    #[test]
+    fn unavailable_alpm_backup_digest_is_distinct_snapshot_authority() {
+        let empty_root = tempfile::tempdir().unwrap();
+        write_package(empty_root.path(), "1.0-1", "0");
+        let empty_files = empty_root.path().join("fixture-1.0-1/files");
+        let empty_content = fs::read_to_string(&empty_files).unwrap();
+        fs::write(
+            &empty_files,
+            empty_content.replace(
+                "etc/fixture.conf\t0123456789abcdef0123456789abcdef",
+                "etc/fixture.conf\t",
+            ),
+        )
+        .unwrap();
+
+        let unavailable_root = tempfile::tempdir().unwrap();
+        write_package(unavailable_root.path(), "1.0-1", "0");
+        let unavailable_files = unavailable_root.path().join("fixture-1.0-1/files");
+        let unavailable_content = fs::read_to_string(&unavailable_files).unwrap();
+        fs::write(
+            &unavailable_files,
+            unavailable_content.replace(
+                "etc/fixture.conf\t0123456789abcdef0123456789abcdef",
+                "etc/fixture.conf\t(null)",
+            ),
+        )
+        .unwrap();
+
+        let empty = capture_local_root(empty_root.path(), 1).unwrap();
+        let unavailable = capture_local_root(unavailable_root.path(), 1).unwrap();
+
+        assert!(matches!(
+            unavailable.package("fixture").unwrap().files[0].config,
+            Some(InstalledConfigAuthority::Pacman {
+                original_digest: PacmanInstalledBackupDigest::Unavailable
+            })
+        ));
+        assert_ne!(empty.token(), unavailable.token());
     }
 }

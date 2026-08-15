@@ -254,7 +254,9 @@ commands.
   `inventory.rs`. Adoption, refresh, and takeover consume one exact tokenized
   snapshot; complete full-system adoption binds all package owners to one
   selected-root traversal and takeover performs one native database-removal
-  batch.
+  batch. RPM dependency-EVR parsing and `rpmdsCompare` component ordering live
+  in `crates/conary-core/src/repository/versioning/rpm_dependency.rs`; the
+  public cross-ecosystem dispatch remains in `repository/versioning.rs`.
 - Complete unfiltered full-system adoption starts in
   `apps/conary/src/commands/adopt/system.rs`; its exact unowned-root partition
   is owned by `adopt/system/captured_root.rs`, the finite scanner and runtime

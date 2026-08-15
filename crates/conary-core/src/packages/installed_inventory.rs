@@ -19,6 +19,19 @@ pub enum NativeInstallReason {
     Dependency,
 }
 
+/// Exact digest state retained for one ALPM backup declaration.
+///
+/// Pacman normally persists an MD5 digest. A deliberately empty local-db
+/// field and the `(null)` spelling emitted when libalpm has no digest are
+/// distinct native states and must remain distinct in the inventory token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+pub enum PacmanInstalledBackupDigest {
+    Md5(String),
+    Empty,
+    Unavailable,
+}
+
 /// Source-specific configuration declaration retained by an installed manager.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "manager", rename_all = "kebab-case", deny_unknown_fields)]
@@ -35,7 +48,7 @@ pub enum InstalledConfigAuthority {
         remove_on_upgrade: bool,
     },
     Pacman {
-        original_md5: Option<String>,
+        original_digest: PacmanInstalledBackupDigest,
     },
     Eopkg {
         permanent: bool,
