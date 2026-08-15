@@ -2,7 +2,7 @@
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Top-level test manifest (one TOML file = one suite).
 #[derive(Debug, Clone, Deserialize)]
@@ -27,6 +27,9 @@ pub struct SuiteDef {
     /// complete within this duration or remaining tests are cancelled.
     #[serde(default)]
     pub timeout: Option<u64>,
+    /// Required typed semantic coverage for corpus suites.
+    #[serde(default)]
+    pub corpus: Option<super::corpus::CorpusSuiteDef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -438,6 +441,33 @@ impl Assertion {
 impl TestManifest {
     /// Validate all assertions in the manifest for conflicting fields.
     pub fn validate(&self) -> Result<()> {
+        let corpus_tests = self
+            .test
+            .iter()
+            .filter_map(|test| test.corpus.as_ref())
+            .collect::<Vec<_>>();
+        match (&self.suite.corpus, corpus_tests.is_empty()) {
+            (None, true) => {}
+            (None, false) => bail!("corpus tests require suite-level semantic coverage"),
+            (Some(_), true) => bail!("suite corpus coverage requires at least one corpus test"),
+            (Some(corpus), false) => {
+                corpus.validate()?;
+                let required = corpus.required.iter().copied().collect::<HashSet<_>>();
+                let claimed = corpus_tests
+                    .iter()
+                    .flat_map(|case| case.coverage.iter().map(|claim| claim.semantic))
+                    .collect::<HashSet<_>>();
+                if claimed != required {
+                    let mut missing = required.difference(&claimed).copied().collect::<Vec<_>>();
+                    let mut undeclared = claimed.difference(&required).copied().collect::<Vec<_>>();
+                    missing.sort();
+                    undeclared.sort();
+                    bail!(
+                        "suite corpus coverage and case claims disagree: missing={missing:?}, undeclared={undeclared:?}"
+                    );
+                }
+            }
+        }
         for test in &self.test {
             if let Some(corpus) = &test.corpus {
                 corpus.validate(&test.id)?;
@@ -471,6 +501,40 @@ impl TestManifest {
 mod validation_tests {
     use super::*;
 
+    fn corpus_manifest(suite_corpus: &str, semantic: &str) -> TestManifest {
+        toml::from_str(&format!(
+            r#"
+[suite]
+name = "corpus"
+phase = 4
+{suite_corpus}
+
+[[test]]
+id = "TC01"
+name = "corpus"
+description = "typed corpus"
+timeout = 30
+
+[test.corpus]
+evidence_path = "/tmp/corpus.json"
+source_profile = "fedora-44"
+source_format = "rpm"
+digest_source = "fixture_build_manifest"
+stages = ["installation"]
+
+[test.corpus.target]
+architecture = "x86_64"
+init_system = "systemd"
+capabilities = ["native_lifecycle"]
+
+[[test.corpus.coverage]]
+semantic = "{semantic}"
+artifact_roles = ["install_request"]
+"#
+        ))
+        .unwrap()
+    }
+
     fn base_assertion() -> Assertion {
         Assertion::default()
     }
@@ -481,6 +545,44 @@ mod validation_tests {
         a.exit_code = Some(0);
         a.stdout_contains = Some("ok".into());
         assert!(a.validate("T01", 0).is_ok());
+    }
+
+    #[test]
+    fn corpus_cases_require_exact_suite_coverage_authority() {
+        let missing_suite = corpus_manifest("", "identity_exact_version");
+        assert!(missing_suite.validate().is_err());
+
+        let mismatched = corpus_manifest(
+            "[suite.corpus]\nrequired = [\"payload_files\"]",
+            "identity_exact_version",
+        );
+        let error = mismatched.validate().unwrap_err().to_string();
+        assert!(error.contains("coverage and case claims disagree"));
+
+        let exact = corpus_manifest(
+            "[suite.corpus]\nrequired = [\"identity_exact_version\"]",
+            "identity_exact_version",
+        );
+        assert!(exact.validate().is_ok());
+    }
+
+    #[test]
+    fn unknown_free_form_semantic_is_not_deserializable() {
+        let source = r#"
+[suite]
+name = "corpus"
+phase = 4
+
+[suite.corpus]
+required = ["package_seems_complex"]
+
+[[test]]
+id = "TC01"
+name = "corpus"
+description = "typed corpus"
+timeout = 30
+"#;
+        assert!(toml::from_str::<TestManifest>(source).is_err());
     }
 
     #[test]

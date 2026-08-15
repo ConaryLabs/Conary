@@ -7,8 +7,8 @@ use crate::container::backend::{ContainerBackend, ContainerId};
 use crate::engine::suite::TestStatus;
 use anyhow::{Result, bail};
 use conary_core::corpus::{
-    ConversionFailure, ConversionStage, CorpusCaseResult, CorpusOutcome, SourceArtifactIdentity,
-    SourceProfileIdentity, StageResult, TargetCapabilitySnapshot,
+    ConversionFailure, ConversionStage, CorpusCaseResult, CorpusCoverageClaim, CorpusOutcome,
+    SourceArtifactIdentity, SourceProfileIdentity, StageResult, TargetCapabilitySnapshot,
 };
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -108,6 +108,7 @@ pub async fn capture_case(
         source_profile(definition),
         evidence.source_artifacts,
         target_snapshot(definition, target_profile),
+        coverage_claims(definition),
         stages,
     )
 }
@@ -172,6 +173,23 @@ fn validate_evidence(
             bail!("runtime artifact digest source contradicts the corpus declaration");
         }
     }
+    for claim in &definition.coverage {
+        for role in &claim.artifact_roles {
+            if evidence
+                .source_artifacts
+                .iter()
+                .filter(|artifact| artifact.role == *role)
+                .count()
+                != 1
+            {
+                bail!(
+                    "corpus coverage {:?} does not resolve role {:?} to one exact source artifact",
+                    claim.semantic,
+                    role
+                );
+            }
+        }
+    }
     if definition.stages.contains(&ConversionStage::Installation)
         && !request_roles.contains(&conary_core::corpus::SourceArtifactRole::InstallRequest)
     {
@@ -230,6 +248,7 @@ fn evidence_failure_case(
         source_profile(definition),
         source_artifacts,
         target_snapshot(definition, target_profile),
+        Vec::new(),
         stages,
     )
 }
@@ -245,6 +264,7 @@ fn skipped_case(
         source_profile(definition),
         Vec::new(),
         target_snapshot(definition, target_profile),
+        Vec::new(),
         definition
             .stages
             .iter()
@@ -283,11 +303,24 @@ fn target_snapshot(definition: &CorpusCaseDef, target_profile: &str) -> TargetCa
     }
 }
 
+fn coverage_claims(definition: &CorpusCaseDef) -> Vec<CorpusCoverageClaim> {
+    definition
+        .coverage
+        .iter()
+        .map(|claim| CorpusCoverageClaim {
+            semantic: claim.semantic,
+            artifact_roles: claim.artifact_roles.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::corpus::{CorpusSourceFormat, CorpusTargetDef};
-    use conary_core::corpus::{FailureKind, SourceArtifactDigestSource, SourceArtifactRole};
+    use crate::config::corpus::{CorpusCoverageClaimDef, CorpusSourceFormat, CorpusTargetDef};
+    use conary_core::corpus::{
+        CorpusSemantic, FailureKind, SourceArtifactDigestSource, SourceArtifactRole,
+    };
 
     fn definition() -> CorpusCaseDef {
         CorpusCaseDef {
@@ -300,6 +333,13 @@ mod tests {
                 init_system: "systemd".into(),
                 capabilities: vec!["native_lifecycle".into()],
             },
+            coverage: vec![CorpusCoverageClaimDef {
+                semantic: CorpusSemantic::LifecycleShell,
+                artifact_roles: vec![
+                    SourceArtifactRole::InstallRequest,
+                    SourceArtifactRole::UpdateRequest,
+                ],
+            }],
             stages: vec![
                 ConversionStage::Installation,
                 ConversionStage::Update,
@@ -395,6 +435,25 @@ mod tests {
             active_stage: None,
         };
         assert!(validate_evidence(&definition(), TestStatus::Passed, &evidence).is_err());
+    }
+
+    #[test]
+    fn semantic_claims_require_one_exact_runtime_artifact_per_role() {
+        let mut definition = definition();
+        definition.coverage[0].artifact_roles = vec![SourceArtifactRole::InstallDependency];
+        let evidence = CorpusRuntimeEvidence {
+            schema_version: EVIDENCE_SCHEMA_VERSION,
+            source_profile: "fedora-44".into(),
+            source_format: "rpm".into(),
+            source_artifacts: artifacts(),
+            completed_stages: definition.stages.clone(),
+            active_stage: None,
+        };
+
+        let error = validate_evidence(&definition, TestStatus::Passed, &evidence)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not resolve role"));
     }
 
     #[test]

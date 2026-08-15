@@ -1,11 +1,11 @@
 ---
-last_updated: 2026-08-13
-revision: 20
-summary: Track Conary's cross-distro package milestone, authenticated derivative execution, and the issue-decomposed W10 takeover horizon
+last_updated: 2026-08-15
+revision: 21
+summary: Track Conary's active W7 just-works corpus gate, typed semantic coverage, external tester milestone, and later workstreams
 proof_baseline: "immutable synchronized v0.15.0 suite at 642750878d5a59a9aa27976347cafc6f9dd86cfd; exact tagged Remi deployed; external tester result remains 0/10 behind #110"
 current_milestone: first external tester loop
-active_workstream: W6 Authority Audit Closure
-next_workstream: W7 Just-Works Corpus Gate
+active_workstream: W7 Just-Works Corpus Gate
+next_workstream: W8 External Tester Outreach
 ---
 
 # Codebase Development Roadmap
@@ -207,10 +207,9 @@ the stated scope, not whether a workstream happens to be active.
 - **Outcome:** ordinary Fedora and Arch repository packages stop failing
   conversion on Conary-invented invariants, and hosted Remi health becomes
   evidence bearing.
-- **Execution status:** implementation issues complete; aggregate gate
-  closeout remains active. The owned #98, #99, #102, #103, and #107 slices are
-  closed, while #110 still owns the typed corpus vocabulary required to report
-  the aggregate prewarm gate without message-text authority.
+- **Execution status:** complete. The owned #98, #99, #102, #103, and #107
+  slices are closed. W7's landed typed corpus vocabulary reports their
+  aggregate evidence without message-text authority.
 - **Issues:** #102 (P0), #103 (P0), #98 (P0), #99 (P0, split into three
   slices), plus #107 for the Remi readiness probe.
 - **Ordering:** #102, #103, and #107 run in parallel with #98
@@ -314,8 +313,11 @@ the stated scope, not whether a workstream happens to be active.
 - **Outcome:** a clean machine on each supported host completes the ordinary
   user journey end to end, and failures are reported as typed stages rather
   than message text.
-- **Execution status:** blocked on W4 through W6.
-- **Issues:** #110 as the corpus umbrella, plus #39 for bootstrap.
+- **Execution status:** active after W4 through W6 completion. Typed per-case
+  reporting is landed; #456 owns the next bounded semantic-coverage authority
+  before the remaining fixture and hosted-execution slices.
+- **Issues:** #110 as the corpus umbrella, #456 for attributable semantic
+  coverage, plus #39 for bootstrap.
 - **User journey:** install the signed release through one documented bootstrap
   entry point; `conary system init` with no hand-edited state; sync and
   authenticate repositories; request a package by ordinary name; resolve the

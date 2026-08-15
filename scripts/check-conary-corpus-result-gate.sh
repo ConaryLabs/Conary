@@ -21,21 +21,45 @@ import sys
 path = pathlib.Path(sys.argv[1])
 data = json.loads(path.read_text())
 corpus = data.get("corpus") if isinstance(data, dict) else None
-if not isinstance(corpus, dict) or corpus.get("schema_version") != 1:
-    print(f"{path}: corpus gate failed: missing schema version 1 corpus object", file=sys.stderr)
+if not isinstance(corpus, dict) or corpus.get("schema_version") != 2:
+    print(f"{path}: corpus gate failed: missing schema version 2 corpus object", file=sys.stderr)
     sys.exit(1)
 
 aggregate = corpus.get("aggregate")
 cases = corpus.get("cases")
 expected_cases = corpus.get("expected_cases")
+coverage = corpus.get("coverage")
 if (
     not isinstance(expected_cases, int)
     or expected_cases <= 0
     or not isinstance(aggregate, dict)
     or not isinstance(cases, list)
     or not cases
+    or not isinstance(coverage, dict)
 ):
-    print(f"{path}: corpus gate failed: expected count, aggregate, and non-empty cases are required", file=sys.stderr)
+    print(f"{path}: corpus gate failed: expected count, aggregate, coverage, and non-empty cases are required", file=sys.stderr)
+    sys.exit(1)
+
+required = coverage.get("required")
+covered = coverage.get("covered")
+missing = coverage.get("missing")
+unattributed = coverage.get("unattributed_claims")
+if (
+    not isinstance(required, list)
+    or not required
+    or not isinstance(covered, list)
+    or not isinstance(missing, list)
+    or not isinstance(unattributed, int)
+    or unattributed != 0
+    or any(not isinstance(item, str) or not item for item in required + covered + missing)
+    or len(set(required)) != len(required)
+    or len(set(covered)) != len(covered)
+    or len(set(missing)) != len(missing)
+):
+    print(f"{path}: corpus gate failed: typed coverage aggregate is malformed", file=sys.stderr)
+    sys.exit(1)
+if missing or set(required) != set(covered):
+    print(f"{path}: corpus gate failed: required semantic coverage is incomplete", file=sys.stderr)
     sys.exit(1)
 
 required_counts = ["cases", "completed", "failed", "skipped", "unclassified"]
@@ -64,6 +88,7 @@ if (
 
 digest_pattern = re.compile(r"^[0-9a-f]{64}$")
 case_ids = set()
+claimed_semantics = set()
 for case in cases:
     if not isinstance(case, dict):
         print(f"{path}: corpus gate failed: case must be an object", file=sys.stderr)
@@ -78,6 +103,7 @@ for case in cases:
     target = case.get("target_profile")
     artifacts = case.get("source_artifacts")
     stages = case.get("stage_results")
+    claims = case.get("coverage_claims")
     if (
         not isinstance(source, dict)
         or not source.get("profile")
@@ -92,6 +118,8 @@ for case in cases:
         or not artifacts
         or not isinstance(stages, list)
         or not stages
+        or not isinstance(claims, list)
+        or not claims
     ):
         print(f"{path}: corpus gate failed: {case_id} lacks attributable authority", file=sys.stderr)
         sys.exit(1)
@@ -139,6 +167,36 @@ for case in cases:
         print(f"{path}: corpus gate failed: {case_id} lacks its update request", file=sys.stderr)
         sys.exit(1)
 
+    claim_keys = set()
+    case_semantics = set()
+    for claim in claims:
+        semantic = claim.get("semantic") if isinstance(claim, dict) else None
+        roles = claim.get("artifact_roles") if isinstance(claim, dict) else None
+        if (
+            not isinstance(semantic, str)
+            or not semantic
+            or not isinstance(roles, list)
+            or not roles
+            or len(set(roles)) != len(roles)
+            or any(not isinstance(role, str) or not role for role in roles)
+        ):
+            print(f"{path}: corpus gate failed: {case_id} has malformed semantic coverage", file=sys.stderr)
+            sys.exit(1)
+        claim_key = (semantic, tuple(roles))
+        if claim_key in claim_keys:
+            print(f"{path}: corpus gate failed: {case_id} repeats a semantic coverage claim", file=sys.stderr)
+            sys.exit(1)
+        claim_keys.add(claim_key)
+        if semantic in case_semantics:
+            print(f"{path}: corpus gate failed: {case_id} repeats a semantic property", file=sys.stderr)
+            sys.exit(1)
+        case_semantics.add(semantic)
+        for role in roles:
+            if sum(1 for artifact in artifacts if artifact.get("role") == role) != 1:
+                print(f"{path}: corpus gate failed: {case_id} has an unbound semantic coverage claim", file=sys.stderr)
+                sys.exit(1)
+        claimed_semantics.add(semantic)
+
     if any(stage.get("outcome") != "passed" for stage in stages if isinstance(stage, dict)) \
        or any(not isinstance(stage, dict) for stage in stages):
         print(f"{path}: corpus gate failed: {case_id} has a non-passing stage", file=sys.stderr)
@@ -146,6 +204,10 @@ for case in cases:
     if case.get("final_outcome") != {"outcome": "completed"}:
         print(f"{path}: corpus gate failed: {case_id} did not complete", file=sys.stderr)
         sys.exit(1)
+
+if claimed_semantics != set(required):
+    print(f"{path}: corpus gate failed: case claims contradict the coverage aggregate", file=sys.stderr)
+    sys.exit(1)
 
 print(f"{path}: corpus ok ({len(cases)} cases)")
 PY

@@ -189,6 +189,13 @@ impl TestRunner {
                 .filter(|test| test.corpus.is_some())
                 .count(),
         );
+        suite.expect_corpus_coverage(
+            manifest
+                .suite
+                .corpus
+                .iter()
+                .flat_map(|corpus| corpus.required.iter().copied()),
+        );
         suite.status = crate::engine::suite::RunStatus::Running;
 
         // Emit suite-started event.

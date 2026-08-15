@@ -105,6 +105,7 @@ fn make_manifest(tests: Vec<TestDef>) -> TestManifest {
             setup: Vec::new(),
             mock_server: None,
             timeout: None,
+            corpus: None,
         },
         test: tests,
         distro_overrides: HashMap::new(),
@@ -178,6 +179,7 @@ async fn suite_setup_executes_before_tests() {
             )],
             mock_server: None,
             timeout: None,
+            corpus: None,
         },
         test: vec![TestDef {
             id: "TSETUP".to_string(),
@@ -588,6 +590,7 @@ async fn test_resource_scoped_flaky_retries_use_fresh_container() {
             setup: Vec::new(),
             mock_server: None,
             timeout: None,
+            corpus: None,
         },
         test: vec![TestDef {
             id: "T-resource-flaky".to_string(),

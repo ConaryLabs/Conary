@@ -60,4 +60,6 @@ pub fn validate_unique_test_ids(manifests: &[(PathBuf, TestManifest)]) -> Result
 
 #[cfg(test)]
 mod tests;
-pub use corpus::{CorpusCaseDef, CorpusSourceFormat, CorpusTargetDef};
+pub use corpus::{
+    CorpusCaseDef, CorpusCoverageClaimDef, CorpusSourceFormat, CorpusSuiteDef, CorpusTargetDef,
+};

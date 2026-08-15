@@ -16,9 +16,13 @@
 //! and the `conary-test` runner. See [`failure`] for the classification rule.
 
 mod aggregate;
+mod coverage;
 mod failure;
 
 pub use aggregate::{CorpusAggregate, FailureTally, StageTally, aggregate_cases};
+pub use coverage::{
+    CorpusCoverageAggregate, CorpusCoverageClaim, CorpusSemantic, aggregate_coverage,
+};
 pub use failure::{ConversionFailure, FailureKind};
 
 use serde::{Deserialize, Serialize};
@@ -114,7 +118,7 @@ pub struct SourceArtifactIdentity {
 /// A case may consume more than one artifact: an install followed by an update
 /// must identify both inputs rather than attributing the complete journey to
 /// the first package digest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceArtifactRole {
     InstallRequest,
@@ -225,6 +229,7 @@ pub struct CorpusCaseResult {
     pub source_profile: SourceProfileIdentity,
     pub source_artifacts: Vec<SourceArtifactIdentity>,
     pub target_profile: TargetCapabilitySnapshot,
+    pub coverage_claims: Vec<CorpusCoverageClaim>,
     pub stage_results: Vec<StageResult>,
     pub final_outcome: CorpusOutcome,
 }
@@ -240,6 +245,7 @@ impl CorpusCaseResult {
         source_profile: SourceProfileIdentity,
         source_artifacts: Vec<SourceArtifactIdentity>,
         target_profile: TargetCapabilitySnapshot,
+        coverage_claims: Vec<CorpusCoverageClaim>,
         stage_results: Vec<StageResult>,
     ) -> Self {
         let first_failure = stage_results.iter().find_map(|result| {
@@ -266,6 +272,7 @@ impl CorpusCaseResult {
             source_profile,
             source_artifacts,
             target_profile,
+            coverage_claims,
             stage_results,
             final_outcome,
         }
@@ -328,6 +335,7 @@ mod tests {
             profile(),
             vec![artifact()],
             target(),
+            Vec::new(),
             stages,
         );
 
@@ -342,6 +350,7 @@ mod tests {
             profile(),
             vec![artifact()],
             target(),
+            Vec::new(),
             vec![StageResult::not_reached(ConversionStage::Installation)],
         );
 
@@ -369,6 +378,7 @@ mod tests {
             profile(),
             vec![artifact()],
             target(),
+            Vec::new(),
             stages,
         );
 
@@ -401,6 +411,7 @@ mod tests {
             profile(),
             vec![artifact()],
             target(),
+            Vec::new(),
             stages,
         );
 
@@ -442,6 +453,7 @@ mod tests {
             profile(),
             vec![artifact()],
             target(),
+            Vec::new(),
             vec![StageResult::failed(
                 ConversionStage::NativeParse,
                 ConversionFailure::SourceMetadata {

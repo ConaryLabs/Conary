@@ -75,6 +75,8 @@ pub struct TestSuite {
     pub target_release: Option<crate::config::release_root::TargetReleaseEvidence>,
     #[serde(skip)]
     corpus_expected: usize,
+    #[serde(skip)]
+    corpus_required: Vec<conary_core::corpus::CorpusSemantic>,
     pub started_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<DateTime<Utc>>,
@@ -92,6 +94,7 @@ impl TestSuite {
             corpus_cases: Vec::new(),
             target_release: None,
             corpus_expected: 0,
+            corpus_required: Vec::new(),
             started_at: Utc::now(),
             finished_at: None,
             unsuccessful_ids: HashSet::new(),
@@ -115,6 +118,19 @@ impl TestSuite {
 
     pub fn corpus_expected(&self) -> usize {
         self.corpus_expected
+    }
+
+    pub fn expect_corpus_coverage(
+        &mut self,
+        required: impl IntoIterator<Item = conary_core::corpus::CorpusSemantic>,
+    ) {
+        self.corpus_required.extend(required);
+        self.corpus_required.sort();
+        self.corpus_required.dedup();
+    }
+
+    pub fn corpus_required(&self) -> &[conary_core::corpus::CorpusSemantic] {
+        &self.corpus_required
     }
 
     pub fn has_failed(&self, id: &str) -> bool {
@@ -163,6 +179,8 @@ impl TestSuite {
     pub fn corpus_all_completed(&self) -> bool {
         self.corpus_cases.len() == self.corpus_expected
             && conary_core::corpus::aggregate_cases(&self.corpus_cases).all_completed()
+            && conary_core::corpus::aggregate_coverage(&self.corpus_required, &self.corpus_cases)
+                .all_covered()
     }
 
     /// Whether anything in this suite blocks calling the run a success.

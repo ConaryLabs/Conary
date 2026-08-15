@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-14
-revision: 75
-summary: Route feature ownership through set-based package transaction persistence, typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
+last_updated: 2026-08-15
+revision: 76
+summary: Route feature ownership through typed corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1432,7 +1432,11 @@ artifact first. Corpus cases
 must carry versioned runtime evidence with exact role-tagged artifact digests,
 typed digest authority, target capabilities, and canonically ordered stage
 checkpoints; report aggregation uses typed stage/failure discriminants and
-never diagnostic text. The declared and emitted case counts must agree.
+never diagnostic text. Corpus suites declare one exact semantic requirement
+set, and each case binds its claims to source-artifact roles that must resolve
+to unique runtime SHA-256 identities. Only completed cases contribute coverage;
+the declared and emitted case counts and required/covered semantic sets must
+agree.
 
 ## Agent/MCP Operation Surfaces
 

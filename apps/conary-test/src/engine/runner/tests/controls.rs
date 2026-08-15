@@ -317,6 +317,7 @@ async fn test_suite_timeout_cancels_remaining() {
             setup: Vec::new(),
             mock_server: None,
             timeout: Some(0), // Already expired.
+            corpus: None,
         },
         test: vec![
             TestDef {

@@ -164,6 +164,7 @@ mod tests {
                 init_system: "systemd".into(),
                 capabilities: Vec::new(),
             },
+            Vec::new(),
             vec![StageResult::failed(stage, failure)],
         )
     }
@@ -189,6 +190,7 @@ mod tests {
                 init_system: "systemd".into(),
                 capabilities: Vec::new(),
             },
+            Vec::new(),
             vec![StageResult::passed(ConversionStage::Installation)],
         )
     }

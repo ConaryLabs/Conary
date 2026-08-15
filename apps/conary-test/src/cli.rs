@@ -552,6 +552,7 @@ fn run_single_distro(
                     )
                     .await?;
                 aggregate_suite.expect_corpus_cases(suite.corpus_expected());
+                aggregate_suite.expect_corpus_coverage(suite.corpus_required().iter().copied());
                 for result in suite.results {
                     aggregate_suite.record(result);
                 }
@@ -653,6 +654,7 @@ async fn run_qemu_only_suite(
                 )
                 .await?;
             aggregate_suite.expect_corpus_cases(suite.corpus_expected());
+            aggregate_suite.expect_corpus_coverage(suite.corpus_required().iter().copied());
             for result in suite.results {
                 aggregate_suite.record(result);
             }
