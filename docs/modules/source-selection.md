@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-14
-revision: 40
-summary: Document coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, Remi feed presets, and lifecycle handoff
+last_updated: 2026-08-15
+revision: 41
+summary: Document coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -564,6 +564,23 @@ exact SAT-selected repository closure, and executes that closure as one batch.
 Typed package relations therefore order provider payloads and dependent
 lifecycle programs inside one package-set transition; model diff iteration
 order is never transaction authority.
+
+## Dependency Acquisition Boundary
+
+`repository/dependencies.rs` prepares the complete selected closure before any
+package acquisition starts. Repository rows, native package trust, Remi route
+identity, and Remi signing policy are resolved serially through the
+caller-owned SQLite connection into immutable per-package plans. The network,
+signature/checksum verification, and CAS portion then runs with at most eight
+packages in flight and never owns or shares that connection.
+
+Acquisition completion order is not transaction order. The downloader drains
+every bounded task, restores the resolver-selected input order, and aggregates
+attributable failures in that same order before returning. Install, update,
+model apply, and replatform consumers therefore receive the identical package
+and lifecycle sequence they received from serial acquisition; payload mutation,
+database commit, lifecycle execution, and generation publication remain outside
+the concurrent boundary.
 
 ## Flow Behavior
 
