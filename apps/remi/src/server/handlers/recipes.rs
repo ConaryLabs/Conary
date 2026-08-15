@@ -33,8 +33,8 @@ pub struct RecipeBuildResponse {
     pub version: String,
     /// Download URL for the built package
     pub download_url: String,
-    /// Chunk hashes
-    pub chunks: Vec<String>,
+    /// Signed controls and exact canonical object set.
+    pub transport: conary_core::ccs::CcsTransportEnvelopeV1,
     /// Total size
     pub size: u64,
 }
@@ -123,7 +123,7 @@ pub async fn build_recipe(
                 name: conversion_result.name,
                 version: conversion_result.version,
                 download_url,
-                chunks: conversion_result.chunk_hashes,
+                transport: conversion_result.transport,
                 size: conversion_result.total_size,
             };
 

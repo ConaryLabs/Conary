@@ -54,7 +54,6 @@ fn target_safe_segment(value: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct PromotedNativeArtifact {
     pub package_path: PathBuf,
-    pub chunk_path: PathBuf,
     pub target_path: String,
 }
 
@@ -65,7 +64,6 @@ impl PromotedNativeArtifact {
 
     pub async fn cleanup_public_objects(&self) {
         let _ = tokio::fs::remove_file(&self.package_path).await;
-        let _ = tokio::fs::remove_file(&self.chunk_path).await;
     }
 }
 
@@ -102,27 +100,26 @@ pub async fn promote_native_artifact(
             )
         })?;
 
-    let chunk_path = crate::server::handlers::cas_object_path(chunk_dir, &artifact.content_hash);
-    if let Some(parent) = chunk_path.parent()
-        && let Err(error) = tokio::fs::create_dir_all(parent).await
+    let objects_dir = chunk_dir.join("objects");
+    let verification = artifact.verification.clone();
+    if let Err(error) = tokio::task::spawn_blocking(move || {
+        let cas = conary_core::filesystem::CasStore::new(objects_dir)?;
+        conary_core::ccs::transport::persist_verified_archive_objects(&verification, &cas)
+            .map(|_| ())
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|result| result)
     {
         let _ = tokio::fs::remove_file(&package_path).await;
         return Err(NativePublishError::internal(
             NativePublishErrorCode::IoError,
-            format!("create native release chunk directory: {error}"),
-        ));
-    }
-    if let Err(error) = tokio::fs::copy(&package_path, &chunk_path).await {
-        let _ = tokio::fs::remove_file(&package_path).await;
-        return Err(NativePublishError::internal(
-            NativePublishErrorCode::IoError,
-            format!("promote native release chunk: {error}"),
+            format!("promote native release signed objects: {error}"),
         ));
     }
 
     Ok(PromotedNativeArtifact {
         package_path,
-        chunk_path,
         target_path: native_target_path(
             distro,
             &artifact.name,

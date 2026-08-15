@@ -39,15 +39,6 @@ pub enum ConversionJobState {
     Failed,
 }
 
-impl ConversionJobState {
-    /// Every state the shared polling contract admits.
-    ///
-    /// Extend this when Remi publishes a new job state; the contract test
-    /// drives both clients through each entry.
-    #[cfg(test)]
-    pub(super) const ALL: [Self; 4] = [Self::Pending, Self::Converting, Self::Ready, Self::Failed];
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum JobPollDecision<'a> {
     Wait,
@@ -67,23 +58,15 @@ impl JobStatus {
     }
 }
 
-/// Package manifest with chunk list
+/// Package manifest with its authenticated CCS transport descriptor.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PackageManifest {
     pub name: String,
     pub version: String,
     pub distro: String,
-    pub chunks: Vec<ChunkRef>,
+    pub transport: crate::ccs::CcsTransportEnvelopeV1,
     pub total_size: u64,
     pub content_hash: String,
-}
-
-/// Reference to a chunk in the CAS
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ChunkRef {
-    pub hash: String,
-    pub size: u64,
-    pub offset: u64,
 }
 
 /// Shared core logic for Remi clients.
@@ -142,23 +125,6 @@ impl RemiClientCore {
             base
         } else {
             format!("{base}?{}", query.join("&"))
-        }
-    }
-
-    /// Construct a direct download URL.
-    pub(super) fn download_url(
-        &self,
-        distro: &str,
-        name: &str,
-        version: Option<&str>,
-        release: Option<&str>,
-        architecture: Option<&str>,
-    ) -> String {
-        let package_url = self.package_url(distro, name, version, release, architecture);
-        if let Some((path, query)) = package_url.split_once('?') {
-            format!("{path}/download?{query}")
-        } else {
-            format!("{package_url}/download")
         }
     }
 

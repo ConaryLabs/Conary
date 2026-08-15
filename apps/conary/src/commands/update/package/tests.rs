@@ -551,7 +551,6 @@ fn update_repository_install_provenance_uses_selected_package_metadata() {
 #[test]
 fn selected_update_resolution_consumes_the_exact_planned_repository_row() {
     let temp = tempfile::tempdir().unwrap();
-    let keyring_dir = temp.path().join("keyrings");
     let mut repo = Repository::new(
         "slice-d-exact-update".to_string(),
         "https://example.test/slice-d".to_string(),
@@ -572,7 +571,7 @@ fn selected_update_resolution_consumes_the_exact_planned_repository_row() {
         &package,
         &repo,
         temp.path(),
-        &keyring_dir,
+        temp.path(),
         &ResolutionPolicy::new(),
     )
     .unwrap();

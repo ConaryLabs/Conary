@@ -6,6 +6,7 @@ use crate::db::models::{RepositoryProvide, Trove, TroveType};
 use crate::db::testing::create_test_db;
 
 fn server_package(checksum: &str, chunk: &str) -> ConvertedPackage {
+    let transport = crate::ccs::transport::test_transport(&[chunk.to_string()]);
     ConvertedPackage::new_repository(
         "fedora-44".to_string(),
         "fixture".to_string(),
@@ -13,7 +14,7 @@ fn server_package(checksum: &str, chunk: &str) -> ConvertedPackage {
         "x86_64".to_string(),
         "rpm".to_string(),
         checksum.to_string(),
-        &[chunk.to_string()],
+        &transport,
         42,
         "sha256:content".to_string(),
         "/tmp/fixture.ccs".to_string(),
@@ -201,6 +202,7 @@ fn sha1_repository_checksum_is_current_and_algorithm_change_invalidates_it() {
         [source_checksum],
     )
     .unwrap();
+    let transport = crate::ccs::transport::test_transport(&["sha256:chunk".to_string()]);
     let mut converted = ConvertedPackage::new_repository(
         "solus".to_string(),
         "fixture".to_string(),
@@ -208,7 +210,7 @@ fn sha1_repository_checksum_is_current_and_algorithm_change_invalidates_it() {
         "x86_64".to_string(),
         "eopkg".to_string(),
         source_checksum.to_string(),
-        &["sha256:chunk".to_string()],
+        &transport,
         42,
         "sha256:content".to_string(),
         "/tmp/fixture.ccs".to_string(),
@@ -241,7 +243,15 @@ fn repository_artifact_exposes_only_complete_serving_state() {
     assert_eq!(artifact.package_version, "1.0-1");
     assert_eq!(artifact.source_profile, "fedora-44");
     assert_eq!(artifact.package_architecture, "x86_64");
-    assert_eq!(artifact.chunk_hashes, vec!["sha256:chunk".to_string()]);
+    assert_eq!(
+        artifact
+            .transport
+            .objects
+            .iter()
+            .map(|object| object.sha256.as_str())
+            .collect::<Vec<_>>(),
+        ["sha256:chunk"]
+    );
     assert_eq!(artifact.total_size, 42);
     assert_eq!(artifact.content_hash, "sha256:content");
     assert_eq!(artifact.ccs_path, "/tmp/fixture.ccs");
@@ -295,14 +305,14 @@ fn installed_conversion_round_trips_a_durable_ccs_path() {
 }
 
 #[test]
-fn repository_artifact_rejects_corrupt_chunk_json() {
+fn repository_artifact_rejects_corrupt_transport_json() {
     let (_temp, conn) = create_test_db();
     let mut converted = server_package("sha256:source", "sha256:chunk");
     converted.insert(&conn).unwrap();
     conn.execute_batch("PRAGMA ignore_check_constraints = ON;")
         .unwrap();
     conn.execute(
-        "UPDATE converted_packages SET chunk_hashes_json = '{bad' WHERE id = ?1",
+        "UPDATE converted_packages SET transport_json = '{bad' WHERE id = ?1",
         [converted.id.unwrap()],
     )
     .unwrap();
@@ -311,7 +321,7 @@ fn repository_artifact_rejects_corrupt_chunk_json() {
         .unwrap()
         .unwrap();
     let error = found.repository_artifact().unwrap_err().to_string();
-    assert!(error.contains("malformed chunk_hashes_json"), "{error}");
+    assert!(error.contains("malformed transport_json"), "{error}");
 }
 
 #[test]

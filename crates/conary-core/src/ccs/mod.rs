@@ -29,6 +29,7 @@ pub mod native_transaction;
 pub mod package;
 pub mod policy;
 pub mod signing;
+pub mod transport;
 pub mod v3;
 pub mod verify;
 
@@ -65,4 +66,7 @@ pub use native_lifecycle::{
 pub use package::CcsPackage;
 pub use policy::{BuildPolicy, BuildPolicyConfig, PolicyAction, PolicyChain};
 pub use signing::SigningKeyPair;
+pub use transport::{
+    CCS_TRANSPORT_SCHEMA_V1, CcsTransportEnvelopeV1, CcsTransportObjectV1, PreparedCcsTransport,
+};
 pub use verify::{TrustPolicy, VerifiedCcsArchive};

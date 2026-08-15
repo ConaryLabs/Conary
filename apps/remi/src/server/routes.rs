@@ -874,6 +874,7 @@ mod tests {
         std::fs::write(&ccs_path, &ccs_bytes).unwrap();
 
         let conn = conary_core::db::open(&db_path).unwrap();
+        let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut converted = conary_core::db::models::ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "qemu-img".to_string(),
@@ -881,7 +882,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:native".to_string(),
-            &[],
+            &transport,
             ccs_bytes.len() as i64,
             "sha256:ccs".to_string(),
             ccs_path.to_string_lossy().to_string(),

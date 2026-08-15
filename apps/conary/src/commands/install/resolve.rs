@@ -20,6 +20,7 @@ use anyhow::Result;
 #[cfg(test)]
 use conary_core::db::models::ProvideEntry;
 use conary_core::db::models::Redirect;
+#[cfg(test)]
 use conary_core::db::paths::keyring_dir;
 use conary_core::repository::resolution_policy::ResolutionPolicy;
 use conary_core::repository::{
@@ -94,6 +95,7 @@ fn build_resolution_options(
         repository: repo.map(String::from),
         architecture: architecture.map(String::from),
         output_dir: None,
+        objects_dir: None,
         skip_installed: false,
         policy: policy_opts.policy.clone(),
         is_root: policy_opts.is_root,
@@ -137,16 +139,15 @@ pub async fn resolve_package_path_with_policy(
     // Check for package redirects (renames, obsoletes, etc.)
     let resolved_name = resolve_redirects(&conn, package, version);
 
-    // Build resolution options
-    // Note: keyring_dir will be used when GPG options are integrated into resolution
-    let _keyring_dir = keyring_dir(db_path);
-    let options = build_resolution_options(
+    // Build resolution options.
+    let mut options = build_resolution_options(
         version,
         package_release,
         repository,
         architecture,
         policy_opts,
     );
+    options.objects_dir = Some(conary_core::db::paths::objects_dir(db_path));
 
     // Use unified resolver
     progress.set_status("Resolving package source...");

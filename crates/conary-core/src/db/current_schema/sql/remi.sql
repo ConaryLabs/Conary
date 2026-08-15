@@ -19,7 +19,7 @@ CREATE TABLE converted_packages (
             -- Conversion algorithm version (re-convert if upgraded)
             conversion_version INTEGER NOT NULL DEFAULT 1,
             -- When the conversion occurred
-            converted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, enhancement_version INTEGER DEFAULT 0, extracted_provenance_json TEXT, enhancement_status TEXT DEFAULT 'pending', enhancement_error TEXT, enhancement_attempted_at TEXT, enhancement_priority INTEGER DEFAULT 1, package_name TEXT, package_version TEXT, source_profile TEXT CHECK(source_profile IS NULL OR source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')), chunk_hashes_json TEXT, total_size INTEGER, content_hash TEXT, ccs_path TEXT, package_architecture TEXT, scriptlet_fidelity TEXT NOT NULL DEFAULT 'native-free', evidence_digest TEXT, scriptlet_summary_json TEXT NOT NULL DEFAULT '{"scriptlet_fidelity":"native-free","evidence_digest":null}',
+            converted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, enhancement_version INTEGER DEFAULT 0, extracted_provenance_json TEXT, enhancement_status TEXT DEFAULT 'pending', enhancement_error TEXT, enhancement_attempted_at TEXT, enhancement_priority INTEGER DEFAULT 1, package_name TEXT, package_version TEXT, source_profile TEXT CHECK(source_profile IS NULL OR source_profile IN ('fedora-44', 'ubuntu-26.04', 'arch', 'solus')), transport_json TEXT, total_size INTEGER, content_hash TEXT, ccs_path TEXT, package_architecture TEXT, scriptlet_fidelity TEXT NOT NULL DEFAULT 'native-free', evidence_digest TEXT, scriptlet_summary_json TEXT NOT NULL DEFAULT '{"scriptlet_fidelity":"native-free","evidence_digest":null}',
             CHECK (
                 (
                     artifact_kind = 'installed'
@@ -29,7 +29,7 @@ CREATE TABLE converted_packages (
                     AND source_profile IS NULL
                     AND package_architecture IS NULL
                     AND repository_provides_digest IS NULL
-                    AND chunk_hashes_json IS NULL
+                    AND transport_json IS NULL
                     AND total_size IS NULL
                     AND content_hash IS NULL
                     AND (ccs_path IS NULL OR length(ccs_path) > 0)
@@ -50,9 +50,9 @@ CREATE TABLE converted_packages (
                     AND substr(repository_provides_digest, 1, 7) = 'sha256:'
                     AND substr(repository_provides_digest, 8)
                         NOT GLOB '*[^0-9a-f]*'
-                    AND chunk_hashes_json IS NOT NULL
-                    AND json_valid(chunk_hashes_json)
-                    AND json_type(chunk_hashes_json) = 'array'
+                    AND transport_json IS NOT NULL
+                    AND json_valid(transport_json)
+                    AND json_type(transport_json) = 'object'
                     AND total_size IS NOT NULL
                     AND total_size >= 0
                     AND content_hash IS NOT NULL

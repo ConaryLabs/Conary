@@ -189,9 +189,18 @@ async fn handle_dep_installs(
                         )?,
                     );
                 }
-                let downloaded =
-                    repository::download_dependencies(&to_download, temp_dir.path(), &keyring_dir)
-                        .await?;
+                let runtime_root =
+                    conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(ctx.db_path);
+                let transport_cas =
+                    conary_core::filesystem::CasStore::new(runtime_root.objects_dir())?;
+                let downloaded = repository::download_dependencies(
+                    ctx.conn,
+                    &to_download,
+                    temp_dir.path(),
+                    &keyring_dir,
+                    &transport_cas,
+                )
+                .await?;
 
                 let parent_name = ctx.pkg.name().to_string();
                 let mut prepared_packages = Vec::with_capacity(downloaded.len());

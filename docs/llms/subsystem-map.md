@@ -209,7 +209,10 @@ commands.
   and `docs/modules/federation.md`. Durable exact-profile CCS/TUF signing
   authority starts in `apps/remi/src/server/signing_authority.rs`; deployment
   wiring and validation start in `apps/remi/src/deployment.rs` and
-  `deploy/remi-deploy-helper.sh`.
+  `deploy/remi-deploy-helper.sh`. Signed object transport authority starts in
+  `crates/conary-core/src/ccs/transport.rs`; Remi persistence begins in
+  `apps/remi/src/server/conversion/storage.rs`, and client CAS reuse begins in
+  `crates/conary-core/src/repository/remi.rs`.
 - conaryd routes and package jobs: `docs/modules/feature-ownership.md` slug
   `conaryd`, plus `docs/modules/conaryd.md`.
 - Exact-tag release construction, signing, immutable publication, deployment,

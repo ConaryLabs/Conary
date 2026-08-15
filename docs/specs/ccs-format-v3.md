@@ -136,9 +136,9 @@ byte length. Non-regular variants carry their own exact data and do not carry
 regular-file content authority.
 
 Every file carries an explicit content layout. Non-regular nodes carry
-`no-content`. An unchunked regular file carries `whole-object`, and the archive
-contains its complete bytes at the canonical path derived from the lowercase
-whole-file digest. A chunked regular file carries `fast-cdc-v2020`, the exact
+`no-content`. An explicitly unchunked regular file carries `whole-object`, and
+the archive contains its complete bytes at the canonical path derived from the
+lowercase whole-file digest. A chunked regular file carries `fast-cdc-v2020`, the exact
 16 KiB minimum, 64 KiB average, and 256 KiB maximum profile, and an ordered
 list of chunk SHA-256 digests and lengths. Missing layout authority is a retired
 pre-alpha v3 shape and fails decoding; consumers never infer a layout.
@@ -153,6 +153,16 @@ Unknown profiles, missing, duplicate, unreferenced, corrupt, reordered, or
 size-inconsistent objects fail before mutation. Generation materialization
 remains the explicit owner of the required whole-file CAS representation; the
 archive verifier does not create a second persistent whole-file copy.
+
+Repository distribution uses `CcsTransportEnvelopeV1`: the versioned envelope
+contains the exact signed control documents and the canonical sorted object
+identity/size sequence derived from them. A consumer authenticates the controls
+and proves that the derived sequence exactly equals the envelope before it may
+fetch payload bytes. Publication and cache layers store these objects directly;
+they do not rechunk or treat the compressed archive as a native object. After
+CAS-hit reuse and verified ingestion of all misses, the consumer reconstructs a
+deterministic temporary archive and reruns normal package verification. This
+carrier is integration state, not an additional persistent payload authority.
 
 Verification also proves that every component summary has the signed name,
 file count, and whole-file byte total.

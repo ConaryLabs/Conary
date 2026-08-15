@@ -31,6 +31,8 @@ async fn chunk_state_with_db(
     std::fs::write(&chunk_path, b"chunk bytes").unwrap();
 
     for (index, stale) in stale_rows.into_iter().enumerate() {
+        let transport =
+            crate::server::conversion::test_support::test_transport(&[hash.to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             format!("pkg-{index}"),
@@ -38,7 +40,7 @@ async fn chunk_state_with_db(
             "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:source-{index}"),
-            &[hash.to_string()],
+            &transport,
             11,
             format!("sha256:content-{index}"),
             format!("/tmp/pkg-{index}.ccs"),

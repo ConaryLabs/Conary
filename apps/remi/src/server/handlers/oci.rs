@@ -556,7 +556,12 @@ fn build_manifest(
     converted.scriptlet_summary()?;
 
     let artifact = converted.repository_artifact()?;
-    let chunk_hashes = &artifact.chunk_hashes;
+    let chunk_hashes = artifact
+        .transport
+        .objects
+        .iter()
+        .map(|object| object.sha256.as_str())
+        .collect::<Vec<_>>();
 
     if chunk_hashes.is_empty() {
         return Ok(None);

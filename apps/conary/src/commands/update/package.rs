@@ -41,7 +41,7 @@ fn resolution_options_for_selected_update(
     repo_pkg: &RepositoryPackage,
     repo: &Repository,
     temp_dir: &Path,
-    _keyring_dir: &Path,
+    objects_dir: &Path,
     policy: &ResolutionPolicy,
 ) -> Result<ResolutionOptions> {
     let mut transaction_policy = policy.clone();
@@ -66,6 +66,7 @@ fn resolution_options_for_selected_update(
         repository: Some(repo.name.clone()),
         architecture: repo_pkg.architecture.clone(),
         output_dir: Some(PathBuf::from(temp_dir)),
+        objects_dir: Some(objects_dir.to_path_buf()),
         // Update has already selected a repository package. Do not let the
         // generic resolver short-circuit on the installed trove; execution
         // must consume the exact repository row selected by update planning.
@@ -143,7 +144,6 @@ async fn prepare_full_updates_before_changeset(
     full_updates: Vec<(Trove, RepositoryPackage, Repository)>,
     db_path: &str,
     temp_dir: &Path,
-    keyring_dir: &Path,
     policy: &ResolutionPolicy,
 ) -> Result<Vec<PreparedFullUpdate>> {
     let mut prepared = Vec::with_capacity(full_updates.len());
@@ -153,7 +153,7 @@ async fn prepare_full_updates_before_changeset(
             &repo_pkg,
             &repo,
             temp_dir,
-            keyring_dir,
+            &objects_dir(db_path),
             policy,
         )?;
 
@@ -286,8 +286,6 @@ pub async fn cmd_update(
         .unwrap_or(Path::new("."))
         .join("tmp");
     std::fs::create_dir_all(&temp_dir)?;
-
-    let keyring_dir = conary_core::db::paths::keyring_dir(db_path);
 
     let installed_troves =
         installed_troves_for_update(&conn, package, package_version, architecture)?;
@@ -501,7 +499,6 @@ pub async fn cmd_update(
         delta_admission_updates,
         db_path,
         &temp_dir,
-        &keyring_dir,
         &policy,
     )
     .await?;
@@ -509,15 +506,9 @@ pub async fn cmd_update(
         let _ = std::fs::remove_file(&prepared.pkg_path);
     }
 
-    let prepared_full_updates = prepare_full_updates_before_changeset(
-        &conn,
-        full_updates,
-        db_path,
-        &temp_dir,
-        &keyring_dir,
-        &policy,
-    )
-    .await?;
+    let prepared_full_updates =
+        prepare_full_updates_before_changeset(&conn, full_updates, db_path, &temp_dir, &policy)
+            .await?;
     let mut full_updates: Vec<(Trove, RepositoryPackage, Repository)> = Vec::new();
 
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
@@ -709,7 +700,7 @@ pub async fn cmd_update(
                     &repo_pkg,
                     &repo,
                     &temp_dir,
-                    &keyring_dir,
+                    &objects_dir,
                     &policy,
                 ) {
                     Ok(options) => options,

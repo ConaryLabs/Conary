@@ -177,6 +177,50 @@ impl<'a> VerifiedObjectBatch<'a> {
         self.metrics
     }
 
+    /// Admit an exact-size canonical hit without downloading or rereading it.
+    ///
+    /// CAS object names are immutable verified-content authority. The batch
+    /// still rechecks file type and size here and again at commit so a caller
+    /// can fetch only missing repository objects without weakening the commit
+    /// boundary.
+    pub fn reuse_trusted(&mut self, sha256: &str) -> Result<bool> {
+        if self.poisoned {
+            return Err(crate::Error::ConflictError(
+                "verified object batch is poisoned by an earlier failure".into(),
+            ));
+        }
+        let (size, state) = self
+            .expected
+            .get(sha256)
+            .map(|object| (object.size, object.state))
+            .ok_or_else(|| {
+                crate::Error::NotFound(format!(
+                    "incoming SHA-256 object {sha256} was not declared by the signed authority"
+                ))
+            })?;
+        match state {
+            ObjectState::Missing => Ok(false),
+            ObjectState::TrustedHit => {
+                let path = self.cas.hash_to_path(sha256)?;
+                let metadata = fs::symlink_metadata(&path)?;
+                if !metadata.file_type().is_file() || metadata.len() != size {
+                    return Err(crate::Error::IoError(format!(
+                        "trusted CAS object {} changed before reuse",
+                        path.display()
+                    )));
+                }
+                self.expected.get_mut(sha256).expect("object exists").state =
+                    ObjectState::IngestedHit;
+                Ok(true)
+            }
+            ObjectState::IngestedMissing | ObjectState::IngestedHit => {
+                Err(crate::Error::ConflictError(format!(
+                    "signed object {sha256} was admitted more than once"
+                )))
+            }
+        }
+    }
+
     /// Consume and authenticate one expected stream with bounded memory.
     pub fn ingest(
         &mut self,
@@ -541,6 +585,24 @@ mod tests {
                 canonical_bytes_reread: 0,
             }
         );
+    }
+
+    #[test]
+    fn trusted_hit_can_commit_without_incoming_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let cas = CasStore::new(temp.path().join("objects")).unwrap();
+        let bytes = b"already authenticated";
+        let sha256 = cas.store(bytes).unwrap();
+        let mut batch = cas
+            .verified_object_batch([(sha256.clone(), bytes.len() as u64)])
+            .unwrap();
+
+        assert!(batch.reuse_trusted(&sha256).unwrap());
+        let set = batch.commit().unwrap();
+        assert!(set.contains(&sha256));
+        assert_eq!(set.metrics().hits, 1);
+        assert_eq!(set.metrics().incoming_bytes_hashed, 0);
+        assert_eq!(set.metrics().persistent_bytes_written, 0);
     }
 
     #[test]

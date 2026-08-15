@@ -667,7 +667,7 @@ fn capture_installed_conversions(
             package_version: None,
             source_profile: None,
             package_architecture: None,
-            chunk_hashes_json: None,
+            transport_json: None,
             total_size: None,
             content_hash: None,
             ccs_path: None,

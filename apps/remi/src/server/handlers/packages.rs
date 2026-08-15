@@ -38,8 +38,8 @@ pub struct PackageManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
     pub distro: String,
-    /// List of chunk hashes that make up this package
-    pub chunks: Vec<ChunkRef>,
+    /// Exact signed CCS control documents and canonical object set.
+    pub transport: conary_core::ccs::CcsTransportEnvelopeV1,
     /// Total size when reassembled
     pub total_size: u64,
     /// SHA-256 of the complete reassembled content
@@ -51,13 +51,6 @@ pub struct PackageManifest {
     /// Passive native lifecycle metadata summary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scriptlets: Option<ScriptletPackageMetadata>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ChunkRef {
-    pub hash: String,
-    pub size: u64,
-    pub offset: u64,
 }
 
 /// Response when conversion is in progress (202 Accepted)
@@ -96,22 +89,13 @@ fn manifest_from_native_publication(
     native: conary_core::db::models::NativePackagePublication,
     route_slug: &str,
 ) -> anyhow::Result<PackageManifest> {
-    let chunk_hashes: Vec<String> = serde_json::from_str(&native.chunk_hashes_json)?;
-    let chunks = chunk_hashes
-        .iter()
-        .enumerate()
-        .map(|(i, hash)| ChunkRef {
-            hash: hash.clone(),
-            size: 0,
-            offset: i as u64,
-        })
-        .collect();
+    let transport = serde_json::from_str(&native.transport_json)?;
     Ok(PackageManifest {
         name: native.name,
         version: native.version,
         release: Some(native.package_release),
         distro: route_slug.to_string(),
-        chunks,
+        transport,
         total_size: native.total_size as u64,
         content_hash: native.content_hash,
         native: true,
@@ -166,7 +150,7 @@ fn native_manifest_for_package(
 
 /// GET /v1/:distro/packages/:name
 ///
-/// Returns package metadata and chunk list.
+/// Returns package metadata and its authenticated CCS transport descriptor.
 /// If package needs conversion, returns 202 Accepted with job ID.
 pub async fn get_package(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -363,14 +347,13 @@ fn check_converted(
         let artifact = converted.repository_artifact()?;
         let ccs_path = std::path::Path::new(artifact.ccs_path);
         if ccs_path.exists() {
-            let chunks = exact_chunk_refs(&conn, &artifact.chunk_hashes)?;
             let scriptlet_summary = converted.scriptlet_summary()?;
             let manifest = PackageManifest {
                 name: artifact.package_name.to_string(),
                 version: artifact.package_version.to_string(),
                 release: None,
                 distro: distro.to_string(),
-                chunks,
+                transport: artifact.transport,
                 total_size: artifact.total_size,
                 content_hash: artifact.content_hash.to_string(),
                 native: false,
@@ -459,15 +442,15 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
             Ok(outcome) => {
                 let conversion_result = outcome;
                 tracing::info!(
-                    "Conversion complete: {}:{} -> {} chunks (job {})",
+                    "Conversion complete: {}:{} -> {} signed objects (job {})",
                     job.distro,
                     job.package_name,
-                    conversion_result.chunk_hashes.len(),
+                    conversion_result.transport.objects.len(),
                     job_id
                 );
                 // Store result with job for later retrieval
                 let job_result = crate::server::jobs::ConversionResult {
-                    chunk_hashes: conversion_result.chunk_hashes,
+                    transport: conversion_result.transport,
                     total_size: conversion_result.total_size,
                     content_hash: conversion_result.content_hash,
                     ccs_path: conversion_result.ccs_path,
@@ -729,32 +712,6 @@ fn converted_ccs_path_for_download(
     } else {
         Ok(ConvertedDownloadLookup::Missing)
     }
-}
-
-fn exact_chunk_refs(
-    conn: &rusqlite::Connection,
-    chunk_hashes: &[String],
-) -> Result<Vec<ChunkRef>, anyhow::Error> {
-    use conary_core::db::models::ChunkAccess;
-
-    let mut offset = 0_u64;
-    let mut chunks = Vec::with_capacity(chunk_hashes.len());
-    for hash in chunk_hashes {
-        let access = ChunkAccess::find_by_hash(conn, hash)?.ok_or_else(|| {
-            anyhow::anyhow!("converted artifact chunk {hash} has no exact size record")
-        })?;
-        let size = u64::try_from(access.size_bytes)
-            .map_err(|_| anyhow::anyhow!("converted artifact chunk {hash} has negative size"))?;
-        chunks.push(ChunkRef {
-            hash: hash.clone(),
-            size,
-            offset,
-        });
-        offset = offset
-            .checked_add(size)
-            .ok_or_else(|| anyhow::anyhow!("converted artifact chunk offsets overflow"))?;
-    }
-    Ok(chunks)
 }
 
 /// Stream a CCS file as a response, recording analytics only on success.

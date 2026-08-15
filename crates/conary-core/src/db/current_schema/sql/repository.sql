@@ -813,7 +813,8 @@ CREATE TABLE native_package_publications (
             authority_format_version INTEGER NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('public', 'superseded', 'rolled_back')),
             content_hash TEXT NOT NULL,
-            chunk_hashes_json TEXT NOT NULL,
+            transport_json TEXT NOT NULL
+                CHECK(json_valid(transport_json) AND json_type(transport_json) = 'object'),
             total_size INTEGER NOT NULL,
             package_path TEXT NOT NULL,
             target_path TEXT NOT NULL,

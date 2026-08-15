@@ -88,6 +88,9 @@ fn converted_manifest_includes_typed_lifecycle_summary() {
     std::fs::write(&ccs_path, b"ccs").unwrap();
 
     let conn = conary_core::db::open(&db_path).unwrap();
+    let mut transport =
+        crate::server::conversion::test_support::test_transport(&["sha256:chunk".to_string()]);
+    transport.objects[0].size = 3;
     let mut converted = ConvertedPackage::new_repository(
         "fedora-44".to_string(),
         "pkg".to_string(),
@@ -95,7 +98,7 @@ fn converted_manifest_includes_typed_lifecycle_summary() {
         "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:source".to_string(),
-        &["sha256:chunk".to_string()],
+        &transport,
         3,
         "sha256:content".to_string(),
         ccs_path.to_string_lossy().to_string(),
@@ -121,8 +124,8 @@ fn converted_manifest_includes_typed_lifecycle_summary() {
 
     let scriptlets = manifest.scriptlets.as_ref().unwrap();
     assert_eq!(scriptlets.scriptlet_fidelity, "native-free");
-    assert_eq!(manifest.chunks[0].size, 3);
-    assert_eq!(manifest.chunks[0].offset, 0);
+    assert_eq!(manifest.transport.objects[0].size, 3);
+    assert_eq!(manifest.transport.objects[0].sha256, "sha256:chunk");
     assert!(!json.contains("publication_status"));
 }
 
@@ -135,6 +138,7 @@ fn malformed_current_conversion_metadata_is_an_internal_data_error() {
     let ccs_path = temp.path().join("pkg.ccs");
     std::fs::write(&ccs_path, b"fake ccs").unwrap();
 
+    let transport = crate::server::conversion::test_support::test_transport(&["abc".to_string()]);
     let mut converted = ConvertedPackage::new_repository(
         "fedora-44".to_string(),
         "pkg".to_string(),
@@ -142,7 +146,7 @@ fn malformed_current_conversion_metadata_is_an_internal_data_error() {
         "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:source".to_string(),
-        &["abc".to_string()],
+        &transport,
         8,
         "sha256:content".to_string(),
         ccs_path.to_string_lossy().to_string(),
@@ -176,6 +180,7 @@ fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
     std::fs::write(&ccs_path, b"stale ccs payload").unwrap();
 
     let conn = conary_core::db::open(&db_path).unwrap();
+    let transport = crate::server::conversion::test_support::test_transport(&[]);
     let mut converted = ConvertedPackage::new_repository(
         "fedora-44".to_string(),
         "p11-kit-trust".to_string(),
@@ -183,7 +188,7 @@ fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
         "x86_64".to_string(),
         "rpm".to_string(),
         "sha256:stale".to_string(),
-        &[],
+        &transport,
         17,
         "sha256:content".to_string(),
         ccs_path.to_string_lossy().to_string(),

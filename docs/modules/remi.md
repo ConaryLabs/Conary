@@ -280,17 +280,18 @@ entry-decision count. There is no scriptlet publication-status projection.
 The current schema separates installed conversions from repository-serving
 artifacts with a required discriminator. Installed rows require an exact trove
 identity and cannot carry serving fields. Repository rows require their exact
-distro/name/version/architecture identity, chunk list, total size, content
-hash, CCS path, and SHA-256 digest of the normalized repository-provide cache
+distro/name/version/architecture identity, authenticated CCS transport
+envelope, total size, content hash, CCS path, and SHA-256 digest of the
+normalized repository-provide cache
 projection. That digest invalidates cached conversions when repository metadata
 changes, but repository rows never mutate identity or capabilities parsed from
 the authenticated source artifact. Public, OCI, index, search, chunk, and
 garbage-collection paths validate that typed artifact instead of filling
 missing fields with guesses or empty values. Architecture and the repository
 provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 33 retains
-fail-closed source and takeover authority and adds package-owned repository
-enrollment plus retained ownership. It is a pre-alpha hard cut: prior databases are rebuilt and
+schema rejects missing, empty, or malformed values. Schema revision 40 replaces
+the retired chunk-list columns with the signed transport envelope. It is a
+pre-alpha hard cut: prior databases are rebuilt and
 re-ingested from configured repository authority rather than migrated. Local
 conversion tracking is written only after the CCS install transaction commits.
 
@@ -340,16 +341,25 @@ profile and uses the same current-row validation. A stale row is reconverted;
 malformed current state is surfaced as a server data error. Conversion has no
 operator promotion state or alternate serving lane.
 
-Local chunk visibility in `server/publication.rs` is a reachability check:
-native publication references are authoritative directly, and converted chunks
-are served only when a current validated conversion references them. Stale-only
+Local object visibility in `server/publication.rs` is a reachability check:
+native and converted publication references come from their signed transport
+envelopes, and objects are served only when a current validated publication
+references them. Stale-only
 and unreferenced local cache objects remain private. It does not classify
 lifecycle program text.
 
 Sparse-index and search responses use `converted=true` only for current,
-validated conversions. Lifecycle execution remains the client's typed
+validated conversions. The package response and completed conversion job carry
+the same authenticated transport envelope. Conary authenticates it with the
+repository targets keys before object fetch, reuses permanent-CAS hits, fetches
+only missing exact objects, verifies reconstruction, and hands a temporary
+deterministic carrier to install or update. Lifecycle execution remains the client's typed
 transaction responsibility; serving a lifecycle-bearing CCS does not bypass
 client preflight.
+
+Remi has no independent chunking toggle or boundary-size configuration. The
+signed CCS layout owns whether a file is whole-object or FastCDC and owns the
+canonical FastCDC profile; server configuration cannot override or fork it.
 
 Public package lookup and download orchestration remain in
 `apps/remi/src/server/handlers/packages.rs`; delta lookup is owned by
@@ -403,8 +413,8 @@ Implementation ownership lives in child modules:
 - `conversion/metadata.rs`: safe CCS filenames, profile-backed parser dispatch,
   metadata construction, repository identity application, and
   repository-provide merging.
-- `conversion/storage.rs`: local CAS writes, optional R2 write-through, and
-  checksum helpers.
+- `conversion/storage.rs`: signed CCS verification, exact local CAS object
+  persistence, and missing-only optional R2 write-through.
 - `conversion/persistence.rs`: converted-package rows, cache-hit
   reconstruction, current-summary validation, and ready-result construction.
 - `conversion/recipe.rs`: recipe URL fetch, DNS/IP validation, SSRF refusal,
@@ -451,6 +461,12 @@ local/R2 deletion pass. `admin_service::run_chunk_gc_op` is the single caller:
 it resolves the database path, chunk objects directory, and optional R2 store
 from server state, applies the one-hour grace period that protects chunks of
 in-flight conversions, and returns the typed report.
+
+The live referenced set is derived from current converted and public native
+transport envelopes plus explicitly protected cache rows. Malformed envelope
+state fails the scan; GC never falls back to a parallel hash list. Object sizes
+inside delta manifests likewise come from the signed envelope, while
+`chunk_access` remains cache/grace/accounting metadata only.
 
 Two surfaces call that one function, so neither can drift from the other. The
 MCP tool `chunk_gc` is the agent surface, and `POST /v1/admin/chunk-gc` on the

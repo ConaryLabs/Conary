@@ -860,6 +860,7 @@ mod tests {
         conversion_version: i32,
     ) {
         let source_profile = source_profile_for_route(distro).expect("supported test route");
+        let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut converted = ConvertedPackage::new_repository(
             source_profile.to_string(),
             name.to_string(),
@@ -867,7 +868,7 @@ mod tests {
             architecture.to_string(),
             "rpm".to_string(),
             format!("sha256:source-{name}-{version}"),
-            &[],
+            &transport,
             3,
             format!("sha256:content-{name}-{version}"),
             format!("/tmp/{name}-{version}.ccs"),
@@ -885,6 +886,7 @@ mod tests {
         architecture: &str,
     ) {
         let source_profile = source_profile_for_route(distro).expect("supported test route");
+        let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut converted = ConvertedPackage::new_repository(
             source_profile.to_string(),
             name.to_string(),
@@ -892,7 +894,7 @@ mod tests {
             architecture.to_string(),
             "rpm".to_string(),
             format!("sha256:source-{name}-{version}"),
-            &[],
+            &transport,
             3,
             format!("sha256:content-{name}-{version}"),
             format!("/tmp/{name}-{version}.ccs"),

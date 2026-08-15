@@ -99,6 +99,7 @@ mod tests {
             repository: Some("test-repo".to_string()),
             architecture: Some("x86_64".to_string()),
             output_dir: None,
+            objects_dir: None,
             skip_installed: false,
             policy: None,
             is_root: false,

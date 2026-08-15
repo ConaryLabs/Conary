@@ -12,7 +12,7 @@ pub struct ServerConversionResult {
     pub name: String,
     pub version: String,
     pub source_profile: Option<String>,
-    pub chunk_hashes: Vec<String>,
+    pub transport: conary_core::ccs::CcsTransportEnvelopeV1,
     pub total_size: u64,
     pub content_hash: String,
     pub ccs_path: PathBuf,
@@ -54,6 +54,18 @@ mod tests {
     use conary_core::ccs::convert::ScriptletBundleSummary;
     use std::time::Duration;
 
+    fn test_transport() -> conary_core::ccs::CcsTransportEnvelopeV1 {
+        conary_core::ccs::CcsTransportEnvelopeV1 {
+            schema_version: conary_core::ccs::transport::CCS_TRANSPORT_SCHEMA_V1,
+            manifest_base64: String::new(),
+            signature_json: "{}".to_string(),
+            debug_toml_base64: None,
+            build_attestation_json: None,
+            foreign_conversion_boundary_json: None,
+            objects: Vec::new(),
+        }
+    }
+
     #[test]
     fn server_conversion_result_can_carry_timing_report() {
         use crate::server::conversion_timing::{ConversionPhase, ConversionTimingReport};
@@ -66,7 +78,7 @@ mod tests {
             name: "nginx".to_string(),
             version: "1.28.0".to_string(),
             source_profile: Some("fedora-44".to_string()),
-            chunk_hashes: vec![],
+            transport: test_transport(),
             total_size: 0,
             content_hash: "sha256:test".to_string(),
             ccs_path: PathBuf::from("/tmp/nginx.ccs"),
@@ -84,7 +96,7 @@ mod tests {
             name: "nginx".to_string(),
             version: "1.24.0".to_string(),
             source_profile: Some("fedora-44".to_string()),
-            chunk_hashes: vec!["abc123".to_string()],
+            transport: test_transport(),
             total_size: 1024,
             content_hash: "sha256:deadbeef".to_string(),
             ccs_path: PathBuf::from("/data/nginx.ccs"),

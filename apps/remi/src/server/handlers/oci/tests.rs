@@ -22,6 +22,7 @@ fn insert_converted_package(
 ) {
     let source_profile =
         conary_core::repository::supported_profiles::profile_for_remi_route(distro).unwrap();
+    let transport = crate::server::conversion::test_support::test_transport(chunks);
     let mut pkg = ConvertedPackage::new_repository(
         source_profile.id().to_string(),
         name.to_string(),
@@ -29,7 +30,7 @@ fn insert_converted_package(
         "x86_64".to_string(),
         "rpm".to_string(),
         format!("sha256:test-{}-{}", name, version),
-        chunks,
+        &transport,
         4096,
         format!("sha256:content-{}-{}", name, version),
         format!("/data/{}-{}.ccs", name, version),
@@ -48,6 +49,7 @@ fn insert_stale_converted_package(
 ) {
     let source_profile =
         conary_core::repository::supported_profiles::profile_for_remi_route(distro).unwrap();
+    let transport = crate::server::conversion::test_support::test_transport(chunks);
     let mut pkg = ConvertedPackage::new_repository(
         source_profile.id().to_string(),
         name.to_string(),
@@ -55,7 +57,7 @@ fn insert_stale_converted_package(
         "x86_64".to_string(),
         "rpm".to_string(),
         format!("sha256:test-{}-{}", name, version),
-        chunks,
+        &transport,
         4096,
         format!("sha256:content-{}-{}", name, version),
         format!("/data/{}-{}.ccs", name, version),
@@ -83,6 +85,8 @@ async fn oci_blob_state_with_db(
     std::fs::write(&chunk_path, b"blob bytes").unwrap();
 
     for (index, stale) in stale_rows.into_iter().enumerate() {
+        let transport =
+            crate::server::conversion::test_support::test_transport(&[hash.to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             format!("pkg-{index}"),
@@ -90,7 +94,7 @@ async fn oci_blob_state_with_db(
             "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:source-{index}"),
-            &[hash.to_string()],
+            &transport,
             10,
             format!("sha256:content-{index}"),
             format!("/tmp/pkg-{index}.ccs"),

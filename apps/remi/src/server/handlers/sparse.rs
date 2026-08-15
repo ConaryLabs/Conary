@@ -476,6 +476,9 @@ mod tests {
     ) {
         let source_profile =
             conary_core::repository::supported_profiles::profile_for_remi_route(distro).unwrap();
+        let transport = crate::server::conversion::test_support::test_transport(&[format!(
+            "sha256:{package}-{version}-chunk"
+        )]);
         let mut converted = ConvertedPackage::new_repository(
             source_profile.id().to_string(),
             package.to_string(),
@@ -483,7 +486,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             format!("sha256:{package}-{version}-source"),
-            &[format!("sha256:{package}-{version}-chunk")],
+            &transport,
             42,
             content_hash.to_string(),
             format!("/tmp/{package}-{version}.ccs"),
@@ -689,6 +692,10 @@ mod tests {
         insert_package(&conn, repo_id, "nginx", "1.25.0-1.fc44", 1100);
 
         // Mark one version as converted
+        let transport = crate::server::conversion::test_support::test_transport(&[
+            "chunk1".to_string(),
+            "chunk2".to_string(),
+        ]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "nginx".to_string(),
@@ -696,7 +703,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:nginx-1.24.0-1.fc44".to_string(),
-            &["chunk1".to_string(), "chunk2".to_string()],
+            &transport,
             2048,
             "sha256:content_abc".to_string(),
             "/data/nginx.ccs".to_string(),
@@ -731,6 +738,8 @@ mod tests {
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
         insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
 
+        let transport =
+            crate::server::conversion::test_support::test_transport(&["chunk1".to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "nginx".to_string(),
@@ -738,7 +747,7 @@ mod tests {
             "x86_64".to_string(),
             "rpm".to_string(),
             "sha256:nginx-1.24.0-1.fc44".to_string(),
-            &["chunk1".to_string()],
+            &transport,
             2048,
             "sha256:content_abc".to_string(),
             "/data/nginx.ccs".to_string(),
@@ -762,6 +771,8 @@ mod tests {
         let repo_id = insert_repo(&conn, "fedora-base", "fedora");
         insert_package(&conn, repo_id, "libffi", "3.5.1-2.fc44", 1024);
 
+        let transport =
+            crate::server::conversion::test_support::test_transport(&["chunk1".to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
             "libffi".to_string(),
@@ -769,7 +780,7 @@ mod tests {
             "i686".to_string(),
             "rpm".to_string(),
             "sha256:libffi-i686".to_string(),
-            &["chunk1".to_string()],
+            &transport,
             2048,
             "sha256:i686-content".to_string(),
             "/data/libffi-i686.ccs".to_string(),

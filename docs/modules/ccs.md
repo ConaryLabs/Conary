@@ -52,6 +52,7 @@ Apply typed install prefix (default `/`) to source-root children
 | CCS package projection | package/v3_projection.rs | Project verified signed v3 authority into install-time package data |
 | `AuthorityDocumentV3` | v3/schema.rs | Signed CCS v3 native package authority |
 | `FileContentLayoutV3` | v3/schema.rs + v3/validation/content_layout.rs | Required whole-object/no-content or canonical FastCDC v2020 reconstruction authority |
+| `CcsTransportEnvelopeV1` | transport.rs | Versioned repository envelope carrying exact signed controls and their canonical ordered object set |
 | v3 manifest identity projection | v3/manifest_projection.rs | Project one exact signed identity into install and untrusted-inspection compatibility manifests |
 | `CcsStructuralBudget` | budget.rs | Single owner of every CCS structural and operator-resource limit; authoring preflight and verification both admit against it |
 | `AuthorityCensus` | budget.rs | Exact structural measurement of one authority document; derives that package's byte ceilings |
@@ -179,6 +180,17 @@ concatenates them, reruns the signed boundary profile, and proves the final
 whole-file digest and size before exposing payload authority. Generation and
 composefs materialization, not archive verification, owns the persistent
 whole-file CAS object required to publish a root.
+
+Repository transport preserves that same authority. `ccs/transport.rs` carries
+the exact signed control bytes plus the canonical object identities and sizes
+derived from them; authentication must reproduce the declared sequence before
+any object is fetched. Remi publication, local/R2 storage, client acquisition,
+delta accounting, federation, reference accounting, and GC all consume those
+identities instead of rechunking the compressed `.ccs` carrier. A client reuses
+trusted permanent-CAS hits, fetches only misses, verifies the complete set, and
+reconstructs a deterministic temporary carrier for the existing install
+boundary. Update uses the same resolver path, while rollback reuses generation
+authority and never reacquires repository objects.
 
 RPM header arrays own installed metadata while the paired CPIO member owns
 bytes. RPM `FILEUSERNAME` and `FILEGROUPNAME` remain source identities.

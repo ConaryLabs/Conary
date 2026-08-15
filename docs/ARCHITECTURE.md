@@ -525,10 +525,11 @@ not a fallback for normal mutation.
 
 Publication and rollback rows reference the same SQLite-selected-root snapshot
 lineage by foreign key. The retired filesystem candidate and complete
-`rollback_root` JSON copy have no current-schema reader. Revision 39 is a
+`rollback_root` JSON copy have no current-schema reader. Revision 40 is a
 pre-alpha hard cut: older databases must be rebuilt from authoritative package
-and repository inputs. It retains revision 38's indexed selected-root authority
-and adds the generation database mutation epoch described below.
+and repository inputs. It retains revision 39's generation database mutation
+epoch and replaces repository chunk-list columns with signed transport
+envelopes.
 
 1. **Select**: Use the latest cumulative selected-root snapshot as lower authority when publication debt is pending. Otherwise mount the current generation's verified composefs image directly beneath its typed mutable-state layer; only first-generation database authority still reconstructs the complete lower
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
@@ -723,7 +724,11 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 39 adds one generation-delta mutation epoch row plus generated
+Schema revision 40 retains revision 39's generation-delta mutation epoch and
+replaces repository publication chunk-list JSON with the signed CCS transport
+envelope. That envelope owns the exact ordered object identities and sizes used
+by publication, acquisition, federation, reference accounting, and GC.
+Revision 39 added one generation-delta mutation epoch row plus generated
 triggers for every authoritative table. A connection-local SQLite function
 assigns one UUID to all writes in a transaction, and the triggers persist that
 UUID exactly once for the transaction. Generation publication can therefore
@@ -732,7 +737,7 @@ prior generation baseline; `PRAGMA data_version` separately rejects a commit
 from another connection while capture is active. Every Conary write connection
 registers the function before schema validation. An unconfigured writer fails
 closed at the trigger instead of changing authority without advancing the
-epoch. This is a pre-alpha hard cut: revision 38 databases must be rebuilt.
+epoch. This is a pre-alpha hard cut: revision 39 databases must be rebuilt.
 
 `generation_backup_chain.rs` owns the active v3 format: one
 content-addressed SQLite base plus at most 32 ordered, content-addressed session

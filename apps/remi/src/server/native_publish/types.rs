@@ -83,6 +83,7 @@ impl NativePublishError {
 #[derive(Debug)]
 pub struct VerifiedNativeArtifact {
     pub package: CcsPackage,
+    pub verification: conary_core::ccs::VerifiedCcsArchive,
     pub lint: PublishLintReport,
     pub name: String,
     pub version: String,

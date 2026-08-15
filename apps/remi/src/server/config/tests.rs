@@ -179,10 +179,7 @@ eviction_threshold = 0.90
 negative_cache_ttl = "15m"
 
 [conversion]
-chunking = true
-chunk_min = 16384
-chunk_avg = 65536
-chunk_max = 262144
+strip_debug = false
 
 [release_publish]
 repository_keys_dir = "/conary/repository-keys"
@@ -275,12 +272,13 @@ eviction_threshold = 1.5
 }
 
 #[test]
-fn test_invalid_chunk_sizes() {
+fn retired_chunk_configuration_is_rejected() {
     let toml_str = r#"
 [conversion]
-chunk_min = 100000
-chunk_avg = 50000
+chunking = true
 "#;
-    let config: RemiConfig = toml::from_str(toml_str).unwrap();
-    assert!(config.validate().is_err());
+    let error = toml::from_str::<RemiConfig>(toml_str)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("chunking"), "{error}");
 }
