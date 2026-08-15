@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-13
-revision: 63
+revision: 64
 summary: Convert direct and exactly re-resolved adopted foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
 ---
 
@@ -191,6 +191,14 @@ trusted permanent-CAS hits, fetches only misses, verifies the complete set, and
 reconstructs a deterministic temporary carrier for the existing install
 boundary. Update uses the same resolver path, while rollback reuses generation
 authority and never reacquires repository objects.
+
+Remi durably publishes one converted transport with at most 16 object tasks in
+flight. Each task checks R2, and a miss reads and re-verifies the canonical
+local CAS object before its PUT. Remi waits for the complete bounded set and
+publishes chunk-size/cache bookkeeping only after every required object is
+durable; any HEAD, read, hash, or PUT failure rejects the conversion before
+that bookkeeping boundary. The bound limits retained upload data to at most 16
+canonical chunks while removing per-object network round-trip serialization.
 
 RPM header arrays own installed metadata while the paired CPIO member owns
 bytes. RPM `FILEUSERNAME` and `FILEGROUPNAME` remain source identities.
