@@ -1,13 +1,12 @@
 // apps/remi/src/server/handlers/chunks.rs
-//! Chunk serving endpoint - fast, dumb file server
+//! Chunk serving endpoint.
 //!
-//! This endpoint serves raw chunks from the CAS store.
-//! No conversion logic here - if a chunk is missing, return 404.
-//! Chunks are immutable and infinitely cacheable.
+//! With R2 configured, the durable store owns presence and GET requests use
+//! presigned redirects. Without R2, the endpoint serves the local CAS.
 //!
 //! Phase 0 hardening:
 //! - HEAD endpoint with Bloom filter protection
-//! - Batch endpoints for finding missing chunks
+//! - Batched missing-chunk discovery
 //! - Pull-through caching (fetch from upstream on miss)
 //! - Metrics tracking
 
@@ -69,6 +68,21 @@ fn chunk_not_found() -> Response {
     (StatusCode::NOT_FOUND, "Chunk not found").into_response()
 }
 
+fn durable_chunk_unavailable(hash: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-conary-error", "durable-chunk-unavailable")
+        .body(Body::from(
+            serde_json::json!({
+                "code": "durable_chunk_unavailable",
+                "hash": hash,
+            })
+            .to_string(),
+        ))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 async fn chunk_servable_by_authority(
     db_path: std::path::PathBuf,
     hash: String,
@@ -107,14 +121,27 @@ pub async fn head_chunk(
     }
     let hash = normalize_hash(&hash);
 
-    let db_path = {
+    let (db_path, r2_store) = {
         let state = state.read().await;
-        state.config.db_path.clone()
+        (state.config.db_path.clone(), state.r2_store.clone())
     };
     match chunk_servable_by_authority(db_path, hash.clone()).await {
         Ok(true) => {}
         Ok(false) => return chunk_not_found(),
         Err(response) => return response,
+    }
+
+    if let Some(r2_store) = r2_store {
+        return match r2_store.head_chunk(&hash).await {
+            Ok(true) => chunk_response_builder(&hash, StatusCode::OK)
+                .body(Body::empty())
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+            Ok(false) => durable_chunk_unavailable(&hash),
+            Err(error) => {
+                tracing::error!("R2 HEAD failed for durable chunk {hash}: {error}");
+                durable_chunk_unavailable(&hash)
+            }
+        };
     }
 
     let state = state.read().await;
@@ -187,10 +214,12 @@ fn parse_range_header(range_header: &str, file_size: u64) -> Option<(u64, u64)> 
 /// GET /v1/chunks/:hash
 ///
 /// Serves a chunk by its content hash. Returns:
-/// - 200 OK with chunk data and immutable cache headers
-/// - 206 Partial Content for Range requests
+/// - 307 Temporary Redirect to R2 when durable storage is configured
+/// - 200 OK with local chunk data otherwise
+/// - 206 Partial Content for local Range requests
 /// - 416 Range Not Satisfiable for invalid ranges
 /// - 404 Not Found if chunk doesn't exist
+/// - 503 Service Unavailable if published state disagrees with R2
 pub async fn get_chunk(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(hash): Path<String>,
@@ -202,14 +231,49 @@ pub async fn get_chunk(
     }
     let hash = normalize_hash(&hash);
 
-    let db_path = {
+    let (db_path, r2_store) = {
         let state_guard = state.read().await;
-        state_guard.config.db_path.clone()
+        (
+            state_guard.config.db_path.clone(),
+            state_guard.r2_store.clone(),
+        )
     };
     match chunk_servable_by_authority(db_path, hash.clone()).await {
         Ok(true) => {}
         Ok(false) => return chunk_not_found(),
         Err(response) => return response,
+    }
+
+    if let Some(r2_store) = r2_store {
+        match r2_store.head_chunk(&hash).await {
+            Ok(true) => {}
+            Ok(false) => return durable_chunk_unavailable(&hash),
+            Err(error) => {
+                tracing::error!("R2 HEAD failed for durable chunk {hash}: {error}");
+                return durable_chunk_unavailable(&hash);
+            }
+        }
+        return match r2_store.presign_get(&hash, 3600).await {
+            Ok(presigned_url) => {
+                let metrics = {
+                    let state_guard = state.read().await;
+                    state_guard.metrics.clone()
+                };
+                metrics.record_hit();
+                Response::builder()
+                    .status(StatusCode::TEMPORARY_REDIRECT)
+                    .header(header::LOCATION, presigned_url)
+                    .header(header::CACHE_CONTROL, "public, max-age=3600")
+                    .header(header::ETAG, format!("\"{hash}\""))
+                    .header(header::ACCEPT_RANGES, "bytes")
+                    .body(Body::empty())
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+            }
+            Err(error) => {
+                tracing::error!("R2 presign failed for durable chunk {hash}: {error}");
+                durable_chunk_unavailable(&hash)
+            }
+        };
     }
 
     let state_guard = state.read().await;
@@ -238,33 +302,6 @@ pub async fn get_chunk(
         }
         state_guard.metrics.record_miss();
         return chunk_not_found();
-    }
-
-    // R2 redirect: if enabled and not a Range request, redirect to presigned R2 URL
-    let is_range_request = headers.contains_key(header::RANGE);
-    if !is_range_request
-        && state_guard.r2_redirect
-        && let Some(ref r2_store) = state_guard.r2_store
-    {
-        match r2_store.presign_get(&hash, 3600).await {
-            Ok(presigned_url) => {
-                state_guard.metrics.record_hit();
-                // Record approximate file size from metadata
-                if let Ok(meta) = tokio::fs::metadata(&chunk_path).await {
-                    state_guard.metrics.record_bytes_served(meta.len());
-                }
-                return Response::builder()
-                    .status(StatusCode::TEMPORARY_REDIRECT)
-                    .header(header::LOCATION, &presigned_url)
-                    .header(header::CACHE_CONTROL, "public, max-age=3600")
-                    .body(Body::empty())
-                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
-            }
-            Err(e) => {
-                tracing::warn!("R2 presign failed for {}, serving locally: {}", hash, e);
-                // Fall through to normal local serving
-            }
-        }
     }
 
     // Open file for streaming
@@ -571,8 +608,7 @@ pub struct FindMissingResponse {
 
 /// POST /v1/chunks/find-missing
 ///
-/// Check which chunks are missing from the cache.
-/// Useful for clients to determine what needs to be uploaded.
+/// Check which published chunks are present in the configured storage authority.
 pub async fn find_missing(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(request): Json<FindMissingRequest>,
@@ -585,12 +621,13 @@ pub async fn find_missing(
             .into_response();
     }
 
-    let (db_path, bloom_filter, chunk_cache) = {
+    let (db_path, bloom_filter, chunk_cache, r2_store) = {
         let state = state.read().await;
         (
             state.config.db_path.clone(),
             state.bloom_filter.clone(),
             state.chunk_cache.clone(),
+            state.r2_store.clone(),
         )
     };
 
@@ -612,6 +649,18 @@ pub async fn find_missing(
                 continue;
             }
             Err(response) => return response,
+        }
+
+        if let Some(r2_store) = &r2_store {
+            match r2_store.head_chunk(&hash).await {
+                Ok(true) => found.push(hash),
+                Ok(false) => return durable_chunk_unavailable(&hash),
+                Err(error) => {
+                    tracing::error!("R2 HEAD failed during find-missing for {hash}: {error}");
+                    return durable_chunk_unavailable(&hash);
+                }
+            }
+            continue;
         }
 
         // Use Bloom filter for quick rejection
@@ -637,149 +686,6 @@ pub async fn find_missing(
         invalid_count,
     })
     .into_response()
-}
-
-/// Request body for batch fetch endpoint
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BatchFetchRequest {
-    /// List of chunk hashes to fetch
-    pub hashes: Vec<String>,
-}
-
-/// POST /v1/chunks/batch
-///
-/// Fetch multiple chunks in a single request.
-/// Returns an efficient binary `multipart/mixed` response.
-///
-/// Multipart format:
-/// ```text
-/// Content-Type: multipart/mixed; boundary=chunk-boundary
-/// --chunk-boundary
-/// X-Chunk-Hash: abc123...
-/// Content-Length: 65536
-/// <raw bytes>
-/// --chunk-boundary
-/// X-Chunk-Hash: def456...
-/// Content-Length: 32768
-/// <raw bytes>
-/// --chunk-boundary--
-/// ```
-pub async fn batch_fetch(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    Json(request): Json<BatchFetchRequest>,
-) -> impl IntoResponse {
-    const MAX_BATCH_SIZE: usize = 100;
-    const BOUNDARY: &str = "chunk-boundary-7f3e9a2b";
-
-    if request.hashes.len() > MAX_BATCH_SIZE {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({ "error": format!("Too many hashes (max {})", MAX_BATCH_SIZE) }),
-            ),
-        )
-            .into_response();
-    }
-
-    /// Maximum aggregate response size for batch fetch (256 MB).
-    const MAX_BATCH_BYTES: u64 = 256 * 1024 * 1024;
-
-    let (db_path, chunk_cache, metrics) = {
-        let state = state.read().await;
-        (
-            state.config.db_path.clone(),
-            state.chunk_cache.clone(),
-            state.metrics.clone(),
-        )
-    };
-
-    // Collect chunk data with aggregate size cap
-    let mut chunks_data: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut missing = Vec::new();
-    let mut invalid = Vec::new();
-    let mut total_bytes: u64 = 0;
-
-    for raw_hash in &request.hashes {
-        if !is_valid_hash(raw_hash) {
-            invalid.push(raw_hash.clone());
-            continue;
-        }
-        let hash = normalize_hash(raw_hash);
-
-        match chunk_servable_by_authority(db_path.clone(), hash.clone()).await {
-            Ok(true) => {}
-            Ok(false) => {
-                missing.push(hash);
-                continue;
-            }
-            Err(response) => return response,
-        }
-
-        let path = chunk_cache.chunk_path(&hash);
-        match tokio::fs::read(&path).await {
-            Ok(data) => {
-                total_bytes += data.len() as u64;
-                if total_bytes > MAX_BATCH_BYTES {
-                    return (
-                        StatusCode::PAYLOAD_TOO_LARGE,
-                        Json(serde_json::json!({
-                            "error": format!(
-                                "Aggregate response exceeds size limit ({} MB)",
-                                MAX_BATCH_BYTES / (1024 * 1024)
-                            )
-                        })),
-                    )
-                        .into_response();
-                }
-                metrics.record_hit();
-                metrics.record_bytes_served(data.len() as u64);
-                chunks_data.push((hash.clone(), data));
-            }
-            Err(_) => {
-                missing.push(hash.clone());
-            }
-        }
-    }
-
-    // Build multipart response
-    let mut body_parts: Vec<u8> = Vec::new();
-
-    // Add metadata header as first part (JSON with missing/invalid info)
-    if !missing.is_empty() || !invalid.is_empty() {
-        body_parts.extend_from_slice(format!("--{}\r\n", BOUNDARY).as_bytes());
-        body_parts.extend_from_slice(b"Content-Type: application/json\r\n");
-        body_parts.extend_from_slice(b"X-Part-Type: metadata\r\n\r\n");
-        let metadata = serde_json::json!({
-            "missing": missing,
-            "invalid": invalid,
-        });
-        body_parts.extend_from_slice(metadata.to_string().as_bytes());
-        body_parts.extend_from_slice(b"\r\n");
-    }
-
-    // Add each chunk as a binary part
-    for (hash, data) in chunks_data {
-        body_parts.extend_from_slice(format!("--{}\r\n", BOUNDARY).as_bytes());
-        body_parts.extend_from_slice(b"Content-Type: application/octet-stream\r\n");
-        body_parts.extend_from_slice(format!("X-Chunk-Hash: {}\r\n", hash).as_bytes());
-        body_parts.extend_from_slice(format!("Content-Length: {}\r\n\r\n", data.len()).as_bytes());
-        body_parts.extend_from_slice(&data);
-        body_parts.extend_from_slice(b"\r\n");
-    }
-
-    // End boundary
-    body_parts.extend_from_slice(format!("--{}--\r\n", BOUNDARY).as_bytes());
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(
-            header::CONTENT_TYPE,
-            format!("multipart/mixed; boundary={}", BOUNDARY),
-        )
-        .header(header::CONTENT_LENGTH, body_parts.len())
-        .body(Body::from(body_parts))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 mod admin;

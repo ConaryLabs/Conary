@@ -2,18 +2,19 @@
 use super::*;
 use crate::server::conversion::test_support::seed_repository_conversion_source;
 
-#[test]
-fn batch_fetch_request_rejects_removed_json_format() {
-    let error = serde_json::from_value::<BatchFetchRequest>(serde_json::json!({
-        "hashes": [],
-        "format": "json"
-    }))
-    .expect_err("removed JSON batch format must fail");
-    assert!(error.to_string().contains("unknown field `format`"));
-}
 use conary_core::db::models::{CONVERSION_VERSION, ChunkAccess, ConvertedPackage};
 
 const TEST_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+#[test]
+fn durable_authority_failure_has_stable_typed_http_contract() {
+    let response = durable_chunk_unavailable(TEST_HASH);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.headers().get("x-conary-error").unwrap(),
+        "durable-chunk-unavailable"
+    );
+}
 
 async fn chunk_state_with_db(
     hash: &str,

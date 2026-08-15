@@ -31,16 +31,10 @@ audit_log = true
 # Recommended: dedicated ZFS pool or XFS partition
 root = "/conary"
 
-# Eviction threshold - start evicting when cache exceeds this ratio of max_cache_size
-eviction_threshold = 0.90
-
-# Minimum age before a chunk is eligible for eviction
-eviction_min_age = "1h"
-
 # TTL for negative cache entries (caches 404 responses to avoid repeated upstream lookups)
 negative_cache_ttl = "15m"
 
-# Maximum cache size
+# Exact maximum local chunk-cache size when R2 is enabled
 # Tune this to the mounted /conary capacity; the production origin currently
 # has dedicated storage, while smaller test hosts should use a lower limit.
 max_cache_size = "700GB"
@@ -57,19 +51,14 @@ max_concurrent = 32
 # See deploy/CLOUDFLARE.md for setup instructions
 enabled = true
 
-# Uncomment and fill in your Cloudflare account details:
-# account_id = "your-cloudflare-account-id"
-# endpoint = "https://your-account-id.r2.cloudflarestorage.com"
+# Required R2 S3 endpoint
+endpoint = "https://your-account-id.r2.cloudflarestorage.com"
 
 # R2 bucket name
 bucket = "conary-chunks"
 
 # Key prefix within the bucket
 prefix = "chunks/"
-
-# Write-through: upload every chunk to R2 immediately after conversion
-# Disable for local-only operation
-write_through = true
 
 # Authentication is via environment variables:
 #   CONARY_R2_ACCESS_KEY - R2 API token access key

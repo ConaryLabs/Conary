@@ -72,8 +72,6 @@ pub struct HttpChunkFetcher {
     max_concurrent: usize,
     /// Whether to verify chunk hashes
     verify_hashes: bool,
-    /// Whether to use batch endpoint for fetch_many
-    use_batch: bool,
     /// Maximum chunk size to accept (for DoS protection)
     max_chunk_size: usize,
 }
@@ -84,7 +82,6 @@ pub struct HttpChunkFetcherBuilder {
     max_concurrent: usize,
     verify_hashes: bool,
     http2_prior_knowledge: bool,
-    use_batch: bool,
     timeout_secs: u64,
     max_chunk_size: usize,
 }
@@ -97,7 +94,6 @@ impl HttpChunkFetcherBuilder {
             max_concurrent: 8,
             verify_hashes: true,
             http2_prior_knowledge: false, // Off by default for compatibility
-            use_batch: true,
             timeout_secs: 60,
             max_chunk_size: 512 * 1024, // 512KB default
         }
@@ -118,12 +114,6 @@ impl HttpChunkFetcherBuilder {
     /// Enable HTTP/2 prior knowledge (use only with known HTTP/2 servers)
     pub fn http2_prior_knowledge(mut self, enable: bool) -> Self {
         self.http2_prior_knowledge = enable;
-        self
-    }
-
-    /// Enable batch endpoint usage for fetch_many
-    pub fn use_batch(mut self, enable: bool) -> Self {
-        self.use_batch = enable;
         self
     }
 
@@ -158,7 +148,6 @@ impl HttpChunkFetcherBuilder {
             base_url: self.base_url,
             max_concurrent: self.max_concurrent,
             verify_hashes: self.verify_hashes,
-            use_batch: self.use_batch,
             max_chunk_size: self.max_chunk_size,
         })
     }
@@ -199,6 +188,17 @@ impl ChunkFetcher for HttpChunkFetcher {
             .send()
             .await
             .map_err(|e| Error::DownloadError(format!("Failed to fetch chunk {}: {e}", hash)))?;
+
+        if response
+            .headers()
+            .get("x-conary-error")
+            .is_some_and(|value| value == "durable-chunk-unavailable")
+        {
+            return Err(Error::DurableChunkUnavailable {
+                hash: hash.to_string(),
+                authority: self.base_url.clone(),
+            });
+        }
 
         if !response.status().is_success() {
             return Err(Error::DownloadError(format!(
@@ -249,18 +249,6 @@ impl ChunkFetcher for HttpChunkFetcher {
     }
 
     async fn fetch_many(&self, hashes: &[String]) -> Result<HashMap<String, Vec<u8>>> {
-        // Try batch endpoint first if enabled
-        if self.use_batch && !hashes.is_empty() {
-            match self.fetch_many_batch(hashes).await {
-                Ok(chunks) => return Ok(chunks),
-                Err(e) => {
-                    debug!("Batch fetch failed, falling back to individual: {}", e);
-                    // Fall through to individual fetches
-                }
-            }
-        }
-
-        // Fallback: individual HTTP requests with concurrency control
         self.fetch_many_individual(hashes).await
     }
 
@@ -270,94 +258,6 @@ impl ChunkFetcher for HttpChunkFetcher {
 }
 
 impl HttpChunkFetcher {
-    /// Fetch multiple chunks using the batch endpoint
-    async fn fetch_many_batch(&self, hashes: &[String]) -> Result<HashMap<String, Vec<u8>>> {
-        use serde::{Deserialize, Serialize};
-
-        #[derive(Serialize)]
-        struct BatchRequest<'a> {
-            hashes: &'a [String],
-            format: &'static str,
-        }
-
-        #[derive(Deserialize)]
-        struct ChunkData {
-            hash: String,
-            data: String, // Base64 encoded
-        }
-
-        #[derive(Deserialize)]
-        struct BatchResponse {
-            chunks: Vec<ChunkData>,
-            missing: Vec<String>,
-        }
-
-        let url = format!("{}/v1/chunks/batch", self.base_url);
-        info!("Fetching {} chunks via batch endpoint", hashes.len());
-
-        // Use JSON format for simplicity (multipart parsing is complex)
-        let request = BatchRequest {
-            hashes,
-            format: "json",
-        };
-
-        let response = self
-            .client
-            .post(&url)
-            .header(header::ACCEPT_ENCODING, "identity")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| Error::DownloadError(format!("Batch request failed: {e}")))?;
-
-        if !response.status().is_success() {
-            return Err(Error::DownloadError(format!(
-                "Batch endpoint returned HTTP {}",
-                response.status()
-            )));
-        }
-
-        let batch_response: BatchResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::DownloadError(format!("Failed to parse batch response: {e}")))?;
-
-        if !batch_response.missing.is_empty() {
-            return Err(Error::DownloadError(format!(
-                "Batch fetch missing {} chunks: {:?}",
-                batch_response.missing.len(),
-                batch_response.missing.first()
-            )));
-        }
-
-        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-
-        let mut chunks = HashMap::new();
-        for chunk_data in batch_response.chunks {
-            let data = BASE64
-                .decode(&chunk_data.data)
-                .map_err(|e| Error::DownloadError(format!("Invalid base64 in batch: {e}")))?;
-
-            // Size check
-            if data.len() > self.max_chunk_size {
-                return Err(Error::DownloadError(format!(
-                    "Chunk {} exceeds max size ({} > {})",
-                    chunk_data.hash,
-                    data.len(),
-                    self.max_chunk_size
-                )));
-            }
-
-            if self.verify_hashes {
-                Self::verify_hash(&chunk_data.hash, &data)?;
-            }
-
-            chunks.insert(chunk_data.hash, data);
-        }
-
-        Ok(chunks)
-    }
-
     /// Fetch chunks individually with concurrency control
     ///
     /// Uses `buffer_unordered` to limit concurrency -- no additional semaphore
@@ -523,6 +423,9 @@ impl ChunkFetcher for CompositeChunkFetcher {
                     return Ok(data);
                 }
                 Err(e) => {
+                    if matches!(e, Error::DurableChunkUnavailable { .. }) {
+                        return Err(e);
+                    }
                     debug!(
                         "Fetcher '{}' failed for chunk {}: {}",
                         fetcher.name(),
@@ -601,6 +504,9 @@ impl ChunkFetcher for CompositeChunkFetcher {
                     return Ok(results);
                 }
                 Err(e) => {
+                    if matches!(e, Error::DurableChunkUnavailable { .. }) {
+                        return Err(e);
+                    }
                     warn!("Fetcher '{}' failed for batch: {}", fetcher.name(), e);
                 }
             }
@@ -621,6 +527,35 @@ impl ChunkFetcher for CompositeChunkFetcher {
 mod tests {
     use super::*;
     use crate::hash::sha256;
+
+    struct DurableFailureFetcher;
+
+    #[async_trait]
+    impl ChunkFetcher for DurableFailureFetcher {
+        async fn fetch(&self, hash: &str) -> Result<Vec<u8>> {
+            Err(Error::DurableChunkUnavailable {
+                hash: hash.to_string(),
+                authority: "test-r2".to_string(),
+            })
+        }
+
+        fn name(&self) -> &str {
+            "durable-failure"
+        }
+    }
+
+    struct UnexpectedFallbackFetcher;
+
+    #[async_trait]
+    impl ChunkFetcher for UnexpectedFallbackFetcher {
+        async fn fetch(&self, _hash: &str) -> Result<Vec<u8>> {
+            Ok(b"fallback".to_vec())
+        }
+
+        fn name(&self) -> &str {
+            "unexpected-fallback"
+        }
+    }
 
     #[test]
     fn test_local_cache_path() {
@@ -695,6 +630,65 @@ mod tests {
 
         // Should fail for non-existent chunk
         assert!(composite.fetch("nonexistent").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn composite_preserves_durable_authority_failure_without_fallback() {
+        let composite = CompositeChunkFetcher::with_cache(
+            vec![
+                Arc::new(DurableFailureFetcher),
+                Arc::new(UnexpectedFallbackFetcher),
+            ],
+            tempfile::tempdir().unwrap().path(),
+        );
+
+        let error = composite.fetch("required-hash").await.unwrap_err();
+        assert!(matches!(error, Error::DurableChunkUnavailable { .. }));
+    }
+
+    #[tokio::test]
+    async fn composite_batch_preserves_durable_authority_failure_without_fallback() {
+        let composite = CompositeChunkFetcher::with_cache(
+            vec![
+                Arc::new(DurableFailureFetcher),
+                Arc::new(UnexpectedFallbackFetcher),
+            ],
+            tempfile::tempdir().unwrap().path(),
+        );
+
+        let error = composite
+            .fetch_many(&["required-hash".to_string()])
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::DurableChunkUnavailable { .. }));
+    }
+
+    #[tokio::test]
+    async fn http_fetcher_maps_remi_durable_failure_to_typed_error() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nX-Conary-Error: durable-chunk-unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+
+        let error = HttpChunkFetcher::new(&base_url)
+            .unwrap()
+            .fetch("required-hash")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::DurableChunkUnavailable { .. }));
+        server.await.unwrap();
     }
 
     #[tokio::test]

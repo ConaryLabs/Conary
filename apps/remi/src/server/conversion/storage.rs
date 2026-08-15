@@ -1,5 +1,5 @@
 // apps/remi/src/server/conversion/storage.rs
-//! Signed CCS object persistence and optional R2 write-through.
+//! Signed CCS object persistence and durable R2 publication.
 
 use super::ConversionService;
 use anyhow::{Context, Result};
@@ -34,7 +34,7 @@ impl ConversionService {
     }
 
     /// Verify the signed CCS authority, persist exactly its canonical objects,
-    /// and publish only absent objects to remote storage.
+    /// and publish only absent objects to the configured durable store.
     pub(super) async fn store_signed_ccs_path_with_timing(
         &self,
         package_path: &Path,
@@ -84,9 +84,6 @@ impl ConversionService {
         let cas_duration = cas_started.elapsed();
         let cas_metrics = verified_set.metrics();
 
-        // The upsert also refreshes the GC grace authority for CAS hits.
-        self.persist_chunk_sizes(&exact_sizes).await?;
-
         let mut r2_work = crate::server::conversion_timing::ConversionR2Work::default();
         let r2_duration = if let Some(r2) = self.r2_store.clone() {
             let started = Instant::now();
@@ -110,6 +107,18 @@ impl ConversionService {
         } else {
             None
         };
+
+        // Publish cache bookkeeping only after the durable write succeeds. A
+        // failed R2 write must not leave a non-evictable local-only cache row.
+        // The upsert also refreshes the GC grace authority for CAS hits.
+        self.persist_chunk_sizes(&exact_sizes).await?;
+
+        if let (Some(r2), Some(bounded_cache)) = (&self.r2_store, &self.bounded_cache) {
+            bounded_cache
+                .enforce(r2.as_ref())
+                .await
+                .context("enforce bounded local cache after durable R2 publication")?;
+        }
 
         Ok(StoredTransport {
             transport,

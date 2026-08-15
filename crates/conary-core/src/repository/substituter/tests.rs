@@ -81,6 +81,28 @@ async fn spawn_chunk_server(routes: HashMap<String, Vec<u8>>) -> (String, Arc<Mu
     (format!("http://{addr}"), seen_paths)
 }
 
+async fn spawn_durable_failure_server() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buffer = [0_u8; 4096];
+            if stream.read(&mut buffer).await.unwrap_or(0) == 0 {
+                continue;
+            }
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 503 Service Unavailable\r\nX-Conary-Error: durable-chunk-unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+        }
+    });
+    format!("http://{addr}")
+}
+
 #[test]
 fn test_chain_ordering() {
     let chain = SubstituterChain::new(vec![
@@ -227,6 +249,47 @@ async fn test_resolve_chunks_falls_through_sources() {
         .unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result.chunks[&hash], b"found-in-second");
+}
+
+#[tokio::test]
+async fn durable_remi_failure_stops_single_source_fallback() {
+    let populated_cache = TempDir::new().unwrap();
+    let hash = sha256(b"must-not-fallback");
+    write_chunk_to_cache(populated_cache.path(), &hash, b"must-not-fallback");
+    let chain = SubstituterChain::new(vec![
+        SubstituterSource::Remi {
+            endpoint: spawn_durable_failure_server().await,
+            distro: "fedora-44".to_string(),
+        },
+        SubstituterSource::LocalCache {
+            cache_dir: populated_cache.path().to_path_buf(),
+        },
+    ]);
+
+    let error = chain.resolve_chunk(&hash, None).await.unwrap_err();
+    assert!(matches!(error, Error::DurableChunkUnavailable { .. }));
+}
+
+#[tokio::test]
+async fn durable_remi_failure_stops_batch_source_fallback() {
+    let populated_cache = TempDir::new().unwrap();
+    let hash = sha256(b"must-not-batch-fallback");
+    write_chunk_to_cache(populated_cache.path(), &hash, b"must-not-batch-fallback");
+    let chain = SubstituterChain::new(vec![
+        SubstituterSource::Remi {
+            endpoint: spawn_durable_failure_server().await,
+            distro: "fedora-44".to_string(),
+        },
+        SubstituterSource::LocalCache {
+            cache_dir: populated_cache.path().to_path_buf(),
+        },
+    ]);
+
+    let error = chain
+        .resolve_chunks(std::slice::from_ref(&hash), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::DurableChunkUnavailable { .. }));
 }
 
 #[test]

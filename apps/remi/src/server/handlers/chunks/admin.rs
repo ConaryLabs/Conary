@@ -45,26 +45,33 @@ pub async fn cache_stats(State(state): State<Arc<RwLock<ServerState>>>) -> impl 
 ///
 /// Manually trigger LRU eviction (admin endpoint)
 pub async fn trigger_eviction(State(state): State<Arc<RwLock<ServerState>>>) -> impl IntoResponse {
-    let state = state.read().await;
+    let (bounded_cache, r2_store, bloom_filter) = {
+        let state = state.read().await;
+        (
+            state.bounded_cache.clone(),
+            state.r2_store.clone(),
+            state.bloom_filter.clone(),
+        )
+    };
+    let Some(r2_store) = r2_store else {
+        return (
+            StatusCode::CONFLICT,
+            "Bounded eviction requires configured R2 durability authority",
+        )
+            .into_response();
+    };
 
-    match state.chunk_cache.run_eviction().await {
+    match bounded_cache.enforce(r2_store.as_ref()).await {
         Ok(result) => {
             // Mark bloom filter dirty after eviction
-            if let Some(ref bloom) = state.bloom_filter {
+            if let Some(ref bloom) = bloom_filter {
                 bloom.mark_dirty();
             }
 
             tracing::info!(
-                "Manual eviction: {} chunks, {} freed",
-                result.chunks_evicted,
-                result.bytes_freed_human
-            );
-
-            state.publish_event(
-                "cache",
-                serde_json::json!({
-                    "action": "eviction_triggered",
-                }),
+                "Manual bounded eviction: {} chunks, {} bytes freed",
+                result.objects_evicted,
+                result.bytes_freed
             );
 
             Json(result).into_response()

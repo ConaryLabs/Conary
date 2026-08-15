@@ -49,7 +49,6 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/chunks/{hash}", head(chunks::head_chunk))
         .route("/v1/chunks/{hash}", get(chunks::get_chunk))
         .route("/v1/chunks/find-missing", post(chunks::find_missing))
-        .route("/v1/chunks/batch", post(chunks::batch_fetch))
         .layer(restricted_cors)
         .with_state(state.clone());
 

@@ -3,7 +3,7 @@
 //!
 //! Supports TOML configuration files with the following sections:
 //! - [server] - Bind address, workers, admin settings
-//! - [storage] - Root directory, eviction thresholds
+//! - [storage] - Root directory and local cache bound
 //! - repository_manifest - typed package-source manifest path
 //! - [conversion] - CCS conversion settings
 //! - [release_publish] - Trusted release signer and repository signing settings
@@ -130,18 +130,11 @@ fn default_true() -> bool {
 
 /// Storage configuration section
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StorageSection {
     /// Root directory for all storage
     #[serde(default = "default_root")]
     pub root: PathBuf,
-
-    /// Eviction threshold (0.0-1.0, e.g., 0.90 = 90%)
-    #[serde(default = "default_eviction_threshold")]
-    pub eviction_threshold: f64,
-
-    /// Minimum age for eviction (e.g., "1h", "30m")
-    #[serde(default = "default_eviction_min_age")]
-    pub eviction_min_age: String,
 
     /// Negative cache TTL (e.g., "15m", "1h")
     #[serde(default = "default_negative_cache_ttl")]
@@ -162,8 +155,6 @@ impl Default for StorageSection {
     fn default() -> Self {
         Self {
             root: default_root(),
-            eviction_threshold: 0.90,
-            eviction_min_age: default_eviction_min_age(),
             negative_cache_ttl: default_negative_cache_ttl(),
             max_cache_size: None,
             readiness_min_free: None,
@@ -173,14 +164,6 @@ impl Default for StorageSection {
 
 fn default_root() -> PathBuf {
     PathBuf::from("/conary")
-}
-
-fn default_eviction_threshold() -> f64 {
-    0.90
-}
-
-fn default_eviction_min_age() -> String {
-    "1h".to_string()
 }
 
 fn default_negative_cache_ttl() -> String {
@@ -396,13 +379,11 @@ fn default_build_work_dir() -> PathBuf {
 
 /// Cloudflare R2 object storage configuration
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct R2Section {
-    /// Enable R2 write-through storage
+    /// Make R2 the durable chunk authority.
     #[serde(default)]
     pub enabled: bool,
-
-    /// R2 account ID
-    pub account_id: Option<String>,
 
     /// S3-compatible endpoint URL
     pub endpoint: Option<String>,
@@ -414,27 +395,15 @@ pub struct R2Section {
     /// Key prefix for chunks in the bucket
     #[serde(default = "default_r2_prefix")]
     pub prefix: String,
-
-    /// Write-through: upload to R2 on every chunk store
-    #[serde(default = "default_true")]
-    pub write_through: bool,
-
-    /// Enable redirect to R2 presigned URLs for chunk GET requests
-    /// When true, GET /v1/chunks/:hash returns 307 redirect to R2 instead of streaming data
-    #[serde(default)]
-    pub r2_redirect: bool,
 }
 
 impl Default for R2Section {
     fn default() -> Self {
         Self {
             enabled: false,
-            account_id: None,
             endpoint: None,
             bucket: default_r2_bucket(),
             prefix: default_r2_prefix(),
-            write_through: true,
-            r2_redirect: false,
         }
     }
 }
@@ -666,12 +635,14 @@ impl RemiConfig {
                 })?;
         }
 
-        // Validate eviction threshold
-        if !(0.0..=1.0).contains(&self.storage.eviction_threshold) {
-            anyhow::bail!(
-                "storage.eviction_threshold must be between 0.0 and 1.0, got {}",
-                self.storage.eviction_threshold
-            );
+        if self.r2.enabled
+            && self
+                .r2
+                .endpoint
+                .as_deref()
+                .is_none_or(|endpoint| endpoint.trim().is_empty())
+        {
+            anyhow::bail!("r2.endpoint is required when r2.enabled is true");
         }
 
         let prewarm_interval = parse_duration(&self.prewarm.metadata_sync_interval)
@@ -727,10 +698,6 @@ impl RemiConfig {
         }
     }
 
-    fn chunk_ttl_days(&self) -> u32 {
-        30
-    }
-
     fn readiness_min_free_bytes(&self) -> Result<u64> {
         match self.storage.readiness_min_free {
             Some(ref size_str) => parse_size(size_str),
@@ -763,7 +730,6 @@ impl RemiConfig {
             cache_dir: self.storage.root.join("cache"),
             max_concurrent_conversions: self.conversion.max_concurrent,
             cache_max_bytes: self.cache_max_bytes()?,
-            chunk_ttl_days: self.chunk_ttl_days(),
             readiness_min_free_bytes: self.readiness_min_free_bytes()?,
             enable_bloom_filter: self.enable_bloom_filter(),
             bloom_expected_chunks: self.bloom_expected_chunks(),
@@ -844,11 +810,6 @@ impl RemiConfig {
     /// Parse negative cache TTL to Duration
     pub fn negative_cache_duration(&self) -> Result<Duration> {
         parse_duration(&self.storage.negative_cache_ttl)
-    }
-
-    /// Parse eviction min age to Duration
-    pub fn eviction_min_age(&self) -> Result<Duration> {
-        parse_duration(&self.storage.eviction_min_age)
     }
 
     /// Get trusted proxy header for IP extraction

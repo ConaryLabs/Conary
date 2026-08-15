@@ -3,14 +3,14 @@
 //!
 //! This module provides an HTTP server that:
 //! - Serves repository metadata (proxied through Cloudflare)
-//! - Serves CCS chunks (direct from origin)
+//! - Serves CCS chunks from R2 authority or a local-only store
 //! - Converts native package formats (RPM/DEB/Arch/eopkg) to CCS on demand
-//! - Uses LRU cache eviction to manage disk space
+//! - Uses R2-verified bounded LRU caching to manage disk space
 //!
 //! Phase 0 hardening features:
 //! - Bloom filter for fast negative lookups (DoS protection)
 //! - Pull-through caching (fetch from upstream on miss)
-//! - Batch endpoints for efficient multi-chunk operations
+//! - Batched missing-chunk discovery
 //! - Metrics tracking for observability
 //! - Rate limiting per IP/peer
 
@@ -20,6 +20,7 @@ pub mod artifact_paths;
 pub mod audit;
 pub mod auth;
 mod bloom;
+mod bounded_cache;
 mod cache;
 pub mod canonical_fetch;
 pub mod canonical_job;
@@ -56,6 +57,7 @@ pub mod test_db;
 
 pub use analytics::AnalyticsRecorder;
 pub use bloom::{BloomStats, ChunkBloomFilter};
+pub use bounded_cache::{BoundedCache, BoundedCacheReport};
 pub use cache::ChunkCache;
 pub use config::RemiConfig;
 pub use conversion::{
@@ -131,8 +133,6 @@ pub struct ServerConfig {
     pub max_concurrent_conversions: usize,
     /// LRU eviction threshold in bytes (default 700GB)
     pub cache_max_bytes: u64,
-    /// Chunk TTL in days before LRU eviction
-    pub chunk_ttl_days: u32,
     /// Free bytes the serving root must have before readiness reports ready.
     pub readiness_min_free_bytes: u64,
 
@@ -203,6 +203,7 @@ pub struct ServerState {
     pub(crate) database_writer: database_writer::DatabaseWriter,
     pub job_manager: JobManager,
     pub chunk_cache: ChunkCache,
+    pub bounded_cache: BoundedCache,
     pub conversion_service: ConversionService,
     /// Bloom filter for fast negative chunk lookups
     pub bloom_filter: Option<Arc<ChunkBloomFilter>>,
@@ -218,8 +219,6 @@ pub struct ServerState {
     pub trusted_proxy_header: Option<String>,
     /// R2 object storage for CDN-backed chunk distribution
     pub r2_store: Option<Arc<R2Store>>,
-    /// Redirect chunk GET requests to R2 presigned URLs instead of streaming locally
-    pub r2_redirect: bool,
     /// Full-text search engine (Tantivy)
     pub search_engine: Option<Arc<SearchEngine>>,
     /// Download analytics recorder (buffered writes)
@@ -268,9 +267,9 @@ impl ServerState {
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
             config.cache_max_bytes,
-            config.chunk_ttl_days,
             config.db_path.clone(),
         );
+        let bounded_cache = BoundedCache::new(chunk_cache.clone());
         let conversion_service = ConversionService::new(
             config.chunk_dir.clone(),
             config.cache_dir.clone(),
@@ -278,6 +277,7 @@ impl ServerState {
             None, // R2 store set later after state initialization
         )
         .with_database_writer(database_writer.clone())
+        .with_bounded_cache(bounded_cache.clone())
         .with_repository_keys_dir(config.release_publish.repository_keys_dir.clone());
 
         // Initialize Bloom filter if enabled
@@ -307,6 +307,7 @@ impl ServerState {
             database_writer,
             job_manager,
             chunk_cache,
+            bounded_cache,
             conversion_service,
             bloom_filter,
             http_client,
@@ -315,7 +316,6 @@ impl ServerState {
             negative_cache,
             trusted_proxy_header,
             r2_store: None,
-            r2_redirect: false,
             search_engine: None,
             analytics: None,
             federated_config: None,
@@ -444,37 +444,33 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
 
     // Initialize R2 storage if enabled
     if remi_config.r2.enabled {
-        if let Some(ref endpoint) = remi_config.r2.endpoint {
-            let r2_config = r2::R2Config {
-                endpoint: endpoint.clone(),
-                bucket: remi_config.r2.bucket.clone(),
-                prefix: remi_config.r2.prefix.clone(),
-                region: "auto".to_string(),
-            };
-            match R2Store::new(&r2_config) {
-                Ok(store) => {
-                    tracing::info!(
-                        "  R2 storage: enabled (bucket: {}, write-through: {}, redirect: {})",
-                        remi_config.r2.bucket,
-                        remi_config.r2.write_through,
-                        remi_config.r2.r2_redirect
-                    );
-                    let mut state_w = state.write().await;
-                    let store = Arc::new(store);
-                    state_w.r2_store = Some(Arc::clone(&store));
-                    state_w.conversion_service = state_w
-                        .conversion_service
-                        .clone()
-                        .with_r2_store(Some(store));
-                    state_w.r2_redirect = remi_config.r2.r2_redirect;
-                }
-                Err(e) => {
-                    tracing::error!("  R2 storage: failed to initialize: {}", e);
-                }
-            }
-        } else {
-            tracing::warn!("  R2 storage: enabled but no endpoint configured");
-        }
+        let endpoint = remi_config
+            .r2
+            .endpoint
+            .as_ref()
+            .context("r2.endpoint is required when R2 authority is enabled")?;
+        let r2_config = r2::R2Config {
+            endpoint: endpoint.clone(),
+            bucket: remi_config.r2.bucket.clone(),
+            prefix: remi_config.r2.prefix.clone(),
+            region: "auto".to_string(),
+        };
+        let store =
+            Arc::new(R2Store::new(&r2_config).context("initialize mandatory R2 chunk authority")?);
+        store
+            .head_chunk("0000000000000000000000000000000000000000000000000000000000000000")
+            .await
+            .context("probe mandatory R2 chunk authority")?;
+        tracing::info!(
+            "  R2 storage: durable authority enabled (bucket: {})",
+            remi_config.r2.bucket
+        );
+        let mut state_w = state.write().await;
+        state_w.r2_store = Some(Arc::clone(&store));
+        state_w.conversion_service = state_w
+            .conversion_service
+            .clone()
+            .with_r2_store(Some(store));
     }
 
     // Initialize search engine if enabled

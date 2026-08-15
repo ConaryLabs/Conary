@@ -93,30 +93,27 @@ impl ChunkAccess {
         Ok(result)
     }
 
-    /// Get least recently used chunks (for eviction)
-    pub fn get_lru_chunks(conn: &Connection, limit: usize) -> Result<Vec<Self>> {
+    /// Get the smallest LRU prefix whose bytes can satisfy an eviction target.
+    pub fn get_lru_chunks_for_bytes(conn: &Connection, bytes: u64) -> Result<Vec<Self>> {
         let sql = format!(
-            "SELECT {} FROM chunk_access \
-             WHERE protected = 0 ORDER BY last_accessed ASC LIMIT ?1",
-            Self::COLUMNS
+            "WITH lru AS (
+                SELECT {},
+                       SUM(size_bytes) OVER (
+                           ORDER BY last_accessed ASC, hash ASC
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                       ) AS cumulative_bytes
+                FROM chunk_access
+                WHERE protected = 0
+             )
+             SELECT {} FROM lru
+             WHERE cumulative_bytes - size_bytes < ?1
+             ORDER BY last_accessed ASC, hash ASC",
+            Self::COLUMNS,
+            Self::COLUMNS,
         );
         let mut stmt = conn.prepare(&sql)?;
         let results = stmt
-            .query_map([limit as i64], Self::from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(results)
-    }
-
-    /// Get chunks older than a given timestamp
-    pub fn get_stale_chunks(conn: &Connection, before: &str) -> Result<Vec<Self>> {
-        let sql = format!(
-            "SELECT {} FROM chunk_access \
-             WHERE protected = 0 AND last_accessed < ?1 ORDER BY last_accessed ASC",
-            Self::COLUMNS
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let results = stmt
-            .query_map([before], Self::from_row)?
+            .query_map([i64::try_from(bytes).unwrap_or(i64::MAX)], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(results)
     }
@@ -277,13 +274,32 @@ mod tests {
         assert!(found.protected);
 
         // LRU query should not return protected chunks
-        let lru = ChunkAccess::get_lru_chunks(&conn, 10).unwrap();
+        let lru = ChunkAccess::get_lru_chunks_for_bytes(&conn, 1).unwrap();
         assert!(lru.is_empty());
 
         // Unprotect
         ChunkAccess::set_protected(&conn, "protected_chunk", false).unwrap();
-        let lru2 = ChunkAccess::get_lru_chunks(&conn, 10).unwrap();
+        let lru2 = ChunkAccess::get_lru_chunks_for_bytes(&conn, 1).unwrap();
         assert_eq!(lru2.len(), 1);
+    }
+
+    #[test]
+    fn lru_byte_query_returns_only_the_prefix_needed_for_the_bound() {
+        let (_temp, conn) = create_test_db();
+        for (hash, size) in [("a", 3), ("b", 5), ("c", 7)] {
+            ChunkAccess::new(hash.to_string(), size)
+                .upsert(&conn)
+                .unwrap();
+        }
+
+        let candidates = ChunkAccess::get_lru_chunks_for_bytes(&conn, 4).unwrap();
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.hash.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
     }
 
     #[test]
