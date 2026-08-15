@@ -21,6 +21,7 @@ use conary_core::db::models::{Repository, RepositoryOwnership};
 use conary_core::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
+use rusqlite::TransactionBehavior;
 
 use crate::federation::{Peer, PeerTier};
 use crate::server::ServerState;
@@ -606,18 +607,23 @@ pub async fn create_repo(
     }
 
     let db = db_path(state).await;
+    let database_writer = state.read().await.database_writer.clone();
     blocking(move || {
-        let conn = conary_core::db::open_fast(&db)?;
-        let mut repo = Repository::new(input.name, input.url);
-        repo.content_url = input.content_url;
-        repo.enabled = input.enabled;
-        repo.priority = input.priority;
-        repo.metadata_expire = input.metadata_expire;
-        repo.set_parser_config(input.parser)?;
-        repo.trust_policy = input.trust;
-        apply_native_source_contract(&mut repo, input.native_source)?;
-        repo.insert(&conn)?;
-        Ok(repo)
+        database_writer.execute(|| {
+            let mut conn = conary_core::db::open_fast(&db)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let mut repo = Repository::new(input.name, input.url);
+            repo.content_url = input.content_url;
+            repo.enabled = input.enabled;
+            repo.priority = input.priority;
+            repo.metadata_expire = input.metadata_expire;
+            repo.set_parser_config(input.parser)?;
+            repo.trust_policy = input.trust;
+            apply_native_source_contract(&mut repo, input.native_source)?;
+            repo.insert(&tx)?;
+            tx.commit()?;
+            Ok(repo)
+        })
     })
     .await
 }
@@ -657,59 +663,62 @@ pub async fn update_repo(
     }
 
     let db = db_path(state).await;
+    let database_writer = state.read().await.database_writer.clone();
     let name_owned = name.to_string();
     blocking(move || {
-        let conn = conary_core::db::open_fast(&db)?;
-        let repo = Repository::find_by_name(&conn, &name_owned)?;
-        let mut repo = match repo {
-            Some(r) => r,
-            None => return Ok(None),
-        };
-        if repo.managed_by == RepositoryOwnership::RemiConfig {
-            return Err(conary_core::Error::ConflictError(format!(
-                "repository '{}' is owned by the Remi repository manifest",
-                repo.name
-            )));
-        }
-        let previous = repo.clone();
-        let source_changed = repo.url != input.url
-            || repo.content_url != input.content_url
-            || repo.parser_config.as_ref() != Some(&input.parser)
-            || repo.trust_policy != input.trust;
-        repo.url = input.url;
-        repo.content_url = input.content_url;
-        if let Some(enabled) = input.enabled {
-            repo.enabled = enabled;
-        }
-        if let Some(priority) = input.priority {
-            repo.priority = priority;
-        }
-        if let Some(metadata_expire) = input.metadata_expire {
-            repo.metadata_expire = metadata_expire;
-        }
-        repo.set_parser_config(input.parser)?;
-        repo.trust_policy = input.trust;
-        apply_native_source_contract(&mut repo, input.native_source)?;
-        let source_changed = source_changed
-            || repo.source_policy != previous.source_policy
-            || repo.repository_identity != previous.repository_identity
-            || repo.stream_binding_sha256 != previous.stream_binding_sha256
-            || repo.pinned_snapshot != previous.pinned_snapshot;
-        let tx = conn.unchecked_transaction()?;
-        if source_changed {
-            let repository_id = repo
-                .id
-                .ok_or_else(|| conary_core::Error::MissingId("Repository has no ID".to_string()))?;
-            Repository::delete(&tx, repository_id)?;
-            repo.id = None;
-            repo.last_sync = None;
-            repo.created_at = None;
-            repo.insert(&tx)?;
-        } else {
-            repo.update(&tx)?;
-        }
-        tx.commit()?;
-        Ok(Some(repo))
+        database_writer.execute(|| {
+            let mut conn = conary_core::db::open_fast(&db)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let repo = Repository::find_by_name(&tx, &name_owned)?;
+            let mut repo = match repo {
+                Some(r) => r,
+                None => return Ok(None),
+            };
+            if repo.managed_by == RepositoryOwnership::RemiConfig {
+                return Err(conary_core::Error::ConflictError(format!(
+                    "repository '{}' is owned by the Remi repository manifest",
+                    repo.name
+                )));
+            }
+            let previous = repo.clone();
+            let source_changed = repo.url != input.url
+                || repo.content_url != input.content_url
+                || repo.parser_config.as_ref() != Some(&input.parser)
+                || repo.trust_policy != input.trust;
+            repo.url = input.url;
+            repo.content_url = input.content_url;
+            if let Some(enabled) = input.enabled {
+                repo.enabled = enabled;
+            }
+            if let Some(priority) = input.priority {
+                repo.priority = priority;
+            }
+            if let Some(metadata_expire) = input.metadata_expire {
+                repo.metadata_expire = metadata_expire;
+            }
+            repo.set_parser_config(input.parser)?;
+            repo.trust_policy = input.trust;
+            apply_native_source_contract(&mut repo, input.native_source)?;
+            let source_changed = source_changed
+                || repo.source_policy != previous.source_policy
+                || repo.repository_identity != previous.repository_identity
+                || repo.stream_binding_sha256 != previous.stream_binding_sha256
+                || repo.pinned_snapshot != previous.pinned_snapshot;
+            if source_changed {
+                let repository_id = repo.id.ok_or_else(|| {
+                    conary_core::Error::MissingId("Repository has no ID".to_string())
+                })?;
+                Repository::delete(&tx, repository_id)?;
+                repo.id = None;
+                repo.last_sync = None;
+                repo.created_at = None;
+                repo.insert(&tx)?;
+            } else {
+                repo.update(&tx)?;
+            }
+            tx.commit()?;
+            Ok(Some(repo))
+        })
     })
     .await
 }
@@ -720,26 +729,32 @@ pub async fn delete_repo(
     name: &str,
 ) -> Result<bool, ServiceError> {
     let db = db_path(state).await;
+    let database_writer = state.read().await.database_writer.clone();
     let name_owned = name.to_string();
     blocking(move || {
-        let conn = conary_core::db::open_fast(&db)?;
-        let repo = Repository::find_by_name(&conn, &name_owned)?;
-        match repo {
-            Some(r) => {
-                if r.managed_by == RepositoryOwnership::RemiConfig {
-                    return Err(conary_core::Error::ConflictError(format!(
-                        "repository '{}' is owned by the Remi repository manifest",
-                        r.name
-                    )));
+        database_writer.execute(|| {
+            let mut conn = conary_core::db::open_fast(&db)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let repo = Repository::find_by_name(&tx, &name_owned)?;
+            let deleted = match repo {
+                Some(r) => {
+                    if r.managed_by == RepositoryOwnership::RemiConfig {
+                        return Err(conary_core::Error::ConflictError(format!(
+                            "repository '{}' is owned by the Remi repository manifest",
+                            r.name
+                        )));
+                    }
+                    let id = r.id.ok_or_else(|| {
+                        conary_core::Error::MissingId("Repository has no ID".to_string())
+                    })?;
+                    Repository::delete(&tx, id)?;
+                    true
                 }
-                let id = r.id.ok_or_else(|| {
-                    conary_core::Error::MissingId("Repository has no ID".to_string())
-                })?;
-                Repository::delete(&conn, id)?;
-                Ok(true)
-            }
-            None => Ok(false),
-        }
+                None => false,
+            };
+            tx.commit()?;
+            Ok(deleted)
+        })
     })
     .await
 }

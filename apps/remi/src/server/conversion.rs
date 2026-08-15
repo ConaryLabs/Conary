@@ -5,7 +5,6 @@
 //! to CCS format, storing chunks in the CAS.
 
 mod benchmark;
-mod database;
 mod lookup;
 mod metadata;
 mod persistence;
@@ -17,7 +16,7 @@ mod types;
 mod workflow;
 
 use crate::server::R2Store;
-use database::ConversionDatabaseWriter;
+use crate::server::database_writer::DatabaseWriter;
 use std::path::PathBuf;
 use std::sync::Arc;
 pub use types::{
@@ -40,7 +39,7 @@ pub struct ConversionService {
     /// Remi-owned per-distro TUF keys used to authenticate converted CCS.
     repository_keys_dir: Option<PathBuf>,
     /// Shared owner for the short SQLite mutation phases of conversion work.
-    database_writer: ConversionDatabaseWriter,
+    database_writer: DatabaseWriter,
 }
 
 impl ConversionService {
@@ -56,8 +55,13 @@ impl ConversionService {
             db_path,
             r2_store,
             repository_keys_dir: None,
-            database_writer: ConversionDatabaseWriter::default(),
+            database_writer: DatabaseWriter::default(),
         }
+    }
+
+    pub(crate) fn with_database_writer(mut self, database_writer: DatabaseWriter) -> Self {
+        self.database_writer = database_writer;
+        self
     }
 
     pub(crate) fn with_r2_store(mut self, r2_store: Option<Arc<R2Store>>) -> Self {

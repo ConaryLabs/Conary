@@ -27,6 +27,7 @@ pub mod chunk_gc;
 pub mod config;
 mod conversion;
 pub mod conversion_timing;
+mod database_writer;
 pub mod delta_manifests;
 pub mod federated_index;
 mod handlers;
@@ -198,6 +199,7 @@ pub struct AdminEvent {
 // TODO: Decompose ServerState into focused sub-structs to improve readability.
 pub struct ServerState {
     pub config: ServerConfig,
+    pub(crate) database_writer: database_writer::DatabaseWriter,
     pub job_manager: JobManager,
     pub chunk_cache: ChunkCache,
     pub conversion_service: ConversionService,
@@ -261,6 +263,7 @@ impl ServerState {
         negative_cache_ttl: Duration,
     ) -> Result<Self> {
         let job_manager = JobManager::new(config.max_concurrent_conversions);
+        let database_writer = database_writer::DatabaseWriter::default();
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
             config.cache_max_bytes,
@@ -273,6 +276,7 @@ impl ServerState {
             config.db_path.clone(),
             None, // R2 store set later after state initialization
         )
+        .with_database_writer(database_writer.clone())
         .with_repository_keys_dir(config.release_publish.repository_keys_dir.clone());
 
         // Initialize Bloom filter if enabled
@@ -299,6 +303,7 @@ impl ServerState {
 
         Ok(Self {
             config,
+            database_writer,
             job_manager,
             chunk_cache,
             conversion_service,

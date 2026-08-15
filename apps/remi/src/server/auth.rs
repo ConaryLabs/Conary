@@ -174,11 +174,15 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Response {
     // Rate limiters come from an Extension layer (set once at startup),
-    // so we only need the RwLock for db_path and trusted_proxy_header.
+    // so we only need the RwLock to clone request-scoped shared state.
     let limiters = limiters.map(|Extension(l)| l);
-    let (db_path, trusted_proxy_header) = {
+    let (db_path, trusted_proxy_header, database_writer) = {
         let s = state.read().await;
-        (s.config.db_path.clone(), s.trusted_proxy_header.clone())
+        (
+            s.config.db_path.clone(),
+            s.trusted_proxy_header.clone(),
+            s.database_writer.clone(),
+        )
     };
     // Use the proxy-aware IP extraction so that rate limiting and auth
     // failure tracking use the real client IP, not the proxy's IP.
@@ -281,8 +285,10 @@ pub async fn auth_middleware(
 
     if should_touch {
         match tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&bg_db_path)?;
-            conary_core::db::models::admin_token::touch(&conn, bg_id)
+            database_writer.execute(|| {
+                let conn = conary_core::db::open_fast(&bg_db_path)?;
+                conary_core::db::models::admin_token::touch(&conn, bg_id)
+            })
         })
         .await
         {
