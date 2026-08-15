@@ -10,7 +10,6 @@ use super::super::open_db;
 use super::cas_capture::{CapturedAdoptionFile, capture_package_files};
 use super::checkpoint::write_db_checkpoint;
 use super::outcome::write_warning_metadata;
-use super::system::FileInfoTuple;
 use crate::commands::AdoptionWarning;
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
@@ -18,7 +17,7 @@ use conary_core::db::models::{
     Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallSource, Trove,
 };
 use conary_core::packages::{
-    InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+    InstalledInventorySnapshot, InstalledPackageIdentity, SystemPackageManager,
 };
 use conary_core::repository::dependency_model::{ProvidedCapability, RepositoryRequirementGroup};
 use conary_core::repository::versioning::VersionScheme;
@@ -164,8 +163,16 @@ pub async fn cmd_adopt_refresh(
         println!("Checking {} adopted package(s) for drift...", adopted.len());
     }
 
-    // Preserve every exact native package-manager record.
-    let system_packages = query_all_current(pkg_mgr)?;
+    // Preserve every exact native package-manager record and every ownership,
+    // relation, reason, config, and lifecycle field under one token.
+    let inventory = InstalledInventorySnapshot::capture(pkg_mgr)?;
+    let system_packages = inventory
+        .packages()
+        .map(|package| CurrentNativePackage {
+            identity: package.identity.clone(),
+            description: package.description.clone(),
+        })
+        .collect::<Vec<_>>();
 
     // Classify each adopted trove
     let mut results: Vec<(&Trove, DriftOutcome)> = Vec::new();
@@ -279,44 +286,19 @@ pub async fn cmd_adopt_refresh(
             let use_cas = trove.install_source == InstallSource::AdoptedFull;
 
             // Query PM metadata outside the transaction.
-            let raw_files = match query_package_files(pkg_mgr, identity.selector()) {
-                Ok(f) => f,
-                Err(e) => {
-                    warn!(
-                        "Failed to query files for '{}': {}; skipping",
-                        identity.selector(),
-                        e
-                    );
-                    skip_ids.insert(trove_id);
-                    continue;
-                }
-            };
-            let requirements =
-                match super::requirements::query_package_requirements(pkg_mgr, identity.selector())
-                {
-                    Ok(d) => d,
-                    Err(e) => {
-                        warn!(
-                            "Failed to query deps for '{}': {}; skipping",
-                            identity.selector(),
-                            e
-                        );
-                        skip_ids.insert(trove_id);
-                        continue;
-                    }
-                };
-            let mut provides = match super::provides::query_package_provides(pkg_mgr, identity) {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!(
-                        "Failed to query provides for '{}': {}; skipping",
-                        identity.selector(),
-                        e
-                    );
-                    skip_ids.insert(trove_id);
-                    continue;
-                }
-            };
+            let native = inventory.package(identity.selector()).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "exact native refresh identity '{}' disappeared from coherent inventory",
+                    identity.selector()
+                )
+            })?;
+            let raw_files = native
+                .files
+                .iter()
+                .map(super::system::inventory_file_tuple)
+                .collect::<Vec<_>>();
+            let requirements = native.requirements.clone();
+            let mut provides = native.provides.clone();
 
             // Capture exact live nodes and bytes outside the transaction.
             let captured_files = match capture_package_files(
@@ -445,6 +427,8 @@ pub async fn cmd_adopt_refresh(
 
         write_warning_metadata(tx, changeset_id, adoption_warnings)
             .map_err(|e| conary_core::Error::Io(std::io::Error::other(e.to_string())))?;
+        let current_inventory = InstalledInventorySnapshot::capture(pkg_mgr)?;
+        inventory.require_unchanged(&current_inventory)?;
         changeset.update_status(tx, ChangesetStatus::Applied)?;
         Ok(changeset_id)
     })?;
@@ -605,77 +589,6 @@ fn replace_refresh_children_for_package_for_test(
         &replacement,
         RefreshFailureInjection::after_delete(fail_after_delete),
     )
-}
-
-/// Query every exact currently installed native package-manager record.
-fn query_all_current(pkg_mgr: SystemPackageManager) -> Result<Vec<CurrentNativePackage>> {
-    let packages = match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_all_packages()?
-            .into_iter()
-            .map(|record| CurrentNativePackage {
-                identity: record.identity,
-                description: record.info.description.or(record.info.summary),
-            })
-            .collect(),
-        SystemPackageManager::Dpkg => dpkg_query::query_all_packages()?
-            .into_iter()
-            .map(|record| CurrentNativePackage {
-                identity: record.identity,
-                description: record.info.description,
-            })
-            .collect(),
-        SystemPackageManager::Pacman => pacman_query::query_all_packages()?
-            .into_iter()
-            .map(|record| CurrentNativePackage {
-                identity: record.identity,
-                description: record.info.description,
-            })
-            .collect(),
-        SystemPackageManager::Eopkg => conary_core::packages::eopkg::query::query_all_packages()?
-            .into_iter()
-            .map(|record| CurrentNativePackage {
-                identity: record.identity,
-                description: record.info.description,
-            })
-            .collect(),
-        _ => return Err(anyhow::anyhow!("Unsupported package manager")),
-    };
-    Ok(packages)
-}
-
-/// Query files for a package from the active package manager.
-///
-/// Returns an error on PM query failure so callers can skip the package
-/// rather than recording it with an empty file list.
-fn query_package_files(pkg_mgr: SystemPackageManager, name: &str) -> Result<Vec<FileInfoTuple>> {
-    let raw = match pkg_mgr {
-        SystemPackageManager::Rpm => rpm_query::query_package_files(name)
-            .map_err(|e| anyhow::anyhow!("RPM file query failed for '{name}': {e}"))?,
-        SystemPackageManager::Dpkg => dpkg_query::query_package_files(name)
-            .map_err(|e| anyhow::anyhow!("DPKG file query failed for '{name}': {e}"))?,
-        SystemPackageManager::Pacman => pacman_query::query_package_files(name)
-            .map_err(|e| anyhow::anyhow!("Pacman file query failed for '{name}': {e}"))?,
-        SystemPackageManager::Eopkg => {
-            conary_core::packages::eopkg::query::query_package_files(name)
-                .map_err(|e| anyhow::anyhow!("eopkg file query failed for '{name}': {e}"))?
-        }
-        _ => return Ok(Vec::new()),
-    };
-    Ok(raw
-        .into_iter()
-        .map(|f| {
-            (
-                f.path,
-                f.size,
-                f.mode,
-                f.digest,
-                f.user,
-                f.group,
-                f.link_target,
-                f.absence_policy,
-            )
-        })
-        .collect())
 }
 
 #[cfg(test)]

@@ -934,6 +934,11 @@ scheme, relation, and EVR boundary from the header. `<`, `<=`, `=`, `>=`, and
 overlap, including inclusive/exclusive endpoints, unversioned existence
 provides, and RPM's partial-EVR equality behavior. It never substitutes the
 owning package EVR or reinterprets the range through another ecosystem.
+Dependency EVR decomposition follows RPM's `parseEVR()` boundary: the final
+hyphen separates release, while earlier hyphens remain part of the version.
+This is intentionally broader than package-header `VERSION` and `RELEASE`
+identity grammar because authentic installed dependency headers retain such
+boundaries.
 
 RPM rich requirements are typed source ABI, not text to split later. The
 parser is pinned to RPM

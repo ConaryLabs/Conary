@@ -2,9 +2,11 @@
 //! Shared types and helpers for native package manager queries.
 
 use crate::packages::InstalledPackageIdentity;
+use serde::{Deserialize, Serialize};
 
 /// Native package-manager authority for a file record that is absent on disk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum InstalledFileAbsencePolicy {
     /// The native record describes required live payload.
     Required,
@@ -14,6 +16,8 @@ pub enum InstalledFileAbsencePolicy {
     RpmMissingOk,
     /// The RPM record carries both `%ghost` and `missingok`.
     RpmGhostAndMissingOk,
+    /// A dpkg conffile declaration survives intentional local deletion.
+    DpkgConffile,
     /// An eopkg permanent record may remain declared without live payload.
     EopkgPermanent,
 }
@@ -26,7 +30,8 @@ impl InstalledFileAbsencePolicy {
 }
 
 /// Information about a single installed file from a native package manager.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InstalledFileInfo {
     pub path: String,
     pub size: i64,

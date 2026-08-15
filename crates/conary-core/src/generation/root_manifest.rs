@@ -31,8 +31,9 @@ pub use overlay::{
     probe_selected_root_overlay_profile,
 };
 pub use scan::{
-    SelectedRootCaptureExclusions, capture_existing_payload_node, capture_root_node,
-    scan_payload_tree, scan_selected_root, scan_selected_root_with_exclusions,
+    SelectedRootCaptureExclusions, SelectedRootScanWork, capture_existing_payload_node,
+    capture_root_node, scan_payload_tree, scan_selected_root, scan_selected_root_with_exclusions,
+    scan_selected_root_with_exclusions_and_work,
 };
 
 pub const GENERATION_ROOT_MANIFEST_FILE: &str = "generation-root.json";

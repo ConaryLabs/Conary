@@ -14,6 +14,7 @@ pub mod dpkg_query;
 pub mod eopkg;
 pub mod install_reason;
 pub mod installed_identity;
+pub mod installed_inventory;
 pub mod native_abi;
 #[doc(hidden)]
 pub mod native_scriptlet_support;
@@ -27,6 +28,12 @@ pub mod source_authority;
 pub mod traits;
 
 pub use installed_identity::InstalledPackageIdentity;
+pub use installed_inventory::{
+    DpkgInstalledControlMember, InstalledConfigAuthority, InstalledInventoryFile,
+    InstalledInventoryPackage, InstalledInventorySnapshot, InstalledInventoryToken,
+    InstalledInventoryWork, InstalledLifecycleAuthority, NativeInstallReason,
+    PacmanInstalledBackupDigest, PacmanInstalledLifecycleKind, RpmInstalledLifecycleSlot,
+};
 pub use registry::{PackageFormatType, detect_format, parse_package};
 
 use crate::error::{Error, Result};
@@ -42,7 +49,10 @@ pub use rpm_query::InstalledRpmInfo;
 pub use traits::{ExtractedFile, PackageFormat};
 
 /// Detect the system package manager
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
 pub enum SystemPackageManager {
     Rpm,
     Dpkg,

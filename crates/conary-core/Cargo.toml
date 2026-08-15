@@ -171,3 +171,7 @@ harness = false
 [[bench]]
 name = "generation_db_snapshot"
 harness = false
+
+[[bench]]
+name = "installed_inventory"
+harness = false

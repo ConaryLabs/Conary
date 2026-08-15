@@ -3,6 +3,7 @@
 //! Solus eopkg/PISI 1.2 package support.
 
 pub mod authority;
+mod inventory;
 mod payload;
 pub mod query;
 pub mod takeover;

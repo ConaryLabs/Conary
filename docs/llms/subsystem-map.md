@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-14
-revision: 72
-summary: Route workspace and release boundaries, typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
+revision: 73
+summary: Route workspace and release boundaries, coherent native inventory adoption, typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, lossless source authority and trust-import planning, exact Remi signing, selected-root mutation, rollback lineage, canonical-map authority, carrier security, generation GC, and subsystem proof through current feature owners.
 ---
 
 # Assistant Subsystem Map
@@ -249,6 +249,14 @@ commands.
   `runtime` component.
 - Adoption preserves native package-manager authority until explicit takeover or
   selected-generation handoff.
+- Coherent RPM, dpkg, pacman, and eopkg installed-state acquisition starts in
+  `crates/conary-core/src/packages/installed_inventory.rs` and each manager's
+  `inventory.rs`. Adoption, refresh, and takeover consume one exact tokenized
+  snapshot; complete full-system adoption binds all package owners to one
+  selected-root traversal and takeover performs one native database-removal
+  batch. RPM dependency-EVR parsing and `rpmdsCompare` component ordering live
+  in `crates/conary-core/src/repository/versioning/rpm_dependency.rs`; the
+  public cross-ecosystem dispatch remains in `repository/versioning.rs`.
 - Complete unfiltered full-system adoption starts in
   `apps/conary/src/commands/adopt/system.rs`; its exact unowned-root partition
   is owned by `adopt/system/captured_root.rs`, the finite scanner and runtime

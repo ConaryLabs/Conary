@@ -22,7 +22,7 @@ use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{InstallSource, Trove};
 use conary_core::model;
 use conary_core::packages::{
-    InstalledPackageIdentity, SystemPackageManager, dpkg_query, pacman_query, rpm_query,
+    InstalledInventorySnapshot, InstalledPackageIdentity, SystemPackageManager,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -66,7 +66,18 @@ pub fn plan_takeover(
         ));
     }
 
-    let system_packages = query_all_system_packages(&pm)?;
+    let inventory = InstalledInventorySnapshot::capture(pm)?;
+    plan_takeover_from_inventory(conn, &inventory).map_err(Into::into)
+}
+
+fn plan_takeover_from_inventory(
+    conn: &rusqlite::Connection,
+    inventory: &InstalledInventorySnapshot,
+) -> conary_core::Result<TakeoverPlan> {
+    let system_packages = inventory
+        .packages()
+        .map(|package| package.identity.clone())
+        .collect();
     // Match exact installed variants; name-only matching collapses multilib and
     // parallel native versions.
     let tracked: HashMap<String, InstallSource> = Trove::list_all(conn)?
@@ -204,6 +215,11 @@ pub async fn cmd_system_takeover(
             .context("Failed to resume interrupted eopkg authority removal")?;
     }
     let bootloader = detect_bootloader();
+    let inventory = if completed_handoff_packages.is_none() {
+        Some(InstalledInventorySnapshot::capture(pm)?)
+    } else {
+        None
+    };
     let mut plan = {
         let conn = open_db(db_path)?;
         if let Some(packages) = completed_handoff_packages {
@@ -218,7 +234,12 @@ pub async fn cmd_system_takeover(
                 .collect::<HashMap<_, _>>();
             classify_takeover_inventory(packages, &tracked)
         } else {
-            plan_takeover(&conn, pm)?
+            plan_takeover_from_inventory(
+                &conn,
+                inventory
+                    .as_ref()
+                    .expect("active native authority has a captured inventory"),
+            )?
         }
     };
     let mut record = incomplete_record.unwrap_or_else(|| {
@@ -341,7 +362,13 @@ pub async fn cmd_system_takeover(
             "  Upgrading {} track-only packages to CAS ...",
             plan.needs_cas_upgrade.len()
         );
-        let cas_upgrade_failures = upgrade_to_cas_backed(db_path, &plan.needs_cas_upgrade, &pm)?;
+        let cas_upgrade_failures = upgrade_to_cas_backed(
+            db_path,
+            &plan.needs_cas_upgrade,
+            inventory
+                .as_ref()
+                .expect("CAS upgrade requires active native authority"),
+        )?;
         if !cas_upgrade_failures.is_empty() {
             let failure_count = cas_upgrade_failures.len();
             record.record_cas_upgrade_failures(cas_upgrade_failures);
@@ -382,7 +409,13 @@ pub async fn cmd_system_takeover(
     if plan.needs_pm_removal.is_empty() {
         info!("No packages need PM removal");
     } else {
-        let ownership_report = match take_ownership(db_path, &plan.needs_pm_removal, pm) {
+        let ownership_report = match take_ownership(
+            db_path,
+            &plan.needs_pm_removal,
+            inventory
+                .as_ref()
+                .expect("ownership transfer requires active native authority"),
+        ) {
             Ok(report) => report,
             Err(error) => {
                 record.mark_failed(format!("Ownership transfer failed: {error}"));
@@ -663,37 +696,6 @@ fn preflight_checks(check_composefs: bool) -> Result<()> {
 
 fn takeover_requires_composefs(level: TakeoverLevel, dry_run: bool) -> bool {
     !dry_run && matches!(level, TakeoverLevel::Generation)
-}
-
-// ---------------------------------------------------------------------------
-// System PM query
-// ---------------------------------------------------------------------------
-
-/// Query every exact installed package-manager database identity.
-fn query_all_system_packages(pm: &SystemPackageManager) -> Result<Vec<InstalledPackageIdentity>> {
-    match pm {
-        SystemPackageManager::Rpm => Ok(rpm_query::query_all_packages()?
-            .into_iter()
-            .map(|record| record.identity)
-            .collect()),
-        SystemPackageManager::Dpkg => Ok(dpkg_query::query_all_packages()?
-            .into_iter()
-            .map(|record| record.identity)
-            .collect()),
-        SystemPackageManager::Pacman => Ok(pacman_query::query_all_packages()?
-            .into_iter()
-            .map(|record| record.identity)
-            .collect()),
-        SystemPackageManager::Eopkg => {
-            Ok(conary_core::packages::eopkg::query::query_all_packages()?
-                .into_iter()
-                .map(|record| record.identity)
-                .collect())
-        }
-        SystemPackageManager::Unknown => {
-            Err(anyhow!("No supported system package manager detected"))
-        }
-    }
 }
 
 #[cfg(test)]

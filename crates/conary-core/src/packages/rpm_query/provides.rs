@@ -15,7 +15,7 @@ use crate::repository::dependency_model::{
 };
 use crate::repository::versioning::VersionScheme;
 
-const RPM_PROVIDE_RECORD_FORMAT: &str =
+pub(super) const RPM_PROVIDE_RECORD_FORMAT: &str =
     "[%{PROVIDENAME}\x1e%{PROVIDEFLAGS:hex}\x1e%{PROVIDEVERSION}\x1f]";
 
 /// Query one installed RPM package's exact identity and declared provides.
@@ -54,7 +54,7 @@ pub fn query_package_provides(
     Ok(provides)
 }
 
-fn parse_rpm_provide_records(
+pub(super) fn parse_rpm_provide_records(
     identity: &InstalledPackageIdentity,
     output: &str,
 ) -> Result<Vec<ProvidedCapability>> {
@@ -168,5 +168,54 @@ mod tests {
         assert!(parse_rpm_provide_records(&identity, "dracut\x1e8\x1f").is_err());
         assert!(parse_rpm_provide_records(&identity, "\x1e8\x1e108\x1f").is_err());
         assert!(parse_rpm_provide_records(&identity, "dracut\x1enope\x1e108\x1f").is_err());
+    }
+
+    #[test]
+    fn installed_provides_admit_rpm_dependency_boundary_characters() {
+        let identity = InstalledPackageIdentity::rpm(
+            "openSUSE-release-20260811-1.1.x86_64",
+            "openSUSE-release",
+            None,
+            "20260811",
+            "1.1",
+            "x86_64",
+        )
+        .unwrap();
+        let cpe = "cpe%3A%2Fo%3Aopensuse%3Aopensuse%3A20260811";
+        let output = format!("product-cpeid()\x1e8\x1e{cpe}\x1f");
+
+        let provides = parse_rpm_provide_records(&identity, &output).unwrap();
+
+        assert_eq!(provides.len(), 2);
+        assert_eq!(provides[1].name, "product-cpeid()");
+        assert_eq!(provides[1].version.as_deref(), Some(cpe));
+        assert_eq!(
+            provides[1].version_relation,
+            Some(ProvideVersionRelation::Equal)
+        );
+    }
+
+    #[test]
+    fn installed_provides_use_rpm_last_hyphen_dependency_evr_split() {
+        let identity = InstalledPackageIdentity::rpm(
+            "patterns-base-base-20200505-58.1.x86_64",
+            "patterns-base-base",
+            None,
+            "20200505",
+            "58.1",
+            "x86_64",
+        )
+        .unwrap();
+        let output = "pattern-icon()\x1e8\x1epattern-basis-addon\x1f";
+
+        let provides = parse_rpm_provide_records(&identity, output).unwrap();
+
+        assert_eq!(provides.len(), 2);
+        assert_eq!(provides[1].name, "pattern-icon()");
+        assert_eq!(provides[1].version.as_deref(), Some("pattern-basis-addon"));
+        assert_eq!(
+            provides[1].version_relation,
+            Some(ProvideVersionRelation::Equal)
+        );
     }
 }
