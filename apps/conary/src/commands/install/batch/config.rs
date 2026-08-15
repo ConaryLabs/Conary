@@ -5,7 +5,10 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use conary_core::config_transaction::{is_config_artifact_kind, is_etc_config_payload};
-use conary_core::db::models::{ConfigFile, ConfigSource, InstalledNativeLifecycleBundle};
+use conary_core::db::models::{
+    ConfigFile, ConfigSource, InstalledNativeLifecycleBundle, PackageTransactionStaging,
+    StagedConfigRow,
+};
 use rusqlite::{Connection, Transaction};
 
 use super::{BatchInstaller, PreparedPackage, inner};
@@ -26,11 +29,11 @@ impl BatchInstaller<'_> {
             || installed_bundle)
     }
 
-    pub(super) fn insert_config_rows(
+    pub(super) fn stage_config_rows(
         tx: &Transaction<'_>,
+        staging: &mut PackageTransactionStaging<'_>,
         pkg: &PreparedPackage,
         trove_id: i64,
-        installed_file_metadata: &HashMap<String, (i64, Option<String>)>,
         stored_files: &[inner::ResolvedInstallFile],
     ) -> Result<()> {
         let declared_source = super::super::config_files::source_for_semantics(pkg.semantics);
@@ -63,18 +66,20 @@ impl BatchInstaller<'_> {
                         pkg.name
                     );
                 }
-                super::super::config_files::persist_debian_remove_on_upgrade(
+                if let Some(config) = super::super::config_files::prepare_debian_remove_on_upgrade(
                     tx,
                     config_info.path(),
                     trove_id,
-                )?;
+                )? {
+                    staging.stage_config(&StagedConfigRow { config })?;
+                }
                 continue;
             }
             if config_info.ghost() {
                 let mut config = ConfigFile::new_ghost(config_info.path().to_string(), trove_id);
                 config.noreplace = config_info.noreplace();
                 config.source = declared_source;
-                config.upsert(tx)?;
+                staging.stage_config(&StagedConfigRow { config })?;
             } else if config_info.payload()
                 == conary_core::packages::config_authority::ConfigPayloadAssociation::Absent
             {
@@ -82,7 +87,7 @@ impl BatchInstaller<'_> {
                     ConfigFile::new_declaration(config_info.path().to_string(), trove_id);
                 config.noreplace = config_info.noreplace();
                 config.source = declared_source;
-                config.upsert(tx)?;
+                staging.stage_config(&StagedConfigRow { config })?;
             }
         }
 
@@ -113,14 +118,7 @@ impl BatchInstaller<'_> {
                     pkg.name
                 );
             }
-            let (file_id, hash) = installed_file_metadata.get(&file.path).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "config payload {} from {} has no installed file identity",
-                    file.path,
-                    pkg.name
-                )
-            })?;
-            let hash = hash.as_ref().ok_or_else(|| {
+            let hash = file.cas_hash.as_ref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "config payload {} from {} has no exact content identity",
                     file.path,
@@ -149,9 +147,8 @@ impl BatchInstaller<'_> {
                 declaration.is_some(),
                 extracted,
             )?;
-            config.file_id = Some(*file_id);
             config.source = declaration.map_or(ConfigSource::Auto, |_| declared_source);
-            config.upsert(tx)?;
+            staging.stage_config(&StagedConfigRow { config })?;
             persisted.insert(file.path.as_str());
         }
 

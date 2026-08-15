@@ -16,8 +16,8 @@ use super::outcome::{BulkAdoptionFailure, BulkAdoptionFailureStage, BulkAdoption
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, FileEntry, InstallReason,
-    InstallSource, PayloadClaim, Trove, TroveType,
+    Changeset, ChangesetStatus, FileEntry, InstallReason, InstallSource, PackageTransactionStaging,
+    PayloadClaim, StagedAnchorDisposition, StagedPayloadRow, Trove, TroveType,
 };
 use conary_core::packages::{
     InstalledFileAbsencePolicy, InstalledInventoryFile, InstalledInventorySnapshot,
@@ -423,6 +423,7 @@ pub async fn cmd_adopt_system(
     let mut captured_root_sync = None;
     let changeset_id = conary_core::db::transaction(&mut conn, |tx| {
         let changeset_id = changeset.insert(tx)?;
+        let mut package_rows = PackageTransactionStaging::begin(tx)?;
 
         for pkg in &pre_collected {
             let selector = pkg.identity.selector();
@@ -463,19 +464,37 @@ pub async fn cmd_adopt_system(
                         message: error.to_string(),
                     })?;
 
+                package_rows
+                    .clear()
+                    .map_err(|error| PackagePersistenceFailure {
+                        stage: BulkAdoptionFailureStage::MetadataInsert,
+                        message: error.to_string(),
+                    })?;
                 for captured in &pkg.files {
                     let file_path = &captured.source.0;
-                    let mut file_entry = captured.file_entry(trove_id);
-                    file_entry
-                        .insert_or_replace_in_savepoint(
-                            tx,
-                            ExistingDirectoryMaterialization::ApplyIncoming,
-                        )
+                    package_rows
+                        .stage_payload(&StagedPayloadRow {
+                            entry: captured.file_entry(trove_id),
+                            package_name: pkg.identity.name().to_string(),
+                            component_name: None,
+                            directory_materialization:
+                                conary_core::db::models::ExistingDirectoryMaterialization::ApplyIncoming,
+                            disposition: StagedAnchorDisposition::Auto,
+                            selected_root_node: None,
+                            materialization_target_path: None,
+                            history: None,
+                        })
                         .map_err(|error| PackagePersistenceFailure {
                             stage: BulkAdoptionFailureStage::MetadataInsert,
                             message: format!("file {file_path}: {error}"),
                         })?;
                 }
+                package_rows.validate_and_reconcile().map_err(|error| {
+                    PackagePersistenceFailure {
+                        stage: BulkAdoptionFailureStage::MetadataInsert,
+                        message: error.to_string(),
+                    }
+                })?;
 
                 super::requirements::insert_package_requirements(
                     tx,
@@ -536,6 +555,14 @@ pub async fn cmd_adopt_system(
         {
             captured_root_sync = Some(synchronize_captured_root(tx, changeset_id, captured)?);
         }
+
+        let sqlite_work = package_rows.finish()?;
+        debug!(
+            rows_loaded = sqlite_work.rows_loaded,
+            statements = sqlite_work.total_statement_executions(),
+            query_shapes = sqlite_work.query_shapes,
+            "reconciled staged adoption package rows"
+        );
 
         // Re-read every native authority immediately before committing the
         // ownership handoff. Any package, path, relation, reason, config, or

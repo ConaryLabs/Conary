@@ -364,6 +364,15 @@ impl ConfigFile {
         Ok(())
     }
 
+    /// Delete package-owned config rows while retaining Debian conffile state.
+    pub fn delete_non_debian_by_trove(conn: &Connection, trove_id: i64) -> Result<()> {
+        conn.execute(
+            "DELETE FROM config_files WHERE trove_id = ?1 AND source != 'deb'",
+            [trove_id],
+        )?;
+        Ok(())
+    }
+
     /// Check if user has modified this config file
     pub fn is_modified(&self) -> bool {
         self.status == ConfigStatus::Modified

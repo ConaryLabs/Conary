@@ -14,7 +14,8 @@ use crate::commands::AdoptionWarning;
 use anyhow::Result;
 use conary_core::db::backup::CheckpointReason;
 use conary_core::db::models::{
-    Changeset, ChangesetStatus, ExistingDirectoryMaterialization, InstallSource, Trove,
+    Changeset, ChangesetStatus, InstallSource, PackageTransactionStaging, StagedAnchorDisposition,
+    StagedPayloadRow, Trove,
 };
 use conary_core::packages::{
     InstalledInventorySnapshot, InstalledPackageIdentity, SystemPackageManager,
@@ -525,16 +526,35 @@ fn replace_refresh_children_for_package(
             ));
         }
 
+        let mut package_rows = PackageTransactionStaging::begin(tx)?;
         for captured in &replacement.files {
             let file_path = &captured.source.0;
-            let mut fe = captured.file_entry(trove_id);
-            fe.insert_or_replace(tx, ExistingDirectoryMaterialization::ApplyIncoming)
+            package_rows
+                .stage_payload(&StagedPayloadRow {
+                    entry: captured.file_entry(trove_id),
+                    package_name: trove_name.to_string(),
+                    component_name: None,
+                    directory_materialization:
+                        conary_core::db::models::ExistingDirectoryMaterialization::ApplyIncoming,
+                    disposition: StagedAnchorDisposition::Auto,
+                    selected_root_node: None,
+                    materialization_target_path: None,
+                    history: None,
+                })
                 .map_err(|e| {
                     anyhow::anyhow!(
                         "failed to insert refreshed file {file_path} for {trove_name}: {e}"
                     )
                 })?;
         }
+        package_rows.validate_and_reconcile()?;
+        let sqlite_work = package_rows.finish()?;
+        tracing::debug!(
+            rows_loaded = sqlite_work.rows_loaded,
+            statements = sqlite_work.total_statement_executions(),
+            query_shapes = sqlite_work.query_shapes,
+            "reconciled staged adoption refresh rows"
+        );
 
         super::requirements::replace_package_requirements(
             tx,

@@ -7,7 +7,10 @@ use super::{
 use crate::commands::progress::{RemovePhase, RemoveProgress};
 use crate::commands::{TroveSnapshot, capture_trove_snapshot};
 use anyhow::Result;
-use conary_core::db::models::{ConfigFile, ConfigSource, FileEntry, Trove};
+use conary_core::db::models::{
+    ConfigFile, FileEntry, PackageTransactionStaging, StagedHistoryAction, StagedHistoryRow, Trove,
+};
+use std::collections::BTreeMap;
 
 pub(crate) struct PreparedRemove {
     pub(crate) snapshot: TroveSnapshot,
@@ -108,54 +111,34 @@ pub(crate) fn commit_remove_db(
         .id
         .ok_or_else(|| anyhow::anyhow!("Trove has no ID"))?;
 
+    let snapshot_by_path = prepared
+        .snapshot
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
+    let mut package_rows = PackageTransactionStaging::begin(tx)?;
     for path in &prepared.materialized_removal_paths {
-        let use_hash = if let Some(content) = prepared
-            .snapshot
-            .files
-            .iter()
-            .find(|file| file.path == *path)
-            .and_then(|file| file.content.as_ref())
-        {
-            let hash_exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM file_contents WHERE sha256_hash = ?1)",
-                [&content.sha256],
-                |row| row.get(0),
-            )?;
-            if hash_exists {
-                Some(content.sha256.as_str())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        match use_hash {
-            Some(hash) => {
-                tx.execute(
-                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, ?3, ?4)",
-                    [&changeset_id.to_string(), path, hash, "delete"],
-                )?;
-            }
-            None => {
-                tx.execute(
-                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action) VALUES (?1, ?2, NULL, ?3)",
-                    [&changeset_id.to_string(), path, "delete"],
-                )?;
-            }
-        }
+        package_rows.stage_history(&StagedHistoryRow {
+            changeset_id,
+            path: path.clone(),
+            sha256_hash: snapshot_by_path
+                .get(path.as_str())
+                .and_then(|file| file.content.as_ref())
+                .map(|content| content.sha256.clone()),
+            action: StagedHistoryAction::Delete,
+        })?;
     }
+    package_rows.validate_and_reconcile()?;
+    let sqlite_work = package_rows.finish()?;
+    tracing::debug!(
+        rows_loaded = sqlite_work.rows_loaded,
+        statements = sqlite_work.total_statement_executions(),
+        query_shapes = sqlite_work.query_shapes,
+        "reconciled staged package removal rows"
+    );
 
-    for config in ConfigFile::find_by_trove(tx, trove_id)? {
-        if config.source != ConfigSource::Deb {
-            ConfigFile::delete(
-                tx,
-                config
-                    .id
-                    .ok_or_else(|| anyhow::anyhow!("tracked config has no database identity"))?,
-            )?;
-        }
-    }
+    ConfigFile::delete_non_debian_by_trove(tx, trove_id)?;
     Trove::delete(tx, trove_id)?;
 
     Ok(RemoveInnerResult {

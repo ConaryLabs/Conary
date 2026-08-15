@@ -36,8 +36,9 @@ use anyhow::{Context, Result};
 pub(crate) use ccs::prepare_ccs_package_for_batch;
 use conary_core::components::ComponentType;
 use conary_core::db::models::{
-    Changeset, Component, InstallReason, InstalledCcsRemoveHook, InstalledFileCapability,
-    InstalledNativeLifecycleBundle, InstalledRequirementGroup, Trove,
+    Changeset, InstallReason, InstalledCcsRemoveHook, InstalledFileCapability,
+    InstalledNativeLifecycleBundle, InstalledRequirementGroup, PackageTransactionStaging,
+    StagedAnchorDisposition, StagedPayloadRow, Trove,
 };
 use conary_core::filesystem::CasStore;
 use conary_core::packages::config_authority::SourceConfigDeclaration;
@@ -622,93 +623,105 @@ impl<'a> BatchInstaller<'a> {
     #[allow(clippy::too_many_arguments)]
     fn insert_batch_payload_rows(
         tx: &Transaction<'_>,
+        staging: &mut PackageTransactionStaging<'_>,
         changeset_id: i64,
         pkg: &PreparedPackage,
         trove_id: i64,
         files: &[inner::ResolvedInstallFile],
         directory_plan: &super::shared_directory::DirectoryInstallPlan,
     ) -> Result<()> {
-        let mut path_to_component = HashMap::new();
+        staging.clear()?;
+        let mut path_to_component = HashMap::<&str, String>::new();
         if let (Some(component_names), Some(component_names_by_path)) = (
             pkg.installed_component_names.as_ref(),
             pkg.component_names_by_path.as_ref(),
         ) {
-            let mut component_ids = HashMap::new();
             for component_name in component_names {
-                let mut component = Component::new(trove_id, component_name.clone());
-                component.description = Some(format!("{component_name} files"));
-                component_ids.insert(component_name.as_str(), component.insert(tx)?);
+                staging.stage_component(
+                    trove_id,
+                    component_name,
+                    Some(&format!("{component_name} files")),
+                    true,
+                )?;
             }
             for (path, component_name) in component_names_by_path {
-                if let Some(component_id) = component_ids.get(component_name.as_str()) {
-                    path_to_component.insert(path.as_str(), *component_id);
+                if component_names.iter().any(|name| name == component_name) {
+                    path_to_component.insert(path.as_str(), component_name.clone());
                 }
             }
         } else {
-            let mut component_ids = HashMap::new();
             for comp_type in &pkg.installed_components {
-                let mut component = Component::from_type(trove_id, *comp_type);
-                component.description = Some(format!("{} files", comp_type.as_str()));
-                component_ids.insert(*comp_type, component.insert(tx)?);
+                staging.stage_component(
+                    trove_id,
+                    comp_type.as_str(),
+                    Some(&format!("{} files", comp_type.as_str())),
+                    true,
+                )?;
             }
             for (comp_type, paths) in &pkg.classified_files {
-                if let Some(component_id) = component_ids.get(comp_type) {
+                if pkg.installed_components.contains(comp_type) {
                     for path in paths {
-                        path_to_component.insert(path.as_str(), *component_id);
+                        path_to_component.insert(path.as_str(), comp_type.as_str().to_string());
                     }
                 }
             }
         }
 
-        let mut installed_file_metadata = HashMap::new();
-        for file in files {
-            if let Some(content) = file.content.as_ref() {
-                tx.execute(
-                    "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size)
-                     VALUES (?1, ?2, ?3)",
-                    rusqlite::params![
-                        &content.sha256,
-                        format!("objects/{}/{}", &content.sha256[0..2], &content.sha256[2..]),
-                        i64::try_from(content.size)
-                            .context("payload content size exceeds SQLite range")?,
-                    ],
-                )?;
+        for removal in &pkg.relation_removals {
+            if removal.mode
+                == conary_core::repository::dependency_model::PackageRelationRemovalMode::OwnershipTransfer
+                && removal
+                    .ownership_transfer_packages
+                    .iter()
+                    .any(|incoming| incoming == &pkg.name)
+            {
+                staging.allow_replacement_of(removal.trove_id)?;
             }
-            let mut entry = conary_core::db::models::FileEntry::new(
+        }
+
+        for file in files {
+            let entry = conary_core::db::models::FileEntry::new(
                 file.path.clone(),
                 file.node.clone(),
                 file.content.clone(),
                 trove_id,
             )
             .with_claim_policy(pkg.semantics.payload_sharing_policy());
-            entry.component_id = path_to_component.get(file.path.as_str()).copied();
             directory_plan.reconcile_through_symlink_target(tx, file)?;
-            let inserted = inner::insert_file_entry_claiming_live_root_overlap(
-                tx,
-                &mut entry,
-                &pkg.name,
-                &pkg.relation_removals,
-                directory_plan.materialization_for_path(&file.path),
-                directory_plan.leaf_before(&file.path),
-            )?;
-            directory_plan.persist_through_symlink_target(tx, file, trove_id)?;
-            installed_file_metadata
-                .insert(file.path.clone(), (inserted.file_id, file.cas_hash.clone()));
-            if inserted.materialized {
-                tx.execute(
-                    "INSERT INTO file_history (changeset_id, path, sha256_hash, action)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![
-                        changeset_id,
-                        &file.path,
-                        file.content.as_ref().map(|content| &content.sha256),
-                        if pkg.is_upgrade { "modify" } else { "add" },
-                    ],
-                )?;
-            }
+            let (disposition, materialization_target_path) = match directory_plan.path(&file.path) {
+                Some(super::shared_directory::DirectoryPathPlan::PreserveCompatiblePayload) => {
+                    (StagedAnchorDisposition::Share, None)
+                }
+                Some(super::shared_directory::DirectoryPathPlan::PreserveLeaf { .. }) => {
+                    (StagedAnchorDisposition::PreserveSelectedRoot, None)
+                }
+                Some(super::shared_directory::DirectoryPathPlan::ApplyDirectoryMetadata {
+                    ..
+                }) => (StagedAnchorDisposition::ApplyDirectory, None),
+                Some(super::shared_directory::DirectoryPathPlan::ApplyThroughSymlink {
+                    resolved_target_path,
+                    ..
+                }) => (
+                    StagedAnchorDisposition::PreserveSelectedRoot,
+                    Some(resolved_target_path.clone()),
+                ),
+                Some(super::shared_directory::DirectoryPathPlan::CreateOrReplace) | None => {
+                    (StagedAnchorDisposition::Replace, None)
+                }
+            };
+            staging.stage_payload(&StagedPayloadRow {
+                entry,
+                package_name: pkg.name.clone(),
+                component_name: path_to_component.get(file.path.as_str()).cloned(),
+                directory_materialization: directory_plan.materialization_for_path(&file.path),
+                disposition,
+                selected_root_node: directory_plan.leaf_before(&file.path).cloned(),
+                materialization_target_path,
+                history: Some((changeset_id, if pkg.is_upgrade { "modify" } else { "add" })),
+            })?;
         }
-        inner::reconcile_installed_hardlink_materializations(tx, files)?;
-        Self::insert_config_rows(tx, pkg, trove_id, &installed_file_metadata, files)?;
+        Self::stage_config_rows(tx, staging, pkg, trove_id, files)?;
+        let installed_file_metadata = staging.validate_and_reconcile()?;
         if let Some(ccs) = pkg.ccs.as_ref() {
             let files_by_path = files
                 .iter()

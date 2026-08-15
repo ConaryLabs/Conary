@@ -9,7 +9,8 @@ use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::ccs::native_transaction::NativePackageIdentity;
 use conary_core::config_transaction::GenerationConfigTransaction;
 use conary_core::db::models::{
-    ActivationRequest, Changeset, ChangesetStatus, InstalledNativeLifecycleBundle, Trove,
+    ActivationRequest, Changeset, ChangesetStatus, InstalledNativeLifecycleBundle,
+    PackageTransactionStaging, Trove,
 };
 use conary_core::filesystem::CasStore;
 use conary_core::scriptlet::ExecutionMode;
@@ -80,6 +81,7 @@ impl BatchInstaller<'_> {
                 None,
                 rollback_root,
             )?;
+            let mut package_rows = PackageTransactionStaging::begin(&tx)?;
             let mut config_transaction = GenerationConfigTransaction::default();
             self.drive_graph(
                 &tx,
@@ -96,7 +98,15 @@ impl BatchInstaller<'_> {
                 native_execution_mode,
                 &graph_inputs,
                 &retained_upgrade_trove_ids,
+                &mut package_rows,
             )?;
+            let sqlite_work = package_rows.finish()?;
+            tracing::debug!(
+                rows_loaded = sqlite_work.rows_loaded,
+                statements = sqlite_work.total_statement_executions(),
+                query_shapes = sqlite_work.query_shapes,
+                "reconciled staged package transaction rows"
+            );
             super::promises::verify_promised_paths_materialized(promise_plan, &selected_root)?;
             let mut activation_requests = native_transaction.take_activation_requests();
             for (package, executor) in packages.iter().zip(ccs_hook_executors.iter()) {
@@ -264,6 +274,7 @@ impl BatchInstaller<'_> {
         native_execution_mode: &ExecutionMode,
         inputs: &GraphExecutionInputs,
         retained_trove_ids: &[i64],
+        package_rows: &mut PackageTransactionStaging<'_>,
     ) -> Result<()> {
         let retained_trove_ids = retained_trove_ids.iter().copied().collect::<BTreeSet<_>>();
         let mut payload = BatchGraphPayload {
@@ -280,6 +291,7 @@ impl BatchInstaller<'_> {
             inputs,
             retained_trove_ids: &retained_trove_ids,
             native_transaction,
+            package_rows,
         };
         super::super::native_graph::drive_native_graph(
             tx,
@@ -292,7 +304,7 @@ impl BatchInstaller<'_> {
     }
 }
 
-struct BatchGraphPayload<'a, R> {
+struct BatchGraphPayload<'a, 'staging, R> {
     tx: &'a rusqlite::Transaction<'a>,
     root_mutation: &'a mut R,
     selected_root: &'a Path,
@@ -306,9 +318,10 @@ struct BatchGraphPayload<'a, R> {
     inputs: &'a GraphExecutionInputs,
     retained_trove_ids: &'a BTreeSet<i64>,
     native_transaction: &'a PreparedNativeTransaction,
+    package_rows: &'a mut PackageTransactionStaging<'staging>,
 }
 
-impl<R> super::super::native_graph::NativeGraphPayloadMutation for BatchGraphPayload<'_, R>
+impl<R> super::super::native_graph::NativeGraphPayloadMutation for BatchGraphPayload<'_, '_, R>
 where
     R: super::super::native_graph::TransactionRootMutation,
 {
@@ -399,6 +412,7 @@ where
             }
             BatchInstaller::insert_batch_payload_rows(
                 self.tx,
+                self.package_rows,
                 self.changeset_id,
                 package,
                 *self

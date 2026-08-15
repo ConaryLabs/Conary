@@ -127,8 +127,20 @@ pub(crate) fn persist_debian_remove_on_upgrade(
     path: &str,
     trove_id: i64,
 ) -> Result<()> {
-    let Some(mut config) = ConfigFile::find_by_path(conn, path)? else {
+    let Some(mut config) = prepare_debian_remove_on_upgrade(conn, path, trove_id)? else {
         return Ok(());
+    };
+    config.upsert(conn)?;
+    Ok(())
+}
+
+pub(crate) fn prepare_debian_remove_on_upgrade(
+    conn: &Connection,
+    path: &str,
+    trove_id: i64,
+) -> Result<Option<ConfigFile>> {
+    let Some(mut config) = ConfigFile::find_by_path(conn, path)? else {
+        return Ok(None);
     };
     if config.source != ConfigSource::Deb || config.original_md5.is_none() {
         bail!(
@@ -142,8 +154,7 @@ pub(crate) fn persist_debian_remove_on_upgrade(
     config.status = ConfigStatus::Missing;
     config.modified_at = None;
     config.remove_on_upgrade = true;
-    config.upsert(conn)?;
-    Ok(())
+    Ok(Some(config))
 }
 
 #[derive(Debug)]
