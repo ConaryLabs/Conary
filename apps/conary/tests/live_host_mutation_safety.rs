@@ -484,6 +484,8 @@ fn system_adopt_package_dry_run_previews_without_mutation_or_ack_prompt() {
             "system",
             "adopt",
             "base-files",
+            "--package-manager",
+            "dpkg",
             "--dry-run",
             "--db-path",
             &db_path,
