@@ -414,6 +414,26 @@ pub async fn openapi_spec() -> Response {
                     "responses": { "200": { "description": "Chunk garbage collection report" }, "400": { "description": "Invalid request body" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
                 }
             },
+            "/v1/admin/r2-durability": {
+                "post": {
+                    "operationId": "r2Durability",
+                    "summary": "Inventory or backfill R2 durability",
+                    "description": "Compares exact published chunk authority with local CAS and R2. An omitted body plans only. mode=apply verifies local SHA-256, uploads missing objects, and rechecks R2. Requires admin scope.",
+                    "tags": ["admin"],
+                    "security": [{ "bearerAuth": [] }],
+                    "requestBody": {
+                        "required": false,
+                        "content": { "application/json": { "schema": {
+                            "type": "object",
+                            "properties": {
+                                "mode": { "type": "string", "enum": ["plan", "apply"], "default": "plan" },
+                                "concurrency": { "type": "integer", "minimum": 1, "maximum": 64, "default": 16 }
+                            }
+                        }}}
+                    },
+                    "responses": { "200": { "description": "Versioned R2 durability report" }, "400": { "description": "R2 is unavailable or request bounds are invalid" }, "401": { "description": "Invalid or missing token" }, "403": { "description": "Insufficient scope" } }
+                }
+            },
             "/v1/admin/test-runs/gc": {
                 "delete": {
                     "operationId": "testRunGarbageCollect",

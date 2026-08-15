@@ -31,6 +31,7 @@ use serde::Deserialize;
 
 use crate::server::ServerState;
 use crate::server::admin_service::{self, AddPeerInput, ChunkGcReport, ServiceError};
+use crate::server::r2_durability::{DEFAULT_BACKFILL_CONCURRENCY, R2DurabilityMode};
 
 /// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
 ///
@@ -205,6 +206,17 @@ pub struct ChunkGcParams {
     /// Show what would be deleted without deleting (default false).
     #[serde(default)]
     pub dry_run: Option<bool>,
+}
+
+/// Parameters for the R2 durability inventory and backfill tool.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct R2DurabilityParams {
+    /// Read-only plan or explicit apply. Defaults to plan.
+    #[serde(default)]
+    pub mode: Option<R2DurabilityMode>,
+    /// Maximum concurrent R2 PUT requests. Defaults to 16 and cannot exceed 64.
+    #[serde(default)]
+    pub concurrency: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------
@@ -615,6 +627,25 @@ impl RemiMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
+    /// Inventory local and R2 chunk durability or apply an exact backfill.
+    #[tool(
+        description = "Inventory exact local and R2 chunk counts, bytes, and published-object completeness. Omitted mode defaults to a read-only plan; mode=apply verifies local SHA-256 before uploading only missing objects and rechecks R2 afterward. Risk: high. Requires plan-then-apply confirmation."
+    )]
+    async fn r2_durability(
+        &self,
+        Parameters(params): Parameters<R2DurabilityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let report = admin_service::run_r2_durability_op(
+            &self.state,
+            params.mode.unwrap_or(R2DurabilityMode::Plan),
+            params.concurrency.unwrap_or(DEFAULT_BACKFILL_CONCURRENCY),
+        )
+        .await
+        .map_err(service_err_to_mcp)?;
+        let text = to_json_text(&report)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
     // -----------------------------------------------------------------------
     // Canonical mapping
     // -----------------------------------------------------------------------
@@ -817,6 +848,7 @@ mod tests {
             "delete_peer",
             "purge_audit_log",
             "chunk_gc",
+            "r2_durability",
             "canonical_rebuild",
             "canonical_fetch",
         ] {

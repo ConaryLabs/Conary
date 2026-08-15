@@ -137,6 +137,22 @@ prefix = "chunks/"
 write_through = true
 ```
 
+### Inventory and backfill before authority changes
+
+Write-through covers only objects stored after it was enabled. Before enabling
+redirect serving or evicting local chunks, use the authenticated
+`POST /v1/admin/r2-durability` operation described in
+`docs/guides/self-hosted-remi.md`. Run `mode=plan`, record its exact object and
+byte gap, then explicitly run `mode=apply` and retain the schema-v1 report.
+Proceed only when the post-apply result says `outcome: "applied_complete"` and
+`r2_complete: true`; a submitted upload count is not completeness proof.
+
+Use a bucket-scoped read/write credential for inventory and backfill. Keep it
+in the service manager's protected environment file, rotate it using the R2
+dashboard, restart Remi, and rerun plan mode after rotation. Bucket lifecycle
+rules must not expire the configured chunk prefix while package transport
+envelopes reference those objects.
+
 ### R2 Custom Domain (optional)
 
 To serve chunks directly from R2 via a custom domain:

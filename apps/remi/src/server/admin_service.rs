@@ -26,6 +26,9 @@ use rusqlite::TransactionBehavior;
 use crate::federation::{Peer, PeerTier};
 use crate::server::ServerState;
 use crate::server::auth::{generate_token, hash_token, validate_scopes};
+use crate::server::r2_durability::{
+    MAX_BACKFILL_CONCURRENCY, R2DurabilityMode, R2DurabilityReport, run_r2_durability,
+};
 
 mod refresh;
 mod repository_policy;
@@ -302,6 +305,38 @@ pub async fn run_chunk_gc_op(
         local_bytes_freed: result.local_bytes_freed,
         r2_bytes_freed: result.r2_bytes_freed,
     })
+}
+
+/// Inventory or backfill the R2 durable chunk tier.
+///
+/// This is the single implementation behind the HTTP admin route and MCP
+/// tool. Plan mode is read-only; apply mode verifies every local object before
+/// upload and reports completion from a fresh R2 inventory.
+pub async fn run_r2_durability_op(
+    state: &Arc<RwLock<ServerState>>,
+    mode: R2DurabilityMode,
+    concurrency: usize,
+) -> Result<R2DurabilityReport, ServiceError> {
+    if !(1..=MAX_BACKFILL_CONCURRENCY).contains(&concurrency) {
+        return Err(ServiceError::BadRequest(format!(
+            "R2 backfill concurrency must be between 1 and {MAX_BACKFILL_CONCURRENCY}"
+        )));
+    }
+    let (db_path, objects_dir, r2_store) = {
+        let state = state.read().await;
+        (
+            state.config.db_path.clone(),
+            state.config.chunk_dir.join("objects"),
+            state.r2_store.clone(),
+        )
+    };
+    let r2_store = r2_store.ok_or_else(|| {
+        ServiceError::BadRequest("R2 storage is not configured for this Remi instance".to_string())
+    })?;
+
+    run_r2_durability(&db_path, &objects_dir, r2_store, mode, concurrency)
+        .await
+        .map_err(|error| ServiceError::Internal(error.to_string()))
 }
 
 // ---------------------------------------------------------------------------
