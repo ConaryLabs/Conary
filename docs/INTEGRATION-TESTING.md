@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-15
-revision: 50
-summary: Document typed semantic corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
+revision: 51
+summary: Document attributable daily-driver semantics, typed corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -537,6 +537,23 @@ proves:
 - a QEMU-safe kernel-adjacent `kernel/install.d` file without mutating boot state
 - an alternative target binary (`/usr/bin/phase4-corpus-alt`) as packaged file
   coverage
+
+`TNPM16` and `TNPM18` make the chain visible to the typed W7 aggregator. Each
+record reopens the builder's schema-versioned output manifest, hashes the exact
+native artifact again, and binds its claims to the install-request role.
+Across the two completed cases the suite declares exactly seven properties:
+exact version, native architecture, regular files, a queried virtual provide,
+matched config, config removal, and shell lifecycle. The source format comes
+from the explicit distro build-context override and must resolve to the closed
+RPM/DEB/ALPM type before evidence can count.
+
+Several useful assertions deliberately remain outside semantic coverage. The
+2 MiB zero-filled file is not W7 large-file/resource-boundary proof; the
+Conary changeset trigger is not a source-package trigger; the disabled systemd
+unit is not activation; the kernel-adjacent file is not an executed target
+helper; and an overlapping-file refusal is not a declared native relation
+conflict. Those properties still require fixtures that prove their exact
+contracts.
 
 Corpus coverage boundaries (not product support exemptions):
 

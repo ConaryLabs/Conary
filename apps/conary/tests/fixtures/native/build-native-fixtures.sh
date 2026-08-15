@@ -51,6 +51,25 @@ fi
 
 artifact="${artifacts[0]}"
 checksum="$(sha256sum "${artifact}" | awk '{print $1}')"
+python3 - "${output_dir}/native-fixture-manifest.json" "${artifact}" "${target}" "${checksum}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+manifest = {
+    "schema_version": 1,
+    "artifact_path": sys.argv[2],
+    "builder_target": sys.argv[3],
+    "sha256": sys.argv[4],
+}
+temporary_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+temporary_path.write_text(
+    json.dumps(manifest, separators=(",", ":")) + "\n", encoding="utf-8"
+)
+os.replace(temporary_path, manifest_path)
+PY
 cat > "${output_dir}/native-fixture.env" <<EOF
 NATIVE_PKG_FILE=$(shell_quote "${artifact}")
 NATIVE_PKG_SHA256=$(shell_quote "${checksum}")

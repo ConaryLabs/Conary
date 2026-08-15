@@ -8,6 +8,17 @@ name = "Phase 4: Native Package Manager Parity Matrix"
 phase = 4
 timeout = 3600
 
+[suite.corpus]
+required = [
+    "identity_exact_version",
+    "identity_native_architecture",
+    "payload_files",
+    "relations_virtual_provide",
+    "configuration_matched_config",
+    "configuration_removal",
+    "lifecycle_shell",
+]
+
 [[suite.setup]]
 conary = "system init"
 
@@ -48,6 +59,8 @@ native_corpus_dependency_probe = "bash"
 native_corpus_config_count = "1"
 native_corpus_config_source = "rpm"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
+native_corpus_source_format = "rpm"
+native_corpus_target_architecture = "x86_64"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 repo_seed_security_version = "9999.0-1"
@@ -71,6 +84,8 @@ native_corpus_dependency_probe = "bash"
 native_corpus_config_count = "1"
 native_corpus_config_source = "deb"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
+native_corpus_source_format = "deb"
+native_corpus_target_architecture = "x86_64"
 repo_install_pkg = "nano"
 repo_install_path = "/usr/bin/nano"
 repo_seed_security_version = "9999.0"
@@ -94,6 +109,8 @@ native_corpus_dependency_probe = "bash"
 native_corpus_config_count = "1"
 native_corpus_config_source = "arch"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
+native_corpus_source_format = "alpm"
+native_corpus_target_architecture = "x86_64"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 repo_seed_security_version = "9999.0-1"
@@ -724,6 +741,42 @@ group = "daily-driver-corpus"
 timeout = 90
 depends_on = ["TNPM15"]
 
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-daily-driver-install.json"
+source_profile = "${native_profile}"
+source_format = "${native_corpus_source_format}"
+digest_source = "fixture_build_manifest"
+stages = ["installation"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "identity_exact_version"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "identity_native_architecture"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "payload_files"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "relations_virtual_provide"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "configuration_matched_config"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "lifecycle_shell"
+artifact_roles = ["install_request"]
+
 [[test.step]]
 conary = "list phase4-daily-driver-corpus --info"
 
@@ -758,6 +811,19 @@ conary = "query whatprovides phase4-daily-driver-corpus"
 [test.step.assert]
 exit_code = 0
 stdout_contains_all = ["Capability 'phase4-daily-driver-corpus' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}"]
+
+[[test.step]]
+conary = "query whatprovides phase4-corpus-tool"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["Capability 'phase4-corpus-tool' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}"]
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-install.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} installation"
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # TNPM17: daily-driver corpus file conflict refusal
@@ -811,6 +877,22 @@ timeout = 120
 fatal = true
 depends_on = ["TNPM17"]
 
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-daily-driver-removal.json"
+source_profile = "${native_profile}"
+source_format = "${native_corpus_source_format}"
+digest_source = "fixture_build_manifest"
+stages = ["removal"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "configuration_removal"
+artifact_roles = ["install_request"]
+
 [[test.step]]
 run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove phase4-daily-driver-corpus --db-path ${DB_PATH} --root /conary --sandbox always --yes"
 
@@ -825,8 +907,14 @@ run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /con
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-daily-driver-corpus'\""
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-daily-driver-corpus'; SELECT COUNT(*) || ' config rows' FROM config_files WHERE path = '/etc/phase4-corpus/app.conf'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "0 installed"
+stdout_contains_all = ["0 installed", "0 config rows"]
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-removal.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} removal"
+
+[test.step.assert]
+exit_code = 0

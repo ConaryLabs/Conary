@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-15
-revision: 33
-summary: Map fixture ownership, including typed semantic coverage, authenticated derivative roots, and cross-source lifecycle proof
+revision: 34
+summary: Map fixture ownership, including attributable daily-driver semantics, authenticated derivative roots, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -399,7 +399,9 @@ Each fixture family should record:
 
 ### conary-test-remi-manifests
 
-- **Owner:** Integration harness: `apps/conary-test/src/config/`,
+- **Owner:** Integration harness: `apps/conary-test/src/config/`, with native
+  corpus manifest contracts in
+  `apps/conary-test/src/config/tests/native_corpus.rs`,
   `apps/conary-test/src/engine/corpus.rs`, `apps/conary-test/src/report/`, and
   `apps/conary-test/src/suite_inventory.rs`.
 - **Purpose:** Declarative Remi and package-manager integration suites. Corpus
@@ -415,6 +417,8 @@ Each fixture family should record:
   `apps/conary/tests/fixtures/conary-test-fixture/`;
   `apps/conary/tests/fixtures/native/`;
   `apps/conary/tests/fixtures/native-lifecycle-parity/`;
+  `apps/conary/tests/fixtures/phase4-daily-driver-corpus/`;
+  `apps/conary/tests/fixtures/phase4-daily-driver-corpus-conflict/`;
   `apps/conary/tests/fixtures/distro-roots/`;
   `apps/conary/tests/fixtures/phase4-runtime-fixture{,-v2}/`;
   `apps/conary/tests/fixtures/native-selected-root-layout/`;
@@ -476,6 +480,15 @@ Each fixture family should record:
   authority from distro-name matching. The typed workflow test owns the three
   source-format cases across all six required target lanes and the stable
   all-lane aggregator context; do not weaken either in workflow-only edits.
+  The Phase 4 daily-driver chain emits two additional exact-artifact records
+  for its host-native RPM, DEB, or ALPM build: the completed install/query
+  chain covers exact/native identity, regular files, one queried virtual
+  provide, matched config, and shell lifecycle; removal covers config cleanup.
+  Its builder writes a schema-versioned digest manifest and the evidence writer
+  rehashes the artifact before publication. Do not infer large-file,
+  source-trigger, activation, target-helper, or declared-relation coverage from
+  the chain's 2 MiB file, out-of-band trigger, disabled unit, adjacent helper
+  path, or file-collision negative.
   Derivative roots are assembled from digest-pinned transport images, exact
   release identity/keyring packages, and byte-pinned APT declarations captured
   from authenticated release media. Product code must not branch on their
@@ -663,9 +676,8 @@ The following families are known but not mapped in detail in this first slice.
 They are candidate future ownership rows; later slices must validate source
 roots and proof commands before treating them as committed gates:
 
-- Native package corpus fixtures under
-  `apps/conary/tests/fixtures/phase4-daily-driver-corpus/` and
-  `apps/conary/tests/fixtures/phase4-runtime-fixture/`.
+- The native `phase4-runtime-fixture/` outside the now-mapped daily-driver
+  family.
 - Native package-manager daily-driver and CLI daily UX fixture patterns under
   `apps/conary/tests/native_pm_daily_driver.rs` and
   `apps/conary/tests/cli_daily_ux.rs`.

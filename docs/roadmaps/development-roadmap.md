@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-15
-revision: 21
+revision: 22
 summary: Track Conary's active W7 just-works corpus gate, typed semantic coverage, external tester milestone, and later workstreams
 proof_baseline: "immutable synchronized v0.15.0 suite at 642750878d5a59a9aa27976347cafc6f9dd86cfd; exact tagged Remi deployed; external tester result remains 0/10 behind #110"
 current_milestone: first external tester loop
@@ -314,10 +314,11 @@ the stated scope, not whether a workstream happens to be active.
   user journey end to end, and failures are reported as typed stages rather
   than message text.
 - **Execution status:** active after W4 through W6 completion. Typed per-case
-  reporting is landed; #456 owns the next bounded semantic-coverage authority
-  before the remaining fixture and hosted-execution slices.
-- **Issues:** #110 as the corpus umbrella, #456 for attributable semantic
-  coverage, plus #39 for bootstrap.
+  reporting and the closed 44-property authority landed through #456; #458
+  makes the existing daily-driver native fixture attributable before the
+  remaining fixture and hosted-execution slices.
+- **Issues:** #110 as the corpus umbrella, #458 for daily-driver fixture
+  attribution, plus #39 for bootstrap.
 - **User journey:** install the signed release through one documented bootstrap
   entry point; `conary system init` with no hand-edited state; sync and
   authenticate repositories; request a package by ordinary name; resolve the
