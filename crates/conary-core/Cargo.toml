@@ -175,3 +175,7 @@ harness = false
 [[bench]]
 name = "installed_inventory"
 harness = false
+
+[[bench]]
+name = "package_transaction_staging"
+harness = false

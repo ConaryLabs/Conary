@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-14
-revision: 74
-summary: Route feature ownership through typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
+revision: 75
+summary: Route feature ownership through set-based package transaction persistence, typed database rebuilds, generation snapshots and recovery deltas, exact native source identity and adopted-artifact conversion, native declaration and trust-import planning, exact Remi signing, streaming package payloads, serialized selected-root mutation, typed rollback lineage, exact lifecycle, canonical-map authority, carrier security, generation GC, exact release authority, and current canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -273,6 +273,9 @@ mutation flows for local package operations.
 `crates/conary-core/src/db/models/payload_claim/*`;
 `crates/conary-core/src/db/models/package_payload_ownership.rs`;
 `crates/conary-core/src/db/models/package_payload_ownership/*`;
+`crates/conary-core/src/db/models/package_transaction_staging.rs`;
+`crates/conary-core/src/db/models/package_transaction_staging/*`;
+`crates/conary-core/benches/package_transaction_staging.rs`;
 `crates/conary-core/src/db/models/file_entry.rs`;
 `crates/conary-core/src/db/models/trove.rs`;
 `crates/conary-core/src/db/models/provide_entry.rs`;
@@ -293,6 +296,7 @@ mutation flows for local package operations.
 `cargo test -p conary --lib exact_installed_authority_round_trips_and_rejects_broken_relations`;
 `cargo test -p conary-core --lib db::models::payload_claim`;
 `cargo test -p conary-core --lib db::models::package_payload_ownership`;
+`cargo test -p conary-core --lib db::models::package_transaction_staging::tests`;
 `cargo test -p conary-core --lib filesystem::selected_root`;
 `cargo test -p conary-core --lib config_transaction`;
 `cargo test -p conary --lib commands::generation::config_transaction`;
@@ -332,7 +336,12 @@ per package; query, lifecycle, removal, derived-package, and rollback
 projections must use claim-aware payload ownership rather than treating the
 materialized file anchor as the only owner. A converted CCS archive retains the
 validated native source format's typed payload-sharing and
-directory-materialization contracts.
+directory-materialization contracts. Package payload, component, config, and
+history rows load into transaction-local TEMP tables through cached statements;
+typed validation establishes anchor decisions before a fixed set of canonical
+reconciliation statements. Those TEMP tables are never durable authority, and
+the selected-root session plus enclosing SQLite transaction remain the rollback
+boundary for any validation or reconciliation failure.
 
 ## Adoption, Unadoption, And Native-Authority Handoff
 

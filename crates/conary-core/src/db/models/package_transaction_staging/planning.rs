@@ -7,6 +7,30 @@ use crate::db::models::{ExistingDirectoryMaterialization, PayloadClaimAnchorPoli
 use crate::error::{Error, Result};
 use crate::payload::{PayloadContentAuthority, PayloadNodeKind, ResolvedPayloadNode};
 
+#[derive(Debug, Clone)]
+pub(super) struct LoadedClaim {
+    pub(super) claim: crate::db::models::PayloadClaim,
+    pub(super) owner_name: String,
+    pub(super) owner_install_source: String,
+    pub(super) replacement_allowed: bool,
+}
+
+#[derive(Debug)]
+pub(super) struct StagedClaimInput {
+    pub(super) path: String,
+    pub(super) trove_id: i64,
+    pub(super) component_id: Option<i64>,
+    pub(super) sharing_policy: String,
+    pub(super) anchor_policy: String,
+    pub(super) materialization_target_path: Option<String>,
+    pub(super) node_json: String,
+    pub(super) content_sha256: Option<String>,
+    pub(super) content_size: Option<i64>,
+    pub(super) owner_name: String,
+    pub(super) owner_install_source: String,
+    pub(super) replacement_allowed: bool,
+}
+
 #[derive(Debug)]
 pub(super) struct StagedAnchorInput {
     pub(super) path: String,
@@ -79,6 +103,24 @@ impl PlannedDecision {
             trove_id,
             anchor_action: "apply-directory",
             materialized: true,
+        }
+    }
+
+    pub(super) fn reconcile_materialization(path: String, trove_id: i64) -> Self {
+        Self {
+            path,
+            trove_id,
+            anchor_action: "reconcile-materialization",
+            materialized: false,
+        }
+    }
+
+    pub(super) fn reconcile_owned(path: String, trove_id: i64) -> Self {
+        Self {
+            path,
+            trove_id,
+            anchor_action: "reconcile-owned",
+            materialized: false,
         }
     }
 }
@@ -157,6 +199,8 @@ pub(super) fn parse_disposition(value: &str) -> Result<StagedAnchorDisposition> 
         "share" => Ok(StagedAnchorDisposition::Share),
         "apply-directory" => Ok(StagedAnchorDisposition::ApplyDirectory),
         "preserve-selected-root" => Ok(StagedAnchorDisposition::PreserveSelectedRoot),
+        "reconcile-owned" => Ok(StagedAnchorDisposition::ReconcileOwned),
+        "reconcile-captured-root" => Ok(StagedAnchorDisposition::ReconcileCapturedRoot),
         other => Err(Error::ParseError(format!(
             "unknown staged payload disposition {other:?}"
         ))),

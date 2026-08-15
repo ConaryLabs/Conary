@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-12
-revision: 31
-summary: Map fixture ownership, including authenticated Debian-derivative roots and cross-source lifecycle proof
+last_updated: 2026-08-14
+revision: 32
+summary: Map fixture ownership, including set-based package transaction scaling, authenticated Debian-derivative roots, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -40,6 +40,7 @@ Each fixture family should record:
 | `ccs-v3-lifecycle-authoring-proof` | CCS v3 lifecycle authoring | `cargo test -p conary --test packaging_m4e`; `cargo test -p conary-core ccs::v3` |
 | `m4d-supported-profile-cutover` | Repository feed profiles | `cargo test -p conary-core supported_profiles`; `cargo test -p conary --test packaging_m4d`; `cargo test -p remi route` |
 | `native-lifecycle-query-fixtures` | Native lifecycle query surfaces | `cargo test -p conary --test query_scripts` |
+| `package-transaction-many-tiny-files` | Transaction-local package-row staging | `cargo test -p conary-core --lib db::models::package_transaction_staging::tests` |
 | `rpm-hardlink-transaction` | RPM payload projection and CCS conversion | `cargo test -p conary-core packages::rpm::payload`; `cargo test -p conary --test conversion_integration golden_conversion` |
 | `rpm-root-anchor-conversion` | RPM root ownership parsing and CCS omission | `cargo test -p conary-core packages::rpm::payload`; opt-in pinned-artifact test below |
 | `remi-native-ccs-publication` | Remi native publication | `cargo test -p remi release_upload_`; `cargo test -p conary --test packaging_m4c` |
@@ -48,6 +49,34 @@ Each fixture family should record:
 | `qemu-source-image-fixtures` | Bootstrap/QEMU fixture maintenance | `bash -n scripts/bootstrap-vm/rotate-qemu-test-identity.sh`; `cargo run -p conary-test -- list` |
 | `supported-host-generation-export` | Generation export boot proofs | `cargo test -p conary-core --test supported_host_generation_export_fixture_contract` |
 | `conary-test-remi-manifests` | Integration harness | `cargo run -p conary-test -- list`; `cargo test -p conary-test suite_inventory` |
+
+### package-transaction-many-tiny-files
+
+- **Owner:** transaction staging model:
+  `crates/conary-core/src/db/models/package_transaction_staging.rs` and
+  `crates/conary-core/src/db/models/package_transaction_staging/`.
+- **Purpose:** Prove package payload persistence scales with transaction rows
+  while validation and canonical reconciliation retain a near-fixed family of
+  SQL query shapes. The order fixture also proves deterministic shared-directory,
+  cross-package hardlink, config, and history authority.
+- **Fixture sources:** in-test 100- and 2,500-path builders in
+  `crates/conary-core/src/db/models/package_transaction_staging/tests.rs` and
+  the matching Criterion builder in
+  `crates/conary-core/benches/package_transaction_staging.rs`.
+- **Consumes:** core staging properties plus install, update, adoption, remove,
+  rollback, and generation interaction gates from the `install` ownership card.
+- **Fast proof:** `cargo test -p conary-core --lib
+  db::models::package_transaction_staging::tests`.
+- **Medium proof:** `cargo test -p conary --lib commands::install` and
+  `cargo test -p conary --lib commands::adopt`.
+- **Slow proof:** `cargo bench -p conary-core --bench
+  package_transaction_staging -- --noplot`; no QEMU lane is owned by this
+  fixture.
+- **Regeneration:** Hand-maintained typed Rust builders. Change row counts only
+  with matching work-counter assertions and benchmark labels.
+- **Safety notes:** The fixture uses disposable SQLite transactions and no live
+  root. Duplicate input and an injected hardlink reconciliation failure must
+  leave canonical rows unchanged after rollback.
 
 ### foreign-package-lifecycle-contracts
 

@@ -24,7 +24,8 @@ CREATE TEMP TABLE conary_tx_payload (
         'exact', 'directory', 'directory-or-symlink-to-directory'
     )),
     disposition TEXT NOT NULL CHECK(disposition IN (
-        'auto', 'replace', 'share', 'apply-directory', 'preserve-selected-root'
+        'auto', 'replace', 'share', 'apply-directory', 'preserve-selected-root',
+        'reconcile-owned', 'reconcile-captured-root'
     )),
     selected_root_node_json TEXT CHECK(
         selected_root_node_json IS NULL OR json_valid(selected_root_node_json)
@@ -51,7 +52,8 @@ CREATE TEMP TABLE conary_tx_decisions (
     path TEXT NOT NULL,
     trove_id INTEGER NOT NULL,
     anchor_action TEXT NOT NULL CHECK(anchor_action IN (
-        'replace', 'keep', 'apply-directory', 'insert-selected-root'
+        'replace', 'keep', 'apply-directory', 'insert-selected-root',
+        'reconcile-materialization', 'reconcile-owned'
     )),
     materialized INTEGER NOT NULL CHECK(materialized IN (0, 1)),
     PRIMARY KEY(path, trove_id)

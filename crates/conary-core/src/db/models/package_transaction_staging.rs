@@ -9,12 +9,14 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::BTreeMap;
 
 use self::planning::{
-    PlannedDecision, StagedAnchorInput, anchor_policy, parse_anchor_policy, parse_content,
-    parse_disposition, parse_node, persisted_content_size, validate_staged_payload,
+    LoadedClaim, PlannedDecision, StagedAnchorInput, StagedClaimInput, anchor_policy,
+    parse_anchor_policy, parse_content, parse_disposition, parse_node, persisted_content_size,
+    validate_staged_payload,
 };
 use self::sql::{CLEAR_STAGING_SQL, DROP_STAGING_SQL, STAGING_SCHEMA_SQL};
 
 mod planning;
+mod reconcile;
 mod sql;
 
 /// Typed materialization action established before canonical package rows change.
@@ -30,6 +32,10 @@ pub enum StagedAnchorDisposition {
     ApplyDirectory,
     /// Preserve an existing selected-root directory or symlink-to-directory anchor.
     PreserveSelectedRoot,
+    /// Reconcile an anchor already owned by the staged package without replacing its claim.
+    ReconcileOwned,
+    /// Reconcile complete selected-root materialization without claiming owned paths.
+    ReconcileCapturedRoot,
 }
 
 impl StagedAnchorDisposition {
@@ -40,6 +46,8 @@ impl StagedAnchorDisposition {
             Self::Share => "share",
             Self::ApplyDirectory => "apply-directory",
             Self::PreserveSelectedRoot => "preserve-selected-root",
+            Self::ReconcileOwned => "reconcile-owned",
+            Self::ReconcileCapturedRoot => "reconcile-captured-root",
         }
     }
 }
@@ -374,15 +382,83 @@ impl<'tx> PackageTransactionStaging<'tx> {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         drop(statement);
         self.count_validation_query();
+        let claims = self.load_claims()?;
 
         let mut decisions = Vec::with_capacity(rows.len());
         for row in rows {
-            decisions.push(self.plan_anchor_decision(row)?);
+            decisions.push(Self::plan_anchor_decision(row, &claims)?);
         }
         Ok(decisions)
     }
 
-    fn plan_anchor_decision(&mut self, row: StagedAnchorInput) -> Result<PlannedDecision> {
+    fn load_claims(&mut self) -> Result<BTreeMap<String, Vec<LoadedClaim>>> {
+        let mut statement = self.tx.prepare(
+            "SELECT pc.path, pc.trove_id, pc.component_id, pc.sharing_policy,
+                    pc.anchor_policy, pc.materialization_target_path,
+                    pc.payload_node_json, pc.content_sha256, pc.content_size,
+                    owner.name, owner.install_source,
+                    allowed.trove_id IS NOT NULL
+             FROM payload_claims pc
+             JOIN troves owner ON owner.id = pc.trove_id
+             LEFT JOIN conary_tx_replacement_owners allowed ON allowed.trove_id = pc.trove_id
+             WHERE pc.path IN (SELECT path FROM conary_tx_payload)
+                OR pc.materialization_target_path IN (SELECT path FROM conary_tx_payload)
+             ORDER BY pc.path, pc.trove_id",
+        )?;
+        let raw = statement
+            .query_map([], |row| {
+                Ok(StagedClaimInput {
+                    path: row.get(0)?,
+                    trove_id: row.get(1)?,
+                    component_id: row.get(2)?,
+                    sharing_policy: row.get(3)?,
+                    anchor_policy: row.get(4)?,
+                    materialization_target_path: row.get(5)?,
+                    node_json: row.get(6)?,
+                    content_sha256: row.get(7)?,
+                    content_size: row.get(8)?,
+                    owner_name: row.get(9)?,
+                    owner_install_source: row.get(10)?,
+                    replacement_allowed: row.get(11)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        self.count_validation_query();
+
+        let mut claims = BTreeMap::<String, Vec<LoadedClaim>>::new();
+        for row in raw {
+            let claim = PayloadClaim::new(
+                row.path.clone(),
+                row.trove_id,
+                parse_node(&row.path, &row.node_json)?,
+                parse_content(&row.path, row.content_sha256, row.content_size)?,
+                crate::payload::PayloadSharingPolicy::parse(&row.sharing_policy)
+                    .map_err(|error| Error::ParseError(error.to_string()))?,
+            )?
+            .with_component(row.component_id)
+            .with_anchor_policy(parse_anchor_policy(&row.anchor_policy)?)
+            .with_materialization_target(row.materialization_target_path.clone());
+            let loaded = LoadedClaim {
+                claim,
+                owner_name: row.owner_name,
+                owner_install_source: row.owner_install_source,
+                replacement_allowed: row.replacement_allowed,
+            };
+            if let Some(target) = row.materialization_target_path
+                && target != row.path
+            {
+                claims.entry(target).or_default().push(loaded.clone());
+            }
+            claims.entry(row.path).or_default().push(loaded);
+        }
+        Ok(claims)
+    }
+
+    fn plan_anchor_decision(
+        row: StagedAnchorInput,
+        claims_by_path: &BTreeMap<String, Vec<LoadedClaim>>,
+    ) -> Result<PlannedDecision> {
         let incoming_node = parse_node(&row.path, &row.incoming_node_json)?;
         let incoming_content = parse_content(&row.path, row.incoming_sha256, row.incoming_size)?;
         let incoming_claim = PayloadClaim::new(
@@ -433,27 +509,29 @@ impl<'tx> PackageTransactionStaging<'tx> {
                     incoming_claim.validate_anchor(existing)?;
                     return Ok(PlannedDecision::apply_directory(row.path, row.trove_id));
                 }
-                if self.claims_are_compatible(&incoming_claim)? {
+                if Self::claims_are_compatible(&incoming_claim, claims_by_path)? {
                     incoming_claim.validate_anchor(existing)?;
                     return Ok(PlannedDecision::keep(row.path, row.trove_id, false));
                 }
-                self.require_replaceable_claims(
+                Self::require_replaceable_claims(
                     &row.path,
                     &row.package_name,
                     existing.trove_id,
                     row.existing_owner_name.as_deref(),
                     row.existing_install_source.as_deref(),
+                    claims_by_path,
                 )?;
                 Ok(PlannedDecision::replace(row.path, row.trove_id))
             }
             StagedAnchorDisposition::Replace => {
                 if let Some(existing) = existing.as_ref() {
-                    self.require_replaceable_claims(
+                    Self::require_replaceable_claims(
                         &row.path,
                         &row.package_name,
                         existing.trove_id,
                         row.existing_owner_name.as_deref(),
                         row.existing_install_source.as_deref(),
+                        claims_by_path,
                     )?;
                 }
                 Ok(PlannedDecision::replace(row.path, row.trove_id))
@@ -468,7 +546,7 @@ impl<'tx> PackageTransactionStaging<'tx> {
                         row.trove_id,
                     ));
                 };
-                self.require_compatible_claims(&incoming_claim)?;
+                Self::require_compatible_claims(&incoming_claim, claims_by_path)?;
                 incoming_claim.validate_anchor(&existing)?;
                 Ok(PlannedDecision::keep(row.path, row.trove_id, false))
             }
@@ -517,37 +595,146 @@ impl<'tx> PackageTransactionStaging<'tx> {
                     ))
                 }
             }
+            StagedAnchorDisposition::ReconcileOwned => {
+                let existing = existing.ok_or_else(|| {
+                    Error::NotFound(format!(
+                        "owned staged payload {} has no materialized anchor",
+                        row.path
+                    ))
+                })?;
+                let candidate = FileEntry {
+                    id: existing.id,
+                    path: row.path.clone(),
+                    node: incoming_claim.node.clone(),
+                    content: incoming_claim.content.clone(),
+                    trove_id: existing.trove_id,
+                    installed_at: existing.installed_at.clone(),
+                    component_id: existing.component_id,
+                    claim_policy: crate::payload::PayloadSharingPolicy::Exclusive,
+                };
+                Self::validate_owned_reconciled_anchor(
+                    &candidate,
+                    &incoming_claim,
+                    claims_by_path,
+                )?;
+                Ok(PlannedDecision::reconcile_owned(row.path, row.trove_id))
+            }
+            StagedAnchorDisposition::ReconcileCapturedRoot => {
+                let Some(existing) = existing.as_ref() else {
+                    return Ok(PlannedDecision::replace(row.path, row.trove_id));
+                };
+                let candidate = FileEntry {
+                    id: existing.id,
+                    path: row.path.clone(),
+                    node: incoming_claim.node.clone(),
+                    content: incoming_claim.content.clone(),
+                    trove_id: existing.trove_id,
+                    installed_at: existing.installed_at.clone(),
+                    component_id: existing.component_id,
+                    claim_policy: crate::payload::PayloadSharingPolicy::Exclusive,
+                };
+                Self::validate_reconciled_anchor(&candidate, claims_by_path)?;
+                Ok(PlannedDecision::reconcile_materialization(
+                    row.path,
+                    row.trove_id,
+                ))
+            }
         }
     }
 
+    fn validate_reconciled_anchor(
+        candidate: &FileEntry,
+        claims_by_path: &BTreeMap<String, Vec<LoadedClaim>>,
+    ) -> Result<()> {
+        let retainers = claims_by_path
+            .get(&candidate.path)
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        if retainers.is_empty() {
+            return Err(Error::ConfigError(format!(
+                "materialized payload {} has no package claim",
+                candidate.path
+            )));
+        }
+        for loaded in retainers {
+            if loaded.claim.path == candidate.path {
+                loaded.claim.validate_anchor(candidate)?;
+            } else if !matches!(candidate.node.source.kind, PayloadNodeKind::Directory) {
+                return Err(Error::ConflictError(format!(
+                    "selected-root node {} is incompatible with claim {} anchor policy '{}'",
+                    candidate.path,
+                    loaded.claim.trove_id,
+                    loaded.claim.anchor_policy.as_str()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_owned_reconciled_anchor(
+        candidate: &FileEntry,
+        incoming: &PayloadClaim,
+        claims_by_path: &BTreeMap<String, Vec<LoadedClaim>>,
+    ) -> Result<()> {
+        let retainers = claims_by_path
+            .get(&candidate.path)
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let mut owns_path = false;
+        for loaded in retainers {
+            if loaded.claim.path == candidate.path && loaded.claim.trove_id == incoming.trove_id {
+                owns_path = true;
+                incoming.validate_anchor(candidate)?;
+            } else if loaded.claim.path == candidate.path {
+                incoming.compatible_with(&loaded.claim).map_err(|mismatch| {
+                    Error::ConflictError(format!(
+                        "replacement payload claim {} from trove {} is incompatible with trove {}: {mismatch}",
+                        candidate.path, incoming.trove_id, loaded.claim.trove_id
+                    ))
+                })?;
+                loaded.claim.validate_anchor(candidate)?;
+            } else if !matches!(candidate.node.source.kind, PayloadNodeKind::Directory) {
+                return Err(Error::ConflictError(format!(
+                    "selected-root node {} is incompatible with claim {} anchor policy '{}'",
+                    candidate.path,
+                    loaded.claim.trove_id,
+                    loaded.claim.anchor_policy.as_str()
+                )));
+            }
+        }
+        if !owns_path {
+            return Err(Error::NotFound(format!(
+                "staged package {} does not own materialized payload {}",
+                incoming.trove_id, candidate.path
+            )));
+        }
+        Ok(())
+    }
+
     fn require_replaceable_claims(
-        &mut self,
         path: &str,
         package_name: &str,
         existing_trove_id: i64,
         existing_owner_name: Option<&str>,
         existing_install_source: Option<&str>,
+        claims_by_path: &BTreeMap<String, Vec<LoadedClaim>>,
     ) -> Result<()> {
-        let blocked = self
-            .tx
-            .query_row(
-                "SELECT pc.trove_id, t.name
-             FROM payload_claims pc
-             JOIN troves t ON t.id = pc.trove_id
-             LEFT JOIN conary_tx_replacement_owners allowed ON allowed.trove_id = pc.trove_id
-             WHERE pc.path = ?1
-               AND allowed.trove_id IS NULL
-               AND t.name != ?2
-               AND t.install_source != 'captured-root'
-             ORDER BY pc.trove_id LIMIT 1",
-                params![path, package_name],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-        self.count_validation_query();
-        if let Some((trove_id, owner)) = blocked {
+        let blocked = claims_by_path
+            .get(path)
+            .into_iter()
+            .flatten()
+            .filter(|loaded| loaded.claim.path == path)
+            .find(|loaded| {
+                !loaded.replacement_allowed
+                    && loaded.owner_name != package_name
+                    && loaded.owner_install_source != "captured-root"
+            });
+        if let Some(blocked) = blocked {
             return Err(Error::ConflictError(format!(
-                "staged payload {path} cannot replace claim from package {owner} ({trove_id})"
+                "staged payload {path} cannot replace claim from package {} ({})",
+                blocked.owner_name, blocked.claim.trove_id
             )));
         }
         if existing_owner_name.is_none() {
@@ -557,14 +744,13 @@ impl<'tx> PackageTransactionStaging<'tx> {
         }
         let anchor_allowed = existing_owner_name == Some(package_name)
             || existing_install_source == Some("captured-root")
-            || self.tx.query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM conary_tx_replacement_owners WHERE trove_id = ?1
-                 )",
-                [existing_trove_id],
-                |row| row.get::<_, bool>(0),
-            )?;
-        self.count_validation_query();
+            || claims_by_path
+                .get(path)
+                .into_iter()
+                .flatten()
+                .any(|loaded| {
+                    loaded.claim.trove_id == existing_trove_id && loaded.replacement_allowed
+                });
         if !anchor_allowed {
             return Err(Error::ConflictError(format!(
                 "staged payload {path} cannot replace package {}",
@@ -574,29 +760,45 @@ impl<'tx> PackageTransactionStaging<'tx> {
         Ok(())
     }
 
-    fn require_compatible_claims(&mut self, incoming: &PayloadClaim) -> Result<()> {
-        let claims = PayloadClaim::find_by_path(self.tx, &incoming.path)?;
-        self.count_validation_query();
+    fn require_compatible_claims(
+        incoming: &PayloadClaim,
+        claims_by_path: &BTreeMap<String, Vec<LoadedClaim>>,
+    ) -> Result<()> {
+        let claims = claims_by_path
+            .get(&incoming.path)
+            .into_iter()
+            .flatten()
+            .filter(|loaded| loaded.claim.path == incoming.path)
+            .collect::<Vec<_>>();
         if claims.is_empty() {
             return Err(Error::ConfigError(format!(
                 "materialized payload {} has no package claim",
                 incoming.path
             )));
         }
-        for claim in claims {
-            incoming.compatible_with(&claim).map_err(|mismatch| {
-                Error::ConflictError(format!(
-                    "staged payload {} is incompatible with trove {}: {mismatch}",
-                    incoming.path, claim.trove_id
-                ))
-            })?;
+        for loaded in claims {
+            incoming
+                .compatible_with(&loaded.claim)
+                .map_err(|mismatch| {
+                    Error::ConflictError(format!(
+                        "staged payload {} is incompatible with trove {}: {mismatch}",
+                        incoming.path, loaded.claim.trove_id
+                    ))
+                })?;
         }
         Ok(())
     }
 
-    fn claims_are_compatible(&mut self, incoming: &PayloadClaim) -> Result<bool> {
-        let claims = PayloadClaim::find_by_path(self.tx, &incoming.path)?;
-        self.count_validation_query();
+    fn claims_are_compatible(
+        incoming: &PayloadClaim,
+        claims_by_path: &BTreeMap<String, Vec<LoadedClaim>>,
+    ) -> Result<bool> {
+        let claims = claims_by_path
+            .get(&incoming.path)
+            .into_iter()
+            .flatten()
+            .filter(|loaded| loaded.claim.path == incoming.path)
+            .collect::<Vec<_>>();
         if claims.is_empty() {
             return Err(Error::ConfigError(format!(
                 "materialized payload {} has no package claim",
@@ -605,7 +807,7 @@ impl<'tx> PackageTransactionStaging<'tx> {
         }
         Ok(claims
             .iter()
-            .all(|claim| incoming.compatible_with(claim).is_ok()))
+            .all(|loaded| incoming.compatible_with(&loaded.claim).is_ok()))
     }
 
     fn persist_decisions(&mut self, decisions: &[PlannedDecision]) -> Result<()> {
@@ -625,271 +827,6 @@ impl<'tx> PackageTransactionStaging<'tx> {
         }
         self.work.query_shapes += 1;
         Ok(())
-    }
-
-    fn reconcile_components(&mut self) -> Result<()> {
-        self.tx.execute(
-            "INSERT INTO components (parent_trove_id, name, description, is_installed)
-             SELECT trove_id, name, description, is_installed
-             FROM conary_tx_components
-             ORDER BY trove_id, name
-             ON CONFLICT(parent_trove_id, name) DO UPDATE SET
-                description = excluded.description,
-                is_installed = excluded.is_installed",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-        Ok(())
-    }
-
-    fn reconcile_contents(&mut self) -> Result<()> {
-        self.tx.execute(
-            "INSERT OR IGNORE INTO file_contents (sha256_hash, content_path, size)
-             SELECT DISTINCT content_sha256,
-                    'objects/' || substr(content_sha256, 1, 2) || '/' || substr(content_sha256, 3),
-                    content_size
-             FROM conary_tx_payload
-             WHERE content_sha256 IS NOT NULL
-             ORDER BY content_sha256",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-        Ok(())
-    }
-
-    fn reconcile_anchors(&mut self) -> Result<()> {
-        self.tx.execute(
-            "DELETE FROM payload_claims
-             WHERE path IN (
-                 SELECT path FROM conary_tx_decisions WHERE anchor_action = 'replace'
-             )
-             AND (
-                 trove_id IN (SELECT trove_id FROM conary_tx_replacement_owners)
-                 OR trove_id IN (
-                     SELECT t.id FROM troves t
-                     JOIN conary_tx_payload p ON p.package_name = t.name
-                     WHERE p.path = payload_claims.path
-                 )
-                 OR trove_id IN (
-                     SELECT id FROM troves WHERE install_source = 'captured-root'
-                 )
-             )",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-
-        self.tx.execute(
-            "INSERT INTO files (
-                path, payload_node_json, content_sha256, content_size,
-                trove_id, component_id
-             )
-             SELECT p.path,
-                    CASE d.anchor_action
-                        WHEN 'insert-selected-root' THEN p.selected_root_node_json
-                        ELSE p.payload_node_json
-                    END,
-                    CASE d.anchor_action
-                        WHEN 'insert-selected-root' THEN NULL
-                        ELSE p.content_sha256
-                    END,
-                    CASE d.anchor_action
-                        WHEN 'insert-selected-root' THEN NULL
-                        ELSE p.content_size
-                    END,
-                    p.trove_id,
-                    c.id
-             FROM conary_tx_payload p
-             JOIN conary_tx_decisions d USING(path, trove_id)
-             LEFT JOIN components c
-               ON c.parent_trove_id = p.trove_id AND c.name = p.component_name
-             WHERE d.anchor_action IN ('replace', 'apply-directory', 'insert-selected-root')
-             ORDER BY p.path, p.trove_id
-             ON CONFLICT(path) DO UPDATE SET
-                payload_node_json = excluded.payload_node_json,
-                content_sha256 = excluded.content_sha256,
-                content_size = excluded.content_size,
-                trove_id = excluded.trove_id,
-                component_id = excluded.component_id",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-        Ok(())
-    }
-
-    fn reconcile_claims(&mut self) -> Result<()> {
-        self.tx.execute(
-            "INSERT INTO payload_claims (
-                path, trove_id, component_id, sharing_policy, anchor_policy,
-                materialization_target_path, payload_node_json,
-                content_sha256, content_size
-             )
-             SELECT p.path, p.trove_id, c.id, p.sharing_policy, p.anchor_policy,
-                    p.materialization_target_path, p.payload_node_json,
-                    p.content_sha256, p.content_size
-             FROM conary_tx_payload p
-             LEFT JOIN components c
-               ON c.parent_trove_id = p.trove_id AND c.name = p.component_name
-             ORDER BY p.path, p.trove_id
-             ON CONFLICT(path, trove_id) DO UPDATE SET
-                component_id = excluded.component_id,
-                sharing_policy = excluded.sharing_policy,
-                anchor_policy = excluded.anchor_policy,
-                materialization_target_path = excluded.materialization_target_path,
-                payload_node_json = excluded.payload_node_json,
-                content_sha256 = excluded.content_sha256,
-                content_size = excluded.content_size",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-        Ok(())
-    }
-
-    fn reconcile_hardlinks(&mut self) -> Result<()> {
-        let missing_target = self
-            .tx
-            .query_row(
-                "SELECT p.path, json_extract(p.payload_node_json, '$.source.kind.target')
-             FROM conary_tx_payload p
-             LEFT JOIN files target
-               ON target.path = json_extract(p.payload_node_json, '$.source.kind.target')
-             WHERE json_extract(p.payload_node_json, '$.source.kind.type') = 'hardlink'
-               AND (
-                   target.path IS NULL
-                   OR json_extract(target.payload_node_json, '$.source.kind.type') != 'regular'
-               )
-             ORDER BY p.path LIMIT 1",
-                [],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-        self.count_validation_query();
-        if let Some((path, target)) = missing_target {
-            return Err(Error::ConflictError(format!(
-                "staged hardlink {path} has no regular materialization target {target}"
-            )));
-        }
-
-        self.tx.execute(
-            "UPDATE files
-             SET payload_node_json = json_set(
-                 payload_node_json,
-                 '$.source.kind.hardlink_identity',
-                 'path:' || path
-             )
-             WHERE path IN (
-                 SELECT DISTINCT json_extract(payload_node_json, '$.source.kind.target')
-                 FROM conary_tx_payload
-                 WHERE json_extract(payload_node_json, '$.source.kind.type') = 'hardlink'
-             )",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-        self.tx.execute(
-            "UPDATE files
-             SET payload_node_json = json_set(
-                 payload_node_json,
-                 '$.source.kind.identity',
-                 'path:' || json_extract(payload_node_json, '$.source.kind.target')
-             )
-             WHERE json_extract(payload_node_json, '$.source.kind.type') = 'hardlink'
-               AND json_extract(payload_node_json, '$.source.kind.target') IN (
-                   SELECT DISTINCT json_extract(payload_node_json, '$.source.kind.target')
-                   FROM conary_tx_payload
-                   WHERE json_extract(payload_node_json, '$.source.kind.type') = 'hardlink'
-               )",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-        Ok(())
-    }
-
-    fn reconcile_history(&mut self) -> Result<()> {
-        self.tx.execute(
-            "INSERT INTO file_history (changeset_id, path, sha256_hash, action)
-             SELECT p.history_changeset_id, p.path, p.content_sha256, p.history_action
-             FROM conary_tx_payload p
-             JOIN conary_tx_decisions d USING(path, trove_id)
-             WHERE p.history_changeset_id IS NOT NULL AND d.materialized = 1
-             ORDER BY p.path, p.trove_id",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-        self.tx.execute(
-            "INSERT INTO file_history (changeset_id, path, sha256_hash, action)
-             SELECT h.changeset_id, h.path,
-                    CASE WHEN content.sha256_hash IS NULL THEN NULL ELSE h.sha256_hash END,
-                    h.action
-             FROM conary_tx_history h
-             LEFT JOIN file_contents content ON content.sha256_hash = h.sha256_hash
-             ORDER BY h.path, h.action",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-        Ok(())
-    }
-
-    fn reconcile_configs(&mut self) -> Result<()> {
-        self.tx.execute(
-            "INSERT INTO config_files (
-                file_id, path, trove_id, package_name, package_version,
-                package_architecture, original_hash, original_md5, current_hash,
-                noreplace, ghost, materialized, remove_on_upgrade, status,
-                modified_at, source
-             )
-             SELECT CASE WHEN s.materialized = 1 THEN f.id ELSE NULL END,
-                    s.path, s.trove_id, t.name, t.version, t.architecture,
-                    s.original_hash, s.original_md5, s.current_hash,
-                    s.noreplace, s.ghost, s.materialized, s.remove_on_upgrade,
-                    s.status, s.modified_at, s.source
-             FROM conary_tx_configs s
-             JOIN troves t ON t.id = s.trove_id
-             LEFT JOIN files f ON f.path = s.path
-             ORDER BY s.path
-             ON CONFLICT(path) DO UPDATE SET
-                file_id = excluded.file_id,
-                trove_id = excluded.trove_id,
-                package_name = excluded.package_name,
-                package_version = excluded.package_version,
-                package_architecture = excluded.package_architecture,
-                original_hash = excluded.original_hash,
-                original_md5 = excluded.original_md5,
-                current_hash = excluded.current_hash,
-                noreplace = excluded.noreplace,
-                ghost = excluded.ghost,
-                materialized = excluded.materialized,
-                remove_on_upgrade = excluded.remove_on_upgrade,
-                status = excluded.status,
-                modified_at = excluded.modified_at,
-                source = excluded.source",
-            [],
-        )?;
-        self.count_reconciliation_statement();
-        Ok(())
-    }
-
-    fn load_outcomes(&mut self) -> Result<BTreeMap<String, StagedPayloadOutcome>> {
-        let mut statement = self.tx.prepare(
-            "SELECT p.path, f.id, f.content_sha256, d.materialized
-             FROM conary_tx_payload p
-             JOIN conary_tx_decisions d USING(path, trove_id)
-             JOIN files f ON f.path = p.path
-             ORDER BY p.path, p.trove_id",
-        )?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    StagedPayloadOutcome {
-                        file_id: row.get(1)?,
-                        content_sha256: row.get(2)?,
-                        materialized: row.get(3)?,
-                    },
-                ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        drop(statement);
-        self.count_validation_query();
-        Ok(rows.into_iter().collect())
     }
 
     fn count_loaded_row(&mut self) {
