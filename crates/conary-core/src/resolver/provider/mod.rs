@@ -28,7 +28,7 @@ use resolvo::{
     VersionSetUnionId,
 };
 
-pub(crate) use loading::repository_expression_to_solver;
+pub(crate) use loading::repository_expression_to_solver_for_architecture;
 use loading::{
     find_repo_package_by_id, load_installed_dependency_requests, load_installed_relations,
     load_repo_dependency_requests, load_repo_provided_capabilities, load_repo_relations,

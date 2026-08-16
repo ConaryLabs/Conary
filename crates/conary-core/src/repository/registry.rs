@@ -51,6 +51,21 @@ pub fn arch_to_debian(arch: &str) -> String {
     }
 }
 
+/// Return the current machine architecture in one source ecosystem's exact
+/// package token grammar.
+pub fn native_architecture_for_scheme(
+    scheme: crate::repository::versioning::VersionScheme,
+) -> String {
+    let architecture = detect_system_arch();
+    match scheme {
+        crate::repository::versioning::VersionScheme::Debian => arch_to_debian(&architecture),
+        crate::repository::versioning::VersionScheme::Rpm
+        | crate::repository::versioning::VersionScheme::Arch
+        | crate::repository::versioning::VersionScheme::Eopkg
+        | crate::repository::versioning::VersionScheme::Conary => architecture,
+    }
+}
+
 /// Explicit package-metadata format for a repository.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RepositoryFormat {
@@ -273,6 +288,10 @@ mod tests {
         assert_eq!(arch_to_debian("riscv64"), "riscv64");
         // Unknown arches pass through unchanged
         assert_eq!(arch_to_debian("unknown"), "unknown");
+        assert_eq!(
+            native_architecture_for_scheme(crate::repository::versioning::VersionScheme::Debian),
+            arch_to_debian(&detect_system_arch())
+        );
     }
 
     #[test]

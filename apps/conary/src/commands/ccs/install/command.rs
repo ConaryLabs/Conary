@@ -179,10 +179,9 @@ pub async fn cmd_ccs_install(
             &conn,
             conary_core::repository::resolution_policy::RequestScope::Any,
         )?;
-        let resolution = conary_core::resolver::solve_requirement_groups_with_policy(
+        let resolution = conary_core::resolver::solve_package_requirements_with_policy(
             &conn,
-            ccs_pkg.requirements(),
-            ccs_pkg.version_scheme(),
+            &ccs_pkg,
             &effective_policy.resolution,
         )?;
         if let Some(conflict) = resolution.conflict_message {

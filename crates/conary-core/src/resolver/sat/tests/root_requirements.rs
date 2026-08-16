@@ -3,8 +3,64 @@
 use super::formal_dependencies::insert_repo_pkg_with_reqs;
 use super::*;
 use crate::db::models::RepositoryProvide;
-use crate::repository::dependency_model::RepositoryRequirementKind;
+use crate::packages::traits::PackageFile;
+use crate::packages::{PackageFormat, PackagePayload};
+use crate::repository::dependency_model::{
+    CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
+    RepositoryCapabilityKind, RepositoryRequirementKind, SourcePackageFormat,
+};
 use crate::repository::requirement::parse_native_requirement;
+
+struct IncomingPackage {
+    requirements: Vec<crate::repository::dependency_model::RepositoryRequirementGroup>,
+    capabilities: Vec<ProvidedCapability>,
+}
+
+impl PackageFormat for IncomingPackage {
+    fn parse(_path: &str) -> crate::Result<Self> {
+        unreachable!("test package is constructed directly")
+    }
+
+    fn name(&self) -> &str {
+        "phase4-corpus"
+    }
+
+    fn version(&self) -> &str {
+        "1.0.0-1"
+    }
+
+    fn version_scheme(&self) -> VersionScheme {
+        VersionScheme::Rpm
+    }
+
+    fn architecture(&self) -> Option<&str> {
+        Some("x86_64")
+    }
+
+    fn description(&self) -> Option<&str> {
+        None
+    }
+
+    fn files(&self) -> &[PackageFile] {
+        &[]
+    }
+
+    fn requirements(&self) -> &[crate::repository::dependency_model::RepositoryRequirementGroup] {
+        &self.requirements
+    }
+
+    fn resolution_capabilities(&self) -> crate::Result<Vec<ProvidedCapability>> {
+        Ok(self.capabilities.clone())
+    }
+
+    fn package_payload(&self) -> crate::Result<PackagePayload> {
+        unreachable!("dependency solving does not read payload")
+    }
+
+    fn to_trove(&self) -> crate::db::models::Trove {
+        unreachable!("dependency solving does not construct a trove")
+    }
+}
 
 fn repository(conn: &Connection) -> i64 {
     let mut repository = Repository::new(
@@ -70,6 +126,122 @@ fn selected_names(result: &SatResolution) -> Vec<&str> {
         .iter()
         .map(|package| package.name.as_str())
         .collect()
+}
+
+#[test]
+fn incoming_exact_provide_satisfies_only_its_matching_positive_requirement() {
+    let self_requirement = parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "config(phase4-corpus) = 1.0.0-1",
+    )
+    .unwrap();
+    let external_requirement = parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "phase4-repository-fixture = 1.0.0",
+    )
+    .unwrap();
+    let incoming = PackageIdentity {
+        repo_package_id: None,
+        name: "phase4-corpus".to_string(),
+        version: "1.0.0-1".to_string(),
+        package_release: None,
+        architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
+        version_scheme: VersionScheme::Rpm,
+        repository_id: None,
+        repository_name: String::new(),
+        repository_profile: None,
+        repository_priority: 0,
+        canonical_id: None,
+        canonical_name: None,
+        installed_trove_id: None,
+        installed_pinned: false,
+        provided_capabilities: vec![ProvidedCapability {
+            kind: RepositoryCapabilityKind::Generic,
+            name: "config(phase4-corpus)".to_string(),
+            version: Some("1.0.0-1".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDeclared {
+                format: SourcePackageFormat::Rpm,
+                record_index: 0,
+            },
+        }],
+    };
+
+    assert!(
+        positive_requirement_group_satisfied_by_package(
+            &self_requirement,
+            VersionScheme::Rpm,
+            &incoming,
+        )
+        .unwrap()
+    );
+    assert!(
+        !positive_requirement_group_satisfied_by_package(
+            &external_requirement,
+            VersionScheme::Rpm,
+            &incoming,
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn package_solver_discharge_self_provide_but_selects_external_dependency() {
+    let (_temp, conn) = setup_test_db();
+    let repository_id = repository(&conn);
+    insert_repo_pkg_with_reqs(
+        &conn,
+        repository_id,
+        "phase4-repository-fixture",
+        "1.0.0",
+        "https://rich-root.invalid/phase4-repository-fixture.rpm",
+        "rpm",
+        &[],
+    );
+    let requirements = [
+        "config(phase4-corpus) = 1.0.0-1",
+        "phase4-repository-fixture = 1.0.0",
+    ]
+    .into_iter()
+    .map(|native| {
+        parse_native_requirement(
+            RepositoryRequirementKind::Depends,
+            VersionScheme::Rpm,
+            native,
+        )
+        .unwrap()
+    })
+    .collect();
+    let package = IncomingPackage {
+        requirements,
+        capabilities: vec![ProvidedCapability {
+            kind: RepositoryCapabilityKind::Generic,
+            name: "config(phase4-corpus)".to_string(),
+            version: Some("1.0.0-1".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDeclared {
+                format: SourcePackageFormat::Rpm,
+                record_index: 0,
+            },
+        }],
+    };
+
+    let result = solve_package_requirements_with_policy(
+        &conn,
+        &package,
+        &ResolutionPolicy::new()
+            .with_mixing(crate::repository::resolution_policy::DependencyMixingPolicy::Permissive),
+    )
+    .unwrap();
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    assert_eq!(selected_names(&result), ["phase4-repository-fixture"]);
 }
 
 #[test]

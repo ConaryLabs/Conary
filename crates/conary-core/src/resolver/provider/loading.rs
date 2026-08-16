@@ -103,11 +103,11 @@ pub(crate) fn repository_expression_to_solver(
     expression: &RepositoryRequirementExpression,
     scheme: VersionScheme,
 ) -> Result<SolverExpression> {
-    let native_architecture = crate::repository::registry::detect_system_arch();
+    let native_architecture = crate::repository::registry::native_architecture_for_scheme(scheme);
     repository_expression_to_solver_for_architecture(expression, scheme, &native_architecture)
 }
 
-fn repository_expression_to_solver_for_architecture(
+pub(crate) fn repository_expression_to_solver_for_architecture(
     expression: &RepositoryRequirementExpression,
     scheme: VersionScheme,
     depending_architecture: &str,

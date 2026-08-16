@@ -490,10 +490,14 @@ Each fixture family should record:
   authority from distro-name matching. The typed workflow test owns the three
   source-format cases across all six required target lanes and the stable
   all-lane aggregator context; do not weaken either in workflow-only edits.
-  The focused `phase4-native-daily-driver-corpus` chain emits two exact-artifact records
-  for its host-native RPM, DEB, or ALPM build: the completed install/query
-  chain covers exact/native identity, regular files, one explicit directory,
+  The focused `phase4-native-daily-driver-corpus` chain emits two case records
+  for its host-native RPM, DEB, or ALPM build. The completed install/query
+  record binds both the native request and its SAT-selected signed CCS
+  dependency to exact build-manifest SHA-256 identities; the removal record
+  remains bound to the request artifact. The completed chain covers
+  exact/native identity, regular files, one explicit directory,
   one exact symlink, one two-path hardlink set, one queried virtual provide,
+  one exact versioned dependency resolved from the bounded loopback repository,
   matched config, and shell lifecycle; removal covers config cleanup. Each
   native package is independently installed or extracted and both hardlink
   paths must report one device/inode identity with a link count of two before
@@ -508,10 +512,10 @@ Each fixture family should record:
   rehashes the artifact before publication. The chain attributes hardlink
   coverage only through the native inode oracle plus the typed
   selected-generation topology assertion. Do not infer large-file,
-  source-trigger, activation, target-helper, or declared-relation coverage from
-  the chain's 2 MiB file, out-of-band trigger, disabled unit, adjacent helper
-  path, or file-collision negative.
-  PRs run only that focused six-test chain on Fedora 44, Ubuntu 26.04, and Arch behind the stable
+  source-trigger, activation, target-helper, conflict, or replacement coverage
+  from the chain's 2 MiB file, out-of-band trigger, disabled unit, adjacent
+  helper path, or file-collision negative. PRs run only that focused six-test
+  chain on Fedora 44, Ubuntu 26.04, and Arch behind the stable
   `native-daily-driver-corpus` aggregate context; every lane applies both the
   ordinary suite-result and typed corpus-result gates.
   Derivative roots are assembled from digest-pinned transport images, exact

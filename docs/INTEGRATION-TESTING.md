@@ -558,12 +558,14 @@ fixture enrolls its binary JSON repository, exact source profile, and CCS
 package key through `conary repo add`; it does not mutate protected SQLite
 authority out of band. The focused
 `phase4-native-daily-driver-corpus` manifest owns `TNPM13` through `TNPM18`
-without inheriting the live repository or prior parity state. That corpus
-builds a package in the host-native format and then proves:
+without inheriting prior parity state. It builds a bounded signed loopback CCS
+repository, then builds a package in the host-native format and proves:
 
 - systemd unit file deployment and trigger matching
 - tracked `/etc` config file metadata
-- native dependency metadata for a real package dependency
+- one exact native versioned dependency resolved by SAT, acquired from the
+  synchronized repository, signature-verified, and installed with dependency
+  reason and source provenance
 - an exact installed native-lifecycle bundle plus install/remove hook effects
 - system user and group creation in the selected generation
 - an explicit mode-0750 directory and an exact relative symlink through native
@@ -575,17 +577,20 @@ builds a package in the host-native format and then proves:
 - an alternative target binary (`/usr/bin/phase4-corpus-alt`) as packaged file
   coverage
 
-`TNPM16` and `TNPM18` make the chain visible to the typed W7 aggregator. Each
-record reopens the builder's schema-versioned output manifest, hashes the exact
-native artifact again, and binds its claims to the install-request role.
-Across the two completed cases the suite declares exactly nine properties:
-exact version, native architecture, regular files, directories, symlinks, a
+`TNPM16` and `TNPM18` make the chain visible to the typed W7 aggregator. The
+install record reopens both builders' schema-versioned output manifests,
+hashes the native request and signed dependency artifacts again, and binds its
+versioned-dependency claim to both `install_request` and `install_dependency`.
+The removal record remains request-bound. Across the two completed cases the
+suite declares exactly eleven properties: exact version, native architecture,
+regular files, directories, symlinks, hardlinks, a versioned dependency, a
 queried virtual provide, matched config, purge-time config removal, and shell
-lifecycle. Directory and symlink claims require exact typed node/mode/target
-queries plus selected-generation assertions; implicit parents and followed
-filesystem paths do not count. The source format comes from the explicit
-distro build-context override and must resolve to the closed RPM/DEB/ALPM type
-before evidence can count.
+lifecycle. Directory, symlink, hardlink, and relation claims require direct
+native metadata, selected-generation, repository-provenance, and installed
+reason assertions; implicit parents, followed filesystem paths, and recorded
+metadata without a completed resolution do not count. The source format comes
+from the explicit distro build-context override and must resolve to the closed
+RPM/DEB/ALPM type before evidence can count.
 
 RPM export emits a directory entry when its mode differs from the implicit
 0755 parent contract or no descendant can create it. Default-mode parents of
@@ -605,8 +610,8 @@ Fedora 44, Ubuntu 26.04, and Arch in a non-fail-fast matrix, then applies both
 the generic suite-result checker and the typed corpus-coverage checker to every
 lane. The stable `native-daily-driver-corpus` aggregate context fails unless
 all three source-format/target pairs complete. The full deterministic repository
-and package-manager matrix remains owned by `phase4-native-pm-parity`; it is not
-a prerequisite for this focused digest-attributed fixture chain.
+and package-manager matrix remains owned by `phase4-native-pm-parity`; the
+focused chain consumes only its deterministic signed-repository fixture.
 
 Corpus coverage boundaries (not product support exemptions):
 

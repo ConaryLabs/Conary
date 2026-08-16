@@ -70,11 +70,8 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
     );
     println!("Checking dependencies for {}...", ctx.pkg.name());
 
-    let sat_result = conary_core::resolver::solve_requirement_groups_with_policy(
-        ctx.conn,
-        ctx.pkg.requirements(),
-        ctx.pkg.version_scheme(),
-        ctx.policy,
+    let sat_result = conary_core::resolver::solve_package_requirements_with_policy(
+        ctx.conn, ctx.pkg, ctx.policy,
     )
     .with_context(|| format!("Failed to resolve dependencies for '{}'", ctx.pkg.name()))?;
 

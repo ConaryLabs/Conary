@@ -2,13 +2,14 @@
 # tests/fixtures/native/build-pinned-binary-fixture.sh
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "Usage: $0 <rpm|deb|arch> <output-dir>" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "Usage: $0 <rpm|deb|arch> <output-dir> [repository-url]" >&2
   exit 64
 fi
 
 target="$1"
 output_dir="$2"
+repository_url="${3:-http://127.0.0.1:18083}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fixture_root="${script_dir}/../phase4-pinned-repository"
 authority_root="${script_dir}/../ccs-test-authority"
@@ -49,12 +50,14 @@ test -s "$artifact"
 
 python3 - \
   "${output_dir}/metadata.json" \
+  "${output_dir}/pinned-binary-fixture-manifest.json" \
   "$version_scheme" \
   "$package_name" \
-  "${version}-${release}" \
+  "$version" \
+  "$release" \
   "$architecture" \
   "$artifact" \
-  "http://127.0.0.1:18083" <<'PY'
+  "$repository_url" <<'PY'
 import hashlib
 import json
 import os
@@ -63,9 +66,11 @@ from pathlib import Path
 
 (
     metadata_path,
+    fixture_manifest_path,
     version_scheme,
     package_name,
     version,
+    release,
     architecture,
     artifact_path,
     repository_url,
@@ -80,6 +85,7 @@ document = {
         {
             "name": package_name,
             "version": version,
+            "release": release,
             "version_scheme": version_scheme,
             "architecture": architecture,
             "description": "Pinned signed CCS repository fixture",
@@ -99,7 +105,21 @@ temporary_path.write_text(
     json.dumps(document, separators=(",", ":")) + "\n", encoding="utf-8"
 )
 os.replace(temporary_path, path)
+
+fixture_manifest = {
+    "schema_version": 1,
+    "artifact_path": str(artifact),
+    "builder_target": version_scheme,
+    "sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+}
+manifest_path = Path(fixture_manifest_path)
+temporary_manifest_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+temporary_manifest_path.write_text(
+    json.dumps(fixture_manifest, separators=(",", ":")) + "\n", encoding="utf-8"
+)
+os.replace(temporary_manifest_path, manifest_path)
 PY
 
 printf 'PINNED_BINARY_ARTIFACT=%q\n' "$artifact" > "${output_dir}/pinned-binary-fixture.env"
 printf 'PINNED_REPOSITORY_METADATA=%q\n' "${output_dir}/metadata.json" >> "${output_dir}/pinned-binary-fixture.env"
+printf 'PINNED_BINARY_FIXTURE_MANIFEST=%q\n' "${output_dir}/pinned-binary-fixture-manifest.json" >> "${output_dir}/pinned-binary-fixture.env"

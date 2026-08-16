@@ -15,14 +15,51 @@ required = [
     "payload_directories",
     "payload_symlinks",
     "payload_hardlinks",
+    "relations_versioned_dependency",
     "relations_virtual_provide",
     "configuration_matched_config",
     "configuration_removal",
     "lifecycle_shell",
 ]
 
+[suite.mock_server]
+port = 18084
+
+[[suite.mock_server.routes]]
+path = "/metadata.json"
+status = 200
+body_file = "/tmp/native-pm-corpus-repo/metadata.json"
+headers = { "Content-Type" = "application/json" }
+
+[[suite.mock_server.routes]]
+path = "/phase4-repository-fixture-1.0.0-1.ccs"
+status = 200
+body_file = "/tmp/native-pm-corpus-repo/phase4-repository-fixture-1.0.0-1.ccs"
+headers = { "Content-Type" = "application/octet-stream" }
+
 [[suite.setup]]
 conary = "system init"
+
+[suite.setup.assert]
+exit_code = 0
+
+[[suite.setup]]
+run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} >/dev/null 2>&1 || true"
+
+[[suite.setup]]
+run = "rm -rf /tmp/native-pm-corpus-repo && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-pinned-binary-fixture.sh ${native_target} /tmp/native-pm-corpus-repo http://127.0.0.1:18084"
+
+[suite.setup.assert]
+exit_code = 0
+
+[[suite.setup]]
+conary = "repo add ${REPO_NAME} http://127.0.0.1:18084 --package-format json --default-strategy binary --ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY} --source-profile ${native_profile}"
+
+[suite.setup.assert]
+exit_code = 0
+
+[[suite.setup]]
+conary = "repo sync ${REPO_NAME} --force"
 
 [suite.setup.assert]
 exit_code = 0
@@ -41,7 +78,7 @@ native_scheme = "rpm"
 native_profile = "fedora-44"
 native_corpus_fixture_version = "1.0.0-1"
 native_corpus_dependency_count = "4"
-native_corpus_dependency_probe = "bash"
+native_corpus_dependency_probe = "phase4-repository-fixture"
 native_corpus_config_count = "1"
 native_corpus_config_source = "rpm"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
@@ -56,7 +93,7 @@ native_scheme = "debian"
 native_profile = "ubuntu-26.04"
 native_corpus_fixture_version = "1.0.0-1"
 native_corpus_dependency_count = "1"
-native_corpus_dependency_probe = "bash"
+native_corpus_dependency_probe = "phase4-repository-fixture"
 native_corpus_config_count = "1"
 native_corpus_config_source = "deb"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
@@ -71,7 +108,7 @@ native_scheme = "arch"
 native_profile = "arch"
 native_corpus_fixture_version = "1.0.0-1"
 native_corpus_dependency_count = "1"
-native_corpus_dependency_probe = "bash"
+native_corpus_dependency_probe = "phase4-repository-fixture"
 native_corpus_config_count = "1"
 native_corpus_config_source = "arch"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
@@ -128,14 +165,21 @@ exit_code = 0
 stdout_contains = "Created trigger: phase4-corpus-trigger"
 
 [[test.step]]
-run = ". /tmp/native-pm-corpus/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --from ${native_profile} --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
+run = ". /tmp/native-pm-corpus/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --from ${native_profile} --db-path ${DB_PATH} --root /conary --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-daily-driver-corpus"]
 
 [[test.step]]
-run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus --expect-directory /opt=0750 --expect-directory /usr/lib/phase4-corpus/state=0750 --expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group"
+run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || t.version || '|' || COALESCE(t.package_release, '') || '|' || COALESCE(t.architecture, '') || '|' || COALESCE(t.version_scheme, '') || '|' || COALESCE(r.name, '') || '|' || COALESCE(t.source_profile, '') || '|' || COALESCE(t.install_source, '') || '|' || COALESCE(t.install_reason, '') FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = 'phase4-repository-fixture'\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "phase4-repository-fixture|1.0.0|1|${native_arch}|${native_scheme}|${REPO_NAME}|${native_profile}|repository|dependency"
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus --expect-directory /opt=0750 --expect-directory /usr/lib/phase4-corpus/state=0750 --expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --present /usr/share/phase4-repository-fixture/probe.txt --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group"
 
 [test.step.assert]
 exit_code = 0
@@ -182,11 +226,11 @@ exit_code = 0
 stdout_contains_all = ["1 hardlinks", "/usr/lib/phase4-corpus/hardlink-anchor|", "/usr/lib/phase4-corpus/hardlink-copy|"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' requirement groups' FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT COALESCE((SELECT group_concat(kind || '|' || version_scheme || '|' || requirement_json, char(10)) FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY id), 'no-deps')\""
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' requirement groups' FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT COALESCE((SELECT group_concat(kind || '|' || version_scheme || '|' || requirement_json, char(10)) FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY id), 'no-deps'); SELECT json_extract(requirement_json, '$.expression.operands.name') || '|' || json_extract(requirement_json, '$.expression.operands.version_constraint') FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(requirement_json, '$.expression.operands.name') = 'phase4-repository-fixture'\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${native_corpus_dependency_count} requirement groups", "${native_corpus_dependency_probe}"]
+stdout_contains_all = ["${native_corpus_dependency_count} requirement groups", "${native_corpus_dependency_probe}", "phase4-repository-fixture|= 1.0.0"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' config rows' FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT path || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY path\""
@@ -226,7 +270,7 @@ evidence_path = "/tmp/conary-corpus-daily-driver-install.json"
 source_profile = "${native_profile}"
 source_format = "${native_corpus_source_format}"
 digest_source = "fixture_build_manifest"
-stages = ["installation"]
+stages = ["resolution", "installation"]
 
 [test.corpus.target]
 architecture = "${native_corpus_target_architecture}"
@@ -256,6 +300,10 @@ artifact_roles = ["install_request"]
 [[test.corpus.coverage]]
 semantic = "payload_hardlinks"
 artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "relations_versioned_dependency"
+artifact_roles = ["install_request", "install_dependency"]
 
 [[test.corpus.coverage]]
 semantic = "relations_virtual_provide"
@@ -312,7 +360,7 @@ exit_code = 0
 stdout_contains_all = ["Capability 'virtual(phase4-corpus-tool)' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}"]
 
 [[test.step]]
-run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-install.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} installation"
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-install.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} resolution installation --dependency-fixture-manifest /tmp/native-pm-corpus-repo/pinned-binary-fixture-manifest.json --dependency-name phase4-repository-fixture --dependency-version 1.0.0-1 --dependency-architecture ${native_arch}"
 
 [test.step.assert]
 exit_code = 0
