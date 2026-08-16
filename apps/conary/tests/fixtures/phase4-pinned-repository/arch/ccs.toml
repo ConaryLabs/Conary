@@ -1,0 +1,24 @@
+# tests/fixtures/phase4-pinned-repository/arch/ccs.toml
+
+[package]
+name = "phase4-repository-fixture"
+version = "1.0.0"
+version_scheme = "arch"
+release = "1"
+kind = "package"
+description = "Pinned Arch-scheme repository fixture for native parity"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[provides]
+capabilities = ["phase4-repository-fixture"]
+binaries = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

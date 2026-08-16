@@ -1,6 +1,7 @@
 // conary-test/src/container/mod.rs
 
 pub mod backend;
+mod exec_supervisor;
 pub mod image;
 pub mod lifecycle;
 #[cfg(test)]

@@ -12,6 +12,8 @@ const MATRIX_GATE_ID: &str = "native-cross-source-lifecycle-gate";
 const STABLE_CHECK_CONTEXT: &str = "native-cross-source-lifecycle";
 const DAILY_DRIVER_JOB_ID: &str = "native-daily-driver-corpus";
 const DAILY_DRIVER_GATE_ID: &str = "native-daily-driver-corpus-gate";
+const NATIVE_PARITY_JOB_ID: &str = "native-pm-parity";
+const NATIVE_PARITY_GATE_ID: &str = "native-pm-parity-gate";
 const RELEASE_ARTIFACT_MATRIX_JOB_ID: &str = "native-package-lifecycle";
 const RELEASE_ARTIFACT_GATE_ID: &str = "release-artifact-proof";
 
@@ -373,6 +375,71 @@ fn native_daily_driver_gate_executes_the_three_attributable_lanes() {
     assert_eq!(
         gate_step.env.get("MATRIX_RESULT").map(String::as_str),
         Some("${{ needs.native-daily-driver-corpus.result }}")
+    );
+}
+
+#[test]
+fn native_pm_parity_gate_runs_the_full_deterministic_suite_and_timeout_contract() {
+    let workflow = load_workflow();
+    let job: MatrixJob = parse_job(&workflow, NATIVE_PARITY_JOB_ID);
+
+    assert_eq!(job.name, "native-pm-parity (${{ matrix.distro }})");
+    assert_eq!(job.timeout_minutes, 90);
+    assert!(!job.continue_on_error);
+    assert_eq!(job.condition, None);
+    assert!(!job.strategy.fail_fast);
+    assert_eq!(
+        job.strategy.matrix.distro,
+        ["fedora44", "ubuntu-26.04", "arch"]
+    );
+
+    let timeout = named_step(
+        &job.steps,
+        "Prove timed-out exec process groups are terminated and reaped",
+    );
+    assert_eq!(
+        timeout
+            .env
+            .get("CONARY_TEST_TIMEOUT_IMAGE")
+            .map(String::as_str),
+        Some("conary-test-${{ matrix.distro }}:latest")
+    );
+    let timeout_run = timeout.run.as_deref().expect("timeout regression command");
+    assert!(timeout_run.contains("timed_out_container_exec_terminates_and_reaps_process_group"));
+    assert!(timeout_run.contains("--ignored --exact"));
+
+    let parity = named_step(&job.steps, "Run the full deterministic native parity suite");
+    assert_eq!(
+        parity.run.as_deref(),
+        Some(
+            "cargo run -p conary-test -- run --distro \"${{ matrix.distro }}\" --phase 4 --suite phase4-native-pm-parity"
+        )
+    );
+    assert_eq!(
+        parity
+            .env
+            .get("CONARY_TEST_REUSE_IMAGE")
+            .map(String::as_str),
+        Some("1")
+    );
+
+    let evidence = named_step(&job.steps, "Verify full native parity evidence");
+    assert!(
+        evidence
+            .run
+            .as_deref()
+            .is_some_and(|run| run.contains("check-conary-test-result-gate.sh"))
+    );
+
+    let gate: GateJob = parse_job(&workflow, NATIVE_PARITY_GATE_ID);
+    assert_eq!(gate.name, "native-pm-parity");
+    assert_eq!(gate.condition, "${{ always() }}");
+    assert_eq!(gate.needs, NATIVE_PARITY_JOB_ID);
+    assert!(!gate.continue_on_error);
+    let gate_step = named_step(&gate.steps, "Require every full native parity job");
+    assert_eq!(
+        gate_step.env.get("MATRIX_RESULT").map(String::as_str),
+        Some("${{ needs.native-pm-parity.result }}")
     );
 }
 

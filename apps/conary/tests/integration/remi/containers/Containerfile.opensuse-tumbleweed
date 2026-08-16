@@ -34,6 +34,7 @@ RUN /usr/bin/conary --version \
     && command -v find \
     && command -v gpg \
     && command -v python3 \
+    && command -v setsid \
     && test -e /lib64/ld-linux-x86-64.so.2
 
 COPY config.toml /opt/remi-tests/config.toml

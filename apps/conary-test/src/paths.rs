@@ -9,6 +9,8 @@ use std::{
 const WORKSPACE_REMI_ROOT: &str = "apps/conary/tests/integration/remi";
 const WORKSPACE_FIXTURES_ROOT: &str = "apps/conary/tests/fixtures";
 pub(crate) const FIXTURE_CCS_KEY_RELATIVE: &str = "ccs-test-authority/fixture-signing-key.private";
+pub(crate) const FIXTURE_CCS_PUBLIC_KEY_RELATIVE: &str =
+    "ccs-test-authority/fixture-signing-key.public";
 pub(crate) const FIXTURE_CCS_POLICY_RELATIVE: &str = "ccs-test-authority/trust-policy.toml";
 pub(crate) const FIXTURE_CCS_EXPIRED_POLICY_RELATIVE: &str =
     "ccs-test-authority/expired-trust-policy.toml";
@@ -112,6 +114,10 @@ pub(crate) fn fixture_ccs_key_path_for(fixtures_root: &Path) -> PathBuf {
     fixtures_root.join(FIXTURE_CCS_KEY_RELATIVE)
 }
 
+pub(crate) fn fixture_ccs_public_key_path_for(fixtures_root: &Path) -> PathBuf {
+    fixtures_root.join(FIXTURE_CCS_PUBLIC_KEY_RELATIVE)
+}
+
 pub(crate) fn fixture_ccs_policy_path_for(fixtures_root: &Path) -> PathBuf {
     fixtures_root.join(FIXTURE_CCS_POLICY_RELATIVE)
 }
@@ -186,6 +192,10 @@ mod tests {
         assert_eq!(
             fixture_ccs_key_path_for(root),
             root.join("ccs-test-authority/fixture-signing-key.private")
+        );
+        assert_eq!(
+            fixture_ccs_public_key_path_for(root),
+            root.join("ccs-test-authority/fixture-signing-key.public")
         );
         assert_eq!(
             fixture_ccs_policy_path_for(root),

@@ -417,6 +417,7 @@ Each fixture family should record:
   `apps/conary/tests/fixtures/conary-test-fixture/`;
   `apps/conary/tests/fixtures/native/`;
   `apps/conary/tests/fixtures/native-lifecycle-parity/`;
+  `apps/conary/tests/fixtures/phase4-pinned-repository/`;
   `apps/conary/tests/fixtures/phase4-daily-driver-corpus/`;
   `apps/conary/tests/fixtures/phase4-daily-driver-corpus-conflict/`;
   `apps/conary/tests/fixtures/distro-roots/`;
@@ -442,7 +443,13 @@ Each fixture family should record:
   `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro fedora44 --phase 4`
   when behavior changes require live integration proof. Run the focused
   lifecycle suite on every configured target for complete target-image
-  coverage. Linux Mint 22.3 and Pop!_OS 24.04 additionally run
+  coverage. The full native package-manager parity suite builds its signed
+  RPM-, Debian-, or Arch-versioned CCS fixture locally, serves its bounded
+  one-package index through the loopback mock server, and runs on Fedora 44,
+  Ubuntu 26.04, and Arch in the PR gate. Each lane first proves that a timed-out
+  container exec has its process group terminated and reaped; inability to
+  prove cleanup kills the exact container and fails the run. Linux Mint 22.3
+  and Pop!_OS 24.04 additionally run
   `debian-derivative-acceptance`, which exercises their actual APT declarations,
   trust roots, native package adoption, and repository takeover. CachyOS and
   openSUSE Tumbleweed additionally run `rolling-derivative-acceptance`, which

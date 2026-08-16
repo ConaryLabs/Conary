@@ -27,6 +27,12 @@ pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, S
                 .into_owned(),
         );
         vars.insert(
+            "FIXTURE_CCS_PUBLIC_KEY".to_string(),
+            crate::paths::fixture_ccs_public_key_path_for(fixture_root)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        vars.insert(
             "FIXTURE_CCS_POLICY".to_string(),
             crate::paths::fixture_ccs_policy_path_for(fixture_root)
                 .to_string_lossy()
@@ -368,6 +374,10 @@ mod tests {
         assert_eq!(
             vars["FIXTURE_CCS_KEY"],
             "/opt/remi-tests/fixtures/ccs-test-authority/fixture-signing-key.private"
+        );
+        assert_eq!(
+            vars["FIXTURE_CCS_PUBLIC_KEY"],
+            "/opt/remi-tests/fixtures/ccs-test-authority/fixture-signing-key.public"
         );
         assert_eq!(
             vars["FIXTURE_CCS_POLICY"],

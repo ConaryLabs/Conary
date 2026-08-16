@@ -43,6 +43,7 @@ RUN /usr/bin/conary --version \
     && rc-service --version \
     && command -v cmp \
     && command -v diff \
+    && command -v setsid \
     && test -e /lib64/ld-linux-x86-64.so.2 \
     && mkdir -p /run/openrc \
     && printf 'default\n' > /run/openrc/softlevel

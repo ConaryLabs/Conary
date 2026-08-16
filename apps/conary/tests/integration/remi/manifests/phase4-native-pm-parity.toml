@@ -8,6 +8,45 @@ name = "Phase 4: Native Package Manager Parity Matrix"
 phase = 4
 timeout = 3600
 
+[suite.mock_server]
+port = 18083
+
+[[suite.mock_server.routes]]
+path = "/v1/index/fedora?page=1&per_page=128&include=versions"
+status = 200
+body_file = "/tmp/native-pm-pinned-repo/index-fedora.json"
+headers = { "Content-Type" = "application/json" }
+
+[[suite.mock_server.routes]]
+path = "/v1/index/ubuntu?page=1&per_page=128&include=versions"
+status = 200
+body_file = "/tmp/native-pm-pinned-repo/index-ubuntu.json"
+headers = { "Content-Type" = "application/json" }
+
+[[suite.mock_server.routes]]
+path = "/v1/index/arch?page=1&per_page=128&include=versions"
+status = 200
+body_file = "/tmp/native-pm-pinned-repo/index-arch.json"
+headers = { "Content-Type" = "application/json" }
+
+[[suite.mock_server.routes]]
+path = "/v1/fedora/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=x86_64"
+status = 200
+body_file = "/tmp/native-pm-pinned-repo/phase4-repository-fixture-1.0.0-1.ccs"
+headers = { "Content-Type" = "application/octet-stream" }
+
+[[suite.mock_server.routes]]
+path = "/v1/ubuntu/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=amd64"
+status = 200
+body_file = "/tmp/native-pm-pinned-repo/phase4-repository-fixture-1.0.0-1.ccs"
+headers = { "Content-Type" = "application/octet-stream" }
+
+[[suite.mock_server.routes]]
+path = "/v1/arch/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=x86_64"
+status = 200
+body_file = "/tmp/native-pm-pinned-repo/phase4-repository-fixture-1.0.0-1.ccs"
+headers = { "Content-Type" = "application/octet-stream" }
+
 [[suite.setup]]
 conary = "system init"
 
@@ -18,7 +57,13 @@ exit_code = 0
 run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[suite.setup]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --source-profile ${REMI_DISTRO}"
+run = "rm -rf /tmp/native-pm-pinned-repo && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-pinned-remi-fixture.sh ${native_target} /tmp/native-pm-pinned-repo"
+
+[suite.setup.assert]
+exit_code = 0
+
+[[suite.setup]]
+conary = "repo add ${REPO_NAME} http://127.0.0.1:18083 --package-format json --default-strategy remi --remi-endpoint http://127.0.0.1:18083 --ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY} --source-profile ${native_profile}"
 
 [suite.setup.assert]
 exit_code = 0
@@ -45,8 +90,8 @@ native_lifecycle_fidelity = "native-free"
 native_provider_count = "4"
 native_file_provider_count = "3"
 native_file_provider_set = "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h"
-repo_install_pkg = "tree"
-repo_install_path = "/usr/bin/tree"
+repo_install_pkg = "phase4-repository-fixture"
+repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0-1"
 
 [distro_overrides."ubuntu-26.04"]
@@ -65,8 +110,8 @@ native_lifecycle_fidelity = "native-free"
 native_provider_count = "1"
 native_file_provider_count = "0"
 native_file_provider_set = "no file provides"
-repo_install_pkg = "nano"
-repo_install_path = "/usr/bin/nano"
+repo_install_pkg = "phase4-repository-fixture"
+repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0"
 
 [distro_overrides.arch]
@@ -85,8 +130,8 @@ native_lifecycle_fidelity = "native-free"
 native_provider_count = "1"
 native_file_provider_count = "0"
 native_file_provider_set = "no file provides"
-repo_install_pkg = "tree"
-repo_install_path = "/usr/bin/tree"
+repo_install_pkg = "phase4-repository-fixture"
+repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0-1"
 
 # --------------------------------------------------------------------------
@@ -96,7 +141,7 @@ repo_seed_security_version = "9999.0-1"
 [[test]]
 id = "TNPM01"
 name = "repo_sync_and_search"
-description = "Repository metadata sync and search are usable"
+description = "Pinned loopback repository metadata sync and search are usable"
 timeout = 300
 fatal = true
 
@@ -474,7 +519,7 @@ stdout_contains_all = ["Install phase4-runtime-fixture-${native_fixture_version}
 [[test]]
 id = "TNPM10"
 name = "repository_install_and_queries"
-description = "Install a native package from the synced repository and verify daily-driver query commands"
+description = "Install a signed source-scheme CCS package from the pinned repository and verify daily-driver query commands"
 timeout = 240
 fatal = true
 depends_on = ["TNPM09"]

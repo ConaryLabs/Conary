@@ -334,6 +334,63 @@ jobs:
             exit 1
           fi
 
+  native-pm-parity:
+    name: native-pm-parity (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora44, ubuntu-26.04, arch]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup-rust-workspace
+      - name: Require the hosted container runtime
+        run: docker info
+      - uses: ./.github/actions/build-static-conary
+      - name: Build the native parity harness
+        run: cargo build -p conary -p conary-test
+      - uses: ./.github/actions/cache-base-image
+        with:
+          distro: ${{ matrix.distro }}
+      - name: Build the ${{ matrix.distro }} native parity image
+        run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
+      - name: Prove timed-out exec process groups are terminated and reaped
+        env:
+          CONARY_TEST_TIMEOUT_IMAGE: conary-test-${{ matrix.distro }}:latest
+        run: >-
+          cargo test -p conary-test
+          container::lifecycle::tests::timed_out_container_exec_terminates_and_reaps_process_group
+          -- --ignored --exact
+      - name: Run the full deterministic native parity suite
+        env:
+          CONARY_TEST_REUSE_IMAGE: "1"
+        run: >-
+          cargo run -p conary-test --
+          run
+          --distro "${{ matrix.distro }}"
+          --phase 4
+          --suite phase4-native-pm-parity
+      - name: Verify full native parity evidence
+        run: |
+          result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
+          bash scripts/check-conary-test-result-gate.sh "$result"
+
+  native-pm-parity-gate:
+    name: native-pm-parity
+    if: ${{ always() }}
+    needs: native-pm-parity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every full native parity job
+        env:
+          MATRIX_RESULT: ${{ needs.native-pm-parity.result }}
+        run: |
+          if [[ "$MATRIX_RESULT" != "success" ]]; then
+            echo "native package-manager parity matrix result: $MATRIX_RESULT" >&2
+            exit 1
+          fi
+
   doctests:
     name: doctests
     runs-on: ubuntu-latest

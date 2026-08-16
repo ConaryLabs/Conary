@@ -152,6 +152,130 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         );
     }
 
+    let mock_server = parity_manifest
+        .suite
+        .mock_server
+        .as_ref()
+        .expect("native parity must own a pinned loopback repository server");
+    assert_eq!(mock_server.port, 18083);
+    let route_contract = mock_server
+        .routes
+        .iter()
+        .map(|route| {
+            (
+                route.path.as_str(),
+                route.body_file.as_deref(),
+                route.delay_ms,
+            )
+        })
+        .collect::<Vec<_>>();
+    for required in [
+        "/v1/index/fedora?page=1&per_page=128&include=versions",
+        "/v1/index/ubuntu?page=1&per_page=128&include=versions",
+        "/v1/index/arch?page=1&per_page=128&include=versions",
+        "/v1/fedora/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=x86_64",
+        "/v1/ubuntu/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=amd64",
+        "/v1/arch/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=x86_64",
+    ] {
+        assert!(
+            route_contract.iter().any(|(path, body_file, delay)| {
+                *path == required
+                    && body_file.is_some_and(|path| path.starts_with("/tmp/native-pm-pinned-repo/"))
+                    && delay.is_none()
+            }),
+            "native parity must serve the exact bounded route {required}"
+        );
+    }
+    let setup = format!("{:?}", parity_manifest.suite.setup);
+    for required in [
+        "build-pinned-remi-fixture.sh ${native_target}",
+        "http://127.0.0.1:18083",
+        "--ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY}",
+        "--source-profile ${native_profile}",
+    ] {
+        assert!(
+            setup.contains(required),
+            "native parity setup must enforce {required}"
+        );
+    }
+    assert!(
+        !setup.contains("${REMI_ENDPOINT}"),
+        "native parity must not consume the live Remi endpoint"
+    );
+    for distro in ["fedora44", "ubuntu-26.04", "arch"] {
+        let overrides = parity_manifest
+            .distro_overrides
+            .get(distro)
+            .unwrap_or_else(|| panic!("missing {distro} overrides"));
+        assert_eq!(
+            overrides.get("repo_install_pkg").map(String::as_str),
+            Some("phase4-repository-fixture")
+        );
+        assert_eq!(
+            overrides.get("repo_install_path").map(String::as_str),
+            Some("/usr/share/phase4-repository-fixture/probe.txt")
+        );
+    }
+    for (target, expected_scheme, expected_architecture) in [
+        ("rpm", "rpm", "x86_64"),
+        ("deb", "debian", "amd64"),
+        ("arch", "arch", "x86_64"),
+    ] {
+        let fixture = conary_fixture_path(&format!("phase4-pinned-repository/{target}/ccs.toml"));
+        let manifest = conary_core::ccs::manifest::CcsManifest::from_file(&fixture)
+            .unwrap_or_else(|error| panic!("load {}: {error}", fixture.display()));
+        assert_eq!(manifest.package.name, "phase4-repository-fixture");
+        assert_eq!(manifest.package.version, "1.0.0");
+        assert_eq!(manifest.package.release, "1");
+        assert_eq!(manifest.package.version_scheme.as_str(), expected_scheme);
+        assert_eq!(
+            manifest
+                .package
+                .platform
+                .as_ref()
+                .expect("pinned repository fixture must declare a platform")
+                .arch
+                .as_deref(),
+            Some(expected_architecture)
+        );
+    }
+    let pinned_builder =
+        std::fs::read_to_string(conary_fixture_path("native/build-pinned-remi-fixture.sh"))
+            .expect("read pinned Remi fixture builder");
+    for required in [
+        "fixture-signing-key.private",
+        "artifact_size=\"$(stat -c %s \"$artifact\")\"",
+        "\"total\": 1",
+        "\"per_page\": 128",
+        "os.replace(temporary_path, path)",
+    ] {
+        assert!(
+            pinned_builder.contains(required),
+            "pinned Remi builder must enforce {required}"
+        );
+    }
+    let container_root = path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("native parity manifest must live below the Remi integration root")
+        .join("containers");
+    for containerfile in [
+        "Containerfile.fedora44",
+        "Containerfile.ubuntu-26.04",
+        "Containerfile.arch",
+        "Containerfile.artix",
+        "Containerfile.cachyos",
+        "Containerfile.opensuse-tumbleweed",
+        "Containerfile.debian-derivative",
+    ] {
+        let contents = std::fs::read_to_string(container_root.join(containerfile))
+            .unwrap_or_else(|error| panic!("read {containerfile}: {error}"));
+        assert!(
+            contents.contains("command -v setsid"),
+            "{containerfile} must prove the synchronous exec supervisor capability"
+        );
+    }
+
     let daily_driver_path = remi_manifest_path("phase4-native-daily-driver-corpus.toml");
     let manifest = load_manifest(&daily_driver_path).expect("load focused daily-driver manifest");
     let required_coverage = &manifest
