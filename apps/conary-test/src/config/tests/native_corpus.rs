@@ -358,6 +358,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             conary_core::corpus::CorpusSemantic::PayloadDirectories,
             conary_core::corpus::CorpusSemantic::PayloadSymlinks,
             conary_core::corpus::CorpusSemantic::PayloadHardlinks,
+            conary_core::corpus::CorpusSemantic::MetadataOwnership,
+            conary_core::corpus::CorpusSemantic::MetadataTimestamps,
             conary_core::corpus::CorpusSemantic::RelationsVersionedDependency,
             conary_core::corpus::CorpusSemantic::RelationsVirtualProvide,
             conary_core::corpus::CorpusSemantic::ConfigurationMatchedConfig,
@@ -367,6 +369,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     );
     for unproven in [
         conary_core::corpus::CorpusSemantic::PayloadLargeFiles,
+        conary_core::corpus::CorpusSemantic::MetadataXattrs,
+        conary_core::corpus::CorpusSemantic::MetadataCapabilities,
         conary_core::corpus::CorpusSemantic::RelationsConflict,
         conary_core::corpus::CorpusSemantic::LifecycleTrigger,
         conary_core::corpus::CorpusSemantic::RuntimeServiceActivation,
@@ -440,7 +444,10 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "--expect-directory /opt=0750",
         "--expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus",
         "--expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy",
+        "--expect-node-metadata /usr/lib/phase4-corpus/hardlink-anchor=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0",
+        "--expect-node-metadata /usr/lib/phase4-corpus/hardlink-copy=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0",
         "assert-native-hardlink.sh",
+        "hardlink-copy 0 0 1700000000",
         "FILEMODES",
         "/opt|16872|root|root",
         "printf %s conflicting-corpus-payload",
@@ -491,7 +498,11 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         );
     }
 
-    for distro in ["fedora44", "ubuntu-26.04", "arch"] {
+    for (distro, expected_user, expected_group) in [
+        ("fedora44", "numeric:0", "numeric:0"),
+        ("ubuntu-26.04", "numeric:0", "numeric:0"),
+        ("arch", "numeric:0", "numeric:0"),
+    ] {
         let overrides = manifest
             .distro_overrides
             .get(distro)
@@ -503,12 +514,28 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             "native_corpus_lifecycle_fidelity",
             "native_corpus_source_format",
             "native_corpus_target_architecture",
+            "native_corpus_payload_user",
+            "native_corpus_payload_group",
         ] {
             assert!(
                 overrides.contains_key(key),
                 "{distro} overrides should define {key}"
             );
         }
+        assert_eq!(
+            overrides
+                .get("native_corpus_payload_user")
+                .map(String::as_str),
+            Some(expected_user),
+            "{distro} must preserve the source format's typed user identity"
+        );
+        assert_eq!(
+            overrides
+                .get("native_corpus_payload_group")
+                .map(String::as_str),
+            Some(expected_group),
+            "{distro} must preserve the source format's typed group identity"
+        );
     }
 
     let install_case = manifest
@@ -529,7 +556,21 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             conary_core::corpus::ConversionStage::Installation,
         ]
     );
-    assert_eq!(install_case.coverage.len(), 10);
+    assert_eq!(install_case.coverage.len(), 12);
+    for semantic in [
+        conary_core::corpus::CorpusSemantic::MetadataOwnership,
+        conary_core::corpus::CorpusSemantic::MetadataTimestamps,
+    ] {
+        let claim = install_case
+            .coverage
+            .iter()
+            .find(|claim| claim.semantic == semantic)
+            .unwrap_or_else(|| panic!("missing {semantic:?} coverage claim"));
+        assert_eq!(
+            claim.artifact_roles,
+            [conary_core::corpus::SourceArtifactRole::InstallRequest]
+        );
+    }
     let dependency_claim = install_case
         .coverage
         .iter()
@@ -592,6 +633,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "dpkg-deb --extract",
         "bsdtar --extract",
         "stat --format '%d:%i:%h'",
+        "stat --format '%u:%g:%Y'",
+        "expected_metadata",
     ] {
         assert!(
             hardlink_helper.contains(required),
@@ -661,8 +704,11 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             .expect("read selected-generation assertion helper");
     for required in [
         "--expect-hardlink",
+        "--expect-node-metadata",
         "hardlink_identity",
         "content authority is not anchor-only",
+        "expected_payload_identity",
+        "expected_mtime",
     ] {
         assert!(
             selected_generation_helper.contains(required),

@@ -570,6 +570,9 @@ repository, then builds a package in the host-native format and proves:
 - system user and group creation in the selected generation
 - an explicit mode-0750 directory and an exact relative symlink through native
   package metadata and the selected generation
+- exact root ownership and whole-second mtime on both members of one hardlink
+  set, first through independent native extraction and then through typed
+  selected-generation node authority
 - conflict refusal before a conflicting-content native package can mutate
   selected state
 - a 2 MiB payload file through the native package parser and file database
@@ -582,15 +585,19 @@ install record reopens both builders' schema-versioned output manifests,
 hashes the native request and signed dependency artifacts again, and binds its
 versioned-dependency claim to both `install_request` and `install_dependency`.
 The removal record remains request-bound. Across the two completed cases the
-suite declares exactly eleven properties: exact version, native architecture,
-regular files, directories, symlinks, hardlinks, a versioned dependency, a
-queried virtual provide, matched config, purge-time config removal, and shell
-lifecycle. Directory, symlink, hardlink, and relation claims require direct
-native metadata, selected-generation, repository-provenance, and installed
-reason assertions; implicit parents, followed filesystem paths, and recorded
-metadata without a completed resolution do not count. The source format comes
-from the explicit distro build-context override and must resolve to the closed
-RPM/DEB/ALPM type before evidence can count.
+suite declares exactly thirteen properties: exact version, native architecture,
+regular files, directories, symlinks, hardlinks, payload ownership, payload
+timestamps, a versioned dependency, a queried virtual provide, matched config,
+purge-time config removal, and shell lifecycle. Directory, symlink, hardlink,
+metadata, and relation claims require direct native metadata,
+selected-generation, repository-provenance, and installed reason assertions;
+implicit parents, followed filesystem paths, and recorded metadata without a
+completed resolution do not count. The selected-generation assertion requires
+the exact numeric uid/gid authority observed after the native package enters
+the target transaction; it does not infer a named identity from RPM's display
+metadata. The source format comes from the explicit distro build-context
+override and must resolve to the closed RPM/DEB/ALPM type before evidence can
+count.
 
 RPM export emits a directory entry when its mode differs from the implicit
 0755 parent contract or no descendant can create it. Default-mode parents of
@@ -602,8 +609,9 @@ Several useful assertions deliberately remain outside semantic coverage. The
 Conary changeset trigger is not a source-package trigger; the disabled systemd
 unit is not activation; the kernel-adjacent file is not an executed target
 helper; and a conflicting-content refusal is not a declared native relation
-conflict. Those properties still require fixtures that prove their exact
-contracts.
+conflict. Root ownership does not establish xattr or capability coverage, and
+selected-generation metadata does not establish live-root materialization.
+Those properties still require fixtures that prove their exact contracts.
 
 The PR gate also runs the focused `phase4-native-daily-driver-corpus` manifest on
 Fedora 44, Ubuntu 26.04, and Arch in a non-fail-fast matrix, then applies both
