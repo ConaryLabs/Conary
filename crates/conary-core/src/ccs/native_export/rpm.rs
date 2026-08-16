@@ -6,7 +6,7 @@
 
 use super::{CommonHookGenerator, GenerationResult, HookConverter, LossReport, arch_for_format};
 use crate::ccs::builder::BuildResult;
-use crate::ccs::manifest::Hooks;
+use crate::ccs::manifest::{Hooks, RpmDependency, RpmDependencyRelation};
 use crate::payload::PayloadNodeKind;
 use anyhow::{Context, Result};
 use rpm::PackageBuilder;
@@ -127,8 +127,8 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
         }
 
         // Add explicit requires
-        for req in &rpm_export.requires {
-            builder.requires(rpm::Dependency::any(req));
+        for requirement in &rpm_export.requires {
+            builder.requires(rpm_dependency(requirement)?);
         }
 
         // Add explicit provides
@@ -369,6 +369,44 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     Ok(GenerationResult { size, loss_report })
 }
 
+fn rpm_dependency(requirement: &RpmDependency) -> Result<rpm::Dependency> {
+    let name = requirement.name.trim();
+    if name.is_empty() {
+        anyhow::bail!("RPM export dependency name must not be empty");
+    }
+
+    let version = || {
+        requirement
+            .version
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("RPM export dependency '{name}' requires a version"))
+            .and_then(|value| rpm_dependency_version(name, value))
+    };
+    Ok(match requirement.relation {
+        RpmDependencyRelation::Any => {
+            if requirement.version.is_some() {
+                anyhow::bail!(
+                    "RPM export unversioned dependency '{name}' must not declare a version"
+                );
+            }
+            rpm::Dependency::any(name)
+        }
+        RpmDependencyRelation::Equal => rpm::Dependency::eq(name, version()?),
+        RpmDependencyRelation::Less => rpm::Dependency::less(name, version()?),
+        RpmDependencyRelation::LessOrEqual => rpm::Dependency::less_eq(name, version()?),
+        RpmDependencyRelation::Greater => rpm::Dependency::greater(name, version()?),
+        RpmDependencyRelation::GreaterOrEqual => rpm::Dependency::greater_eq(name, version()?),
+    })
+}
+
+fn rpm_dependency_version<'a>(name: &str, value: &'a str) -> Result<&'a str> {
+    let value = value.trim();
+    if value.is_empty() {
+        anyhow::bail!("RPM export dependency '{name}' has an empty version");
+    }
+    Ok(value)
+}
+
 fn hardlink_file_options(
     options: rpm::FileOptionsBuilder,
     node: &crate::payload::PayloadNode,
@@ -431,7 +469,7 @@ fn payload_kind_name(kind: &PayloadNodeKind) -> &'static str {
 mod tests {
     use super::*;
     use crate::ccs::builder::FileEntry;
-    use crate::ccs::manifest::CcsManifest;
+    use crate::ccs::manifest::{CcsManifest, NativeExport, RpmExport};
     use crate::packages::PackageFormat;
     use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};
     use std::collections::HashMap;
@@ -481,6 +519,73 @@ mod tests {
         let gen_result = generate(&result, &output_path).unwrap();
         assert!(output_path.exists());
         assert!(gen_result.size > 0);
+    }
+
+    #[test]
+    fn rpm_versioned_dependency_round_trips_as_typed_header_authority() {
+        let mut result = create_test_build_result();
+        result.manifest.native_export = Some(NativeExport {
+            rpm: Some(RpmExport {
+                requires: vec![RpmDependency {
+                    name: "phase4-repository-fixture".to_string(),
+                    relation: RpmDependencyRelation::Equal,
+                    version: Some("1.0.0-1".to_string()),
+                }],
+                ..RpmExport::default()
+            }),
+            ..NativeExport::default()
+        });
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("versioned-dependency.rpm");
+
+        generate(&result, &output_path).unwrap();
+        let package = crate::packages::rpm::RpmPackage::parse(output_path.to_str().unwrap())
+            .expect("parse generated RPM");
+        let requirement = package
+            .requirements()
+            .iter()
+            .find(|group| {
+                group
+                    .alternatives
+                    .iter()
+                    .any(|clause| clause.name == "phase4-repository-fixture")
+            })
+            .expect("versioned RPM dependency");
+        assert_eq!(requirement.alternatives.len(), 1);
+        assert_eq!(
+            requirement.alternatives[0].version_constraint.as_deref(),
+            Some("= 1.0.0-1")
+        );
+    }
+
+    #[test]
+    fn rpm_versioned_dependency_rejects_empty_authority() {
+        for requirement in [
+            RpmDependency {
+                name: " ".to_string(),
+                relation: RpmDependencyRelation::Any,
+                version: None,
+            },
+            RpmDependency {
+                name: "phase4-repository-fixture".to_string(),
+                relation: RpmDependencyRelation::Equal,
+                version: Some(" ".to_string()),
+            },
+        ] {
+            let mut result = create_test_build_result();
+            result.manifest.native_export = Some(NativeExport {
+                rpm: Some(RpmExport {
+                    requires: vec![requirement],
+                    ..RpmExport::default()
+                }),
+                ..NativeExport::default()
+            });
+            let temp_dir = TempDir::new().unwrap();
+            let output_path = temp_dir.path().join("invalid-dependency.rpm");
+
+            assert!(generate(&result, &output_path).is_err());
+            assert!(!output_path.exists());
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-16
 revision: 25
-summary: Track Conary's active W7 deterministic native-parity slice, typed semantic coverage, external tester milestone, and later workstreams
+summary: Track Conary's active W7 versioned-dependency corpus slice, typed semantic coverage, external tester milestone, and later workstreams
 proof_baseline: "immutable synchronized v0.15.0 suite at 642750878d5a59a9aa27976347cafc6f9dd86cfd; exact tagged Remi deployed; external tester result remains 0/10 behind #110"
 current_milestone: first external tester loop
 active_workstream: W7 Just-Works Corpus Gate
@@ -318,14 +318,16 @@ the stated scope, not whether a workstream happens to be active.
   makes the daily-driver native fixture attributable in one focused local
   manifest. #463 adds exact directory and symlink topology to that same
   digest-bound chain. #462 and #464 add exact hardlink and root-directory export
-  with hosted inode and RPM parser proof. #460 now pins the legacy provider-set
-  contract per source format but remains open for the full matrix. #461 is the
-  active slice removing live repository-sync nondeterminism and host-PID timeout
-  cleanup from that terminal parity proof. The #458 discovery run filed both
-  defects rather than folding them into the focused W7 gate.
+  with hosted inode and RPM parser proof. #460 and #461 are closed: the legacy
+  provider contract is exact per source format and the full parity matrix now
+  uses a signed loopback repository plus process-group timeout cleanup. #470 is
+  the active slice making one exact versioned dependency resolve, acquire, and
+  install from that repository with both artifacts bound to typed corpus
+  evidence.
 - **Issues:** #110 as the corpus umbrella; #458 and #463 for focused
   daily-driver attribution; #462 and #464 for payload-topology export gaps;
-  #460 and #461 for exact legacy parity defects; plus #39 for bootstrap.
+  #460 and #461 for closed legacy parity defects; #470 for versioned dependency
+  resolution; plus #39 for bootstrap.
 - **User journey:** install the signed release through one documented bootstrap
   entry point; `conary system init` with no hand-edited state; sync and
   authenticate repositories; request a package by ordinary name; resolve the

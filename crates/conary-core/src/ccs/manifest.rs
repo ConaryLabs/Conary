@@ -575,10 +575,38 @@ pub struct RpmExport {
     pub group: Option<String>,
 
     #[serde(default)]
-    pub requires: Vec<String>,
+    pub requires: Vec<RpmDependency>,
 
     #[serde(default)]
     pub provides: Vec<String>,
+}
+
+/// One exact RPM dependency header declaration.
+///
+/// Keep the operator typed: passing an RPM-spec expression to
+/// `rpm::Dependency::any` encodes the entire expression as an unversioned
+/// dependency name rather than as a version constraint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpmDependency {
+    pub name: String,
+
+    pub relation: RpmDependencyRelation,
+
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+/// RPM comparison flags. Every relation except `any` requires a version.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RpmDependencyRelation {
+    Any,
+    Equal,
+    Less,
+    LessOrEqual,
+    Greater,
+    GreaterOrEqual,
 }
 
 /// Debian-specific export overrides.

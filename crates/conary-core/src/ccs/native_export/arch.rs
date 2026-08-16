@@ -429,7 +429,7 @@ mod tests {
         let mut result = create_test_build_result();
         result.manifest.native_export = Some(NativeExport {
             arch: Some(ArchExport {
-                depends: vec!["bash".to_string()],
+                depends: vec!["phase4-repository-fixture=1.0.0-1".to_string()],
                 provides: vec!["virtual-test-tool".to_string()],
                 ..ArchExport::default()
             }),
@@ -442,7 +442,21 @@ mod tests {
         let package = crate::packages::arch::ArchPackage::parse(output_path.to_str().unwrap())
             .expect("parse generated Arch package");
 
-        assert_eq!(package.requirements().len(), 1);
+        let requirement = package
+            .requirements()
+            .iter()
+            .find(|group| {
+                group
+                    .alternatives
+                    .iter()
+                    .any(|clause| clause.name == "phase4-repository-fixture")
+            })
+            .expect("versioned Arch dependency");
+        assert_eq!(requirement.alternatives.len(), 1);
+        assert_eq!(
+            requirement.alternatives[0].version_constraint.as_deref(),
+            Some("= 1.0.0-1")
+        );
         assert!(
             package
                 .resolution_capabilities()

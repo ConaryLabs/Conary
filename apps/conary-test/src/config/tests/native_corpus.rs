@@ -268,6 +268,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "\"download_url\": f\"{repository_url}/{artifact.name}\"",
         "\"requirements\": []",
         "\"relations\": []",
+        "pinned-binary-fixture-manifest.json",
+        "\"schema_version\": 1",
         "os.replace(temporary_path, path)",
     ] {
         assert!(
@@ -355,6 +357,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             conary_core::corpus::CorpusSemantic::PayloadDirectories,
             conary_core::corpus::CorpusSemantic::PayloadSymlinks,
             conary_core::corpus::CorpusSemantic::PayloadHardlinks,
+            conary_core::corpus::CorpusSemantic::RelationsVersionedDependency,
             conary_core::corpus::CorpusSemantic::RelationsVirtualProvide,
             conary_core::corpus::CorpusSemantic::ConfigurationMatchedConfig,
             conary_core::corpus::CorpusSemantic::ConfigurationRemoval,
@@ -420,6 +423,9 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "phase4-corpus-user",
         "phase4-corpus-group",
         "${native_corpus_dependency_probe}",
+        "phase4-repository-fixture|= 1.0.0-1",
+        "|repository|dependency",
+        "/usr/share/phase4-repository-fixture/probe.txt",
         "/var/lib/phase4-corpus/scriptlet.marker",
         "/var/lib/phase4-corpus/remove.marker",
         "phase4-corpus-conflict",
@@ -443,10 +449,44 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "--from ${native_profile}",
         "query whatprovides 'virtual(phase4-corpus-tool)'",
         "0 config rows",
+        "--dependency-fixture-manifest",
+        "resolution",
     ] {
         assert!(
             rendered.contains(required),
             "daily-driver corpus should cover {required}"
+        );
+    }
+    let daily_driver_setup = format!("{:?}", manifest.suite.setup);
+    for required in [
+        "build-pinned-binary-fixture.sh ${native_target}",
+        "http://127.0.0.1:18084",
+        "--default-strategy binary",
+        "--ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY}",
+        "repo sync ${REPO_NAME} --force",
+    ] {
+        assert!(
+            daily_driver_setup.contains(required),
+            "daily-driver dependency setup must enforce {required}"
+        );
+    }
+    assert!(
+        !daily_driver_setup.contains("${REMI_ENDPOINT}"),
+        "daily-driver dependency proof must not consume the live Remi endpoint"
+    );
+    let mock_server = manifest
+        .suite
+        .mock_server
+        .as_ref()
+        .expect("daily-driver dependency proof needs a pinned loopback repository");
+    assert_eq!(mock_server.port, 18084);
+    for required in ["/metadata.json", "/phase4-repository-fixture-1.0.0-1.ccs"] {
+        assert!(
+            mock_server
+                .routes
+                .iter()
+                .any(|route| route.path == required),
+            "daily-driver dependency proof must serve {required}"
         );
     }
 
@@ -483,13 +523,33 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     );
     assert_eq!(
         install_case.stages,
-        [conary_core::corpus::ConversionStage::Installation]
+        [
+            conary_core::corpus::ConversionStage::Resolution,
+            conary_core::corpus::ConversionStage::Installation,
+        ]
     );
-    assert_eq!(install_case.coverage.len(), 9);
+    assert_eq!(install_case.coverage.len(), 10);
+    let dependency_claim = install_case
+        .coverage
+        .iter()
+        .find(|claim| {
+            claim.semantic == conary_core::corpus::CorpusSemantic::RelationsVersionedDependency
+        })
+        .expect("versioned dependency coverage claim");
+    assert_eq!(
+        dependency_claim.artifact_roles,
+        [
+            conary_core::corpus::SourceArtifactRole::InstallRequest,
+            conary_core::corpus::SourceArtifactRole::InstallDependency,
+        ]
+    );
     assert!(
         install_case
             .coverage
             .iter()
+            .filter(|claim| {
+                claim.semantic != conary_core::corpus::CorpusSemantic::RelationsVersionedDependency
+            })
             .all(|claim| claim.artifact_roles
                 == [conary_core::corpus::SourceArtifactRole::InstallRequest])
     );
@@ -566,10 +626,11 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             .expect("read primary daily-driver fixture");
     for required in [
         "[native_export.rpm]",
-        "requires = [\"bash\"]",
+        "requires = [{ name = \"phase4-repository-fixture\", relation = \"equal\", version = \"1.0.0-1\" }]",
         "[native_export.deb]",
+        "depends = [\"phase4-repository-fixture (= 1.0.0-1)\"]",
         "[native_export.arch]",
-        "depends = [\"bash\"]",
+        "depends = [\"phase4-repository-fixture=1.0.0-1\"]",
         "provides = [\"phase4-corpus-tool\"]",
     ] {
         assert!(
@@ -616,6 +677,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "schema_version",
         "sha256(artifact_path)",
         "fixture_build_manifest",
+        "install_dependency",
+        "dependency artifact identity requires all dependency arguments",
         "os.replace",
     ] {
         assert!(
@@ -623,6 +686,113 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             "native corpus evidence writer should enforce {required}"
         );
     }
+}
+
+#[test]
+fn corpus_evidence_writer_binds_request_and_dependency_to_exact_digests() {
+    let directory = tempfile::tempdir().expect("create evidence test directory");
+    let request_artifact = directory.path().join("request.rpm");
+    let dependency_artifact = directory.path().join("dependency.ccs");
+    std::fs::write(&request_artifact, b"exact native request").unwrap();
+    std::fs::write(&dependency_artifact, b"exact signed dependency").unwrap();
+
+    let request_manifest = directory.path().join("request-manifest.json");
+    let dependency_manifest = directory.path().join("dependency-manifest.json");
+    for (manifest, artifact, target) in [
+        (&request_manifest, &request_artifact, "rpm"),
+        (&dependency_manifest, &dependency_artifact, "rpm"),
+    ] {
+        std::fs::write(
+            manifest,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "artifact_path": artifact,
+                "builder_target": target,
+                "sha256": conary_core::hash::sha256(&std::fs::read(artifact).unwrap()),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    let evidence_path = directory.path().join("evidence.json");
+    let script = conary_fixture_path("native/write-corpus-evidence.py");
+    let output = std::process::Command::new("python3")
+        .arg(&script)
+        .args([
+            request_manifest.as_os_str(),
+            evidence_path.as_os_str(),
+            "fedora-44".as_ref(),
+            "rpm".as_ref(),
+            "phase4-daily-driver-corpus".as_ref(),
+            "1.0.0-1".as_ref(),
+            "x86_64".as_ref(),
+            "resolution".as_ref(),
+            "installation".as_ref(),
+            "--dependency-fixture-manifest".as_ref(),
+            dependency_manifest.as_os_str(),
+            "--dependency-name".as_ref(),
+            "phase4-repository-fixture".as_ref(),
+            "--dependency-version".as_ref(),
+            "1.0.0-1".as_ref(),
+            "--dependency-architecture".as_ref(),
+            "x86_64".as_ref(),
+        ])
+        .output()
+        .expect("run evidence writer");
+    assert!(
+        output.status.success(),
+        "evidence writer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let evidence: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&evidence_path).unwrap()).unwrap();
+    assert_eq!(
+        evidence["completed_stages"],
+        serde_json::json!(["resolution", "installation"])
+    );
+    let artifacts = evidence["source_artifacts"].as_array().unwrap();
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(artifacts[0]["role"], "install_request");
+    assert_eq!(artifacts[1]["role"], "install_dependency");
+    assert_eq!(
+        artifacts[0]["digest"],
+        conary_core::hash::sha256(&std::fs::read(&request_artifact).unwrap())
+    );
+    assert_eq!(
+        artifacts[1]["digest"],
+        conary_core::hash::sha256(&std::fs::read(&dependency_artifact).unwrap())
+    );
+
+    std::fs::write(&dependency_artifact, b"mutated dependency").unwrap();
+    let contradiction = std::process::Command::new("python3")
+        .arg(script)
+        .args([
+            request_manifest.as_os_str(),
+            evidence_path.as_os_str(),
+            "fedora-44".as_ref(),
+            "rpm".as_ref(),
+            "request".as_ref(),
+            "1".as_ref(),
+            "x86_64".as_ref(),
+            "installation".as_ref(),
+            "--dependency-fixture-manifest".as_ref(),
+            dependency_manifest.as_os_str(),
+            "--dependency-name".as_ref(),
+            "dependency".as_ref(),
+            "--dependency-version".as_ref(),
+            "1".as_ref(),
+            "--dependency-architecture".as_ref(),
+            "x86_64".as_ref(),
+        ])
+        .output()
+        .expect("run contradictory evidence writer");
+    assert!(!contradiction.status.success());
+    assert!(
+        String::from_utf8_lossy(&contradiction.stderr)
+            .contains("artifact digest contradicts its build manifest")
+    );
 }
 
 #[test]
