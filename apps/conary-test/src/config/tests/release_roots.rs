@@ -156,6 +156,27 @@ fn rolling_takeover_helper_uses_typed_configuration_not_distro_names() {
 }
 
 #[test]
+fn tumbleweed_image_build_avoids_mirror_skew_without_rewriting_repository_authority() {
+    let path = integration_root().join("containers/Containerfile.opensuse-tumbleweed");
+    let source = std::fs::read_to_string(&path).expect("read Tumbleweed Containerfile");
+    let backup = source
+        .find("cp -a /etc/zypp/repos.d /tmp/zypp-repos.d.pinned")
+        .expect("repository declaration backup");
+    let origin = source
+        .find("https://downloadcontent.opensuse.org/")
+        .expect("official openSUSE origin");
+    let install = source
+        .find("zypper --non-interactive install --no-recommends")
+        .expect("build dependency transaction");
+    let restore = source
+        .find("cp -a /tmp/zypp-repos.d.pinned/. /etc/zypp/repos.d/")
+        .expect("repository declaration restoration");
+
+    assert!(backup < origin && origin < install && install < restore);
+    assert!(source[restore..].contains("rm -rf /tmp/zypp-repos.d.pinned"));
+}
+
+#[test]
 fn derivative_takeover_helper_is_data_driven_and_typed() {
     let path =
         integration_root().join("../../fixtures/distro-roots/run-apt-repository-takeover.py");
