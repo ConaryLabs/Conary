@@ -14,6 +14,7 @@ required = [
     "payload_files",
     "payload_directories",
     "payload_symlinks",
+    "payload_hardlinks",
     "relations_virtual_provide",
     "configuration_matched_config",
     "configuration_removal",
@@ -84,13 +85,19 @@ native_corpus_target_architecture = "x86_64"
 [[test]]
 id = "TNPM13"
 name = "daily_driver_corpus_build"
-description = "Build a curated native package corpus with service, config, dependency, scriptlet, alternative target, large payload, and kernel-adjacent files"
+description = "Build a curated native package corpus with hardlinks, service, config, dependency, scriptlet, alternative target, large payload, and kernel-adjacent files"
 group = "daily-driver-corpus"
 timeout = 240
 fatal = true
 
 [[test.step]]
-run = "rm -rf /tmp/native-pm-corpus /tmp/native-pm-corpus-src /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && cp -a /opt/remi-tests/fixtures/phase4-daily-driver-corpus /tmp/native-pm-corpus-src && mkdir -p /tmp/native-pm-corpus-src/stage/usr/share/phase4-corpus /tmp/native-pm-corpus-src/stage/usr/lib/phase4-corpus/state && chmod 0750 /tmp/native-pm-corpus-src/stage/usr/lib/phase4-corpus/state && ln -s phase4-corpus /tmp/native-pm-corpus-src/stage/usr/bin/phase4-corpus-link && dd if=/dev/zero of=/tmp/native-pm-corpus-src/stage/usr/share/phase4-corpus/large-payload.bin bs=1048576 count=2 && mkdir -p /tmp/native-pm-corpus && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-corpus /tmp/native-pm-corpus-src && . /tmp/native-pm-corpus/native-fixture.env && test -f \"$NATIVE_PKG_FILE\" && test \"$NATIVE_TARGET\" = \"${native_target}\" && test ${#NATIVE_PKG_SHA256} -eq 64 && case \"$NATIVE_PKG_FILE\" in /tmp/native-pm-corpus/${native_glob}) true ;; *) echo \"unexpected native corpus package path: $NATIVE_PKG_FILE\"; exit 1 ;; esac"
+run = "rm -rf /tmp/native-pm-corpus /tmp/native-pm-corpus-src /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && cp -a /opt/remi-tests/fixtures/phase4-daily-driver-corpus /tmp/native-pm-corpus-src && mkdir -p /tmp/native-pm-corpus-src/stage/usr/share/phase4-corpus /tmp/native-pm-corpus-src/stage/usr/lib/phase4-corpus/state && chmod 0750 /tmp/native-pm-corpus-src/stage/usr/lib/phase4-corpus/state && ln -s phase4-corpus /tmp/native-pm-corpus-src/stage/usr/bin/phase4-corpus-link && printf 'shared hardlink corpus payload\\n' > /tmp/native-pm-corpus-src/stage/usr/lib/phase4-corpus/hardlink-anchor && ln /tmp/native-pm-corpus-src/stage/usr/lib/phase4-corpus/hardlink-anchor /tmp/native-pm-corpus-src/stage/usr/lib/phase4-corpus/hardlink-copy && touch -d @1700000000 /tmp/native-pm-corpus-src/stage/usr/lib/phase4-corpus/hardlink-anchor && dd if=/dev/zero of=/tmp/native-pm-corpus-src/stage/usr/share/phase4-corpus/large-payload.bin bs=1048576 count=2 && mkdir -p /tmp/native-pm-corpus && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-corpus /tmp/native-pm-corpus-src && . /tmp/native-pm-corpus/native-fixture.env && test -f \"$NATIVE_PKG_FILE\" && test \"$NATIVE_TARGET\" = \"${native_target}\" && test ${#NATIVE_PKG_SHA256} -eq 64 && case \"$NATIVE_PKG_FILE\" in /tmp/native-pm-corpus/${native_glob}) true ;; *) echo \"unexpected native corpus package path: $NATIVE_PKG_FILE\"; exit 1 ;; esac"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = ". /tmp/native-pm-corpus/native-fixture.env && rm -rf /tmp/native-pm-corpus-hardlink-root && /opt/remi-tests/fixtures/native/assert-native-hardlink.sh \"$NATIVE_TARGET\" \"$NATIVE_PKG_FILE\" /tmp/native-pm-corpus-hardlink-root /usr/lib/phase4-corpus/hardlink-anchor /usr/lib/phase4-corpus/hardlink-copy"
 
 [test.step.assert]
 exit_code = 0
@@ -101,7 +108,7 @@ exit_code = 0
 [[test]]
 id = "TNPM14"
 name = "daily_driver_corpus_install_and_surface"
-description = "Install the corpus package and verify its daily-driver files, service unit, users/groups, trigger, and scriptlet side effects"
+description = "Install the corpus package and verify its hardlink, daily-driver files, service unit, users/groups, trigger, and scriptlet side effects"
 group = "daily-driver-corpus"
 timeout = 240
 fatal = true
@@ -122,7 +129,7 @@ exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-daily-driver-corpus"]
 
 [[test.step]]
-run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus --expect-directory /usr/lib/phase4-corpus/state=0750 --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus --expect-directory /usr/lib/phase4-corpus/state=0750 --expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group"
 
 [test.step.assert]
 exit_code = 0
@@ -152,7 +159,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["6 regular files", "/etc/phase4-corpus/app.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
+stdout_contains_all = ["7 regular files", "/etc/phase4-corpus/app.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || printf('%04o', json_extract(payload_node_json, '$.source.mode') & 4095) FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path = '/usr/lib/phase4-corpus/state'; SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || json_extract(payload_node_json, '$.source.kind.target') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path = '/usr/bin/phase4-corpus-link'\""
@@ -160,6 +167,13 @@ run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || json_extract(payload_node_json
 [test.step.assert]
 exit_code = 0
 stdout_contains_all = ["/usr/lib/phase4-corpus/state|directory|0750", "/usr/bin/phase4-corpus-link|symlink|phase4-corpus"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' hardlinks' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'hardlink'; SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/usr/lib/phase4-corpus/hardlink-anchor', '/usr/lib/phase4-corpus/hardlink-copy') ORDER BY path\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["1 hardlinks", "/usr/lib/phase4-corpus/hardlink-anchor|", "/usr/lib/phase4-corpus/hardlink-copy|"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' requirement groups' FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT COALESCE((SELECT group_concat(kind || '|' || version_scheme || '|' || requirement_json, char(10)) FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY id), 'no-deps')\""
@@ -234,6 +248,10 @@ semantic = "payload_symlinks"
 artifact_roles = ["install_request"]
 
 [[test.corpus.coverage]]
+semantic = "payload_hardlinks"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
 semantic = "relations_virtual_provide"
 artifact_roles = ["install_request"]
 
@@ -257,7 +275,7 @@ conary = "list phase4-daily-driver-corpus --files"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["/usr/bin/phase4-corpus", "/usr/bin/phase4-corpus-alt", "/usr/bin/phase4-corpus-link", "/usr/lib/phase4-corpus/state", "/etc/phase4-corpus/app.conf", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin", "/usr/lib/kernel/install.d/95-phase4-corpus.install"]
+stdout_contains_all = ["/usr/bin/phase4-corpus", "/usr/bin/phase4-corpus-alt", "/usr/bin/phase4-corpus-link", "/usr/lib/phase4-corpus/state", "/usr/lib/phase4-corpus/hardlink-anchor", "/usr/lib/phase4-corpus/hardlink-copy", "/etc/phase4-corpus/app.conf", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin", "/usr/lib/kernel/install.d/95-phase4-corpus.install"]
 
 [[test.step]]
 conary = "list --path /usr/bin/phase4-corpus-alt"
@@ -369,7 +387,7 @@ exit_code = 0
 stdout_contains = "Removed package: phase4-daily-driver-corpus version ${native_corpus_fixture_version}"
 
 [[test.step]]
-run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-corpus/remove.marker=e1f79758cc42e6fe6037941205d1fbc37f5780f13aa077d0ba8287fd93cecd52 --absent /usr/bin/phase4-corpus --absent /usr/bin/phase4-corpus-alt --absent /usr/bin/phase4-corpus-link --absent /usr/lib/phase4-corpus/state --absent /etc/phase4-corpus/app.conf --absent /usr/lib/systemd/system/phase4-corpus.service --absent /usr/lib/kernel/install.d/95-phase4-corpus.install --absent /usr/share/phase4-corpus/large-payload.bin"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-corpus/remove.marker=e1f79758cc42e6fe6037941205d1fbc37f5780f13aa077d0ba8287fd93cecd52 --absent /usr/bin/phase4-corpus --absent /usr/bin/phase4-corpus-alt --absent /usr/bin/phase4-corpus-link --absent /usr/lib/phase4-corpus/state --absent /usr/lib/phase4-corpus/hardlink-anchor --absent /usr/lib/phase4-corpus/hardlink-copy --absent /etc/phase4-corpus/app.conf --absent /usr/lib/systemd/system/phase4-corpus.service --absent /usr/lib/kernel/install.d/95-phase4-corpus.install --absent /usr/share/phase4-corpus/large-payload.bin"
 
 [test.step.assert]
 exit_code = 0
