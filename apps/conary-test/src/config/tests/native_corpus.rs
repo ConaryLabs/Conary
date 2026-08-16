@@ -161,6 +161,17 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             "TNPM04 must enforce the source-format and payload-owned provider contract {required}"
         );
     }
+    let deferred_follow_up = parity_manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM09")
+        .expect("Phase 4 native PM parity must include TNPM09");
+    let deferred_rendered = format!("{deferred_follow_up:?}");
+    assert!(
+        deferred_rendered.contains("generation_publication")
+            && !deferred_rendered.contains("generation_rebuild"),
+        "TNPM09 must assert the canonical generation-publication follow-up kind"
+    );
 
     let mock_server = parity_manifest
         .suite
