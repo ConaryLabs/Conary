@@ -194,14 +194,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             )
         })
         .collect::<Vec<_>>();
-    for required in [
-        "/v1/index/fedora?page=1&per_page=128&include=versions",
-        "/v1/index/ubuntu?page=1&per_page=128&include=versions",
-        "/v1/index/arch?page=1&per_page=128&include=versions",
-        "/v1/fedora/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=x86_64",
-        "/v1/ubuntu/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=amd64",
-        "/v1/arch/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=x86_64",
-    ] {
+    for required in ["/metadata.json", "/phase4-repository-fixture-1.0.0-1.ccs"] {
         assert!(
             route_contract.iter().any(|(path, body_file, delay)| {
                 *path == required
@@ -213,8 +206,9 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     }
     let setup = format!("{:?}", parity_manifest.suite.setup);
     for required in [
-        "build-pinned-remi-fixture.sh ${native_target}",
+        "build-pinned-binary-fixture.sh ${native_target}",
         "http://127.0.0.1:18083",
+        "--default-strategy binary",
         "--ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY}",
         "--source-profile ${native_profile}",
     ] {
@@ -265,21 +259,20 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         );
     }
     let pinned_builder =
-        std::fs::read_to_string(conary_fixture_path("native/build-pinned-remi-fixture.sh"))
-            .expect("read pinned Remi fixture builder");
+        std::fs::read_to_string(conary_fixture_path("native/build-pinned-binary-fixture.sh"))
+            .expect("read pinned binary fixture builder");
     for required in [
         "fixture-signing-key.private",
-        "artifact_size=\"$(stat -c %s \"$artifact\")\"",
-        "\"total\": 1",
-        "\"per_page\": 128",
-        "\"kind\": \"package\"",
-        "\"version_relation\": \"equal\"",
-        "\"architecture_qualifier\": {\"kind\": \"implicit\"}",
+        "hashlib.sha256(artifact_bytes).hexdigest()",
+        "\"security_advisory_source\": None",
+        "\"download_url\": f\"{repository_url}/{artifact.name}\"",
+        "\"requirements\": []",
+        "\"relations\": []",
         "os.replace(temporary_path, path)",
     ] {
         assert!(
             pinned_builder.contains(required),
-            "pinned Remi builder must enforce {required}"
+            "pinned binary builder must enforce {required}"
         );
     }
     let container_root = path

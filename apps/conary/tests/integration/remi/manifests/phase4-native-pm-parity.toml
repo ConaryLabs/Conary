@@ -12,37 +12,13 @@ timeout = 3600
 port = 18083
 
 [[suite.mock_server.routes]]
-path = "/v1/index/fedora?page=1&per_page=128&include=versions"
+path = "/metadata.json"
 status = 200
-body_file = "/tmp/native-pm-pinned-repo/index-fedora.json"
+body_file = "/tmp/native-pm-pinned-repo/metadata.json"
 headers = { "Content-Type" = "application/json" }
 
 [[suite.mock_server.routes]]
-path = "/v1/index/ubuntu?page=1&per_page=128&include=versions"
-status = 200
-body_file = "/tmp/native-pm-pinned-repo/index-ubuntu.json"
-headers = { "Content-Type" = "application/json" }
-
-[[suite.mock_server.routes]]
-path = "/v1/index/arch?page=1&per_page=128&include=versions"
-status = 200
-body_file = "/tmp/native-pm-pinned-repo/index-arch.json"
-headers = { "Content-Type" = "application/json" }
-
-[[suite.mock_server.routes]]
-path = "/v1/fedora/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=x86_64"
-status = 200
-body_file = "/tmp/native-pm-pinned-repo/phase4-repository-fixture-1.0.0-1.ccs"
-headers = { "Content-Type" = "application/octet-stream" }
-
-[[suite.mock_server.routes]]
-path = "/v1/ubuntu/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=amd64"
-status = 200
-body_file = "/tmp/native-pm-pinned-repo/phase4-repository-fixture-1.0.0-1.ccs"
-headers = { "Content-Type" = "application/octet-stream" }
-
-[[suite.mock_server.routes]]
-path = "/v1/arch/packages/phase4-repository-fixture/download?version=1.0.0&release=1&arch=x86_64"
+path = "/phase4-repository-fixture-1.0.0-1.ccs"
 status = 200
 body_file = "/tmp/native-pm-pinned-repo/phase4-repository-fixture-1.0.0-1.ccs"
 headers = { "Content-Type" = "application/octet-stream" }
@@ -57,13 +33,13 @@ exit_code = 0
 run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[suite.setup]]
-run = "rm -rf /tmp/native-pm-pinned-repo && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-pinned-remi-fixture.sh ${native_target} /tmp/native-pm-pinned-repo"
+run = "rm -rf /tmp/native-pm-pinned-repo && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-pinned-binary-fixture.sh ${native_target} /tmp/native-pm-pinned-repo"
 
 [suite.setup.assert]
 exit_code = 0
 
 [[suite.setup]]
-conary = "repo add ${REPO_NAME} http://127.0.0.1:18083 --package-format json --default-strategy remi --remi-endpoint http://127.0.0.1:18083 --ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY} --source-profile ${native_profile}"
+conary = "repo add ${REPO_NAME} http://127.0.0.1:18083 --package-format json --default-strategy binary --ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY} --source-profile ${native_profile}"
 
 [suite.setup.assert]
 exit_code = 0
