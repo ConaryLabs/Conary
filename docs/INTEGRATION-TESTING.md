@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-16
-revision: 54
-summary: Document attributable daily-driver configuration upgrade, payload topology, typed corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
+revision: 55
+summary: Document attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -568,6 +568,9 @@ repository, then builds a package in the host-native format and proves:
 - one exact native versioned dependency resolved by SAT, acquired from the
   synchronized repository, signature-verified, and installed with dependency
   reason and source provenance
+- one source-declared same-name compatibility provide at version `1.0`, kept
+  distinct from the native package's exact version in native metadata,
+  installed capability provenance, and `whatprovides` output
 - an exact installed native-lifecycle bundle plus install/remove hook effects
 - system user and group creation in the selected generation
 - an explicit mode-0750 directory and an exact relative symlink through native
@@ -593,10 +596,14 @@ from a bounded repository, and must preserve the native checksum in the
 installed lifecycle bundle while its repository checksum, selected-generation
 config bytes, and persisted pristine config hashes agree. The removal record
 binds to the installed v2 update request. Across the three completed cases the
-suite declares exactly fourteen properties: exact version, native architecture,
+suite declares exactly fifteen properties: exact version, native architecture,
 regular files, directories, symlinks, hardlinks, payload ownership, payload
-timestamps, a versioned dependency, a queried virtual provide, matched config,
-pristine config upgrade, purge-time config removal, and shell lifecycle. Directory, symlink, hardlink,
+timestamps, a versioned dependency, a queried virtual provide, a queried
+source-declared same-name compatibility provide, matched config, pristine
+config upgrade, purge-time config removal, and shell lifecycle. The
+same-name assertion requires the source format's exact native metadata plus
+separate exact-identity and source-declared installed rows with typed version
+scheme and source-format provenance. Directory, symlink, hardlink,
 metadata, and relation claims require direct native metadata,
 selected-generation, repository-provenance, and installed reason assertions;
 implicit parents, followed filesystem paths, and recorded metadata without a

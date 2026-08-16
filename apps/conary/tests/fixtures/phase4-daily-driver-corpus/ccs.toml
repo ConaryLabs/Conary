@@ -22,15 +22,18 @@ maintainers = ["Conary Fixture Maintainers <fixtures@conary.io>"]
 
 [native_export.rpm]
 requires = [{ name = "phase4-repository-fixture", relation = "equal", version = "1.0.0" }]
-provides = ["phase4-corpus-tool"]
+provides = [
+    { name = "phase4-corpus-tool", relation = "any" },
+    { name = "phase4-daily-driver-corpus", relation = "equal", version = "1.0" },
+]
 
 [native_export.deb]
 depends = ["phase4-repository-fixture (= 1.0.0)"]
-provides = ["phase4-corpus-tool"]
+provides = ["phase4-corpus-tool", "phase4-daily-driver-corpus (= 1.0)"]
 
 [native_export.arch]
 depends = ["phase4-repository-fixture=1.0.0"]
-provides = ["phase4-corpus-tool"]
+provides = ["phase4-corpus-tool", "phase4-daily-driver-corpus=1.0"]
 
 [provides]
 capabilities = ["phase4-daily-driver-corpus", "phase4-corpus-tool"]

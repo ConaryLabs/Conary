@@ -365,6 +365,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             conary_core::corpus::CorpusSemantic::MetadataTimestamps,
             conary_core::corpus::CorpusSemantic::RelationsVersionedDependency,
             conary_core::corpus::CorpusSemantic::RelationsVirtualProvide,
+            conary_core::corpus::CorpusSemantic::RelationsSameNameCompatibilityProvide,
             conary_core::corpus::CorpusSemantic::ConfigurationMatchedConfig,
             conary_core::corpus::CorpusSemantic::ConfigurationUpgrade,
             conary_core::corpus::CorpusSemantic::ConfigurationRemoval,
@@ -463,6 +464,11 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "/usr/lib/kernel/install.d/95-phase4-corpus.install",
         "--from ${native_profile}",
         "query whatprovides 'virtual(phase4-corpus-tool)'",
+        "query whatprovides phase4-daily-driver-corpus",
+        "phase4-daily-driver-corpus|1.0|eq|package",
+        "source-declared",
+        "provides version: 1.0",
+        "Total: 2 provider(s)",
         "0 config rows",
         "--dependency-fixture-manifest",
         "build-daily-driver-update-fixture.sh",
@@ -529,6 +535,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             "native_corpus_dependency_probe",
             "native_corpus_lifecycle_fidelity",
             "native_corpus_source_format",
+            "native_corpus_capability_format",
             "native_corpus_target_architecture",
             "native_corpus_payload_user",
             "native_corpus_payload_group",
@@ -572,7 +579,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             conary_core::corpus::ConversionStage::Installation,
         ]
     );
-    assert_eq!(install_case.coverage.len(), 12);
+    assert_eq!(install_case.coverage.len(), 13);
     for semantic in [
         conary_core::corpus::CorpusSemantic::MetadataOwnership,
         conary_core::corpus::CorpusSemantic::MetadataTimestamps,
@@ -717,11 +724,14 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     for required in [
         "[native_export.rpm]",
         "requires = [{ name = \"phase4-repository-fixture\", relation = \"equal\", version = \"1.0.0\" }]",
+        "{ name = \"phase4-corpus-tool\", relation = \"any\" }",
+        "{ name = \"phase4-daily-driver-corpus\", relation = \"equal\", version = \"1.0\" }",
         "[native_export.deb]",
         "depends = [\"phase4-repository-fixture (= 1.0.0)\"]",
+        "provides = [\"phase4-corpus-tool\", \"phase4-daily-driver-corpus (= 1.0)\"]",
         "[native_export.arch]",
         "depends = [\"phase4-repository-fixture=1.0.0\"]",
-        "provides = [\"phase4-corpus-tool\"]",
+        "provides = [\"phase4-corpus-tool\", \"phase4-daily-driver-corpus=1.0\"]",
     ] {
         assert!(
             primary_fixture.contains(required),

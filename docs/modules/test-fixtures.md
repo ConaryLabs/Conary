@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-16
-revision: 37
-summary: Map fixture ownership, including attributable daily-driver configuration upgrade, payload topology, authenticated derivative roots, and cross-source lifecycle proof
+revision: 38
+summary: Map fixture ownership, including attributable daily-driver same-name provides, configuration upgrade, payload topology, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -513,7 +513,10 @@ Each fixture family should record:
   uid/gid `0` and zero timestamp nanoseconds for all three formats. The proof
   does not infer named ownership from RPM display metadata. Topology and
   metadata count only after typed native-package and selected-generation node
-  assertions agree.
+  assertions agree. Each native artifact also declares its package name at
+  compatibility version `1.0`; exact RPM/DEB/ALPM metadata, installed
+  exact-identity and source-declared rows, typed provenance, and query output
+  must agree before the same-name provide enters semantic coverage.
   RPM directory proof includes the non-default root child `/opt` plus a
   non-default leaf so the package owns exact path, mode, and ownership metadata;
   default shared parents remain implicit native-package paths.

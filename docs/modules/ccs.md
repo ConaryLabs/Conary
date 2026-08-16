@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-13
-revision: 64
-summary: Convert direct and exactly re-resolved adopted foreign packages through lossless source authority, typed authoring, host capability, lifecycle, and native export contracts
+last_updated: 2026-08-16
+revision: 65
+summary: Convert foreign packages through lossless source authority and typed native relation, lifecycle, and export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -399,7 +399,11 @@ translation and do not provide a `[legacy]` schema alias. Required target
 metadata comes from exact manifest fields: RPM requires the package license,
 Arch requires homepage and maintainer-backed packager identity, and Debian
 omits its optional maintainer field when no exact value exists. Exporters do
-not invent unknown identities or unconditional maintainer scriptlets. Config
+not invent unknown identities or unconditional maintainer scriptlets. RPM
+requires and provides share one typed name/relation/version declaration;
+unversioned relations cannot carry a version. Exporter/parser round trips keep
+a source-declared same-name compatibility provide distinct from the package's
+exact identity. Config
 export fails when the target format cannot express a declaration's exact
 per-path semantics. Shared hardlink preflight rejects missing or cyclic
 targets, multiple or absent anchors, alias-side content, and member metadata
