@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-15
-revision: 34
-summary: Map fixture ownership, including attributable daily-driver semantics, authenticated derivative roots, and cross-source lifecycle proof
+revision: 35
+summary: Map fixture ownership, including the focused attributable daily-driver manifest, authenticated derivative roots, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -436,6 +436,8 @@ Each fixture family should record:
 - **Slow proof:** Suite-specific commands such as
   `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`
   and
+  `cargo run -p conary-test -- run --suite phase4-native-daily-driver-corpus --distro fedora44 --phase 4`
+  and
   `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro fedora44 --phase 4`
   when behavior changes require live integration proof. Run the focused
   lifecycle suite on every configured target for complete target-image
@@ -480,7 +482,7 @@ Each fixture family should record:
   authority from distro-name matching. The typed workflow test owns the three
   source-format cases across all six required target lanes and the stable
   all-lane aggregator context; do not weaken either in workflow-only edits.
-  The Phase 4 daily-driver chain emits two additional exact-artifact records
+  The focused `phase4-native-daily-driver-corpus` chain emits two exact-artifact records
   for its host-native RPM, DEB, or ALPM build: the completed install/query
   chain covers exact/native identity, regular files, one queried virtual
   provide, matched config, and shell lifecycle; removal covers config cleanup.
@@ -489,7 +491,7 @@ Each fixture family should record:
   source-trigger, activation, target-helper, or declared-relation coverage from
   the chain's 2 MiB file, out-of-band trigger, disabled unit, adjacent helper
   path, or file-collision negative.
-  PRs run that chain on Fedora 44, Ubuntu 26.04, and Arch behind the stable
+  PRs run only that focused six-test chain on Fedora 44, Ubuntu 26.04, and Arch behind the stable
   `native-daily-driver-corpus` aggregate context; every lane applies both the
   ordinary suite-result and typed corpus-result gates.
   Derivative roots are assembled from digest-pinned transport images, exact

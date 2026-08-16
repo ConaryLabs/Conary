@@ -312,7 +312,7 @@ jobs:
           run
           --distro "${{ matrix.distro }}"
           --phase 4
-          --suite phase4-native-pm-parity
+          --suite phase4-native-daily-driver-corpus
       - name: Verify daily-driver corpus evidence
         run: |
           result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"

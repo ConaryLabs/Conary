@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-15
-revision: 76
-summary: Route feature ownership through typed corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+revision: 77
+summary: Route feature ownership through focused typed corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1412,6 +1412,7 @@ matrix job in `.github/workflows/pr-gate.yml`.
 
 **Interaction gate:** `bash scripts/build-static-conary.sh`;
 `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro fedora44 --phase 4`;
+`cargo run -p conary-test -- run --suite phase4-native-daily-driver-corpus --distro fedora44 --phase 4`;
 `cargo run -p conary-test -- run --suite phase3-active-generation-handoff --distro fedora44 --phase 3`;
 run `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro <distro> --phase 4`
 for each configured distro when native conversion/lifecycle behavior or image

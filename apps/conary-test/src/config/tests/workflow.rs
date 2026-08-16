@@ -346,7 +346,7 @@ fn native_daily_driver_gate_executes_the_three_attributable_lanes() {
     assert_eq!(
         run.run.as_deref(),
         Some(
-            "cargo run -p conary-test -- run --distro \"${{ matrix.distro }}\" --phase 4 --suite phase4-native-pm-parity"
+            "cargo run -p conary-test -- run --distro \"${{ matrix.distro }}\" --phase 4 --suite phase4-native-daily-driver-corpus"
         )
     );
     assert_eq!(

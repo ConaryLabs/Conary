@@ -3,44 +3,25 @@
 use super::{conary_fixture_path, load_manifest, remi_manifest_path};
 
 #[test]
-fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contract() {
+fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
     let path = remi_manifest_path("phase4-native-pm-parity.toml");
     if !path.exists() {
         return;
     }
 
-    let manifest = load_manifest(&path).unwrap();
-    let required_coverage = &manifest
-        .suite
-        .corpus
-        .as_ref()
-        .expect("daily-driver semantic coverage authority")
-        .required;
-    assert_eq!(
-        required_coverage,
-        &[
-            conary_core::corpus::CorpusSemantic::IdentityExactVersion,
-            conary_core::corpus::CorpusSemantic::IdentityNativeArchitecture,
-            conary_core::corpus::CorpusSemantic::PayloadFiles,
-            conary_core::corpus::CorpusSemantic::RelationsVirtualProvide,
-            conary_core::corpus::CorpusSemantic::ConfigurationMatchedConfig,
-            conary_core::corpus::CorpusSemantic::ConfigurationRemoval,
-            conary_core::corpus::CorpusSemantic::LifecycleShell,
-        ]
+    let parity_manifest = load_manifest(&path).unwrap();
+    assert!(
+        parity_manifest.suite.corpus.is_none(),
+        "the legacy parity suite must not own focused W7 coverage"
     );
-    for unproven in [
-        conary_core::corpus::CorpusSemantic::PayloadLargeFiles,
-        conary_core::corpus::CorpusSemantic::RelationsConflict,
-        conary_core::corpus::CorpusSemantic::LifecycleTrigger,
-        conary_core::corpus::CorpusSemantic::RuntimeServiceActivation,
-        conary_core::corpus::CorpusSemantic::RuntimeTargetHelper,
-    ] {
-        assert!(
-            !required_coverage.contains(&unproven),
-            "daily-driver fixture must not overclaim {unproven:?}"
-        );
-    }
-    let cross_source = manifest
+    assert!(
+        parity_manifest
+            .test
+            .iter()
+            .all(|test| test.group.as_deref() != Some("daily-driver-corpus")),
+        "daily-driver cases must have one focused manifest owner"
+    );
+    let cross_source = parity_manifest
         .test
         .iter()
         .find(|test| test.id == "TNPM02X")
@@ -126,6 +107,39 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         }
     }
 
+    let daily_driver_path = remi_manifest_path("phase4-native-daily-driver-corpus.toml");
+    let manifest = load_manifest(&daily_driver_path).expect("load focused daily-driver manifest");
+    let required_coverage = &manifest
+        .suite
+        .corpus
+        .as_ref()
+        .expect("daily-driver semantic coverage authority")
+        .required;
+    assert_eq!(
+        required_coverage,
+        &[
+            conary_core::corpus::CorpusSemantic::IdentityExactVersion,
+            conary_core::corpus::CorpusSemantic::IdentityNativeArchitecture,
+            conary_core::corpus::CorpusSemantic::PayloadFiles,
+            conary_core::corpus::CorpusSemantic::RelationsVirtualProvide,
+            conary_core::corpus::CorpusSemantic::ConfigurationMatchedConfig,
+            conary_core::corpus::CorpusSemantic::ConfigurationRemoval,
+            conary_core::corpus::CorpusSemantic::LifecycleShell,
+        ]
+    );
+    for unproven in [
+        conary_core::corpus::CorpusSemantic::PayloadLargeFiles,
+        conary_core::corpus::CorpusSemantic::RelationsConflict,
+        conary_core::corpus::CorpusSemantic::LifecycleTrigger,
+        conary_core::corpus::CorpusSemantic::RuntimeServiceActivation,
+        conary_core::corpus::CorpusSemantic::RuntimeTargetHelper,
+    ] {
+        assert!(
+            !required_coverage.contains(&unproven),
+            "daily-driver fixture must not overclaim {unproven:?}"
+        );
+    }
+
     let corpus_tests: Vec<_> = manifest
         .test
         .iter()
@@ -133,8 +147,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         .collect();
 
     assert!(
-        corpus_tests.len() >= 5,
-        "Phase 4 native PM parity should include a daily-driver corpus group"
+        corpus_tests.len() == 6,
+        "focused daily-driver manifest should own exactly TNPM13 through TNPM18"
     );
     assert!(
         corpus_tests.iter().all(|test| test.skip.is_none()),
@@ -145,8 +159,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "daily-driver corpus tests must not rely on flaky majority voting"
     );
 
-    for test_id in ["TNPM04", "TNPM15"] {
-        let metadata_test = manifest
+    for (test_id, owner) in [("TNPM04", &parity_manifest), ("TNPM15", &manifest)] {
+        let metadata_test = owner
             .test
             .iter()
             .find(|test| test.id == test_id)

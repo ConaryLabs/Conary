@@ -112,6 +112,7 @@ apps/conary/tests/integration/remi/manifests/
   phase4-group-d.toml       # T221-T255 (Provenance/Capability/Trust/System/Federation/Automation)
   phase4-group-e.toml       # T256-T277 (Cross-distro compatibility overlay: distro policy/replatform/takeover)
   phase4-native-pm-parity.toml  # Three-distro native package-manager parity proof
+  phase4-native-daily-driver-corpus.toml  # Focused attributable W7 daily-driver proof
   phase4-security-advisory-pipeline.toml  # Trusted advisory ingestion and security update proof
 ```
 
