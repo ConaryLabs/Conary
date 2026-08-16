@@ -12,12 +12,13 @@ pub(super) struct SupervisedExec {
 
 const SUPERVISOR_SCRIPT: &str = r#"
 child_pid=
+kill_bin=
 terminate_child() {
     trap - TERM INT HUP
     if [ -n "${child_pid}" ]; then
-        kill -TERM -- "-${child_pid}" 2>/dev/null || true
+        "${kill_bin}" -TERM -- "-${child_pid}" 2>/dev/null || true
         sleep 0.2
-        kill -KILL -- "-${child_pid}" 2>/dev/null || true
+        "${kill_bin}" -KILL -- "-${child_pid}" 2>/dev/null || true
         wait "${child_pid}" 2>/dev/null || true
     fi
     exit 124
@@ -25,6 +26,16 @@ terminate_child() {
 trap terminate_child TERM INT HUP
 if ! command -v setsid >/dev/null 2>&1; then
     echo "conary-test synchronous exec requires setsid" >&2
+    exit 125
+fi
+for candidate in /bin/kill /usr/bin/kill; do
+    if [ -x "${candidate}" ]; then
+        kill_bin=${candidate}
+        break
+    fi
+done
+if [ -z "${kill_bin}" ]; then
+    echo "conary-test synchronous exec requires an external kill executable" >&2
     exit 125
 fi
 setsid "$@" &
@@ -92,8 +103,9 @@ mod tests {
         for required in [
             "trap terminate_child TERM INT HUP",
             "setsid \"$@\" &",
-            "kill -TERM -- \"-${child_pid}\"",
-            "kill -KILL -- \"-${child_pid}\"",
+            "for candidate in /bin/kill /usr/bin/kill",
+            "\"${kill_bin}\" -TERM -- \"-${child_pid}\"",
+            "\"${kill_bin}\" -KILL -- \"-${child_pid}\"",
             "wait \"${child_pid}\"",
         ] {
             assert!(
