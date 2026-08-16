@@ -34,20 +34,16 @@ rm -rf "${v2_source_dir}" "${output_dir}"
 cp -a "${v1_source_dir}" "${v2_source_dir}"
 mkdir -p "${output_dir}"
 
+python3 "${script_dir}/rewrite-package-version.py" \
+  "${v2_source_dir}/ccs.toml" \
+  1.0.0 \
+  1.0.1
+
 python3 - "${v2_source_dir}" <<'PY'
 from pathlib import Path
 import sys
 
 source = Path(sys.argv[1])
-manifest_path = source / "ccs.toml"
-manifest = manifest_path.read_text(encoding="utf-8")
-old_version = 'version = "1.0.0"'
-if manifest.count(old_version) != 1:
-    raise SystemExit("daily-driver manifest must contain one exact v1 package version")
-manifest_path.write_text(
-    manifest.replace(old_version, 'version = "1.0.1"'), encoding="utf-8"
-)
-
 (source / "stage/etc/phase4-corpus/app.conf").write_text(
     'mode = "daily-driver"\n'
     'service = "phase4-corpus"\n'

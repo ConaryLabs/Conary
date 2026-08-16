@@ -3,6 +3,7 @@
 use super::{conary_fixture_path, load_manifest, remi_manifest_path};
 
 mod evidence;
+mod version_rewrite;
 
 #[test]
 fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contract() {
@@ -786,7 +787,9 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     ))
     .expect("read daily-driver update builder");
     for required in [
-        "version = \"1.0.1\"",
+        "rewrite-package-version.py",
+        "1.0.0",
+        "1.0.1",
         "revision = \"v2\"",
         "build-native-fixtures.sh",
         "native-fixture-manifest.json",
