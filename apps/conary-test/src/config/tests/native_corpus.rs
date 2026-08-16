@@ -145,6 +145,21 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "daily-driver corpus tests must not rely on flaky majority voting"
     );
 
+    for test_id in ["TNPM04", "TNPM15"] {
+        let metadata_test = manifest
+            .test
+            .iter()
+            .find(|test| test.id == test_id)
+            .unwrap_or_else(|| panic!("missing {test_id} native metadata test"));
+        let metadata_rendered = format!("{metadata_test:?}");
+        assert!(
+            metadata_rendered.contains("regular files")
+                && metadata_rendered
+                    .contains("json_extract(payload_node_json, '$.source.kind.type') = 'regular'",),
+            "{test_id} must distinguish typed regular files from directory payload rows"
+        );
+    }
+
     let rendered = corpus_tests
         .iter()
         .map(|test| format!("{test:?}"))

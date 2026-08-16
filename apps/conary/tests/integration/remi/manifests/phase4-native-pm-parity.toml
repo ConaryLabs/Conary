@@ -222,11 +222,11 @@ exit_code = 0
 stdout_contains_all = ["1 troves", "phase4-runtime-fixture|${native_fixture_version}|${native_arch}|${native_scheme}||file|explicit"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture'); SELECT path || '|' || coalesce(content_sha256, '-') || '|' || coalesce(content_size, '-') || '|' || payload_node_json FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') ORDER BY path\""
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_sha256, '-') || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || json_extract(payload_node_json, '$.source.mode') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["3 files", "/etc/phase4-runtime-fixture/app.conf|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|61|33188", "/usr/bin/phase4-runtime-fixture|517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f|44|33188", "/usr/include/phase4-runtime-fixture/api.h|88904c275ae0f26a566c03f488ae82869c47ac921fb6f0cf7979d5845f199c88|130|33188"]
+stdout_contains_all = ["3 regular files", "/etc/phase4-runtime-fixture/app.conf|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|61|regular|33188", "/usr/bin/phase4-runtime-fixture|517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f|44|regular|33188", "/usr/include/phase4-runtime-fixture/api.h|88904c275ae0f26a566c03f488ae82869c47ac921fb6f0cf7979d5845f199c88|130|regular|33188"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' provides' FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture'); SELECT capability || '|' || COALESCE(version, '') || '|' || COALESCE(kind, '') FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') ORDER BY capability\""
@@ -695,11 +695,11 @@ exit_code = 0
 stdout_contains_all = ["1 troves", "phase4-daily-driver-corpus|${native_corpus_fixture_version}|${native_arch}|${native_scheme}||file|explicit"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT path || '|' || coalesce(content_size, '-') || '|' || payload_node_json FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY path\""
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["6 files", "/etc/phase4-corpus/app.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152"]
+stdout_contains_all = ["6 regular files", "/etc/phase4-corpus/app.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' requirement groups' FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT COALESCE((SELECT group_concat(kind || '|' || version_scheme || '|' || requirement_json, char(10)) FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY id), 'no-deps')\""
