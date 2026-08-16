@@ -140,6 +140,7 @@ pub enum PackageSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepositorySourceKind {
     Native,
+    Binary,
     Remi,
     Static,
 }
@@ -782,17 +783,28 @@ async fn download_verified_repository_package(
     pkg_with_repo: &PackageWithRepo,
     conn: &Connection,
 ) -> Result<PathBuf> {
-    if selected_repository_source_kind(pkg_with_repo) == RepositorySourceKind::Static {
-        download_static_package_verified(package, output_dir, None).await
-    } else {
-        let trust = build_download_options(conn, &pkg_with_repo.repository)?;
-        download_package_verified(package, output_dir, &trust).await
+    match selected_repository_source_kind(pkg_with_repo) {
+        RepositorySourceKind::Static => {
+            download_static_package_verified(package, output_dir, None).await
+        }
+        RepositorySourceKind::Binary => {
+            crate::repository::download_binary_package_verified(package, output_dir).await
+        }
+        RepositorySourceKind::Native => {
+            let trust = build_download_options(conn, &pkg_with_repo.repository)?;
+            download_package_verified(package, output_dir, &trust).await
+        }
+        RepositorySourceKind::Remi => Err(Error::ConfigError(format!(
+            "repository '{}' routed a Remi package through direct repository download",
+            pkg_with_repo.repository.name
+        ))),
     }
 }
 
 fn selected_repository_source_kind(pkg_with_repo: &PackageWithRepo) -> RepositorySourceKind {
     match pkg_with_repo.repository.default_strategy.as_deref() {
         Some("static") => RepositorySourceKind::Static,
+        Some("binary") => RepositorySourceKind::Binary,
         Some("remi") => RepositorySourceKind::Remi,
         _ => RepositorySourceKind::Native,
     }

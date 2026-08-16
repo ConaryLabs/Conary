@@ -288,8 +288,15 @@ mod tests {
     }
 
     #[test]
-    fn repository_source_metadata_tags_static_and_remi_sources() {
+    fn repository_source_metadata_tags_binary_static_and_remi_sources() {
         let (_temp, conn) = create_test_db();
+        conn.execute(
+            "INSERT INTO repositories (name, url, enabled, priority, default_strategy, source_profile)
+             VALUES ('binary-repo', 'https://binary.example.invalid', 1, 10, 'binary', 'fedora-44')",
+            [],
+        )
+        .unwrap();
+        let binary_repo_id = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO repositories (name, url, enabled, priority, default_strategy, source_profile)
              VALUES ('static-repo', 'https://static.example.invalid', 1, 10, 'static', 'fedora-44')",
@@ -304,9 +311,13 @@ mod tests {
         )
         .unwrap();
         let remi_repo_id = conn.last_insert_rowid();
+        let _binary_pkg_id = create_test_package(&conn, binary_repo_id, "binary-tree", "1.0.0");
         let _static_pkg_id = create_test_package(&conn, static_repo_id, "static-tree", "1.0.0");
         let _remi_pkg_id = create_test_package(&conn, remi_repo_id, "remi-tree", "1.0.0");
 
+        let binary_pkg =
+            PackageSelector::find_best_package(&conn, "binary-tree", &SelectionOptions::default())
+                .unwrap();
         let static_pkg =
             PackageSelector::find_best_package(&conn, "static-tree", &SelectionOptions::default())
                 .unwrap();
@@ -314,6 +325,10 @@ mod tests {
             PackageSelector::find_best_package(&conn, "remi-tree", &SelectionOptions::default())
                 .unwrap();
 
+        assert_eq!(
+            repository_source_metadata(&binary_pkg).unwrap().source_kind,
+            RepositorySourceKind::Binary
+        );
         assert_eq!(
             repository_source_metadata(&static_pkg).unwrap().source_kind,
             RepositorySourceKind::Static

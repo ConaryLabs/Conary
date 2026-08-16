@@ -7,7 +7,7 @@
 
 use super::super::open_db;
 use super::PackageFormatType;
-use super::batch::{BatchInstaller, prepare_ccs_package_for_batch};
+use super::batch::{BatchInstaller, PreparedPackageSourceAuthority, prepare_ccs_package_for_batch};
 use super::dep_resolution;
 use super::dependencies::resolved_repository_deps_from_sat_result;
 use super::repository_batch::{
@@ -316,6 +316,8 @@ pub struct CcsArtifactInstallOptions<'a> {
     pub yes: bool,
     pub envelope_authority: CcsEnvelopeAuthority,
     pub repository_provenance: Option<RepositoryInstallProvenance>,
+    /// Exact source identity explicitly supplied for a local artifact.
+    pub requested_source_identity: Option<&'a str>,
     /// Exact transaction source policy established by explicit scope,
     /// persisted pin, or selected root repository provenance.
     pub resolution_policy: conary_core::repository::resolution_policy::ResolutionPolicy,
@@ -537,6 +539,7 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
         yes,
         envelope_authority,
         repository_provenance,
+        requested_source_identity,
         resolution_policy,
     } = opts;
 
@@ -624,6 +627,7 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
                 selection_reason: None,
                 selected_manifest_components: None,
                 repository_provenance,
+                requested_source_identity,
             },
         )?;
         return Ok(result.trove_id);
@@ -666,7 +670,10 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
         "Explicit package request",
         allow_downgrade,
         intent,
-        repository_provenance,
+        PreparedPackageSourceAuthority {
+            repository_provenance,
+            requested_source_identity,
+        },
     )?);
 
     println!("Installing CCS package...");

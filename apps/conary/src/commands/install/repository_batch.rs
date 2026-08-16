@@ -3,8 +3,8 @@
 //! Authenticated preparation of exact repository selections for one batch.
 
 use super::batch::{
-    BatchInstallResult, BatchInstaller, PreparedPackage, prepare_ccs_package_for_batch,
-    prepare_package_for_batch,
+    BatchInstallResult, BatchInstaller, PreparedPackage, PreparedPackageSourceAuthority,
+    prepare_ccs_package_for_batch, prepare_package_for_batch,
 };
 use super::conversion::{
     validate_selected_repository_ccs_identity, validate_selected_repository_native_identity,
@@ -156,7 +156,10 @@ pub(super) async fn prepare_repository_batch(
                 &selection.selection_reason,
                 selection.allow_downgrade,
                 selection.intent,
-                Some(provenance),
+                PreparedPackageSourceAuthority {
+                    repository_provenance: Some(provenance),
+                    requested_source_identity: None,
+                },
             )?);
         } else {
             let Some(mut package) = prepare_package_for_batch(

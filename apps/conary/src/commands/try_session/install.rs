@@ -56,6 +56,7 @@ pub(super) fn install_try_package(
             selection_reason: Some("conary try"),
             selected_manifest_components: None,
             repository_provenance: None,
+            requested_source_identity: None,
         },
         &mut selected,
     )?;

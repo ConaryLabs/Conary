@@ -54,7 +54,8 @@ pub use client::RepositoryClient;
 pub(crate) use client::{MAX_BYTES_RESPONSE_SIZE, read_response_bytes_with_limit};
 pub use dependencies::download_dependencies;
 pub use download::{
-    DownloadOptions, DownloadProgress, download_delta, download_package_verified,
+    DownloadOptions, DownloadProgress, download_binary_package_verified,
+    download_binary_package_verified_with_progress, download_delta, download_package_verified,
     download_package_verified_with_progress, download_package_with_authority_verified,
     download_static_package_verified, download_static_package_verified_with_progress,
     verify_cached_package_verified, verify_checksum,

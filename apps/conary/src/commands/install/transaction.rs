@@ -26,6 +26,8 @@ pub(super) struct TransactionContext<'a> {
     pub(super) ccs_file_capabilities: Option<&'a [conary_core::ccs::manifest::FileCapability]>,
     pub(super) defer_generation: bool,
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
+    /// Exact source identity explicitly supplied for a local artifact.
+    pub(super) requested_source_identity: Option<&'a str>,
     pub(super) native_lifecycle_bundle:
         Option<&'a conary_core::ccs::native_lifecycle::NativeLifecycleBundle>,
     pub(super) repository_enrollments:

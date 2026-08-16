@@ -209,7 +209,7 @@ fatal = true
 depends_on = ["TNPM02X"]
 
 [[test.step]]
-run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
+run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --from ${native_profile} --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
@@ -238,7 +238,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name 
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 troves", "phase4-runtime-fixture|${native_fixture_version}|${native_arch}|${native_scheme}||file|explicit"]
+stdout_contains_all = ["1 troves", "phase4-runtime-fixture|${native_fixture_version}|${native_arch}|${native_scheme}|${native_profile}|file|explicit"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_sha256, '-') || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || json_extract(payload_node_json, '$.source.mode') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""

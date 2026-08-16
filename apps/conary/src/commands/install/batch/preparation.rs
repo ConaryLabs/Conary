@@ -143,6 +143,7 @@ pub fn prepare_package_for_batch(
         installed_component_names: None,
         component_names_by_path: None,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_state,
         ccs: None,
     }))

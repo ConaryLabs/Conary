@@ -13,8 +13,12 @@ pub(crate) fn prepare_ccs_package_for_batch(
     selection_reason: &str,
     allow_downgrade: bool,
     intent: InstallIntent,
-    repository_provenance: Option<RepositoryInstallProvenance>,
+    source_authority: PreparedPackageSourceAuthority<'_>,
 ) -> Result<PreparedPackage> {
+    let PreparedPackageSourceAuthority {
+        repository_provenance,
+        requested_source_identity,
+    } = source_authority;
     super::super::ccs_transaction::enforce_ccs_scriptlet_capability_gate(package)?;
     let semantics =
         super::super::ccs_transaction::install_semantics_for_ccs_manifest(package.manifest())?;
@@ -141,6 +145,7 @@ pub(crate) fn prepare_ccs_package_for_batch(
         installed_component_names: Some(component_names),
         component_names_by_path: Some(component_names_by_path),
         repository_provenance,
+        requested_source_identity: requested_source_identity.map(str::to_string),
         native_lifecycle_state,
         ccs: Some(PreparedCcsMetadata {
             hooks: package.manifest().hooks.clone(),

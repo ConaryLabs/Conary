@@ -277,6 +277,20 @@ pub async fn download_package_with_authority_verified(
     download_package_inner(repo_pkg, dest_dir, Some(options), None, false).await
 }
 
+/// Download a checksum-addressed CCS package from a binary repository.
+///
+/// The repository metadata owns checksum and size during acquisition; the
+/// caller verifies the CCS envelope against the repository's pinned package
+/// keys before installation. Local file references remain forbidden here.
+pub async fn download_binary_package_verified(
+    repo_pkg: &RepositoryPackage,
+    dest_dir: &Path,
+) -> Result<PathBuf> {
+    download_package_inner(repo_pkg, dest_dir, None, None, false)
+        .await
+        .map(|download| download.path)
+}
+
 /// Re-verify a checksum-addressed cached native artifact through the same
 /// checksum, size, and ecosystem-native package authority as a fresh download.
 pub async fn verify_cached_package_verified(
@@ -494,6 +508,17 @@ pub async fn download_package_verified_with_progress(
     progress_bar: Option<&ProgressBar>,
 ) -> Result<PathBuf> {
     download_package_inner(repo_pkg, dest_dir, Some(options), progress_bar, false)
+        .await
+        .map(|download| download.path)
+}
+
+/// Download a checksum-addressed binary-repository CCS package with progress.
+pub async fn download_binary_package_verified_with_progress(
+    repo_pkg: &RepositoryPackage,
+    dest_dir: &Path,
+    progress_bar: Option<&ProgressBar>,
+) -> Result<PathBuf> {
+    download_package_inner(repo_pkg, dest_dir, None, progress_bar, false)
         .await
         .map(|download| download.path)
 }

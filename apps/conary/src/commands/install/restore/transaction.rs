@@ -915,6 +915,7 @@ fn restore_transaction_context<'a>(
         ccs_file_capabilities: file_capabilities,
         defer_generation: false,
         repository_provenance: prepared.repository_provenance.clone(),
+        requested_source_identity: None,
         native_lifecycle_bundle: prepared.native_lifecycle_state.bundle_to_persist.as_ref(),
         repository_enrollments: &[],
         relation_removals: &[],

@@ -37,6 +37,7 @@ pub(crate) struct CcsTransactionInstallOptions<'a> {
     pub selection_reason: Option<&'a str>,
     pub selected_manifest_components: Option<Vec<String>>,
     pub repository_provenance: Option<RepositoryInstallProvenance>,
+    pub requested_source_identity: Option<&'a str>,
 }
 
 pub(crate) struct CcsTransactionInstallResult {
@@ -529,6 +530,7 @@ fn install_ccs_package_transactionally_inner(
         // always persist and publish their selected-root authority here.
         defer_generation: opts.defer_generation && caller_owned_selected_root,
         repository_provenance: opts.repository_provenance,
+        requested_source_identity: opts.requested_source_identity,
         native_lifecycle_bundle,
         repository_enrollments,
         relation_removals: &relation_plan.removals,

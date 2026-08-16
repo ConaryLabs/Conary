@@ -100,6 +100,7 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
         repository_provenance: Some(provenance),
+        requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
     })
     .await
@@ -115,4 +116,73 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
         installed.version_scheme,
         conary_core::repository::versioning::VersionScheme::Rpm
     );
+}
+
+#[tokio::test]
+async fn converted_local_artifact_persists_explicit_source_identity_without_repository_provenance()
+{
+    let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let install_root = temp_dir.path().join("root");
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+    let native_path = temp_dir.path().join("nginx.rpm");
+
+    std::fs::create_dir_all(&install_root).unwrap();
+    conary_core::db::init(db_path_str).unwrap();
+    stage_test_boot_assets(temp_dir.path());
+    rpm::PackageBuilder::new("nginx", "1.0.0", "MIT", "x86_64", "RPM fixture")
+        .build()
+        .unwrap()
+        .write_file(&native_path)
+        .unwrap();
+
+    let mut package = FakeNativePackage::nginx();
+    add_bootable_init(&mut package);
+    let converted = try_convert_to_ccs(
+        &package,
+        &native_path,
+        PackageFormatType::Rpm,
+        db_path_str,
+        Some("fedora-44"),
+    )
+    .await
+    .unwrap();
+    let ConversionResult::Converted {
+        ccs_path,
+        temp_dir: _conversion_dir,
+        signing_public_key,
+        ..
+    } = converted
+    else {
+        panic!("native conversion unexpectedly skipped");
+    };
+
+    let trove_id = install_ccs_artifact(CcsArtifactInstallOptions {
+        ccs_path: &ccs_path,
+        db_path: db_path_str,
+        root: install_root.to_str().unwrap(),
+        dry_run: false,
+        sandbox_mode: SandboxMode::Always,
+        no_deps: true,
+        allow_downgrade: false,
+        intent: InstallIntent::PackageChange,
+        yes: true,
+        envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
+        repository_provenance: None,
+        requested_source_identity: Some("fedora-44"),
+        resolution_policy: test_resolution_policy(),
+    })
+    .await
+    .unwrap()
+    .expect("converted package install must persist a trove");
+
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let installed = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();
+    assert_eq!(
+        installed.install_source,
+        conary_core::db::models::InstallSource::File
+    );
+    assert_eq!(installed.installed_from_repository_id, None);
+    assert_eq!(installed.source_profile.as_deref(), Some("fedora-44"));
 }

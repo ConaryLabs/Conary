@@ -485,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn selects_debian_update_from_generic_metadata_driven_repo() {
+    fn selects_debian_update_for_explicitly_sourced_local_artifact() {
         let (_temp, db_path) = create_test_db();
         let conn = conary_core::db::open(&db_path).unwrap();
         let mut repo = Repository::new(
@@ -517,7 +517,8 @@ mod tests {
         );
         installed.architecture = Some("amd64".to_string());
         installed.source_profile = Some("ubuntu-26.04".to_string());
-        installed.installed_from_repository_id = Some(repo_id);
+        assert_eq!(installed.install_source, InstallSource::File);
+        assert_eq!(installed.installed_from_repository_id, None);
 
         let selected = select_update_candidate(
             &conn,

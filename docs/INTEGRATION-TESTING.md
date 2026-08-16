@@ -550,7 +550,10 @@ file providers. The RPM lane also retains the generator-authored
 `config(phase4-runtime-fixture) = 1.0.0-1` dependency as one typed RPM
 requirement group; DEB and Arch retain no dependency groups for this fixture.
 Single-package and batch installs use the same payload-path projection before
-persisting installed resolution authority. The signed update
+persisting installed resolution authority. The local native install supplies
+its exact source identity with `--from`; Conary persists that identity without
+mislabeling the artifact as repository-installed, so the later ordinary update
+can select only the matching enrolled repository. The signed update
 fixture enrolls its binary JSON repository, exact source profile, and CCS
 package key through `conary repo add`; it does not mutate protected SQLite
 authority out of band. The focused
