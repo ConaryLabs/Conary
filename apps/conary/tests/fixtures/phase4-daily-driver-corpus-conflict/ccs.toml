@@ -6,6 +6,7 @@ release = "1"
 kind = "package"
 description = "Phase 4 exact file-conflict fixture"
 license = "MIT"
+homepage = "https://conary.io/fixtures/phase4-daily-driver-corpus-conflict"
 
 [package.platform]
 os = "linux"

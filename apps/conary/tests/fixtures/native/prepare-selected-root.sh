@@ -93,10 +93,11 @@ copy_elf_closure /bin/sh
 copy_elf_closure /bin/bash
 copy_elf_closure /usr/bin/bash
 
-for command_name in mkdir getent groupadd useradd; do
+for command_name in mkdir install getent groupadd useradd; do
   command_path="$(command -v "${command_name}")"
   copy_elf_closure "${command_path}"
 done
+copy_elf_closure /bin/false
 copy_elf_closure /usr/bin/true
 
 # A selected root advertises OpenRC lifecycle support only when its provider
@@ -159,7 +160,9 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   --root "${runtime_root}" \
   --present /bin/sh \
   --present /bin/bash \
+  --present /bin/false \
   --present /usr/bin/bash \
+  --present /usr/bin/install \
   --present /lib64/ld-linux-x86-64.so.2 \
   --present /etc/passwd \
   --present /etc/group \

@@ -266,6 +266,39 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
     assert!(build_helper.contains("native-fixture-manifest.json"));
     assert!(build_helper.contains("\"schema_version\": 1"));
 
+    for (fixture, homepage) in [
+        (
+            "phase4-daily-driver-corpus/ccs.toml",
+            "https://conary.io/fixtures/phase4-daily-driver-corpus",
+        ),
+        (
+            "phase4-daily-driver-corpus-conflict/ccs.toml",
+            "https://conary.io/fixtures/phase4-daily-driver-corpus-conflict",
+        ),
+    ] {
+        let manifest = std::fs::read_to_string(conary_fixture_path(fixture))
+            .unwrap_or_else(|error| panic!("read {fixture}: {error}"));
+        assert!(
+            manifest.contains(&format!("homepage = \"{homepage}\"")),
+            "{fixture} must carry exact metadata required by every native exporter"
+        );
+    }
+
+    let selected_root_helper =
+        std::fs::read_to_string(conary_fixture_path("native/prepare-selected-root.sh"))
+            .expect("read selected-root preparation helper");
+    for required in [
+        "for command_name in mkdir install getent groupadd useradd",
+        "copy_elf_closure /bin/false",
+        "--present /bin/false",
+        "--present /usr/bin/install",
+    ] {
+        assert!(
+            selected_root_helper.contains(required),
+            "daily-driver lifecycle runtime should include {required}"
+        );
+    }
+
     let evidence_helper =
         std::fs::read_to_string(conary_fixture_path("native/write-corpus-evidence.py"))
             .expect("read native corpus evidence writer");

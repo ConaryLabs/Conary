@@ -10,6 +10,7 @@ release = "1"
 kind = "package"
 description = "Phase 4 daily-driver corpus fixture for native package-manager parity"
 license = "MIT"
+homepage = "https://conary.io/fixtures/phase4-daily-driver-corpus"
 
 [package.platform]
 os = "linux"
