@@ -6,7 +6,7 @@
 
 use super::{CommonHookGenerator, GenerationResult, HookConverter, LossReport, arch_for_format};
 use crate::ccs::builder::BuildResult;
-use crate::ccs::manifest::{Hooks, RpmDependency, RpmDependencyRelation};
+use crate::ccs::manifest::{Hooks, RpmRelation, RpmRelationOperator};
 use crate::payload::PayloadNodeKind;
 use anyhow::{Context, Result};
 use rpm::PackageBuilder;
@@ -128,12 +128,12 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
         // Add explicit requires
         for requirement in &rpm_export.requires {
-            builder.requires(rpm_dependency(requirement)?);
+            builder.requires(rpm_relation(requirement, "requires")?);
         }
 
         // Add explicit provides
-        for prov in &rpm_export.provides {
-            builder.provides(rpm::Dependency::any(prov));
+        for provide in &rpm_export.provides {
+            builder.provides(rpm_relation(provide, "provides")?);
         }
     }
 
@@ -369,40 +369,44 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     Ok(GenerationResult { size, loss_report })
 }
 
-fn rpm_dependency(requirement: &RpmDependency) -> Result<rpm::Dependency> {
-    let name = requirement.name.trim();
+fn rpm_relation(declaration: &RpmRelation, field: &str) -> Result<rpm::Dependency> {
+    let name = declaration.name.trim();
     if name.is_empty() {
-        anyhow::bail!("RPM export dependency name must not be empty");
+        anyhow::bail!("RPM native_export.rpm.{field} name must not be empty");
     }
 
     let version = || {
-        requirement
+        declaration
             .version
             .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("RPM export dependency '{name}' requires a version"))
-            .and_then(|value| rpm_dependency_version(name, value))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "RPM native_export.rpm.{field} relation '{name}' requires a version"
+                )
+            })
+            .and_then(|value| rpm_relation_version(field, name, value))
     };
-    Ok(match requirement.relation {
-        RpmDependencyRelation::Any => {
-            if requirement.version.is_some() {
+    Ok(match declaration.relation {
+        RpmRelationOperator::Any => {
+            if declaration.version.is_some() {
                 anyhow::bail!(
-                    "RPM export unversioned dependency '{name}' must not declare a version"
+                    "RPM native_export.rpm.{field} unversioned relation '{name}' must not declare a version"
                 );
             }
             rpm::Dependency::any(name)
         }
-        RpmDependencyRelation::Equal => rpm::Dependency::eq(name, version()?),
-        RpmDependencyRelation::Less => rpm::Dependency::less(name, version()?),
-        RpmDependencyRelation::LessOrEqual => rpm::Dependency::less_eq(name, version()?),
-        RpmDependencyRelation::Greater => rpm::Dependency::greater(name, version()?),
-        RpmDependencyRelation::GreaterOrEqual => rpm::Dependency::greater_eq(name, version()?),
+        RpmRelationOperator::Equal => rpm::Dependency::eq(name, version()?),
+        RpmRelationOperator::Less => rpm::Dependency::less(name, version()?),
+        RpmRelationOperator::LessOrEqual => rpm::Dependency::less_eq(name, version()?),
+        RpmRelationOperator::Greater => rpm::Dependency::greater(name, version()?),
+        RpmRelationOperator::GreaterOrEqual => rpm::Dependency::greater_eq(name, version()?),
     })
 }
 
-fn rpm_dependency_version<'a>(name: &str, value: &'a str) -> Result<&'a str> {
+fn rpm_relation_version<'a>(field: &str, name: &str, value: &'a str) -> Result<&'a str> {
     let value = value.trim();
     if value.is_empty() {
-        anyhow::bail!("RPM export dependency '{name}' has an empty version");
+        anyhow::bail!("RPM native_export.rpm.{field} relation '{name}' has an empty version");
     }
     Ok(value)
 }
@@ -526,9 +530,9 @@ mod tests {
         let mut result = create_test_build_result();
         result.manifest.native_export = Some(NativeExport {
             rpm: Some(RpmExport {
-                requires: vec![RpmDependency {
+                requires: vec![RpmRelation {
                     name: "phase4-repository-fixture".to_string(),
-                    relation: RpmDependencyRelation::Equal,
+                    relation: RpmRelationOperator::Equal,
                     version: Some("1.0.0-1".to_string()),
                 }],
                 ..RpmExport::default()
@@ -559,16 +563,57 @@ mod tests {
     }
 
     #[test]
+    fn rpm_same_name_compatibility_provide_round_trips_as_typed_header_authority() {
+        let mut result = create_test_build_result();
+        result.manifest.native_export = Some(NativeExport {
+            rpm: Some(RpmExport {
+                provides: vec![RpmRelation {
+                    name: "test-rpm-package".to_string(),
+                    relation: RpmRelationOperator::Equal,
+                    version: Some("1.0".to_string()),
+                }],
+                ..RpmExport::default()
+            }),
+            ..NativeExport::default()
+        });
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("versioned-provide.rpm");
+
+        generate(&result, &output_path).unwrap();
+        let package = crate::packages::rpm::RpmPackage::parse(output_path.to_str().unwrap())
+            .expect("parse generated RPM");
+        let compatibility = package
+            .resolution_capabilities()
+            .unwrap()
+            .into_iter()
+            .find(|provide| {
+                provide.name == "test-rpm-package" && provide.version.as_deref() == Some("1.0")
+            })
+            .expect("same-name RPM compatibility provide");
+        assert_eq!(
+            compatibility.version_relation,
+            Some(crate::repository::dependency_model::ProvideVersionRelation::Equal)
+        );
+        assert!(matches!(
+            compatibility.provenance,
+            crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn rpm_versioned_dependency_rejects_empty_authority() {
         for requirement in [
-            RpmDependency {
+            RpmRelation {
                 name: " ".to_string(),
-                relation: RpmDependencyRelation::Any,
+                relation: RpmRelationOperator::Any,
                 version: None,
             },
-            RpmDependency {
+            RpmRelation {
                 name: "phase4-repository-fixture".to_string(),
-                relation: RpmDependencyRelation::Equal,
+                relation: RpmRelationOperator::Equal,
                 version: Some(" ".to_string()),
             },
         ] {
@@ -584,6 +629,42 @@ mod tests {
             let output_path = temp_dir.path().join("invalid-dependency.rpm");
 
             assert!(generate(&result, &output_path).is_err());
+            assert!(!output_path.exists());
+        }
+    }
+
+    #[test]
+    fn rpm_versioned_provide_rejects_incomplete_authority_before_publication() {
+        for provide in [
+            RpmRelation {
+                name: " ".to_string(),
+                relation: RpmRelationOperator::Any,
+                version: None,
+            },
+            RpmRelation {
+                name: "test-rpm-package".to_string(),
+                relation: RpmRelationOperator::Equal,
+                version: None,
+            },
+            RpmRelation {
+                name: "test-rpm-package".to_string(),
+                relation: RpmRelationOperator::Any,
+                version: Some("1.0".to_string()),
+            },
+        ] {
+            let mut result = create_test_build_result();
+            result.manifest.native_export = Some(NativeExport {
+                rpm: Some(RpmExport {
+                    provides: vec![provide],
+                    ..RpmExport::default()
+                }),
+                ..NativeExport::default()
+            });
+            let temp_dir = TempDir::new().unwrap();
+            let output_path = temp_dir.path().join("invalid-provide.rpm");
+
+            let error = generate(&result, &output_path).unwrap_err().to_string();
+            assert!(error.contains("native_export.rpm.provides"), "{error}");
             assert!(!output_path.exists());
         }
     }

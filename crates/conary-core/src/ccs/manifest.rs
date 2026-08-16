@@ -575,23 +575,23 @@ pub struct RpmExport {
     pub group: Option<String>,
 
     #[serde(default)]
-    pub requires: Vec<RpmDependency>,
+    pub requires: Vec<RpmRelation>,
 
     #[serde(default)]
-    pub provides: Vec<String>,
+    pub provides: Vec<RpmRelation>,
 }
 
-/// One exact RPM dependency header declaration.
+/// One exact RPM dependency or capability header declaration.
 ///
 /// Keep the operator typed: passing an RPM-spec expression to
 /// `rpm::Dependency::any` encodes the entire expression as an unversioned
-/// dependency name rather than as a version constraint.
+/// relation name rather than as a version constraint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RpmDependency {
+pub struct RpmRelation {
     pub name: String,
 
-    pub relation: RpmDependencyRelation,
+    pub relation: RpmRelationOperator,
 
     #[serde(default)]
     pub version: Option<String>,
@@ -600,7 +600,7 @@ pub struct RpmDependency {
 /// RPM comparison flags. Every relation except `any` requires a version.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RpmDependencyRelation {
+pub enum RpmRelationOperator {
     Any,
     Equal,
     Less,

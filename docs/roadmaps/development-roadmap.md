@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-16
-revision: 27
+revision: 28
 summary: Track Conary's active W7 corpus gate, typed semantic coverage, external tester milestone, and later workstreams
 proof_baseline: "immutable synchronized v0.15.0 suite at 642750878d5a59a9aa27976347cafc6f9dd86cfd; exact tagged Remi deployed; external tester result remains 0/10 behind #110"
 current_milestone: first external tester loop
@@ -325,13 +325,15 @@ the stated scope, not whether a workstream happens to be active.
   install from that repository with both artifacts bound to typed corpus
   evidence. #473 owns exact source-native and selected-generation ownership and
   timestamp attribution for the same digest-bound daily-driver artifact. #475
-  is the active bounded slice for digest-attributable pristine configuration
-  upgrade through the same focused daily-driver authority.
+  is closed after adding digest-attributable pristine configuration upgrade.
+  #477 is the active bounded slice for source-declared same-name compatibility
+  provides through the same focused daily-driver authority.
 - **Issues:** #110 as the corpus umbrella; #458 and #463 for focused
   daily-driver attribution; #462 and #464 for payload-topology export gaps;
   #460 and #461 for closed legacy parity defects; #470 for versioned dependency
   resolution; #473 for payload metadata attribution; #475 for configuration
-  upgrade attribution; plus #39 for bootstrap.
+  upgrade attribution; #477 for same-name compatibility provides; plus #39
+  for bootstrap.
 - **User journey:** install the signed release through one documented bootstrap
   entry point; `conary system init` with no hand-edited state; sync and
   authenticate repositories; request a package by ordinary name; resolve the
@@ -411,7 +413,7 @@ acceptance criteria, and proof.
 | W4 Source Fidelity Hard Cut | #102, #103, #98, #99 (slices 99a-99c), #107 | P0 |
 | W5 Source Authority Model | #108 specification, #104, #105 | P0 |
 | W6 Authority Audit Closure | #67 epic, #109, plus narrow ledger slices | P1 |
-| W7 Just-Works Corpus Gate | #110 umbrella, #475 active slice, #39 | P0 |
+| W7 Just-Works Corpus Gate | #110 umbrella, #477 active slice, #39 | P0 |
 | W8 External Tester Outreach | #48 | gated |
 | W9 Common Package Capability Classes | #74, #50, #46, #67 P2 remainder | P1 |
 | W10 Distro-Agnostic Takeover | #62 epic decomposed, #68 | P2 |

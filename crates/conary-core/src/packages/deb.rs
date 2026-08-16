@@ -428,11 +428,13 @@ impl DebPackage {
 
     fn convert_declared_capability_records(
         entries: &[String],
+        package_name: &str,
     ) -> Result<Vec<DebianDeclaredCapability>> {
         let mut provides = Vec::new();
         for (record_index, entry) in entries.iter().enumerate() {
-            let native = crate::repository::package_relation::parse_debian_provide(entry)
-                .map_err(Error::ParseError)?;
+            let native =
+                crate::repository::package_relation::parse_debian_provide(entry, package_name)
+                    .map_err(Error::ParseError)?;
             let provide = DebianDeclaredCapability {
                 control_index: u32::try_from(record_index).map_err(|_| {
                     Error::ParseError("Debian provide record index exceeds u32".to_string())
@@ -543,7 +545,7 @@ impl PackageFormat for DebPackage {
             })
             .collect();
 
-        let provides = Self::convert_declared_capability_records(&control.provides)?;
+        let provides = Self::convert_declared_capability_records(&control.provides, &name)?;
         let mut requirements =
             Self::convert_requirements(&control.dependencies, RepositoryRequirementKind::Depends)?;
         requirements.extend(Self::convert_requirements(

@@ -19,6 +19,7 @@ required = [
     "metadata_timestamps",
     "relations_versioned_dependency",
     "relations_virtual_provide",
+    "relations_same_name_compatibility_provide",
     "configuration_matched_config",
     "configuration_upgrade",
     "configuration_removal",
@@ -87,6 +88,7 @@ native_corpus_config_count = "1"
 native_corpus_config_source = "rpm"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "rpm"
+native_corpus_capability_format = "rpm"
 native_corpus_target_architecture = "x86_64"
 native_corpus_payload_user = "numeric:0"
 native_corpus_payload_group = "numeric:0"
@@ -105,6 +107,7 @@ native_corpus_config_count = "1"
 native_corpus_config_source = "deb"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "deb"
+native_corpus_capability_format = "debian"
 native_corpus_target_architecture = "x86_64"
 native_corpus_payload_user = "numeric:0"
 native_corpus_payload_group = "numeric:0"
@@ -123,6 +126,7 @@ native_corpus_config_count = "1"
 native_corpus_config_source = "arch"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "alpm"
+native_corpus_capability_format = "alpm"
 native_corpus_target_architecture = "x86_64"
 native_corpus_payload_user = "numeric:0"
 native_corpus_payload_group = "numeric:0"
@@ -147,6 +151,12 @@ exit_code = 0
 
 [[test.step]]
 run = ". /tmp/native-pm-corpus/native-fixture.env && case \"$NATIVE_TARGET\" in rpm) rpm -qp --qf '[%{FILENAMES}|%{FILEMODES}|%{FILEUSERNAME}|%{FILEGROUPNAME}\\n]' \"$NATIVE_PKG_FILE\" | grep -Fx '/opt|16872|root|root' ;; *) true ;; esac"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = ". /tmp/native-pm-corpus/native-fixture.env && case \"$NATIVE_TARGET\" in rpm) rpm -qp --provides \"$NATIVE_PKG_FILE\" | grep -Fx 'phase4-daily-driver-corpus = 1.0' ;; deb) test \"$(dpkg-deb --field \"$NATIVE_PKG_FILE\" Provides)\" = 'phase4-corpus-tool, phase4-daily-driver-corpus (= 1.0)' ;; arch) bsdtar -xOf \"$NATIVE_PKG_FILE\" .PKGINFO | grep -Fx 'provides = phase4-daily-driver-corpus=1.0' ;; esac"
 
 [test.step.assert]
 exit_code = 0
@@ -264,6 +274,13 @@ exit_code = 0
 stdout_contains_all = ["${native_corpus_config_count} config rows", "/etc/phase4-corpus/app.conf|1|pristine|${native_corpus_config_source}"]
 
 [[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT capability || '|' || version || '|' || version_relation || '|' || kind || '|' || version_scheme || '|' || json_extract(provenance, '$.role') || '|' || COALESCE(json_extract(provenance, '$.format'), '') FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND capability = 'phase4-daily-driver-corpus' AND kind = 'package' ORDER BY json_extract(provenance, '$.role')\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["phase4-daily-driver-corpus|${native_corpus_fixture_version}|eq|package|${native_scheme}|exact-identity|", "phase4-daily-driver-corpus|1.0|eq|package|${native_scheme}|source-declared|${native_corpus_capability_format}"]
+
+[[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' lifecycle bundles' FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT source_format || '|' || source_package || '|' || source_version || '|' || scriptlet_fidelity || '|' || lifecycle_state FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\""
 
 [test.step.assert]
@@ -342,6 +359,10 @@ semantic = "relations_virtual_provide"
 artifact_roles = ["install_request"]
 
 [[test.corpus.coverage]]
+semantic = "relations_same_name_compatibility_provide"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
 semantic = "configuration_matched_config"
 artifact_roles = ["install_request"]
 
@@ -382,7 +403,7 @@ conary = "query whatprovides phase4-daily-driver-corpus"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Capability 'phase4-daily-driver-corpus' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}"]
+stdout_contains_all = ["Capability 'phase4-daily-driver-corpus' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}", "provides version: ${native_corpus_fixture_version}", "provides version: 1.0", "Total: 1 provider(s)"]
 
 [[test.step]]
 conary = "query whatprovides 'virtual(phase4-corpus-tool)'"

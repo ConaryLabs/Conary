@@ -215,7 +215,11 @@ impl DebianParser {
     }
 
     /// Parse a Provides field into structured `RepositoryProvide` entries.
-    fn parse_structured_provides(&self, provides_str: &str) -> Result<Vec<RepositoryProvide>> {
+    fn parse_structured_provides(
+        &self,
+        provides_str: &str,
+        package_name: &str,
+    ) -> Result<Vec<RepositoryProvide>> {
         let mut result = Vec::new();
 
         for (record_index, provide) in provides_str.split(',').enumerate() {
@@ -225,10 +229,13 @@ impl DebianParser {
                     "invalid Debian Provides field with an empty comma-separated entry: {provides_str}"
                 )));
             }
-            let mut parsed = crate::repository::package_relation::parse_debian_provide(provide)
-                .map_err(|error| {
-                    Error::ParseError(format!("invalid Debian Provides atom '{provide}': {error}"))
-                })?;
+            let mut parsed =
+                crate::repository::package_relation::parse_debian_provide(provide, package_name)
+                    .map_err(|error| {
+                        Error::ParseError(format!(
+                            "invalid Debian Provides atom '{provide}': {error}"
+                        ))
+                    })?;
             parsed.provenance =
                 crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
                     format: crate::repository::dependency_model::SourcePackageFormat::Debian,
@@ -302,7 +309,7 @@ impl DebianParser {
         let parsed_provides = entry
             .provides
             .as_deref()
-            .map(|provides| self.parse_structured_provides(provides))
+            .map(|provides| self.parse_structured_provides(provides, &entry.package))
             .transpose()?
             .unwrap_or_default();
         let mut structured_provides = vec![RepositoryProvide::package_name(
@@ -825,7 +832,9 @@ mod tests {
             conflicts: None,
             breaks: None,
             replaces: None,
-            provides: Some("mail-transport-agent, smtp-server (= 1.0)".to_string()),
+            provides: Some(
+                "exim4 (= 4.96-compat), mail-transport-agent, smtp-server (= 1.0)".to_string(),
+            ),
             homepage: None,
             section: None,
             installed_size: None,
@@ -835,8 +844,8 @@ mod tests {
             .package_from_entry("https://example.test", entry)
             .unwrap();
 
-        // Self-provide + 2 explicit provides
-        assert!(pkg.provides.len() >= 3);
+        // Exact identity + same-name compatibility provide + 2 virtual provides.
+        assert!(pkg.provides.len() >= 4);
 
         let self_prov = pkg
             .provides
@@ -844,6 +853,27 @@ mod tests {
             .find(|p| p.name == "exim4" && p.kind == RepositoryCapabilityKind::PackageName)
             .expect("self-provide missing");
         assert_eq!(self_prov.version.as_deref(), Some("4.97-1"));
+
+        let compatibility_prov = pkg
+            .provides
+            .iter()
+            .find(|provide| {
+                provide.name == "exim4"
+                    && provide.version.as_deref() == Some("4.96-compat")
+                    && matches!(
+                        provide.provenance,
+                        crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                            format:
+                                crate::repository::dependency_model::SourcePackageFormat::Debian,
+                            record_index: 0,
+                        }
+                    )
+            })
+            .expect("same-name compatibility provide missing");
+        assert_eq!(
+            compatibility_prov.kind,
+            RepositoryCapabilityKind::PackageName
+        );
 
         let mta = pkg
             .provides
@@ -856,7 +886,7 @@ mod tests {
             mta.provenance,
             crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
                 format: crate::repository::dependency_model::SourcePackageFormat::Debian,
-                record_index: 0,
+                record_index: 1,
             }
         );
 
@@ -871,7 +901,7 @@ mod tests {
             smtp.provenance,
             crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
                 format: crate::repository::dependency_model::SourcePackageFormat::Debian,
-                record_index: 1,
+                record_index: 2,
             }
         );
     }
@@ -879,7 +909,7 @@ mod tests {
     #[test]
     fn structured_provides_preserve_explicit_architecture_qualifiers() {
         let provides = parser()
-            .parse_structured_provides("mail-api:any (= 2), helper:arm64")
+            .parse_structured_provides("mail-api:any (= 2), helper:arm64", "fixture")
             .unwrap();
         assert_eq!(provides[0].name, "mail-api");
         assert_eq!(provides[0].version.as_deref(), Some("2"));
@@ -899,7 +929,9 @@ mod tests {
     #[test]
     fn structured_provides_reject_non_exact_versions_and_empty_atoms() {
         for invalid in ["mail-api (>= 2)", "mail-api,,helper"] {
-            let error = parser().parse_structured_provides(invalid).unwrap_err();
+            let error = parser()
+                .parse_structured_provides(invalid, "fixture")
+                .unwrap_err();
             assert!(error.to_string().contains("Provides"), "{error}");
         }
     }

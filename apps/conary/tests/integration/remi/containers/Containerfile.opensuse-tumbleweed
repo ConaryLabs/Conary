@@ -6,7 +6,12 @@ FROM ${BASE_IMAGE}
 
 ARG INSTALL_MODE=binary
 
-RUN zypper --non-interactive install --no-recommends \
+RUN cp -a /etc/zypp/repos.d /tmp/zypp-repos.d.pinned \
+    && sed -i \
+        -e 's#http://download.opensuse.org/#https://downloadcontent.opensuse.org/#g' \
+        -e 's#https://download.opensuse.org/#https://downloadcontent.opensuse.org/#g' \
+        /etc/zypp/repos.d/*.repo \
+    && zypper --non-interactive install --no-recommends \
         ca-certificates \
         diffutils \
         findutils \
@@ -15,7 +20,9 @@ RUN zypper --non-interactive install --no-recommends \
         python3 \
         shadow \
         sqlite3 \
-    && zypper clean --all
+    && zypper clean --all \
+    && cp -a /tmp/zypp-repos.d.pinned/. /etc/zypp/repos.d/ \
+    && rm -rf /tmp/zypp-repos.d.pinned
 
 COPY conary* /tmp/install/
 

@@ -437,7 +437,10 @@ mod tests {
         result.manifest.native_export = Some(NativeExport {
             deb: Some(DebExport {
                 depends: vec!["phase4-repository-fixture (= 1.0.0-1)".to_string()],
-                provides: vec!["virtual-test-tool".to_string()],
+                provides: vec![
+                    "virtual-test-tool".to_string(),
+                    "test-package (= 1.0)".to_string(),
+                ],
                 ..DebExport::default()
             }),
             ..NativeExport::default()
@@ -471,6 +474,25 @@ mod tests {
                 .iter()
                 .any(|provide| provide.name == "virtual-test-tool")
         );
+        let compatibility = package
+            .resolution_capabilities()
+            .unwrap()
+            .into_iter()
+            .find(|provide| {
+                provide.name == "test-package" && provide.version.as_deref() == Some("1.0")
+            })
+            .expect("same-name Debian compatibility provide");
+        assert_eq!(
+            compatibility.version_relation,
+            Some(crate::repository::dependency_model::ProvideVersionRelation::Equal)
+        );
+        assert!(matches!(
+            compatibility.provenance,
+            crate::repository::dependency_model::CapabilityProvenance::SourceDeclared {
+                format: crate::repository::dependency_model::SourcePackageFormat::Debian,
+                ..
+            }
+        ));
     }
 
     #[test]
