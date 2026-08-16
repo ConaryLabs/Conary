@@ -191,7 +191,8 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
         "phase4-corpus-conflict",
         "large-payload.bin",
         "/usr/lib/kernel/install.d/95-phase4-corpus.install",
-        "query whatprovides phase4-corpus-tool",
+        "--from ${native_profile}",
+        "query whatprovides 'virtual(phase4-corpus-tool)'",
         "0 config rows",
     ] {
         assert!(
