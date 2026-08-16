@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-16
-revision: 25
-summary: Track Conary's active W7 versioned-dependency corpus slice, typed semantic coverage, external tester milestone, and later workstreams
+revision: 26
+summary: Track Conary's active W7 corpus gate, typed semantic coverage, external tester milestone, and later workstreams
 proof_baseline: "immutable synchronized v0.15.0 suite at 642750878d5a59a9aa27976347cafc6f9dd86cfd; exact tagged Remi deployed; external tester result remains 0/10 behind #110"
 current_milestone: first external tester loop
 active_workstream: W7 Just-Works Corpus Gate
@@ -321,9 +321,9 @@ the stated scope, not whether a workstream happens to be active.
   with hosted inode and RPM parser proof. #460 and #461 are closed: the legacy
   provider contract is exact per source format and the full parity matrix now
   uses a signed loopback repository plus process-group timeout cleanup. #470 is
-  the active slice making one exact versioned dependency resolve, acquire, and
+  closed after making one exact versioned dependency resolve, acquire, and
   install from that repository with both artifacts bound to typed corpus
-  evidence.
+  evidence. The next bounded #110 slice has not yet been selected.
 - **Issues:** #110 as the corpus umbrella; #458 and #463 for focused
   daily-driver attribution; #462 and #464 for payload-topology export gaps;
   #460 and #461 for closed legacy parity defects; #470 for versioned dependency
