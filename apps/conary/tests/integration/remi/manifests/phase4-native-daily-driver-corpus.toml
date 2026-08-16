@@ -5,7 +5,7 @@
 [suite]
 name = "Phase 4: Native Daily-Driver Corpus"
 phase = 4
-timeout = 1200
+timeout = 1500
 
 [suite.corpus]
 required = [
@@ -20,6 +20,7 @@ required = [
     "relations_versioned_dependency",
     "relations_virtual_provide",
     "configuration_matched_config",
+    "configuration_upgrade",
     "configuration_removal",
     "lifecycle_shell",
 ]
@@ -79,6 +80,7 @@ native_arch = "x86_64"
 native_scheme = "rpm"
 native_profile = "fedora-44"
 native_corpus_fixture_version = "1.0.0-1"
+native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "4"
 native_corpus_dependency_probe = "phase4-repository-fixture"
 native_corpus_config_count = "1"
@@ -96,6 +98,7 @@ native_arch = "amd64"
 native_scheme = "debian"
 native_profile = "ubuntu-26.04"
 native_corpus_fixture_version = "1.0.0-1"
+native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "1"
 native_corpus_dependency_probe = "phase4-repository-fixture"
 native_corpus_config_count = "1"
@@ -113,6 +116,7 @@ native_arch = "x86_64"
 native_scheme = "arch"
 native_profile = "arch"
 native_corpus_fixture_version = "1.0.0-1"
+native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "1"
 native_corpus_dependency_probe = "phase4-repository-fixture"
 native_corpus_config_count = "1"
@@ -130,7 +134,7 @@ native_corpus_payload_group = "numeric:0"
 [[test]]
 id = "TNPM13"
 name = "daily_driver_corpus_build"
-description = "Build a curated native package corpus with hardlinks, service, config, dependency, scriptlet, alternative target, large payload, and kernel-adjacent files"
+description = "Build exact v1 and v2 native corpus packages with hardlinks, service, versioned config, dependency, scriptlet, alternative target, large payload, and kernel-adjacent files"
 group = "daily-driver-corpus"
 timeout = 240
 fatal = true
@@ -149,6 +153,18 @@ exit_code = 0
 
 [[test.step]]
 run = ". /tmp/native-pm-corpus/native-fixture.env && rm -rf /tmp/native-pm-corpus-hardlink-root && /opt/remi-tests/fixtures/native/assert-native-hardlink.sh \"$NATIVE_TARGET\" \"$NATIVE_PKG_FILE\" /tmp/native-pm-corpus-hardlink-root /usr/lib/phase4-corpus/hardlink-anchor /usr/lib/phase4-corpus/hardlink-copy 0 0 1700000000"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-daily-driver-update-fixture.sh ${native_target} /tmp/native-pm-corpus-src /tmp/native-pm-corpus-v2-src /tmp/native-pm-corpus-v2"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = ". /tmp/native-pm-corpus-v2/native-fixture.env && rm -rf /tmp/native-pm-corpus-v2-root && /opt/remi-tests/fixtures/native/assert-native-hardlink.sh \"$NATIVE_TARGET\" \"$NATIVE_PKG_FILE\" /tmp/native-pm-corpus-v2-root /usr/lib/phase4-corpus/hardlink-anchor /usr/lib/phase4-corpus/hardlink-copy 0 0 1700000000 && test \"$(sha256sum /tmp/native-pm-corpus-v2-root/etc/phase4-corpus/app.conf | awk '{print $1}')\" = 97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27 && case \"$NATIVE_TARGET\" in rpm) test \"$(rpm -qp --qf '%{VERSION}-%{RELEASE}' \"$NATIVE_PKG_FILE\")\" = \"${native_corpus_update_version}\" ;; deb) test \"$(dpkg-deb --field \"$NATIVE_PKG_FILE\" Version)\" = \"${native_corpus_update_version}\" ;; arch) bsdtar -xOf \"$NATIVE_PKG_FILE\" .PKGINFO | grep -Fx \"pkgver = ${native_corpus_update_version}\" ;; esac"
 
 [test.step.assert]
 exit_code = 0
@@ -421,17 +437,90 @@ exit_code = 0
 stdout_contains_all = ["1 installed", "0 conflicts"]
 
 # --------------------------------------------------------------------------
-# TNPM18: daily-driver corpus removal hook and cleanup
+# TNPM18: daily-driver corpus configuration upgrade
 # --------------------------------------------------------------------------
 
 [[test]]
 id = "TNPM18"
+name = "daily_driver_corpus_configuration_upgrade"
+description = "Update through a bounded signed repository and prove the v2 native config artifact, persisted config authority, and selected generation agree"
+group = "daily-driver-corpus"
+timeout = 300
+fatal = true
+depends_on = ["TNPM17"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-daily-driver-update.json"
+source_profile = "${native_profile}"
+source_format = "${native_corpus_source_format}"
+digest_source = "fixture_build_manifest"
+stages = ["installation", "update"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "configuration_upgrade"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.step]]
+run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/prepare-native-update-repository.sh /tmp/native-pm-corpus-v2/native-fixture-manifest.json ${native_target} ${native_profile} ${DB_PATH} phase4-daily-driver-corpus ${native_corpus_update_version} ${native_scheme} ${native_arch}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = ". /tmp/native-update-repository/native-update-repository.env && sqlite3 ${DB_PATH} \"SELECT r.name || '|' || r.default_strategy || '|' || r.source_profile || '|' || rp.name || '|' || rp.version || '|' || rp.version_scheme || '|' || rp.architecture || '|' || rp.checksum || '|' || k.status FROM repositories r JOIN repository_packages rp ON rp.repository_id = r.id JOIN repository_package_keys k ON k.repository_id = r.id WHERE r.name = '$NATIVE_UPDATE_REPOSITORY'\" | grep -Fx \"$NATIVE_UPDATE_REPOSITORY|binary|${native_profile}|phase4-daily-driver-corpus|${native_corpus_update_version}|${native_scheme}|${native_arch}|$NATIVE_UPDATE_CCS_SHA256|active\""
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} update phase4-daily-driver-corpus --db-path ${DB_PATH} --root /conary --yes --sandbox always"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "phase4-daily-driver-corpus"
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=f8dced754a927950dfaaeab8b1b61d0c119e2fdb68ced61381748dc406f752a5 --expect-sha256 /etc/phase4-corpus/app.conf=97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27 --expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || t.version || '|' || COALESCE(t.architecture, '') || '|' || t.version_scheme || '|' || COALESCE(t.source_profile, '') || '|' || COALESCE(r.name, '') || '|' || t.install_source || '|' || t.install_reason FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = 'phase4-daily-driver-corpus'; SELECT path || '|' || original_hash || '|' || COALESCE(current_hash, '') || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["phase4-daily-driver-corpus|${native_corpus_update_version}|${native_arch}|${native_scheme}|${native_profile}|w7-native-update|repository|explicit", "/etc/phase4-corpus/app.conf|97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27|97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27|1|pristine|${native_corpus_config_source}"]
+
+[[test.step]]
+run = ". /tmp/native-update-repository/native-update-repository.env && test \"$(sqlite3 ${DB_PATH} \"SELECT source_format || '|' || source_package || '|' || source_version || '|' || lifecycle_state FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\")\" = \"${native_target}|phase4-daily-driver-corpus|${native_corpus_update_version}|installed\" && sqlite3 ${DB_PATH} \"SELECT bundle_toml FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\" | grep -F \"source_checksum = \\\"sha256:$NATIVE_UPDATE_SOURCE_SHA256\\\"\""
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-update.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} installation update --update-fixture-manifest /tmp/native-pm-corpus-v2/native-fixture-manifest.json --update-name phase4-daily-driver-corpus --update-version ${native_corpus_update_version} --update-architecture ${native_arch}"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM19: daily-driver corpus removal hook and cleanup
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM19"
 name = "daily_driver_corpus_remove_hooks_and_cleanup"
 description = "Purging the corpus package runs its pre-remove hook and deletes the tracked files and config"
 group = "daily-driver-corpus"
 timeout = 120
 fatal = true
-depends_on = ["TNPM17"]
+depends_on = ["TNPM18"]
 
 [test.corpus]
 evidence_path = "/tmp/conary-corpus-daily-driver-removal.json"
@@ -447,14 +536,14 @@ capabilities = ["native_lifecycle", "selected_root_generation"]
 
 [[test.corpus.coverage]]
 semantic = "configuration_removal"
-artifact_roles = ["install_request"]
+artifact_roles = ["update_request"]
 
 [[test.step]]
 run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove phase4-daily-driver-corpus --db-path ${DB_PATH} --root /conary --sandbox always --purge --yes"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "Removed package: phase4-daily-driver-corpus version ${native_corpus_fixture_version}"
+stdout_contains = "Removed package: phase4-daily-driver-corpus version ${native_corpus_update_version}"
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-corpus/remove.marker=e1f79758cc42e6fe6037941205d1fbc37f5780f13aa077d0ba8287fd93cecd52 --absent /opt --absent /usr/bin/phase4-corpus --absent /usr/bin/phase4-corpus-alt --absent /usr/bin/phase4-corpus-link --absent /usr/lib/phase4-corpus/state --absent /usr/lib/phase4-corpus/hardlink-anchor --absent /usr/lib/phase4-corpus/hardlink-copy --absent /etc/phase4-corpus/app.conf --absent /usr/lib/systemd/system/phase4-corpus.service --absent /usr/lib/kernel/install.d/95-phase4-corpus.install --absent /usr/share/phase4-corpus/large-payload.bin"
@@ -470,7 +559,7 @@ exit_code = 0
 stdout_contains_all = ["0 installed", "0 config rows"]
 
 [[test.step]]
-run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-removal.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} removal"
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-removal.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} removal --update-fixture-manifest /tmp/native-pm-corpus-v2/native-fixture-manifest.json --update-name phase4-daily-driver-corpus --update-version ${native_corpus_update_version} --update-architecture ${native_arch}"
 
 [test.step.assert]
 exit_code = 0

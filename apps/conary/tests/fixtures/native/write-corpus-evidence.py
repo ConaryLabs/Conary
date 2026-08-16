@@ -54,6 +54,10 @@ def main() -> None:
     parser.add_argument("--dependency-name")
     parser.add_argument("--dependency-version")
     parser.add_argument("--dependency-architecture")
+    parser.add_argument("--update-fixture-manifest", type=Path)
+    parser.add_argument("--update-name")
+    parser.add_argument("--update-version")
+    parser.add_argument("--update-architecture")
     args = parser.parse_args()
 
     dependency_values = [
@@ -66,6 +70,16 @@ def main() -> None:
         value is not None for value in dependency_values
     ):
         parser.error("dependency artifact identity requires all dependency arguments")
+    update_values = [
+        args.update_fixture_manifest,
+        args.update_name,
+        args.update_version,
+        args.update_architecture,
+    ]
+    if any(value is not None for value in update_values) and not all(
+        value is not None for value in update_values
+    ):
+        parser.error("update artifact identity requires all update arguments")
 
     source_artifacts = [
         artifact_identity(
@@ -76,6 +90,16 @@ def main() -> None:
             args.architecture,
         )
     ]
+    if args.update_fixture_manifest is not None:
+        source_artifacts.append(
+            artifact_identity(
+                args.update_fixture_manifest,
+                "update_request",
+                args.update_name,
+                args.update_version,
+                args.update_architecture,
+            )
+        )
     if args.dependency_fixture_manifest is not None:
         source_artifacts.append(
             artifact_identity(
