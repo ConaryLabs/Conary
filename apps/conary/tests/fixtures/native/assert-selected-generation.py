@@ -267,6 +267,33 @@ def assert_selected_symlink(
         fail(f"{path} symlink target is {actual!r}, expected {expected!r}")
 
 
+def assert_selected_directory(
+    entries: dict[str, dict[str, Any]], expectation: str
+) -> None:
+    path, expected = split_expectation(expectation, "--expect-directory")
+    if any(character not in "01234567" for character in expected):
+        fail(f"--expect-directory mode is not octal: {expected!r}")
+    expected_mode = int(expected, 8)
+    if expected_mode > 0o7777:
+        fail(f"--expect-directory mode exceeds permission bits: {expected!r}")
+    entry = entries.get(path)
+    if entry is None:
+        fail(f"selected generation does not contain {path}")
+    node = entry.get("node")
+    source = node.get("source") if isinstance(node, dict) else None
+    kind = source.get("kind") if isinstance(source, dict) else None
+    if not isinstance(kind, dict) or kind.get("type") != "directory":
+        fail(f"selected-generation path {path} is not a directory")
+    actual_mode = source.get("mode")
+    if isinstance(actual_mode, bool) or not isinstance(actual_mode, int):
+        fail(f"selected-generation directory {path} has no numeric mode")
+    if actual_mode & 0o7777 != expected_mode:
+        fail(
+            f"{path} directory mode is {actual_mode & 0o7777:04o}, "
+            f"expected {expected_mode:04o}"
+        )
+
+
 def parse_colon_records(content: bytes, path: str, field_count: int) -> list[list[str]]:
     try:
         lines = content.decode("utf-8").splitlines()
@@ -353,6 +380,9 @@ def main() -> int:
     parser.add_argument(
         "--expect-symlink", action="append", default=[], metavar="PATH=TARGET"
     )
+    parser.add_argument(
+        "--expect-directory", action="append", default=[], metavar="PATH=MODE"
+    )
     parser.add_argument("--contains-line", action="append", default=[], metavar="PATH=LINE")
     parser.add_argument(
         "--expect-user",
@@ -380,6 +410,8 @@ def main() -> int:
             fail(f"{path} bytes do not match expected digest {expected}")
     for value in args.expect_symlink:
         assert_selected_symlink(entries, value)
+    for value in args.expect_directory:
+        assert_selected_directory(entries, value)
     for value in args.contains_line:
         path, expected = split_expectation(value, "--contains-line")
         _, content = entry_content(entries, cas_base, path)
@@ -393,6 +425,7 @@ def main() -> int:
         len(args.present)
         + len(args.expect_sha256)
         + len(args.expect_symlink)
+        + len(args.expect_directory)
         + len(args.expect_user)
     )
     print(

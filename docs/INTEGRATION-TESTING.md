@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-15
-revision: 52
-summary: Document the focused attributable daily-driver manifest, typed corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
+last_updated: 2026-08-16
+revision: 53
+summary: Document attributable daily-driver payload topology, typed corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -534,6 +534,8 @@ builds a package in the host-native format and then proves:
 - native dependency metadata for a real package dependency
 - an exact installed native-lifecycle bundle plus install/remove hook effects
 - system user and group creation in the selected generation
+- an explicit mode-0750 directory and an exact relative symlink through native
+  package metadata and the selected generation
 - conflict refusal before a conflicting-content native package can mutate
   selected state
 - a 2 MiB payload file through the native package parser and file database
@@ -544,11 +546,14 @@ builds a package in the host-native format and then proves:
 `TNPM16` and `TNPM18` make the chain visible to the typed W7 aggregator. Each
 record reopens the builder's schema-versioned output manifest, hashes the exact
 native artifact again, and binds its claims to the install-request role.
-Across the two completed cases the suite declares exactly seven properties:
-exact version, native architecture, regular files, a queried virtual provide,
-matched config, purge-time config removal, and shell lifecycle. The source
-format comes from the explicit distro build-context override and must resolve
-to the closed RPM/DEB/ALPM type before evidence can count.
+Across the two completed cases the suite declares exactly nine properties:
+exact version, native architecture, regular files, directories, symlinks, a
+queried virtual provide, matched config, purge-time config removal, and shell
+lifecycle. Directory and symlink claims require exact typed node/mode/target
+queries plus selected-generation assertions; implicit parents and followed
+filesystem paths do not count. The source format comes from the explicit
+distro build-context override and must resolve to the closed RPM/DEB/ALPM type
+before evidence can count.
 
 Several useful assertions deliberately remain outside semantic coverage. The
 2 MiB zero-filled file is not W7 large-file/resource-boundary proof; the

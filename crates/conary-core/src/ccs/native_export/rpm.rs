@@ -140,12 +140,19 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
         );
     }
 
-    // Write files to temp dir and add to RPM
+    // Write files to temp dir and add to RPM.
+    let mut omitted_top_level_directory = false;
     for file in &result.files {
-        if matches!(&file.node.kind, PayloadNodeKind::Directory) {
+        if matches!(&file.node.kind, PayloadNodeKind::Directory)
+            && Path::new(&file.path).parent() == Some(Path::new("/"))
+        {
+            // rpm-rs 0.27 currently encodes a root-child directory such as
+            // /usr with dirname "//", which is not canonical RPM authority.
+            // Parent directories are implicit for descendant entries; retain
+            // an explicit loss record instead of publishing malformed bytes.
+            omitted_top_level_directory = true;
             continue;
         }
-
         match &file.node.kind {
             PayloadNodeKind::Regular { .. } => {
                 // Write to temp location
@@ -213,13 +220,24 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                     .with_symlink(options)
                     .context(format!("Failed to add symlink: {}", file.path))?;
             }
-            PayloadNodeKind::Directory => unreachable!("directories filtered above"),
+            PayloadNodeKind::Directory => {
+                let options =
+                    rpm::FileOptions::dir(&file.path).permissions((file.node.mode & 0o7777) as u16);
+                builder
+                    .with_dir_entry(options)
+                    .with_context(|| format!("Failed to add directory: {}", file.path))?;
+            }
             other => anyhow::bail!(
                 "RPM generator does not yet encode {} node {}",
                 payload_kind_name(other),
                 file.path
             ),
         }
+    }
+    if omitted_top_level_directory {
+        loss_report.add_unsupported(
+            "Explicit top-level directory metadata (RPM descendant paths create parents implicitly)",
+        );
     }
 
     for config in manifest.config.files.iter().filter(|config| config.ghost()) {
