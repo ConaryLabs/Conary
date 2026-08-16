@@ -14,6 +14,7 @@ use rusqlite::Connection;
 use std::time::Duration;
 
 use crate::error::{Error, Result};
+use crate::packages::PackageFormat;
 use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::versioning::VersionScheme;
@@ -148,16 +149,37 @@ pub fn solve_requirement_groups_with_policy(
     version_scheme: VersionScheme,
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
+    let depending_architecture =
+        crate::repository::registry::native_architecture_for_scheme(version_scheme);
+    solve_requirement_groups_for_architecture_with_policy(
+        conn,
+        groups,
+        version_scheme,
+        &depending_architecture,
+        policy,
+    )
+}
+
+fn solve_requirement_groups_for_architecture_with_policy(
+    conn: &Connection,
+    groups: &[RepositoryRequirementGroup],
+    version_scheme: VersionScheme,
+    depending_architecture: &str,
+    policy: &ResolutionPolicy,
+) -> Result<SatResolution> {
     let mut expressions = Vec::new();
     for group in groups {
         crate::repository::requirement::validate_requirement_group(group, version_scheme)
             .map_err(Error::ConfigError)?;
         match group.kind {
             RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends => {
-                expressions.push(crate::resolver::provider::repository_expression_to_solver(
-                    &group.expression,
-                    version_scheme,
-                )?);
+                expressions.push(
+                    crate::resolver::provider::repository_expression_to_solver_for_architecture(
+                        &group.expression,
+                        version_scheme,
+                        depending_architecture,
+                    )?,
+                );
             }
             RepositoryRequirementKind::Optional | RepositoryRequirementKind::Build => {}
             RepositoryRequirementKind::Conflict
@@ -238,15 +260,18 @@ pub fn positive_requirement_group_satisfied_by_package(
         expression: &crate::repository::dependency_model::RepositoryRequirementExpression,
         version_scheme: VersionScheme,
         package: &PackageIdentity,
+        depending_architecture: &str,
         native_architecture: &str,
     ) -> Result<bool> {
         use crate::repository::dependency_model::RepositoryRequirementExpression as Expression;
         match expression {
             Expression::Atom(_) => {
-                let solver_expression = crate::resolver::provider::repository_expression_to_solver(
-                    expression,
-                    version_scheme,
-                )?;
+                let solver_expression =
+                    crate::resolver::provider::repository_expression_to_solver_for_architecture(
+                        expression,
+                        version_scheme,
+                        depending_architecture,
+                    )?;
                 let crate::resolver::provider::SolverExpression::Atom(atom) = solver_expression
                 else {
                     return Ok(false);
@@ -266,6 +291,7 @@ pub fn positive_requirement_group_satisfied_by_package(
                         operand,
                         version_scheme,
                         package,
+                        depending_architecture,
                         native_architecture,
                     )? {
                         return Ok(false);
@@ -279,6 +305,7 @@ pub fn positive_requirement_group_satisfied_by_package(
                         operand,
                         version_scheme,
                         package,
+                        depending_architecture,
                         native_architecture,
                     )? {
                         return Ok(true);
@@ -293,11 +320,70 @@ pub fn positive_requirement_group_satisfied_by_package(
         }
     }
 
+    let native_architecture = crate::repository::registry::detect_system_arch();
+    let depending_architecture = package
+        .architecture
+        .as_deref()
+        .unwrap_or(native_architecture.as_str());
     matches_positive_expression(
         &group.expression,
         version_scheme,
         package,
-        &crate::repository::registry::detect_system_arch(),
+        depending_architecture,
+        &native_architecture,
+    )
+}
+
+/// Solve one parsed package's external requirements after discharging exact
+/// positive requirements that the incoming package itself provides.
+///
+/// All install entrypoints use this boundary so a converted CCS archive and
+/// its source-native package receive identical dependency semantics.
+pub fn solve_package_requirements_with_policy(
+    conn: &Connection,
+    package: &dyn PackageFormat,
+    policy: &ResolutionPolicy,
+) -> Result<SatResolution> {
+    let incoming = PackageIdentity {
+        repo_package_id: None,
+        name: package.name().to_string(),
+        version: package.version().to_string(),
+        package_release: package.package_release().map(str::to_string),
+        architecture: package.architecture().map(str::to_string),
+        debian_multi_arch: package.debian_multi_arch(),
+        version_scheme: package.version_scheme(),
+        repository_id: None,
+        repository_name: String::new(),
+        repository_profile: None,
+        repository_priority: 0,
+        canonical_id: None,
+        canonical_name: None,
+        installed_trove_id: None,
+        installed_pinned: false,
+        provided_capabilities: package.resolution_capabilities()?,
+    };
+    let mut external_requirements = Vec::new();
+    for requirement in package.requirements() {
+        if !positive_requirement_group_satisfied_by_package(
+            requirement,
+            package.version_scheme(),
+            &incoming,
+        )? {
+            external_requirements.push(requirement.clone());
+        }
+    }
+    let depending_architecture = package
+        .architecture()
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            crate::repository::registry::native_architecture_for_scheme(package.version_scheme())
+        });
+    solve_requirement_groups_for_architecture_with_policy(
+        conn,
+        &external_requirements,
+        package.version_scheme(),
+        &depending_architecture,
+        policy,
     )
 }
 

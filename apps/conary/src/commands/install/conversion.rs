@@ -572,10 +572,9 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
     let mut selected_dependencies = Vec::new();
     if !no_deps && !ccs_pkg.requirements().is_empty() {
         let conn = open_db(db_path)?;
-        let sat_result = conary_core::resolver::solve_requirement_groups_with_policy(
+        let sat_result = conary_core::resolver::solve_package_requirements_with_policy(
             &conn,
-            ccs_pkg.requirements(),
-            ccs_pkg.version_scheme(),
+            &ccs_pkg,
             &resolution_policy,
         )
         .with_context(|| {

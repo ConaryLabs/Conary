@@ -646,6 +646,7 @@ fn json_contract_keeps_source_version_and_ccs_release_separate() {
         "signed-static".to_string(),
         "https://example.test/static".to_string(),
     );
+    repo.source_profile = Some("ubuntu-26.04".to_string());
     repo.insert(&conn).unwrap();
     let repo_id = repo.id.unwrap();
     let metadata: JsonRepositoryMetadata = serde_json::from_value(json!({
@@ -656,8 +657,8 @@ fn json_contract_keeps_source_version_and_ccs_release_separate() {
             "name": "fixture",
             "version": "1.0.0",
             "release": "1",
-            "version_scheme": "rpm",
-            "architecture": "x86_64",
+            "version_scheme": "debian",
+            "architecture": "amd64",
             "description": "signed fixture",
             "checksum": "fixture-checksum",
             "size": 42,
@@ -675,6 +676,23 @@ fn json_contract_keeps_source_version_and_ccs_release_separate() {
     let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
     assert_eq!(stored[0].version, "1.0.0");
     assert_eq!(stored[0].package_release, "1");
+
+    let requirement = crate::repository::requirement::parse_native_requirement(
+        crate::repository::dependency_model::RepositoryRequirementKind::Depends,
+        VersionScheme::Debian,
+        "fixture (= 1.0.0)",
+    )
+    .unwrap();
+    let resolution = crate::resolver::solve_requirement_groups_with_policy(
+        &conn,
+        &[requirement],
+        VersionScheme::Debian,
+        &crate::repository::resolution_policy::ResolutionPolicy::new()
+            .with_primary_source_identity("ubuntu-26.04"),
+    )
+    .unwrap();
+    assert!(resolution.conflict_message.is_none(), "{resolution:?}");
+    assert_eq!(resolution.install_order.len(), 1);
 }
 
 #[test]

@@ -16,7 +16,7 @@ use conary_core::db::paths::keyring_dir;
 use conary_core::packages::PackageFormat;
 use conary_core::repository;
 use conary_core::repository::dependency_model::RepositoryRequirementKind;
-use conary_core::resolver::{PackageIdentity, SatResolution, SatSource};
+use conary_core::resolver::{SatResolution, SatSource};
 use conary_core::scriptlet::SandboxMode;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -70,40 +70,8 @@ pub(super) async fn handle_dependencies(ctx: &DepAnalysisContext<'_>) -> Result<
     );
     println!("Checking dependencies for {}...", ctx.pkg.name());
 
-    let incoming_package = PackageIdentity {
-        repo_package_id: None,
-        name: ctx.pkg.name().to_string(),
-        version: ctx.pkg.version().to_string(),
-        package_release: ctx.pkg.package_release().map(str::to_string),
-        architecture: ctx.pkg.architecture().map(str::to_string),
-        debian_multi_arch: ctx.pkg.debian_multi_arch(),
-        version_scheme: ctx.pkg.version_scheme(),
-        repository_id: None,
-        repository_name: String::new(),
-        repository_profile: None,
-        repository_priority: 0,
-        canonical_id: None,
-        canonical_name: None,
-        installed_trove_id: None,
-        installed_pinned: false,
-        provided_capabilities: ctx.pkg.resolution_capabilities()?,
-    };
-    let mut external_requirements = Vec::new();
-    for requirement in ctx.pkg.requirements() {
-        if !conary_core::resolver::positive_requirement_group_satisfied_by_package(
-            requirement,
-            ctx.pkg.version_scheme(),
-            &incoming_package,
-        )? {
-            external_requirements.push(requirement.clone());
-        }
-    }
-
-    let sat_result = conary_core::resolver::solve_requirement_groups_with_policy(
-        ctx.conn,
-        &external_requirements,
-        ctx.pkg.version_scheme(),
-        ctx.policy,
+    let sat_result = conary_core::resolver::solve_package_requirements_with_policy(
+        ctx.conn, ctx.pkg, ctx.policy,
     )
     .with_context(|| format!("Failed to resolve dependencies for '{}'", ctx.pkg.name()))?;
 
