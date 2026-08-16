@@ -169,8 +169,12 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     let deferred_rendered = format!("{deferred_follow_up:?}");
     assert!(
         deferred_rendered.contains("generation_publication")
-            && !deferred_rendered.contains("generation_rebuild"),
-        "TNPM09 must assert the canonical generation-publication follow-up kind"
+            && deferred_rendered.contains("generation publication is pending")
+            && deferred_rendered.contains("generation_publications")
+            && deferred_rendered.contains("last_error")
+            && deferred_rendered
+                .contains("forced generation rebuild failure for test: slice-d-forced"),
+        "TNPM09 must separate canonical deferred authority from exact publication failure evidence"
     );
 
     let mock_server = parity_manifest

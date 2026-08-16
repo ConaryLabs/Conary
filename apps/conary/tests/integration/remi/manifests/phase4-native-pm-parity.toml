@@ -503,7 +503,14 @@ run = "sqlite3 ${DB_PATH} \"SELECT COALESCE(metadata, '') FROM changesets WHERE 
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["deferred_follow_up", "generation_publication", "forced generation rebuild failure for test: slice-d-forced"]
+stdout_contains_all = ["deferred_follow_up", "generation_publication", "generation publication is pending"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT status || '|' || COALESCE(last_error, '') || '|' || retry_count || '|' || recoverable FROM generation_publications WHERE trigger_changeset_id = (SELECT id FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1) ORDER BY id DESC LIMIT 1\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "failed|forced generation rebuild failure for test: slice-d-forced|1|1"
 
 [[test.step]]
 conary = "system history"
