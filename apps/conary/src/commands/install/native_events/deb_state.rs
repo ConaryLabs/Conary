@@ -79,6 +79,36 @@ fn owner_identity(owner: &NativeBundleOwner) -> NativePackageIdentity {
 }
 
 impl PreparedNativeTransaction {
+    pub(crate) fn finalize_successful_debian_installs(
+        &self,
+        conn: &rusqlite::Connection,
+    ) -> Result<()> {
+        for owner in self.owners.iter().filter(|owner| {
+            owner.bundle.source_format == SourceFormat::Deb
+                && owner.role == NativeBundleRole::Installing
+        }) {
+            let runtime = self.runtime_state(conn, owner)?;
+            let state = match runtime.lifecycle_state {
+                DebPackageState::Unpacked if !runtime.awaited_packages.is_empty() => {
+                    DebPackageState::TriggersAwaited
+                }
+                DebPackageState::Unpacked if !runtime.pending_triggers.is_empty() => {
+                    DebPackageState::TriggersPending
+                }
+                DebPackageState::Unpacked => DebPackageState::Installed,
+                _ => continue,
+            };
+            self.update_owner_state(
+                conn,
+                owner,
+                state,
+                Some(&runtime.pending_triggers),
+                Some(&runtime.awaited_packages),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(super) fn persist_event_success(
         &self,
         conn: &rusqlite::Connection,
@@ -457,6 +487,9 @@ mod tests {
     use conary_core::ccs::native_transaction::{
         DebTriggerActivation, DebTriggerActivationBoundary, DebTriggerUnconfiguration,
     };
+    use conary_core::db::models::{Trove, TroveType};
+    use conary_core::repository::dependency_model::DebianMultiArch;
+    use conary_core::repository::versioning::VersionScheme as RepositoryVersionScheme;
 
     fn deb_bundle() -> conary_core::ccs::native_lifecycle::NativeLifecycleBundle {
         conary_core::ccs::native_lifecycle::NativeLifecycleBundle {
@@ -478,6 +511,85 @@ mod tests {
             scriptlet_fidelity: ScriptletFidelity::NativeLifecycle,
             entries: Vec::new(),
         }
+    }
+
+    #[test]
+    fn successful_debian_install_without_postinst_reaches_terminal_state() {
+        let (_tmp, db_path) = crate::commands::test_helpers::create_test_db();
+        let conn = conary_core::db::open(&db_path).unwrap();
+        let mut owners = Vec::new();
+
+        for (package, state, pending, awaited) in [
+            (
+                "native-free",
+                DebPackageState::Unpacked,
+                Vec::new(),
+                Vec::new(),
+            ),
+            (
+                "pending-trigger",
+                DebPackageState::TriggersPending,
+                vec!["refresh-cache".to_string()],
+                Vec::new(),
+            ),
+            (
+                "awaiting-trigger",
+                DebPackageState::Unpacked,
+                Vec::new(),
+                vec![NativePackageIdentity::new(
+                    "trigger-owner",
+                    "1.0-1",
+                    Some("amd64"),
+                )],
+            ),
+        ] {
+            let mut trove = Trove::new(
+                package.to_string(),
+                "1.0-1".to_string(),
+                TroveType::Package,
+                RepositoryVersionScheme::Debian,
+            );
+            trove.debian_multi_arch = Some(DebianMultiArch::No);
+            let trove_id = trove.insert(&conn).unwrap();
+            let mut bundle = deb_bundle();
+            bundle.source_package = package.to_string();
+            let mut installed =
+                InstalledNativeLifecycleBundle::new(trove_id, None, &bundle).unwrap();
+            installed.lifecycle_state = state;
+            installed.pending_triggers = pending.clone();
+            installed.awaited_packages = awaited.clone();
+            installed.insert_or_replace(&conn).unwrap();
+            owners.push(NativeBundleOwner {
+                package_name: package.to_string(),
+                package_version: "1.0-1".to_string(),
+                instances_after: 1,
+                role: NativeBundleRole::Installing,
+                initial_package_state: DebPackageState::NotInstalled,
+                initial_pending_triggers: Vec::new(),
+                initial_awaited_packages: Vec::new(),
+                bundle,
+            });
+        }
+
+        let transaction = PreparedNativeTransaction {
+            owners,
+            operations: vec![NativeTransactionOperation::Install; 3],
+            ..PreparedNativeTransaction::default()
+        };
+        transaction
+            .finalize_successful_debian_installs(&conn)
+            .unwrap();
+
+        let states = transaction
+            .owners
+            .iter()
+            .map(|owner| transaction.runtime_state(&conn, owner).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(states[0].lifecycle_state, DebPackageState::Installed);
+        assert_eq!(states[1].lifecycle_state, DebPackageState::TriggersPending);
+        assert_eq!(states[1].pending_triggers, ["refresh-cache"]);
+        assert_eq!(states[2].lifecycle_state, DebPackageState::TriggersAwaited);
+        assert_eq!(states[2].awaited_packages.len(), 1);
     }
 
     #[test]

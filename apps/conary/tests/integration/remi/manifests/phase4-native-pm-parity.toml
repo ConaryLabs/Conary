@@ -496,7 +496,7 @@ run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "deferred"
+stdout_contains = "pending"
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COALESCE(metadata, '') FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1\""
