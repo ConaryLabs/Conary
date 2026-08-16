@@ -428,6 +428,7 @@ Each fixture family should record:
   suite runner, local QEMU validation scripts.
 - **Fast proof:** `cargo run -p conary-test -- list`;
   `cargo test -p conary-test suite_inventory`;
+  `cargo test -p conary-test phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contract`;
   `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
   `cargo test -p conary-test native_cross_source_`.
 - **Medium proof:**
