@@ -340,10 +340,17 @@ mod tests {
             arch: Some("x86_64".to_string()),
             ..Default::default()
         });
-        let result = crate::ccs::builder::CcsBuilder::new(manifest, source.path())
+        let mut result = crate::ccs::builder::CcsBuilder::new(manifest, source.path())
             .unwrap()
             .build()
             .unwrap();
+        let state = result
+            .files
+            .iter_mut()
+            .find(|file| file.path == "/usr/lib/topology/state")
+            .expect("explicit topology directory authority");
+        state.node.user = crate::payload::PayloadIdentity::Numeric { id: 0 };
+        state.node.group = crate::payload::PayloadIdentity::Numeric { id: 0 };
         let output = tempfile::tempdir().unwrap();
 
         let rpm_path = output.path().join("topology.rpm");

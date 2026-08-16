@@ -455,6 +455,23 @@ mod tests {
         }
     }
 
+    fn directory_entry(path: &str, permissions: u32, owner: u64) -> FileEntry {
+        FileEntry {
+            path: path.to_string(),
+            node: PayloadNode {
+                kind: PayloadNodeKind::Directory,
+                mode: libc::S_IFDIR | permissions,
+                user: PayloadIdentity::Numeric { id: owner },
+                group: PayloadIdentity::Numeric { id: owner },
+                mtime: PayloadTimestamp::UNIX_EPOCH,
+                xattrs: Default::default(),
+            },
+            content: None,
+            component: "runtime".to_string(),
+            chunks: None,
+        }
+    }
+
     #[test]
     fn test_rpm_generation_empty() {
         let result = create_test_build_result();
@@ -471,20 +488,7 @@ mod tests {
         let mut result = create_test_build_result();
         result.files = [("/usr", 0o751), ("/opt", 0o750)]
             .into_iter()
-            .map(|(path, permissions)| FileEntry {
-                path: path.to_string(),
-                node: PayloadNode {
-                    kind: PayloadNodeKind::Directory,
-                    mode: libc::S_IFDIR | permissions,
-                    user: PayloadIdentity::Numeric { id: 0 },
-                    group: PayloadIdentity::Numeric { id: 0 },
-                    mtime: PayloadTimestamp::UNIX_EPOCH,
-                    xattrs: Default::default(),
-                },
-                content: None,
-                component: "runtime".to_string(),
-                chunks: None,
-            })
+            .map(|(path, permissions)| directory_entry(path, permissions, 0))
             .collect();
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("root-directories.rpm");
@@ -528,6 +532,22 @@ mod tests {
                 .iter()
                 .all(|file| !file.path.starts_with("//"))
         );
+    }
+
+    #[test]
+    fn directory_export_rejects_nonzero_numeric_ownership() {
+        let mut result = create_test_build_result();
+        result.files = vec![directory_entry("/opt", 0o750, 1001)];
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("numeric-owner.rpm");
+
+        let error = generate(&result, &output_path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot represent numeric user identity 1001 exactly")
+        );
+        assert!(!output_path.exists());
     }
 
     #[test]
