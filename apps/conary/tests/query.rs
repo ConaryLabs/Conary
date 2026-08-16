@@ -382,6 +382,50 @@ fn whatprovides_reports_installed_and_repository_providers() {
 }
 
 #[test]
+fn whatprovides_surfaces_same_name_compatibility_version_once_per_package() {
+    use conary_core::db::models::{ProvideEntry, Trove, TroveType};
+    use conary_core::repository::dependency_model::{
+        ProvideArchitectureQualifier, RepositoryCapabilityKind,
+    };
+
+    let (_tmp, db_path, conn) = common::create_test_db();
+    let mut package = Trove::new(
+        "fixture".to_string(),
+        "2.0".to_string(),
+        TroveType::Package,
+        VersionScheme::Rpm,
+    );
+    let trove_id = package.insert(&conn).unwrap();
+    ProvideEntry::new(
+        trove_id,
+        "fixture".to_string(),
+        Some("2.0".to_string()),
+        VersionScheme::Rpm,
+    )
+    .insert(&conn)
+    .unwrap();
+    ProvideEntry::new_typed(
+        trove_id,
+        RepositoryCapabilityKind::PackageName,
+        "fixture".to_string(),
+        Some("1.0".to_string()),
+        VersionScheme::Rpm,
+        ProvideArchitectureQualifier::Implicit,
+    )
+    .insert(&conn)
+    .unwrap();
+    drop(conn);
+
+    let output = run_conary(&["query", "whatprovides", "fixture", "--db-path", &db_path]);
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("fixture 2.0"), "{stdout}");
+    assert!(stdout.contains("provides version: 2.0"), "{stdout}");
+    assert!(stdout.contains("provides version: 1.0"), "{stdout}");
+    assert!(stdout.contains("Total: 1 provider(s)"), "{stdout}");
+}
+
+#[test]
 fn whatprovides_reads_normalized_repository_provider_metadata() {
     use conary_core::db::models::{Repository, RepositoryPackage, RepositoryProvide};
 

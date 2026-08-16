@@ -5,6 +5,7 @@ use crate::packages::traits::{
     DebMaintainerMode, DebTriggerAwaitMode, DebTriggerDirective, NativeArgumentValue,
     NativeLifecyclePath, NativeScriptletKind, NativeScriptletMetadata, NativeStdinContract,
 };
+use crate::repository::dependency_model::RepositoryCapabilityKind;
 use std::io::Cursor;
 
 #[test]
@@ -224,6 +225,22 @@ fn deb_predepends_and_alternatives_preserve_exact_typed_groups() {
             .collect::<Vec<_>>(),
         vec!["default-mta", "mail-transport-agent"]
     );
+}
+
+#[test]
+fn deb_declared_same_name_provide_is_package_name_authority() {
+    let provides = DebPackage::convert_declared_capability_records(
+        &[
+            "fixture (= 1.0)".to_string(),
+            "fixture-abi (= 1.0)".to_string(),
+        ],
+        "fixture",
+    )
+    .unwrap();
+
+    assert_eq!(provides[0].kind, RepositoryCapabilityKind::PackageName);
+    assert_eq!(provides[0].version.as_deref(), Some("1.0"));
+    assert_eq!(provides[1].kind, RepositoryCapabilityKind::Virtual);
 }
 
 #[test]

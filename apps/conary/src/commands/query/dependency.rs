@@ -12,7 +12,7 @@ use conary_core::db::models::{
     InstalledRequirementAtom, ProvideEntry, Repository, RepositoryPackage, RepositoryProvide, Trove,
 };
 use conary_core::repository::dependency_model::RepositoryCapabilityKind;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use tracing::info;
 
 /// Show dependencies for a package
@@ -154,10 +154,10 @@ pub async fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
     println!("Capability '{}' is provided by:", capability);
     if !providers.is_empty() {
         println!("Installed providers:");
-        for provide in &providers {
-            if let Ok(Some(trove)) = Trove::find_by_id(&conn, provide.trove_id) {
+        for provider in &providers {
+            if let Ok(Some(trove)) = Trove::find_by_id(&conn, provider.trove_id) {
                 print!("  {} {}", trove.name, trove.version);
-                if let Some(ref ver) = provide.version {
+                for ver in &provider.capability_versions {
                     print!(" (provides version: {})", ver);
                 }
                 if let Some(ref arch) = trove.architecture {
@@ -171,8 +171,8 @@ pub async fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
     let mut rendered_repo_providers = 0usize;
     if !repo_providers.is_empty() {
         println!("Repository providers:");
-        for provide in &repo_providers {
-            let Some(pkg) = RepositoryPackage::find_by_id(&conn, provide.repository_package_id)?
+        for provider in &repo_providers {
+            let Some(pkg) = RepositoryPackage::find_by_id(&conn, provider.repository_package_id)?
             else {
                 continue;
             };
@@ -184,7 +184,7 @@ pub async fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
                 print!(" [{}]", arch);
             }
             print!(" @{}", repo_name);
-            if let Some(version) = &provide.version {
+            for version in &provider.capability_versions {
                 print!(" (provides version: {})", version);
             }
             println!();
@@ -199,24 +199,71 @@ pub async fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct InstalledProviderMatch {
+    trove_id: i64,
+    capability_versions: Vec<String>,
+}
+
+#[derive(Debug)]
+struct RepositoryProviderMatch {
+    repository_package_id: i64,
+    capability_versions: Vec<String>,
+}
+
+fn record_installed_provider(
+    providers: &mut Vec<InstalledProviderMatch>,
+    indexes: &mut HashMap<i64, usize>,
+    provider: ProvideEntry,
+) {
+    let index = *indexes.entry(provider.trove_id).or_insert_with(|| {
+        providers.push(InstalledProviderMatch {
+            trove_id: provider.trove_id,
+            capability_versions: Vec::new(),
+        });
+        providers.len() - 1
+    });
+    if let Some(version) = provider.version
+        && !providers[index].capability_versions.contains(&version)
+    {
+        providers[index].capability_versions.push(version);
+    }
+}
+
+fn record_repository_provider(
+    providers: &mut Vec<RepositoryProviderMatch>,
+    indexes: &mut HashMap<i64, usize>,
+    provider: RepositoryProvide,
+) {
+    let package_id = provider.repository_package_id;
+    let index = *indexes.entry(package_id).or_insert_with(|| {
+        providers.push(RepositoryProviderMatch {
+            repository_package_id: package_id,
+            capability_versions: Vec::new(),
+        });
+        providers.len() - 1
+    });
+    if let Some(version) = provider.version
+        && !providers[index].capability_versions.contains(&version)
+    {
+        providers[index].capability_versions.push(version);
+    }
+}
+
 fn installed_providers_for_capability(
     conn: &rusqlite::Connection,
     capability: &str,
-) -> Result<Vec<ProvideEntry>> {
+) -> Result<Vec<InstalledProviderMatch>> {
     let mut providers = Vec::new();
-    let mut seen_troves = HashSet::new();
+    let mut indexes = HashMap::new();
 
     for provider in ProvideEntry::find_all_by_cli_exact_query(conn, capability)? {
-        if seen_troves.insert(provider.trove_id) {
-            providers.push(provider);
-        }
+        record_installed_provider(&mut providers, &mut indexes, provider);
     }
 
     if let Some((kind, typed_capability)) = parse_typed_capability_query(capability) {
         for provider in ProvideEntry::find_all_typed(conn, kind, typed_capability)? {
-            if seen_troves.insert(provider.trove_id) {
-                providers.push(provider);
-            }
+            record_installed_provider(&mut providers, &mut indexes, provider);
         }
     }
 
@@ -226,14 +273,12 @@ fn installed_providers_for_capability(
 fn repository_providers_for_capability(
     conn: &rusqlite::Connection,
     capability: &str,
-) -> Result<Vec<RepositoryProvide>> {
+) -> Result<Vec<RepositoryProviderMatch>> {
     let mut providers = Vec::new();
-    let mut seen_packages = HashSet::new();
+    let mut indexes = HashMap::new();
 
     for provider in RepositoryProvide::find_by_cli_exact_query(conn, capability)? {
-        if seen_packages.insert(provider.repository_package_id) {
-            providers.push(provider);
-        }
+        record_repository_provider(&mut providers, &mut indexes, provider);
     }
 
     if let Some((kind, typed_capability)) = parse_typed_capability_query(capability) {
@@ -242,9 +287,7 @@ fn repository_providers_for_capability(
             typed_capability,
             capability_kind_name(kind),
         )? {
-            if seen_packages.insert(provider.repository_package_id) {
-                providers.push(provider);
-            }
+            record_repository_provider(&mut providers, &mut indexes, provider);
         }
     }
     Ok(providers)

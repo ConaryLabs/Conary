@@ -482,7 +482,7 @@ fn parse_dpkg_provide_record(
     for (record_index, part) in fields[3].split(',').enumerate() {
         let provide = part.trim();
         if !provide.is_empty() {
-            let parsed = crate::repository::package_relation::parse_debian_provide(provide)
+            let parsed = crate::repository::package_relation::parse_debian_provide(provide, name)
                 .map_err(Error::ParseError)?;
             provides.push(ProvidedCapability {
                 kind: parsed.kind,
@@ -951,21 +951,25 @@ mod tests {
         .unwrap();
         let provides = parse_dpkg_provide_record(
             &identity,
-            "fixture:amd64\x1efixture\x1e2:1.4-3\x1email-api:any (= 2), helper:arm64",
+            "fixture:amd64\x1efixture\x1e2:1.4-3\x1efixture (= 1.0), mail-api:any (= 2), helper:arm64",
         )
         .unwrap();
 
-        assert_eq!(provides.len(), 3);
+        assert_eq!(provides.len(), 4);
         assert_eq!(provides[0].provenance, CapabilityProvenance::ExactIdentity);
-        assert_eq!(provides[1].name, "mail-api");
-        assert_eq!(provides[1].version.as_deref(), Some("2"));
-        assert_eq!(
-            provides[1].architecture_qualifier,
-            ProvideArchitectureQualifier::Any
-        );
-        assert_eq!(provides[2].name, "helper");
+        assert_eq!(provides[1].name, "fixture");
+        assert_eq!(provides[1].kind, RepositoryCapabilityKind::PackageName);
+        assert_eq!(provides[1].version.as_deref(), Some("1.0"));
+        assert_eq!(provides[2].name, "mail-api");
+        assert_eq!(provides[2].kind, RepositoryCapabilityKind::Virtual);
+        assert_eq!(provides[2].version.as_deref(), Some("2"));
         assert_eq!(
             provides[2].architecture_qualifier,
+            ProvideArchitectureQualifier::Any
+        );
+        assert_eq!(provides[3].name, "helper");
+        assert_eq!(
+            provides[3].architecture_qualifier,
             ProvideArchitectureQualifier::Exact("arm64".to_string())
         );
     }

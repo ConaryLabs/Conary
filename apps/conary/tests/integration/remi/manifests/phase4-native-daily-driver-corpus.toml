@@ -403,7 +403,7 @@ conary = "query whatprovides phase4-daily-driver-corpus"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Capability 'phase4-daily-driver-corpus' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}", "provides version: 1.0", "Total: 2 provider(s)"]
+stdout_contains_all = ["Capability 'phase4-daily-driver-corpus' is provided by:", "phase4-daily-driver-corpus ${native_corpus_fixture_version}", "provides version: ${native_corpus_fixture_version}", "provides version: 1.0", "Total: 1 provider(s)"]
 
 [[test.step]]
 conary = "query whatprovides 'virtual(phase4-corpus-tool)'"

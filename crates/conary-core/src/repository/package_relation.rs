@@ -522,8 +522,13 @@ pub(crate) fn parse_debian_atom(input: &str) -> Result<RepositoryRequirementClau
 }
 
 /// Parse one Debian `Provides` atom with dpkg's exact version and architecture
-/// grammar. Only an exact provided version is meaningful to dpkg.
-pub(crate) fn parse_debian_provide(input: &str) -> Result<RepositoryProvide, String> {
+/// grammar. Only an exact provided version is meaningful to dpkg. A relation
+/// naming the package itself is package-name authority rather than a virtual
+/// alias.
+pub(crate) fn parse_debian_provide(
+    input: &str,
+    package_name: &str,
+) -> Result<RepositoryProvide, String> {
     let clause = parse_debian_atom(input)?;
     let version = match clause.version_constraint.as_deref() {
         None => None,
@@ -548,9 +553,14 @@ pub(crate) fn parse_debian_provide(input: &str) -> Result<RepositoryProvide, Str
             ProvideArchitectureQualifier::Exact(architecture)
         }
     };
+    let kind = if clause.name == package_name {
+        RepositoryCapabilityKind::PackageName
+    } else {
+        RepositoryCapabilityKind::Virtual
+    };
     Ok(RepositoryProvide {
         name: clause.name,
-        kind: RepositoryCapabilityKind::Virtual,
+        kind,
         version_relation: version
             .as_ref()
             .map(|_| crate::repository::dependency_model::ProvideVersionRelation::Equal),
@@ -971,5 +981,16 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn debian_same_name_provide_is_package_name_authority() {
+        let same_name =
+            parse_debian_provide("fixture (= 1.0)", "fixture").expect("same-name provide");
+        assert_eq!(same_name.kind, RepositoryCapabilityKind::PackageName);
+        assert_eq!(same_name.version.as_deref(), Some("1.0"));
+
+        let alias = parse_debian_provide("fixture-abi (= 1.0)", "fixture").expect("alias");
+        assert_eq!(alias.kind, RepositoryCapabilityKind::Virtual);
     }
 }
