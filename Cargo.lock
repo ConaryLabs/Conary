@@ -5183,7 +5183,7 @@ checksum = "323c417e1d9665a65b263ec744ba09030cfb277e9daa0b018a4ab62e57bc8189"
 [[package]]
 name = "rpm"
 version = "0.27.1"
-source = "git+https://github.com/ConaryLabs/rpm-rs?rev=f84167b8bbb1e010a8668347c2165134e5fd177a#f84167b8bbb1e010a8668347c2165134e5fd177a"
+source = "git+https://github.com/ConaryLabs/rpm-rs?rev=1d34711495afe021993707ad64fb60fa8dc34881#1d34711495afe021993707ad64fb60fa8dc34881"
 dependencies = [
  "base64 0.23.1",
  "bitflags",

@@ -98,7 +98,7 @@ x509-cert = { version = "0.2", features = ["pem", "std"] }
 tar = "0.4"
 flate2 = "1.0"
 # Pin the upstream Sequoia signature backend until it reaches a crates.io release.
-rpm = { git = "https://github.com/ConaryLabs/rpm-rs", rev = "f84167b8bbb1e010a8668347c2165134e5fd177a", version = "0.27.1", default-features = false, features = ["payload"] }
+rpm = { git = "https://github.com/ConaryLabs/rpm-rs", rev = "1d34711495afe021993707ad64fb60fa8dc34881", version = "0.27.1", default-features = false, features = ["payload"] }
 rpm-version = "0.5.0"
 debversion = "0.5.4"
 alpm-types = "0.11.2"

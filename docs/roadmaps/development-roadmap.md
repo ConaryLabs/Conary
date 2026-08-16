@@ -317,8 +317,9 @@ the stated scope, not whether a workstream happens to be active.
   reporting and the closed 44-property authority landed through #456; #458
   makes the daily-driver native fixture attributable in one focused local
   manifest. #463 adds exact directory and symlink topology to that same
-  digest-bound chain. Hardlink export remains an explicit #462 gap, and
-  root-child RPM directory authoring remains #464. The #458 discovery run
+  digest-bound chain. #462 and PR #466 add exact hardlink export and hosted
+  inode proof; root-child RPM directory authoring remains the active #464
+  slice. The #458 discovery run
   filed the legacy provider-set defect as #460 and live repository-sync
   nondeterminism as #461 rather than folding them into the focused W7 gate.
 - **Issues:** #110 as the corpus umbrella; #458 and #463 for focused
