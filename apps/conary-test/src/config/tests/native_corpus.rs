@@ -807,6 +807,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     for required in [
         "native update artifact digest contradicts its build manifest",
         "cook \"${native_artifact}\"",
+        "--source-profile \"${source_profile}\"",
         "ccs verify",
         "repository-fixture-manifest.json",
         "--default-strategy binary",

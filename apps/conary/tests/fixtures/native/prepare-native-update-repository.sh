@@ -76,7 +76,9 @@ native_artifact="${native_identity[0]}"
 native_digest="${native_identity[1]}"
 
 XDG_DATA_HOME="${work}/xdg-data" HOME="${work}/home" \
-  "${conary_bin}" cook "${native_artifact}" --output "${package_output}"
+  "${conary_bin}" cook "${native_artifact}" \
+  --source-profile "${source_profile}" \
+  --output "${package_output}"
 
 mapfile -t packages < <(
   find "${package_output}" -maxdepth 1 -type f -name '*.ccs' -print | sort

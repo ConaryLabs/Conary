@@ -410,6 +410,10 @@ pub enum Commands {
         #[arg(long)]
         recipe: Option<String>,
 
+        /// Exact public source profile for typed foreign-package conversion
+        #[arg(long, value_name = "ID", hide = true)]
+        source_profile: Option<String>,
+
         /// Output directory for the built package
         #[arg(short, long, default_value = "./dist")]
         output: String,

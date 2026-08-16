@@ -276,6 +276,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
         Some(Commands::Cook {
             target,
             recipe,
+            source_profile,
             output,
             source_cache,
             jobs,
@@ -293,6 +294,11 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             record_command,
         }) => {
             if record {
+                if source_profile.is_some() {
+                    anyhow::bail!(
+                        "--source-profile is valid only for typed foreign-package conversion"
+                    );
+                }
                 let source = target
                     .as_deref()
                     .map(std::path::PathBuf::from)
@@ -319,6 +325,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             commands::cmd_cook(
                 target.as_deref(),
                 recipe.as_deref(),
+                source_profile.as_deref(),
                 &output,
                 &source_cache,
                 jobs,

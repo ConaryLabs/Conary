@@ -125,6 +125,7 @@ fn publish_help_exposes_attested_artifact_form() {
     let cook = subcommand_help("cook");
     assert!(!cook.contains("--hermetic"));
     assert!(!cook.contains("foreign"));
+    assert!(!cook.contains("--source-profile"));
 
     let publish = subcommand_help("publish");
     assert!(publish.contains("[TARGET]"), "{publish}");
@@ -262,6 +263,29 @@ fn cook_publish_and_watch_accept_json_flags() {
         Some(Commands::Try { watch, json, .. }) => {
             assert!(watch);
             assert!(json);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
+fn foreign_cook_accepts_an_exact_source_profile() {
+    let cook = parse_cli([
+        "conary",
+        "cook",
+        "package.pkg.tar.zst",
+        "--source-profile",
+        "arch",
+    ])
+    .unwrap();
+    match cook.command {
+        Some(Commands::Cook {
+            target,
+            source_profile,
+            ..
+        }) => {
+            assert_eq!(target.as_deref(), Some("package.pkg.tar.zst"));
+            assert_eq!(source_profile.as_deref(), Some("arch"));
         }
         other => panic!("unexpected command: {other:?}"),
     }
