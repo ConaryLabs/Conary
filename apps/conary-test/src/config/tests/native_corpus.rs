@@ -123,6 +123,7 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
             conary_core::corpus::CorpusSemantic::PayloadFiles,
             conary_core::corpus::CorpusSemantic::PayloadDirectories,
             conary_core::corpus::CorpusSemantic::PayloadSymlinks,
+            conary_core::corpus::CorpusSemantic::PayloadHardlinks,
             conary_core::corpus::CorpusSemantic::RelationsVirtualProvide,
             conary_core::corpus::CorpusSemantic::ConfigurationMatchedConfig,
             conary_core::corpus::CorpusSemantic::ConfigurationRemoval,
@@ -193,8 +194,12 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
         "phase4-corpus-conflict",
         "/usr/lib/phase4-corpus/state|directory|0750",
         "/usr/bin/phase4-corpus-link|symlink|phase4-corpus",
+        "/usr/lib/phase4-corpus/hardlink-anchor",
+        "/usr/lib/phase4-corpus/hardlink-copy",
         "--expect-directory /usr/lib/phase4-corpus/state=0750",
         "--expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus",
+        "--expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy",
+        "assert-native-hardlink.sh",
         "printf %s conflicting-corpus-payload",
         "is incompatible with package phase4-daily-driver-corpus",
         "large-payload.bin",
@@ -244,7 +249,7 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
         install_case.stages,
         [conary_core::corpus::ConversionStage::Installation]
     );
-    assert_eq!(install_case.coverage.len(), 8);
+    assert_eq!(install_case.coverage.len(), 9);
     assert!(
         install_case
             .coverage
@@ -281,6 +286,21 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
             .expect("read native fixture builder");
     assert!(build_helper.contains("native-fixture-manifest.json"));
     assert!(build_helper.contains("\"schema_version\": 1"));
+
+    let hardlink_helper =
+        std::fs::read_to_string(conary_fixture_path("native/assert-native-hardlink.sh"))
+            .expect("read native hardlink oracle");
+    for required in [
+        "rpm --root",
+        "dpkg-deb --extract",
+        "bsdtar --extract",
+        "stat --format '%d:%i:%h'",
+    ] {
+        assert!(
+            hardlink_helper.contains(required),
+            "native hardlink oracle should enforce {required}"
+        );
+    }
 
     for (fixture, homepage) in [
         (
@@ -335,6 +355,20 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
         assert!(
             selected_root_helper.contains(required),
             "daily-driver lifecycle runtime should include {required}"
+        );
+    }
+
+    let selected_generation_helper =
+        std::fs::read_to_string(conary_fixture_path("native/assert-selected-generation.py"))
+            .expect("read selected-generation assertion helper");
+    for required in [
+        "--expect-hardlink",
+        "hardlink_identity",
+        "content authority is not anchor-only",
+    ] {
+        assert!(
+            selected_generation_helper.contains(required),
+            "selected-generation hardlink proof should enforce {required}"
         );
     }
 

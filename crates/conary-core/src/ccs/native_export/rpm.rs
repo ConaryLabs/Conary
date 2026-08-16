@@ -11,8 +11,9 @@ use crate::payload::PayloadNodeKind;
 use anyhow::{Context, Result};
 use rpm::PackageBuilder;
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, FileTimes};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
 
 /// RPM-specific hook converter
 struct RpmHookConverter;
@@ -73,6 +74,7 @@ impl HookConverter for RpmHookConverter {
 /// Generate an RPM package from a CCS build result
 pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationResult> {
     let mut loss_report = LossReport::default();
+    let hardlinks = super::hardlinks::Topology::validate(result)?;
 
     // Create temp directory for building
     let temp_dir = tempfile::tempdir()?;
@@ -142,7 +144,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     }
 
     let mut implicit_parent_dirs = HashSet::<PathBuf>::new();
-    for file in &result.files {
+    for file in hardlinks.ordered_files() {
         let mut parent = Path::new(&file.path).parent();
         while let Some(path) = parent {
             implicit_parent_dirs.insert(path.to_path_buf());
@@ -152,7 +154,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
     // Write files to temp dir and add to RPM.
     let mut omitted_top_level_directory = false;
-    for file in &result.files {
+    for file in hardlinks.ordered_files() {
         if matches!(&file.node.kind, PayloadNodeKind::Directory) {
             let has_descendant = implicit_parent_dirs.contains(Path::new(&file.path));
             let has_default_parent_metadata = file.node.mode & 0o7777 == 0o755;
@@ -182,9 +184,24 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                 let temp_path = temp_dir.path().join(content_hash);
                 super::copy_file_content(result, file, &temp_path)?;
 
+                if matches!(
+                    file.node.kind,
+                    PayloadNodeKind::Regular {
+                        hardlink_identity: Some(_)
+                    }
+                ) {
+                    set_hardlink_source_mtime(&temp_path, &file.node)?;
+                }
+
                 // Determine file options
                 let options =
                     rpm::FileOptions::new(&file.path).permissions((file.node.mode & 0o7777) as u16);
+                let options = match &file.node.kind {
+                    PayloadNodeKind::Regular {
+                        hardlink_identity: Some(identity),
+                    } => hardlink_file_options(options.hardlink(identity), &file.node)?,
+                    _ => options,
+                };
 
                 // Check if config file
                 let options = if let Some(config) = manifest
@@ -244,6 +261,42 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                 builder
                     .with_dir_entry(options)
                     .with_context(|| format!("Failed to add directory: {}", file.path))?;
+            }
+            PayloadNodeKind::Hardlink { identity, .. } => {
+                let anchor = hardlinks.anchor(identity);
+                let content_hash = &anchor
+                    .content
+                    .as_ref()
+                    .expect("validated hardlink anchor has regular content authority")
+                    .sha256;
+                let temp_path = temp_dir.path().join(content_hash);
+                let options = rpm::FileOptions::new(&file.path)
+                    .permissions((file.node.mode & 0o7777) as u16)
+                    .hardlink(identity);
+                let options = hardlink_file_options(options, &file.node)?;
+                let options = if let Some(config) = manifest
+                    .config
+                    .files
+                    .iter()
+                    .find(|config| config.path() == file.path)
+                {
+                    if config.remove_on_upgrade() || config.ghost() {
+                        anyhow::bail!(
+                            "RPM payload config {} carries absent-payload semantics",
+                            config.path()
+                        );
+                    }
+                    if config.noreplace() {
+                        options.config().noreplace()
+                    } else {
+                        options.config()
+                    }
+                } else {
+                    options
+                };
+                builder
+                    .with_file(&temp_path, options)
+                    .with_context(|| format!("Failed to add hardlink: {}", file.path))?;
             }
             other => anyhow::bail!(
                 "RPM generator does not yet encode {} node {}",
@@ -328,6 +381,44 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     let size = fs::metadata(output_path)?.len();
 
     Ok(GenerationResult { size, loss_report })
+}
+
+fn hardlink_file_options(
+    options: rpm::FileOptionsBuilder,
+    node: &crate::payload::PayloadNode,
+) -> Result<rpm::FileOptionsBuilder> {
+    if !node.xattrs.is_empty() {
+        anyhow::bail!("RPM hardlink export cannot represent xattr authority exactly");
+    }
+    let user = rpm_identity(&node.user, "user")?;
+    let group = rpm_identity(&node.group, "group")?;
+    Ok(options.user(user).group(group))
+}
+
+fn rpm_identity(identity: &crate::payload::PayloadIdentity, field: &str) -> Result<String> {
+    match identity {
+        crate::payload::PayloadIdentity::Named { name } => Ok(name.clone()),
+        crate::payload::PayloadIdentity::Numeric { id: 0 } => Ok("root".to_string()),
+        crate::payload::PayloadIdentity::Numeric { id } => anyhow::bail!(
+            "RPM hardlink export cannot represent numeric {field} identity {id} exactly"
+        ),
+    }
+}
+
+fn set_hardlink_source_mtime(path: &Path, node: &crate::payload::PayloadNode) -> Result<()> {
+    if node.mtime.nanoseconds != 0 {
+        anyhow::bail!("RPM hardlink export requires whole-second mtime authority");
+    }
+    let seconds = u32::try_from(node.mtime.seconds)
+        .context("RPM hardlink mtime is outside its unsigned 32-bit authority")?;
+    let modified = UNIX_EPOCH
+        .checked_add(Duration::from_secs(u64::from(seconds)))
+        .context("RPM hardlink mtime is outside host filesystem authority")?;
+    fs::File::options()
+        .write(true)
+        .open(path)?
+        .set_times(FileTimes::new().set_modified(modified))?;
+    Ok(())
 }
 
 fn payload_kind_name(kind: &PayloadNodeKind) -> &'static str {

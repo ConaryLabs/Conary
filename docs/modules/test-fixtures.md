@@ -485,13 +485,18 @@ Each fixture family should record:
   The focused `phase4-native-daily-driver-corpus` chain emits two exact-artifact records
   for its host-native RPM, DEB, or ALPM build: the completed install/query
   chain covers exact/native identity, regular files, one explicit directory,
-  one exact symlink, one queried virtual provide, matched config, and shell
-  lifecycle; removal covers config cleanup. Topology counts only after typed
-  native-package metadata and selected-generation node assertions agree.
+  one exact symlink, one two-path hardlink set, one queried virtual provide,
+  matched config, and shell lifecycle; removal covers config cleanup. Each
+  native package is independently installed or extracted and both hardlink
+  paths must report one device/inode identity with a link count of two before
+  Conary installation begins. Topology counts only after typed native-package
+  metadata and selected-generation node assertions agree.
   RPM directory proof uses a non-default leaf so the package owns its metadata;
   default shared parents remain implicit native-package paths.
   Its builder writes a schema-versioned digest manifest and the evidence writer
-  rehashes the artifact before publication. Do not infer hardlink, large-file,
+  rehashes the artifact before publication. The chain attributes hardlink
+  coverage only through the native inode oracle plus the typed
+  selected-generation topology assertion. Do not infer large-file,
   source-trigger, activation, target-helper, or declared-relation coverage from
   the chain's 2 MiB file, out-of-band trigger, disabled unit, adjacent helper
   path, or file-collision negative.

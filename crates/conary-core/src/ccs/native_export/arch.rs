@@ -93,6 +93,7 @@ impl HookConverter for ArchHookConverter {
 /// Generate an Arch Linux package from a CCS build result
 pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationResult> {
     let mut loss_report = LossReport::default();
+    let hardlinks = super::hardlinks::Topology::validate(result)?;
 
     // Create temp directory for building
     let temp_dir = tempfile::tempdir()?;
@@ -218,7 +219,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     }
 
     // Write data files
-    for file in &result.files {
+    for file in hardlinks.ordered_files() {
         // Use safe_join to prevent path traversal from untrusted package paths
         let dest_path = crate::filesystem::safe_join(&pkg_root, &file.path)
             .with_context(|| format!("Unsafe file path: {}", file.path))?;
@@ -245,6 +246,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                 perms.set_mode(file.node.mode & 0o7777);
                 fs::set_permissions(&dest_path, perms)?;
             }
+            PayloadNodeKind::Hardlink { .. } => {}
             other => anyhow::bail!(
                 "Arch generator does not yet encode {:?} node {}",
                 other,
@@ -281,7 +283,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     }
 
     // Create the tarball with zstd compression
-    create_arch_package(&pkg_root, output_path)?;
+    create_arch_package(&pkg_root, output_path, &hardlinks)?;
 
     // Note features that don't map to Arch
     loss_report.add_unsupported("Component-based installation (Arch installs all components)");
@@ -341,7 +343,11 @@ fn generate_install_script(converter: &ArchHookConverter, hooks: &Hooks) -> Opti
 }
 
 /// Create the final .pkg.tar.zst package
-fn create_arch_package(pkg_root: &Path, output_path: &Path) -> Result<()> {
+fn create_arch_package(
+    pkg_root: &Path,
+    output_path: &Path,
+    hardlinks: &super::hardlinks::Topology<'_>,
+) -> Result<()> {
     // Create tar archive in memory first
     let tar_path = pkg_root.with_extension("tar");
     {
@@ -361,24 +367,7 @@ fn create_arch_package(pkg_root: &Path, output_path: &Path) -> Result<()> {
             archive.append_path_with_name(&install_path, ".INSTALL")?;
         }
 
-        // Add all other files
-        for entry in walkdir(pkg_root)? {
-            let rel_path = entry
-                .strip_prefix(pkg_root)
-                .context("Failed to get relative path")?;
-            let rel_str = rel_path.to_string_lossy();
-
-            // Skip metadata files we already added
-            if rel_str == ".PKGINFO" || rel_str == ".INSTALL" {
-                continue;
-            }
-
-            if entry.is_file() || entry.is_symlink() {
-                archive.append_path_with_name(&entry, rel_path)?;
-            } else if entry.is_dir() && rel_path.as_os_str() != "" {
-                archive.append_dir(rel_path, &entry)?;
-            }
-        }
+        super::hardlinks::append_tar_payload(&mut archive, pkg_root, hardlinks, true)?;
 
         archive.finish()?;
     }
@@ -392,27 +381,6 @@ fn create_arch_package(pkg_root: &Path, output_path: &Path) -> Result<()> {
     fs::remove_file(&tar_path)?;
 
     Ok(())
-}
-
-/// Simple recursive directory walker
-fn walkdir(path: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let mut entries = Vec::new();
-
-    if path.is_dir() {
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            entries.push(path.clone());
-
-            if path.is_dir() {
-                entries.extend(walkdir(&path)?);
-            }
-        }
-    }
-
-    entries.sort();
-    Ok(entries)
 }
 
 #[cfg(test)]

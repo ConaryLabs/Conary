@@ -401,7 +401,13 @@ Arch requires homepage and maintainer-backed packager identity, and Debian
 omits its optional maintainer field when no exact value exists. Exporters do
 not invent unknown identities or unconditional maintainer scriptlets. Config
 export fails when the target format cannot express a declaration's exact
-per-path semantics.
+per-path semantics. Shared hardlink preflight rejects missing or cyclic
+targets, multiple or absent anchors, alias-side content, and member metadata
+conflicts before any native artifact is published. Debian and Arch exporters
+write explicit tar link records; RPM export uses an explicit package-builder
+set identity and rejects ownership or timestamp authority that RPM cannot
+encode. Exporter/parser round trips prove the canonical anchor, alias target,
+shared content authority, and effective inode metadata for all three formats.
 
 **export/** -- OCI image export. Produces OCI-layout archives with gzipped
 tar layers, image config, and manifest. ContainerConfig controls entrypoint,

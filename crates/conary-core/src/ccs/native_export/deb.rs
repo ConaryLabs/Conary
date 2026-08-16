@@ -14,6 +14,7 @@ use crate::payload::PayloadNodeKind;
 use anyhow::{Context, Result};
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -80,6 +81,8 @@ impl HookConverter for DebHookConverter {
 /// Generate a DEB package from a CCS build result
 pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationResult> {
     let mut loss_report = LossReport::default();
+    let hardlinks = super::hardlinks::Topology::validate(result)?;
+    hardlinks.require_deb_hardlink_metadata()?;
 
     // Create temp directory for building
     let temp_dir = tempfile::tempdir()?;
@@ -222,7 +225,8 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
     // Write data files
     let mut md5sums = Vec::new();
-    for file in &result.files {
+    let mut hardlink_md5s = HashMap::<&str, String>::new();
+    for file in hardlinks.ordered_files() {
         // Use safe_join to prevent path traversal from untrusted package paths
         let dest_path = crate::filesystem::safe_join(&data_dir, &file.path)
             .with_context(|| format!("Unsafe file path: {}", file.path))?;
@@ -245,6 +249,12 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
                 // Add to md5sums using the already-computed relative path.
                 md5sums.push(format!("{}  {}", content_md5, rel_path));
+                if let PayloadNodeKind::Regular {
+                    hardlink_identity: Some(identity),
+                } = &file.node.kind
+                {
+                    hardlink_md5s.insert(identity, content_md5);
+                }
             }
             PayloadNodeKind::Symlink { target } => {
                 #[cfg(unix)]
@@ -255,6 +265,12 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                 let mut perms = fs::metadata(&dest_path)?.permissions();
                 perms.set_mode(file.node.mode & 0o7777);
                 fs::set_permissions(&dest_path, perms)?;
+            }
+            PayloadNodeKind::Hardlink { identity, .. } => {
+                let content_md5 = hardlink_md5s.get(identity.as_str()).with_context(|| {
+                    format!("validated hardlink identity {identity} has no emitted anchor")
+                })?;
+                md5sums.push(format!("{}  {}", content_md5, rel_path));
             }
             other => anyhow::bail!(
                 "DEB generator does not yet encode {:?} node {}",
@@ -275,7 +291,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
     // Create data.tar.gz
     let data_tar_path = temp_dir.path().join("data.tar.gz");
-    create_tarball(&data_dir, &data_tar_path)?;
+    create_payload_tarball(&data_dir, &data_tar_path, &hardlinks)?;
 
     // Create debian-binary
     let debian_binary_path = temp_dir.path().join("debian-binary");
@@ -297,6 +313,20 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     let size = fs::metadata(output_path)?.len();
 
     Ok(GenerationResult { size, loss_report })
+}
+
+fn create_payload_tarball(
+    staging_root: &Path,
+    output_path: &Path,
+    hardlinks: &super::hardlinks::Topology<'_>,
+) -> Result<()> {
+    let file = File::create(output_path)?;
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut archive = TarBuilder::new(encoder);
+    super::hardlinks::append_tar_payload(&mut archive, staging_root, hardlinks, false)?;
+    let encoder = archive.into_inner()?;
+    encoder.finish()?;
+    Ok(())
 }
 
 /// Create a gzipped tarball of a directory

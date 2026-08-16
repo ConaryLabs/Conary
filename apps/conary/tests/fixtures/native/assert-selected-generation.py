@@ -294,6 +294,42 @@ def assert_selected_directory(
         )
 
 
+def assert_selected_hardlink(
+    entries: dict[str, dict[str, Any]], expectation: str
+) -> None:
+    first_path, second_path = split_expectation(expectation, "--expect-hardlink")
+    members = []
+    for path in (first_path, second_path):
+        entry = entries.get(path)
+        if entry is None:
+            fail(f"selected generation does not contain {path}")
+        node = entry.get("node")
+        source = node.get("source") if isinstance(node, dict) else None
+        kind = source.get("kind") if isinstance(source, dict) else None
+        if not isinstance(kind, dict) or kind.get("type") not in ("regular", "hardlink"):
+            fail(f"selected-generation hardlink member {path} has kind {kind!r}")
+        members.append((path, entry, source, kind))
+
+    regular = [member for member in members if member[3]["type"] == "regular"]
+    aliases = [member for member in members if member[3]["type"] == "hardlink"]
+    if len(regular) != 1 or len(aliases) != 1:
+        fail("--expect-hardlink requires exactly one regular anchor and one hardlink alias")
+    anchor_path, anchor_entry, anchor_source, anchor_kind = regular[0]
+    alias_path, alias_entry, alias_source, alias_kind = aliases[0]
+    if alias_kind.get("target") != anchor_path:
+        fail(
+            f"hardlink alias {alias_path} targets {alias_kind.get('target')!r}, "
+            f"expected {anchor_path!r}"
+        )
+    if alias_kind.get("identity") != anchor_kind.get("hardlink_identity"):
+        fail("selected-generation hardlink members disagree on identity")
+    if anchor_entry.get("content") is None or alias_entry.get("content") is not None:
+        fail("selected-generation hardlink content authority is not anchor-only")
+    for field in ("mode", "user", "group", "mtime", "xattrs"):
+        if alias_source.get(field) != anchor_source.get(field):
+            fail(f"selected-generation hardlink members disagree on {field}")
+
+
 def parse_colon_records(content: bytes, path: str, field_count: int) -> list[list[str]]:
     try:
         lines = content.decode("utf-8").splitlines()
@@ -383,6 +419,9 @@ def main() -> int:
     parser.add_argument(
         "--expect-directory", action="append", default=[], metavar="PATH=MODE"
     )
+    parser.add_argument(
+        "--expect-hardlink", action="append", default=[], metavar="PATH_A=PATH_B"
+    )
     parser.add_argument("--contains-line", action="append", default=[], metavar="PATH=LINE")
     parser.add_argument(
         "--expect-user",
@@ -412,6 +451,8 @@ def main() -> int:
         assert_selected_symlink(entries, value)
     for value in args.expect_directory:
         assert_selected_directory(entries, value)
+    for value in args.expect_hardlink:
+        assert_selected_hardlink(entries, value)
     for value in args.contains_line:
         path, expected = split_expectation(value, "--contains-line")
         _, content = entry_content(entries, cas_base, path)
@@ -426,6 +467,7 @@ def main() -> int:
         + len(args.expect_sha256)
         + len(args.expect_symlink)
         + len(args.expect_directory)
+        + len(args.expect_hardlink)
         + len(args.expect_user)
     )
     print(
