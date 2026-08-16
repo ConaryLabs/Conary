@@ -735,6 +735,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     for required in [
         "install_path=\"$(command -v install)\"",
         "copy_elf_closure \"${install_path}\"",
+        "if ($1 ~ /^\\//) { print $1 }",
+        "print $3",
         "copy_elf_closure /bin/false",
         "--present /bin/false",
         "--present \"${install_path}\"",
