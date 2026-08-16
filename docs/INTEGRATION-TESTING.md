@@ -555,6 +555,11 @@ filesystem paths do not count. The source format comes from the explicit
 distro build-context override and must resolve to the closed RPM/DEB/ALPM type
 before evidence can count.
 
+RPM export emits a directory entry when its mode differs from the implicit
+0755 parent contract or no descendant can create it. Default-mode parents of
+payload entries remain implicit so generated packages do not claim shared
+target paths such as `/usr/bin` from the native filesystem package.
+
 Several useful assertions deliberately remain outside semantic coverage. The
 2 MiB zero-filled file is not W7 large-file/resource-boundary proof; the
 Conary changeset trigger is not a source-package trigger; the disabled systemd

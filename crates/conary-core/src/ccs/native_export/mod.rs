@@ -371,6 +371,20 @@ mod tests {
         assert!(matches!(directory.node.kind, PayloadNodeKind::Directory));
         assert_eq!(directory.node.mode & 0o7777, 0o750);
 
+        if format == "rpm" {
+            assert!(
+                payload.files().iter().all(|file| file.path != "/usr/bin"),
+                "rpm must not claim the target filesystem package's default parent directory"
+            );
+            assert!(
+                payload
+                    .files()
+                    .iter()
+                    .all(|file| file.path != "/usr/lib/topology"),
+                "rpm must leave default parent directories implicit"
+            );
+        }
+
         let symlink = payload
             .files()
             .iter()
