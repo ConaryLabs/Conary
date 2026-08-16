@@ -189,6 +189,8 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
         "/var/lib/phase4-corpus/scriptlet.marker",
         "/var/lib/phase4-corpus/remove.marker",
         "phase4-corpus-conflict",
+        "printf %s conflicting-corpus-payload",
+        "is incompatible with package phase4-daily-driver-corpus",
         "large-payload.bin",
         "/usr/lib/kernel/install.d/95-phase4-corpus.install",
         "--from ${native_profile}",

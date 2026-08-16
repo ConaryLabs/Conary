@@ -283,14 +283,14 @@ exit_code = 0
 [[test]]
 id = "TNPM17"
 name = "daily_driver_corpus_file_conflict_refuses_before_mutation"
-description = "A second native package with overlapping files is refused before it can mutate the selected generation"
+description = "A second native package with conflicting file content is refused before it can mutate the selected generation"
 group = "daily-driver-corpus"
 timeout = 240
 fatal = true
 depends_on = ["TNPM16"]
 
 [[test.step]]
-run = "rm -rf /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && mkdir -p /tmp/native-pm-corpus-conflict-src /tmp/native-pm-corpus-conflict && cp /opt/remi-tests/fixtures/phase4-daily-driver-corpus-conflict/ccs.toml /tmp/native-pm-corpus-conflict-src/ccs.toml && cp -a /tmp/native-pm-corpus-src/stage /tmp/native-pm-corpus-conflict-src/stage && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && . /tmp/native-pm-corpus-conflict/native-fixture.env && test -f \"$NATIVE_PKG_FILE\""
+run = "rm -rf /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && mkdir -p /tmp/native-pm-corpus-conflict-src /tmp/native-pm-corpus-conflict && cp /opt/remi-tests/fixtures/phase4-daily-driver-corpus-conflict/ccs.toml /tmp/native-pm-corpus-conflict-src/ccs.toml && cp -a /tmp/native-pm-corpus-src/stage /tmp/native-pm-corpus-conflict-src/stage && printf %s conflicting-corpus-payload > /tmp/native-pm-corpus-conflict-src/stage/usr/bin/phase4-corpus && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && . /tmp/native-pm-corpus-conflict/native-fixture.env && test -f \"$NATIVE_PKG_FILE\""
 
 [test.step.assert]
 exit_code = 0
@@ -300,7 +300,7 @@ run = ". /tmp/native-pm-corpus-conflict/native-fixture.env && CONARY_TEST_SKIP_G
 
 [test.step.assert]
 exit_code_not = 0
-stdout_contains = "already tracked by package phase4-daily-driver-corpus"
+stdout_contains = "is incompatible with package phase4-daily-driver-corpus"
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c"

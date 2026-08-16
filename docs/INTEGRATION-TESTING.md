@@ -534,8 +534,8 @@ builds a package in the host-native format and then proves:
 - native dependency metadata for a real package dependency
 - an exact installed native-lifecycle bundle plus install/remove hook effects
 - system user and group creation in the selected generation
-- conflict refusal before an overlapping native package can mutate selected
-  state
+- conflict refusal before a conflicting-content native package can mutate
+  selected state
 - a 2 MiB payload file through the native package parser and file database
 - a QEMU-safe kernel-adjacent `kernel/install.d` file without mutating boot state
 - an alternative target binary (`/usr/bin/phase4-corpus-alt`) as packaged file
@@ -554,7 +554,7 @@ Several useful assertions deliberately remain outside semantic coverage. The
 2 MiB zero-filled file is not W7 large-file/resource-boundary proof; the
 Conary changeset trigger is not a source-package trigger; the disabled systemd
 unit is not activation; the kernel-adjacent file is not an executed target
-helper; and an overlapping-file refusal is not a declared native relation
+helper; and a conflicting-content refusal is not a declared native relation
 conflict. Those properties still require fixtures that prove their exact
 contracts.
 
