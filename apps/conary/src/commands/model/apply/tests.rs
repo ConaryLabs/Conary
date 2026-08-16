@@ -139,13 +139,17 @@ async fn strict_model_apply_demotes_an_omitted_explicit_package() {
         r#"
 [model]
 version = 1
-install = ["retained-package"]
+install = ["retained-package", "also-retained-package"]
 "#,
     )
     .unwrap();
 
     let conn = conary_core::db::open(&db_path).unwrap();
-    for package in ["retained-package", "orphaned-package"] {
+    for package in [
+        "retained-package",
+        "also-retained-package",
+        "orphaned-package",
+    ] {
         Trove::new(
             package.to_string(),
             "1.0.0".to_string(),
@@ -174,10 +178,14 @@ install = ["retained-package"]
     let retained = Trove::find_one_by_name(&conn, "retained-package")
         .unwrap()
         .unwrap();
+    let also_retained = Trove::find_one_by_name(&conn, "also-retained-package")
+        .unwrap()
+        .unwrap();
     let orphaned = Trove::find_one_by_name(&conn, "orphaned-package")
         .unwrap()
         .unwrap();
     assert_eq!(retained.install_reason, InstallReason::Explicit);
+    assert_eq!(also_retained.install_reason, InstallReason::Explicit);
     assert_eq!(orphaned.install_reason, InstallReason::Dependency);
 }
 

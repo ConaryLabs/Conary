@@ -303,6 +303,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "model apply",
         "--strict",
         "--no-autoremove",
+        "native-matrix-root-layout",
+        "phase4-runtime-fixture",
         "Marked '${repo_install_pkg}' as dependency",
     ] {
         assert!(

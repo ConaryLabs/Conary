@@ -592,7 +592,7 @@ fatal = true
 depends_on = ["TNPM11"]
 
 [[test.step]]
-run = "printf '[model]\\nversion = 1\\ninstall = [\"phase4-runtime-fixture\"]\\n' > /tmp/native-pm-autoremove-model.toml && ${CONARY_BIN} model apply --model /tmp/native-pm-autoremove-model.toml --db-path ${DB_PATH} --root /conary --strict --no-autoremove --offline --yes"
+run = "printf '[model]\\nversion = 1\\ninstall = [\"native-matrix-root-layout\", \"phase4-runtime-fixture\"]\\n' > /tmp/native-pm-autoremove-model.toml && ${CONARY_BIN} model apply --model /tmp/native-pm-autoremove-model.toml --db-path ${DB_PATH} --root /conary --strict --no-autoremove --offline --yes"
 
 [test.step.assert]
 exit_code = 0
