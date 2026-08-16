@@ -275,6 +275,24 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             "pinned binary builder must enforce {required}"
         );
     }
+    let security_probe = std::fs::read_to_string(conary_fixture_path(
+        "native/prepare-unknown-security-repository.sh",
+    ))
+    .expect("read unknown-security repository helper");
+    for required in [
+        "--security-advisories unknown",
+        "--source-profile \"${source_profile}\"",
+        "security_advisory_support, package_format, source_profile",
+    ] {
+        assert!(
+            security_probe.contains(required),
+            "unknown-security repository helper must enforce {required}"
+        );
+    }
+    assert!(
+        !security_probe.contains("UPDATE troves"),
+        "unknown-security proof must not rewrite installed provenance through raw SQLite"
+    );
     let container_root = path
         .parent()
         .and_then(std::path::Path::parent)
