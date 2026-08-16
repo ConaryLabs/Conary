@@ -21,16 +21,19 @@ case "$target" in
   rpm)
     route="fedora"
     source_profile="fedora-44"
+    version_scheme="rpm"
     architecture="x86_64"
     ;;
   deb)
     route="ubuntu"
     source_profile="ubuntu-26.04"
+    version_scheme="debian"
     architecture="amd64"
     ;;
   arch)
     route="arch"
     source_profile="arch"
+    version_scheme="arch"
     architecture="x86_64"
     ;;
   *)
@@ -55,6 +58,7 @@ python3 - \
   "${output_dir}/index-${route}.json" \
   "$route" \
   "$source_profile" \
+  "$version_scheme" \
   "$package_name" \
   "$version" \
   "$release" \
@@ -69,6 +73,7 @@ from pathlib import Path
     index_path,
     route,
     source_profile,
+    version_scheme,
     package_name,
     version,
     release,
@@ -86,7 +91,17 @@ document = {
                 {
                     "version": version,
                     "release": release,
-                    "provides": [],
+                    "provides": [
+                        {
+                            "capability": package_name,
+                            "version": version,
+                            "version_relation": "equal",
+                            "kind": "package",
+                            "raw": f"{package_name} = {version}",
+                            "version_scheme": version_scheme,
+                            "architecture_qualifier": {"kind": "implicit"},
+                        }
+                    ],
                     "requirement_groups": [],
                     "architecture": architecture,
                     "size": int(artifact_size),

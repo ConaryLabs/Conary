@@ -4,6 +4,12 @@ use anyhow::{Context, Result};
 
 const PID_MARKER: &str = "__CONARY_TEST_SYNC_SUPERVISOR__=";
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct SupervisedExec {
+    pub(super) supervisor_pid: u64,
+    pub(super) child_process_group: u64,
+}
+
 const SUPERVISOR_SCRIPT: &str = r#"
 child_pid=
 terminate_child() {
@@ -23,7 +29,7 @@ if ! command -v setsid >/dev/null 2>&1; then
 fi
 setsid "$@" &
 child_pid=$!
-printf '__CONARY_TEST_SYNC_SUPERVISOR__=%s\n' "$$"
+printf '__CONARY_TEST_SYNC_SUPERVISOR__=%s:%s\n' "$$" "${child_pid}"
 wait "${child_pid}"
 exit $?
 "#;
@@ -39,7 +45,7 @@ pub(super) fn supervised_command(command: &[&str]) -> Vec<String> {
     supervised
 }
 
-pub(super) fn take_supervisor_pid(stdout: &mut String) -> Result<u64> {
+pub(super) fn take_supervised_exec(stdout: &mut String) -> Result<SupervisedExec> {
     let marker_start = stdout
         .find(PID_MARKER)
         .context("synchronous exec did not report its supervisor PID")?;
@@ -47,12 +53,21 @@ pub(super) fn take_supervisor_pid(stdout: &mut String) -> Result<u64> {
     let value_end = stdout[value_start..]
         .find('\n')
         .map_or(stdout.len(), |offset| value_start + offset);
-    let pid = stdout[value_start..value_end]
+    let (supervisor_pid, child_process_group) = stdout[value_start..value_end]
+        .split_once(':')
+        .context("synchronous exec did not report its child process group")?;
+    let supervisor_pid = supervisor_pid
         .parse::<u64>()
         .context("synchronous exec reported an invalid supervisor PID")?;
+    let child_process_group = child_process_group
+        .parse::<u64>()
+        .context("synchronous exec reported an invalid child process group")?;
     let remove_end = value_end.saturating_add(usize::from(value_end < stdout.len()));
     stdout.replace_range(marker_start..remove_end, "");
-    Ok(pid)
+    Ok(SupervisedExec {
+        supervisor_pid,
+        child_process_group,
+    })
 }
 
 #[cfg(test)]
@@ -81,17 +96,26 @@ mod tests {
 
     #[test]
     fn supervisor_pid_is_parsed_and_removed_without_losing_command_output() {
-        let mut stdout = format!("child output\n{PID_MARKER}742\nmore output\n");
-        assert_eq!(take_supervisor_pid(&mut stdout).unwrap(), 742);
+        let mut stdout = format!("child output\n{PID_MARKER}742:743\nmore output\n");
+        assert_eq!(
+            take_supervised_exec(&mut stdout).unwrap(),
+            SupervisedExec {
+                supervisor_pid: 742,
+                child_process_group: 743,
+            }
+        );
         assert_eq!(stdout, "child output\nmore output\n");
     }
 
     #[test]
     fn missing_or_malformed_supervisor_pid_fails_closed() {
         let mut missing = "ordinary output\n".to_string();
-        assert!(take_supervisor_pid(&mut missing).is_err());
+        assert!(take_supervised_exec(&mut missing).is_err());
 
         let mut malformed = format!("{PID_MARKER}not-a-pid\n");
-        assert!(take_supervisor_pid(&mut malformed).is_err());
+        assert!(take_supervised_exec(&mut malformed).is_err());
+
+        let mut malformed_group = format!("{PID_MARKER}742:not-a-pid\n");
+        assert!(take_supervised_exec(&mut malformed_group).is_err());
     }
 }

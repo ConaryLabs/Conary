@@ -247,6 +247,9 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "artifact_size=\"$(stat -c %s \"$artifact\")\"",
         "\"total\": 1",
         "\"per_page\": 128",
+        "\"kind\": \"package\"",
+        "\"version_relation\": \"equal\"",
+        "\"architecture_qualifier\": {\"kind\": \"implicit\"}",
         "os.replace(temporary_path, path)",
     ] {
         assert!(

@@ -509,9 +509,10 @@ key, runtime artifact size, and six exact HTTP routes are its complete
 authority.
 
 Synchronous container commands run beneath an in-container process-group
-supervisor. On timeout, the harness signals that supervisor inside the
-container, terminates the command group, and waits until Docker reports the
-exec reaped. If cleanup cannot be proved, the harness kills the exact test
+supervisor. On timeout, the harness signals the recorded child process group
+inside the container, and the supervisor waits and reaps it before Docker
+reports the exec complete. This does not depend on shell-specific trap
+scheduling. If cleanup cannot be proved, the harness kills the exact test
 container and fails closed. The PR gate runs this timeout regression and the
 full 13-test suite on Fedora 44, Ubuntu 26.04, and Arch; the stable
 `native-pm-parity` context requires all three lanes.

@@ -229,21 +229,25 @@ impl BollardBackend {
         &self,
         container_id: &ContainerId,
         exec_id: &str,
-        supervisor_pid: u64,
+        supervised_exec: &exec_supervisor::SupervisedExec,
     ) -> Result<()> {
         let signal = self
             .run_raw_exec(
                 container_id,
                 &[
-                    "kill".to_string(),
-                    "-TERM".to_string(),
-                    supervisor_pid.to_string(),
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "kill -TERM -- \"-$1\" 2>/dev/null || true; sleep 0.2; kill -KILL -- \"-$1\" 2>/dev/null || true"
+                        .to_string(),
+                    "conary-test-timeout-cleanup".to_string(),
+                    supervised_exec.child_process_group.to_string(),
                 ],
             )
             .await?;
-        if signal.exit_code != 0 && !signal.stderr.contains("No such process") {
+        if signal.exit_code != 0 {
             bail!(
-                "failed to signal synchronous exec supervisor {supervisor_pid}: {}",
+                "failed to terminate synchronous exec child process group {}: {}",
+                supervised_exec.child_process_group,
                 signal.stderr.trim()
             );
         }
@@ -258,13 +262,17 @@ impl BollardBackend {
             if inspect.running != Some(true) {
                 debug!(
                     exec_id,
-                    supervisor_pid, "timed-out exec terminated and reaped"
+                    supervisor_pid = supervised_exec.supervisor_pid,
+                    child_process_group = supervised_exec.child_process_group,
+                    "timed-out exec terminated and reaped"
                 );
                 return Ok(());
             }
             if Instant::now() >= deadline {
                 bail!(
-                    "synchronous exec supervisor {supervisor_pid} remained running after termination"
+                    "synchronous exec supervisor {} remained running after terminating child process group {}",
+                    supervised_exec.supervisor_pid,
+                    supervised_exec.child_process_group
                 );
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -458,10 +466,10 @@ impl ContainerBackend for BollardBackend {
             if tokio::time::timeout(timeout, collect_future).await.is_err() {
                 warn!(id = %id, cmd = ?cmd, "exec timed out");
 
-                match exec_supervisor::take_supervisor_pid(&mut stdout) {
-                    Ok(supervisor_pid) => {
+                match exec_supervisor::take_supervised_exec(&mut stdout) {
+                    Ok(supervised_exec) => {
                         if let Err(error) = self
-                            .terminate_supervised_exec(id, &exec_instance.id, supervisor_pid)
+                            .terminate_supervised_exec(id, &exec_instance.id, &supervised_exec)
                             .await
                         {
                             return self.kill_container_after_cleanup_failure(id, &error).await;
@@ -485,7 +493,7 @@ impl ContainerBackend for BollardBackend {
             }
         }
 
-        exec_supervisor::take_supervisor_pid(&mut stdout)?;
+        exec_supervisor::take_supervised_exec(&mut stdout)?;
 
         // Inspect for exit code.
         let inspect = self
