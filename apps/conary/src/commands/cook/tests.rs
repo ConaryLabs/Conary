@@ -151,6 +151,42 @@ fn foreign_package_routing_rejects_misleading_extension() {
 }
 
 #[test]
+fn recipe_cook_rejects_foreign_source_profile_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    let recipe_path = temp.path().join("recipe.toml");
+    let output_dir = temp.path().join("out");
+    let source_cache = temp.path().join("sources");
+    write_local_recipe(&recipe_path);
+    let mut output = Vec::new();
+    let error = run_cook_operation(
+        CookRunOptions {
+            target: Some(recipe_path.to_str().unwrap()),
+            recipe: None,
+            source_profile: Some("arch"),
+            output_dir: output_dir.to_str().unwrap(),
+            source_cache: source_cache.to_str().unwrap(),
+            jobs: None,
+            keep_builddir: false,
+            validate_only: true,
+            fetch_only: false,
+            isolated: false,
+            json: false,
+            operation_id: "source-profile-rejection".to_string(),
+            source_download_policy_override: None,
+            origin_class_override: None,
+            signing_key_path: None,
+        },
+        &mut output,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("valid only for typed foreign-package conversion")
+    );
+}
+
+#[test]
 fn host_iteration_env_pins_cargo_target_dir_to_recipe_local_target() {
     let mut config = KitchenConfig::default();
     add_host_iteration_env(&mut config);
@@ -256,6 +292,7 @@ async fn cook_directory_with_recipe_toml_uses_explicit_recipe_provenance() {
     cmd_cook(
         Some(recipe_dir.to_str().unwrap()),
         None,
+        None,
         output_dir.to_str().unwrap(),
         source_cache.to_str().unwrap(),
         None,
@@ -286,6 +323,7 @@ async fn cook_build_requires_explicit_signing_authority() {
     let error = cmd_cook_with_output(
         Some(recipe_path.to_str().unwrap()),
         None,
+        None,
         output_dir.to_str().unwrap(),
         temp.path().join("sources").to_str().unwrap(),
         None,
@@ -313,6 +351,7 @@ async fn explicit_custom_recipe_validates_without_building() {
     let mut output = Vec::new();
     cmd_cook_with_output(
         Some(recipe_path.to_str().unwrap()),
+        None,
         None,
         output_dir.to_str().unwrap(),
         temp.path().join("sources").to_str().unwrap(),
@@ -342,6 +381,7 @@ async fn cook_validate_only_json_has_schema_version_and_summary() {
     let mut output = Vec::new();
     cmd_cook_with_output(
         Some(recipe_path.to_str().unwrap()),
+        None,
         None,
         temp.path().join("out").to_str().unwrap(),
         temp.path().join("sources").to_str().unwrap(),
@@ -373,6 +413,7 @@ async fn cook_isolated_fails_closed_without_hermetic_config() {
     let mut output = Vec::new();
     let error = cmd_cook_with_output(
         Some(recipe_path.to_str().unwrap()),
+        None,
         None,
         output_dir.to_str().unwrap(),
         temp.path().join("sources").to_str().unwrap(),

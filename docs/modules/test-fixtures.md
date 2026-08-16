@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-16
-revision: 36
-summary: Map fixture ownership, including attributable daily-driver payload topology, authenticated derivative roots, and cross-source lifecycle proof
+revision: 37
+summary: Map fixture ownership, including attributable daily-driver configuration upgrade, payload topology, authenticated derivative roots, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -490,16 +490,22 @@ Each fixture family should record:
   authority from distro-name matching. The typed workflow test owns the three
   source-format cases across all six required target lanes and the stable
   all-lane aggregator context; do not weaken either in workflow-only edits.
-  The focused `phase4-native-daily-driver-corpus` chain emits two case records
+  The focused `phase4-native-daily-driver-corpus` chain emits three case records
   for its host-native RPM, DEB, or ALPM build. The completed install/query
   record binds both the native request and its SAT-selected signed CCS
-  dependency to exact build-manifest SHA-256 identities; the removal record
-  remains bound to the request artifact. The completed chain covers
+  dependency to exact build-manifest SHA-256 identities. The update record
+  binds the installed v1 request and an independently built and extracted v2
+  native request, converts that exact v2 artifact through Conary's native
+  parser, and acquires the resulting signed CCS from a bounded loopback
+  repository. Selected-generation v2 bytes, pristine config hashes and source
+  format, repository checksum and provenance, and the installed lifecycle
+  bundle's native source checksum must all agree. The removal record binds to
+  the installed v2 update request. The completed chain covers
   exact/native identity, regular files, one explicit directory,
   one exact symlink, one two-path hardlink set, one queried virtual provide,
   one exact versioned dependency resolved from the bounded loopback repository,
-  matched config, exact payload ownership and timestamp authority, and shell
-  lifecycle; removal covers config cleanup. Each native package is independently
+  matched config, pristine config upgrade, exact payload ownership and timestamp
+  authority, and shell lifecycle; removal covers config cleanup. Each native package is independently
   installed or extracted and both hardlink paths must report one device/inode
   identity with a link count of two, uid/gid `0`, and mtime `1700000000` before
   Conary installation begins. The selected-generation proof then requires both
@@ -519,7 +525,7 @@ Each fixture family should record:
   live-root materialization coverage. Do not infer large-file, source-trigger,
   activation, target-helper, conflict, or replacement coverage from the chain's
   2 MiB file, out-of-band trigger, disabled unit, adjacent helper path, or
-  file-collision negative. PRs run only that focused six-test
+  file-collision negative. PRs run only that focused seven-test
   chain on Fedora 44, Ubuntu 26.04, and Arch behind the stable
   `native-daily-driver-corpus` aggregate context; every lane applies both the
   ordinary suite-result and typed corpus-result gates.

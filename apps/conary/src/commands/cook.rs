@@ -46,6 +46,7 @@ struct ResolvedCookInput {
 struct CookRunOptions<'a> {
     target: Option<&'a str>,
     recipe: Option<&'a str>,
+    source_profile: Option<&'a str>,
     output_dir: &'a str,
     source_cache: &'a str,
     jobs: Option<u32>,
@@ -88,6 +89,7 @@ pub(crate) fn run_cook_for_try_watch(
         CookRunOptions {
             target: options.target,
             recipe: options.recipe,
+            source_profile: None,
             output_dir: options.output_dir,
             source_cache: options.source_cache,
             jobs: options.jobs,
@@ -145,6 +147,7 @@ fn recorded_draft_run_options<'a>(
     CookRunOptions {
         target: Some(recipe),
         recipe: None,
+        source_profile: None,
         output_dir,
         source_cache,
         jobs: None,
@@ -325,6 +328,7 @@ fn hermetic_build_input(
 /// # Arguments
 /// * `target` - Optional recipe path or directory containing recipe.toml
 /// * `recipe` - Optional explicit recipe path. Wins over target when present.
+/// * `source_profile` - Exact public source profile for foreign-package conversion.
 /// * `output_dir` - Output directory for the built package
 /// * `source_cache` - Directory for caching downloaded sources
 /// * `jobs` - Number of parallel build jobs (None = auto)
@@ -337,6 +341,7 @@ fn hermetic_build_input(
 pub async fn cmd_cook(
     target: Option<&str>,
     recipe: Option<&str>,
+    source_profile: Option<&str>,
     output_dir: &str,
     source_cache: &str,
     jobs: Option<u32>,
@@ -351,6 +356,7 @@ pub async fn cmd_cook(
     cmd_cook_with_output(
         target,
         recipe,
+        source_profile,
         output_dir,
         source_cache,
         jobs,
@@ -369,6 +375,7 @@ pub async fn cmd_cook(
 async fn cmd_cook_with_output(
     target: Option<&str>,
     recipe: Option<&str>,
+    source_profile: Option<&str>,
     output_dir: &str,
     source_cache: &str,
     jobs: Option<u32>,
@@ -384,6 +391,7 @@ async fn cmd_cook_with_output(
     let options = CookRunOptions {
         target,
         recipe,
+        source_profile,
         output_dir,
         source_cache,
         jobs,
@@ -430,15 +438,29 @@ fn run_cook_operation(
         if foreign_package_format(target_path).is_some() {
             if options.json {
                 let mut sink = io::sink();
-                cook_foreign_package(target_path, Path::new(options.output_dir), &mut sink)?;
+                cook_foreign_package(
+                    target_path,
+                    options.source_profile,
+                    Path::new(options.output_dir),
+                    &mut sink,
+                )?;
             } else {
-                cook_foreign_package(target_path, Path::new(options.output_dir), output)?;
+                cook_foreign_package(
+                    target_path,
+                    options.source_profile,
+                    Path::new(options.output_dir),
+                    output,
+                )?;
             }
             return Ok(cook_success_output(
                 &options.operation_id,
                 "Foreign package converted",
             ));
         }
+    }
+
+    if options.source_profile.is_some() {
+        anyhow::bail!("--source-profile is valid only for typed foreign-package conversion");
     }
 
     let resolved = resolve_cook_input(options.target, options.recipe)?;

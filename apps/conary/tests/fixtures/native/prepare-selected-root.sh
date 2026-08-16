@@ -76,17 +76,21 @@ copy_elf_closure() {
     copy_runtime_path "${dependency}"
   done < <(
     awk '
-      $2 == "=>" && $3 ~ /^\// { print $3; next }
+      $2 == "=>" && $3 ~ /^\// {
+        if ($1 ~ /^\//) { print $1 }
+        print $3
+        next
+      }
       $1 ~ /^\// { print $1 }
     ' <<<"${ldd_output}" | sort -u
   )
 }
 
 # The selected-root layout fixture declares x86_64 + GNU libc. The kernel opens
-# PT_INTERP by its encoded absolute path, while ldd reports the canonical loader
-# target on merged-/usr distributions such as Arch. Materialize the ABI path
-# itself so the selected generation is executable without inheriting host
-# symlink topology.
+# PT_INTERP by its encoded absolute path, while ldd can report that path on the
+# left of `=>` and its canonical loader target on the right on merged-/usr
+# distributions such as Arch. copy_elf_closure materializes both paths so the
+# selected generation is executable without inheriting host symlink topology.
 gnu_loader=/lib64/ld-linux-x86-64.so.2
 copy_runtime_path "${gnu_loader}"
 copy_elf_closure /bin/sh

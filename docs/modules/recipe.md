@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-05
-revision: 7
+last_updated: 2026-08-16
+revision: 8
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -16,7 +16,10 @@ recipe file, a directory containing `recipe.toml`, or the default current
 directory only when `./recipe.toml` exists. It does not inspect build-system
 markers, clone or extract a target, download a source target, or synthesize a
 recipe. Foreign RPM, DEB, and Arch binary inputs remain a separate typed
-conversion path.
+conversion path. When that conversion needs distribution-owned lifecycle ABI,
+`conary cook <native-package> --source-profile <exact-public-id>` passes the
+explicit typed profile to the converter; package-format inference cannot stand
+in for that source identity.
 
 ## Data Flow: Recipe Cook
 

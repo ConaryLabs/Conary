@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-16
-revision: 53
-summary: Document attributable daily-driver payload topology, typed corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
+revision: 54
+summary: Document attributable daily-driver configuration upgrade, payload topology, typed corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -557,12 +557,14 @@ can select only the matching enrolled repository. The signed update
 fixture enrolls its binary JSON repository, exact source profile, and CCS
 package key through `conary repo add`; it does not mutate protected SQLite
 authority out of band. The focused
-`phase4-native-daily-driver-corpus` manifest owns `TNPM13` through `TNPM18`
+`phase4-native-daily-driver-corpus` manifest owns `TNPM13` through `TNPM19`
 without inheriting prior parity state. It builds a bounded signed loopback CCS
 repository, then builds a package in the host-native format and proves:
 
 - systemd unit file deployment and trigger matching
 - tracked `/etc` config file metadata
+- pristine `/etc` config upgrade from an exact v1 native artifact to an exact
+  v2 native artifact through a bounded signed loopback repository
 - one exact native versioned dependency resolved by SAT, acquired from the
   synchronized repository, signature-verified, and installed with dependency
   reason and source provenance
@@ -580,15 +582,21 @@ repository, then builds a package in the host-native format and proves:
 - an alternative target binary (`/usr/bin/phase4-corpus-alt`) as packaged file
   coverage
 
-`TNPM16` and `TNPM18` make the chain visible to the typed W7 aggregator. The
+`TNPM16`, `TNPM18`, and `TNPM19` make the chain visible to the typed W7 aggregator. The
 install record reopens both builders' schema-versioned output manifests,
 hashes the native request and signed dependency artifacts again, and binds its
 versioned-dependency claim to both `install_request` and `install_dependency`.
-The removal record remains request-bound. Across the two completed cases the
-suite declares exactly thirteen properties: exact version, native architecture,
+The update record rehashes independently built v1 and v2 native artifacts and
+binds pristine config-upgrade coverage to `install_request` plus
+`update_request`. Conary converts the exact v2 artifact, serves the signed CCS
+from a bounded repository, and must preserve the native checksum in the
+installed lifecycle bundle while its repository checksum, selected-generation
+config bytes, and persisted pristine config hashes agree. The removal record
+binds to the installed v2 update request. Across the three completed cases the
+suite declares exactly fourteen properties: exact version, native architecture,
 regular files, directories, symlinks, hardlinks, payload ownership, payload
 timestamps, a versioned dependency, a queried virtual provide, matched config,
-purge-time config removal, and shell lifecycle. Directory, symlink, hardlink,
+pristine config upgrade, purge-time config removal, and shell lifecycle. Directory, symlink, hardlink,
 metadata, and relation claims require direct native metadata,
 selected-generation, repository-provenance, and installed reason assertions;
 implicit parents, followed filesystem paths, and recorded metadata without a
@@ -922,7 +930,7 @@ Adversarial and stress tests.
 
 ### Phase 4: Feature Validation
 
-Phase 4 currently contains 155 tests across nine manifests. It validates the
+Phase 4 currently contains 153 tests across nine manifests. It validates the
 active, user-facing command surface and checks that claimed features still match
 the current binary. Where a flow is intentionally preview-only or not yet
 implemented, the manifest asserts that it fails cleanly with an explicit
@@ -930,14 +938,14 @@ message rather than pretending it is production-ready.
 
 | Suite | IDs | Count | Category |
 |-------|-----|-------|----------|
-| A | T160-T176 | 17 | Config, distro, canonical, groups, registry |
+| A | T160-T176 | 15 | Config, distro, canonical, groups, registry |
 | B | T177-T195 plus suffix IDs | 20 | Label, model, collection, derive |
 | C | T196-T220 plus suffix IDs | 27 | CCS ops, query, repo management |
 | D | T221-T255 plus suffix IDs | 38 | Provenance, capability, trust, system ops, federation, automation |
 | E | T256-T273 and T276-T277 plus suffix IDs | 22 | Cross-source compatibility overlay: native package parity, source identity, model convergence, and takeover |
 | Native package-manager parity | TNPM01-TNPM12 plus TNPM02X | 13 | Cross-distro repository and native package-manager parity |
-| Native daily-driver corpus | TNPM13-TNPM18 | 6 | Focused attributable host-native daily-driver semantics |
-| Native cross-source lifecycle | TNPMX01R, TNPMX01D, TNPMX01A | 3 | Attributable native-oracle install/update/rollback/remove corpus evidence on every target image |
+| Native daily-driver corpus | TNPM13-TNPM19 | 7 | Focused attributable host-native daily-driver semantics |
+| Native cross-source lifecycle | TNPMX01R, TNPMX01D, TNPMX01A, TNPMX02O | 4 | Attributable native-oracle install/update/rollback/remove corpus evidence plus OpenRC activation proof on every target image |
 | Security advisory pipeline | TSEC01-TSEC07 | 7 | Trusted advisory ingestion and security update proof |
 
 Phase 4 is intentionally mixed:
