@@ -121,6 +121,8 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
             conary_core::corpus::CorpusSemantic::IdentityExactVersion,
             conary_core::corpus::CorpusSemantic::IdentityNativeArchitecture,
             conary_core::corpus::CorpusSemantic::PayloadFiles,
+            conary_core::corpus::CorpusSemantic::PayloadDirectories,
+            conary_core::corpus::CorpusSemantic::PayloadSymlinks,
             conary_core::corpus::CorpusSemantic::RelationsVirtualProvide,
             conary_core::corpus::CorpusSemantic::ConfigurationMatchedConfig,
             conary_core::corpus::CorpusSemantic::ConfigurationRemoval,
@@ -189,6 +191,10 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
         "/var/lib/phase4-corpus/scriptlet.marker",
         "/var/lib/phase4-corpus/remove.marker",
         "phase4-corpus-conflict",
+        "/usr/lib/phase4-corpus/state|directory|0750",
+        "/usr/bin/phase4-corpus-link|symlink|phase4-corpus",
+        "--expect-directory /usr/lib/phase4-corpus/state=0750",
+        "--expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus",
         "printf %s conflicting-corpus-payload",
         "is incompatible with package phase4-daily-driver-corpus",
         "large-payload.bin",
@@ -238,7 +244,7 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
         install_case.stages,
         [conary_core::corpus::ConversionStage::Installation]
     );
-    assert_eq!(install_case.coverage.len(), 6);
+    assert_eq!(install_case.coverage.len(), 8);
     assert!(
         install_case
             .coverage

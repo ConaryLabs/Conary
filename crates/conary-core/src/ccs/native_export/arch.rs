@@ -347,6 +347,7 @@ fn create_arch_package(pkg_root: &Path, output_path: &Path) -> Result<()> {
     {
         let file = File::create(&tar_path)?;
         let mut archive = TarBuilder::new(file);
+        archive.follow_symlinks(false);
 
         // Add .PKGINFO first (required)
         let pkginfo_path = pkg_root.join(".PKGINFO");

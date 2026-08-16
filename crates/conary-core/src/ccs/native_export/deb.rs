@@ -304,6 +304,7 @@ fn create_tarball(source_dir: &Path, output_path: &Path) -> Result<()> {
     let file = File::create(output_path)?;
     let encoder = GzEncoder::new(file, Compression::default());
     let mut archive = TarBuilder::new(encoder);
+    archive.follow_symlinks(false);
 
     // Add files from directory
     for entry in fs::read_dir(source_dir)? {

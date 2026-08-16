@@ -258,6 +258,9 @@ pub fn arch_for_format(arch: Option<&str>, format: &str) -> anyhow::Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packages::PackageFormat;
+    use crate::payload::PayloadNodeKind;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn source_backed_copy_preserves_bytes_and_computes_debian_md5() {
@@ -311,6 +314,86 @@ mod tests {
         assert!(arch_for_format(Some("noarch"), "deb").is_err());
         assert!(arch_for_format(None, "arch").is_err());
         assert!(arch_for_format(Some("riscv64"), "arch").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_exporters_round_trip_explicit_directory_and_symlink_topology() {
+        let source = tempfile::tempdir().unwrap();
+        let state_dir = source.path().join("usr/lib/topology/state");
+        let bin_dir = source.path().join("usr/bin");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o750)).unwrap();
+        std::fs::write(bin_dir.join("topology-tool"), b"topology\n").unwrap();
+        std::os::unix::fs::symlink("topology-tool", bin_dir.join("topology-link")).unwrap();
+
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("topology", "1.0.0");
+        manifest.package.license = Some("MIT".to_string());
+        manifest.package.homepage = Some("https://example.invalid/topology".to_string());
+        manifest.package.authors = Some(crate::ccs::manifest::Authors {
+            maintainers: vec!["Topology Test <topology@example.invalid>".to_string()],
+            upstream: None,
+        });
+        manifest.package.platform = Some(crate::ccs::manifest::Platform {
+            arch: Some("x86_64".to_string()),
+            ..Default::default()
+        });
+        let result = crate::ccs::builder::CcsBuilder::new(manifest, source.path())
+            .unwrap()
+            .build()
+            .unwrap();
+        let output = tempfile::tempdir().unwrap();
+
+        let rpm_path = output.path().join("topology.rpm");
+        rpm::generate(&result, &rpm_path).unwrap();
+        let rpm = crate::packages::rpm::RpmPackage::parse(rpm_path.to_str().unwrap()).unwrap();
+        assert_topology("rpm", &rpm);
+
+        let deb_path = output.path().join("topology.deb");
+        deb::generate(&result, &deb_path).unwrap();
+        let deb = crate::packages::deb::DebPackage::parse(deb_path.to_str().unwrap()).unwrap();
+        assert_topology("deb", &deb);
+
+        let arch_path = output.path().join("topology.pkg.tar.zst");
+        arch::generate(&result, &arch_path).unwrap();
+        let arch = crate::packages::arch::ArchPackage::parse(arch_path.to_str().unwrap()).unwrap();
+        assert_topology("arch", &arch);
+    }
+
+    fn assert_topology(format: &str, package: &impl PackageFormat) {
+        let payload = package.package_payload().unwrap();
+        let directory = payload
+            .files()
+            .iter()
+            .find(|file| file.path == "/usr/lib/topology/state")
+            .expect("explicit topology directory");
+        assert!(matches!(directory.node.kind, PayloadNodeKind::Directory));
+        assert_eq!(directory.node.mode & 0o7777, 0o750);
+
+        if format == "rpm" {
+            assert!(
+                payload.files().iter().all(|file| file.path != "/usr/bin"),
+                "rpm must not claim the target filesystem package's default parent directory"
+            );
+            assert!(
+                payload
+                    .files()
+                    .iter()
+                    .all(|file| file.path != "/usr/lib/topology"),
+                "rpm must leave default parent directories implicit"
+            );
+        }
+
+        let symlink = payload
+            .files()
+            .iter()
+            .find(|file| file.path == "/usr/bin/topology-link")
+            .expect("topology symlink");
+        let PayloadNodeKind::Symlink { target } = &symlink.node.kind else {
+            panic!("{format} topology link is {:?}", symlink.node.kind);
+        };
+        assert_eq!(target, "topology-tool", "{format} symlink target");
     }
 
     #[test]
