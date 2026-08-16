@@ -427,7 +427,13 @@ pub(super) fn install_inner_with_stored_files(
                 .insert_or_replace(tx)?;
         }
 
-        super::transaction::persist_package_provides(tx, trove_id, pkg)?;
+        super::transaction::persist_package_provides(
+            tx,
+            trove_id,
+            pkg,
+            ctx.semantics,
+            &extraction.extracted_files,
+        )?;
 
         trove_id
     };

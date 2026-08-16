@@ -45,6 +45,18 @@ pub(super) fn supervised_command(command: &[&str]) -> Vec<String> {
     supervised
 }
 
+pub(super) fn termination_command(supervised_exec: &SupervisedExec) -> Vec<String> {
+    vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        "kill -TERM -- \"-$1\" 2>/dev/null || true; sleep 0.2; kill -KILL -- \"-$1\" 2>/dev/null || true; kill -TERM \"$2\" 2>/dev/null || true; sleep 0.2; kill -KILL \"$2\" 2>/dev/null || true"
+            .to_string(),
+        "conary-test-timeout-cleanup".to_string(),
+        supervised_exec.child_process_group.to_string(),
+        supervised_exec.supervisor_pid.to_string(),
+    ]
+}
+
 pub(super) fn take_supervised_exec(stdout: &mut String) -> Result<SupervisedExec> {
     let marker_start = stdout
         .find(PID_MARKER)
@@ -105,6 +117,26 @@ mod tests {
             }
         );
         assert_eq!(stdout, "child output\nmore output\n");
+    }
+
+    #[test]
+    fn timeout_cleanup_terminates_the_child_group_and_supervisor() {
+        let command = termination_command(&SupervisedExec {
+            supervisor_pid: 742,
+            child_process_group: 743,
+        });
+        assert_eq!(&command[4..], &["743", "742"]);
+        for required in [
+            "kill -TERM -- \"-$1\"",
+            "kill -KILL -- \"-$1\"",
+            "kill -TERM \"$2\"",
+            "kill -KILL \"$2\"",
+        ] {
+            assert!(
+                command[2].contains(required),
+                "timeout cleanup must enforce {required}"
+            );
+        }
     }
 
     #[test]

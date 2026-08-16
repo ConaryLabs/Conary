@@ -7,7 +7,7 @@ use crate::commands::install::{
 };
 use conary_core::db::models::{
     Changeset, ConfigFile, ConfigSource, FileEntry, InstallSource, InstalledFileCapability,
-    Repository, Trove, TroveType,
+    ProvideEntry, Repository, Trove, TroveType,
 };
 use conary_core::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
 use conary_core::packages::traits::{ExtractedFile, PackageFile, PackageFormat};
@@ -444,6 +444,28 @@ fn install_inner_persists_declared_config_metadata() {
     );
     assert!(config.noreplace);
     assert_eq!(config.source, ConfigSource::Rpm);
+    let trove = Trove::find_by_name(&conn, "phase4-runtime-fixture")
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("installed fixture trove");
+    let provides = ProvideEntry::find_by_trove(&conn, trove.id.expect("persisted trove ID"))
+        .expect("load installed provides");
+    let payload_provider = provides
+        .iter()
+        .find(|provide| provide.capability == "/etc/fixture/app.conf")
+        .expect("materialized payload path must be an installed provider");
+    assert_eq!(
+        payload_provider.kind,
+        conary_core::repository::dependency_model::RepositoryCapabilityKind::File
+    );
+    assert_eq!(payload_provider.version_scheme, VersionScheme::Rpm);
+    assert_eq!(
+        payload_provider.provenance,
+        conary_core::repository::dependency_model::CapabilityProvenance::SourceDerivedFile {
+            format: conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
+        }
+    );
 }
 
 #[test]

@@ -234,14 +234,7 @@ impl BollardBackend {
         let signal = self
             .run_raw_exec(
                 container_id,
-                &[
-                    "sh".to_string(),
-                    "-c".to_string(),
-                    "kill -TERM -- \"-$1\" 2>/dev/null || true; sleep 0.2; kill -KILL -- \"-$1\" 2>/dev/null || true"
-                        .to_string(),
-                    "conary-test-timeout-cleanup".to_string(),
-                    supervised_exec.child_process_group.to_string(),
-                ],
+                &exec_supervisor::termination_command(supervised_exec),
             )
             .await?;
         if signal.exit_code != 0 {
@@ -270,7 +263,7 @@ impl BollardBackend {
             }
             if Instant::now() >= deadline {
                 bail!(
-                    "synchronous exec supervisor {} remained running after terminating child process group {}",
+                    "synchronous exec supervisor {} remained running after terminating child process group {} and the supervisor",
                     supervised_exec.supervisor_pid,
                     supervised_exec.child_process_group
                 );

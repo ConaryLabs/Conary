@@ -110,12 +110,22 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     let provider_contract = [
         (
             "fedora44",
+            "7",
+            "3",
+            "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
+        ),
+        (
+            "ubuntu-26.04",
             "4",
             "3",
             "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
         ),
-        ("ubuntu-26.04", "1", "0", "no file provides"),
-        ("arch", "1", "0", "no file provides"),
+        (
+            "arch",
+            "4",
+            "3",
+            "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
+        ),
     ];
     for (distro, provider_count, file_provider_count, file_provider_set) in provider_contract {
         let overrides = parity_manifest
@@ -148,7 +158,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     ] {
         assert!(
             metadata_rendered.contains(required),
-            "TNPM04 must enforce the source-format-owned provider contract {required}"
+            "TNPM04 must enforce the source-format and payload-owned provider contract {required}"
         );
     }
 

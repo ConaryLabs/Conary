@@ -157,8 +157,15 @@ pub(super) fn persist_package_provides(
     tx: &rusqlite::Transaction<'_>,
     trove_id: i64,
     package: &dyn PackageFormat,
+    semantics: InstallSemantics,
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
 ) -> Result<()> {
-    let provides = package.resolution_capabilities()?;
+    let mut provides = package.resolution_capabilities()?;
+    conary_core::repository::dependency_model::extend_materialized_file_provides(
+        &mut provides,
+        semantics.source_package_format(),
+        extracted_files.iter().map(|file| file.path.as_str()),
+    )?;
     persist_declared_provides(
         tx,
         trove_id,

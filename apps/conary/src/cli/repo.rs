@@ -227,8 +227,8 @@ pub struct RepoAddArgs {
 
     /// Authenticated Ed25519 public key allowed to sign CCS packages; repeatable
     ///
-    /// Canonical remi.conary.io keys ship with Conary. Self-hosted Remi
-    /// repositories must provide their targets.public file explicitly.
+    /// Canonical remi.conary.io keys ship with Conary. Self-hosted Remi and
+    /// binary JSON repositories serving CCS must provide their public key.
     #[arg(
         long = "ccs-package-key",
         value_name = "PUBLIC_KEY_FILE",

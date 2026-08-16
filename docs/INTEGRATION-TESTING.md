@@ -542,9 +542,14 @@ update, query, security-refusal, and autoremove parity proof. Repository update
 selection uses a signed CCS package synchronized through typed JSON metadata;
 the unknown-security case also enters through normal typed repository sync,
 not a synthetic package row. `TNPM04` binds its provider assertions to the
-source format: RPM requires the exact package provide plus its three native
-file provides, while DEB and Arch require only the exact versioned package
-provide and reject invented file-provide rows. The focused
+source format and exact extracted payload: every format retains its exact
+versioned package self-provide and publishes the same three materialized paths
+as file providers, while RPM additionally retains its source-declared
+capabilities. Single-package and batch installs use the same payload-path
+projection before persisting installed resolution authority. The signed update
+fixture enrolls its binary JSON repository, exact source profile, and CCS
+package key through `conary repo add`; it does not mutate protected SQLite
+authority out of band. The focused
 `phase4-native-daily-driver-corpus` manifest owns `TNPM13` through `TNPM18`
 without inheriting the live repository or prior parity state. That corpus
 builds a package in the host-native format and then proves:
