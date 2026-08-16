@@ -124,6 +124,7 @@ fi
   --package-format json \
   --priority 1000 \
   --security-advisories unknown \
+  --source-profile "${source_profile}" \
   --db-path "${db_path}"
 "${conary_bin}" repo sync "${repo_name}" \
   --db-path "${db_path}" \
@@ -154,7 +155,7 @@ connection = sqlite3.connect(db_path)
 try:
     repository = connection.execute(
         """
-        SELECT id, security_advisory_support, package_format
+        SELECT id, security_advisory_support, package_format, source_profile
         FROM repositories
         WHERE name = ?
         """,
@@ -162,11 +163,15 @@ try:
     ).fetchone()
     if repository is None:
         raise SystemExit("typed unknown-security repository was not persisted")
-    repository_id, advisory_support, package_format = repository
-    if (advisory_support, package_format) != ("unknown", "json"):
+    repository_id, advisory_support, package_format, persisted_profile = repository
+    if (advisory_support, package_format, persisted_profile) != (
+        "unknown",
+        "json",
+        source_profile,
+    ):
         raise SystemExit(
             "unknown-security repository persisted an unexpected contract: "
-            f"{(advisory_support, package_format)!r}"
+            f"{(advisory_support, package_format, persisted_profile)!r}"
         )
 
     packages = connection.execute(
@@ -200,25 +205,6 @@ try:
             f"expected one installed {package_name!r} trove, found {installed!r}"
         )
 
-    connection.execute(
-        """
-        UPDATE repositories
-        SET source_profile = ?
-        WHERE id = ?
-        """,
-        (source_profile, repository_id),
-    )
-    connection.execute(
-        """
-        UPDATE troves
-        SET installed_from_repository_id = ?,
-            source_profile = ?,
-            version_scheme = ?
-        WHERE name = ?
-        """,
-        (repository_id, source_profile, version_scheme, package_name),
-    )
-    connection.commit()
 finally:
     connection.close()
 PY

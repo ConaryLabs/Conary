@@ -214,6 +214,7 @@ fn drive_native_graph_steps(
     if !arch_finalizer_executed {
         native_transaction.execute_graph_transaction_finalizer(selected_root)?;
     }
+    native_transaction.finalize_successful_debian_installs(conn)?;
     native_transaction.refresh_debian_admin_projection(conn, selected_root)?;
     Ok(())
 }

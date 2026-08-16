@@ -45,6 +45,7 @@ async fn converted_ccs_install_rejects_unknown_target_syscall_before_db_mutation
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
     })
     .await
@@ -115,6 +116,7 @@ async fn converted_ccs_install_accepts_prompted_capabilities_when_allowed() {
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
     })
     .await

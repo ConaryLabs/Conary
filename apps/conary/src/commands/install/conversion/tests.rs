@@ -364,6 +364,7 @@ fn converted_install_options<'a>(
         yes: true,
         envelope_authority,
         repository_provenance,
+        requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
     }
 }
@@ -466,6 +467,7 @@ async fn converted_ccs_install_executes_directory_hooks() {
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
     })
     .await
@@ -706,6 +708,7 @@ async fn converted_ccs_install_rolls_back_post_hook_failure() {
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
     })
     .await
@@ -801,6 +804,7 @@ async fn converted_ccs_install_rejects_symlink_child_payload() {
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
     })
     .await
@@ -891,6 +895,7 @@ async fn converted_ccs_install_rejects_child_before_package_symlink() {
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        requested_source_identity: None,
         resolution_policy: test_resolution_policy(),
     })
     .await

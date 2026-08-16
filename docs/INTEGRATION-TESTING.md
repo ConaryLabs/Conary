@@ -500,7 +500,24 @@ Focused Slice D native package-manager parity proof:
 - Focused W7 daily-driver lanes:
   `cargo run -p conary-test -- run --suite phase4-native-daily-driver-corpus --distro <fedora44|ubuntu-26.04|arch> --phase 4`
 
-The current `phase4-native-pm-parity` manifest has 13 tests. `TNPM02X` exports
+The current `phase4-native-pm-parity` manifest has 13 tests. Before `TNPM01`,
+the suite builds one signed source-scheme CCS fixture for the current RPM, DEB,
+or Arch lane and exposes an exact one-package sparse index plus artifact through
+the harness's loopback mock server. Repository sync therefore has no live Remi
+or distribution-mirror dependency; the checked-in manifest, disposable fixture
+key, runtime artifact size, and six exact HTTP routes are its complete
+authority.
+
+Synchronous container commands run beneath an in-container process-group
+supervisor. On timeout, the harness signals the recorded child process group
+inside the container, and the supervisor waits and reaps it before Docker
+reports the exec complete. This does not depend on shell-specific trap
+scheduling. If cleanup cannot be proved, the harness kills the exact test
+container and fails closed. The PR gate runs this timeout regression and the
+full 13-test suite on Fedora 44, Ubuntu 26.04, and Arch; the stable
+`native-pm-parity` context requires all three lanes.
+
+`TNPM02X` exports
 one lifecycle-bearing v1/v2 fixture as RPM, DEB, and Arch artifacts on every
 target image. Fedora captures the RPM-owned trace, Ubuntu captures the
 dpkg-owned trace, and Arch captures the libalpm/pacman-owned trace. Each trace
@@ -525,9 +542,21 @@ update, query, security-refusal, and autoremove parity proof. Repository update
 selection uses a signed CCS package synchronized through typed JSON metadata;
 the unknown-security case also enters through normal typed repository sync,
 not a synthetic package row. `TNPM04` binds its provider assertions to the
-source format: RPM requires the exact package provide plus its three native
-file provides, while DEB and Arch require only the exact versioned package
-provide and reject invented file-provide rows. The focused
+source format and exact extracted payload: every format retains its exact
+versioned package self-provide and publishes the same three materialized paths
+as file providers, while RPM additionally retains its source-declared
+capabilities. Synthesized parent directories are generation layout rather than
+file providers. The RPM lane also retains the generator-authored
+`config(phase4-runtime-fixture) = 1.0.0-1` dependency as one typed RPM
+requirement group; DEB and Arch retain no dependency groups for this fixture.
+Single-package and batch installs use the same payload-path projection before
+persisting installed resolution authority. The local native install supplies
+its exact source identity with `--from`; Conary persists that identity without
+mislabeling the artifact as repository-installed, so the later ordinary update
+can select only the matching enrolled repository. The signed update
+fixture enrolls its binary JSON repository, exact source profile, and CCS
+package key through `conary repo add`; it does not mutate protected SQLite
+authority out of band. The focused
 `phase4-native-daily-driver-corpus` manifest owns `TNPM13` through `TNPM18`
 without inheriting the live repository or prior parity state. That corpus
 builds a package in the host-native format and then proves:
@@ -571,13 +600,13 @@ helper; and a conflicting-content refusal is not a declared native relation
 conflict. Those properties still require fixtures that prove their exact
 contracts.
 
-The PR gate runs the focused `phase4-native-daily-driver-corpus` manifest on
+The PR gate also runs the focused `phase4-native-daily-driver-corpus` manifest on
 Fedora 44, Ubuntu 26.04, and Arch in a non-fail-fast matrix, then applies both
 the generic suite-result checker and the typed corpus-coverage checker to every
 lane. The stable `native-daily-driver-corpus` aggregate context fails unless
-all three source-format/target pairs complete. Live repository parity remains
-owned by `phase4-native-pm-parity`; it is not a prerequisite for this local,
-digest-attributed fixture chain.
+all three source-format/target pairs complete. The full deterministic repository
+and package-manager matrix remains owned by `phase4-native-pm-parity`; it is not
+a prerequisite for this focused digest-attributed fixture chain.
 
 Corpus coverage boundaries (not product support exemptions):
 

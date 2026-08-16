@@ -18,12 +18,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use super::backend::{
     ContainerBackend, ContainerConfig, ContainerId, ContainerInspection, ExecResult, ImageInfo,
     VolumeMount,
 };
+use super::exec_supervisor;
 
 const BUILD_OUTPUT_TAIL_BYTES: usize = 32 * 1024;
 
@@ -168,6 +170,132 @@ impl BollardBackend {
         lines
     }
 
+    async fn run_raw_exec(&self, id: &ContainerId, cmd: &[String]) -> Result<ExecResult> {
+        let exec = self
+            .docker
+            .create_exec(
+                id,
+                CreateExecOptions {
+                    attach_stdout: Some(true),
+                    attach_stderr: Some(true),
+                    cmd: Some(cmd.to_vec()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .context("failed to create cleanup exec")?;
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        let collect = async {
+            if let StartExecResults::Attached { mut output, .. } = self
+                .docker
+                .start_exec(&exec.id, None)
+                .await
+                .context("failed to start cleanup exec")?
+            {
+                while let Some(message) = output.next().await {
+                    match message.context("failed to read cleanup exec output")? {
+                        LogOutput::StdOut { message } => {
+                            stdout.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        LogOutput::StdErr { message } => {
+                            stderr.push_str(&String::from_utf8_lossy(&message));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        };
+        tokio::time::timeout(Duration::from_secs(10), collect)
+            .await
+            .context("cleanup exec timed out")??;
+        let inspect = self
+            .docker
+            .inspect_exec(&exec.id)
+            .await
+            .context("failed to inspect cleanup exec")?;
+        Ok(ExecResult {
+            exit_code: inspect
+                .exit_code
+                .and_then(|code| i32::try_from(code).ok())
+                .unwrap_or(-1),
+            stdout,
+            stderr,
+        })
+    }
+
+    async fn terminate_supervised_exec(
+        &self,
+        container_id: &ContainerId,
+        exec_id: &str,
+        supervised_exec: &exec_supervisor::SupervisedExec,
+    ) -> Result<()> {
+        let signal = self
+            .run_raw_exec(
+                container_id,
+                &exec_supervisor::termination_command(supervised_exec),
+            )
+            .await?;
+        if signal.exit_code != 0 {
+            bail!(
+                "failed to signal synchronous exec supervisor {} for child process group {}: {}",
+                supervised_exec.supervisor_pid,
+                supervised_exec.child_process_group,
+                signal.stderr.trim()
+            );
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let inspect = self
+                .docker
+                .inspect_exec(exec_id)
+                .await
+                .context("failed to inspect timed-out exec during reap")?;
+            if inspect.running != Some(true) {
+                debug!(
+                    exec_id,
+                    supervisor_pid = supervised_exec.supervisor_pid,
+                    child_process_group = supervised_exec.child_process_group,
+                    "timed-out exec terminated and reaped"
+                );
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "synchronous exec supervisor {} remained running after terminating child process group {} and the supervisor",
+                    supervised_exec.supervisor_pid,
+                    supervised_exec.child_process_group
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    async fn kill_container_after_cleanup_failure<T>(
+        &self,
+        container_id: &ContainerId,
+        cleanup_error: &anyhow::Error,
+    ) -> Result<T> {
+        self.docker
+            .kill_container(
+                container_id,
+                Some(KillContainerOptions {
+                    signal: "SIGKILL".to_string(),
+                }),
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "timed-out exec cleanup failed ({cleanup_error}); failed to kill its container"
+                )
+            })?;
+        bail!(
+            "timed-out exec cleanup failed ({cleanup_error}); killed container {container_id} to guarantee termination"
+        )
+    }
+
     async fn consume_build_stream<S>(mut stream: S) -> Result<()>
     where
         S: Stream<Item = std::result::Result<BuildInfo, bollard::errors::Error>> + Unpin,
@@ -291,10 +419,11 @@ impl ContainerBackend for BollardBackend {
     }
 
     async fn exec(&self, id: &ContainerId, cmd: &[&str], timeout: Duration) -> Result<ExecResult> {
+        let supervised_cmd = exec_supervisor::supervised_command(cmd);
         let exec_opts = CreateExecOptions {
             attach_stdout: Some(true),
             attach_stderr: Some(true),
-            cmd: Some(cmd.iter().map(|s| s.to_string()).collect()),
+            cmd: Some(supervised_cmd),
             ..Default::default()
         };
 
@@ -331,43 +460,34 @@ impl ContainerBackend for BollardBackend {
             if tokio::time::timeout(timeout, collect_future).await.is_err() {
                 warn!(id = %id, cmd = ?cmd, "exec timed out");
 
-                // Kill the still-running exec process to prevent it from
-                // leaking into subsequent test steps. The PID from
-                // inspect_exec() is the *host-namespace* PID, so we must
-                // kill from the host side, not inside the container.
-                if let Ok(inspect) = self.docker.inspect_exec(&exec_instance.id).await
-                    && inspect.running == Some(true)
-                    && let Some(pid) = inspect.pid.filter(|&p| p > 0)
-                {
-                    let pid_str = pid.to_string();
-                    match tokio::process::Command::new("kill")
-                        .args(["-9", &pid_str])
-                        .output()
-                        .await
-                    {
-                        Ok(out) if out.status.success() => {
-                            debug!(id = %id, pid, "killed timed-out exec process from host");
-                        }
-                        Ok(out) => {
-                            let err = String::from_utf8_lossy(&out.stderr);
-                            // "No such process" means it already exited -- not an error.
-                            if !err.contains("No such process") {
-                                warn!(id = %id, pid, error = %err, "failed to kill timed-out exec");
-                            }
-                        }
-                        Err(e) => {
-                            warn!(id = %id, pid, error = %e, "failed to invoke kill for timed-out exec");
+                match exec_supervisor::take_supervised_exec(&mut stdout) {
+                    Ok(supervised_exec) => {
+                        if let Err(error) = self
+                            .terminate_supervised_exec(id, &exec_instance.id, &supervised_exec)
+                            .await
+                        {
+                            return self.kill_container_after_cleanup_failure(id, &error).await;
                         }
                     }
+                    Err(error) => {
+                        return self.kill_container_after_cleanup_failure(id, &error).await;
+                    }
                 }
+
+                if !stderr.is_empty() && !stderr.ends_with('\n') {
+                    stderr.push('\n');
+                }
+                stderr.push_str(&format!("[timed out after {}s]", timeout.as_secs()));
 
                 return Ok(ExecResult {
                     exit_code: -1,
                     stdout,
-                    stderr: format!("{stderr}\n[timed out after {}s]", timeout.as_secs()),
+                    stderr,
                 });
             }
         }
+
+        exec_supervisor::take_supervised_exec(&mut stdout)?;
 
         // Inspect for exit code.
         let inspect = self
@@ -913,5 +1033,69 @@ mod tests {
 
         backend.stop(&id).await.expect("stop container");
         backend.remove(&id).await.expect("remove container");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a locally built conary-test image named by CONARY_TEST_TIMEOUT_IMAGE"]
+    async fn timed_out_container_exec_terminates_and_reaps_process_group() {
+        use crate::container::backend::{ContainerBackend, ContainerConfig};
+        use std::time::Duration;
+
+        let image = std::env::var("CONARY_TEST_TIMEOUT_IMAGE")
+            .expect("CONARY_TEST_TIMEOUT_IMAGE must name an existing local image");
+        let backend = BollardBackend::new().expect("connect to container runtime");
+        let id = backend
+            .create(ContainerConfig {
+                image,
+                ..Default::default()
+            })
+            .await
+            .expect("create timeout regression container");
+        backend.start(&id).await.expect("start timeout container");
+
+        let execution = backend
+            .exec(
+                &id,
+                &[
+                    "sh",
+                    "-c",
+                    "printf '%s' \"$$\" > /tmp/conary-timeout-group; sleep 300 & child=$!; printf '%s' \"$child\" > /tmp/conary-timeout-child; trap 'kill -TERM \"$child\" 2>/dev/null || true; wait \"$child\" 2>/dev/null || true; exit 0' TERM; wait \"$child\"",
+                ],
+                Duration::from_secs(1),
+            )
+            .await;
+        let probe = if execution.is_ok() {
+            Some(
+                backend
+                    .exec(
+                        &id,
+                        &[
+                            "sh",
+                            "-c",
+                            "group=$(cat /tmp/conary-timeout-group); child=$(cat /tmp/conary-timeout-child); ! kill -0 \"$group\" 2>/dev/null && ! kill -0 \"$child\" 2>/dev/null",
+                        ],
+                        Duration::from_secs(10),
+                    )
+                    .await,
+            )
+        } else {
+            None
+        };
+        let stop = backend.stop(&id).await;
+        let remove = backend.remove(&id).await;
+
+        let execution = execution.expect("timed-out exec should return a typed failed result");
+        assert_eq!(execution.exit_code, -1);
+        assert!(execution.stderr.contains("[timed out after 1s]"));
+        let probe = probe
+            .expect("successful timeout result should run the reap probe")
+            .expect("run reap probe");
+        assert_eq!(
+            probe.exit_code, 0,
+            "timed-out process group still exists: stdout={:?} stderr={:?}",
+            probe.stdout, probe.stderr
+        );
+        stop.expect("stop timeout regression container");
+        remove.expect("remove timeout regression container");
     }
 }

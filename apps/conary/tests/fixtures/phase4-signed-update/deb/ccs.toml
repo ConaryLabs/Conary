@@ -2,6 +2,7 @@
 name = "phase4-runtime-fixture"
 version = "1.0.1-1"
 version_scheme = "debian"
+debian_multi_arch = "no"
 release = "1"
 kind = "package"
 description = "Signed Debian-versioned repository update fixture"

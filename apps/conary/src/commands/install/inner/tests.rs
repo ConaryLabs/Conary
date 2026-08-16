@@ -7,7 +7,7 @@ use crate::commands::install::{
 };
 use conary_core::db::models::{
     Changeset, ConfigFile, ConfigSource, FileEntry, InstallSource, InstalledFileCapability,
-    Repository, Trove, TroveType,
+    ProvideEntry, Repository, Trove, TroveType,
 };
 use conary_core::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
 use conary_core::packages::traits::{ExtractedFile, PackageFile, PackageFormat};
@@ -215,6 +215,7 @@ fn install_inner_replaces_live_root_owned_overlapping_path() {
         ccs_file_capabilities: None,
         defer_generation: false,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_bundle: None,
         repository_enrollments: &[],
         relation_removals: &[],
@@ -402,6 +403,7 @@ fn install_inner_persists_declared_config_metadata() {
         ccs_file_capabilities: None,
         defer_generation: false,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_bundle: None,
         repository_enrollments: &[],
         relation_removals: &[],
@@ -444,6 +446,28 @@ fn install_inner_persists_declared_config_metadata() {
     );
     assert!(config.noreplace);
     assert_eq!(config.source, ConfigSource::Rpm);
+    let trove = Trove::find_by_name(&conn, "phase4-runtime-fixture")
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("installed fixture trove");
+    let provides = ProvideEntry::find_by_trove(&conn, trove.id.expect("persisted trove ID"))
+        .expect("load installed provides");
+    let payload_provider = provides
+        .iter()
+        .find(|provide| provide.capability == "/etc/fixture/app.conf")
+        .expect("materialized payload path must be an installed provider");
+    assert_eq!(
+        payload_provider.kind,
+        conary_core::repository::dependency_model::RepositoryCapabilityKind::File
+    );
+    assert_eq!(payload_provider.version_scheme, VersionScheme::Rpm);
+    assert_eq!(
+        payload_provider.provenance,
+        conary_core::repository::dependency_model::CapabilityProvenance::SourceDerivedFile {
+            format: conary_core::repository::dependency_model::SourcePackageFormat::Rpm,
+        }
+    );
 }
 
 #[test]
@@ -485,6 +509,7 @@ fn install_inner_persists_selected_installed_file_capability_metadata() {
         ccs_file_capabilities: Some(&file_capabilities),
         defer_generation: false,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_bundle: None,
         repository_enrollments: &[],
         relation_removals: &[],
@@ -567,6 +592,7 @@ fn install_inner_persists_usrmerge_normalized_file_capability_metadata() {
         ccs_file_capabilities: Some(&normalized_file_capabilities),
         defer_generation: false,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_bundle: None,
         repository_enrollments: &[],
         relation_removals: &[],
@@ -653,6 +679,7 @@ fn install_inner_replaces_installed_file_capability_metadata_on_upgrade() {
         ccs_file_capabilities: Some(&file_capabilities),
         defer_generation: false,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_bundle: None,
         repository_enrollments: &[],
         relation_removals: &[],
@@ -746,6 +773,7 @@ fn install_inner_rejects_installed_file_capability_on_symlink_payload() {
         ccs_file_capabilities: Some(&file_capabilities),
         defer_generation: false,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_bundle: None,
         repository_enrollments: &[],
         relation_removals: &[],
@@ -773,6 +801,31 @@ fn install_inner_rejects_installed_file_capability_on_symlink_payload() {
     };
 
     assert!(err.to_string().contains("is not a regular installed file"));
+}
+
+#[test]
+fn explicit_local_source_identity_is_persisted_without_repository_provenance() {
+    let package = FakePackage::with_file("tree", "/usr/bin/tree", b"tree\n");
+    let mut trove = package.to_trove();
+
+    apply_install_source_authority(&mut trove, None, Some("fedora-44"));
+
+    assert_eq!(trove.install_source, InstallSource::File);
+    assert_eq!(trove.installed_from_repository_id, None);
+    assert_eq!(trove.source_profile.as_deref(), Some("fedora-44"));
+
+    let provenance = RepositoryInstallProvenance {
+        repository_id: 42,
+        source_identity: Some("ubuntu-26.04".to_string()),
+        source_profile: Some("ubuntu-26.04".to_string()),
+        version_scheme: VersionScheme::Debian,
+        source_kind: conary_core::repository::RepositorySourceKind::Native,
+    };
+    apply_install_source_authority(&mut trove, Some(&provenance), Some("fedora-44"));
+
+    assert_eq!(trove.install_source, InstallSource::Repository);
+    assert_eq!(trove.installed_from_repository_id, Some(42));
+    assert_eq!(trove.source_profile.as_deref(), Some("ubuntu-26.04"));
 }
 
 #[test]
@@ -827,6 +880,7 @@ fn install_inner_applies_repository_provenance_from_resolution() {
             version_scheme: conary_core::repository::versioning::VersionScheme::Rpm,
             source_kind: conary_core::repository::RepositorySourceKind::Native,
         }),
+        requested_source_identity: None,
         native_lifecycle_bundle: None,
         repository_enrollments: &[],
         relation_removals: &[],

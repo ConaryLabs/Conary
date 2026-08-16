@@ -262,11 +262,11 @@ pub(super) fn install_inner_with_stored_files(
         let mut trove = pkg.to_trove();
         trove.installed_by_changeset_id = Some(changeset_id);
 
-        if let Some(provenance) = ctx.repository_provenance.as_ref() {
-            trove.install_source = InstallSource::Repository;
-            trove.installed_from_repository_id = Some(provenance.repository_id);
-            trove.source_profile = provenance.source_profile.clone();
-        }
+        apply_install_source_authority(
+            &mut trove,
+            ctx.repository_provenance.as_ref(),
+            ctx.requested_source_identity,
+        );
 
         if let Some(reason) = selection_reason {
             trove.selection_reason = Some(reason.to_string());
@@ -427,7 +427,13 @@ pub(super) fn install_inner_with_stored_files(
                 .insert_or_replace(tx)?;
         }
 
-        super::transaction::persist_package_provides(tx, trove_id, pkg)?;
+        super::transaction::persist_package_provides(
+            tx,
+            trove_id,
+            pkg,
+            ctx.semantics,
+            &extraction.extracted_files,
+        )?;
 
         trove_id
     };
@@ -456,6 +462,20 @@ pub(super) fn install_inner_with_stored_files(
             .flatten(),
         retained_relation_trove_ids,
     })
+}
+
+fn apply_install_source_authority(
+    trove: &mut Trove,
+    repository_provenance: Option<&super::RepositoryInstallProvenance>,
+    requested_source_identity: Option<&str>,
+) {
+    if let Some(provenance) = repository_provenance {
+        trove.install_source = InstallSource::Repository;
+        trove.installed_from_repository_id = Some(provenance.repository_id);
+        trove.source_profile = provenance.source_profile.clone();
+    } else if let Some(source_identity) = requested_source_identity {
+        trove.source_profile = Some(source_identity.to_string());
+    }
 }
 
 fn persist_config_files(

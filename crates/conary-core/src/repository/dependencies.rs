@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use super::download::{
-    DownloadOptions, DownloadProgress, download_package_verified_with_progress,
-    download_static_package_verified_with_progress,
+    DownloadOptions, DownloadProgress, download_binary_package_verified_with_progress,
+    download_package_verified_with_progress, download_static_package_verified_with_progress,
 };
 use super::remi::{RemiClient, RemiFetchRequest};
 use super::selector::PackageWithRepo;
@@ -30,6 +30,7 @@ struct PreparedDependencyAcquisition {
 
 enum PreparedDependencyStrategy {
     Static,
+    Binary,
     Native {
         trust: DownloadOptions,
     },
@@ -168,7 +169,8 @@ fn prepare_dependency_acquisitions(
             let strategy = match pkg_with_repo.repository.default_strategy.as_deref() {
                 Some("static") => PreparedDependencyStrategy::Static,
                 Some("remi") => prepare_remi_dependency(conn, pkg_with_repo)?,
-                None | Some("binary") => PreparedDependencyStrategy::Native {
+                Some("binary") => PreparedDependencyStrategy::Binary,
+                None => PreparedDependencyStrategy::Native {
                     trust: DownloadOptions::for_repository(&pkg_with_repo.repository, keyring_dir)?,
                 },
                 Some(strategy) => {
@@ -246,6 +248,10 @@ async fn acquire_prepared_dependency(
                 progress_bar,
             )
             .await
+        }
+        PreparedDependencyStrategy::Binary => {
+            download_binary_package_verified_with_progress(&plan.package, dest_dir, progress_bar)
+                .await
         }
         PreparedDependencyStrategy::Native { trust } => {
             download_package_verified_with_progress(&plan.package, dest_dir, trust, progress_bar)
@@ -385,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn native_dependency_still_requires_ecosystem_trust_during_serial_planning() {
+    fn binary_ccs_dependency_does_not_require_ecosystem_native_trust() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let keyring = tempfile::tempdir().unwrap();
         let package = package_with_repository(
@@ -397,20 +403,17 @@ mod tests {
             1,
         );
 
-        let error = prepare_dependency_acquisitions(
+        let plans = prepare_dependency_acquisitions(
             &conn,
             &[("dbus-broker".to_string(), package)],
             keyring.path(),
         )
-        .err()
-        .expect("native dependency planning must reject missing trust");
+        .expect("binary CCS acquisition must defer envelope trust to install preflight");
 
-        assert!(
-            error
-                .to_string()
-                .contains("has no ecosystem-native trust policy"),
-            "native dependency trust must remain mandatory: {error}"
-        );
+        assert!(matches!(
+            plans[0].strategy,
+            PreparedDependencyStrategy::Binary
+        ));
     }
 
     #[tokio::test]

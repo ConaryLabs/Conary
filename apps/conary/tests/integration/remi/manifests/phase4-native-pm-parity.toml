@@ -8,6 +8,21 @@ name = "Phase 4: Native Package Manager Parity Matrix"
 phase = 4
 timeout = 3600
 
+[suite.mock_server]
+port = 18083
+
+[[suite.mock_server.routes]]
+path = "/metadata.json"
+status = 200
+body_file = "/tmp/native-pm-pinned-repo/metadata.json"
+headers = { "Content-Type" = "application/json" }
+
+[[suite.mock_server.routes]]
+path = "/phase4-repository-fixture-1.0.0-1.ccs"
+status = 200
+body_file = "/tmp/native-pm-pinned-repo/phase4-repository-fixture-1.0.0-1.ccs"
+headers = { "Content-Type" = "application/octet-stream" }
+
 [[suite.setup]]
 conary = "system init"
 
@@ -18,7 +33,13 @@ exit_code = 0
 run = "${CONARY_BIN} repo remove ${REPO_NAME} --db-path ${DB_PATH} >/dev/null 2>&1 || true"
 
 [[suite.setup]]
-conary = "repo add ${REPO_NAME} ${REMI_ENDPOINT} --package-format json --default-strategy remi --remi-endpoint ${REMI_ENDPOINT} --source-profile ${REMI_DISTRO}"
+run = "rm -rf /tmp/native-pm-pinned-repo && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-pinned-binary-fixture.sh ${native_target} /tmp/native-pm-pinned-repo"
+
+[suite.setup.assert]
+exit_code = 0
+
+[[suite.setup]]
+conary = "repo add ${REPO_NAME} http://127.0.0.1:18083 --package-format json --default-strategy binary --ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY} --source-profile ${native_profile}"
 
 [suite.setup.assert]
 exit_code = 0
@@ -37,16 +58,16 @@ native_scheme = "rpm"
 native_profile = "fedora-44"
 native_fixture_version = "1.0.0-1"
 native_update_version = "1.0.1-1"
-native_dependency_count = "0"
-native_dependency_probe = "no-deps"
+native_dependency_count = "1"
+native_dependency_probe = 'depends|rpm|{"kind":"Depends","behavior":"Hard","expression":{"operator":"atom","operands":{"name":"config(phase4-runtime-fixture)","capability_kind":null,"version_constraint":"= 1.0.0-1","architecture_qualifier":{"kind":"unqualified"},"native_text":null}},"alternatives":[{"name":"config(phase4-runtime-fixture)","capability_kind":null,"version_constraint":"= 1.0.0-1","architecture_qualifier":{"kind":"unqualified"},"native_text":null}],"description":null,"native_text":"config(phase4-runtime-fixture) = 1.0.0-1"}'
 native_config_count = "1"
 native_config_source = "rpm"
 native_lifecycle_fidelity = "native-free"
-native_provider_count = "4"
+native_provider_count = "7"
 native_file_provider_count = "3"
 native_file_provider_set = "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h"
-repo_install_pkg = "tree"
-repo_install_path = "/usr/bin/tree"
+repo_install_pkg = "phase4-repository-fixture"
+repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0-1"
 
 [distro_overrides."ubuntu-26.04"]
@@ -62,11 +83,11 @@ native_dependency_probe = "no-deps"
 native_config_count = "1"
 native_config_source = "deb"
 native_lifecycle_fidelity = "native-free"
-native_provider_count = "1"
-native_file_provider_count = "0"
-native_file_provider_set = "no file provides"
-repo_install_pkg = "nano"
-repo_install_path = "/usr/bin/nano"
+native_provider_count = "4"
+native_file_provider_count = "3"
+native_file_provider_set = "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h"
+repo_install_pkg = "phase4-repository-fixture"
+repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0"
 
 [distro_overrides.arch]
@@ -82,11 +103,11 @@ native_dependency_probe = "no-deps"
 native_config_count = "1"
 native_config_source = "arch"
 native_lifecycle_fidelity = "native-free"
-native_provider_count = "1"
-native_file_provider_count = "0"
-native_file_provider_set = "no file provides"
-repo_install_pkg = "tree"
-repo_install_path = "/usr/bin/tree"
+native_provider_count = "4"
+native_file_provider_count = "3"
+native_file_provider_set = "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h"
+repo_install_pkg = "phase4-repository-fixture"
+repo_install_path = "/usr/share/phase4-repository-fixture/probe.txt"
 repo_seed_security_version = "9999.0-1"
 
 # --------------------------------------------------------------------------
@@ -96,7 +117,7 @@ repo_seed_security_version = "9999.0-1"
 [[test]]
 id = "TNPM01"
 name = "repo_sync_and_search"
-description = "Repository metadata sync and search are usable"
+description = "Pinned loopback repository metadata sync and search are usable"
 timeout = 300
 fatal = true
 
@@ -164,7 +185,7 @@ fatal = true
 depends_on = ["TNPM02X"]
 
 [[test.step]]
-run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
+run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --from ${native_profile} --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
 
 [test.step.assert]
 exit_code = 0
@@ -193,7 +214,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name 
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 troves", "phase4-runtime-fixture|${native_fixture_version}|${native_arch}|${native_scheme}||file|explicit"]
+stdout_contains_all = ["1 troves", "phase4-runtime-fixture|${native_fixture_version}|${native_arch}|${native_scheme}|${native_profile}|file|explicit"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_sha256, '-') || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || json_extract(payload_node_json, '$.source.mode') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""
@@ -366,7 +387,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT r.default_strategy || '|' || r.source_profile
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "static|${native_profile}|phase4-runtime-fixture|${native_update_version}|${native_scheme}|${native_arch}|active"
+stdout_contains = "binary|${native_profile}|phase4-runtime-fixture|${native_update_version}|${native_scheme}|${native_arch}|active"
 
 [[test.step]]
 run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} update phase4-runtime-fixture --db-path ${DB_PATH} --root /conary --yes --sandbox always"
@@ -451,21 +472,28 @@ run = ". /tmp/native-pm-parity/native-fixture.env && CONARY_TEST_SKIP_GENERATION
 
 [test.step.assert]
 exit_code = 0
-stdout_contains = "deferred"
+stdout_contains = "pending"
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COALESCE(metadata, '') FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["deferred_follow_up", "generation_rebuild", "forced generation rebuild failure for test: slice-d-forced"]
+stdout_contains_all = ["deferred_follow_up", "generation_publication", "generation publication is pending"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT status || '|' || COALESCE(last_error, '') || '|' || retry_count || '|' || recoverable FROM generation_publications WHERE trigger_changeset_id = (SELECT id FROM changesets WHERE description = 'Install phase4-runtime-fixture-${native_fixture_version}' ORDER BY id DESC LIMIT 1) ORDER BY id DESC LIMIT 1\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "failed|forced generation rebuild failure for test: slice-d-forced|1|1"
 
 [[test.step]]
 conary = "system history"
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["Install phase4-runtime-fixture-${native_fixture_version}", "[deferred]", "generation_rebuild"]
+stdout_contains_all = ["Install phase4-runtime-fixture-${native_fixture_version}", "[deferred]", "generation_publication"]
 
 # --------------------------------------------------------------------------
 # TNPM10: repository install and daily query surface
@@ -474,7 +502,7 @@ stdout_contains_all = ["Install phase4-runtime-fixture-${native_fixture_version}
 [[test]]
 id = "TNPM10"
 name = "repository_install_and_queries"
-description = "Install a native package from the synced repository and verify daily-driver query commands"
+description = "Install a signed source-scheme CCS package from the pinned repository and verify daily-driver query commands"
 timeout = 240
 fatal = true
 depends_on = ["TNPM09"]
@@ -564,10 +592,11 @@ fatal = true
 depends_on = ["TNPM11"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"UPDATE troves SET install_reason = 'dependency', selection_reason = 'Slice D orphan fixture', orphan_since = CURRENT_TIMESTAMP WHERE name = '${repo_install_pkg}'\""
+run = "printf '[model]\\nversion = 1\\ninstall = [\"native-matrix-root-layout\", \"phase4-runtime-fixture\"]\\n' > /tmp/native-pm-autoremove-model.toml && ${CONARY_BIN} model apply --model /tmp/native-pm-autoremove-model.toml --db-path ${DB_PATH} --root /conary --strict --no-autoremove --offline --yes"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "Marked '${repo_install_pkg}' as dependency"
 
 [[test.step]]
 run = "${CONARY_BIN} autoremove --db-path ${DB_PATH} --root /conary --dry-run"

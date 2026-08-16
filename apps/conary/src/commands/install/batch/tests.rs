@@ -72,6 +72,16 @@ fn extracted_symlink(path: &str, target: &str) -> PackagePayloadFile {
     .unwrap()
 }
 
+fn extracted_directory(path: &str, permissions: u32) -> PackagePayloadFile {
+    PackagePayloadFile::new(
+        path.to_string(),
+        payload_node(PayloadNodeKind::Directory, libc::S_IFDIR | permissions),
+        None,
+        None,
+    )
+    .unwrap()
+}
+
 fn installed_regular_file(
     db_path: &std::path::Path,
     path: &str,
@@ -143,6 +153,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
         installed_component_names: None,
         component_names_by_path: None,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
         ccs: None,
     };
@@ -176,6 +187,7 @@ fn test_batch_plan_detects_cross_package_conflict() {
         installed_component_names: None,
         component_names_by_path: None,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
         ccs: None,
     };
@@ -232,6 +244,7 @@ fn test_prepared_package_to_trove() {
         installed_component_names: None,
         component_names_by_path: None,
         repository_provenance: None,
+        requested_source_identity: Some("debian-13".to_string()),
         native_lifecycle_state: super::super::NativeLifecycleInstallState::default(),
         ccs: None,
     };
@@ -244,6 +257,12 @@ fn test_prepared_package_to_trove() {
     assert_eq!(trove.version, "1.2.3");
     assert_eq!(trove.architecture, Some("amd64".to_string()));
     assert_eq!(trove.installed_by_changeset_id, Some(42));
+    assert_eq!(
+        trove.install_source,
+        conary_core::db::models::InstallSource::File
+    );
+    assert_eq!(trove.installed_from_repository_id, None);
+    assert_eq!(trove.source_profile.as_deref(), Some("debian-13"));
     assert_eq!(
         trove.install_reason,
         conary_core::db::models::InstallReason::Dependency
@@ -287,6 +306,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
             version_scheme: conary_core::repository::versioning::VersionScheme::Arch,
             source_kind: conary_core::repository::RepositorySourceKind::Native,
         }),
+        requested_source_identity: Some("conflicting-local-source".to_string()),
         native_lifecycle_state: NativeLifecycleInstallState::default(),
         ccs: None,
     };
@@ -298,6 +318,7 @@ fn prepared_package_to_trove_preserves_matching_repository_provenance() {
         conary_core::db::models::InstallSource::Repository
     );
     assert_eq!(trove.installed_from_repository_id, Some(9));
+    assert_eq!(trove.source_profile.as_deref(), Some("arch"));
     assert_eq!(trove.source_profile.as_deref(), Some("arch"));
     assert_eq!(
         trove.version_scheme,
@@ -341,6 +362,7 @@ fn prepared_test_package(name: &str, path: &str, content: &[u8]) -> PreparedPack
         installed_component_names: None,
         component_names_by_path: None,
         repository_provenance: None,
+        requested_source_identity: None,
         native_lifecycle_state: NativeLifecycleInstallState::default(),
         ccs: None,
     }
@@ -1139,7 +1161,10 @@ fn prepare_signed_ccs_dependency(
         "required by the exact selected transaction",
         false,
         InstallIntent::PackageChange,
-        None,
+        PreparedPackageSourceAuthority {
+            repository_provenance: None,
+            requested_source_identity: None,
+        },
     )
     .unwrap()
 }
@@ -1152,7 +1177,7 @@ fn ccs_test_db(temp_dir: &std::path::Path) -> (std::path::PathBuf, rusqlite::Con
 }
 
 #[test]
-fn prepared_package_publishes_every_payload_path_as_a_file_provider() {
+fn prepared_package_publishes_non_directory_payload_paths_as_file_providers() {
     let temp = tempfile::tempdir().unwrap();
     let (db_path, _conn) = ccs_test_db(temp.path());
     let paths = ["/usr/bin/sh", "/usr/share/doc/bash/README"];
@@ -1163,7 +1188,12 @@ fn prepared_package_publishes_every_payload_path_as_a_file_provider() {
         !prepared.extracted_files.is_empty(),
         "the fixture must carry a payload"
     );
-    for file in &prepared.extracted_files {
+    for file in prepared.extracted_files.iter().filter(|file| {
+        !matches!(
+            file.node.kind,
+            conary_core::payload::PayloadNodeKind::Directory
+        )
+    }) {
         assert!(
             prepared.provides.iter().any(|provide| {
                 provide.kind
@@ -1186,6 +1216,33 @@ fn prepared_package_publishes_every_payload_path_as_a_file_provider() {
             .any(|provide| provide.name == "bash"),
         "materialized paths must not displace the exact package self-provider"
     );
+}
+
+#[test]
+fn materialized_payload_providers_exclude_directories_but_include_symlinks() {
+    let payload = [
+        extracted_directory("/usr/bin", 0o755),
+        extracted_regular("/usr/bin/tool", b"tool\n", 0o755),
+        extracted_symlink("/usr/bin/tool-link", "tool"),
+    ];
+    let mut provides = Vec::new();
+
+    super::super::transaction::extend_materialized_payload_provides(
+        &mut provides,
+        InstallSemantics::native_package(PackageFormatType::Rpm),
+        &payload,
+    )
+    .unwrap();
+
+    let file_paths = provides
+        .iter()
+        .filter(|provide| {
+            provide.kind
+                == conary_core::repository::dependency_model::RepositoryCapabilityKind::File
+        })
+        .map(|provide| provide.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(file_paths, ["/usr/bin/tool", "/usr/bin/tool-link"]);
 }
 
 #[test]

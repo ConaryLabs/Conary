@@ -129,6 +129,7 @@ async fn cmd_install_with_intent(
         intent,
         yes,
         repository_provenance: requested_repository_provenance,
+        requested_source_identity: from_source.as_deref(),
     };
 
     let Some((pkg, format, repository_provenance)) = resolve_and_parse_package(
@@ -276,6 +277,7 @@ async fn cmd_install_with_intent(
         ccs_file_capabilities: None,
         defer_generation: false,
         repository_provenance,
+        requested_source_identity: from_source.as_deref(),
         native_lifecycle_bundle: native_lifecycle_state.bundle_to_persist.as_ref(),
         repository_enrollments: &repository_enrollments,
         relation_removals: &relation_plan.removals,

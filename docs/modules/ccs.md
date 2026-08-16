@@ -485,7 +485,10 @@ exact persisted repository provenance and only active
 `repository_package_keys`; a static repository may derive those keys from its
 verified TUF targets metadata. Canonical Remi repository setup seeds a
 release-tracked, exact-endpoint/exact-profile key set, while self-hosted Remi
-requires an independently authenticated public-key file. An unknown,
+requires an independently authenticated public-key file. A binary JSON
+repository that serves already-built CCS packages enrolls its independently
+authenticated public-key file through the same `--ccs-package-key` input; it
+does not acquire authority from package metadata. An unknown,
 cross-profile, malformed, or retired signer fails closed before payload or
 lifecycle mutation. Local authoring and explicit file workflows retain their
 separate exact-key or policy authority.

@@ -110,12 +110,22 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     let provider_contract = [
         (
             "fedora44",
+            "7",
+            "3",
+            "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
+        ),
+        (
+            "ubuntu-26.04",
             "4",
             "3",
             "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
         ),
-        ("ubuntu-26.04", "1", "0", "no file provides"),
-        ("arch", "1", "0", "no file provides"),
+        (
+            "arch",
+            "4",
+            "3",
+            "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
+        ),
     ];
     for (distro, provider_count, file_provider_count, file_provider_set) in provider_contract {
         let overrides = parity_manifest
@@ -148,7 +158,183 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     ] {
         assert!(
             metadata_rendered.contains(required),
-            "TNPM04 must enforce the source-format-owned provider contract {required}"
+            "TNPM04 must enforce the source-format and payload-owned provider contract {required}"
+        );
+    }
+    let deferred_follow_up = parity_manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM09")
+        .expect("Phase 4 native PM parity must include TNPM09");
+    let deferred_rendered = format!("{deferred_follow_up:?}");
+    assert!(
+        deferred_rendered.contains("generation_publication")
+            && deferred_rendered.contains("generation publication is pending")
+            && deferred_rendered.contains("generation_publications")
+            && deferred_rendered.contains("last_error")
+            && deferred_rendered
+                .contains("forced generation rebuild failure for test: slice-d-forced"),
+        "TNPM09 must separate canonical deferred authority from exact publication failure evidence"
+    );
+
+    let mock_server = parity_manifest
+        .suite
+        .mock_server
+        .as_ref()
+        .expect("native parity must own a pinned loopback repository server");
+    assert_eq!(mock_server.port, 18083);
+    let route_contract = mock_server
+        .routes
+        .iter()
+        .map(|route| {
+            (
+                route.path.as_str(),
+                route.body_file.as_deref(),
+                route.delay_ms,
+            )
+        })
+        .collect::<Vec<_>>();
+    for required in ["/metadata.json", "/phase4-repository-fixture-1.0.0-1.ccs"] {
+        assert!(
+            route_contract.iter().any(|(path, body_file, delay)| {
+                *path == required
+                    && body_file.is_some_and(|path| path.starts_with("/tmp/native-pm-pinned-repo/"))
+                    && delay.is_none()
+            }),
+            "native parity must serve the exact bounded route {required}"
+        );
+    }
+    let setup = format!("{:?}", parity_manifest.suite.setup);
+    for required in [
+        "build-pinned-binary-fixture.sh ${native_target}",
+        "http://127.0.0.1:18083",
+        "--default-strategy binary",
+        "--ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY}",
+        "--source-profile ${native_profile}",
+    ] {
+        assert!(
+            setup.contains(required),
+            "native parity setup must enforce {required}"
+        );
+    }
+    assert!(
+        !setup.contains("${REMI_ENDPOINT}"),
+        "native parity must not consume the live Remi endpoint"
+    );
+    for distro in ["fedora44", "ubuntu-26.04", "arch"] {
+        let overrides = parity_manifest
+            .distro_overrides
+            .get(distro)
+            .unwrap_or_else(|| panic!("missing {distro} overrides"));
+        assert_eq!(
+            overrides.get("repo_install_pkg").map(String::as_str),
+            Some("phase4-repository-fixture")
+        );
+        assert_eq!(
+            overrides.get("repo_install_path").map(String::as_str),
+            Some("/usr/share/phase4-repository-fixture/probe.txt")
+        );
+    }
+    for (target, expected_scheme, expected_architecture) in [
+        ("rpm", "rpm", "x86_64"),
+        ("deb", "debian", "amd64"),
+        ("arch", "arch", "x86_64"),
+    ] {
+        let fixture = conary_fixture_path(&format!("phase4-pinned-repository/{target}/ccs.toml"));
+        let manifest = conary_core::ccs::manifest::CcsManifest::from_file(&fixture)
+            .unwrap_or_else(|error| panic!("load {}: {error}", fixture.display()));
+        assert_eq!(manifest.package.name, "phase4-repository-fixture");
+        assert_eq!(manifest.package.version, "1.0.0");
+        assert_eq!(manifest.package.release, "1");
+        assert_eq!(manifest.package.version_scheme.as_str(), expected_scheme);
+        assert_eq!(
+            manifest
+                .package
+                .platform
+                .as_ref()
+                .expect("pinned repository fixture must declare a platform")
+                .arch
+                .as_deref(),
+            Some(expected_architecture)
+        );
+    }
+    let pinned_builder =
+        std::fs::read_to_string(conary_fixture_path("native/build-pinned-binary-fixture.sh"))
+            .expect("read pinned binary fixture builder");
+    for required in [
+        "fixture-signing-key.private",
+        "hashlib.sha256(artifact_bytes).hexdigest()",
+        "\"security_advisory_source\": None",
+        "\"download_url\": f\"{repository_url}/{artifact.name}\"",
+        "\"requirements\": []",
+        "\"relations\": []",
+        "os.replace(temporary_path, path)",
+    ] {
+        assert!(
+            pinned_builder.contains(required),
+            "pinned binary builder must enforce {required}"
+        );
+    }
+    let security_probe = std::fs::read_to_string(conary_fixture_path(
+        "native/prepare-unknown-security-repository.sh",
+    ))
+    .expect("read unknown-security repository helper");
+    for required in [
+        "--security-advisories unknown",
+        "--source-profile \"${source_profile}\"",
+        "security_advisory_support, package_format, source_profile",
+    ] {
+        assert!(
+            security_probe.contains(required),
+            "unknown-security repository helper must enforce {required}"
+        );
+    }
+    assert!(
+        !security_probe.contains("UPDATE troves"),
+        "unknown-security proof must not rewrite installed provenance through raw SQLite"
+    );
+    let autoremove_test = parity_manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM12")
+        .expect("Phase 4 native PM parity must include TNPM12");
+    let autoremove_rendered = format!("{autoremove_test:?}");
+    for required in [
+        "model apply",
+        "--strict",
+        "--no-autoremove",
+        "native-matrix-root-layout",
+        "phase4-runtime-fixture",
+        "Marked '${repo_install_pkg}' as dependency",
+    ] {
+        assert!(
+            autoremove_rendered.contains(required),
+            "TNPM12 must establish its orphan through model authority {required}"
+        );
+    }
+    assert!(
+        !autoremove_rendered.contains("UPDATE troves"),
+        "TNPM12 must not rewrite install reason through raw SQLite"
+    );
+    let container_root = path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("native parity manifest must live below the Remi integration root")
+        .join("containers");
+    for containerfile in [
+        "Containerfile.fedora44",
+        "Containerfile.ubuntu-26.04",
+        "Containerfile.arch",
+        "Containerfile.artix",
+        "Containerfile.cachyos",
+        "Containerfile.opensuse-tumbleweed",
+        "Containerfile.debian-derivative",
+    ] {
+        let contents = std::fs::read_to_string(container_root.join(containerfile))
+            .unwrap_or_else(|error| panic!("read {containerfile}: {error}"));
+        assert!(
+            contents.contains("command -v setsid"),
+            "{containerfile} must prove the synchronous exec supervisor capability"
         );
     }
 

@@ -1,0 +1,25 @@
+# tests/fixtures/phase4-pinned-repository/deb/ccs.toml
+
+[package]
+name = "phase4-repository-fixture"
+version = "1.0.0"
+version_scheme = "debian"
+debian_multi_arch = "no"
+release = "1"
+kind = "package"
+description = "Pinned Debian-scheme repository fixture for native parity"
+license = "MIT"
+
+[package.platform]
+os = "linux"
+arch = "amd64"
+libc = "gnu"
+
+[provides]
+capabilities = ["phase4-repository-fixture"]
+binaries = []
+
+[components]
+default = ["runtime"]
+
+[hooks]

@@ -451,6 +451,7 @@ async fn repository_ccs_closure_runs_root_pretransaction_before_dependency_paylo
         yes: true,
         envelope_authority: CcsEnvelopeAuthority::LocalDev,
         repository_provenance: None,
+        requested_source_identity: None,
         resolution_policy: test_resolution_policy().with_primary_source_identity("fedora-44"),
     })
     .await

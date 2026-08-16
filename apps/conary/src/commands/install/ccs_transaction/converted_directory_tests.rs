@@ -226,6 +226,7 @@ async fn reloaded_converted_formats_install_with_their_directory_contract() {
             yes: true,
             envelope_authority: super::super::CcsEnvelopeAuthority::LocalDev,
             repository_provenance: None,
+            requested_source_identity: None,
             resolution_policy: conary_core::repository::resolution_policy::ResolutionPolicy::new()
                 .with_mixing(
                     conary_core::repository::resolution_policy::DependencyMixingPolicy::Permissive,

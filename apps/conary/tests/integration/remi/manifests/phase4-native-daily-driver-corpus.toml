@@ -158,7 +158,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' troves' FROM troves WHERE name 
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["1 troves", "phase4-daily-driver-corpus|${native_corpus_fixture_version}|${native_arch}|${native_scheme}||file|explicit"]
+stdout_contains_all = ["1 troves", "phase4-daily-driver-corpus|${native_corpus_fixture_version}|${native_arch}|${native_scheme}|${native_profile}|file|explicit"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular'; SELECT path || '|' || coalesce(content_size, '-') || '|' || json_extract(payload_node_json, '$.source.kind.type') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND json_extract(payload_node_json, '$.source.kind.type') = 'regular' ORDER BY path\""

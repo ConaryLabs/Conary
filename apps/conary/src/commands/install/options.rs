@@ -103,6 +103,7 @@ pub(crate) fn repository_install_provenance_from_package(
         version_scheme,
         source_kind: match repository.default_strategy.as_deref() {
             Some("static") => RepositorySourceKind::Static,
+            Some("binary") => RepositorySourceKind::Binary,
             Some("remi") => RepositorySourceKind::Remi,
             _ => RepositorySourceKind::Native,
         },
@@ -222,5 +223,29 @@ mod tests {
             conary_core::repository::versioning::VersionScheme::Rpm
         );
         assert_eq!(provenance.source_kind, RepositorySourceKind::Static);
+    }
+
+    #[test]
+    fn repository_install_provenance_from_package_tags_binary_repository() {
+        let mut repository = Repository::new(
+            "binary-repo".to_string(),
+            "https://binary.example.invalid/repo".to_string(),
+        );
+        repository.id = Some(89);
+        repository.default_strategy = Some("binary".to_string());
+        repository.source_profile = Some("fedora-44".to_string());
+        let package = RepositoryPackage::new(
+            89,
+            "tree".to_string(),
+            "2.2.1-4.fc44".to_string(),
+            conary_core::repository::versioning::VersionScheme::Rpm,
+            "sha256:abc123".to_string(),
+            1024,
+            "https://binary.example.invalid/tree.ccs".to_string(),
+        );
+
+        let provenance = repository_install_provenance_from_package(&package, &repository).unwrap();
+
+        assert_eq!(provenance.source_kind, RepositorySourceKind::Binary);
     }
 }

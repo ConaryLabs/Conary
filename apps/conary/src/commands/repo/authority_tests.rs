@@ -52,6 +52,19 @@ fn remi_repo_options(
     }
 }
 
+fn binary_repo_options(
+    name: &str,
+    db_path: &std::path::Path,
+    endpoint: &str,
+    profile: &str,
+    ccs_package_keys: Vec<PathBuf>,
+) -> RepoAddOptions {
+    let mut options = remi_repo_options(name, db_path, endpoint, profile, ccs_package_keys);
+    options.default_strategy = Some("binary".to_string());
+    options.remi_endpoint = None;
+    options
+}
+
 #[tokio::test]
 async fn repo_add_seeds_exact_canonical_remi_package_authority() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -234,6 +247,40 @@ async fn repo_add_persists_explicit_self_hosted_authority_and_rejects_duplicates
     let repo = Repository::find_by_name(&conn, "self-hosted")
         .unwrap()
         .unwrap();
+    assert_eq!(
+        RepositoryPackageKey::trusted_keys_for_repository(&conn, repo.id.unwrap()).unwrap(),
+        vec![signing_key.public_key_base64()]
+    );
+}
+
+#[tokio::test]
+async fn repo_add_persists_explicit_binary_ccs_authority() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let private_key = temp_dir.path().join("binary.private");
+    let public_key = temp_dir.path().join("binary.public");
+    let signing_key = SigningKeyPair::generate().with_key_id("binary");
+    signing_key
+        .save_to_files(&private_key, &public_key)
+        .unwrap();
+
+    cmd_repo_add(binary_repo_options(
+        "binary-ccs",
+        &db_path,
+        "https://packages.example.invalid",
+        "arch",
+        vec![public_key],
+    ))
+    .await
+    .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let repo = Repository::find_by_name(&conn, "binary-ccs")
+        .unwrap()
+        .unwrap();
+    assert_eq!(repo.default_strategy.as_deref(), Some("binary"));
+    assert_eq!(repo.source_profile.as_deref(), Some("arch"));
     assert_eq!(
         RepositoryPackageKey::trusted_keys_for_repository(&conn, repo.id.unwrap()).unwrap(),
         vec![signing_key.public_key_base64()]

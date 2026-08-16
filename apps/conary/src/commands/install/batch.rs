@@ -112,10 +112,17 @@ pub struct PreparedPackage {
     pub component_names_by_path: Option<HashMap<String, String>>,
     /// Repository metadata for packages resolved from synced repository rows.
     pub repository_provenance: Option<RepositoryInstallProvenance>,
+    /// Exact source identity explicitly supplied for a local artifact.
+    pub requested_source_identity: Option<String>,
     /// Bundle replay plans accepted during preflight, carried through commit.
     pub native_lifecycle_state: NativeLifecycleInstallState,
     /// CCS-only lifecycle and capability authority.
     pub(crate) ccs: Option<PreparedCcsMetadata>,
+}
+
+pub(crate) struct PreparedPackageSourceAuthority<'a> {
+    pub(crate) repository_provenance: Option<RepositoryInstallProvenance>,
+    pub(crate) requested_source_identity: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +184,8 @@ impl PreparedPackage {
             trove.install_source = conary_core::db::models::InstallSource::Repository;
             trove.installed_from_repository_id = Some(provenance.repository_id);
             trove.source_profile = provenance.source_profile.clone();
+        } else if let Some(source_identity) = self.requested_source_identity.as_ref() {
+            trove.source_profile = Some(source_identity.clone());
         }
 
         Ok(trove)

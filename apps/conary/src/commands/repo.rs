@@ -36,8 +36,10 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     {
         anyhow::bail!("--remi-endpoint is required when --default-strategy=remi");
     }
-    if !opts.ccs_package_keys.is_empty() && opts.default_strategy.as_deref() != Some("remi") {
-        anyhow::bail!("--ccs-package-key requires --default-strategy=remi");
+    if !opts.ccs_package_keys.is_empty()
+        && !matches!(opts.default_strategy.as_deref(), Some("remi" | "binary"))
+    {
+        anyhow::bail!("--ccs-package-key requires --default-strategy=remi or binary");
     }
 
     let supplied_profile = opts
@@ -116,11 +118,16 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
         resolve_ccs_package_authority(
             opts.default_strategy.as_deref(),
             opts.remi_endpoint.as_deref(),
-            profile_id,
+            Some(profile_id),
             &opts.ccs_package_keys,
         )?
     } else {
-        Vec::new()
+        resolve_ccs_package_authority(
+            opts.default_strategy.as_deref(),
+            opts.remi_endpoint.as_deref(),
+            profile_id.as_deref(),
+            &opts.ccs_package_keys,
+        )?
     };
     let parser_config = exact_parser_config(
         package_format,

@@ -31,6 +31,7 @@ pub(super) struct CcsInstallParams<'a> {
     pub(super) intent: InstallIntent,
     pub(super) yes: bool,
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
+    pub(super) requested_source_identity: Option<&'a str>,
 }
 
 /// Resolve a package path, detect its format, and parse it.
@@ -128,6 +129,7 @@ pub(super) async fn resolve_and_parse_package(
                 repository_provenance.as_ref(),
             )?,
             repository_provenance,
+            requested_source_identity: ccs_opts.requested_source_identity,
             resolution_policy,
         })
         .await?;
@@ -158,6 +160,7 @@ pub(super) async fn resolve_and_parse_package(
                 repository_provenance.as_ref(),
             )?,
             repository_provenance,
+            requested_source_identity: ccs_opts.requested_source_identity,
             resolution_policy,
         })
         .await?;
@@ -204,6 +207,7 @@ pub(super) async fn resolve_and_parse_package(
                     yes: ccs_opts.yes,
                     envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
                     repository_provenance,
+                    requested_source_identity: ccs_opts.requested_source_identity,
                     resolution_policy,
                 })
                 .await?;

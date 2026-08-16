@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-16
-revision: 24
-summary: Track Conary's active W7 payload-topology corpus slice, typed semantic coverage, external tester milestone, and later workstreams
+revision: 25
+summary: Track Conary's active W7 deterministic native-parity slice, typed semantic coverage, external tester milestone, and later workstreams
 proof_baseline: "immutable synchronized v0.15.0 suite at 642750878d5a59a9aa27976347cafc6f9dd86cfd; exact tagged Remi deployed; external tester result remains 0/10 behind #110"
 current_milestone: first external tester loop
 active_workstream: W7 Just-Works Corpus Gate
@@ -317,11 +317,12 @@ the stated scope, not whether a workstream happens to be active.
   reporting and the closed 44-property authority landed through #456; #458
   makes the daily-driver native fixture attributable in one focused local
   manifest. #463 adds exact directory and symlink topology to that same
-  digest-bound chain. #462 and PR #466 add exact hardlink export and hosted
-  inode proof; root-child RPM directory authoring remains the active #464
-  slice. The #458 discovery run
-  filed the legacy provider-set defect as #460 and live repository-sync
-  nondeterminism as #461 rather than folding them into the focused W7 gate.
+  digest-bound chain. #462 and #464 add exact hardlink and root-directory export
+  with hosted inode and RPM parser proof. #460 now pins the legacy provider-set
+  contract per source format but remains open for the full matrix. #461 is the
+  active slice removing live repository-sync nondeterminism and host-PID timeout
+  cleanup from that terminal parity proof. The #458 discovery run filed both
+  defects rather than folding them into the focused W7 gate.
 - **Issues:** #110 as the corpus umbrella; #458 and #463 for focused
   daily-driver attribution; #462 and #464 for payload-topology export gaps;
   #460 and #461 for exact legacy parity defects; plus #39 for bootstrap.
