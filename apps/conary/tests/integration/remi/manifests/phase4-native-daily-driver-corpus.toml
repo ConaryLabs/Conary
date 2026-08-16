@@ -322,7 +322,7 @@ stdout_contains_all = ["1 installed", "0 conflicts"]
 [[test]]
 id = "TNPM18"
 name = "daily_driver_corpus_remove_hooks_and_cleanup"
-description = "Removing the corpus package runs its pre-remove hook and deletes the tracked files"
+description = "Purging the corpus package runs its pre-remove hook and deletes the tracked files and config"
 group = "daily-driver-corpus"
 timeout = 120
 fatal = true
@@ -345,7 +345,7 @@ semantic = "configuration_removal"
 artifact_roles = ["install_request"]
 
 [[test.step]]
-run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove phase4-daily-driver-corpus --db-path ${DB_PATH} --root /conary --sandbox always --yes"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove phase4-daily-driver-corpus --db-path ${DB_PATH} --root /conary --sandbox always --purge --yes"
 
 [test.step.assert]
 exit_code = 0

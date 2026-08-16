@@ -247,11 +247,14 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
                 == [conary_core::corpus::SourceArtifactRole::InstallRequest])
     );
 
-    let removal_case = manifest
+    let removal_test = manifest
         .test
         .iter()
         .find(|test| test.id == "TNPM18")
-        .and_then(|test| test.corpus.as_ref())
+        .expect("TNPM18 removal test");
+    let removal_case = removal_test
+        .corpus
+        .as_ref()
         .expect("TNPM18 typed removal evidence");
     assert_eq!(
         removal_case.stages,
@@ -261,6 +264,10 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
     assert_eq!(
         removal_case.coverage[0].semantic,
         conary_core::corpus::CorpusSemantic::ConfigurationRemoval
+    );
+    assert!(
+        format!("{removal_test:?}").contains("--purge"),
+        "configuration removal evidence must cross the explicit purge boundary"
     );
 
     let build_helper =

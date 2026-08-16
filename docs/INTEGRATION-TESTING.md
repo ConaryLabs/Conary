@@ -546,9 +546,9 @@ record reopens the builder's schema-versioned output manifest, hashes the exact
 native artifact again, and binds its claims to the install-request role.
 Across the two completed cases the suite declares exactly seven properties:
 exact version, native architecture, regular files, a queried virtual provide,
-matched config, config removal, and shell lifecycle. The source format comes
-from the explicit distro build-context override and must resolve to the closed
-RPM/DEB/ALPM type before evidence can count.
+matched config, purge-time config removal, and shell lifecycle. The source
+format comes from the explicit distro build-context override and must resolve
+to the closed RPM/DEB/ALPM type before evidence can count.
 
 Several useful assertions deliberately remain outside semantic coverage. The
 2 MiB zero-filled file is not W7 large-file/resource-boundary proof; the
