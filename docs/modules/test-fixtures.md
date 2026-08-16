@@ -498,23 +498,27 @@ Each fixture family should record:
   exact/native identity, regular files, one explicit directory,
   one exact symlink, one two-path hardlink set, one queried virtual provide,
   one exact versioned dependency resolved from the bounded loopback repository,
-  matched config, and shell lifecycle; removal covers config cleanup. Each
-  native package is independently installed or extracted and both hardlink
-  paths must report one device/inode identity with a link count of two before
-  Conary installation begins. The fixture pins that inode's mtime to an exact
-  whole second shared by the accepted RPM, Debian, and ALPM metadata grammars.
-  Topology counts only after typed native-package metadata and
-  selected-generation node assertions agree.
+  matched config, exact payload ownership and timestamp authority, and shell
+  lifecycle; removal covers config cleanup. Each native package is independently
+  installed or extracted and both hardlink paths must report one device/inode
+  identity with a link count of two, uid/gid `0`, and mtime `1700000000` before
+  Conary installation begins. The selected-generation proof then requires both
+  members to retain the exact source-typed ownership and timestamp: named
+  `root` for RPM ownership, numeric `0` for Debian and ALPM ownership, and zero
+  timestamp nanoseconds for all three. Topology and metadata count only after
+  typed native-package and selected-generation node assertions agree.
   RPM directory proof includes the non-default root child `/opt` plus a
   non-default leaf so the package owns exact path, mode, and ownership metadata;
   default shared parents remain implicit native-package paths.
   Its builder writes a schema-versioned digest manifest and the evidence writer
   rehashes the artifact before publication. The chain attributes hardlink
   coverage only through the native inode oracle plus the typed
-  selected-generation topology assertion. Do not infer large-file,
-  source-trigger, activation, target-helper, conflict, or replacement coverage
-  from the chain's 2 MiB file, out-of-band trigger, disabled unit, adjacent
-  helper path, or file-collision negative. PRs run only that focused six-test
+  selected-generation topology assertion. Ownership and timestamp coverage use
+  that same exact request artifact but do not establish xattr, capability, or
+  live-root materialization coverage. Do not infer large-file, source-trigger,
+  activation, target-helper, conflict, or replacement coverage from the chain's
+  2 MiB file, out-of-band trigger, disabled unit, adjacent helper path, or
+  file-collision negative. PRs run only that focused six-test
   chain on Fedora 44, Ubuntu 26.04, and Arch behind the stable
   `native-daily-driver-corpus` aggregate context; every lane applies both the
   ordinary suite-result and typed corpus-result gates.

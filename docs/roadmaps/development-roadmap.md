@@ -323,11 +323,12 @@ the stated scope, not whether a workstream happens to be active.
   uses a signed loopback repository plus process-group timeout cleanup. #470 is
   closed after making one exact versioned dependency resolve, acquire, and
   install from that repository with both artifacts bound to typed corpus
-  evidence. The next bounded #110 slice has not yet been selected.
+  evidence. #473 owns exact source-native and selected-generation ownership and
+  timestamp attribution for the same digest-bound daily-driver artifact.
 - **Issues:** #110 as the corpus umbrella; #458 and #463 for focused
   daily-driver attribution; #462 and #464 for payload-topology export gaps;
   #460 and #461 for closed legacy parity defects; #470 for versioned dependency
-  resolution; plus #39 for bootstrap.
+  resolution; #473 for payload metadata attribution; plus #39 for bootstrap.
 - **User journey:** install the signed release through one documented bootstrap
   entry point; `conary system init` with no hand-edited state; sync and
   authenticate repositories; request a package by ordinary name; resolve the

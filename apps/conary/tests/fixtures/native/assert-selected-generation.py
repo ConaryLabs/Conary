@@ -330,6 +330,65 @@ def assert_selected_hardlink(
             fail(f"selected-generation hardlink members disagree on {field}")
 
 
+def expected_payload_identity(value: str, field: str) -> dict[str, Any]:
+    try:
+        identity_type, identity_value = value.split(":", 1)
+    except ValueError:
+        fail(f"{field} expects named:NAME or numeric:ID, got {value!r}")
+    if identity_type == "named" and identity_value and "\x00" not in identity_value:
+        return {"type": "named", "name": identity_value}
+    if (
+        identity_type == "numeric"
+        and identity_value.isascii()
+        and identity_value.isdecimal()
+    ):
+        return {"type": "numeric", "id": int(identity_value)}
+    fail(f"{field} expects named:NAME or numeric:ID, got {value!r}")
+
+
+def assert_selected_node_metadata(
+    entries: dict[str, dict[str, Any]], expectation: str
+) -> None:
+    path, expected = split_expectation(expectation, "--expect-node-metadata")
+    fields = expected.split(",")
+    if len(fields) != 4:
+        fail(
+            "--expect-node-metadata expects "
+            "PATH=USER,GROUP,SECONDS,NANOSECONDS"
+        )
+    expected_user = expected_payload_identity(fields[0], "USER")
+    expected_group = expected_payload_identity(fields[1], "GROUP")
+    try:
+        expected_seconds = int(fields[2])
+        expected_nanoseconds = int(fields[3])
+    except ValueError:
+        fail("--expect-node-metadata seconds and nanoseconds must be decimal integers")
+    if not 0 <= expected_nanoseconds < 1_000_000_000:
+        fail("--expect-node-metadata nanoseconds must be in [0, 1000000000)")
+
+    entry = entries.get(path)
+    if entry is None:
+        fail(f"selected generation does not contain {path}")
+    node = entry.get("node")
+    source = node.get("source") if isinstance(node, dict) else None
+    if not isinstance(source, dict):
+        fail(f"selected-generation path {path} has no typed source-node authority")
+    expected_mtime = {
+        "seconds": expected_seconds,
+        "nanoseconds": expected_nanoseconds,
+    }
+    for field, expected_value in (
+        ("user", expected_user),
+        ("group", expected_group),
+        ("mtime", expected_mtime),
+    ):
+        if source.get(field) != expected_value:
+            fail(
+                f"{path} {field} authority is {source.get(field)!r}, "
+                f"expected {expected_value!r}"
+            )
+
+
 def parse_colon_records(content: bytes, path: str, field_count: int) -> list[list[str]]:
     try:
         lines = content.decode("utf-8").splitlines()
@@ -422,6 +481,12 @@ def main() -> int:
     parser.add_argument(
         "--expect-hardlink", action="append", default=[], metavar="PATH_A=PATH_B"
     )
+    parser.add_argument(
+        "--expect-node-metadata",
+        action="append",
+        default=[],
+        metavar="PATH=USER,GROUP,SECONDS,NANOSECONDS",
+    )
     parser.add_argument("--contains-line", action="append", default=[], metavar="PATH=LINE")
     parser.add_argument(
         "--expect-user",
@@ -453,6 +518,8 @@ def main() -> int:
         assert_selected_directory(entries, value)
     for value in args.expect_hardlink:
         assert_selected_hardlink(entries, value)
+    for value in args.expect_node_metadata:
+        assert_selected_node_metadata(entries, value)
     for value in args.contains_line:
         path, expected = split_expectation(value, "--contains-line")
         _, content = entry_content(entries, cas_base, path)
@@ -468,6 +535,7 @@ def main() -> int:
         + len(args.expect_symlink)
         + len(args.expect_directory)
         + len(args.expect_hardlink)
+        + len(args.expect_node_metadata)
         + len(args.expect_user)
     )
     print(
