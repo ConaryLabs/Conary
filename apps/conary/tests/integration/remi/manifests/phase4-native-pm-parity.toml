@@ -592,10 +592,11 @@ fatal = true
 depends_on = ["TNPM11"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"UPDATE troves SET install_reason = 'dependency', selection_reason = 'Slice D orphan fixture', orphan_since = CURRENT_TIMESTAMP WHERE name = '${repo_install_pkg}'\""
+run = "printf '[model]\\nversion = 1\\ninstall = [\"phase4-runtime-fixture\"]\\n' > /tmp/native-pm-autoremove-model.toml && ${CONARY_BIN} model apply --model /tmp/native-pm-autoremove-model.toml --db-path ${DB_PATH} --root /conary --strict --no-autoremove --offline --yes"
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "Marked '${repo_install_pkg}' as dependency"
 
 [[test.step]]
 run = "${CONARY_BIN} autoremove --db-path ${DB_PATH} --root /conary --dry-run"

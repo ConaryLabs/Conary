@@ -293,6 +293,27 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         !security_probe.contains("UPDATE troves"),
         "unknown-security proof must not rewrite installed provenance through raw SQLite"
     );
+    let autoremove_test = parity_manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM12")
+        .expect("Phase 4 native PM parity must include TNPM12");
+    let autoremove_rendered = format!("{autoremove_test:?}");
+    for required in [
+        "model apply",
+        "--strict",
+        "--no-autoremove",
+        "Marked '${repo_install_pkg}' as dependency",
+    ] {
+        assert!(
+            autoremove_rendered.contains(required),
+            "TNPM12 must establish its orphan through model authority {required}"
+        );
+    }
+    assert!(
+        !autoremove_rendered.contains("UPDATE troves"),
+        "TNPM12 must not rewrite install reason through raw SQLite"
+    );
     let container_root = path
         .parent()
         .and_then(std::path::Path::parent)

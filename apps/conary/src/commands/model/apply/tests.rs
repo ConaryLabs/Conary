@@ -127,6 +127,61 @@ fn replatform_absent_architecture_fails_closed_on_multiple_variants() {
 }
 
 #[tokio::test]
+async fn strict_model_apply_demotes_an_omitted_explicit_package() {
+    use conary_core::db::models::{InstallReason, Trove, TroveType};
+    use conary_core::repository::versioning::VersionScheme;
+
+    let (_temp_file, db_path) = create_test_db();
+    let temp_dir = tempdir().unwrap();
+    let model_path = temp_dir.path().join("system.toml");
+    std::fs::write(
+        &model_path,
+        r#"
+[model]
+version = 1
+install = ["retained-package"]
+"#,
+    )
+    .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    for package in ["retained-package", "orphaned-package"] {
+        Trove::new(
+            package.to_string(),
+            "1.0.0".to_string(),
+            TroveType::Package,
+            VersionScheme::Rpm,
+        )
+        .insert(&conn)
+        .unwrap();
+    }
+    drop(conn);
+
+    cmd_model_apply(ApplyOptions {
+        model_path: model_path.to_str().unwrap(),
+        db_path: &db_path,
+        root: temp_dir.path().to_str().unwrap(),
+        dry_run: false,
+        skip_optional: false,
+        strict: true,
+        autoremove: false,
+        offline: true,
+    })
+    .await
+    .unwrap();
+
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let retained = Trove::find_one_by_name(&conn, "retained-package")
+        .unwrap()
+        .unwrap();
+    let orphaned = Trove::find_one_by_name(&conn, "orphaned-package")
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.install_reason, InstallReason::Explicit);
+    assert_eq!(orphaned.install_reason, InstallReason::Dependency);
+}
+
+#[tokio::test]
 async fn test_model_apply_installs_explicit_roots_in_one_lifecycle_transaction() {
     const TEST_NAME: &str = "commands::model::apply::tests::test_model_apply_installs_explicit_roots_in_one_lifecycle_transaction";
     if !crate::commands::test_helpers::run_exact_test_in_user_mount_namespace(TEST_NAME) {
