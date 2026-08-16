@@ -164,6 +164,9 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
         for dependency in &arch_export.depends {
             pkginfo.push_str(&format!("depend = {}\n", dependency));
         }
+        for provide in &arch_export.provides {
+            pkginfo.push_str(&format!("provides = {}\n", provide));
+        }
     }
 
     if !manifest.requirements.is_empty() {
@@ -414,7 +417,8 @@ fn walkdir(path: &Path) -> Result<Vec<std::path::PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::manifest::CcsManifest;
+    use crate::ccs::manifest::{ArchExport, CcsManifest, NativeExport};
+    use crate::packages::PackageFormat;
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -449,6 +453,34 @@ mod tests {
         let gen_result = generate(&result, &output_path).unwrap();
         assert!(output_path.exists());
         assert!(gen_result.size > 0);
+    }
+
+    #[test]
+    fn arch_native_export_relations_round_trip_through_the_parser() {
+        let mut result = create_test_build_result();
+        result.manifest.native_export = Some(NativeExport {
+            arch: Some(ArchExport {
+                depends: vec!["bash".to_string()],
+                provides: vec!["virtual-test-tool".to_string()],
+                ..ArchExport::default()
+            }),
+            ..NativeExport::default()
+        });
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("relations.pkg.tar.zst");
+
+        generate(&result, &output_path).unwrap();
+        let package = crate::packages::arch::ArchPackage::parse(output_path.to_str().unwrap())
+            .expect("parse generated Arch package");
+
+        assert_eq!(package.requirements().len(), 1);
+        assert!(
+            package
+                .resolution_capabilities()
+                .unwrap()
+                .iter()
+                .any(|provide| provide.name == "virtual-test-tool")
+        );
     }
 
     #[test]

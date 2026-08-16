@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-15
-revision: 50
-summary: Document typed semantic corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
+revision: 52
+summary: Document the focused attributable daily-driver manifest, typed corpus coverage, authenticated derivative targets, release evidence, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -497,8 +497,10 @@ Focused Slice D native package-manager parity proof:
 - `cargo run -p conary-test -- run --suite phase4-native-pm-parity --distro arch --phase 4`
 - Focused PR/local lane:
   `cargo run -p conary-test -- run --suite native-cross-source-lifecycle --distro <distro> --phase 4`
+- Focused W7 daily-driver lanes:
+  `cargo run -p conary-test -- run --suite phase4-native-daily-driver-corpus --distro <fedora44|ubuntu-26.04|arch> --phase 4`
 
-The current `phase4-native-pm-parity` manifest has 19 tests. `TNPM02X` exports
+The current `phase4-native-pm-parity` manifest has 13 tests. `TNPM02X` exports
 one lifecycle-bearing v1/v2 fixture as RPM, DEB, and Arch artifacts on every
 target image. Fedora captures the RPM-owned trace, Ubuntu captures the
 dpkg-owned trace, and Arch captures the libalpm/pacman-owned trace. Each trace
@@ -522,21 +524,47 @@ payload snapshot, not mislabeled as a native package-manager downgrade.
 update, query, security-refusal, and autoremove parity proof. Repository update
 selection uses a signed CCS package synchronized through typed JSON metadata;
 the unknown-security case also enters through normal typed repository sync,
-not a synthetic package row. `TNPM13` through `TNPM18` add the daily-driver
-corpus group. That corpus builds a package in the host-native format and then
-proves:
+not a synthetic package row. The focused
+`phase4-native-daily-driver-corpus` manifest owns `TNPM13` through `TNPM18`
+without inheriting the live repository or prior parity state. That corpus
+builds a package in the host-native format and then proves:
 
 - systemd unit file deployment and trigger matching
 - tracked `/etc` config file metadata
 - native dependency metadata for a real package dependency
 - an exact installed native-lifecycle bundle plus install/remove hook effects
 - system user and group creation in the selected generation
-- conflict refusal before an overlapping native package can mutate selected
-  state
+- conflict refusal before a conflicting-content native package can mutate
+  selected state
 - a 2 MiB payload file through the native package parser and file database
 - a QEMU-safe kernel-adjacent `kernel/install.d` file without mutating boot state
 - an alternative target binary (`/usr/bin/phase4-corpus-alt`) as packaged file
   coverage
+
+`TNPM16` and `TNPM18` make the chain visible to the typed W7 aggregator. Each
+record reopens the builder's schema-versioned output manifest, hashes the exact
+native artifact again, and binds its claims to the install-request role.
+Across the two completed cases the suite declares exactly seven properties:
+exact version, native architecture, regular files, a queried virtual provide,
+matched config, purge-time config removal, and shell lifecycle. The source
+format comes from the explicit distro build-context override and must resolve
+to the closed RPM/DEB/ALPM type before evidence can count.
+
+Several useful assertions deliberately remain outside semantic coverage. The
+2 MiB zero-filled file is not W7 large-file/resource-boundary proof; the
+Conary changeset trigger is not a source-package trigger; the disabled systemd
+unit is not activation; the kernel-adjacent file is not an executed target
+helper; and a conflicting-content refusal is not a declared native relation
+conflict. Those properties still require fixtures that prove their exact
+contracts.
+
+The PR gate runs the focused `phase4-native-daily-driver-corpus` manifest on
+Fedora 44, Ubuntu 26.04, and Arch in a non-fail-fast matrix, then applies both
+the generic suite-result checker and the typed corpus-coverage checker to every
+lane. The stable `native-daily-driver-corpus` aggregate context fails unless
+all three source-format/target pairs complete. Live repository parity remains
+owned by `phase4-native-pm-parity`; it is not a prerequisite for this local,
+digest-attributed fixture chain.
 
 Corpus coverage boundaries (not product support exemptions):
 
@@ -839,7 +867,7 @@ Adversarial and stress tests.
 
 ### Phase 4: Feature Validation
 
-Phase 4 currently contains 155 tests across eight manifests. It validates the
+Phase 4 currently contains 155 tests across nine manifests. It validates the
 active, user-facing command surface and checks that claimed features still match
 the current binary. Where a flow is intentionally preview-only or not yet
 implemented, the manifest asserts that it fails cleanly with an explicit
@@ -852,7 +880,8 @@ message rather than pretending it is production-ready.
 | C | T196-T220 plus suffix IDs | 27 | CCS ops, query, repo management |
 | D | T221-T255 plus suffix IDs | 38 | Provenance, capability, trust, system ops, federation, automation |
 | E | T256-T273 and T276-T277 plus suffix IDs | 22 | Cross-source compatibility overlay: native package parity, source identity, model convergence, and takeover |
-| Native package-manager parity | TNPM01-TNPM18 plus TNPM02X | 19 | Cross-distro native PM parity and daily-driver corpus |
+| Native package-manager parity | TNPM01-TNPM12 plus TNPM02X | 13 | Cross-distro repository and native package-manager parity |
+| Native daily-driver corpus | TNPM13-TNPM18 | 6 | Focused attributable host-native daily-driver semantics |
 | Native cross-source lifecycle | TNPMX01R, TNPMX01D, TNPMX01A | 3 | Attributable native-oracle install/update/rollback/remove corpus evidence on every target image |
 | Security advisory pipeline | TSEC01-TSEC07 | 7 | Trusted advisory ingestion and security update proof |
 

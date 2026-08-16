@@ -6,26 +6,68 @@ use anyhow::{Result, bail};
 use conary_core::corpus::{
     ConversionStage, CorpusSemantic, SourceArtifactDigestSource, SourceArtifactRole,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use std::path::{Component, Path};
 
 /// Exact native source package format exercised by a corpus case.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CorpusSourceFormat {
     Rpm,
     Deb,
     Alpm,
+    Template(String),
 }
 
 impl CorpusSourceFormat {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Rpm => "rpm",
             Self::Deb => "deb",
             Self::Alpm => "alpm",
+            Self::Template(value) => value,
         }
+    }
+
+    pub(crate) fn from_value(value: impl Into<String>) -> Self {
+        let value = value.into();
+        match value.as_str() {
+            "rpm" => Self::Rpm,
+            "deb" => Self::Deb,
+            "alpm" => Self::Alpm,
+            _ => Self::Template(value),
+        }
+    }
+
+    fn is_exact(&self) -> bool {
+        !matches!(self, Self::Template(_))
+    }
+
+    fn is_variable(&self) -> bool {
+        matches!(self, Self::Template(value) if value.starts_with("${")
+            && value.ends_with('}')
+            && value.len() > 3
+            && !value[2..value.len() - 1]
+                .chars()
+                .any(|character| matches!(character, '$' | '{' | '}')))
+    }
+}
+
+impl Serialize for CorpusSourceFormat {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for CorpusSourceFormat {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self::from_value(String::deserialize(deserializer)?))
     }
 }
 
@@ -96,6 +138,12 @@ impl CorpusCaseDef {
         }
         if self.source_profile.trim().is_empty() {
             bail!("{}: source_profile must not be empty", context());
+        }
+        if !self.source_format.is_exact() && !self.source_format.is_variable() {
+            bail!(
+                "{}: source_format must be rpm, deb, alpm, or one exact variable reference",
+                context()
+            );
         }
         if self.target.architecture.trim().is_empty()
             || self.target.init_system.trim().is_empty()
@@ -189,6 +237,19 @@ mod tests {
     #[test]
     fn complete_case_is_valid() {
         assert!(valid_case().validate("TC01").is_ok());
+    }
+
+    #[test]
+    fn source_format_accepts_exact_values_or_one_variable() {
+        let mut case = valid_case();
+        case.source_format = CorpusSourceFormat::from_value("${native_source_format}");
+        assert!(case.validate("TC01").is_ok());
+
+        for invalid in ["arch", "${one}-${two}", "${}", "rpm-${target}"] {
+            let mut case = valid_case();
+            case.source_format = CorpusSourceFormat::from_value(invalid);
+            assert!(case.validate("TC01").is_err(), "accepted {invalid}");
+        }
     }
 
     #[test]

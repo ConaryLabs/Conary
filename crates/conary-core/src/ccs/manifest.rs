@@ -593,6 +593,9 @@ pub struct DebExport {
 
     #[serde(default)]
     pub depends: Vec<String>,
+
+    #[serde(default)]
+    pub provides: Vec<String>,
 }
 
 /// Arch-specific export overrides.
@@ -605,6 +608,10 @@ pub struct ArchExport {
     /// Exact ALPM dependency strings for native export.
     #[serde(default)]
     pub depends: Vec<String>,
+
+    /// Exact ALPM virtual-provide strings for native export.
+    #[serde(default)]
+    pub provides: Vec<String>,
 }
 
 /// Package redirects / supersedes declarations

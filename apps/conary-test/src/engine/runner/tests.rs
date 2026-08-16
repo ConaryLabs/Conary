@@ -215,6 +215,42 @@ async fn suite_setup_executes_before_tests() {
 }
 
 #[tokio::test]
+async fn suite_setup_assertion_failure_preserves_command_output() {
+    let backend = MockBackend::new(vec![ExecResult {
+        exit_code: 1,
+        stdout: "setup stdout evidence".to_string(),
+        stderr: "setup stderr evidence".to_string(),
+    }]);
+
+    let manifest = TestManifest {
+        suite: SuiteDef {
+            name: "setup-failure-suite".to_string(),
+            phase: 4,
+            setup: vec![simple_step_run(
+                "failing setup",
+                Some(make_assertion(Some(0), None)),
+            )],
+            mock_server: None,
+            timeout: None,
+            corpus: None,
+        },
+        test: Vec::new(),
+        distro_overrides: HashMap::new(),
+    };
+
+    let mut runner = TestRunner::new(test_config(), "fedora44".to_string());
+    let error = runner
+        .run(&manifest, &backend, &"ctr-setup-failure".to_string(), None)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("suite setup assertion failed"));
+    assert!(error.contains("setup stdout evidence"));
+    assert!(error.contains("setup stderr evidence"));
+}
+
+#[tokio::test]
 async fn test_runner_fails_on_bad_exit_code() {
     let backend = MockBackend::new(vec![ExecResult {
         exit_code: 1,

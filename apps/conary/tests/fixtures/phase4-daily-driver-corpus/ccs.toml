@@ -10,11 +10,27 @@ release = "1"
 kind = "package"
 description = "Phase 4 daily-driver corpus fixture for native package-manager parity"
 license = "MIT"
+homepage = "https://conary.io/fixtures/phase4-daily-driver-corpus"
 
 [package.platform]
 os = "linux"
 arch = "x86_64"
 libc = "gnu"
+
+[package.authors]
+maintainers = ["Conary Fixture Maintainers <fixtures@conary.io>"]
+
+[native_export.rpm]
+requires = ["bash"]
+provides = ["phase4-corpus-tool"]
+
+[native_export.deb]
+depends = ["bash"]
+provides = ["phase4-corpus-tool"]
+
+[native_export.arch]
+depends = ["bash"]
+provides = ["phase4-corpus-tool"]
 
 [provides]
 capabilities = ["phase4-daily-driver-corpus", "phase4-corpus-tool"]

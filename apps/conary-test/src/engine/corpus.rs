@@ -42,6 +42,21 @@ pub async fn capture_case(
     backend: &dyn ContainerBackend,
     container_id: &ContainerId,
 ) -> CorpusCaseResult {
+    if matches!(
+        definition.source_format,
+        crate::config::corpus::CorpusSourceFormat::Template(_)
+    ) {
+        return evidence_failure_case(
+            definition,
+            test_id,
+            target_profile,
+            Vec::new(),
+            format!(
+                "corpus source format did not resolve to rpm, deb, or alpm: {}",
+                definition.source_format.as_str()
+            ),
+        );
+    }
     if matches!(status, TestStatus::Skipped | TestStatus::Cancelled) {
         return skipped_case(
             definition,

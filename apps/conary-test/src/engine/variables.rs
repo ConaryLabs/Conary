@@ -128,7 +128,10 @@ pub fn expand_corpus_case(
     CorpusCaseDef {
         evidence_path: expand_variables(&definition.evidence_path, vars),
         source_profile: expand_variables(&definition.source_profile, vars),
-        source_format: definition.source_format,
+        source_format: crate::config::corpus::CorpusSourceFormat::from_value(expand_variables(
+            definition.source_format.as_str(),
+            vars,
+        )),
         digest_source: definition.digest_source,
         target: CorpusTargetDef {
             architecture: expand_variables(&definition.target.architecture, vars),
@@ -595,7 +598,7 @@ mod tests {
             r#"
 evidence_path = "/tmp/evidence.json"
 source_profile = "arch"
-source_format = "alpm"
+source_format = "${native_corpus_source_format}"
 digest_source = "fixture_build_manifest"
 stages = ["installation"]
 
@@ -611,6 +614,10 @@ capabilities = ["native_lifecycle", "${target_service_capability}"]
         )
         .unwrap();
         let vars = HashMap::from([
+            (
+                "native_corpus_source_format".to_string(),
+                "alpm".to_string(),
+            ),
             ("target_init_system".to_string(), "openrc".to_string()),
             (
                 "target_service_capability".to_string(),
@@ -619,6 +626,7 @@ capabilities = ["native_lifecycle", "${target_service_capability}"]
         ]);
 
         let expanded = expand_corpus_case(&definition, &vars);
+        assert_eq!(expanded.source_format.as_str(), "alpm");
         assert_eq!(expanded.target.init_system, "openrc");
         assert_eq!(
             expanded.target.capabilities,

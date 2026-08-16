@@ -140,6 +140,9 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
         if !deb.depends.is_empty() {
             control.push_str(&format!("Depends: {}\n", deb.depends.join(", ")));
         }
+        if !deb.provides.is_empty() {
+            control.push_str(&format!("Provides: {}\n", deb.provides.join(", ")));
+        }
     }
 
     if !manifest.requirements.is_empty() {
@@ -364,7 +367,8 @@ fn set_executable(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ccs::manifest::CcsManifest;
+    use crate::ccs::manifest::{CcsManifest, DebExport, NativeExport};
+    use crate::packages::PackageFormat;
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -394,6 +398,34 @@ mod tests {
         let gen_result = generate(&result, &output_path).unwrap();
         assert!(output_path.exists());
         assert!(gen_result.size > 0);
+    }
+
+    #[test]
+    fn deb_native_export_relations_round_trip_through_the_parser() {
+        let mut result = create_test_build_result();
+        result.manifest.native_export = Some(NativeExport {
+            deb: Some(DebExport {
+                depends: vec!["bash".to_string()],
+                provides: vec!["virtual-test-tool".to_string()],
+                ..DebExport::default()
+            }),
+            ..NativeExport::default()
+        });
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("relations.deb");
+
+        generate(&result, &output_path).unwrap();
+        let package = crate::packages::deb::DebPackage::parse(output_path.to_str().unwrap())
+            .expect("parse generated Debian package");
+
+        assert_eq!(package.requirements().len(), 1);
+        assert!(
+            package
+                .resolution_capabilities()
+                .unwrap()
+                .iter()
+                .any(|provide| provide.name == "virtual-test-tool")
+        );
     }
 
     #[test]
