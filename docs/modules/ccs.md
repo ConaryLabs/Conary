@@ -406,7 +406,10 @@ targets, multiple or absent anchors, alias-side content, and member metadata
 conflicts before any native artifact is published. Debian and Arch exporters
 write explicit tar link records; RPM export uses an explicit package-builder
 set identity and rejects ownership or timestamp authority that RPM cannot
-encode. Exporter/parser round trips prove the canonical anchor, alias target,
+encode. RPM root-child directories use the canonical `/` dirname with their
+exact basename; default shared parent directories remain implicit when a
+descendant already causes the native package manager to create them.
+Exporter/parser round trips prove the canonical anchor, alias target,
 shared content authority, and effective inode metadata for all three formats.
 
 **export/** -- OCI image export. Produces OCI-layout archives with gzipped

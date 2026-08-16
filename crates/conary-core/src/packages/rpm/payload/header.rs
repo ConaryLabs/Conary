@@ -440,6 +440,11 @@ mod tests {
         );
         assert!(rpm_header_path("", "/").is_err());
         assert!(rpm_header_path("/", ".").is_err());
+        assert!(rpm_header_path("//", "usr").is_err());
+        assert_eq!(
+            rpm_header_path("/", "usr").unwrap(),
+            ("/usr".to_string(), HeaderPathKind::Deployable)
+        );
         assert_eq!(
             rpm_header_path("/usr/share/", "fixture").unwrap(),
             ("/usr/share/fixture".to_string(), HeaderPathKind::Deployable)

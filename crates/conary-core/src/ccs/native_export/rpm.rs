@@ -153,7 +153,6 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
     }
 
     // Write files to temp dir and add to RPM.
-    let mut omitted_top_level_directory = false;
     for file in hardlinks.ordered_files() {
         if matches!(&file.node.kind, PayloadNodeKind::Directory) {
             let has_descendant = implicit_parent_dirs.contains(Path::new(&file.path));
@@ -162,14 +161,6 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                 // RPM creates default-mode parent directories for descendant
                 // entries. Do not claim shared paths such as /usr/bin, which
                 // belong to the target's filesystem package.
-                continue;
-            }
-            if Path::new(&file.path).parent() == Some(Path::new("/")) {
-                // rpm-rs 0.27 currently encodes a root-child directory such as
-                // /usr with dirname "//", which is not canonical RPM authority.
-                // Retain an explicit loss record instead of publishing malformed
-                // bytes when its metadata cannot be represented implicitly.
-                omitted_top_level_directory = true;
                 continue;
             }
         }
@@ -258,6 +249,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
             PayloadNodeKind::Directory => {
                 let options =
                     rpm::FileOptions::dir(&file.path).permissions((file.node.mode & 0o7777) as u16);
+                let options = rpm_node_ownership(options, &file.node)?;
                 builder
                     .with_dir_entry(options)
                     .with_context(|| format!("Failed to add directory: {}", file.path))?;
@@ -305,12 +297,6 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
             ),
         }
     }
-    if omitted_top_level_directory {
-        loss_report.add_unsupported(
-            "Explicit top-level directory metadata (RPM descendant paths create parents implicitly)",
-        );
-    }
-
     for config in manifest.config.files.iter().filter(|config| config.ghost()) {
         if config.remove_on_upgrade() {
             anyhow::bail!(
@@ -390,6 +376,13 @@ fn hardlink_file_options(
     if !node.xattrs.is_empty() {
         anyhow::bail!("RPM hardlink export cannot represent xattr authority exactly");
     }
+    rpm_node_ownership(options, node)
+}
+
+fn rpm_node_ownership(
+    options: rpm::FileOptionsBuilder,
+    node: &crate::payload::PayloadNode,
+) -> Result<rpm::FileOptionsBuilder> {
     let user = rpm_identity(&node.user, "user")?;
     let group = rpm_identity(&node.group, "group")?;
     Ok(options.user(user).group(group))
@@ -437,7 +430,10 @@ fn payload_kind_name(kind: &PayloadNodeKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ccs::builder::FileEntry;
     use crate::ccs::manifest::CcsManifest;
+    use crate::packages::PackageFormat;
+    use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -459,6 +455,23 @@ mod tests {
         }
     }
 
+    fn directory_entry(path: &str, permissions: u32, owner: u64) -> FileEntry {
+        FileEntry {
+            path: path.to_string(),
+            node: PayloadNode {
+                kind: PayloadNodeKind::Directory,
+                mode: libc::S_IFDIR | permissions,
+                user: PayloadIdentity::Numeric { id: owner },
+                group: PayloadIdentity::Numeric { id: owner },
+                mtime: PayloadTimestamp::UNIX_EPOCH,
+                xattrs: Default::default(),
+            },
+            content: None,
+            component: "runtime".to_string(),
+            chunks: None,
+        }
+    }
+
     #[test]
     fn test_rpm_generation_empty() {
         let result = create_test_build_result();
@@ -468,6 +481,73 @@ mod tests {
         let gen_result = generate(&result, &output_path).unwrap();
         assert!(output_path.exists());
         assert!(gen_result.size > 0);
+    }
+
+    #[test]
+    fn root_child_directories_round_trip_with_canonical_paths_and_exact_metadata() {
+        let mut result = create_test_build_result();
+        result.files = [("/usr", 0o751), ("/opt", 0o750)]
+            .into_iter()
+            .map(|(path, permissions)| directory_entry(path, permissions, 0))
+            .collect();
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("root-directories.rpm");
+
+        let generated = generate(&result, &output_path).unwrap();
+        assert!(
+            generated
+                .loss_report
+                .unsupported_features
+                .iter()
+                .all(|feature| !feature.contains("top-level directory"))
+        );
+        let package = crate::packages::rpm::RpmPackage::parse(output_path.to_str().unwrap())
+            .expect("parse generated RPM");
+        let payload = package.package_payload().expect("read RPM payload");
+
+        for (path, permissions) in [("/usr", 0o751), ("/opt", 0o750)] {
+            let file = payload
+                .files()
+                .iter()
+                .find(|file| file.path == path)
+                .unwrap_or_else(|| panic!("missing canonical RPM directory {path}"));
+            assert!(matches!(file.node.kind, PayloadNodeKind::Directory));
+            assert_eq!(file.node.mode & 0o7777, permissions);
+            assert_eq!(
+                file.node.user,
+                PayloadIdentity::Named {
+                    name: "root".to_string()
+                }
+            );
+            assert_eq!(
+                file.node.group,
+                PayloadIdentity::Named {
+                    name: "root".to_string()
+                }
+            );
+        }
+        assert!(
+            payload
+                .files()
+                .iter()
+                .all(|file| !file.path.starts_with("//"))
+        );
+    }
+
+    #[test]
+    fn directory_export_rejects_nonzero_numeric_ownership() {
+        let mut result = create_test_build_result();
+        result.files = vec![directory_entry("/opt", 0o750, 1001)];
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("numeric-owner.rpm");
+
+        let error = generate(&result, &output_path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot represent numeric user identity 1001 exactly")
+        );
+        assert!(!output_path.exists());
     }
 
     #[test]

@@ -493,7 +493,8 @@ Each fixture family should record:
   whole second shared by the accepted RPM, Debian, and ALPM metadata grammars.
   Topology counts only after typed native-package metadata and
   selected-generation node assertions agree.
-  RPM directory proof uses a non-default leaf so the package owns its metadata;
+  RPM directory proof includes the non-default root child `/opt` plus a
+  non-default leaf so the package owns exact path, mode, and ownership metadata;
   default shared parents remain implicit native-package paths.
   Its builder writes a schema-versioned digest manifest and the evidence writer
   rehashes the artifact before publication. The chain attributes hardlink
