@@ -489,8 +489,10 @@ Each fixture family should record:
   matched config, and shell lifecycle; removal covers config cleanup. Each
   native package is independently installed or extracted and both hardlink
   paths must report one device/inode identity with a link count of two before
-  Conary installation begins. Topology counts only after typed native-package
-  metadata and selected-generation node assertions agree.
+  Conary installation begins. The fixture pins that inode's mtime to an exact
+  whole second shared by the accepted RPM, Debian, and ALPM metadata grammars.
+  Topology counts only after typed native-package metadata and
+  selected-generation node assertions agree.
   RPM directory proof uses a non-default leaf so the package owns its metadata;
   default shared parents remain implicit native-package paths.
   Its builder writes a schema-versioned digest manifest and the evidence writer

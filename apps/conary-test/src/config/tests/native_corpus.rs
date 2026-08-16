@@ -196,6 +196,7 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
         "/usr/bin/phase4-corpus-link|symlink|phase4-corpus",
         "/usr/lib/phase4-corpus/hardlink-anchor",
         "/usr/lib/phase4-corpus/hardlink-copy",
+        "touch -d @1700000000",
         "--expect-directory /usr/lib/phase4-corpus/state=0750",
         "--expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus",
         "--expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy",
