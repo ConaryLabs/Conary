@@ -93,10 +93,12 @@ copy_elf_closure /bin/sh
 copy_elf_closure /bin/bash
 copy_elf_closure /usr/bin/bash
 
-for command_name in mkdir install getent groupadd useradd; do
+install_path="$(command -v install)"
+for command_name in mkdir getent groupadd useradd; do
   command_path="$(command -v "${command_name}")"
   copy_elf_closure "${command_path}"
 done
+copy_elf_closure "${install_path}"
 copy_elf_closure /bin/false
 copy_elf_closure /usr/bin/true
 
@@ -162,7 +164,7 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   --present /bin/bash \
   --present /bin/false \
   --present /usr/bin/bash \
-  --present /usr/bin/install \
+  --present "${install_path}" \
   --present /lib64/ld-linux-x86-64.so.2 \
   --present /etc/passwd \
   --present /etc/group \

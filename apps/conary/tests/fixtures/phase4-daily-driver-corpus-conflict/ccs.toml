@@ -13,6 +13,9 @@ os = "linux"
 arch = "x86_64"
 libc = "gnu"
 
+[package.authors]
+maintainers = ["Conary Fixture Maintainers <fixtures@conary.io>"]
+
 [provides]
 capabilities = ["phase4-corpus-conflict"]
 binaries = ["/usr/bin/phase4-corpus", "/usr/bin/phase4-corpus-alt"]

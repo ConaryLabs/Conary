@@ -504,7 +504,13 @@ impl TestRunner {
             if let Some(ref assertion) = step.assert {
                 let assertion = self.expand_assertion(assertion);
                 evaluate_assertion(&assertion, result.exit_code, &result.stdout, &result.stderr)
-                    .map_err(|err| anyhow::anyhow!("suite setup assertion failed: {err}"))?;
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "suite setup assertion failed: {err}\nstdout:\n{}\nstderr:\n{}",
+                            result.stdout,
+                            result.stderr
+                        )
+                    })?;
             }
         }
 

@@ -282,16 +282,39 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
             manifest.contains(&format!("homepage = \"{homepage}\"")),
             "{fixture} must carry exact metadata required by every native exporter"
         );
+        assert!(
+            manifest
+                .contains("maintainers = [\"Conary Fixture Maintainers <fixtures@conary.io>\"]"),
+            "{fixture} must carry the exact Arch packager authority"
+        );
+    }
+
+    let primary_fixture =
+        std::fs::read_to_string(conary_fixture_path("phase4-daily-driver-corpus/ccs.toml"))
+            .expect("read primary daily-driver fixture");
+    for required in [
+        "[native_export.rpm]",
+        "requires = [\"bash\"]",
+        "[native_export.deb]",
+        "[native_export.arch]",
+        "depends = [\"bash\"]",
+        "provides = [\"phase4-corpus-tool\"]",
+    ] {
+        assert!(
+            primary_fixture.contains(required),
+            "daily-driver native export must preserve {required}"
+        );
     }
 
     let selected_root_helper =
         std::fs::read_to_string(conary_fixture_path("native/prepare-selected-root.sh"))
             .expect("read selected-root preparation helper");
     for required in [
-        "for command_name in mkdir install getent groupadd useradd",
+        "install_path=\"$(command -v install)\"",
+        "copy_elf_closure \"${install_path}\"",
         "copy_elf_closure /bin/false",
         "--present /bin/false",
-        "--present /usr/bin/install",
+        "--present \"${install_path}\"",
     ] {
         assert!(
             selected_root_helper.contains(required),

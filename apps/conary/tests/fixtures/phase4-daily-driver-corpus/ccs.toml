@@ -17,6 +17,21 @@ os = "linux"
 arch = "x86_64"
 libc = "gnu"
 
+[package.authors]
+maintainers = ["Conary Fixture Maintainers <fixtures@conary.io>"]
+
+[native_export.rpm]
+requires = ["bash"]
+provides = ["phase4-corpus-tool"]
+
+[native_export.deb]
+depends = ["bash"]
+provides = ["phase4-corpus-tool"]
+
+[native_export.arch]
+depends = ["bash"]
+provides = ["phase4-corpus-tool"]
+
 [provides]
 capabilities = ["phase4-daily-driver-corpus", "phase4-corpus-tool"]
 binaries = ["/usr/bin/phase4-corpus", "/usr/bin/phase4-corpus-alt"]
