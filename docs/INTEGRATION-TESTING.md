@@ -545,8 +545,12 @@ not a synthetic package row. `TNPM04` binds its provider assertions to the
 source format and exact extracted payload: every format retains its exact
 versioned package self-provide and publishes the same three materialized paths
 as file providers, while RPM additionally retains its source-declared
-capabilities. Single-package and batch installs use the same payload-path
-projection before persisting installed resolution authority. The signed update
+capabilities. Synthesized parent directories are generation layout rather than
+file providers. The RPM lane also retains the generator-authored
+`config(phase4-runtime-fixture) = 1.0.0-1` dependency as one typed RPM
+requirement group; DEB and Arch retain no dependency groups for this fixture.
+Single-package and batch installs use the same payload-path projection before
+persisting installed resolution authority. The signed update
 fixture enrolls its binary JSON repository, exact source profile, and CCS
 package key through `conary repo add`; it does not mutate protected SQLite
 authority out of band. The focused

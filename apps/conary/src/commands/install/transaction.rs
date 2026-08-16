@@ -161,11 +161,7 @@ pub(super) fn persist_package_provides(
     extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
 ) -> Result<()> {
     let mut provides = package.resolution_capabilities()?;
-    conary_core::repository::dependency_model::extend_materialized_file_provides(
-        &mut provides,
-        semantics.source_package_format(),
-        extracted_files.iter().map(|file| file.path.as_str()),
-    )?;
+    extend_materialized_payload_provides(&mut provides, semantics, extracted_files)?;
     persist_declared_provides(
         tx,
         trove_id,
@@ -174,6 +170,30 @@ pub(super) fn persist_package_provides(
         package.version_scheme(),
         &provides,
     )
+}
+
+pub(super) fn extend_materialized_payload_provides(
+    provides: &mut Vec<conary_core::repository::dependency_model::ProvidedCapability>,
+    semantics: InstallSemantics,
+    extracted_files: &[conary_core::packages::payload::PackagePayloadFile],
+) -> Result<()> {
+    // Archive readers synthesize parent directories needed to materialize the
+    // payload. Those directories are layout, not source-owned file-provider
+    // authority; regular files and non-directory nodes such as symlinks are.
+    conary_core::repository::dependency_model::extend_materialized_file_provides(
+        provides,
+        semantics.source_package_format(),
+        extracted_files
+            .iter()
+            .filter(|file| {
+                !matches!(
+                    file.node.kind,
+                    conary_core::payload::PayloadNodeKind::Directory
+                )
+            })
+            .map(|file| file.path.as_str()),
+    )?;
+    Ok(())
 }
 
 pub(super) fn persist_declared_provides(

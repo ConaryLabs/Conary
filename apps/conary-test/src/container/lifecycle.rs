@@ -239,7 +239,8 @@ impl BollardBackend {
             .await?;
         if signal.exit_code != 0 {
             bail!(
-                "failed to terminate synchronous exec child process group {}: {}",
+                "failed to signal synchronous exec supervisor {} for child process group {}: {}",
+                supervised_exec.supervisor_pid,
                 supervised_exec.child_process_group,
                 signal.stderr.trim()
             );

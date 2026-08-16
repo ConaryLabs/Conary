@@ -110,10 +110,10 @@ pub(crate) fn prepare_ccs_package_for_batch(
     // payload it is about to install is the only authority for the file
     // providers that satisfy path dependencies.
     let mut provides = package.resolution_capabilities()?;
-    conary_core::repository::dependency_model::extend_materialized_file_provides(
+    super::super::transaction::extend_materialized_payload_provides(
         &mut provides,
-        semantics.source_package_format(),
-        extracted_files.iter().map(|file| file.path.as_str()),
+        semantics,
+        &extracted_files,
     )?;
 
     Ok(PreparedPackage {

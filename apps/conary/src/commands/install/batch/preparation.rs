@@ -112,10 +112,10 @@ pub fn prepare_package_for_batch(
     // A native header declares only its own `Provides`; the payload it ships is
     // the only authority for the file providers that satisfy path dependencies.
     let mut provides = pkg.resolution_capabilities()?;
-    conary_core::repository::dependency_model::extend_materialized_file_provides(
+    super::super::transaction::extend_materialized_payload_provides(
         &mut provides,
-        semantics.source_package_format(),
-        extracted_files.iter().map(|file| file.path.as_str()),
+        semantics,
+        &extracted_files,
     )?;
 
     Ok(Some(PreparedPackage {
