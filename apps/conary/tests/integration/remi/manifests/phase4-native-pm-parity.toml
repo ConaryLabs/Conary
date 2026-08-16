@@ -42,6 +42,9 @@ native_dependency_probe = "no-deps"
 native_config_count = "1"
 native_config_source = "rpm"
 native_lifecycle_fidelity = "native-free"
+native_provider_count = "4"
+native_file_provider_count = "3"
+native_file_provider_set = "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 repo_seed_security_version = "9999.0-1"
@@ -59,6 +62,9 @@ native_dependency_probe = "no-deps"
 native_config_count = "1"
 native_config_source = "deb"
 native_lifecycle_fidelity = "native-free"
+native_provider_count = "1"
+native_file_provider_count = "0"
+native_file_provider_set = "no file provides"
 repo_install_pkg = "nano"
 repo_install_path = "/usr/bin/nano"
 repo_seed_security_version = "9999.0"
@@ -76,6 +82,9 @@ native_dependency_probe = "no-deps"
 native_config_count = "1"
 native_config_source = "arch"
 native_lifecycle_fidelity = "native-free"
+native_provider_count = "1"
+native_file_provider_count = "0"
+native_file_provider_set = "no file provides"
 repo_install_pkg = "tree"
 repo_install_path = "/usr/bin/tree"
 repo_seed_security_version = "9999.0-1"
@@ -194,11 +203,11 @@ exit_code = 0
 stdout_contains_all = ["3 regular files", "/etc/phase4-runtime-fixture/app.conf|1da0b50cb027387347265437a11956c1433788d045e4c63b379a1e0740882e7c|61|regular|33188", "/usr/bin/phase4-runtime-fixture|517631de24336343a6aaf1a8f704d326299c14c619fe8c8d75d17824d074bd7f|44|regular|33188", "/usr/include/phase4-runtime-fixture/api.h|88904c275ae0f26a566c03f488ae82869c47ac921fb6f0cf7979d5845f199c88|130|regular|33188"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' provides' FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture'); SELECT capability || '|' || COALESCE(version, '') || '|' || COALESCE(kind, '') FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') ORDER BY capability\""
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' provides' FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture'); SELECT COUNT(*) || ' file provides' FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'file'; SELECT capability || '|' || COALESCE(version, '') || '|' || COALESCE(kind, '') FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'package'; SELECT COALESCE((SELECT group_concat(capability, ',') FROM (SELECT capability FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture') AND kind = 'file' ORDER BY capability)), 'no file provides')\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["4 provides", "/etc/phase4-runtime-fixture/app.conf||file", "/usr/bin/phase4-runtime-fixture||file", "/usr/include/phase4-runtime-fixture/api.h||file", "phase4-runtime-fixture|${native_fixture_version}|package"]
+stdout_contains_all = ["${native_provider_count} provides", "${native_file_provider_count} file provides", "phase4-runtime-fixture|${native_fixture_version}|package", "${native_file_provider_set}"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' requirement groups' FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-runtime-fixture')\""

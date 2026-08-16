@@ -3,7 +3,7 @@
 use super::{conary_fixture_path, load_manifest, remi_manifest_path};
 
 #[test]
-fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
+fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contract() {
     let path = remi_manifest_path("phase4-native-pm-parity.toml");
     if !path.exists() {
         return;
@@ -105,6 +105,51 @@ fn phase4_native_manifests_separate_parity_from_daily_driver_authority() {
                 "{trace_path} must contain only normalized lifecycle records"
             );
         }
+    }
+
+    let provider_contract = [
+        (
+            "fedora44",
+            "4",
+            "3",
+            "/etc/phase4-runtime-fixture/app.conf,/usr/bin/phase4-runtime-fixture,/usr/include/phase4-runtime-fixture/api.h",
+        ),
+        ("ubuntu-26.04", "1", "0", "no file provides"),
+        ("arch", "1", "0", "no file provides"),
+    ];
+    for (distro, provider_count, file_provider_count, file_provider_set) in provider_contract {
+        let overrides = parity_manifest
+            .distro_overrides
+            .get(distro)
+            .unwrap_or_else(|| panic!("missing {distro} overrides"));
+        for (key, expected) in [
+            ("native_provider_count", provider_count),
+            ("native_file_provider_count", file_provider_count),
+            ("native_file_provider_set", file_provider_set),
+        ] {
+            assert_eq!(
+                overrides.get(key).map(String::as_str),
+                Some(expected),
+                "{distro} must declare its exact {key}"
+            );
+        }
+    }
+    let metadata_test = parity_manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM04")
+        .expect("Phase 4 native PM parity must include TNPM04");
+    let metadata_rendered = format!("{metadata_test:?}");
+    for required in [
+        "${native_provider_count} provides",
+        "${native_file_provider_count} file provides",
+        "phase4-runtime-fixture|${native_fixture_version}|package",
+        "${native_file_provider_set}",
+    ] {
+        assert!(
+            metadata_rendered.contains(required),
+            "TNPM04 must enforce the source-format-owned provider contract {required}"
+        );
     }
 
     let daily_driver_path = remi_manifest_path("phase4-native-daily-driver-corpus.toml");

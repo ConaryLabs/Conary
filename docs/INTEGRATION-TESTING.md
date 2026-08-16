@@ -524,7 +524,10 @@ payload snapshot, not mislabeled as a native package-manager downgrade.
 update, query, security-refusal, and autoremove parity proof. Repository update
 selection uses a signed CCS package synchronized through typed JSON metadata;
 the unknown-security case also enters through normal typed repository sync,
-not a synthetic package row. The focused
+not a synthetic package row. `TNPM04` binds its provider assertions to the
+source format: RPM requires the exact package provide plus its three native
+file provides, while DEB and Arch require only the exact versioned package
+provide and reject invented file-provide rows. The focused
 `phase4-native-daily-driver-corpus` manifest owns `TNPM13` through `TNPM18`
 without inheriting the live repository or prior parity state. That corpus
 builds a package in the host-native format and then proves:
