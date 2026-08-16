@@ -230,7 +230,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' requirement groups' FROM packag
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${native_corpus_dependency_count} requirement groups", "${native_corpus_dependency_probe}", "phase4-repository-fixture|= 1.0.0-1"]
+stdout_contains_all = ["${native_corpus_dependency_count} requirement groups", "${native_corpus_dependency_probe}", "phase4-repository-fixture|= 1.0.0"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' config rows' FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus'); SELECT path || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') ORDER BY path\""

@@ -53,7 +53,8 @@ python3 - \
   "${output_dir}/pinned-binary-fixture-manifest.json" \
   "$version_scheme" \
   "$package_name" \
-  "${version}-${release}" \
+  "$version" \
+  "$release" \
   "$architecture" \
   "$artifact" \
   "$repository_url" <<'PY'
@@ -69,6 +70,7 @@ from pathlib import Path
     version_scheme,
     package_name,
     version,
+    release,
     architecture,
     artifact_path,
     repository_url,
@@ -83,6 +85,7 @@ document = {
         {
             "name": package_name,
             "version": version,
+            "release": release,
             "version_scheme": version_scheme,
             "architecture": architecture,
             "description": "Pinned signed CCS repository fixture",

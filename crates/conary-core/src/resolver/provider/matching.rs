@@ -449,6 +449,74 @@ pub(crate) fn provider_expression_matches_package(
     }
 }
 
+/// Evaluate one solver constraint against a package using exact identity,
+/// capability, architecture, and native-version authority. Callers decide
+/// whether the requested name is an admitted identity (exact for incoming
+/// packages; exact or canonical for persisted SAT candidates).
+pub(crate) fn constraint_matches_candidate(
+    requested_name: &str,
+    constraint: &ConaryConstraint,
+    package: &PackageIdentity,
+    native_architecture: &str,
+    identity_name_matches: bool,
+) -> VersionResult<bool> {
+    let requested_kind = match constraint {
+        ConaryConstraint::Repository {
+            capability_kind, ..
+        } => *capability_kind,
+        ConaryConstraint::Requested(_)
+        | ConaryConstraint::RpmRuntime(_)
+        | ConaryConstraint::ProviderExpression { .. } => None,
+    };
+
+    match constraint {
+        ConaryConstraint::RpmRuntime(_) => Ok(false),
+        ConaryConstraint::ProviderExpression { expression } => Ok(
+            constraint_architecture_matches_package(constraint, package, native_architecture)
+                && provider_expression_matches_package(expression, package)?,
+        ),
+        constraint
+            if matches!(
+                requested_kind,
+                None | Some(
+                    crate::repository::dependency_model::RepositoryCapabilityKind::PackageName
+                )
+            ) && identity_name_matches =>
+        {
+            Ok(
+                constraint_architecture_matches_package(constraint, package, native_architecture)
+                    && constraint_matches_package(
+                        constraint,
+                        &package.version,
+                        package.version_scheme,
+                    )?,
+            )
+        }
+        constraint => {
+            for capability in package.provided_capabilities.iter().filter(|capability| {
+                capability.name == requested_name
+                    && requested_kind.is_none_or(|kind| capability.kind == kind)
+            }) {
+                if constraint_architecture_matches_provide(
+                    constraint,
+                    package,
+                    &capability.architecture_qualifier,
+                    capability.version_scheme,
+                    native_architecture,
+                ) && constraint_matches_provide(
+                    constraint,
+                    capability.version.as_deref(),
+                    capability.version_relation,
+                    capability.version_scheme,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+    }
+}
+
 fn requested_constraint_matches(
     constraint: &VersionConstraint,
     version: &str,

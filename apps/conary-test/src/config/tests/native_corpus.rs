@@ -266,6 +266,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "hashlib.sha256(artifact_bytes).hexdigest()",
         "\"security_advisory_source\": None",
         "\"download_url\": f\"{repository_url}/{artifact.name}\"",
+        "\"release\": release",
         "\"requirements\": []",
         "\"relations\": []",
         "pinned-binary-fixture-manifest.json",
@@ -423,7 +424,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
         "phase4-corpus-user",
         "phase4-corpus-group",
         "${native_corpus_dependency_probe}",
-        "phase4-repository-fixture|= 1.0.0-1",
+        "phase4-repository-fixture|= 1.0.0",
         "|repository|dependency",
         "/usr/share/phase4-repository-fixture/probe.txt",
         "/var/lib/phase4-corpus/scriptlet.marker",
@@ -626,11 +627,11 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
             .expect("read primary daily-driver fixture");
     for required in [
         "[native_export.rpm]",
-        "requires = [{ name = \"phase4-repository-fixture\", relation = \"equal\", version = \"1.0.0-1\" }]",
+        "requires = [{ name = \"phase4-repository-fixture\", relation = \"equal\", version = \"1.0.0\" }]",
         "[native_export.deb]",
-        "depends = [\"phase4-repository-fixture (= 1.0.0-1)\"]",
+        "depends = [\"phase4-repository-fixture (= 1.0.0)\"]",
         "[native_export.arch]",
-        "depends = [\"phase4-repository-fixture=1.0.0-1\"]",
+        "depends = [\"phase4-repository-fixture=1.0.0\"]",
         "provides = [\"phase4-corpus-tool\"]",
     ] {
         assert!(

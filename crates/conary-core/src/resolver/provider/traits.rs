@@ -15,10 +15,7 @@ use resolvo::{
 };
 
 use super::ConaryProvider;
-use super::matching::{
-    constraint_architecture_matches_package, constraint_architecture_matches_provide,
-    constraint_matches_package, constraint_matches_provide, provider_expression_matches_package,
-};
+use super::matching::constraint_matches_candidate;
 use super::types::ConaryConstraint;
 
 // --- Display helpers ---
@@ -116,77 +113,24 @@ impl DependencyProvider for ConaryProvider<'_> {
     ) -> Vec<SolvableId> {
         let (name_id, ref constraint) = self.version_sets[version_set.to_index()];
         let requested_name = &self.names[name_id.to_index()];
-        let requested_kind = match constraint {
-            ConaryConstraint::Repository {
-                capability_kind, ..
-            } => *capability_kind,
-            ConaryConstraint::Requested(_)
-            | ConaryConstraint::RpmRuntime(_)
-            | ConaryConstraint::ProviderExpression { .. } => None,
-        };
         candidates
             .iter()
             .copied()
             .filter(|&sid| {
                 let pkg = &self.solvables[sid.to_index()];
-                let matches = match constraint {
-                    ConaryConstraint::RpmRuntime(_) => false,
-                    ConaryConstraint::ProviderExpression { expression } => {
-                        constraint_architecture_matches_package(
-                            constraint,
-                            pkg,
-                            &self.native_architecture,
-                        ) && provider_expression_matches_package(expression, pkg)
-                            .expect("resolver package versions are validated before SAT filtering")
-                    }
-                    _ if matches!(
-                        requested_kind,
-                        None
-                            | Some(
-                                crate::repository::dependency_model::RepositoryCapabilityKind::PackageName
-                            )
-                    ) && (pkg.name == *requested_name
-                        || self
-                            .canonical_equivalents(requested_name)
-                            .iter()
-                            .any(|equivalent| equivalent == &pkg.name)) =>
-                    {
-                        constraint_architecture_matches_package(
-                            constraint,
-                            pkg,
-                            &self.native_architecture,
-                        ) && constraint_matches_package(
-                            constraint,
-                            &pkg.version,
-                            pkg.version_scheme,
-                        )
-                        .expect("resolver package versions are validated before SAT filtering")
-                    }
-                    _ => pkg
-                        .provided_capabilities
+                let identity_name_matches = pkg.name == *requested_name
+                    || self
+                        .canonical_equivalents(requested_name)
                         .iter()
-                        .filter(|capability| {
-                            capability.name == *requested_name
-                                && requested_kind.is_none_or(|kind| capability.kind == kind)
-                        })
-                        .any(|capability| {
-                            constraint_architecture_matches_provide(
-                                constraint,
-                                pkg,
-                                &capability.architecture_qualifier,
-                                capability.version_scheme,
-                                &self.native_architecture,
-                            ) && constraint_matches_provide(
-                                constraint,
-                                capability.version.as_deref(),
-                                capability.version_relation,
-                                capability.version_scheme,
-                            )
-                            .expect(
-                                "resolver capability versions are validated before SAT filtering",
-                            )
-                        }),
-                };
+                        .any(|equivalent| equivalent == &pkg.name);
+                let matches = constraint_matches_candidate(
+                    requested_name,
+                    constraint,
+                    pkg,
+                    &self.native_architecture,
+                    identity_name_matches,
+                )
+                .expect("resolver package versions are validated before SAT filtering");
                 if inverse { !matches } else { matches }
             })
             .collect()

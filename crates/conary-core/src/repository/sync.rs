@@ -468,6 +468,14 @@ fn json_repository_sync_snapshot(
         );
 
         let version_scheme = pkg_meta.version_scheme;
+        if let Some(release) = pkg_meta.release.as_deref() {
+            crate::repository::versioning::validate_package_release(release).map_err(|error| {
+                Error::ParseError(format!(
+                    "repository package '{}' has invalid CCS release '{}': {error}",
+                    pkg_meta.name, release
+                ))
+            })?;
+        }
         let mut repo_pkg = RepositoryPackage::new(
             repo_id,
             pkg_meta.name.clone(),
@@ -477,6 +485,7 @@ fn json_repository_sync_snapshot(
             pkg_meta.size,
             download_url,
         );
+        repo_pkg.package_release = pkg_meta.release.unwrap_or_default();
         repo_pkg.architecture = pkg_meta.architecture;
         repo_pkg.debian_multi_arch = if version_scheme == VersionScheme::Debian {
             Some(pkg_meta.debian_multi_arch.unwrap_or_default())

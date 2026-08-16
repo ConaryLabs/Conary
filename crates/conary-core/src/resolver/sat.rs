@@ -17,6 +17,7 @@ use crate::error::{Error, Result};
 use crate::repository::dependency_model::{RepositoryRequirementGroup, RepositoryRequirementKind};
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::versioning::VersionScheme;
+use crate::resolver::identity::PackageIdentity;
 use crate::version::VersionConstraint;
 
 const MAX_LOADED_NAMES: usize = 50_000;
@@ -210,6 +211,94 @@ pub fn solve_requirement_groups_with_policy(
             "Dependency resolution was cancelled".to_string(),
         )),
     }
+}
+
+/// Return whether an incoming package already satisfies one positive
+/// requirement group from its exact identity and declared provides.
+///
+/// Conditional and negated forms remain SAT-owned because their truth can
+/// depend on other packages selected into the transaction. Positive atoms,
+/// conjunctions, and disjunctions are safe to discharge against the incoming
+/// package alone.
+pub fn positive_requirement_group_satisfied_by_package(
+    group: &RepositoryRequirementGroup,
+    version_scheme: VersionScheme,
+    package: &PackageIdentity,
+) -> Result<bool> {
+    crate::repository::requirement::validate_requirement_group(group, version_scheme)
+        .map_err(Error::ConfigError)?;
+    if !matches!(
+        group.kind,
+        RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends
+    ) {
+        return Ok(false);
+    }
+
+    fn matches_positive_expression(
+        expression: &crate::repository::dependency_model::RepositoryRequirementExpression,
+        version_scheme: VersionScheme,
+        package: &PackageIdentity,
+        native_architecture: &str,
+    ) -> Result<bool> {
+        use crate::repository::dependency_model::RepositoryRequirementExpression as Expression;
+        match expression {
+            Expression::Atom(_) => {
+                let solver_expression = crate::resolver::provider::repository_expression_to_solver(
+                    expression,
+                    version_scheme,
+                )?;
+                let crate::resolver::provider::SolverExpression::Atom(atom) = solver_expression
+                else {
+                    return Ok(false);
+                };
+                crate::resolver::provider::matching::constraint_matches_candidate(
+                    &atom.name,
+                    &atom.constraint,
+                    package,
+                    native_architecture,
+                    package.name == atom.name,
+                )
+                .map_err(Error::from)
+            }
+            Expression::And(operands) => {
+                for operand in operands {
+                    if !matches_positive_expression(
+                        operand,
+                        version_scheme,
+                        package,
+                        native_architecture,
+                    )? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            Expression::Or(operands) => {
+                for operand in operands {
+                    if matches_positive_expression(
+                        operand,
+                        version_scheme,
+                        package,
+                        native_architecture,
+                    )? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Expression::If { .. }
+            | Expression::Unless { .. }
+            | Expression::With { .. }
+            | Expression::Without { .. } => Ok(false),
+        }
+    }
+
+    matches_positive_expression(
+        &group.expression,
+        version_scheme,
+        package,
+        &crate::repository::registry::detect_system_arch(),
+    )
 }
 
 /// Check what packages would break if the given packages are removed.

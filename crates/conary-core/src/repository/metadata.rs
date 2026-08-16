@@ -43,6 +43,10 @@ pub struct DeltaInfo {
 pub struct PackageMetadata {
     pub name: String,
     pub version: String,
+    /// Monotonic signed CCS build release, when the indexed artifact is a CCS
+    /// package. This stays separate from the source-native version authority.
+    #[serde(default)]
+    pub release: Option<String>,
     /// Exact native version ordering contract for this package.
     pub version_scheme: VersionScheme,
     pub architecture: Option<String>,

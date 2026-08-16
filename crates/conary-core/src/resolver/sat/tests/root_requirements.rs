@@ -3,7 +3,10 @@
 use super::formal_dependencies::insert_repo_pkg_with_reqs;
 use super::*;
 use crate::db::models::RepositoryProvide;
-use crate::repository::dependency_model::RepositoryRequirementKind;
+use crate::repository::dependency_model::{
+    CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation, ProvidedCapability,
+    RepositoryCapabilityKind, RepositoryRequirementKind, SourcePackageFormat,
+};
 use crate::repository::requirement::parse_native_requirement;
 
 fn repository(conn: &Connection) -> i64 {
@@ -70,6 +73,68 @@ fn selected_names(result: &SatResolution) -> Vec<&str> {
         .iter()
         .map(|package| package.name.as_str())
         .collect()
+}
+
+#[test]
+fn incoming_exact_provide_satisfies_only_its_matching_positive_requirement() {
+    let self_requirement = parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "config(phase4-corpus) = 1.0.0-1",
+    )
+    .unwrap();
+    let external_requirement = parse_native_requirement(
+        RepositoryRequirementKind::Depends,
+        VersionScheme::Rpm,
+        "phase4-repository-fixture = 1.0.0",
+    )
+    .unwrap();
+    let incoming = PackageIdentity {
+        repo_package_id: None,
+        name: "phase4-corpus".to_string(),
+        version: "1.0.0-1".to_string(),
+        package_release: None,
+        architecture: Some("x86_64".to_string()),
+        debian_multi_arch: None,
+        version_scheme: VersionScheme::Rpm,
+        repository_id: None,
+        repository_name: String::new(),
+        repository_profile: None,
+        repository_priority: 0,
+        canonical_id: None,
+        canonical_name: None,
+        installed_trove_id: None,
+        installed_pinned: false,
+        provided_capabilities: vec![ProvidedCapability {
+            kind: RepositoryCapabilityKind::Generic,
+            name: "config(phase4-corpus)".to_string(),
+            version: Some("1.0.0-1".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDeclared {
+                format: SourcePackageFormat::Rpm,
+                record_index: 0,
+            },
+        }],
+    };
+
+    assert!(
+        positive_requirement_group_satisfied_by_package(
+            &self_requirement,
+            VersionScheme::Rpm,
+            &incoming,
+        )
+        .unwrap()
+    );
+    assert!(
+        !positive_requirement_group_satisfied_by_package(
+            &external_requirement,
+            VersionScheme::Rpm,
+            &incoming,
+        )
+        .unwrap()
+    );
 }
 
 #[test]

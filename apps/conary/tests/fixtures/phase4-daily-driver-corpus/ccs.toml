@@ -1,5 +1,5 @@
 requirements = [
-    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "phase4-repository-fixture", capability_kind = "PackageName", version_constraint = "=1.0.0-1", native_text = "phase4-repository-fixture =1.0.0-1" } }, alternatives = [{ name = "phase4-repository-fixture", capability_kind = "PackageName", version_constraint = "=1.0.0-1", native_text = "phase4-repository-fixture =1.0.0-1" }], native_text = "phase4-repository-fixture =1.0.0-1" },
+    { kind = "Depends", behavior = "Hard", expression = { operator = "atom", operands = { name = "phase4-repository-fixture", capability_kind = "PackageName", version_constraint = "=1.0.0", native_text = "phase4-repository-fixture =1.0.0" } }, alternatives = [{ name = "phase4-repository-fixture", capability_kind = "PackageName", version_constraint = "=1.0.0", native_text = "phase4-repository-fixture =1.0.0" }], native_text = "phase4-repository-fixture =1.0.0" },
 ]
 
 [package]
@@ -21,15 +21,15 @@ libc = "gnu"
 maintainers = ["Conary Fixture Maintainers <fixtures@conary.io>"]
 
 [native_export.rpm]
-requires = [{ name = "phase4-repository-fixture", relation = "equal", version = "1.0.0-1" }]
+requires = [{ name = "phase4-repository-fixture", relation = "equal", version = "1.0.0" }]
 provides = ["phase4-corpus-tool"]
 
 [native_export.deb]
-depends = ["phase4-repository-fixture (= 1.0.0-1)"]
+depends = ["phase4-repository-fixture (= 1.0.0)"]
 provides = ["phase4-corpus-tool"]
 
 [native_export.arch]
-depends = ["phase4-repository-fixture=1.0.0-1"]
+depends = ["phase4-repository-fixture=1.0.0"]
 provides = ["phase4-corpus-tool"]
 
 [provides]

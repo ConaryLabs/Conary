@@ -639,6 +639,45 @@ fn test_json_contract_persists_trusted_advisory_metadata() {
 }
 
 #[test]
+fn json_contract_keeps_source_version_and_ccs_release_separate() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    let mut repo = Repository::new(
+        "signed-static".to_string(),
+        "https://example.test/static".to_string(),
+    );
+    repo.insert(&conn).unwrap();
+    let repo_id = repo.id.unwrap();
+    let metadata: JsonRepositoryMetadata = serde_json::from_value(json!({
+        "name": "signed-static",
+        "version": "1",
+        "security_advisory_source": null,
+        "packages": [{
+            "name": "fixture",
+            "version": "1.0.0",
+            "release": "1",
+            "version_scheme": "rpm",
+            "architecture": "x86_64",
+            "description": "signed fixture",
+            "checksum": "fixture-checksum",
+            "size": 42,
+            "download_url": "https://example.test/static/fixture-1.0.0-1.ccs",
+            "requirements": [],
+            "relations": [],
+            "delta_from": null,
+            "security_advisory": null
+        }]
+    }))
+    .unwrap();
+
+    let snapshot = json_repository_sync_snapshot(&repo, metadata).unwrap();
+    persist_repository_sync_snapshot(&conn, &mut repo, snapshot).unwrap();
+    let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+    assert_eq!(stored[0].version, "1.0.0");
+    assert_eq!(stored[0].package_release, "1");
+}
+
+#[test]
 fn test_json_contract_supported_repo_requires_trusted_advisory_source() {
     let mut repo = Repository::new(
         "fedora-security".to_string(),
