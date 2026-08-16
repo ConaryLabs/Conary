@@ -499,7 +499,7 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contra
     }
 
     for (distro, expected_user, expected_group) in [
-        ("fedora44", "named:root", "named:root"),
+        ("fedora44", "numeric:0", "numeric:0"),
         ("ubuntu-26.04", "numeric:0", "numeric:0"),
         ("arch", "numeric:0", "numeric:0"),
     ] {

@@ -86,8 +86,8 @@ native_corpus_config_source = "rpm"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "rpm"
 native_corpus_target_architecture = "x86_64"
-native_corpus_payload_user = "named:root"
-native_corpus_payload_group = "named:root"
+native_corpus_payload_user = "numeric:0"
+native_corpus_payload_group = "numeric:0"
 
 [distro_overrides."ubuntu-26.04"]
 native_target = "deb"

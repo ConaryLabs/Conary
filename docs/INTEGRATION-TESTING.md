@@ -592,10 +592,10 @@ purge-time config removal, and shell lifecycle. Directory, symlink, hardlink,
 metadata, and relation claims require direct native metadata,
 selected-generation, repository-provenance, and installed reason assertions;
 implicit parents, followed filesystem paths, and recorded metadata without a
-completed resolution do not count. RPM ownership remains source-named while
-Debian and ALPM ownership remains source-numeric; the selected-generation
-assertion proves that typed distinction instead of flattening both to runtime
-uid/gid values. The source format comes from the explicit distro build-context
+completed resolution do not count. The selected-generation assertion requires
+the exact numeric uid/gid authority observed after the native package enters
+the target transaction; it does not infer a named identity from RPM's display
+metadata. The source format comes from the explicit distro build-context
 override and must resolve to the closed RPM/DEB/ALPM type before evidence can
 count.
 

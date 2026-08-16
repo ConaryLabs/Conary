@@ -503,10 +503,11 @@ Each fixture family should record:
   installed or extracted and both hardlink paths must report one device/inode
   identity with a link count of two, uid/gid `0`, and mtime `1700000000` before
   Conary installation begins. The selected-generation proof then requires both
-  members to retain the exact source-typed ownership and timestamp: named
-  `root` for RPM ownership, numeric `0` for Debian and ALPM ownership, and zero
-  timestamp nanoseconds for all three. Topology and metadata count only after
-  typed native-package and selected-generation node assertions agree.
+  members to retain the exact transaction ownership and timestamp: numeric
+  uid/gid `0` and zero timestamp nanoseconds for all three formats. The proof
+  does not infer named ownership from RPM display metadata. Topology and
+  metadata count only after typed native-package and selected-generation node
+  assertions agree.
   RPM directory proof includes the non-default root child `/opt` plus a
   non-default leaf so the package owns exact path, mode, and ownership metadata;
   default shared parents remain implicit native-package paths.
