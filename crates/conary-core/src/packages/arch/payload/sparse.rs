@@ -104,7 +104,7 @@ pub(super) fn copy_payload(
 ) -> Result<String> {
     let mut map_bytes = 0_u64;
     let extent_count = read_map_decimal(reader, &mut map_bytes, "extent count", path)?;
-    bounds.admit_archive_entry("ALPM GNU sparse extent records", extent_count)?;
+    bounds.admit_payload_references("ALPM GNU sparse extent records", extent_count)?;
     let capacity = usize::try_from(extent_count).map_err(|_| {
         Error::ParseError(format!(
             "GNU sparse extent count for {path} exceeds addressable memory"

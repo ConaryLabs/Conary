@@ -734,6 +734,33 @@ mod tests {
     }
 
     #[test]
+    fn rejects_gnu_pax_sparse_v1_extent_count_over_the_structural_budget() {
+        let bytes = pax_sparse_v1_archive(
+            "usr/share/example/sparse.bin",
+            b"16",
+            b"3\n0\n3\n13\n3\n16\n0\n",
+            b"abcxyz",
+        );
+        let mut bounds = crate::ccs::CCS_BUDGET.archive_decode_bounds().unwrap();
+        bounds.max_payload_references = 2;
+        let mut archive = Archive::new(Cursor::new(bytes));
+        let mut entry = archive.entries().unwrap().next().unwrap().unwrap();
+        let error = match parse_entry(&mut entry, &PayloadSpool::new(0).unwrap(), 0, &bounds) {
+            Ok(_) => panic!("sparse extent count over the structural budget must fail closed"),
+            Err(error) => error,
+        };
+        let Error::Budget(error) = error else {
+            panic!("expected typed payload-reference budget refusal");
+        };
+        assert_eq!(
+            error.dimension,
+            crate::ccs::BudgetDimension::PayloadReferenceCount
+        );
+        assert_eq!(error.observed, 3);
+        assert_eq!(error.limit, 2);
+    }
+
+    #[test]
     fn parses_exact_posix_nodes_and_pax_authority() {
         let mut builder = Builder::new(Vec::new());
         builder
