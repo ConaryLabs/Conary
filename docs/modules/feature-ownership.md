@@ -566,6 +566,7 @@ and export raw/qcow2/ISO carriers.
 `crates/conary-core/src/generation/root_manifest/delta.rs`;
 `crates/conary-core/src/generation/root_manifest/scan.rs`;
 `crates/conary-core/src/generation/root_manifest/materialize.rs`;
+`crates/conary-core/src/generation/root_manifest/overlay/config_state.rs`;
 `crates/conary-core/src/generation/root_manifest/composefs.rs`;
 `crates/conary-core/src/generation/builder/create.rs`;
 `crates/conary-core/src/generation/builder/rebuild.rs`;
@@ -599,6 +600,7 @@ and export raw/qcow2/ISO carriers.
 `apps/conary/src/commands/generation/activation_intents.rs`;
 `packaging/systemd/conary-generation-activation.service`;
 `apps/conary/src/commands/generation/selected_root.rs`;
+`apps/conary/src/commands/generation/selected_root/config_state.rs`;
 `apps/conary/src/commands/generation/config_transaction.rs`;
 `apps/conary/src/commands/generation/publication.rs`;
 `apps/conary/src/commands/system.rs`;

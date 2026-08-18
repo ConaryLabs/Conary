@@ -2,6 +2,7 @@
 
 //! Rollback-safe writable roots for generation-aware transaction execution.
 
+mod config_state;
 mod deferred_ima;
 mod overlay_session;
 mod publication_authority;
@@ -463,11 +464,11 @@ fn prepare_current_root(
                 &generation_path,
             )?
         };
-        let captured = CapturedSelectedRoot {
+        let mut captured = CapturedSelectedRoot {
             generation: artifact.generation_root.clone(),
             state: artifact.mutable_state.clone(),
         };
-        let snapshot = match GenerationPublication::selected_root_snapshot_for_generation(
+        let mut snapshot = match GenerationPublication::selected_root_snapshot_for_generation(
             conn,
             generation,
         )? {
@@ -478,6 +479,12 @@ fn prepare_current_root(
             })?,
             None => SelectedRootSnapshot::capture(conn, &captured)?,
         };
+        if let Some((active_snapshot, active_captured)) =
+            config_state::capture_active_upper(conn, runtime_root, generation, snapshot, &cas)?
+        {
+            snapshot = active_snapshot;
+            captured = active_captured;
+        }
         if require_materialized {
             let selected_root = selected_root_materialization_destination(session_dir, true)?;
             materialize_captured_selected_root(&captured, &cas, &selected_root)?;

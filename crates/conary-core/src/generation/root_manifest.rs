@@ -27,8 +27,8 @@ pub use overlay::{
     OverlayMetadataCopyUp, OverlayOpaqueDirectory, OverlayWhiteoutEncoding, OverlayXattrNamespace,
     SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION, SELECTED_ROOT_OVERLAY_PROFILE_VERSION,
     SelectedRootOverlayCapabilities, SelectedRootOverlayProfile,
-    decode_selected_root_overlay_upper_indexed, encode_selected_root_overlay_upper_node,
-    probe_selected_root_overlay_profile,
+    decode_complete_config_state_upper_indexed, decode_selected_root_overlay_upper_indexed,
+    encode_selected_root_overlay_upper_node, probe_selected_root_overlay_profile,
 };
 pub use scan::{
     SelectedRootCaptureExclusions, SelectedRootScanWork, capture_existing_payload_node,

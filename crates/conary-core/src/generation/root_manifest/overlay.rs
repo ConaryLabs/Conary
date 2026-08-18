@@ -2,9 +2,11 @@
 
 //! OverlayFS upper-tree decoding for delta-sized selected-root transactions.
 
+mod config_state;
 mod indexed;
 mod probe;
 
+pub use config_state::decode_complete_config_state_upper_indexed;
 pub use indexed::decode_selected_root_overlay_upper_indexed;
 pub use probe::{
     MountedSelectedRootOverlay, OverlayHardlinkCopyUp, OverlayLowerDirectoryRename,
@@ -14,9 +16,11 @@ pub use probe::{
 };
 
 #[cfg(test)]
-use super::scan::scan_selected_root_overlay_upper;
+use super::CapturedSelectedRoot;
 #[cfg(test)]
-use super::{CapturedSelectedRoot, SelectedRootSnapshot};
+use super::SelectedRootSnapshot;
+#[cfg(test)]
+use super::scan::scan_selected_root_overlay_upper;
 use super::{GenerationRootEntry, SELECTED_ROOT_MANIFEST_DELTA_VERSION, SelectedRootManifestDelta};
 #[cfg(test)]
 use crate::filesystem::PrivateCasWriter;
