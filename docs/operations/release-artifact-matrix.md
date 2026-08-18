@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-18
-revision: 24
-summary: Record the immutable synchronized v0.15.0 suite, deployment, and released-artifact evidence
+revision: 25
+summary: Record immutable v0.15.0 evidence and the prepared v0.16.1 suite target
 ---
 
 # Release Artifact Matrix
@@ -58,6 +58,13 @@ verifies that signature before parsing any selection field and verifies the
 selected artifact before a native package transaction. This is prospective
 source truth until an immutable carrying release and its clean three-host proof
 are recorded below; v0.15.0 does not contain those two assets.
+
+Workspace version `0.16.1` is the prepared target for that release, not current
+release authority. Protected tag `v0.16.0` remains reserved evidence for a
+failed version-validation run and has no GitHub release; it will not be moved
+or reused. The matrix must continue to identify `v0.15.0` as current until the
+reviewed `v0.16.1` merge receives its own annotated tag and the exact-tag
+publication, deployment, and released-artifact proof all complete.
 
 | Artifact product | Artifact classes | Current construction authority | Suite deploy mode | Current immutable authority | Local build |
 | --- | --- | --- | --- | --- | --- |

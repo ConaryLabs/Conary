@@ -309,7 +309,7 @@ main() {
 
     printf '=== Conary synchronized suite release ===\n'
     printf '  Previous suite tags considered: %s\n' "${previous_tags[*]:-none}"
-    printf '  Published baseline: v%s\n' "$history_version"
+    printf '  Immutable tag baseline: v%s\n' "$history_version"
     printf '  Current version authority: %s\n' "$manifest_version"
 
     if [[ -n "$target_version" ]]; then
@@ -322,7 +322,7 @@ main() {
         printf '  Target authority: explicit\n'
     else
         level="$(determine_bump "$history_tag")"
-        [[ "$level" != "none" ]] || die "no version-bumping suite commits found since ${history_tag:-repository start}"
+        [[ "$level" != "none" ]] || die "no version-bumping suite commits found since immutable tag ${history_tag:-repository start}"
         new_version="$(bump_version "$current_version" "$level")"
         printf '  Target authority: conventional commits (%s)\n' "$level"
     fi

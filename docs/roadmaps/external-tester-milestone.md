@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-13
-revision: 9
+last_updated: 2026-08-18
+revision: 10
 status: active
 current_result: 0/10
 summary: Outcome tracker for Conary's first cross-distro external tester milestone
@@ -41,6 +41,11 @@ annotated tag, immutable 13-asset release across four products, checksums and
 GitHub digests, release attestation, detached CCS signature, deployments,
 self-update endpoint, build-only routes, and three-distro released-package
 proof. Production Remi runs the exact tagged binary.
+
+Synchronized suite `v0.16.1` is a prepared target only. Protected failed tag
+`v0.16.0` remains reserved and has no release; `v0.16.1` does not become
+publication or tester authority unless its reviewed exact-tag release,
+deployment, and released-artifact workflows pass.
 
 That complete release closeout does not by itself open outreach. The
 ordinary-package corpus gate owned by #110/W7 must also pass before this
