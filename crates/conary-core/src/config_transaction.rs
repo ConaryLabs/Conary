@@ -178,6 +178,66 @@ pub enum ConfigRemovalDecision {
     RotatePacsaveAndSaveCurrent,
 }
 
+/// Source-owned transition from a packaged config artifact to declaration-only
+/// ownership. RPM and libalpm deliberately disagree here, so the incoming
+/// declaration must select the contract before either filesystem planner runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigDematerializationContract {
+    /// RPM `rpmfilesDecideFate()` skips an incoming `%ghost` and preserves
+    /// whatever is currently on disk.
+    RpmGhost,
+    /// libalpm removes an old backup file omitted from the incoming file list,
+    /// saving a locally modified primary as `.pacsave`.
+    AlpmBackupWithoutPayload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigDematerializationDecision {
+    PreserveCurrent,
+    Remove,
+    RotatePacsaveAndSaveCurrent,
+}
+
+/// Resolve the exact source contract for a materialized-to-declaration-only
+/// update. Other source/flag combinations have no upstream transition and
+/// fail before mutation instead of inheriting removal behavior accidentally.
+pub fn config_dematerialization_contract(
+    source: ConfigSource,
+    incoming_ghost: bool,
+) -> crate::Result<ConfigDematerializationContract> {
+    match (source, incoming_ghost) {
+        (ConfigSource::Rpm, true) => Ok(ConfigDematerializationContract::RpmGhost),
+        (ConfigSource::Arch, false) => {
+            Ok(ConfigDematerializationContract::AlpmBackupWithoutPayload)
+        }
+        _ => Err(crate::Error::ConfigError(format!(
+            "{source} has no materialized-to-declaration-only config contract with ghost={incoming_ghost}"
+        ))),
+    }
+}
+
+/// Decide the primary and auxiliary filesystem outcome for one exact
+/// dematerialization contract and the old/current content identities.
+#[must_use]
+pub fn decide_config_dematerialization(
+    contract: ConfigDematerializationContract,
+    old: Option<&str>,
+    current: Option<&str>,
+) -> ConfigDematerializationDecision {
+    match contract {
+        ConfigDematerializationContract::RpmGhost => {
+            ConfigDematerializationDecision::PreserveCurrent
+        }
+        ConfigDematerializationContract::AlpmBackupWithoutPayload => {
+            if current.is_some() && current != old {
+                ConfigDematerializationDecision::RotatePacsaveAndSaveCurrent
+            } else {
+                ConfigDematerializationDecision::Remove
+            }
+        }
+    }
+}
+
 /// Decide removal from persisted package semantics and the exact current
 /// identity. `purge` is authoritative for Debian conffile residual state.
 #[must_use]
@@ -519,9 +579,9 @@ impl GenerationConfigTransaction {
             if entry.operation == ConfigTransactionOperation::Dematerialize {
                 let before = entry.before.as_ref().expect("checked above");
                 let after = entry.after.as_ref().expect("checked above");
-                if !before.materialized || after.materialized || after.ghost {
+                if !before.materialized || after.materialized {
                     return Err(crate::Error::ConfigError(format!(
-                        "generation config dematerialization for {} must replace a materialized artifact with a non-ghost declaration-only state",
+                        "generation config dematerialization for {} must replace a materialized artifact with a declaration-only state",
                         entry.path
                     )));
                 }
@@ -531,6 +591,7 @@ impl GenerationConfigTransaction {
                         entry.path, before.source, after.source
                     )));
                 }
+                config_dematerialization_contract(after.source, after.ghost)?;
             }
             if entry.operation == ConfigTransactionOperation::RemoveOnUpgrade {
                 let Some(before) = entry.before.as_ref() else {

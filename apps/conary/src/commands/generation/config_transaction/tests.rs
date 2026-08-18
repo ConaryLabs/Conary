@@ -293,6 +293,37 @@ fn alpm_materialized_to_absent_preserves_modified_content_and_rolls_back_exactly
     );
 }
 
+#[test]
+fn rpm_materialized_to_ghost_preserves_current_and_rolls_back_exactly() {
+    let before = state(ConfigSource::Rpm, true, b"packaged-v1");
+    let current = regular(b"locally-modified", 0o100600);
+    let transaction = GenerationConfigTransaction {
+        entries: vec![ConfigPathTransaction {
+            path: "/etc/demo/ghost.conf".to_string(),
+            operation: ConfigTransactionOperation::Dematerialize,
+            before: Some(before),
+            current: Some(current.clone()),
+            after: Some(ConfigPackageState {
+                source: ConfigSource::Rpm,
+                noreplace: true,
+                ghost: true,
+                materialized: false,
+                original_sha256: None,
+                artifact: None,
+            }),
+            auxiliaries: Vec::new(),
+        }],
+        ..Default::default()
+    };
+
+    transaction.validate().unwrap();
+    assert!(plan_entry(&transaction.entries[0]).unwrap().is_empty());
+
+    let rollback = transaction.restore_snapshot().unwrap();
+    let mutations = plan_entry(&rollback.entries[0]).unwrap();
+    assert!(mutations.contains(&overlay_write("/etc/demo/ghost.conf".to_string(), current)));
+}
+
 fn update_entry(source: ConfigSource, noreplace: bool) -> ConfigPathTransaction {
     ConfigPathTransaction {
         path: "/etc/demo.conf".to_string(),
