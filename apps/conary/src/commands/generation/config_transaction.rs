@@ -11,10 +11,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use conary_core::config_transaction::{
-    ConfigArtifact, ConfigInstallDecision, ConfigPackageState, ConfigPathTransaction,
-    ConfigRemovalDecision, ConfigSuffix, ConfigTransactionOperation, GenerationConfigTransaction,
-    decide_config_install, decide_config_removal, decide_deb_remove_on_upgrade,
-    is_config_artifact_kind, is_etc_config_payload,
+    ConfigArtifact, ConfigDematerializationDecision, ConfigInstallDecision, ConfigPackageState,
+    ConfigPathTransaction, ConfigRemovalDecision, ConfigSuffix, ConfigTransactionOperation,
+    GenerationConfigTransaction, config_dematerialization_contract,
+    decide_config_dematerialization, decide_config_install, decide_config_removal,
+    decide_deb_remove_on_upgrade, is_config_artifact_kind, is_etc_config_payload,
 };
 use conary_core::db::models::{ConfigFile, ConfigSource, ConfigStatus, FileEntry};
 use conary_core::filesystem::CasStore;
@@ -584,9 +585,38 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
             }
             mutations.push(OverlayMutation::Remove(entry.path.clone()));
         }
-        ConfigTransactionOperation::Dematerialize
-        | ConfigTransactionOperation::Remove
-        | ConfigTransactionOperation::Purge => {
+        ConfigTransactionOperation::Dematerialize => {
+            let before = entry
+                .before
+                .as_ref()
+                .context("dematerialize config transaction has no exact prior package state")?;
+            let after = entry
+                .after
+                .as_ref()
+                .context("dematerialize config transaction has no declaration-only after state")?;
+            let contract = config_dematerialization_contract(after.source, after.ghost)?;
+            match decide_config_dematerialization(
+                contract,
+                before.original_sha256.as_deref(),
+                entry.current.as_ref().map(ConfigArtifact::sha256),
+            ) {
+                ConfigDematerializationDecision::PreserveCurrent => {}
+                ConfigDematerializationDecision::Remove => {
+                    mutations.push(OverlayMutation::Remove(entry.path.clone()));
+                }
+                ConfigDematerializationDecision::RotatePacsaveAndSaveCurrent => {
+                    rotate_pacsaves(entry, &mut mutations)?;
+                    if let Some(current) = &entry.current {
+                        mutations.push(overlay_write(
+                            format!("{}{}", entry.path, ConfigSuffix::PacSave.as_str()),
+                            current.clone(),
+                        ));
+                    }
+                    mutations.push(OverlayMutation::Remove(entry.path.clone()));
+                }
+            }
+        }
+        ConfigTransactionOperation::Remove | ConfigTransactionOperation::Purge => {
             let before = entry
                 .before
                 .as_ref()

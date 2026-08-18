@@ -150,6 +150,35 @@ fn removal_contracts_cover_residuals_purge_and_native_backups() {
 }
 
 #[test]
+fn dematerialization_contract_covers_pristine_modified_and_deleted_paths() {
+    let rpm = config_dematerialization_contract(ConfigSource::Rpm, true).unwrap();
+    for current in [Some(OLD), Some(LOCAL), None] {
+        assert_eq!(
+            decide_config_dematerialization(rpm, Some(OLD), current),
+            ConfigDematerializationDecision::PreserveCurrent
+        );
+    }
+
+    let alpm = config_dematerialization_contract(ConfigSource::Arch, false).unwrap();
+    assert_eq!(
+        decide_config_dematerialization(alpm, Some(OLD), Some(OLD)),
+        ConfigDematerializationDecision::Remove
+    );
+    assert_eq!(
+        decide_config_dematerialization(alpm, Some(OLD), Some(LOCAL)),
+        ConfigDematerializationDecision::RotatePacsaveAndSaveCurrent
+    );
+    assert_eq!(
+        decide_config_dematerialization(alpm, Some(OLD), None),
+        ConfigDematerializationDecision::Remove
+    );
+
+    assert!(config_dematerialization_contract(ConfigSource::Rpm, false).is_err());
+    assert!(config_dematerialization_contract(ConfigSource::Arch, true).is_err());
+    assert!(config_dematerialization_contract(ConfigSource::Deb, false).is_err());
+}
+
+#[test]
 fn durable_artifact_round_trip_validates_content_identity() {
     let artifact = regular(b"local config", 0o100640);
     let encoded = serde_json::to_string(&artifact).unwrap();

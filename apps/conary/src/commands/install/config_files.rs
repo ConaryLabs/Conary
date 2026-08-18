@@ -13,11 +13,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use conary_core::config_transaction::{
-    ConfigInstallDecision, ConfigRemovalDecision, ConfigSuffix, decide_config_install,
+    ConfigDematerializationDecision, ConfigInstallDecision, ConfigRemovalDecision, ConfigSuffix,
+    config_dematerialization_contract, decide_config_dematerialization, decide_config_install,
     decide_config_removal, decide_deb_remove_on_upgrade, is_etc_config_payload,
 };
 use conary_core::db::models::{ConfigFile, ConfigSource, ConfigStatus};
-use conary_core::packages::config_authority::SourceConfigDeclaration;
+use conary_core::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};
 use rusqlite::Connection;
 
 use crate::commands::{LiveRootContent, LiveRootFile, live_root};
@@ -192,6 +193,44 @@ pub(crate) fn prepare_config_install(
         .collect::<BTreeSet<_>>();
     let mut planned = Vec::with_capacity(files.len() + declarations.len());
     let mut remove_paths = BTreeSet::new();
+
+    for declaration in declared.iter().filter(|declaration| {
+        declaration.payload() == ConfigPayloadAssociation::Absent
+            && !declaration.remove_on_upgrade()
+    }) {
+        let Some(old) = ConfigFile::find_by_path(conn, declaration.path())? else {
+            continue;
+        };
+        if old.trove_id != replacing_trove_id || !old.materialized {
+            continue;
+        }
+        let current = read_existing(root, declaration.path())?;
+        let contract = config_dematerialization_contract(source, declaration.ghost())?;
+        match decide_config_dematerialization(
+            contract,
+            old.original_hash.as_deref(),
+            current.as_ref().map(|existing| existing.hash.as_str()),
+        ) {
+            ConfigDematerializationDecision::PreserveCurrent => {}
+            ConfigDematerializationDecision::Remove => {
+                remove_paths.insert(declaration.path().to_string());
+            }
+            ConfigDematerializationDecision::RotatePacsaveAndSaveCurrent => {
+                if let Some(existing) = current {
+                    let mut rotated_remove_paths = Vec::new();
+                    rotate_pacsave(
+                        root,
+                        declaration.path(),
+                        existing.file,
+                        &mut rotated_remove_paths,
+                        &mut planned,
+                    )?;
+                    remove_paths.extend(rotated_remove_paths);
+                }
+                remove_paths.insert(declaration.path().to_string());
+            }
+        }
+    }
 
     for declaration in declared
         .iter()
@@ -548,8 +587,15 @@ fn rotate_pacsave(
     }
 
     numbered.sort_by_key(|(number, _, _)| std::cmp::Reverse(*number));
+    let mut replacement_paths = numbered
+        .iter()
+        .map(|(number, _, _)| format!("{base}.{}", number + 1))
+        .collect::<BTreeSet<_>>();
+    replacement_paths.insert(base.clone());
     for (number, old_path, mut old_file) in numbered {
-        remove_paths.push(old_path);
+        if !replacement_paths.contains(&old_path) {
+            remove_paths.push(old_path);
+        }
         old_file.path = format!("{base}.{}", number + 1);
         files.push(old_file);
     }

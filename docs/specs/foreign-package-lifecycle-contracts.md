@@ -777,6 +777,19 @@ RPM `%ghost %config` is ownership without payload: install and update neither
 create nor back up the path. Erase removes the path if it exists. Ghost
 metadata must never be converted into an empty payload artifact.
 
+The materialized-to-declaration-only transition is pinned directly to the
+source-package implementations. RPM
+[`rpmfilesDecideFate()`](https://github.com/rpm-software-management/rpm/blob/a8f0192aee1c08bd1454ed2ac6ebaf506004b55c/lib/rpmfi.cc#L1029-L1033)
+returns `FA_SKIP` as soon as the incoming file is a ghost, preserving pristine,
+modified, or absent current state without a backup. libalpm
+[`remove.c`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/remove.c#L528-L575)
+removes an old backup file omitted from the incoming file list and rotates a
+modified current file to `.pacsave`; its
+[`should_skip_file()`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/remove.c#L589-L596)
+only preserves an incoming backup declaration when the new package also owns a
+payload file at that path. `ConfigDematerializationContract` is the one typed
+projection consumed by mutable-root and generation planning.
+
 A newly introduced declaration-only path (RPM ghost, Debian
 `remove-on-upgrade`, or ALPM backup without a payload member) is durable
 authority that performs no filesystem mutation: install and update neither
