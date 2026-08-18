@@ -4,6 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MATRIX="${REPO_ROOT}/scripts/release-matrix.sh"
+TEST_RUN_ROOT="$(mktemp -d "${REPO_ROOT}/.tmp-release-matrix-run.XXXXXX")"
 
 fail() {
     printf 'FAIL: %s\n' "$1" >&2
@@ -31,7 +32,7 @@ assert_contains() {
 }
 
 cleanup() {
-    find "$REPO_ROOT" -maxdepth 1 -type d -name '.tmp-release-matrix-test.*' -exec rm -rf {} +
+    rm -rf -- "$TEST_RUN_ROOT"
 }
 
 trap cleanup EXIT
@@ -59,7 +60,7 @@ EOF
 create_release_fixture() {
     local repo
 
-    repo="$(mktemp -d "${REPO_ROOT}/.tmp-release-matrix-test.XXXXXX")"
+    repo="$(mktemp -d "${TEST_RUN_ROOT}/fixture.XXXXXX")"
 
     mkdir -p \
         "$repo/scripts" \
@@ -253,7 +254,7 @@ run_repo_matrix() {
 create_release_policy_fixture() {
     local repo
 
-    repo="$(mktemp -d "${REPO_ROOT}/.tmp-release-matrix-test.XXXXXX")"
+    repo="$(mktemp -d "${TEST_RUN_ROOT}/fixture.XXXXXX")"
     mkdir -p \
         "$repo/scripts" \
         "$repo/.github/actions/setup-exact-ownership-tests" \
@@ -262,6 +263,7 @@ create_release_policy_fixture() {
         "$repo/.github/workflows" \
         "$repo/docs/operations" \
         "$repo/site/src/lib" \
+        "$repo/site/static" \
         "$repo/site/src/routes/install" \
         "$repo/packaging/rpm" \
         "$repo/packaging/deb" \
@@ -281,6 +283,9 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/docs/operations/release-artifact-matrix.md" "$repo/docs/operations/release-artifact-matrix.md"
     cp "$REPO_ROOT/site/src/lib/preview-release.ts" "$repo/site/src/lib/preview-release.ts"
     cp "$REPO_ROOT/site/src/routes/install/+page.svelte" "$repo/site/src/routes/install/+page.svelte"
+    cp "$REPO_ROOT/site/static/install-conary-preview.sh" "$repo/site/static/install-conary-preview.sh"
+    cp "$REPO_ROOT/scripts/bootstrap-manifest.sh" "$repo/scripts/bootstrap-manifest.sh"
+    cp "$REPO_ROOT/scripts/test-install-conary-preview.sh" "$repo/scripts/test-install-conary-preview.sh"
     cp "$REPO_ROOT/packaging/rpm/Containerfile.build" "$repo/packaging/rpm/Containerfile.build"
     cp "$REPO_ROOT/packaging/rpm/conary.spec" "$repo/packaging/rpm/conary.spec"
     cp "$REPO_ROOT/packaging/deb/Containerfile.build" "$repo/packaging/deb/Containerfile.build"
@@ -292,6 +297,10 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/packaging/ccs/build.sh" "$repo/packaging/ccs/build.sh"
     chmod +x "$repo/scripts/release-matrix.sh"
     printf '%s\n' "$repo"
+}
+
+test_bootstrap_installer_contract() {
+    bash "$REPO_ROOT/scripts/test-install-conary-preview.sh"
 }
 
 replace_fixture_text_once() {
@@ -795,6 +804,17 @@ test_check_release_matrix_rejects_unpinned_arch_builder_image() {
         'image: docker.io/library/archlinux:latest'
 
     assert_check_release_matrix_fails "$repo" "release-build Arch builder must use the pinned Arch image"
+}
+
+test_check_release_matrix_rejects_arch_bootstrap_partial_upgrade() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        'pacman -Syu --noconfirm curl openssl sudo ca-certificates' \
+        'pacman -Sy --noconfirm curl openssl sudo ca-certificates'
+
+    assert_check_release_matrix_fails "$repo" "Arch bootstrap rehearsal must avoid an unsupported partial upgrade"
 }
 
 test_check_release_matrix_rejects_rpm_debug_subpackage_generation() {
@@ -1352,6 +1372,7 @@ test_check_release_matrix_rejects_single_static_site_deploy() {
 
 main() {
     local -a tests=(
+        test_bootstrap_installer_contract
         test_resolve_tag_suite_canonical
         test_latest_version_from_list_uses_canonical_tags
         test_field_conary_test_deploy_mode
@@ -1382,6 +1403,7 @@ main() {
         test_check_release_matrix_rejects_unpinned_rpm_builder_image
         test_check_release_matrix_rejects_unpinned_deb_builder_image
         test_check_release_matrix_rejects_unpinned_arch_builder_image
+        test_check_release_matrix_rejects_arch_bootstrap_partial_upgrade
         test_check_release_matrix_rejects_rpm_debug_subpackage_generation
         test_check_release_matrix_rejects_automatic_rpm_rust_flags
         test_check_release_matrix_rejects_rpm_debug_rust_flags

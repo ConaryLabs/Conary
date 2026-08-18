@@ -127,7 +127,9 @@ artifact_patterns_for() {
                 'conary-<version>.ccs.sig' \
                 'conary-<version>-1.fc44.x86_64.rpm' \
                 'conary_<version>-1_amd64.deb' \
-                'conary-<version>-1-x86_64.pkg.tar.zst'
+                'conary-<version>-1-x86_64.pkg.tar.zst' \
+                'conary-bootstrap-v1.manifest' \
+                'conary-bootstrap-v1.manifest.sig'
             ;;
         remi)
             printf '%s\n' \

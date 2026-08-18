@@ -224,7 +224,7 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
-          dnf install -y rpm-build openssl-devel xz-devel libseccomp-devel pkg-config gcc cmake perl systemd-rpm-macros curl git \
+          dnf install -y rpm-build openssl-devel xz-devel libseccomp-devel pkg-config gcc cmake perl clang systemd-rpm-macros curl git \
           && dnf clean all
       - name: Install Rust
         run: |
@@ -283,7 +283,7 @@ jobs:
         run: |
           apt-get update && apt-get install -y --no-install-recommends \
             build-essential dpkg-dev debhelper libssl-dev liblzma-dev libseccomp-dev \
-            pkg-config cmake perl curl ca-certificates git \
+            pkg-config cmake perl libclang-dev curl ca-certificates git \
           && rm -rf /var/lib/apt/lists/*
       - name: Install Rust
         run: |
@@ -339,7 +339,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel openssl xz libseccomp pkg-config cmake perl rustup git
+          pacman -S --noconfirm base-devel openssl xz libseccomp pkg-config cmake perl clang rustup git
           pacman -Scc --noconfirm
       - name: Set up build user
         run: |
@@ -398,6 +398,7 @@ jobs:
       - name: Collect artifacts and checksums
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
         run: |
           set -euo pipefail
 
@@ -433,9 +434,15 @@ jobs:
             "release-packages/conary-${VERSION}-1-x86_64.pkg.tar.zst" \
             release-packages/*.pkg.tar.zst
 
+          bash scripts/bootstrap-manifest.sh \
+            "$TAG_NAME" \
+            "$VERSION" \
+            release-packages \
+            release-packages/conary-bootstrap-v1.manifest
+
           cd release-packages
           sha256sum -- * > SHA256SUMS
-      - name: Sign CCS package
+      - name: Sign release bootstrap manifest and CCS package
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -445,8 +452,13 @@ jobs:
           set -euo pipefail
           chmod +x release-artifacts/sign-hash/sign_hash
           CCS_FILE="release-packages/conary-${VERSION}.ccs"
+          BOOTSTRAP_MANIFEST="release-packages/conary-bootstrap-v1.manifest"
           if [[ ! -s "$CCS_FILE" || -L "$CCS_FILE" ]]; then
             echo "Expected CCS package not found at $CCS_FILE" >&2
+            exit 1
+          fi
+          if [[ ! -s "$BOOTSTRAP_MANIFEST" || -L "$BOOTSTRAP_MANIFEST" ]]; then
+            echo "Expected bootstrap manifest not found at $BOOTSTRAP_MANIFEST" >&2
             exit 1
           fi
           if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
@@ -475,7 +487,10 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then
             release-artifacts/sign-hash/sign_hash --show-public-key > release-packages/REHEARSAL_SIGNING_PUBLIC_KEY.txt
           fi
+          release-artifacts/sign-hash/sign_hash "$BOOTSTRAP_MANIFEST" > "${BOOTSTRAP_MANIFEST}.sig"
           release-artifacts/sign-hash/sign_hash "$CCS_FILE" > "${CCS_FILE}.sig"
+          release-artifacts/sign-hash/sign_hash --verify "$BOOTSTRAP_MANIFEST" "${BOOTSTRAP_MANIFEST}.sig"
+          release-artifacts/sign-hash/sign_hash --verify "$CCS_FILE" "${CCS_FILE}.sig"
       - name: Upload release bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -673,12 +688,96 @@ jobs:
             echo "- bundle_name: \`conary-test-bundle\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  bootstrap-rehearsal:
+    name: bootstrap-rehearsal (${{ matrix.distro }})
+    needs: [prepare, bundle-conary]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora44
+            image: registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb
+          - distro: ubuntu-26.04
+            image: docker.io/library/ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb
+          - distro: arch
+            image: docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Download the complete Conary release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-bundle
+          path: release-bundle
+      - name: Prove the signed bootstrap against the constructed artifacts
+        shell: bash
+        env:
+          DISTRO: ${{ matrix.distro }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+
+          public_key_override=""
+          if [[ -s release-bundle/REHEARSAL_SIGNING_PUBLIC_KEY.txt ]]; then
+            public_key_hex="$(tr -d '\n' < release-bundle/REHEARSAL_SIGNING_PUBLIC_KEY.txt)"
+            [[ "$public_key_hex" =~ ^[0-9a-f]{64}$ ]] || {
+              echo "rehearsal signing public key is malformed" >&2
+              exit 1
+            }
+            public_key_override="$(python3 -c '
+          import base64, sys
+          print(base64.b64encode(bytes.fromhex("302a300506032b6570032100" + sys.argv[1])).decode())
+          ' "$public_key_hex")"
+          fi
+
+          python3 -m http.server 18080 \
+            --bind 127.0.0.1 \
+            --directory release-bundle \
+            >"$RUNNER_TEMP/bootstrap-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for _ in {1..20}; do
+            curl --fail --silent http://127.0.0.1:18080/conary-bootstrap-v1.manifest >/dev/null && break
+            sleep 0.25
+          done
+
+          docker run --rm --privileged --network host \
+            --volume "$PWD/site/static/install-conary-preview.sh:/tmp/install-conary-preview.sh:ro" \
+            --env CONARY_BOOTSTRAP_TESTING=1 \
+            --env "CONARY_BOOTSTRAP_PUBLIC_KEY_DER_BASE64=$public_key_override" \
+            --env CONARY_BOOTSTRAP_ARTIFACT_BASE_URL=http://127.0.0.1:18080 \
+            --env CONARY_BOOTSTRAP_MANIFEST_URL=http://127.0.0.1:18080/conary-bootstrap-v1.manifest \
+            --env "DISTRO=$DISTRO" \
+            "$IMAGE" \
+            /bin/bash -euo pipefail -c '
+              case "$DISTRO" in
+                fedora44)
+                  dnf install -y curl openssl sudo ca-certificates
+                  ;;
+                ubuntu-26.04)
+                  apt-get update
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y curl openssl sudo ca-certificates
+                  ;;
+                arch)
+                  pacman -Syu --noconfirm curl openssl sudo ca-certificates
+                  ;;
+                *)
+                  echo "unsupported release bootstrap rehearsal target: $DISTRO" >&2
+                  exit 1
+                  ;;
+              esac
+              /tmp/install-conary-preview.sh \
+                --manifest-url "$CONARY_BOOTSTRAP_MANIFEST_URL" \
+                --apply --yes
+            '
+
   bundle-suite:
     name: bundle-suite
     needs:
       - prepare
       - workspace-validation
       - bundle-conary
+      - bootstrap-rehearsal
       - build-remi
       - build-conaryd
       - build-conary-test
@@ -716,6 +815,8 @@ jobs:
           copy_exact "release-artifacts/release-bundle/conary-${VERSION}-1.fc44.x86_64.rpm" "conary-${VERSION}-1.fc44.x86_64.rpm"
           copy_exact "release-artifacts/release-bundle/conary_${VERSION}-1_amd64.deb" "conary_${VERSION}-1_amd64.deb"
           copy_exact "release-artifacts/release-bundle/conary-${VERSION}-1-x86_64.pkg.tar.zst" "conary-${VERSION}-1-x86_64.pkg.tar.zst"
+          copy_exact "release-artifacts/release-bundle/conary-bootstrap-v1.manifest" "conary-bootstrap-v1.manifest"
+          copy_exact "release-artifacts/release-bundle/conary-bootstrap-v1.manifest.sig" "conary-bootstrap-v1.manifest.sig"
           copy_exact "release-artifacts/remi-bundle/remi-${VERSION}-linux-x64" "remi-${VERSION}-linux-x64"
           copy_exact "release-artifacts/remi-bundle/remi-${VERSION}-linux-x64.tar.gz" "remi-${VERSION}-linux-x64.tar.gz"
           copy_exact "release-artifacts/conaryd-bundle/conaryd-${VERSION}-linux-x64" "conaryd-${VERSION}-linux-x64"
@@ -739,7 +840,7 @@ jobs:
              .tag_name == $tag and
              .bundle_name == "suite-bundle" and
              .deploy_mode == "suite" and
-             (.artifact_patterns | length) == 11 and
+             (.artifact_patterns | length) == 13 and
              (.artifacts | map({product, bundle_name, deploy_mode})) == [
                {"product":"conary","bundle_name":"release-bundle","deploy_mode":"release_bundle"},
                {"product":"remi","bundle_name":"remi-bundle","deploy_mode":"remote_bundle"},
@@ -768,8 +869,8 @@ jobs:
             mapfile -d '' assets < <(
               find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\0' | sort -z
             )
-            [[ ${#assets[@]} -eq 12 || ${#assets[@]} -eq 13 ]] || {
-              echo "expected 12 live suite assets or 13 rehearsal assets; found ${#assets[@]}" >&2
+            [[ ${#assets[@]} -eq 14 || ${#assets[@]} -eq 15 ]] || {
+              echo "expected 14 live suite assets or 15 rehearsal assets; found ${#assets[@]}" >&2
               exit 1
             }
             sha256sum -- "${assets[@]}" > SHA256SUMS
@@ -853,6 +954,21 @@ jobs:
           - Fedora 44: \`conary-${VERSION}-1.fc44.x86_64.rpm\`
           - Ubuntu 26.04 LTS: \`conary_${VERSION}-1_amd64.deb\`
           - Arch Linux: \`conary-${VERSION}-1-x86_64.pkg.tar.zst\`
+
+          The release-owned bootstrap entry point downloads and verifies the
+          product-signed \`conary-bootstrap-v1.manifest\`, selects only the
+          exact supported host artifact, and defaults to a non-mutating preview:
+
+          \`\`\`bash
+          curl --proto '=https' --tlsv1.2 -fLO https://conary.io/install-conary-preview.sh
+          less install-conary-preview.sh
+          bash ./install-conary-preview.sh
+          bash ./install-conary-preview.sh --apply --yes
+          \`\`\`
+
+          Do not pipe the installer into a shell. The explicit apply mode uses
+          the native package manager only to install Conary itself; the package
+          owns system initialization and built-in repository enrollment.
 
           Verify downloaded files with:
 

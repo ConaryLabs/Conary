@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-13
-revision: 23
+last_updated: 2026-08-18
+revision: 24
 summary: Record the immutable synchronized v0.15.0 suite, deployment, and released-artifact evidence
 ---
 
@@ -47,6 +47,17 @@ SHA-256 `8c5348be89d2c92b094498443d23782c88ff5d4deed888290939b4d73d39cc8f`.
 Broad external outreach remains separately postponed at 0/10 qualifying
 completions until #110's ordinary-package corpus gate passes; release proof is
 not tester authority.
+
+The next suite release adds two Conary product assets:
+`conary-bootstrap-v1.manifest` and its detached `.sig`. The release workflow
+constructs the manifest only after the exact RPM, DEB, and Arch packages exist;
+it binds the suite tag/version and each supported host to one exact basename,
+size, and SHA-256, then signs the manifest with the same Ed25519 release key
+embedded for self-update authority. `site/static/install-conary-preview.sh`
+verifies that signature before parsing any selection field and verifies the
+selected artifact before a native package transaction. This is prospective
+source truth until an immutable carrying release and its clean three-host proof
+are recorded below; v0.15.0 does not contain those two assets.
 
 | Artifact product | Artifact classes | Current construction authority | Suite deploy mode | Current immutable authority | Local build |
 | --- | --- | --- | --- | --- | --- |
@@ -264,6 +275,8 @@ For each published suite release, also record:
 - independently downloaded asset SHA-256 values and matching GitHub digests;
 - binary `--version` output from all four downloaded artifacts;
 - signature, SBOM, and provenance status for each artifact product;
+- signed bootstrap manifest inventory and clean Fedora, Ubuntu, and Arch
+  installer proof when the release carries the bootstrap protocol;
 - serialized build-only routing for conaryd and conary-test;
 - Conary and Remi deployment and live-behavior proof required by their rows.
 

@@ -182,6 +182,40 @@ jobs:
       - uses: ./.github/actions/build-static-conary
       - name: Build the lifecycle harness
         run: cargo build -p conary -p conary-test
+      - name: Prove the signed bootstrap in a clean supported host
+        shell: bash
+        env:
+          DISTRO: ${{ matrix.distro }}
+        run: |
+          set -euo pipefail
+
+          base_ref="$(target/debug/conary-test images base-ref --distro "$DISTRO")"
+          manifest_url="https://github.com/${GH_REPO}/releases/download/${RELEASE_TAG}/conary-bootstrap-v1.manifest"
+
+          docker run --rm --privileged \
+            --volume "$PWD/site/static/install-conary-preview.sh:/tmp/install-conary-preview.sh:ro" \
+            --env "MANIFEST_URL=$manifest_url" \
+            --env "DISTRO=$DISTRO" \
+            "$base_ref" \
+            /bin/bash -euo pipefail -c '
+              case "$DISTRO" in
+                fedora44)
+                  dnf install -y curl openssl sudo ca-certificates
+                  ;;
+                ubuntu-26.04)
+                  apt-get update
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y curl openssl sudo ca-certificates
+                  ;;
+                arch)
+                  pacman -Sy --noconfirm curl openssl sudo ca-certificates
+                  ;;
+                *)
+                  echo "unsupported release bootstrap proof target: $DISTRO" >&2
+                  exit 1
+                  ;;
+              esac
+              /tmp/install-conary-preview.sh --manifest-url "$MANIFEST_URL" --apply --yes
+            '
       - uses: ./.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}

@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process;
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 use sha2::{Digest, Sha256};
 
 fn signing_key_from_hex(key_hex: &str) -> Result<SigningKey, String> {
@@ -62,8 +62,46 @@ fn write_ccs_authority(directory: &Path, signing_key: SigningKey) -> Result<(), 
 }
 
 fn usage() -> ! {
-    eprintln!("usage: sign_hash [--show-public-key | --write-ccs-authority <directory> | <file>]");
+    eprintln!(
+        "usage: sign_hash [--show-public-key | --write-ccs-authority <directory> | --verify <file> <signature> | <file>]"
+    );
     process::exit(1);
+}
+
+fn sha256_hex_file(file_path: &str) -> Result<String, String> {
+    let mut file =
+        File::open(file_path).map_err(|error| format!("cannot open {file_path}: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|error| format!("reading {file_path}: {error}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn verify_signature(
+    signing_key: &SigningKey,
+    file_path: &str,
+    signature_path: &str,
+) -> Result<(), String> {
+    let hash_hex = sha256_hex_file(file_path)?;
+    let signature_base64 = fs::read_to_string(signature_path)
+        .map_err(|error| format!("cannot read {signature_path}: {error}"))?;
+    let signature_bytes = BASE64
+        .decode(signature_base64.trim())
+        .map_err(|error| format!("signature is not valid base64: {error}"))?;
+    let signature = Signature::from_slice(&signature_bytes)
+        .map_err(|error| format!("signature is not Ed25519: {error}"))?;
+    signing_key
+        .verifying_key()
+        .verify(hash_hex.as_bytes(), &signature)
+        .map_err(|_| "signature verification failed".to_string())
 }
 
 fn main() {
@@ -100,33 +138,24 @@ fn main() {
             }
             return;
         }
+        [flag, file_path, signature_path] if flag == "--verify" => {
+            if let Err(error) = verify_signature(&signing_key, file_path, signature_path) {
+                eprintln!("error: {error}");
+                process::exit(1);
+            }
+            return;
+        }
         [file_path] => file_path,
         _ => usage(),
     };
 
-    let mut file = match File::open(file_path) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("error: cannot open {file_path}: {e}");
+    let hash_hex = match sha256_hex_file(file_path) {
+        Ok(hash) => hash,
+        Err(error) => {
+            eprintln!("error: {error}");
             process::exit(1);
         }
     };
-
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = match file.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("error: reading {file_path}: {e}");
-                process::exit(1);
-            }
-        };
-        hasher.update(&buf[..n]);
-    }
-
-    let hash_hex = hex::encode(hasher.finalize());
     let signature = signing_key.sign(hash_hex.as_bytes());
     print!("{}", BASE64.encode(signature.to_bytes()));
 }
@@ -159,5 +188,35 @@ mod tests {
             let mode = fs::metadata(private_path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+    }
+
+    #[test]
+    fn detached_hash_signature_verification_rejects_tampering() {
+        let directory = tempfile::tempdir().unwrap();
+        let file_path = directory.path().join("artifact");
+        let signature_path = directory.path().join("artifact.sig");
+        let signing_key = SigningKey::from_bytes(&[42; 32]);
+        fs::write(&file_path, b"exact release bytes").unwrap();
+
+        let hash_hex = sha256_hex_file(file_path.to_str().unwrap()).unwrap();
+        let signature = signing_key.sign(hash_hex.as_bytes());
+        fs::write(&signature_path, BASE64.encode(signature.to_bytes())).unwrap();
+        verify_signature(
+            &signing_key,
+            file_path.to_str().unwrap(),
+            signature_path.to_str().unwrap(),
+        )
+        .unwrap();
+
+        fs::write(&file_path, b"tampered release bytes").unwrap();
+        assert_eq!(
+            verify_signature(
+                &signing_key,
+                file_path.to_str().unwrap(),
+                signature_path.to_str().unwrap(),
+            )
+            .unwrap_err(),
+            "signature verification failed"
+        );
     }
 }

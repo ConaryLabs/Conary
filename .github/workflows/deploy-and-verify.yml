@@ -204,8 +204,8 @@ jobs:
 
           [[ "$BUNDLE_NAME" == "suite-bundle" ]] || { echo "bundle_name must be suite-bundle" >&2; exit 1; }
           [[ -n "$ARTIFACT_PATTERNS" && "$ARTIFACT_PATTERNS" != "null" ]] || { echo "artifact_patterns output missing" >&2; exit 1; }
-          jq -e 'length == 11 and (unique | length) == 11' <<< "$ARTIFACT_PATTERNS" >/dev/null || {
-            echo "suite artifact pattern inventory must contain 11 unique entries" >&2
+          jq -e 'length == 13 and (unique | length) == 13' <<< "$ARTIFACT_PATTERNS" >/dev/null || {
+            echo "suite artifact pattern inventory must contain 13 unique entries" >&2
             exit 1
           }
 
