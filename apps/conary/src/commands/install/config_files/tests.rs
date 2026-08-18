@@ -227,7 +227,6 @@ fn deb_remove_on_upgrade_without_prior_identity_ignores_and_persists_declaration
         conary_core::repository::versioning::VersionScheme::Conary,
     );
     let trove_id = trove.insert(&conn).unwrap();
-
     // dpkg ignores remove-on-upgrade for a path that was never a tracked
     // conffile: the user-created file is untouched and nothing is removed.
     let plan = prepare_config_install(
@@ -314,6 +313,13 @@ fn rpm_and_alpm_dematerialization_apply_and_rollback_match_source_contracts() {
         conary_core::repository::versioning::VersionScheme::Conary,
     );
     let trove_id = trove.insert(&conn).unwrap();
+    let mut next_trove = conary_core::db::models::Trove::new(
+        "demo".to_string(),
+        "2.0.0".to_string(),
+        conary_core::db::models::TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    let next_trove_id = next_trove.insert(&conn).unwrap();
 
     let rpm_path = "/etc/rpm.conf";
     fs::write(root.join("etc/rpm.conf"), b"rpm-local").unwrap();
@@ -345,8 +351,26 @@ fn rpm_and_alpm_dematerialization_apply_and_rollback_match_source_contracts() {
     rpm_tx.apply_install_files(&rpm_plan.files).unwrap();
     rpm_tx.apply_remove_paths(&rpm_plan.remove_paths).unwrap();
     assert_eq!(fs::read(root.join("etc/rpm.conf")).unwrap(), b"rpm-local");
+    let rpm_db_tx = conn.unchecked_transaction().unwrap();
+    let mut rpm_after = ConfigFile::new_ghost(rpm_path.to_string(), next_trove_id);
+    rpm_after.noreplace = true;
+    rpm_after.upsert(&rpm_db_tx).unwrap();
+    let stored = ConfigFile::find_by_path(&rpm_db_tx, rpm_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.trove_id, Some(next_trove_id));
+    assert!(stored.ghost);
+    assert!(!stored.materialized);
+    assert_eq!(fs::read(root.join("etc/rpm.conf")).unwrap(), b"rpm-local");
+    rpm_db_tx.rollback().unwrap();
     rpm_tx.rollback().unwrap();
     assert_eq!(fs::read(root.join("etc/rpm.conf")).unwrap(), b"rpm-local");
+    assert!(
+        ConfigFile::find_by_path(&conn, rpm_path)
+            .unwrap()
+            .unwrap()
+            .materialized
+    );
 
     let alpm_path = "/etc/alpm.conf";
     fs::write(root.join("etc/alpm.conf"), b"alpm-local").unwrap();
@@ -385,7 +409,20 @@ fn rpm_and_alpm_dematerialization_apply_and_rollback_match_source_contracts() {
         fs::read(root.join("etc/alpm.conf.pacsave.1")).unwrap(),
         b"prior-save"
     );
+    let alpm_db_tx = conn.unchecked_transaction().unwrap();
+    let mut alpm_after = ConfigFile::new_declaration(alpm_path.to_string(), next_trove_id);
+    alpm_after.source = ConfigSource::Arch;
+    alpm_after.upsert(&alpm_db_tx).unwrap();
+    let stored = ConfigFile::find_by_path(&alpm_db_tx, alpm_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.trove_id, Some(next_trove_id));
+    assert_eq!(stored.source, ConfigSource::Arch);
+    assert!(!stored.ghost);
+    assert!(!stored.materialized);
+    assert!(!root.join("etc/alpm.conf").exists());
 
+    alpm_db_tx.rollback().unwrap();
     alpm_tx.rollback().unwrap();
     assert_eq!(fs::read(root.join("etc/alpm.conf")).unwrap(), b"alpm-local");
     assert_eq!(
@@ -393,6 +430,12 @@ fn rpm_and_alpm_dematerialization_apply_and_rollback_match_source_contracts() {
         b"prior-save"
     );
     assert!(!root.join("etc/alpm.conf.pacsave.1").exists());
+    assert!(
+        ConfigFile::find_by_path(&conn, alpm_path)
+            .unwrap()
+            .unwrap()
+            .materialized
+    );
 }
 
 #[test]
