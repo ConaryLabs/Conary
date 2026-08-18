@@ -116,6 +116,7 @@ fn spawn_watch(
     fixture: &WatchFixture,
     ready_file: &Path,
     failure_file: Option<&Path>,
+    json: bool,
     extra_env: &[(&str, &str)],
 ) -> Child {
     let mut command = base_watch_command(fixture);
@@ -125,6 +126,9 @@ fn spawn_watch(
         .stderr(Stdio::piped());
     if let Some(path) = failure_file {
         command.env("CONARY_TEST_TRY_WATCH_FAILURE_FILE", path);
+    }
+    if json {
+        command.arg("--json");
     }
     for (key, value) in extra_env {
         command.env(key, value);
@@ -266,7 +270,7 @@ fn try_watch_startup_creates_active_namespace_session_and_refuses_keep() {
     let fixture = WatchFixture::new();
     let ready = fixture.source.join(".watch-ready");
 
-    let mut child = spawn_watch(&fixture, &ready, None, &[]);
+    let mut child = spawn_watch(&fixture, &ready, None, false, &[]);
     wait_for_file_or_child_exit(&ready, &mut child);
 
     let session = active_try_session(&fixture.db_path).expect("active watch session");
@@ -378,7 +382,7 @@ fn try_watch_failed_refresh_keeps_last_successful_generation() {
     let ready = fixture.source.join(".watch-ready");
     let failure = fixture.source.join(".watch-failure");
 
-    let mut child = spawn_watch(&fixture, &ready, Some(&failure), &[]);
+    let mut child = spawn_watch(&fixture, &ready, Some(&failure), false, &[]);
     wait_for_file_or_child_exit(&ready, &mut child);
     let session = active_try_session(&fixture.db_path).expect("active watch session");
     let first_generation = session.try_generation_id.expect("initial generation");
@@ -404,7 +408,7 @@ fn try_watch_retries_after_failed_refresh_when_source_is_fixed() {
     let ready = fixture.source.join(".watch-ready");
     let failure = fixture.source.join(".watch-failure");
 
-    let mut child = spawn_watch(&fixture, &ready, Some(&failure), &[]);
+    let mut child = spawn_watch(&fixture, &ready, Some(&failure), false, &[]);
     wait_for_file_or_child_exit(&ready, &mut child);
     let session = active_try_session(&fixture.db_path).expect("active watch session");
     let first_generation = session.try_generation_id.expect("initial generation");
@@ -436,13 +440,20 @@ fn try_watch_retries_after_failed_refresh_when_source_is_fixed() {
 fn try_watch_discards_cook_when_source_changes_during_build() {
     let fixture = WatchFixture::new();
     let ready = fixture.source.join(".watch-ready");
+    let cook_started = fixture.source.parent().unwrap().join("watch-cook-started");
+    let cook_started_env = cook_started.to_string_lossy().into_owned();
     let mut child = spawn_watch(
         &fixture,
         &ready,
         None,
+        true,
         &[
             ("CONARY_TEST_TRY_WATCH_EXIT_AFTER_REFRESHES", "1"),
             ("CONARY_TEST_TRY_WATCH_PAUSE_DURING_COOK", "1"),
+            (
+                "CONARY_TEST_TRY_WATCH_COOK_STARTED_FILE",
+                cook_started_env.as_str(),
+            ),
         ],
     );
     wait_for_file_or_child_exit(&ready, &mut child);
@@ -452,7 +463,7 @@ fn try_watch_discards_cook_when_source_changes_during_build() {
         "fn main() { println!(\"first refresh\"); }\n",
     )
     .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1600));
+    wait_for_file_or_child_exit(&cook_started, &mut child);
     fs::write(
         fixture.source.join("src/main.rs"),
         "fn main() { println!(\"changed during cook\"); }\n",
@@ -461,7 +472,15 @@ fn try_watch_discards_cook_when_source_changes_during_build() {
 
     let output = child.wait_with_output().expect("watch output");
     assert_success(&output);
-    assert!(stdout_text(&output).contains("source changed during cook"));
+    let stdout = stdout_text(&output);
+    assert!(
+        stdout.lines().any(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .is_ok_and(|event| event["kind"] == "watch-refresh-skipped")
+        }),
+        "{}",
+        output_text(&output)
+    );
 }
 
 #[test]
@@ -469,7 +488,7 @@ fn try_rollback_after_failed_watch_refresh_cleans_session() {
     let fixture = WatchFixture::new();
     let ready = fixture.source.join(".watch-ready");
     let failure = fixture.source.join(".watch-failure");
-    let mut child = spawn_watch(&fixture, &ready, Some(&failure), &[]);
+    let mut child = spawn_watch(&fixture, &ready, Some(&failure), false, &[]);
     wait_for_file_or_child_exit(&ready, &mut child);
 
     fs::write(

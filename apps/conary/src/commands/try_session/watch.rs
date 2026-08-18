@@ -28,6 +28,7 @@ use super::{
 };
 
 mod reporting;
+mod test_control;
 
 use reporting::{
     WatchFailure, emit_diagnostic, emit_non_destructive_failure, emit_push, fail_before_session,
@@ -958,11 +959,7 @@ async fn run_watch_cook_cancellable(
 }
 
 fn run_watch_cook(request: WatchCookRequest) -> Result<PackagingCommandOutput> {
-    if std::env::var_os("CONARY_TEST_TRY_WATCH_PAUSE_DURING_COOK").is_some()
-        && request.source_policy == WatchCookSourcePolicy::Refresh
-    {
-        std::thread::sleep(Duration::from_millis(1200));
-    }
+    test_control::pause_refresh_cook(request.source_policy == WatchCookSourcePolicy::Refresh)?;
     let output_dir = request.output_dir.to_string_lossy().into_owned();
     let source_cache = request.source_cache.to_string_lossy().into_owned();
     fs::create_dir_all(&output_dir)
