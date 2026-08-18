@@ -389,6 +389,44 @@ def assert_selected_node_metadata(
             )
 
 
+def assert_selected_xattr_hex(
+    entries: dict[str, dict[str, Any]], expectation: str
+) -> None:
+    path, expected = split_expectation(expectation, "--expect-xattr-hex")
+    try:
+        name, encoded = expected.split(",", 1)
+    except ValueError:
+        fail("--expect-xattr-hex expects PATH=NAME,HEX")
+    if not name or "\x00" in name or not encoded or len(encoded) % 2:
+        fail("--expect-xattr-hex expects PATH=NAME,HEX")
+    try:
+        expected_value = bytes.fromhex(encoded)
+    except ValueError as error:
+        fail(f"--expect-xattr-hex value is not hexadecimal: {error}")
+    entry = entries.get(path)
+    if entry is None:
+        fail(f"selected generation does not contain {path}")
+    node = entry.get("node")
+    source = node.get("source") if isinstance(node, dict) else None
+    xattrs = source.get("xattrs") if isinstance(source, dict) else None
+    actual = xattrs.get(name) if isinstance(xattrs, dict) else None
+    if (
+        not isinstance(actual, list)
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > 255
+            for value in actual
+        )
+        or bytes(actual) != expected_value
+    ):
+        fail(
+            f"{path} xattr {name!r} is {actual!r}, "
+            f"expected {list(expected_value)!r}"
+        )
+
+
 def parse_colon_records(content: bytes, path: str, field_count: int) -> list[list[str]]:
     try:
         lines = content.decode("utf-8").splitlines()
@@ -487,6 +525,9 @@ def main() -> int:
         default=[],
         metavar="PATH=USER,GROUP,SECONDS,NANOSECONDS",
     )
+    parser.add_argument(
+        "--expect-xattr-hex", action="append", default=[], metavar="PATH=NAME,HEX"
+    )
     parser.add_argument("--contains-line", action="append", default=[], metavar="PATH=LINE")
     parser.add_argument(
         "--expect-user",
@@ -520,6 +561,8 @@ def main() -> int:
         assert_selected_hardlink(entries, value)
     for value in args.expect_node_metadata:
         assert_selected_node_metadata(entries, value)
+    for value in args.expect_xattr_hex:
+        assert_selected_xattr_hex(entries, value)
     for value in args.contains_line:
         path, expected = split_expectation(value, "--contains-line")
         _, content = entry_content(entries, cas_base, path)
@@ -536,6 +579,7 @@ def main() -> int:
         + len(args.expect_directory)
         + len(args.expect_hardlink)
         + len(args.expect_node_metadata)
+        + len(args.expect_xattr_hex)
         + len(args.expect_user)
     )
     print(

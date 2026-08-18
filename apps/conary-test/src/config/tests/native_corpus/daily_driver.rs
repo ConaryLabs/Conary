@@ -554,6 +554,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "64*1024*1024",
         "user.conary",
         "installed_native_lifecycle_bundles",
+        "native-free",
     ] {
         assert!(
             rendered_semantic.contains(required),
@@ -729,6 +730,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
     for required in [
         "--expect-hardlink",
         "--expect-node-metadata",
+        "--expect-xattr-hex",
         "hardlink_identity",
         "content authority is not anchor-only",
         "expected_payload_identity",

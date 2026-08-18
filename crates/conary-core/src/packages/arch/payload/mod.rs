@@ -2,8 +2,10 @@
 
 //! Exact ALPM tar payload parsing.
 
+mod sparse;
 mod xattrs;
 
+use crate::ccs::ArchiveDecodeBounds;
 use crate::error::{Error, Result};
 use crate::hash::{HashAlgorithm, Hasher};
 use crate::packages::archive_utils::normalize_path;
@@ -13,6 +15,7 @@ use crate::packages::payload::{
 use crate::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
 };
+use sparse::{GnuSparsePaxRecords, GnuSparseV1};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -68,23 +71,32 @@ impl ArchivePayloadEntry {
     }
 }
 
-pub(crate) fn declared_spool_bytes<R: Read>(entry: &Entry<'_, R>) -> u64 {
-    match entry.header().entry_type() {
-        EntryType::Regular | EntryType::Continuous | EntryType::GNUSparse => entry.size(),
+pub(crate) fn declared_spool_bytes<R: Read>(
+    entry: &mut Entry<'_, R>,
+    bounds: &ArchiveDecodeBounds,
+) -> Result<u64> {
+    let raw_path = exact_utf8(entry.path_bytes().as_ref(), "payload path", "archive entry")?;
+    let pax = read_pax(entry, &raw_path, bounds)?;
+    Ok(match entry.header().entry_type() {
+        EntryType::Regular | EntryType::Continuous | EntryType::GNUSparse => pax
+            .gnu_sparse
+            .as_ref()
+            .map_or_else(|| entry.size(), |sparse| sparse.logical_size),
         EntryType::Link if entry.size() != 0 => entry.size(),
         _ => 0,
-    }
+    })
 }
 
 pub(crate) fn parse_entry<R: Read>(
     entry: &mut Entry<'_, R>,
     spool: &PayloadSpool,
     index: usize,
+    bounds: &ArchiveDecodeBounds,
 ) -> Result<ArchivePayloadEntry> {
     let path_bytes = entry.path_bytes().into_owned();
     let raw_path = std::str::from_utf8(&path_bytes)
         .map_err(|error| Error::ParseError(format!("ALPM payload path is not UTF-8: {error}")))?;
-    let path = normalize_path(raw_path)
+    let mut path = normalize_path(raw_path)
         .map_err(|error| Error::ParseError(format!("invalid ALPM payload path: {error}")))?;
     let header = entry.header();
     let entry_type = header.entry_type();
@@ -123,7 +135,13 @@ pub(crate) fn parse_entry<R: Read>(
         .link_name_bytes()
         .map(|target| exact_utf8(target.as_ref(), "link target", &path))
         .transpose()?;
-    let pax = read_pax(entry, &path)?;
+    let pax = read_pax(entry, raw_path, bounds)?;
+    let source_path = pax
+        .gnu_sparse
+        .as_ref()
+        .map_or(raw_path, |sparse| sparse.name.as_str());
+    path = normalize_path(source_path)
+        .map_err(|error| Error::ParseError(format!("invalid ALPM payload path: {error}")))?;
     let mtime = pax.mtime.unwrap_or(PayloadTimestamp {
         seconds: i64::try_from(header_mtime).map_err(|_| {
             Error::ParseError(format!("mtime for {path} exceeds signed timestamp range"))
@@ -140,7 +158,8 @@ pub(crate) fn parse_entry<R: Read>(
     let mut hardlink_source = None;
     let kind = match entry_type {
         EntryType::Regular | EntryType::Continuous | EntryType::GNUSparse => {
-            let (authority, payload_source) = spool_content(entry, &path, spool, index)?;
+            let (authority, payload_source) =
+                spool_content(entry, &path, spool, index, pax.gnu_sparse.as_ref(), bounds)?;
             content_authority = Some(authority);
             source = Some(payload_source);
             PayloadNodeKind::Regular {
@@ -164,7 +183,8 @@ pub(crate) fn parse_entry<R: Read>(
                 Error::ParseError(format!("invalid ALPM hardlink target for {path}: {error}"))
             })?;
             if entry.size() != 0 {
-                let (authority, payload_source) = spool_content(entry, &path, spool, index)?;
+                let (authority, payload_source) =
+                    spool_content(entry, &path, spool, index, None, bounds)?;
                 hardlink_authority = Some(authority);
                 hardlink_source = Some(payload_source);
             }
@@ -338,9 +358,14 @@ struct PaxAuthority {
     device_major: Option<u64>,
     device_minor: Option<u64>,
     xattrs: BTreeMap<String, Vec<u8>>,
+    gnu_sparse: Option<GnuSparseV1>,
 }
 
-fn read_pax<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<PaxAuthority> {
+fn read_pax<R: Read>(
+    entry: &mut Entry<'_, R>,
+    path: &str,
+    bounds: &ArchiveDecodeBounds,
+) -> Result<PaxAuthority> {
     let mut authority = PaxAuthority::default();
     let Some(extensions) = entry
         .pax_extensions()
@@ -349,6 +374,7 @@ fn read_pax<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<PaxAuthorit
         return Ok(authority);
     };
     let mut xattr_records = PaxXattrRecords::default();
+    let mut sparse_records = GnuSparsePaxRecords::default();
     for extension in extensions {
         let extension = extension.map_err(|error| {
             Error::ParseError(format!("invalid PAX record for {path}: {error}"))
@@ -357,6 +383,9 @@ fn read_pax<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<PaxAuthorit
             .key()
             .map_err(|error| Error::ParseError(format!("non-UTF-8 PAX key for {path}: {error}")))?;
         let value = extension.value_bytes();
+        if sparse_records.record(key, value, path)? {
+            continue;
+        }
         match key {
             "mtime" => authority.mtime = Some(parse_pax_timestamp(value, path)?),
             "SCHILY.devmajor" => authority.device_major = Some(parse_decimal(value, key, path)?),
@@ -395,6 +424,10 @@ fn read_pax<R: Read>(entry: &mut Entry<'_, R>, path: &str) -> Result<PaxAuthorit
         }
     }
     authority.xattrs = xattr_records.project(path)?;
+    authority.gnu_sparse = sparse_records.finish(path)?;
+    if let Some(sparse) = &authority.gnu_sparse {
+        bounds.admit_payload_object("ALPM GNU sparse logical payload", sparse.logical_size)?;
+    }
     Ok(authority)
 }
 
@@ -477,12 +510,19 @@ fn spool_content<R: Read>(
     path: &str,
     spool: &PayloadSpool,
     index: usize,
+    sparse: Option<&GnuSparseV1>,
+    bounds: &ArchiveDecodeBounds,
 ) -> Result<(PayloadContentAuthority, ReopenablePayload)> {
-    let size = entry.size();
+    let size = sparse.map_or_else(|| entry.size(), |sparse| sparse.logical_size);
     crate::packages::payload::ensure_available_space(spool.root(), size)?;
     let output_path = spool.indexed_path(index);
     let mut output = File::create(&output_path)?;
-    let sha256 = copy_declared_payload(entry, &mut output, size, path)?;
+    let sha256 = if let Some(sparse) = sparse {
+        let encoded_size = entry.size();
+        sparse::copy_payload(entry, &mut output, encoded_size, sparse, path, bounds)?
+    } else {
+        copy_declared_payload(entry, &mut output, size, path)?
+    };
     output.sync_all()?;
     Ok((
         PayloadContentAuthority { sha256, size },
@@ -589,17 +629,52 @@ mod tests {
         builder.append(&header, content).unwrap();
     }
 
+    fn pax_sparse_v1_archive(
+        logical_path: &'static str,
+        logical_size: &'static [u8],
+        map: &[u8],
+        extent_bytes: &[u8],
+    ) -> Vec<u8> {
+        let mut builder = Builder::new(Vec::new());
+        builder
+            .append_pax_extensions([
+                ("GNU.sparse.major", b"1".as_slice()),
+                ("GNU.sparse.minor", b"0".as_slice()),
+                ("GNU.sparse.name", logical_path.as_bytes()),
+                ("GNU.sparse.realsize", logical_size),
+            ])
+            .unwrap();
+        let mut encoded = map.to_vec();
+        encoded.resize(encoded.len().div_ceil(512) * 512, 0);
+        encoded.extend_from_slice(extent_bytes);
+        append(
+            &mut builder,
+            header(
+                "GNUSparseFile.123/sparse.bin",
+                EntryType::Regular,
+                0o640,
+                12,
+                34,
+                56,
+                encoded.len() as u64,
+            ),
+            &encoded,
+        );
+        builder.into_inner().unwrap()
+    }
+
     fn parse_archive(bytes: Vec<u8>) -> Result<Vec<ExtractedFile>> {
         let mut archive = Archive::new(Cursor::new(bytes));
         let mut parsed = Vec::new();
         let spool = PayloadSpool::new(0)?;
+        let bounds = crate::ccs::CCS_BUDGET.archive_decode_bounds()?;
         for (index, entry) in archive
             .entries()
             .map_err(|error| Error::ParseError(error.to_string()))?
             .enumerate()
         {
             let mut entry = entry.map_err(|error| Error::ParseError(error.to_string()))?;
-            parsed.push(parse_entry(&mut entry, &spool, index)?);
+            parsed.push(parse_entry(&mut entry, &spool, index, &bounds)?);
         }
         PackagePayload::new(resolve_hardlinks(parsed)?).to_extracted_in_memory()
     }
@@ -620,6 +695,41 @@ mod tests {
             error
                 .to_string()
                 .contains("declares 3 bytes but yields at least 4")
+        );
+    }
+
+    #[test]
+    fn parses_gnu_pax_sparse_v1_as_the_logical_path_and_content() {
+        let bytes = pax_sparse_v1_archive(
+            "usr/share/example/sparse.bin",
+            b"16",
+            b"3\n0\n3\n13\n3\n16\n0\n",
+            b"abcxyz",
+        );
+        let bounds = crate::ccs::CCS_BUDGET.archive_decode_bounds().unwrap();
+        let mut archive = Archive::new(Cursor::new(bytes.clone()));
+        let mut entry = archive.entries().unwrap().next().unwrap().unwrap();
+        assert_eq!(declared_spool_bytes(&mut entry, &bounds).unwrap(), 16);
+
+        let files = parse_archive(bytes).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "/usr/share/example/sparse.bin");
+        assert_eq!(files[0].content_authority.as_ref().unwrap().size, 16);
+        assert_eq!(files[0].content, b"abc\0\0\0\0\0\0\0\0\0\0xyz");
+    }
+
+    #[test]
+    fn rejects_overlapping_gnu_pax_sparse_v1_extents() {
+        let bytes = pax_sparse_v1_archive(
+            "usr/share/example/sparse.bin",
+            b"5",
+            b"2\n0\n4\n3\n2\n",
+            b"abcdef",
+        );
+        let error = parse_archive(bytes).expect_err("overlapping sparse extents must fail closed");
+        assert!(
+            error.to_string().contains("overlapping, out of order"),
+            "{error}"
         );
     }
 
