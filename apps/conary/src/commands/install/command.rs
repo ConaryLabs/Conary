@@ -5,6 +5,7 @@ use super::ccs_removal_hooks::CcsRemovalHookPlan;
 use super::dependencies::{DepAnalysisContext, handle_dependencies};
 use super::native_events::{NativeInstallInput, PreparedNativeTransaction};
 use super::prepare::check_upgrade_status;
+use super::resolve::is_local_package_request;
 use super::validation::{parse_component_and_validate, try_promote_existing_dep};
 use super::{
     InstallIntent, InstallOptions, InstallProgress, InstallSemantics, NativeLifecycleInstallState,
@@ -76,8 +77,12 @@ async fn cmd_install_with_intent(
     // name `nginx` and component `devel` before canonical resolution.
     // Without this, `resolve_canonical_name("nginx:devel")` looks for a
     // canonical package literally named "nginx:devel" and fails.
-    let (base_name_for_canonical, early_component) = parse_component_spec(package)
-        .map_or_else(|| (package.to_string(), None), |(b, c)| (b, Some(c)));
+    let (base_name_for_canonical, early_component) = if is_local_package_request(package) {
+        (package.to_string(), None)
+    } else {
+        parse_component_spec(package)
+            .map_or_else(|| (package.to_string(), None), |(b, c)| (b, Some(c)))
+    };
 
     let effective_source_policy =
         conary_core::repository::load_effective_policy(&conn, RequestScope::Any)?;

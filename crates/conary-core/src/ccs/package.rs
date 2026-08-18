@@ -482,7 +482,7 @@ inheritable = false
             package.manifest().file_capabilities[0]
                 .to_setcap_spec()
                 .unwrap(),
-            "cap_net_bind_service=+ep"
+            "cap_net_bind_service=ep"
         );
     }
 

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Deterministic selected-root provider for activation-capture tests. Runtime
+# verbs are intercepted before this body can run; --version is the only direct
+# probe permitted by the fixture contract.
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+    printf 'systemd 999 (Conary selected-root fixture)\n'
+    exit 0
+fi
+printf 'unexpected selected-root systemctl invocation\n' >&2
+exit 64

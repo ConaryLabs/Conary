@@ -10,23 +10,49 @@ timeout = 1500
 [suite.corpus]
 required = [
     "identity_exact_version",
+    "identity_epoch_release",
+    "identity_architecture_independent",
     "identity_native_architecture",
     "payload_files",
     "payload_directories",
     "payload_symlinks",
     "payload_hardlinks",
+    "payload_sparse_files",
+    "payload_large_files",
+    "metadata_xattrs",
+    "metadata_capabilities",
     "metadata_ownership",
     "metadata_timestamps",
     "relations_versioned_dependency",
     "relations_virtual_provide",
     "relations_same_name_compatibility_provide",
+    "relations_conflict",
+    "relations_replacement",
     "configuration_matched_config",
     "configuration_unmatched_declaration",
     "configuration_local_modification",
     "configuration_deletion",
     "configuration_upgrade",
     "configuration_removal",
+    "lifecycle_none",
     "lifecycle_shell",
+    "lifecycle_non_shell_interpreter",
+    "lifecycle_trigger",
+    "lifecycle_transaction_hook",
+    "trust_multiple_valid_signing_keys",
+    "trust_signing_subkeys",
+    "trust_expired_key",
+    "trust_revoked_key",
+    "trust_unknown_key",
+    "runtime_service_activation",
+    "runtime_target_helper",
+    "runtime_deferred_generation_work",
+    "failure_interrupted_download",
+    "failure_conversion",
+    "failure_payload_mutation",
+    "failure_lifecycle",
+    "failure_publication",
+    "failure_activation",
 ]
 
 [suite.mock_server]
@@ -43,6 +69,68 @@ path = "/phase4-repository-fixture-1.0.0-1.ccs"
 status = 200
 body_file = "/tmp/native-pm-corpus-repo/phase4-repository-fixture-1.0.0-1.ccs"
 headers = { "Content-Type" = "application/octet-stream" }
+
+[[suite.mock_server.routes]]
+path = "/interrupted/metadata.json"
+status = 200
+body_file = "/tmp/w7-failures/interrupted-metadata.json"
+headers = { "Content-Type" = "application/json" }
+
+[[suite.mock_server.routes]]
+path = "/w7trust.db"
+status = 200
+body_file = "/tmp/w7-trust/w7trust.db"
+headers = { "Content-Type" = "application/octet-stream" }
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-valid-a-1.0.0-1-any.pkg.tar.gz"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-valid-a-1.0.0-1-any.pkg.tar.gz"
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-valid-a-1.0.0-1-any.pkg.tar.gz.sig"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-valid-a-1.0.0-1-any.pkg.tar.gz.sig"
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-valid-b-1.0.0-1-any.pkg.tar.gz"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-valid-b-1.0.0-1-any.pkg.tar.gz"
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-valid-b-1.0.0-1-any.pkg.tar.gz.sig"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-valid-b-1.0.0-1-any.pkg.tar.gz.sig"
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-expired-1.0.0-1-any.pkg.tar.gz"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-expired-1.0.0-1-any.pkg.tar.gz"
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-expired-1.0.0-1-any.pkg.tar.gz.sig"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-expired-1.0.0-1-any.pkg.tar.gz.sig"
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-revoked-1.0.0-1-any.pkg.tar.gz"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-revoked-1.0.0-1-any.pkg.tar.gz"
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-revoked-1.0.0-1-any.pkg.tar.gz.sig"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-revoked-1.0.0-1-any.pkg.tar.gz.sig"
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-unknown-1.0.0-1-any.pkg.tar.gz"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-unknown-1.0.0-1-any.pkg.tar.gz"
+
+[[suite.mock_server.routes]]
+path = "/w7-trust-unknown-1.0.0-1-any.pkg.tar.gz.sig"
+status = 200
+body_file = "/tmp/w7-trust/w7-trust-unknown-1.0.0-1-any.pkg.tar.gz.sig"
 
 [[suite.setup]]
 conary = "system init"
@@ -73,6 +161,24 @@ exit_code = 0
 
 [[suite.setup]]
 run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/prepare-selected-root.sh ${DB_PATH} /conary"
+
+[suite.setup.assert]
+exit_code = 0
+
+[[suite.setup]]
+run = "rm -rf /tmp/w7-trust && mkdir -p /tmp/w7-trust && CONARY_FIXTURES_ROOT=/opt/remi-tests/fixtures /opt/remi-tests/fixtures/native/build-w7-trust-fixture.sh /tmp/w7-trust"
+
+[suite.setup.assert]
+exit_code = 0
+
+[[suite.setup]]
+run = "set -e; . /tmp/w7-trust/w7-trust-fixture.env; ${CONARY_BIN} repo remove w7trust --db-path ${DB_PATH} >/dev/null 2>&1 || true; ${CONARY_BIN} repo add w7trust http://127.0.0.1:18084 --package-format arch --database w7trust --arch-keyring file:///tmp/w7-trust/w7trust.gpg --arch-keyring-format open-pgp --arch-master-key \"${W7_TRUST_MASTER_FINGERPRINT}\" --arch-packager-key-threshold 1 --arch-database-signature optional --source-profile arch --source-id conary-w7 --repository-id trust-corpus --stream-kind rolling --stream-id w7 --follow --db-path ${DB_PATH}"
+
+[suite.setup.assert]
+exit_code = 0
+
+[[suite.setup]]
+conary = "repo sync w7trust --force"
 
 [suite.setup.assert]
 exit_code = 0
@@ -216,7 +322,7 @@ exit_code = 0
 stdout_contains = "phase4-repository-fixture|1.0.0|1|${native_arch}|${native_scheme}|${REPO_NAME}|${native_profile}|repository|dependency"
 
 [[test.step]]
-run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus --expect-directory /opt=0750 --expect-directory /usr/lib/phase4-corpus/state=0750 --expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy --expect-node-metadata /usr/lib/phase4-corpus/hardlink-anchor=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-node-metadata /usr/lib/phase4-corpus/hardlink-copy=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /etc/phase4-corpus/app-local.conf=9773fc86d4e388ba3f5eba7408708b46ce20738acf98fc55a4e5f584bbe8af66 --expect-sha256 /etc/phase4-corpus/app-deleted.conf=d9697bd8e59efc7dc9863c9ae9b0c3745262015b3552a20712a9bcbfc3e47f79 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --present /usr/share/phase4-repository-fixture/probe.txt --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus --expect-directory /opt=0750 --expect-directory /usr/lib/phase4-corpus/state=0750 --expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy --expect-node-metadata /usr/lib/phase4-corpus/hardlink-anchor=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-node-metadata /usr/lib/phase4-corpus/hardlink-copy=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /etc/phase4-corpus/app-local.conf=9773fc86d4e388ba3f5eba7408708b46ce20738acf98fc55a4e5f584bbe8af66 --expect-sha256 /etc/phase4-corpus/app-deleted.conf=d9697bd8e59efc7dc9863c9ae9b0c3745262015b3552a20712a9bcbfc3e47f79 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --present /usr/share/phase4-repository-fixture/probe.txt --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-sha256 /var/lib/phase4-corpus/depmod-help.marker=0fb98ea274b779dd170fdff34cb68096c6a1a4f852d9592386d2e6580335e741 --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group || { sqlite3 ${DB_PATH} \"SELECT source_entry || '|' || failure_kind || '|' || message FROM lifecycle_events ORDER BY id\" >&2; exit 1; }"
 
 [test.step.assert]
 exit_code = 0
@@ -246,7 +352,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["9 regular files", "/etc/phase4-corpus/app.conf", "/etc/phase4-corpus/app-deleted.conf", "/etc/phase4-corpus/app-local.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
+stdout_contains_all = ["10 regular files", "/etc/phase4-corpus/app.conf", "/etc/phase4-corpus/app-deleted.conf", "/etc/phase4-corpus/app-local.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/sbin/depmod", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || printf('%04o', json_extract(payload_node_json, '$.source.mode') & 4095) FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/opt', '/usr/lib/phase4-corpus/state') ORDER BY path; SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || json_extract(payload_node_json, '$.source.kind.target') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path = '/usr/bin/phase4-corpus-link'\""
@@ -289,6 +395,13 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' lifecycle bundles' FROM install
 [test.step.assert]
 exit_code = 0
 stdout_contains_all = ["1 lifecycle bundles", "${native_target}|phase4-daily-driver-corpus|${native_corpus_fixture_version}|${native_corpus_lifecycle_fidelity}|installed"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT source_kind || '|' || source_package || '|' || json_extract(invocation_json, '$.kind') || '|' || json_extract(invocation_json, '$.invocation.action') || '|' || json_extract(invocation_json, '$.invocation.units[0]') FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus' ORDER BY id; SELECT status || '|' || COUNT(*) FROM generation_activation_intents WHERE request_id IN (SELECT id FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus') GROUP BY status\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service", "pending|1"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || ct.status || '|' || ct.matched_files FROM changeset_triggers ct JOIN triggers t ON t.id = ct.trigger_id WHERE t.name = 'phase4-corpus-trigger' ORDER BY ct.id DESC LIMIT 1\""
@@ -373,6 +486,14 @@ artifact_roles = ["install_request"]
 semantic = "lifecycle_shell"
 artifact_roles = ["install_request"]
 
+[[test.corpus.coverage]]
+semantic = "runtime_service_activation"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "runtime_target_helper"
+artifact_roles = ["install_request"]
+
 [[test.step]]
 conary = "list phase4-daily-driver-corpus --info"
 
@@ -434,6 +555,22 @@ timeout = 240
 fatal = true
 depends_on = ["TNPM16"]
 
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-payload-mutation-failure.json"
+source_profile = "${native_profile}"
+source_format = "${native_corpus_source_format}"
+digest_source = "fixture_build_manifest"
+stages = ["transaction_preflight"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "failure_payload_mutation"
+artifact_roles = ["install_request"]
+
 [[test.step]]
 run = "rm -rf /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && mkdir -p /tmp/native-pm-corpus-conflict-src /tmp/native-pm-corpus-conflict && cp /opt/remi-tests/fixtures/phase4-daily-driver-corpus-conflict/ccs.toml /tmp/native-pm-corpus-conflict-src/ccs.toml && cp -a /tmp/native-pm-corpus-src/stage /tmp/native-pm-corpus-conflict-src/stage && printf %s conflicting-corpus-payload > /tmp/native-pm-corpus-conflict-src/stage/usr/bin/phase4-corpus && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh ${native_target} /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src && . /tmp/native-pm-corpus-conflict/native-fixture.env && test -f \"$NATIVE_PKG_FILE\""
 
@@ -441,11 +578,10 @@ run = "rm -rf /tmp/native-pm-corpus-conflict /tmp/native-pm-corpus-conflict-src 
 exit_code = 0
 
 [[test.step]]
-run = ". /tmp/native-pm-corpus-conflict/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always 2>&1"
+run = ". /tmp/native-pm-corpus-conflict/native-fixture.env && /opt/remi-tests/fixtures/native/assert-w7-command-rejection.sh phase4-corpus-conflict - ${DB_PATH} /conary /tmp/w7-payload-mutation.log 'is incompatible with package phase4-daily-driver-corpus' -- env CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
 
 [test.step.assert]
-exit_code_not = 0
-stdout_contains = "is incompatible with package phase4-daily-driver-corpus"
+exit_code = 0
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c"
@@ -459,6 +595,12 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE na
 [test.step.assert]
 exit_code = 0
 stdout_contains_all = ["1 installed", "0 conflicts"]
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus-conflict/native-fixture-manifest.json /tmp/conary-corpus-w7-payload-mutation-failure.json ${native_profile} ${native_corpus_source_format} phase4-corpus-conflict ${native_corpus_fixture_version} ${native_arch} transaction_preflight"
+
+[test.step.assert]
+exit_code = 0
 
 # --------------------------------------------------------------------------
 # TNPM18: daily-driver corpus configuration upgrade
@@ -620,6 +762,638 @@ stdout_contains_all = ["0 installed", "0 config rows"]
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-daily-driver-removal.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} removal --update-fixture-manifest /tmp/native-pm-corpus-v2/native-fixture-manifest.json --update-name phase4-daily-driver-corpus --update-version ${native_corpus_update_version} --update-architecture ${native_arch}"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM20: epoch, architecture-independent, sparse, large, xattr, no-lifecycle
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM20"
+name = "semantic_identity_payload_and_xattr_corpus"
+description = "Install one pinned ALPM artifact carrying epoch/release, any architecture, sparse and large payloads, an exact user xattr, and no lifecycle"
+group = "daily-driver-corpus"
+timeout = 300
+fatal = true
+depends_on = ["TNPM19"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-semantic.json"
+source_profile = "arch"
+source_format = "alpm"
+digest_source = "fixture_build_manifest"
+stages = ["installation"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "identity_epoch_release"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "identity_architecture_independent"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "payload_sparse_files"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "payload_large_files"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "metadata_xattrs"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "lifecycle_none"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "rm -rf /tmp/w7-semantic /tmp/w7-semantic-extract && mkdir -p /tmp/w7-semantic /tmp/w7-semantic-extract && CONARY_FIXTURES_ROOT=/opt/remi-tests/fixtures /opt/remi-tests/fixtures/native/build-w7-semantic-fixtures.sh /tmp/w7-semantic && . /tmp/w7-semantic/w7-semantic-fixture.env && tar -xOf \"$W7_SEMANTIC_PACKAGE\" .PKGINFO | grep -Fx 'pkgver = 2:1.0.0-3' && tar -xOf \"$W7_SEMANTIC_PACKAGE\" .PKGINFO | grep -Fx 'arch = any' && tar --xattrs --extract --file \"$W7_SEMANTIC_PACKAGE\" --directory /tmp/w7-semantic-extract && python3 -c 'import os; from pathlib import Path; root=Path(\"/tmp/w7-semantic-extract\"); large=root/\"usr/share/phase4-w7-semantic-corpus/large.bin\"; sparse=root/\"usr/share/phase4-w7-semantic-corpus/sparse.bin\"; tool=root/\"usr/bin/phase4-w7-semantic\"; assert large.stat().st_size == 32*1024*1024; st=sparse.stat(); assert st.st_size == 64*1024*1024 and st.st_blocks*512 < st.st_size//8; assert sparse.read_bytes()[:16] == b\"W7-SPARSE-BEGIN\\n\"; assert os.getxattr(tool, \"user.conary\") == b\"exact-w7-xattr\"'"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = ". /tmp/w7-semantic/w7-semantic-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$W7_SEMANTIC_PACKAGE\" --convert-to-ccs --from arch --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_any = ["Successfully installed", "Installed", "phase4-w7-semantic-corpus"]
+
+[[test.step]]
+run = "test \"$(sqlite3 ${DB_PATH} \"SELECT name || '|' || version || '|' || COALESCE(architecture, '') || '|' || COALESCE(version_scheme, '') FROM troves WHERE name = 'phase4-w7-semantic-corpus'\")\" = 'phase4-w7-semantic-corpus|2:1.0.0-3|any|arch' && test \"$(sqlite3 ${DB_PATH} \"SELECT COUNT(*) FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-semantic-corpus')\")\" = 0 && python3 -c 'import os; from pathlib import Path; root=Path(\"/conary\"); large=root/\"usr/share/phase4-w7-semantic-corpus/large.bin\"; sparse=root/\"usr/share/phase4-w7-semantic-corpus/sparse.bin\"; tool=root/\"usr/bin/phase4-w7-semantic\"; assert large.stat().st_size == 32*1024*1024; assert sparse.stat().st_size == 64*1024*1024; stream=sparse.open(\"rb\"); assert stream.read(16) == b\"W7-SPARSE-BEGIN\\n\"; stream.seek(-len(b\"W7-SPARSE-END\\n\"), os.SEEK_END); assert stream.read() == b\"W7-SPARSE-END\\n\"; stream.close(); assert os.getxattr(tool, \"user.conary\") == b\"exact-w7-xattr\"'"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-semantic/w7-semantic-fixture-manifest.json /tmp/conary-corpus-w7-semantic.json arch alpm phase4-w7-semantic-corpus 2:1.0.0-3 any installation"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM21: typed RPM file capability source authority
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM21"
+name = "semantic_file_capability_corpus"
+description = "Export and install one pinned RPM whose typed file capability survives native headers, conversion, persistence, and selected-root materialization"
+group = "daily-driver-corpus"
+timeout = 300
+fatal = true
+depends_on = ["TNPM20"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-capability.json"
+source_profile = "fedora-44"
+source_format = "rpm"
+digest_source = "fixture_build_manifest"
+stages = ["installation"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "metadata_capabilities"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "rm -rf /tmp/w7-capability && mkdir -p /tmp/w7-capability && CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-native-fixtures.sh rpm /tmp/w7-capability /opt/remi-tests/fixtures/phase4-w7-capability-corpus && . /tmp/w7-capability/native-fixture.env && test -f \"$NATIVE_PKG_FILE\" && test ${#NATIVE_PKG_SHA256} -eq 64"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = ". /tmp/w7-capability/native-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --from fedora-44 --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_any = ["Successfully installed", "Installed", "phase4-w7-capability-corpus"]
+
+[[test.step]]
+run = "test \"$(sqlite3 ${DB_PATH} \"SELECT path || '|' || capabilities_json || '|' || permitted || '|' || effective || '|' || inheritable FROM installed_file_capabilities WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-capability-corpus')\")\" = '/usr/bin/phase4-w7-capability|[\"cap_net_bind_service\"]|1|1|0' && python3 -c 'import os; assert os.getxattr(\"/conary/usr/bin/phase4-w7-capability\", \"security.capability\").hex() == \"0100000200040000000000000000000000000000\"'"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-capability/native-fixture-manifest.json /tmp/conary-corpus-w7-capability.json fedora-44 rpm phase4-w7-capability-corpus 1.0.0-1 x86_64 installation"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM22: RPM conflict/replacement and exact native lifecycle ABI
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM22"
+name = "semantic_rpm_relation_and_lifecycle_corpus"
+description = "Install one immutable RPM carrying typed conflict/obsoletion plus Python, file-trigger, and pre-transaction lifecycle entries"
+group = "daily-driver-corpus"
+timeout = 300
+fatal = true
+depends_on = ["TNPM21"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-rpm-semantics.json"
+source_profile = "fedora-44"
+source_format = "rpm"
+digest_source = "fixture_build_manifest"
+stages = ["installation"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "relations_conflict"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "relations_replacement"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "lifecycle_non_shell_interpreter"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "lifecycle_trigger"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "lifecycle_transaction_hook"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "rm -rf /tmp/w7-rpm-semantics && mkdir -p /tmp/w7-rpm-semantics && CONARY_FIXTURES_ROOT=/opt/remi-tests/fixtures /opt/remi-tests/fixtures/native/build-w7-rpm-semantics-fixture.sh /tmp/w7-rpm-semantics && . /tmp/w7-rpm-semantics/w7-rpm-semantics-fixture.env && test -f \"$W7_RPM_SEMANTICS_PACKAGE\" && test \"$W7_RPM_SEMANTICS_SHA256\" = 0b412f9d56da06d94bff3f7f3ba58b080633edf90e5bcc6beba9fe40544bc0ca"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = ". /tmp/w7-rpm-semantics/w7-rpm-semantics-fixture.env && CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$W7_RPM_SEMANTICS_PACKAGE\" --convert-to-ccs --from fedora-44 --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_any = ["Successfully installed", "Installed", "phase4-w7-rpm-semantics"]
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT kind || '|' || json_extract(requirement_json, '$.expression.operands.name') || '|' || json_extract(requirement_json, '$.expression.operands.version_constraint') FROM package_requirement_groups WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-rpm-semantics') AND kind IN ('conflict', 'obsolete') ORDER BY kind\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["conflict|phase4-w7-conflict|< 2", "obsolete|phase4-w7-replaced|<= 1"]
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-w7-rpm-semantics/non-shell.marker=3205d86da0fc907a4ad85e8a9f1db8448816c034dde7161f044d819004345da6 --expect-sha256 /var/lib/phase4-w7-rpm-semantics/transaction.marker=489c47f8a3ba3293737ac7bdbaa4e1f0e71c0211ece5d5093091a92fa358c851 --expect-sha256 /var/lib/phase4-w7-rpm-semantics/trigger.marker=dc7f6d4c8a327e433ae1cf601ed6efb965d6ac81e505ea97691451765b805a2c"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT bundle_toml FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-rpm-semantics')\" | grep -F 'native_slot = \"%post\"' && sqlite3 ${DB_PATH} \"SELECT bundle_toml FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-rpm-semantics')\" | grep -F 'native_slot = \"%pretrans\"' && sqlite3 ${DB_PATH} \"SELECT bundle_toml FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-rpm-semantics')\" | grep -F 'native_slot = \"%filetriggerin\"' && sqlite3 ${DB_PATH} \"SELECT bundle_toml FROM installed_native_lifecycle_bundles WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-rpm-semantics')\" | grep -F 'interpreter = \"/usr/bin/python3\"'"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-rpm-semantics/native-fixture-manifest.json /tmp/conary-corpus-w7-rpm-semantics.json fedora-44 rpm phase4-w7-rpm-semantics 1.0.0-1 x86_64 installation"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM23-TNPM27: authenticated Arch signing-key and negative trust corpus
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM23"
+name = "trust_valid_signing_subkey_a"
+description = "Install the first package signed by an independently master-certified Arch signing subkey"
+group = "daily-driver-corpus"
+timeout = 180
+fatal = true
+depends_on = ["TNPM22"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-trust-valid-a.json"
+source_profile = "arch"
+source_format = "alpm"
+digest_source = "fixture_build_manifest"
+stages = ["repository_authentication", "artifact_download", "package_signature_verification", "native_parse", "ccs_projection", "ccs_signing", "ccs_verification", "publication", "resolution", "transaction_preflight", "installation"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "trust_multiple_valid_signing_keys"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "trust_signing_subkeys"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install w7-trust-valid-a --convert-to-ccs --repo w7trust --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always && test -f /conary/usr/share/w7-trust-valid-a/proof.txt"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-trust/w7-trust-valid-a-fixture-manifest.json /tmp/conary-corpus-w7-trust-valid-a.json arch alpm w7-trust-valid-a 1.0.0-1 any repository_authentication artifact_download package_signature_verification native_parse ccs_projection ccs_signing ccs_verification publication resolution transaction_preflight installation"
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TNPM24"
+name = "trust_valid_signing_subkey_b"
+description = "Install the second package signed by a distinct independently master-certified Arch signing subkey"
+group = "daily-driver-corpus"
+timeout = 180
+fatal = true
+depends_on = ["TNPM23"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-trust-valid-b.json"
+source_profile = "arch"
+source_format = "alpm"
+digest_source = "fixture_build_manifest"
+stages = ["repository_authentication", "artifact_download", "package_signature_verification", "native_parse", "ccs_projection", "ccs_signing", "ccs_verification", "publication", "resolution", "transaction_preflight", "installation"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "trust_multiple_valid_signing_keys"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "trust_signing_subkeys"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install w7-trust-valid-b --convert-to-ccs --repo w7trust --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always && test -f /conary/usr/share/w7-trust-valid-b/proof.txt"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-trust/w7-trust-valid-b-fixture-manifest.json /tmp/conary-corpus-w7-trust-valid-b.json arch alpm w7-trust-valid-b 1.0.0-1 any repository_authentication artifact_download package_signature_verification native_parse ccs_projection ccs_signing ccs_verification publication resolution transaction_preflight installation"
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TNPM25"
+name = "trust_expired_packager_rejection"
+description = "Reject a package whose signing key belongs to an expired packager certificate without changing durable state"
+group = "daily-driver-corpus"
+timeout = 120
+fatal = true
+depends_on = ["TNPM24"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-trust-expired.json"
+source_profile = "arch"
+source_format = "alpm"
+digest_source = "fixture_build_manifest"
+stages = ["repository_authentication", "artifact_download", "package_signature_verification"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "trust_expired_key"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/assert-w7-trust-rejection.sh w7-trust-expired 'is expired at the trust-snapshot time and the certificate is Unknown trust' ${DB_PATH} /conary ${CONARY_BIN}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-trust/w7-trust-expired-fixture-manifest.json /tmp/conary-corpus-w7-trust-expired.json arch alpm w7-trust-expired 1.0.0-1 any repository_authentication artifact_download package_signature_verification"
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TNPM26"
+name = "trust_revoked_packager_rejection"
+description = "Reject a package signed by a self-revoked certified packager without changing durable state"
+group = "daily-driver-corpus"
+timeout = 120
+fatal = true
+depends_on = ["TNPM25"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-trust-revoked.json"
+source_profile = "arch"
+source_format = "alpm"
+digest_source = "fixture_build_manifest"
+stages = ["repository_authentication", "artifact_download", "package_signature_verification"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "trust_revoked_key"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/assert-w7-trust-rejection.sh w7-trust-revoked 'is invalid: KeyRevoked' ${DB_PATH} /conary ${CONARY_BIN}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-trust/w7-trust-revoked-fixture-manifest.json /tmp/conary-corpus-w7-trust-revoked.json arch alpm w7-trust-revoked 1.0.0-1 any repository_authentication artifact_download package_signature_verification"
+
+[test.step.assert]
+exit_code = 0
+
+[[test]]
+id = "TNPM27"
+name = "trust_unknown_packager_rejection"
+description = "Reject a package whose signing certificate is absent from the authenticated keyring without changing durable state"
+group = "daily-driver-corpus"
+timeout = 120
+fatal = true
+depends_on = ["TNPM26"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-trust-unknown.json"
+source_profile = "arch"
+source_format = "alpm"
+digest_source = "fixture_build_manifest"
+stages = ["repository_authentication", "artifact_download", "package_signature_verification"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "trust_unknown_key"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/assert-w7-trust-rejection.sh w7-trust-unknown 'no authenticated keyring certificate owns signing key' ${DB_PATH} /conary ${CONARY_BIN}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-trust/w7-trust-unknown-fixture-manifest.json /tmp/conary-corpus-w7-trust-unknown.json arch alpm w7-trust-unknown 1.0.0-1 any repository_authentication artifact_download package_signature_verification"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM28: interrupted download consistency
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM28"
+name = "interrupted_download_preserves_state"
+description = "An exact repository artifact whose transport endpoint is unreachable fails without changing package, filesystem, generation, or activation state"
+group = "daily-driver-corpus"
+timeout = 120
+fatal = true
+depends_on = ["TNPM27"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-interrupted-download.json"
+source_profile = "${native_profile}"
+source_format = "${native_corpus_source_format}"
+digest_source = "fixture_build_manifest"
+stages = ["repository_authentication", "artifact_download"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "failure_interrupted_download"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "set -e; . /tmp/native-pm-corpus/native-fixture.env; rm -rf /tmp/w7-failures; /opt/remi-tests/fixtures/native/prepare-w7-failure-fixtures.py /tmp/native-pm-corpus-repo/phase4-repository-fixture-1.0.0-1.ccs \"$NATIVE_PKG_FILE\" /tmp/w7-failures; ${CONARY_BIN} repo remove w7interrupted --db-path ${DB_PATH} >/dev/null 2>&1 || true; ${CONARY_BIN} repo add w7interrupted http://127.0.0.1:18084/interrupted --package-format json --default-strategy binary --ccs-package-key ${FIXTURE_CCS_PUBLIC_KEY} --source-profile ${native_profile} --db-path ${DB_PATH}; ${CONARY_BIN} repo sync w7interrupted --force --db-path ${DB_PATH}"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/assert-w7-command-rejection.sh phase4-w7-interrupted-download /usr/share/phase4-w7-interrupted-download/proof.txt ${DB_PATH} /conary /tmp/w7-interrupted-download.log - -- env CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install phase4-w7-interrupted-download --repo w7interrupted --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-failures/interrupted-fixture-manifest.json /tmp/conary-corpus-w7-interrupted-download.json ${native_profile} ${native_corpus_source_format} phase4-w7-interrupted-download 1.0.0-1 ${native_arch} repository_authentication artifact_download"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM29: conversion failure consistency
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM29"
+name = "conversion_failure_preserves_state"
+description = "A deterministically truncated exact native artifact is rejected by conversion without changing durable or selected-root state"
+group = "daily-driver-corpus"
+timeout = 120
+fatal = true
+depends_on = ["TNPM28"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-conversion-failure.json"
+source_profile = "${native_profile}"
+source_format = "${native_corpus_source_format}"
+digest_source = "fixture_build_manifest"
+stages = ["native_parse", "ccs_projection"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "failure_conversion"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "CORRUPT_NATIVE=$(python3 -c 'import json; print(json.load(open(\"/tmp/w7-failures/corrupt-native-fixture-manifest.json\"))[\"artifact_path\"])') && /opt/remi-tests/fixtures/native/assert-w7-command-rejection.sh phase4-daily-driver-corpus /usr/bin/phase4-corpus ${DB_PATH} /conary /tmp/w7-conversion-failure.log - -- env CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install \"$CORRUPT_NATIVE\" --convert-to-ccs --from ${native_profile} --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-failures/corrupt-native-fixture-manifest.json /tmp/conary-corpus-w7-conversion-failure.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} native_parse ccs_projection"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM30: lifecycle failure consistency
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM30"
+name = "lifecycle_failure_preserves_state"
+description = "A forced exact native lifecycle execution failure aborts before payload publication and preserves durable generation and activation state"
+group = "daily-driver-corpus"
+timeout = 240
+fatal = true
+depends_on = ["TNPM29"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-lifecycle-failure.json"
+source_profile = "${native_profile}"
+source_format = "${native_corpus_source_format}"
+digest_source = "fixture_build_manifest"
+stages = ["transaction_preflight", "installation"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "failure_lifecycle"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = ". /tmp/native-pm-corpus/native-fixture.env && /opt/remi-tests/fixtures/native/assert-w7-command-rejection.sh phase4-daily-driver-corpus /usr/bin/phase4-corpus ${DB_PATH} /conary /tmp/w7-lifecycle-failure.log 'forced native lifecycle failure for test: w7-lifecycle-failure' -- env CONARY_TEST_SKIP_GENERATION_MOUNT=1 CONARY_TEST_FAIL_NATIVE_LIFECYCLE=w7-lifecycle-failure ${CONARY_BIN} install \"$NATIVE_PKG_FILE\" --convert-to-ccs --from ${native_profile} --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-w7-lifecycle-failure.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} transaction_preflight installation"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM31: deferred publication consistency
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM31"
+name = "publication_failure_is_durable_deferred_work"
+description = "A forced generation publication failure leaves the committed package mutually consistent with one recoverable publication debt"
+group = "daily-driver-corpus"
+timeout = 180
+fatal = true
+depends_on = ["TNPM30"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-publication-failure.json"
+source_profile = "arch"
+source_format = "alpm"
+digest_source = "fixture_build_manifest"
+stages = ["publication", "installation"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "runtime_deferred_generation_work"
+artifact_roles = ["install_request"]
+
+[[test.corpus.coverage]]
+semantic = "failure_publication"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} remove w7-trust-valid-a --db-path ${DB_PATH} --root /conary --yes --sandbox always && CONARY_TEST_SKIP_GENERATION_MOUNT=1 CONARY_TEST_FAIL_GENERATION_REBUILD=w7-publication-failure ${CONARY_BIN} install w7-trust-valid-a --convert-to-ccs --repo w7trust --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always 2>&1"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "pending"
+
+[[test.step]]
+run = "test -f /conary/usr/share/w7-trust-valid-a/proof.txt && test \"$(sqlite3 ${DB_PATH} \"SELECT COUNT(*) FROM troves WHERE name = 'w7-trust-valid-a'\")\" = 1 && sqlite3 ${DB_PATH} \"PRAGMA quick_check; SELECT status || '|' || retry_count || '|' || recoverable || '|' || COALESCE(last_error, '') FROM generation_publications WHERE trigger_changeset_id = (SELECT id FROM changesets WHERE description LIKE 'Install w7-trust-valid-a-%' ORDER BY id DESC LIMIT 1) ORDER BY id DESC LIMIT 1; SELECT status || '|' || COUNT(*) FROM generation_activation_intents GROUP BY status ORDER BY status\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["ok", "failed|1|1|forced generation rebuild failure for test: w7-publication-failure"]
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-trust/w7-trust-valid-a-fixture-manifest.json /tmp/conary-corpus-w7-publication-failure.json arch alpm w7-trust-valid-a 1.0.0-1 any publication installation"
+
+[test.step.assert]
+exit_code = 0
+
+# --------------------------------------------------------------------------
+# TNPM32: activation failure consistency
+# --------------------------------------------------------------------------
+
+[[test]]
+id = "TNPM32"
+name = "activation_failure_remains_retryable"
+description = "A boot-generation activation attempt with an unavailable verified provider fails durably and leaves package, filesystem, generation, and request identity consistent"
+group = "daily-driver-corpus"
+timeout = 120
+fatal = true
+depends_on = ["TNPM31"]
+
+[test.corpus]
+evidence_path = "/tmp/conary-corpus-w7-activation-failure.json"
+source_profile = "${native_profile}"
+source_format = "${native_corpus_source_format}"
+digest_source = "fixture_build_manifest"
+stages = ["installation"]
+
+[test.corpus.target]
+architecture = "${native_corpus_target_architecture}"
+init_system = "systemd"
+capabilities = ["native_lifecycle", "selected_root_generation"]
+
+[[test.corpus.coverage]]
+semantic = "failure_activation"
+artifact_roles = ["install_request"]
+
+[[test.step]]
+run = "generation=$(sqlite3 ${DB_PATH} \"SELECT MAX(generation_number) FROM generation_activation_intents WHERE status = 'pending'\") && test -n \"$generation\" && test -f \"/conary/generations/$generation/.conary-artifact.json\" && printf 'quiet conary.generation=%s\\n' \"$generation\" > /tmp/w7-proc-cmdline && before_current=$(readlink /conary/current) && before_generations=$(find /conary/generations -mindepth 1 -maxdepth 1 -type d | wc -l) && before_requests=$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM activation_requests') && before_troves=$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM troves') && if CONARY_TEST_PROC_CMDLINE_PATH=/tmp/w7-proc-cmdline ${CONARY_BIN} generation activate --db-path ${DB_PATH} > /tmp/w7-activation-failure.log 2>&1; then cat /tmp/w7-activation-failure.log; exit 1; fi && grep -F 'generation activation request(s) remain retryable' /tmp/w7-activation-failure.log && test \"$(readlink /conary/current)\" = \"$before_current\" && test \"$(find /conary/generations -mindepth 1 -maxdepth 1 -type d | wc -l)\" = \"$before_generations\" && test \"$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM activation_requests')\" = \"$before_requests\" && test \"$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM troves')\" = \"$before_troves\" && test -f /conary/usr/share/w7-trust-valid-a/proof.txt && sqlite3 ${DB_PATH} \"PRAGMA quick_check; SELECT status || '|' || attempt_count || '|' || COALESCE(last_error, '') FROM generation_activation_intents WHERE generation_number = $generation ORDER BY request_id\""
+
+[test.step.assert]
+exit_code = 0
+stdout_contains_all = ["ok", "failed|1|activation interface verification failed"]
+
+[[test.step]]
+run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/native-pm-corpus/native-fixture-manifest.json /tmp/conary-corpus-w7-activation-failure.json ${native_profile} ${native_corpus_source_format} phase4-daily-driver-corpus ${native_corpus_fixture_version} ${native_arch} installation"
 
 [test.step.assert]
 exit_code = 0

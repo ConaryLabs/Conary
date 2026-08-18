@@ -255,7 +255,7 @@ impl FileCapability {
         if self.permitted {
             flags.push('p');
         }
-        Ok(format!("{}=+{}", self.capabilities.join(","), flags))
+        Ok(format!("{}={}", self.capabilities.join(","), flags))
     }
 }
 

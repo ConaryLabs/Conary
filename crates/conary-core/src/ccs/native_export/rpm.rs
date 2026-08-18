@@ -154,6 +154,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
 
     // Write files to temp dir and add to RPM.
     for file in hardlinks.ordered_files() {
+        validate_rpm_node_xattrs(&result.manifest, &file.path, &file.node)?;
         if matches!(&file.node.kind, PayloadNodeKind::Directory) {
             let has_descendant = implicit_parent_dirs.contains(Path::new(&file.path));
             let has_default_parent_metadata = file.node.mode & 0o7777 == 0o755;
@@ -187,6 +188,7 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                 // Determine file options
                 let options =
                     rpm::FileOptions::new(&file.path).permissions((file.node.mode & 0o7777) as u16);
+                let options = rpm_file_security_options(options, &result.manifest, &file.path)?;
                 let options = match &file.node.kind {
                     PayloadNodeKind::Regular {
                         hardlink_identity: Some(identity),
@@ -419,6 +421,60 @@ fn hardlink_file_options(
     rpm_node_ownership(options, node)
 }
 
+fn rpm_file_security_options(
+    mut options: rpm::FileOptionsBuilder,
+    manifest: &crate::ccs::manifest::CcsManifest,
+    path: &str,
+) -> Result<rpm::FileOptionsBuilder> {
+    let declaration = manifest
+        .file_capabilities
+        .iter()
+        .find(|capability| capability.path == path);
+
+    if let Some(capability) = declaration {
+        options = options.caps(capability.to_setcap_spec()?)?;
+    }
+
+    Ok(options)
+}
+
+fn validate_rpm_node_xattrs(
+    manifest: &crate::ccs::manifest::CcsManifest,
+    path: &str,
+    node: &crate::payload::PayloadNode,
+) -> Result<()> {
+    let declaration = manifest
+        .file_capabilities
+        .iter()
+        .find(|capability| capability.path == path);
+    let mut remaining_xattrs = node.xattrs.clone();
+
+    if let Some(capability) = declaration {
+        let expected = crate::generation::builder::encode_security_capability_xattr(capability)?;
+        if let Some(observed) =
+            remaining_xattrs.remove(crate::generation::builder::SECURITY_CAPABILITY_XATTR)
+            && observed != expected
+        {
+            anyhow::bail!(
+                "RPM native export file capability declaration disagrees with payload xattr at {path}"
+            );
+        }
+    } else if remaining_xattrs.contains_key(crate::generation::builder::SECURITY_CAPABILITY_XATTR) {
+        anyhow::bail!(
+            "RPM native export requires a typed file_capabilities declaration for {path}"
+        );
+    }
+
+    if !remaining_xattrs.is_empty() {
+        anyhow::bail!(
+            "RPM native export cannot represent payload xattrs exactly at {path}: {:?}",
+            remaining_xattrs.keys().collect::<Vec<_>>()
+        );
+    }
+
+    Ok(())
+}
+
 fn rpm_node_ownership(
     options: rpm::FileOptionsBuilder,
     node: &crate::payload::PayloadNode,
@@ -471,10 +527,12 @@ fn payload_kind_name(kind: &PayloadNodeKind) -> &'static str {
 mod tests {
     use super::*;
     use crate::ccs::builder::FileEntry;
-    use crate::ccs::manifest::{CcsManifest, NativeExport, RpmExport};
+    use crate::ccs::manifest::{CcsManifest, FileCapability, NativeExport, RpmExport};
     use crate::packages::PackageFormat;
     use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};
     use std::collections::HashMap;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
     fn create_test_build_result() -> BuildResult {
@@ -743,6 +801,72 @@ mod tests {
 
         let error = generate(&result, &output_path).unwrap_err();
         assert!(error.to_string().contains("exact package.license"));
+        assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn rpm_file_capability_round_trips_from_typed_manifest_authority() {
+        let temp_dir = TempDir::new().unwrap();
+        let source = temp_dir.path().join("source");
+        let tool = source.join("usr/bin/tool");
+        fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        fs::write(&tool, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut manifest = create_test_build_result().manifest;
+        manifest.file_capabilities = vec![FileCapability {
+            path: "/usr/bin/tool".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }];
+        let result = crate::ccs::builder::CcsBuilder::new(manifest, &source)
+            .unwrap()
+            .build()
+            .unwrap();
+        let output_path = temp_dir.path().join("capability.rpm");
+
+        generate(&result, &output_path).unwrap();
+        let package = crate::packages::rpm::RpmPackage::parse(output_path.to_str().unwrap())
+            .expect("parse generated capability RPM");
+        let payload = package
+            .package_payload()
+            .expect("read capability RPM payload");
+        let file = payload
+            .files()
+            .iter()
+            .find(|file| file.path == "/usr/bin/tool")
+            .expect("capability payload path");
+        assert_eq!(
+            file.node.xattrs.get("security.capability"),
+            Some(
+                &crate::generation::builder::encode_security_capability_xattr(
+                    &result.manifest.file_capabilities[0]
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn rpm_export_rejects_unrepresentable_generic_xattrs() {
+        let mut result = create_test_build_result();
+        let mut entry = directory_entry("/opt", 0o750, 0);
+        entry
+            .node
+            .xattrs
+            .insert("user.conary".to_string(), b"exact".to_vec());
+        result.files = vec![entry];
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("generic-xattr.rpm");
+
+        let error = generate(&result, &output_path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot represent payload xattrs exactly")
+        );
         assert!(!output_path.exists());
     }
 

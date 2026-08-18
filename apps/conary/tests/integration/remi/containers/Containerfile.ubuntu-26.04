@@ -22,7 +22,7 @@ FROM docker.io/library/ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7
 ARG INSTALL_MODE=binary
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl diffutils libseccomp2 passwd python3 sqlite3 \
+    ca-certificates curl diffutils libseccomp2 passwd python3 sqlite3 systemd \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy all conary* files from build context (binary or package)
@@ -41,6 +41,7 @@ RUN /usr/bin/conary --version \
     && command -v cmp \
     && command -v diff \
     && command -v setsid \
+    && command -v systemctl \
     && test -e /lib64/ld-linux-x86-64.so.2
 
 COPY config.toml /opt/remi-tests/config.toml

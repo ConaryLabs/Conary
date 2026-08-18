@@ -106,10 +106,21 @@ copy_elf_closure "${install_path}"
 copy_elf_closure /bin/false
 copy_elf_closure /usr/bin/true
 
-# A selected root advertises OpenRC lifecycle support only when its provider
-# executable is part of that root. Preserve the target's actual provider and
-# runtime closure so foreign scriptlets cross the same typed capture boundary
-# that production generations use.
+# A selected root advertises service-manager lifecycle support only when its
+# provider executable is part of that root. The deterministic fixture is the
+# execution boundary, while the booted host's real systemctl remains the
+# persisted capability authority. Runtime verbs are bind-intercepted before
+# the fixture body can execute, avoiding target-specific dlopen dependencies.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl_path=/usr/bin/systemctl
+  if [[ ! -x "${stage}${systemctl_path}" ]]; then
+    echo "Selected-root systemctl fixture is missing: ${stage}${systemctl_path}" >&2
+    exit 1
+  fi
+else
+  systemctl_path=
+  rm -f "${stage}/usr/bin/systemctl"
+fi
 if openrc_path="$(command -v rc-service 2>/dev/null)"; then
   copy_elf_closure "${openrc_path}"
 fi
@@ -168,6 +179,7 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   --present /bin/bash \
   --present /bin/false \
   --present /usr/bin/bash \
+  --present "${systemctl_path:-/usr/bin/true}" \
   --present "${install_path}" \
   --present /lib64/ld-linux-x86-64.so.2 \
   --present /etc/passwd \

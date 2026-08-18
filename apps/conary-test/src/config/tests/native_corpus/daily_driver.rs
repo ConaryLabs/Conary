@@ -1,6 +1,7 @@
 // conary-test/src/config/tests/native_corpus/daily_driver.rs
 
 use super::{conary_fixture_path, load_manifest, remi_manifest_path};
+use conary_core::packages::{PackageFormat, traits::NativeLifecyclePath};
 
 #[test]
 fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
@@ -24,39 +25,51 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         required_coverage,
         &[
             conary_core::corpus::CorpusSemantic::IdentityExactVersion,
+            conary_core::corpus::CorpusSemantic::IdentityEpochRelease,
+            conary_core::corpus::CorpusSemantic::IdentityArchitectureIndependent,
             conary_core::corpus::CorpusSemantic::IdentityNativeArchitecture,
             conary_core::corpus::CorpusSemantic::PayloadFiles,
             conary_core::corpus::CorpusSemantic::PayloadDirectories,
             conary_core::corpus::CorpusSemantic::PayloadSymlinks,
             conary_core::corpus::CorpusSemantic::PayloadHardlinks,
+            conary_core::corpus::CorpusSemantic::PayloadSparseFiles,
+            conary_core::corpus::CorpusSemantic::PayloadLargeFiles,
+            conary_core::corpus::CorpusSemantic::MetadataXattrs,
+            conary_core::corpus::CorpusSemantic::MetadataCapabilities,
             conary_core::corpus::CorpusSemantic::MetadataOwnership,
             conary_core::corpus::CorpusSemantic::MetadataTimestamps,
             conary_core::corpus::CorpusSemantic::RelationsVersionedDependency,
             conary_core::corpus::CorpusSemantic::RelationsVirtualProvide,
             conary_core::corpus::CorpusSemantic::RelationsSameNameCompatibilityProvide,
+            conary_core::corpus::CorpusSemantic::RelationsConflict,
+            conary_core::corpus::CorpusSemantic::RelationsReplacement,
             conary_core::corpus::CorpusSemantic::ConfigurationMatchedConfig,
             conary_core::corpus::CorpusSemantic::ConfigurationUnmatchedDeclaration,
             conary_core::corpus::CorpusSemantic::ConfigurationLocalModification,
             conary_core::corpus::CorpusSemantic::ConfigurationDeletion,
             conary_core::corpus::CorpusSemantic::ConfigurationUpgrade,
             conary_core::corpus::CorpusSemantic::ConfigurationRemoval,
+            conary_core::corpus::CorpusSemantic::LifecycleNone,
             conary_core::corpus::CorpusSemantic::LifecycleShell,
+            conary_core::corpus::CorpusSemantic::LifecycleNonShellInterpreter,
+            conary_core::corpus::CorpusSemantic::LifecycleTrigger,
+            conary_core::corpus::CorpusSemantic::LifecycleTransactionHook,
+            conary_core::corpus::CorpusSemantic::TrustMultipleValidSigningKeys,
+            conary_core::corpus::CorpusSemantic::TrustSigningSubkeys,
+            conary_core::corpus::CorpusSemantic::TrustExpiredKey,
+            conary_core::corpus::CorpusSemantic::TrustRevokedKey,
+            conary_core::corpus::CorpusSemantic::TrustUnknownKey,
+            conary_core::corpus::CorpusSemantic::RuntimeServiceActivation,
+            conary_core::corpus::CorpusSemantic::RuntimeTargetHelper,
+            conary_core::corpus::CorpusSemantic::RuntimeDeferredGenerationWork,
+            conary_core::corpus::CorpusSemantic::FailureInterruptedDownload,
+            conary_core::corpus::CorpusSemantic::FailureConversion,
+            conary_core::corpus::CorpusSemantic::FailurePayloadMutation,
+            conary_core::corpus::CorpusSemantic::FailureLifecycle,
+            conary_core::corpus::CorpusSemantic::FailurePublication,
+            conary_core::corpus::CorpusSemantic::FailureActivation,
         ]
     );
-    for unproven in [
-        conary_core::corpus::CorpusSemantic::PayloadLargeFiles,
-        conary_core::corpus::CorpusSemantic::MetadataXattrs,
-        conary_core::corpus::CorpusSemantic::MetadataCapabilities,
-        conary_core::corpus::CorpusSemantic::RelationsConflict,
-        conary_core::corpus::CorpusSemantic::LifecycleTrigger,
-        conary_core::corpus::CorpusSemantic::RuntimeServiceActivation,
-        conary_core::corpus::CorpusSemantic::RuntimeTargetHelper,
-    ] {
-        assert!(
-            !required_coverage.contains(&unproven),
-            "daily-driver fixture must not overclaim {unproven:?}"
-        );
-    }
 
     let corpus_tests: Vec<_> = manifest
         .test
@@ -65,8 +78,8 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         .collect();
 
     assert!(
-        corpus_tests.len() == 7,
-        "focused daily-driver manifest should own exactly TNPM13 through TNPM19"
+        corpus_tests.len() == 20,
+        "focused daily-driver manifest should own exactly TNPM13 through TNPM32"
     );
     assert!(
         corpus_tests.iter().all(|test| test.skip.is_none()),
@@ -103,7 +116,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "/etc/phase4-corpus/app-local.conf",
         "/etc/phase4-corpus/app-deleted.conf",
         "/etc/phase4-corpus/app-unmatched.conf",
-        "9 regular files",
+        "10 regular files",
         "phase4-corpus-alt",
         "phase4-corpus-user",
         "phase4-corpus-group",
@@ -112,6 +125,21 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "|repository|dependency",
         "/usr/share/phase4-repository-fixture/probe.txt",
         "/var/lib/phase4-corpus/scriptlet.marker",
+        "/var/lib/phase4-corpus/depmod-help.marker",
+        "captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service",
+        "pending|1",
+        "RuntimeServiceActivation",
+        "RuntimeTargetHelper",
+        "FailureInterruptedDownload",
+        "FailureConversion",
+        "FailurePayloadMutation",
+        "FailureLifecycle",
+        "FailurePublication",
+        "FailureActivation",
+        "RuntimeDeferredGenerationWork",
+        "assert-w7-command-rejection.sh",
+        "CONARY_TEST_PROC_CMDLINE_PATH",
+        "w7-publication-failure",
         "/var/lib/phase4-corpus/remove.marker",
         "phase4-corpus-conflict",
         "/usr/lib/phase4-corpus/state|directory|0750",
@@ -157,6 +185,92 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         assert!(
             rendered.contains(required),
             "daily-driver corpus should cover {required}"
+        );
+    }
+
+    let trust_cases = manifest
+        .test
+        .iter()
+        .filter(|test| {
+            matches!(
+                test.id.as_str(),
+                "TNPM23" | "TNPM24" | "TNPM25" | "TNPM26" | "TNPM27"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(trust_cases.len(), 5);
+    let trust_semantics = trust_cases
+        .iter()
+        .flat_map(|test| test.corpus.as_ref().unwrap().coverage.iter())
+        .map(|claim| claim.semantic)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        trust_semantics,
+        std::collections::BTreeSet::from([
+            conary_core::corpus::CorpusSemantic::TrustMultipleValidSigningKeys,
+            conary_core::corpus::CorpusSemantic::TrustSigningSubkeys,
+            conary_core::corpus::CorpusSemantic::TrustExpiredKey,
+            conary_core::corpus::CorpusSemantic::TrustRevokedKey,
+            conary_core::corpus::CorpusSemantic::TrustUnknownKey,
+        ])
+    );
+    let rendered_trust = format!("{manifest:?}");
+    for required in [
+        "w7trust.gpg",
+        "arch-keyring-format open-pgp",
+        "w7-trust-valid-a",
+        "w7-trust-valid-b",
+        "is expired at the trust-snapshot time",
+        "KeyRevoked",
+        "no authenticated keyring certificate owns signing key",
+        "assert-w7-trust-rejection.sh",
+    ] {
+        assert!(
+            rendered_trust.contains(required),
+            "W7 trust corpus should prove {required}"
+        );
+    }
+
+    let rpm_semantics_test = manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM22")
+        .expect("TNPM22 RPM relation and lifecycle test");
+    let rpm_semantics_case = rpm_semantics_test
+        .corpus
+        .as_ref()
+        .expect("TNPM22 typed relation and lifecycle evidence");
+    assert_eq!(
+        rpm_semantics_case
+            .coverage
+            .iter()
+            .map(|claim| claim.semantic)
+            .collect::<Vec<_>>(),
+        [
+            conary_core::corpus::CorpusSemantic::RelationsConflict,
+            conary_core::corpus::CorpusSemantic::RelationsReplacement,
+            conary_core::corpus::CorpusSemantic::LifecycleNonShellInterpreter,
+            conary_core::corpus::CorpusSemantic::LifecycleTrigger,
+            conary_core::corpus::CorpusSemantic::LifecycleTransactionHook,
+        ]
+    );
+    assert!(rpm_semantics_case.coverage.iter().all(|claim| {
+        claim.artifact_roles == [conary_core::corpus::SourceArtifactRole::InstallRequest]
+    }));
+    let rendered_rpm_semantics = format!("{rpm_semantics_test:?}");
+    for required in [
+        "phase4-w7-rpm-semantics",
+        "package_requirement_groups",
+        "conflict|phase4-w7-conflict|< 2",
+        "obsolete|phase4-w7-replaced|<= 1",
+        "native_slot = \\\"%post\\\"",
+        "native_slot = \\\"%pretrans\\\"",
+        "native_slot = \\\"%filetriggerin\\\"",
+        "interpreter = \\\"/usr/bin/python3\\\"",
+    ] {
+        assert!(
+            rendered_rpm_semantics.contains(required),
+            "TNPM22 should prove {required}"
         );
     }
     let daily_driver_setup = format!("{:?}", manifest.suite.setup);
@@ -252,7 +366,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
             conary_core::corpus::ConversionStage::Installation,
         ]
     );
-    assert_eq!(install_case.coverage.len(), 13);
+    assert_eq!(install_case.coverage.len(), 15);
     for semantic in [
         conary_core::corpus::CorpusSemantic::MetadataOwnership,
         conary_core::corpus::CorpusSemantic::MetadataTimestamps,
@@ -402,6 +516,83 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "configuration removal evidence must cross the explicit purge boundary"
     );
 
+    let semantic_case = manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM20")
+        .and_then(|test| test.corpus.as_ref())
+        .expect("TNPM20 typed identity, payload, xattr, and no-lifecycle evidence");
+    assert_eq!(
+        semantic_case
+            .coverage
+            .iter()
+            .map(|claim| claim.semantic)
+            .collect::<Vec<_>>(),
+        [
+            conary_core::corpus::CorpusSemantic::IdentityEpochRelease,
+            conary_core::corpus::CorpusSemantic::IdentityArchitectureIndependent,
+            conary_core::corpus::CorpusSemantic::PayloadSparseFiles,
+            conary_core::corpus::CorpusSemantic::PayloadLargeFiles,
+            conary_core::corpus::CorpusSemantic::MetadataXattrs,
+            conary_core::corpus::CorpusSemantic::LifecycleNone,
+        ]
+    );
+    assert!(semantic_case.coverage.iter().all(|claim| {
+        claim.artifact_roles == [conary_core::corpus::SourceArtifactRole::InstallRequest]
+    }));
+    let semantic_test = manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM20")
+        .expect("TNPM20 semantic test");
+    let rendered_semantic = format!("{semantic_test:?}");
+    for required in [
+        "pkgver = 2:1.0.0-3",
+        "arch = any",
+        "st_blocks",
+        "32*1024*1024",
+        "64*1024*1024",
+        "user.conary",
+        "installed_native_lifecycle_bundles",
+    ] {
+        assert!(
+            rendered_semantic.contains(required),
+            "TNPM20 should prove {required}"
+        );
+    }
+
+    let capability_test = manifest
+        .test
+        .iter()
+        .find(|test| test.id == "TNPM21")
+        .expect("TNPM21 capability test");
+    let capability_case = capability_test
+        .corpus
+        .as_ref()
+        .expect("TNPM21 typed capability evidence");
+    assert_eq!(capability_case.coverage.len(), 1);
+    assert_eq!(
+        capability_case.coverage[0].semantic,
+        conary_core::corpus::CorpusSemantic::MetadataCapabilities
+    );
+    assert_eq!(
+        capability_case.coverage[0].artifact_roles,
+        [conary_core::corpus::SourceArtifactRole::InstallRequest]
+    );
+    let rendered_capability = format!("{capability_test:?}");
+    for required in [
+        "phase4-w7-capability-corpus",
+        "NATIVE_PKG_SHA256",
+        "installed_file_capabilities",
+        "security.capability",
+        "0100000200040000000000000000000000000000",
+    ] {
+        assert!(
+            rendered_capability.contains(required),
+            "TNPM21 should prove {required}"
+        );
+    }
+
     let build_helper =
         std::fs::read_to_string(conary_fixture_path("native/build-native-fixtures.sh"))
             .expect("read native fixture builder");
@@ -462,6 +653,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "[native_export.arch]",
         "depends = [\"phase4-repository-fixture=1.0.0\"]",
         "provides = [\"phase4-corpus-tool\", \"phase4-daily-driver-corpus=1.0\"]",
+        "/usr/sbin/depmod --help > /var/lib/phase4-corpus/depmod-help.marker",
     ] {
         assert!(
             primary_fixture.contains(required),
@@ -512,7 +704,11 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "if ($1 ~ /^\\//) { print $1 }",
         "print $3",
         "copy_elf_closure /bin/false",
+        "systemctl_path=/usr/bin/systemctl",
+        "Selected-root systemctl fixture is missing",
+        "rm -f \"${stage}/usr/bin/systemctl\"",
         "--present /bin/false",
+        "--present \"${systemctl_path:-/usr/bin/true}\"",
         "--present \"${install_path}\"",
     ] {
         assert!(
@@ -520,6 +716,10 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
             "daily-driver lifecycle runtime should include {required}"
         );
     }
+    assert!(
+        conary_fixture_path("native-selected-root-layout/stage/usr/bin/systemctl").is_file(),
+        "selected-root activation capture must ship its deterministic systemctl boundary"
+    );
 
     let selected_generation_helper =
         std::fs::read_to_string(conary_fixture_path("native/assert-selected-generation.py"))
@@ -599,5 +799,68 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
             update_repository.contains(required),
             "native update repository should enforce {required}"
         );
+    }
+}
+
+#[test]
+fn pinned_w7_rpm_fixture_carries_typed_relations_and_lifecycle_abi() {
+    let output = tempfile::tempdir().expect("create W7 RPM fixture output");
+    let fixtures_root = conary_fixture_path("");
+    let status = std::process::Command::new(conary_fixture_path(
+        "native/build-w7-rpm-semantics-fixture.sh",
+    ))
+    .arg(output.path())
+    .env("CONARY_FIXTURES_ROOT", &fixtures_root)
+    .status()
+    .expect("decode pinned W7 RPM fixture");
+    assert!(status.success());
+
+    let artifact = output
+        .path()
+        .join("phase4-w7-rpm-semantics-1.0.0-1.x86_64.rpm");
+    assert_eq!(
+        conary_core::hash::sha256(&std::fs::read(&artifact).unwrap()),
+        "0b412f9d56da06d94bff3f7f3ba58b080633edf90e5bcc6beba9fe40544bc0ca"
+    );
+    let package = conary_core::packages::rpm::RpmPackage::parse(
+        artifact.to_str().expect("UTF-8 RPM fixture path"),
+    )
+    .expect("parse pinned W7 RPM fixture");
+    assert_eq!(
+        package
+            .relations()
+            .iter()
+            .map(|relation| relation.kind)
+            .collect::<Vec<_>>(),
+        [
+            conary_core::repository::dependency_model::RepositoryRequirementKind::Conflict,
+            conary_core::repository::dependency_model::RepositoryRequirementKind::Obsolete,
+        ]
+    );
+
+    let scriptlets = package.native_scriptlet_abi();
+    for (slot, lifecycle, interpreter) in [
+        (
+            "%post",
+            NativeLifecyclePath::PostInstall,
+            "/usr/bin/python3",
+        ),
+        (
+            "%pretrans",
+            NativeLifecyclePath::PreTransaction,
+            "/usr/bin/python3",
+        ),
+        (
+            "%filetriggerin",
+            NativeLifecyclePath::FileTrigger,
+            "/usr/bin/python3",
+        ),
+    ] {
+        let scriptlet = scriptlets
+            .iter()
+            .find(|entry| entry.native_slot == slot)
+            .unwrap_or_else(|| panic!("missing {slot}"));
+        assert_eq!(scriptlet.primary_lifecycle, lifecycle);
+        assert_eq!(scriptlet.interpreter.as_deref(), Some(interpreter));
     }
 }

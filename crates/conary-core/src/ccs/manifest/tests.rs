@@ -668,7 +668,7 @@ inheritable = true
     assert!(capability.inheritable);
     assert_eq!(
         capability.to_setcap_spec().unwrap(),
-        "cap_net_bind_service=+eip"
+        "cap_net_bind_service=eip"
     );
 }
 

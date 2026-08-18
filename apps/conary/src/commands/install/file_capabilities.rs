@@ -176,7 +176,7 @@ mod tests {
         assert_eq!(applied, 1);
         assert_eq!(applier.calls.len(), 1);
         assert_eq!(applier.calls[0].0, root.path().join("usr/bin/demo"));
-        assert_eq!(applier.calls[0].1, "cap_net_bind_service=+ep");
+        assert_eq!(applier.calls[0].1, "cap_net_bind_service=ep");
     }
 
     #[test]

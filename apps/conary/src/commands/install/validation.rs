@@ -1,6 +1,6 @@
 // conary/src/commands/install/validation.rs
 
-use super::{ComponentSelection, OwnershipMode};
+use super::{ComponentSelection, OwnershipMode, resolve::is_local_package_request};
 use anyhow::Result;
 use conary_core::components::{ComponentType, parse_component_spec};
 use conary_core::db::models::{InstallReason, Trove};
@@ -17,9 +17,10 @@ pub(super) fn parse_component_and_validate(
     ownership: OwnershipMode,
 ) -> Result<(String, ComponentSelection)> {
     // Parse component spec from package argument (e.g., "nginx:devel" or "nginx:all")
-    let (package_name, component_selection) = if let Some((pkg, comp)) =
-        parse_component_spec(package)
-    {
+    let component_spec = (!is_local_package_request(package))
+        .then(|| parse_component_spec(package))
+        .flatten();
+    let (package_name, component_selection) = if let Some((pkg, comp)) = component_spec {
         let selection = if comp == "all" {
             ComponentSelection::All
         } else if let Some(comp_type) = ComponentType::parse(&comp) {
@@ -200,5 +201,29 @@ mod tests {
             parse_component_and_validate(&conn, "curl", None, OwnershipMode::Takeover).unwrap();
 
         assert_eq!(package_name, "curl");
+    }
+
+    #[test]
+    fn existing_native_artifact_with_epoch_colon_is_not_a_component_request() {
+        use crate::commands::test_helpers::create_test_db;
+
+        let (directory, db_path) = create_test_db();
+        let package = directory.path().join("fixture-2:1.0.0-3-any.pkg.tar.zst");
+        std::fs::write(&package, b"fixture").unwrap();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        let (package_name, component_selection) = parse_component_and_validate(
+            &conn,
+            package.to_str().unwrap(),
+            None,
+            OwnershipMode::Preserve,
+        )
+        .unwrap();
+
+        assert_eq!(package_name, package.to_str().unwrap());
+        assert_eq!(
+            component_selection.display(),
+            "defaults (runtime, lib, config)"
+        );
     }
 }

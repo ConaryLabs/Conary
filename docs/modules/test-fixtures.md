@@ -492,8 +492,9 @@ Each fixture family should record:
   authority from distro-name matching. The typed workflow test owns the three
   source-format cases across all six required target lanes and the stable
   all-lane aggregator context; do not weaken either in workflow-only edits.
-  The focused `phase4-native-daily-driver-corpus` chain emits three case records
-  for its host-native RPM, DEB, or ALPM build. The completed install/query
+  The focused `phase4-native-daily-driver-corpus` chain runs TNPM13 through
+  TNPM32 and emits 17 attributable case records for each host-native RPM, DEB,
+  or ALPM lane. The completed install/query
   record binds both the native request and its SAT-selected signed CCS
   dependency to exact build-manifest SHA-256 identities. The update record
   binds the installed v1 request and an independently built and extracted v2
@@ -502,8 +503,20 @@ Each fixture family should record:
   repository. Selected-generation v2 bytes, pristine config hashes and source
   format, repository checksum and provenance, and the installed lifecycle
   bundle's native source checksum must all agree. The removal record binds to
-  the installed v2 update request. The completed chain covers
-  exact/native identity, regular files, one explicit directory,
+  the installed v2 update request. Additional digest-pinned fixtures cover
+  epoch/release and architecture-independent identity, sparse and large files,
+  xattrs, file capabilities, typed conflict/replacement relations, no-lifecycle
+  packages, non-shell interpreters, file triggers, transaction hooks, multiple
+  valid signing subkeys, and expired, revoked, and unknown trust negatives.
+  Runtime proof captures a service activation intent, invokes the selected
+  root's exact target helper, and records deferred generation work. Forced
+  interrupted-download, conversion, payload-mutation, lifecycle, publication,
+  and activation failures assert the package database, selected generation,
+  filesystem, generation count, and activation state appropriate to their
+  typed failure boundary. Together those cases declare and prove every one of
+  the suite's 44 required semantic properties.
+
+  The host-native chain covers exact/native identity, regular files, one explicit directory,
   one exact symlink, one two-path hardlink set, one queried virtual provide,
   one exact versioned dependency resolved from the bounded loopback repository,
   matched config, a newly introduced unmatched declaration,
@@ -534,14 +547,13 @@ Each fixture family should record:
   rehashes the artifact before publication. The chain attributes hardlink
   coverage only through the native inode oracle plus the typed
   selected-generation topology assertion. Ownership and timestamp coverage use
-  that same exact request artifact but do not establish xattr, capability, or
-  live-root materialization coverage. Do not infer large-file, source-trigger,
-  activation, target-helper, conflict, or replacement coverage from the chain's
-  2 MiB file, out-of-band trigger, disabled unit, adjacent helper path, or
-  file-collision negative. The unmatched-declaration claim is the newly
+  that same exact request artifact; xattr, capability, large/sparse payload,
+  source-trigger, activation, target-helper, conflict, and replacement claims
+  belong only to their separately pinned TNPM20 through TNPM32 artifacts and
+  assertions. The unmatched-declaration claim is the newly
   introduced declaration-only path's durable state, never a payload invention
-  or a message-text classification. PRs run only that focused seven-test
-  chain on Fedora 44, Ubuntu 26.04, and Arch behind the stable
+  or a message-text classification. PRs run this focused 20-test chain on
+  Fedora 44, Ubuntu 26.04, and Arch behind the stable
   `native-daily-driver-corpus` aggregate context; every lane applies both the
   ordinary suite-result and typed corpus-result gates.
   Derivative roots are assembled from digest-pinned transport images, exact
