@@ -704,10 +704,12 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "if ($1 ~ /^\\//) { print $1 }",
         "print $3",
         "copy_elf_closure /bin/false",
+        "copy_elf_closure /usr/sbin/depmod",
         "systemctl_path=/usr/bin/systemctl",
         "Selected-root systemctl fixture is missing",
         "rm -f \"${stage}/usr/bin/systemctl\"",
         "--present /bin/false",
+        "--present /usr/sbin/depmod",
         "--present \"${systemctl_path:-/usr/bin/true}\"",
         "--present \"${install_path}\"",
     ] {

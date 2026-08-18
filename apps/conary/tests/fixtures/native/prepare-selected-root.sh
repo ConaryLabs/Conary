@@ -106,6 +106,12 @@ copy_elf_closure "${install_path}"
 copy_elf_closure /bin/false
 copy_elf_closure /usr/bin/true
 
+# Information-only boot-runtime invocations execute the provider staged from
+# the selected root. The daily-driver lifecycle calls the pinned absolute
+# depmod endpoint, so carry its executable and ELF closure into that root;
+# mutation forms remain intercepted by the typed boot-runtime boundary.
+copy_elf_closure /usr/sbin/depmod
+
 # A selected root advertises service-manager lifecycle support only when its
 # provider executable is part of that root. The deterministic fixture is the
 # execution boundary, while the booted host's real systemctl remains the
@@ -179,6 +185,7 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   --present /bin/bash \
   --present /bin/false \
   --present /usr/bin/bash \
+  --present /usr/sbin/depmod \
   --present "${systemctl_path:-/usr/bin/true}" \
   --present "${install_path}" \
   --present /lib64/ld-linux-x86-64.so.2 \
