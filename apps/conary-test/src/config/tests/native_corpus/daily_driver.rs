@@ -365,6 +365,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "app-local.conf.dpkg-dist",
         "app-local.conf.pacnew",
         "app-unmatched.conf=09f55aa386292b9525a334ba15a6a5e1922d08f3013772ae3b61c009b057b510",
+        "app-unmatched.conf||09f55aa386292b9525a334ba15a6a5e1922d08f3013772ae3b61c009b057b510|1|modified|deb|0|0|1",
         "materialized || '|' || ghost",
         "remove_on_upgrade",
     ] {
