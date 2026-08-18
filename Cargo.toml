@@ -13,7 +13,7 @@ exclude = ["third_party/resolvo-0.12.0-patched"]
 resolver = "3"
 
 [workspace.package]
-version = "0.15.0"
+version = "0.16.1"
 edition = "2024"
 rust-version = "1.97.1"
 authors = ["Conary Contributors"]
