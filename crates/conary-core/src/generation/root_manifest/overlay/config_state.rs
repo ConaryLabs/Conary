@@ -55,6 +55,17 @@ pub fn decode_config_state_upper_indexed(
             .is_some_and(|entry| matches!(entry.node.source.kind, PayloadNodeKind::Directory)))
     })?;
     let mut delta = decoded.into_delta(&prior_root);
+    // A generation config upper is cumulative rather than transaction-owned.
+    // Its whiteouts remain present after a prior selected-root snapshot has
+    // already incorporated the deletion, so repeated capture must treat only
+    // those already-satisfied removals as no-ops.
+    let mut pending_removals = Vec::with_capacity(delta.removals.len());
+    for path in delta.removals {
+        if prior.entry(conn, &path)?.is_some() {
+            pending_removals.push(path);
+        }
+    }
+    delta.removals = pending_removals;
     let groups = indexed::affected_hardlink_groups(
         conn,
         prior,

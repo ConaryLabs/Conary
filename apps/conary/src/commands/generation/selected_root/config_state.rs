@@ -83,9 +83,15 @@ mod tests {
         )
         .unwrap();
 
-        let (_, captured) = capture_active_upper(&conn, &runtime_root, 7, snapshot, &cas)
-            .unwrap()
-            .unwrap();
+        let (captured_snapshot, captured) =
+            capture_active_upper(&conn, &runtime_root, 7, snapshot, &cas)
+                .unwrap()
+                .unwrap();
+        let (_, recaptured) =
+            capture_active_upper(&conn, &runtime_root, 7, captured_snapshot, &cas)
+                .unwrap()
+                .unwrap();
+        assert_eq!(recaptured, captured);
         let materialized = temp.path().join("materialized");
         materialize_captured_selected_root(&captured, &cas, &materialized).unwrap();
 
