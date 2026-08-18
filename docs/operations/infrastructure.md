@@ -269,6 +269,10 @@ old process. That can fail with `Text file busy`.
   their update or deletion. Live release construction rejects a tag commit
   that is not reachable from `origin/main` and revalidates the remote tag
   immediately before draft mutation and publication.
+- A protected tag whose release construction fails remains reserved evidence;
+  correct the cause in an issue-linked reviewed commit, prepare a strictly
+  higher suite version, and create a new tag. Never move or reuse the failed
+  tag.
 - Product-prefixed tags remain immutable historical evidence for their exact
   trees. They are not current baselines, version inputs, or workflow routes.
 - `release-build` constructs all four products from the exact suite tag,

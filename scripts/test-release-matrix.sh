@@ -545,7 +545,7 @@ test_release_dry_run_prefers_highest_numeric_suite_history() {
     commit_change "$repo" "apps/remi/changes.txt" "fix(remi): tighten deploy flow"
 
     output="$(run_release_dry_run "$repo" suite)"
-    assert_contains "$output" "Published baseline: v2.0.0" "the suite should choose the highest canonical numeric baseline"
+    assert_contains "$output" "Immutable tag baseline: v2.0.0" "the suite should choose the highest canonical numeric baseline"
     assert_contains "$output" "Tag after reviewed merge: v2.0.1" "the suite should bump from that baseline"
 }
 
@@ -572,7 +572,7 @@ test_release_dry_run_ignores_product_prefixed_history() {
     commit_change "$repo" "apps/conary-test/changes.txt" "fix(test): update bundle layout"
 
     output="$(run_release_dry_run "$repo" suite)"
-    assert_contains "$output" "Published baseline: v0.7.0" "product-prefixed history must not become suite authority"
+    assert_contains "$output" "Immutable tag baseline: v0.7.0" "product-prefixed history must not become suite authority"
     assert_contains "$output" "Tag after reviewed merge: v0.7.1" "the suite should ignore product-prefixed versions"
     if [[ "$output" == *"prepare 9.0.0"* ]]; then
         fail "superseded product release preparation must not enter suite notes"
