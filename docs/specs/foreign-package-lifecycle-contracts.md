@@ -775,6 +775,16 @@ RPM `%ghost %config` is ownership without payload: install and update neither
 create nor back up the path. Erase removes the path if it exists. Ghost
 metadata must never be converted into an empty payload artifact.
 
+A newly introduced declaration-only path (RPM ghost, Debian
+`remove-on-upgrade`, or ALPM backup without a payload member) is durable
+authority that performs no filesystem mutation: install and update neither
+create nor remove nor back up the user-created path. dpkg ignores a
+`remove-on-upgrade` conffile that was never a tracked conffile of the old
+version, so the path stays byte-exact there too. Every lane persists the
+incoming declaration with `materialized = false` and its exact source
+authority, ghost, and remove-on-upgrade flags, and no lane invents payload
+bytes for the declared path.
+
 ### Remove And Purge
 
 | Source contract | Ordinary remove | Purge |

@@ -127,10 +127,10 @@ pub(crate) fn persist_debian_remove_on_upgrade(
     path: &str,
     trove_id: i64,
 ) -> Result<()> {
-    let Some(mut config) = prepare_debian_remove_on_upgrade(conn, path, trove_id)? else {
-        return Ok(());
-    };
-    config.upsert(conn)?;
+    let mut config = prepare_debian_remove_on_upgrade(conn, path, trove_id)?;
+    if let Some(config) = config.as_mut() {
+        config.upsert(conn)?;
+    }
     Ok(())
 }
 
@@ -140,7 +140,14 @@ pub(crate) fn prepare_debian_remove_on_upgrade(
     trove_id: i64,
 ) -> Result<Option<ConfigFile>> {
     let Some(mut config) = ConfigFile::find_by_path(conn, path)? else {
-        return Ok(None);
+        // The declaration is durable authority even when no prior conffile
+        // identity exists: persist it as declaration-only Debian conffile
+        // state that performs no filesystem mutation.
+        let mut config = ConfigFile::new_declaration(path.to_string(), trove_id);
+        config.noreplace = true;
+        config.source = ConfigSource::Deb;
+        config.remove_on_upgrade = true;
+        return Ok(Some(config));
     };
     if config.source != ConfigSource::Deb || config.original_md5.is_none() {
         bail!(
@@ -210,6 +217,12 @@ pub(crate) fn prepare_config_install(
         {
             // dpkg ignores remove-on-upgrade when another package owns the
             // same path.
+            continue;
+        }
+        if old.is_none() {
+            // dpkg also ignores a remove-on-upgrade conffile that was never a
+            // tracked conffile: there is no prior identity to remove or save,
+            // so the declaration persists without touching the path.
             continue;
         }
         let current = read_existing(root, declaration.path())?;

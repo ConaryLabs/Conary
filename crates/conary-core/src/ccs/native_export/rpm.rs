@@ -297,13 +297,11 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
             ),
         }
     }
-    for config in manifest.config.files.iter().filter(|config| config.ghost()) {
-        if config.remove_on_upgrade() {
-            anyhow::bail!(
-                "RPM ghost config {} cannot also be remove-on-upgrade",
-                config.path()
-            );
-        }
+    for config in manifest.config.files.iter().filter(|config| {
+        !config.remove_on_upgrade()
+            && config.payload()
+                == crate::packages::config_authority::ConfigPayloadAssociation::Absent
+    }) {
         let options = rpm::FileOptions::ghost(config.path()).config();
         let options = if config.noreplace() {
             options.noreplace()

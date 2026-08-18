@@ -541,7 +541,13 @@ unmatched ALPM backup declarations are absent for distinct source-owned
 reasons. An unmatched ALPM declaration remains signed and persisted with
 `materialized = false`; it never creates, removes, or backs up a user-created
 path until a later version supplies a matching payload node. `CcsPackage`
-projects only verified declaration authority into transactions.
+projects only verified declaration authority into transactions. A manifest can
+author an absent declaration directly with `payload = "absent"` and
+`noreplace = true`; native export encodes that one declaration through each
+format's own mechanism (`%ghost %config(noreplace)`, a
+`remove-on-upgrade` conffile, or a backup entry without a payload member), and
+no exporter invents payload bytes for it. Authoring an absent declaration with
+`noreplace = false` is rejected before any export runs.
 
 Signed file conflict replacement and host-mutation policy are rejected while
 their typed transaction consumers do not exist. The reader never accepts a

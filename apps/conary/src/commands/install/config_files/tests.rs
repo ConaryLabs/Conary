@@ -187,6 +187,53 @@ fn remove_on_upgrade_requires_and_preserves_prior_debian_identity() {
 }
 
 #[test]
+fn deb_remove_on_upgrade_without_prior_identity_ignores_and_persists_declaration() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    fs::create_dir_all(root.join("etc")).unwrap();
+    fs::write(root.join("etc/new.conf"), b"user-created").unwrap();
+    let db = temp.path().join("db.sqlite");
+    conary_core::db::init(&db).unwrap();
+    let conn = conary_core::db::open(&db).unwrap();
+    let mut trove = conary_core::db::models::Trove::new(
+        "demo".to_string(),
+        "1.0.0".to_string(),
+        conary_core::db::models::TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    let trove_id = trove.insert(&conn).unwrap();
+
+    // dpkg ignores remove-on-upgrade for a path that was never a tracked
+    // conffile: the user-created file is untouched and nothing is removed.
+    let plan = prepare_config_install(
+        &conn,
+        &root,
+        ConfigSource::Deb,
+        &[deb_remove("/etc/new.conf")],
+        Some(trove_id),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(plan.files.is_empty());
+    assert!(plan.remove_paths.is_empty());
+    assert_eq!(
+        fs::read(root.join("etc/new.conf")).unwrap(),
+        b"user-created"
+    );
+
+    persist_debian_remove_on_upgrade(&conn, "/etc/new.conf", trove_id).unwrap();
+    let stored = ConfigFile::find_by_path(&conn, "/etc/new.conf")
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.trove_id, Some(trove_id));
+    assert_eq!(stored.source, ConfigSource::Deb);
+    assert!(stored.remove_on_upgrade);
+    assert!(!stored.materialized);
+    assert_eq!(stored.status, ConfigStatus::Missing);
+    assert_eq!(stored.original_hash, None);
+}
+
+#[test]
 fn prepared_arch_conflict_keeps_local_and_writes_pacnew() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("root");

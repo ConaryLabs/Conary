@@ -21,6 +21,9 @@ required = [
     "relations_virtual_provide",
     "relations_same_name_compatibility_provide",
     "configuration_matched_config",
+    "configuration_unmatched_declaration",
+    "configuration_local_modification",
+    "configuration_deletion",
     "configuration_upgrade",
     "configuration_removal",
     "lifecycle_shell",
@@ -84,7 +87,7 @@ native_corpus_fixture_version = "1.0.0-1"
 native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "4"
 native_corpus_dependency_probe = "phase4-repository-fixture"
-native_corpus_config_count = "1"
+native_corpus_config_count = "3"
 native_corpus_config_source = "rpm"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "rpm"
@@ -103,7 +106,7 @@ native_corpus_fixture_version = "1.0.0-1"
 native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "1"
 native_corpus_dependency_probe = "phase4-repository-fixture"
-native_corpus_config_count = "1"
+native_corpus_config_count = "3"
 native_corpus_config_source = "deb"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "deb"
@@ -122,7 +125,7 @@ native_corpus_fixture_version = "1.0.0-1"
 native_corpus_update_version = "1.0.1-1"
 native_corpus_dependency_count = "1"
 native_corpus_dependency_probe = "phase4-repository-fixture"
-native_corpus_config_count = "1"
+native_corpus_config_count = "3"
 native_corpus_config_source = "arch"
 native_corpus_lifecycle_fidelity = "native-lifecycle"
 native_corpus_source_format = "alpm"
@@ -150,13 +153,13 @@ run = "rm -rf /tmp/native-pm-corpus /tmp/native-pm-corpus-src /tmp/native-pm-cor
 exit_code = 0
 
 [[test.step]]
-run = ". /tmp/native-pm-corpus/native-fixture.env && case \"$NATIVE_TARGET\" in rpm) rpm -qp --qf '[%{FILENAMES}|%{FILEMODES}|%{FILEUSERNAME}|%{FILEGROUPNAME}\\n]' \"$NATIVE_PKG_FILE\" | grep -Fx '/opt|16872|root|root' ;; *) true ;; esac"
+run = ". /tmp/native-pm-corpus/native-fixture.env && case \"${native_target}\" in rpm) rpm -qp --qf '[%{FILENAMES}|%{FILEMODES}|%{FILEUSERNAME}|%{FILEGROUPNAME}\\n]' \"$NATIVE_PKG_FILE\" | grep -Fx '/opt|16872|root|root' ;; *) true ;; esac"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = ". /tmp/native-pm-corpus/native-fixture.env && case \"$NATIVE_TARGET\" in rpm) rpm -qp --provides \"$NATIVE_PKG_FILE\" | grep -Fx 'phase4-daily-driver-corpus = 1.0' ;; deb) test \"$(dpkg-deb --field \"$NATIVE_PKG_FILE\" Provides)\" = 'phase4-corpus-tool, phase4-daily-driver-corpus (= 1.0)' ;; arch) bsdtar -xOf \"$NATIVE_PKG_FILE\" .PKGINFO | grep -Fx 'provides = phase4-daily-driver-corpus=1.0' ;; esac"
+run = ". /tmp/native-pm-corpus/native-fixture.env && case \"${native_target}\" in rpm) rpm -qp --provides \"$NATIVE_PKG_FILE\" | grep -Fx 'phase4-daily-driver-corpus = 1.0' ;; deb) test \"$(dpkg-deb --field \"$NATIVE_PKG_FILE\" Provides)\" = 'phase4-corpus-tool, phase4-daily-driver-corpus (= 1.0)' ;; arch) bsdtar -xOf \"$NATIVE_PKG_FILE\" .PKGINFO | grep -Fx 'provides = phase4-daily-driver-corpus=1.0' ;; esac"
 
 [test.step.assert]
 exit_code = 0
@@ -174,7 +177,7 @@ run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/build-daily-driv
 exit_code = 0
 
 [[test.step]]
-run = ". /tmp/native-pm-corpus-v2/native-fixture.env && rm -rf /tmp/native-pm-corpus-v2-root && /opt/remi-tests/fixtures/native/assert-native-hardlink.sh \"$NATIVE_TARGET\" \"$NATIVE_PKG_FILE\" /tmp/native-pm-corpus-v2-root /usr/lib/phase4-corpus/hardlink-anchor /usr/lib/phase4-corpus/hardlink-copy 0 0 1700000000 && test \"$(sha256sum /tmp/native-pm-corpus-v2-root/etc/phase4-corpus/app.conf | awk '{print $1}')\" = 97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27 && case \"$NATIVE_TARGET\" in rpm) test \"$(rpm -qp --qf '%{VERSION}-%{RELEASE}' \"$NATIVE_PKG_FILE\")\" = \"${native_corpus_update_version}\" ;; deb) test \"$(dpkg-deb --field \"$NATIVE_PKG_FILE\" Version)\" = \"${native_corpus_update_version}\" ;; arch) bsdtar -xOf \"$NATIVE_PKG_FILE\" .PKGINFO | grep -Fx \"pkgver = ${native_corpus_update_version}\" ;; esac"
+run = ". /tmp/native-pm-corpus-v2/native-fixture.env && rm -rf /tmp/native-pm-corpus-v2-root && /opt/remi-tests/fixtures/native/assert-native-hardlink.sh \"$NATIVE_TARGET\" \"$NATIVE_PKG_FILE\" /tmp/native-pm-corpus-v2-root /usr/lib/phase4-corpus/hardlink-anchor /usr/lib/phase4-corpus/hardlink-copy 0 0 1700000000 && test \"$(sha256sum /tmp/native-pm-corpus-v2-root/etc/phase4-corpus/app.conf | awk '{print $1}')\" = 97d836d4bf6c4c49fa763836c117d738fef15b7d995bc2cf82e2a02704364d27 && case \"${native_target}\" in rpm) test \"$(rpm -qp --qf '%{VERSION}-%{RELEASE}' \"$NATIVE_PKG_FILE\")\" = \"${native_corpus_update_version}\" ;; deb) test \"$(dpkg-deb --field \"$NATIVE_PKG_FILE\" Version)\" = \"${native_corpus_update_version}\" ;; arch) bsdtar -xOf \"$NATIVE_PKG_FILE\" .PKGINFO | grep -Fx \"pkgver = ${native_corpus_update_version}\" ;; esac"
 
 [test.step.assert]
 exit_code = 0
@@ -213,7 +216,7 @@ exit_code = 0
 stdout_contains = "phase4-repository-fixture|1.0.0|1|${native_arch}|${native_scheme}|${REPO_NAME}|${native_profile}|repository|dependency"
 
 [[test.step]]
-run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus --expect-directory /opt=0750 --expect-directory /usr/lib/phase4-corpus/state=0750 --expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy --expect-node-metadata /usr/lib/phase4-corpus/hardlink-anchor=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-node-metadata /usr/lib/phase4-corpus/hardlink-copy=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --present /usr/share/phase4-repository-fixture/probe.txt --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/bin/phase4-corpus=565d3f61ffdbbca53c7371588ce6884b680dfa1d1c1bd7fe3954b4ab957e0676 --expect-sha256 /usr/bin/phase4-corpus-alt=1c279f8af2faaed5ae4aad470ab37742b2cede45b42b65d961f2bb33233e5ad3 --expect-symlink /usr/bin/phase4-corpus-link=phase4-corpus --expect-directory /opt=0750 --expect-directory /usr/lib/phase4-corpus/state=0750 --expect-hardlink /usr/lib/phase4-corpus/hardlink-anchor=/usr/lib/phase4-corpus/hardlink-copy --expect-node-metadata /usr/lib/phase4-corpus/hardlink-anchor=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-node-metadata /usr/lib/phase4-corpus/hardlink-copy=${native_corpus_payload_user},${native_corpus_payload_group},1700000000,0 --expect-sha256 /etc/phase4-corpus/app.conf=8b3ca388884ac9c33e5e1c849ac30bc59aa9d494e7afc5d91fb56c8a4e760eb2 --expect-sha256 /etc/phase4-corpus/app-local.conf=9773fc86d4e388ba3f5eba7408708b46ce20738acf98fc55a4e5f584bbe8af66 --expect-sha256 /etc/phase4-corpus/app-deleted.conf=d9697bd8e59efc7dc9863c9ae9b0c3745262015b3552a20712a9bcbfc3e47f79 --expect-sha256 /usr/lib/systemd/system/phase4-corpus.service=20200a86933288373c109a2e3289b2314ff6015886bfbad9bec6e613421e756a --expect-sha256 /usr/lib/kernel/install.d/95-phase4-corpus.install=8753356f470ea82416c2d7a71cbf8367d4cbe1a8b78f3276fe45035e114c3674 --present /usr/share/phase4-corpus/large-payload.bin --present /usr/share/phase4-repository-fixture/probe.txt --expect-sha256 /var/lib/phase4-corpus/scriptlet.marker=a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c --expect-user phase4-corpus-user=/var/lib/phase4-corpus,/bin/false,phase4-corpus-group"
 
 [test.step.assert]
 exit_code = 0
@@ -243,7 +246,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["7 regular files", "/etc/phase4-corpus/app.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
+stdout_contains_all = ["9 regular files", "/etc/phase4-corpus/app.conf", "/etc/phase4-corpus/app-deleted.conf", "/etc/phase4-corpus/app-local.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || printf('%04o', json_extract(payload_node_json, '$.source.mode') & 4095) FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/opt', '/usr/lib/phase4-corpus/state') ORDER BY path; SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || json_extract(payload_node_json, '$.source.kind.target') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path = '/usr/bin/phase4-corpus-link'\""
@@ -271,7 +274,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' config rows' FROM config_files 
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["${native_corpus_config_count} config rows", "/etc/phase4-corpus/app.conf|1|pristine|${native_corpus_config_source}"]
+stdout_contains_all = ["${native_corpus_config_count} config rows", "/etc/phase4-corpus/app-deleted.conf|1|pristine|${native_corpus_config_source}", "/etc/phase4-corpus/app-local.conf|1|pristine|${native_corpus_config_source}", "/etc/phase4-corpus/app.conf|1|pristine|${native_corpus_config_source}"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT capability || '|' || version || '|' || version_relation || '|' || kind || '|' || version_scheme || '|' || json_extract(provenance, '$.role') || '|' || COALESCE(json_extract(provenance, '$.format'), '') FROM provides WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND capability = 'phase4-daily-driver-corpus' AND kind = 'package' ORDER BY json_extract(provenance, '$.role')\""
@@ -464,7 +467,7 @@ stdout_contains_all = ["1 installed", "0 conflicts"]
 [[test]]
 id = "TNPM18"
 name = "daily_driver_corpus_configuration_upgrade"
-description = "Update through a bounded signed repository and prove the v2 native config artifact, persisted config authority, and selected generation agree"
+description = "Update through a bounded signed repository and prove pristine upgrade, a newly introduced unmatched declaration, local modification preservation, and deletion decisions across the typed config transaction"
 group = "daily-driver-corpus"
 timeout = 300
 fatal = true
@@ -483,6 +486,18 @@ init_system = "systemd"
 capabilities = ["native_lifecycle", "selected_root_generation"]
 
 [[test.corpus.coverage]]
+semantic = "configuration_unmatched_declaration"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "configuration_local_modification"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
+semantic = "configuration_deletion"
+artifact_roles = ["install_request", "update_request"]
+
+[[test.corpus.coverage]]
 semantic = "configuration_upgrade"
 artifact_roles = ["install_request", "update_request"]
 
@@ -494,6 +509,12 @@ exit_code = 0
 
 [[test.step]]
 run = ". /tmp/native-update-repository/native-update-repository.env && sqlite3 ${DB_PATH} \"SELECT r.name || '|' || r.default_strategy || '|' || r.source_profile || '|' || rp.name || '|' || rp.version || '|' || rp.version_scheme || '|' || rp.architecture || '|' || rp.checksum || '|' || k.status FROM repositories r JOIN repository_packages rp ON rp.repository_id = r.id JOIN repository_package_keys k ON k.repository_id = r.id WHERE r.name = '$NATIVE_UPDATE_REPOSITORY'\" | grep -Fx \"$NATIVE_UPDATE_REPOSITORY|binary|${native_profile}|phase4-daily-driver-corpus|${native_corpus_update_version}|${native_scheme}|${native_arch}|$NATIVE_UPDATE_CCS_SHA256|active\""
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "printf 'local = \"locally-edited\"\\nuser = \"phase4\"\\n' > /conary/etc/phase4-corpus/app-local.conf && printf 'unmatched = \"user-edited\"\\nuser = \"phase4\"\\n' > /conary/etc/phase4-corpus/app-unmatched.conf && rm -f /conary/etc/phase4-corpus/app-deleted.conf && test \"$(sha256sum /conary/etc/phase4-corpus/app-local.conf | awk '{print $1}')\" = 5f23c18d1ce79fd01be76b4fbb43cc20a1406193880a2797b46ed5cd9fd50731 && test \"$(sha256sum /conary/etc/phase4-corpus/app-unmatched.conf | awk '{print $1}')\" = 09f55aa386292b9525a334ba15a6a5e1922d08f3013772ae3b61c009b057b510 && test ! -e /conary/etc/phase4-corpus/app-deleted.conf"
 
 [test.step.assert]
 exit_code = 0
@@ -512,7 +533,19 @@ run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /con
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || t.version || '|' || COALESCE(t.architecture, '') || '|' || t.version_scheme || '|' || COALESCE(t.source_profile, '') || '|' || COALESCE(r.name, '') || '|' || t.install_source || '|' || t.install_reason FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = 'phase4-daily-driver-corpus'; SELECT path || '|' || original_hash || '|' || COALESCE(current_hash, '') || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus')\""
+run = "case \"${native_target}\" in rpm) /opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /etc/phase4-corpus/app-local.conf=5f23c18d1ce79fd01be76b4fbb43cc20a1406193880a2797b46ed5cd9fd50731 --expect-sha256 /etc/phase4-corpus/app-local.conf.rpmnew=7e6df4aca3f86658eeecc97b20d158a1526a43aca511148fafb594bbf75382e9 --expect-sha256 /etc/phase4-corpus/app-deleted.conf=8fda7f7f57ff0f6f2cd13db5c5d005359746d5d226f99ff1eb06d900b5586e85 --expect-sha256 /etc/phase4-corpus/app-unmatched.conf=09f55aa386292b9525a334ba15a6a5e1922d08f3013772ae3b61c009b057b510 ;; deb) /opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /etc/phase4-corpus/app-local.conf=5f23c18d1ce79fd01be76b4fbb43cc20a1406193880a2797b46ed5cd9fd50731 --expect-sha256 /etc/phase4-corpus/app-local.conf.dpkg-dist=7e6df4aca3f86658eeecc97b20d158a1526a43aca511148fafb594bbf75382e9 --expect-sha256 /etc/phase4-corpus/app-deleted.conf.dpkg-dist=8fda7f7f57ff0f6f2cd13db5c5d005359746d5d226f99ff1eb06d900b5586e85 --expect-sha256 /etc/phase4-corpus/app-unmatched.conf=09f55aa386292b9525a334ba15a6a5e1922d08f3013772ae3b61c009b057b510 ;; arch) /opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /etc/phase4-corpus/app-local.conf=5f23c18d1ce79fd01be76b4fbb43cc20a1406193880a2797b46ed5cd9fd50731 --expect-sha256 /etc/phase4-corpus/app-local.conf.pacnew=7e6df4aca3f86658eeecc97b20d158a1526a43aca511148fafb594bbf75382e9 --expect-sha256 /etc/phase4-corpus/app-deleted.conf=8fda7f7f57ff0f6f2cd13db5c5d005359746d5d226f99ff1eb06d900b5586e85 --expect-sha256 /etc/phase4-corpus/app-unmatched.conf=09f55aa386292b9525a334ba15a6a5e1922d08f3013772ae3b61c009b057b510 ;; esac"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "case \"${native_target}\" in rpm) rows=\"$(sqlite3 ${DB_PATH} \"SELECT path || '|' || COALESCE(original_hash, '') || '|' || COALESCE(current_hash, '') || '|' || noreplace || '|' || status || '|' || source || '|' || materialized || '|' || ghost || '|' || remove_on_upgrade FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/etc/phase4-corpus/app-deleted.conf', '/etc/phase4-corpus/app-local.conf', '/etc/phase4-corpus/app-unmatched.conf') ORDER BY path\")\" && test \"$rows\" = \"$(printf '%s\\n' '/etc/phase4-corpus/app-deleted.conf|8fda7f7f57ff0f6f2cd13db5c5d005359746d5d226f99ff1eb06d900b5586e85|8fda7f7f57ff0f6f2cd13db5c5d005359746d5d226f99ff1eb06d900b5586e85|1|pristine|rpm|1|0|0' '/etc/phase4-corpus/app-local.conf|7e6df4aca3f86658eeecc97b20d158a1526a43aca511148fafb594bbf75382e9|5f23c18d1ce79fd01be76b4fbb43cc20a1406193880a2797b46ed5cd9fd50731|1|modified|rpm|1|0|0' '/etc/phase4-corpus/app-unmatched.conf||09f55aa386292b9525a334ba15a6a5e1922d08f3013772ae3b61c009b057b510|1|modified|rpm|0|1|0')\" ;; deb) rows=\"$(sqlite3 ${DB_PATH} \"SELECT path || '|' || COALESCE(original_hash, '') || '|' || COALESCE(current_hash, '') || '|' || noreplace || '|' || status || '|' || source || '|' || materialized || '|' || ghost || '|' || remove_on_upgrade FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/etc/phase4-corpus/app-deleted.conf', '/etc/phase4-corpus/app-local.conf', '/etc/phase4-corpus/app-unmatched.conf') ORDER BY path\")\" && test \"$rows\" = \"$(printf '%s\\n' '/etc/phase4-corpus/app-deleted.conf|8fda7f7f57ff0f6f2cd13db5c5d005359746d5d226f99ff1eb06d900b5586e85||1|missing|deb|1|0|0' '/etc/phase4-corpus/app-local.conf|7e6df4aca3f86658eeecc97b20d158a1526a43aca511148fafb594bbf75382e9|5f23c18d1ce79fd01be76b4fbb43cc20a1406193880a2797b46ed5cd9fd50731|1|modified|deb|1|0|0' '/etc/phase4-corpus/app-unmatched.conf|||1|missing|deb|0|0|1')\" ;; arch) rows=\"$(sqlite3 ${DB_PATH} \"SELECT path || '|' || COALESCE(original_hash, '') || '|' || COALESCE(current_hash, '') || '|' || noreplace || '|' || status || '|' || source || '|' || materialized || '|' || ghost || '|' || remove_on_upgrade FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/etc/phase4-corpus/app-deleted.conf', '/etc/phase4-corpus/app-local.conf', '/etc/phase4-corpus/app-unmatched.conf') ORDER BY path\")\" && test \"$rows\" = \"$(printf '%s\\n' '/etc/phase4-corpus/app-deleted.conf|8fda7f7f57ff0f6f2cd13db5c5d005359746d5d226f99ff1eb06d900b5586e85|8fda7f7f57ff0f6f2cd13db5c5d005359746d5d226f99ff1eb06d900b5586e85|1|pristine|arch|1|0|0' '/etc/phase4-corpus/app-local.conf|7e6df4aca3f86658eeecc97b20d158a1526a43aca511148fafb594bbf75382e9|5f23c18d1ce79fd01be76b4fbb43cc20a1406193880a2797b46ed5cd9fd50731|1|modified|arch|1|0|0' '/etc/phase4-corpus/app-unmatched.conf|||1|missing|arch|0|0|0')\" ;; esac"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || t.version || '|' || COALESCE(t.architecture, '') || '|' || t.version_scheme || '|' || COALESCE(t.source_profile, '') || '|' || COALESCE(r.name, '') || '|' || t.install_source || '|' || t.install_reason FROM troves t LEFT JOIN repositories r ON r.id = t.installed_from_repository_id WHERE t.name = 'phase4-daily-driver-corpus'; SELECT path || '|' || original_hash || '|' || COALESCE(current_hash, '') || '|' || noreplace || '|' || status || '|' || source FROM config_files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path = '/etc/phase4-corpus/app.conf'\""
 
 [test.step.assert]
 exit_code = 0
@@ -537,7 +570,7 @@ exit_code = 0
 [[test]]
 id = "TNPM19"
 name = "daily_driver_corpus_remove_hooks_and_cleanup"
-description = "Purging the corpus package runs its pre-remove hook and deletes the tracked files and config"
+description = "Purging the corpus package runs its pre-remove hook and deletes the tracked files and config while preserving the typed per-format auxiliary artifacts"
 group = "daily-driver-corpus"
 timeout = 120
 fatal = true
@@ -567,13 +600,19 @@ exit_code = 0
 stdout_contains = "Removed package: phase4-daily-driver-corpus version ${native_corpus_update_version}"
 
 [[test.step]]
-run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-corpus/remove.marker=e1f79758cc42e6fe6037941205d1fbc37f5780f13aa077d0ba8287fd93cecd52 --absent /opt --absent /usr/bin/phase4-corpus --absent /usr/bin/phase4-corpus-alt --absent /usr/bin/phase4-corpus-link --absent /usr/lib/phase4-corpus/state --absent /usr/lib/phase4-corpus/hardlink-anchor --absent /usr/lib/phase4-corpus/hardlink-copy --absent /etc/phase4-corpus/app.conf --absent /usr/lib/systemd/system/phase4-corpus.service --absent /usr/lib/kernel/install.d/95-phase4-corpus.install --absent /usr/share/phase4-corpus/large-payload.bin"
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /var/lib/phase4-corpus/remove.marker=e1f79758cc42e6fe6037941205d1fbc37f5780f13aa077d0ba8287fd93cecd52 --absent /opt --absent /usr/bin/phase4-corpus --absent /usr/bin/phase4-corpus-alt --absent /usr/bin/phase4-corpus-link --absent /usr/lib/phase4-corpus/state --absent /usr/lib/phase4-corpus/hardlink-anchor --absent /usr/lib/phase4-corpus/hardlink-copy --absent /etc/phase4-corpus/app.conf --absent /etc/phase4-corpus/app-local.conf --absent /etc/phase4-corpus/app-deleted.conf --absent /usr/lib/systemd/system/phase4-corpus.service --absent /usr/lib/kernel/install.d/95-phase4-corpus.install --absent /usr/share/phase4-corpus/large-payload.bin"
 
 [test.step.assert]
 exit_code = 0
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-daily-driver-corpus'; SELECT COUNT(*) || ' config rows' FROM config_files WHERE path = '/etc/phase4-corpus/app.conf'\""
+run = "case \"${native_target}\" in rpm) /opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --absent /etc/phase4-corpus/app-unmatched.conf --expect-sha256 /etc/phase4-corpus/app-local.conf.rpmnew=7e6df4aca3f86658eeecc97b20d158a1526a43aca511148fafb594bbf75382e9 ;; deb) /opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --absent /etc/phase4-corpus/app-unmatched.conf --absent /etc/phase4-corpus/app-local.conf.dpkg-dist --absent /etc/phase4-corpus/app-deleted.conf.dpkg-dist ;; arch) /opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /etc/phase4-corpus/app-unmatched.conf=09f55aa386292b9525a334ba15a6a5e1922d08f3013772ae3b61c009b057b510 --expect-sha256 /etc/phase4-corpus/app-local.conf.pacnew=7e6df4aca3f86658eeecc97b20d158a1526a43aca511148fafb594bbf75382e9 ;; esac"
+
+[test.step.assert]
+exit_code = 0
+
+[[test.step]]
+run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' installed' FROM troves WHERE name = 'phase4-daily-driver-corpus'; SELECT COUNT(*) || ' config rows' FROM config_files WHERE path IN ('/etc/phase4-corpus/app.conf', '/etc/phase4-corpus/app-local.conf', '/etc/phase4-corpus/app-deleted.conf', '/etc/phase4-corpus/app-unmatched.conf')\""
 
 [test.step.assert]
 exit_code = 0
