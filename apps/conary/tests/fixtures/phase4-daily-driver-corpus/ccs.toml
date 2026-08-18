@@ -48,6 +48,18 @@ path = "/etc/phase4-corpus/app.conf"
 noreplace = true
 payload = "matched"
 
+[[config.files]]
+source = "ccs"
+path = "/etc/phase4-corpus/app-local.conf"
+noreplace = true
+payload = "matched"
+
+[[config.files]]
+source = "ccs"
+path = "/etc/phase4-corpus/app-deleted.conf"
+noreplace = true
+payload = "matched"
+
 [hooks]
 
 [[hooks.groups]]

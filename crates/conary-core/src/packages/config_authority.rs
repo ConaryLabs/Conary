@@ -133,12 +133,51 @@ impl SourceConfigDeclaration {
             }
             Self::Alpm(_) | Self::Eopkg(_) => {}
             Self::Ccs(value) if value.payload == ConfigPayloadAssociation::Absent => {
-                return Err(crate::Error::ConfigError(format!(
-                    "direct CCS config declaration {path} cannot omit its payload"
-                )));
+                // Every native exporter encodes an absent declaration through
+                // its own source-owned mechanism (RPM `%ghost %config`,
+                // Debian `remove-on-upgrade`, ALPM backup without a payload
+                // member), and all of them require `noreplace`.
+                if !value.noreplace {
+                    return Err(crate::Error::ConfigError(format!(
+                        "direct CCS absent config declaration {path} must be noreplace"
+                    )));
+                }
             }
             Self::Ccs(_) => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ccs_absent(noreplace: bool) -> SourceConfigDeclaration {
+        SourceConfigDeclaration::Ccs(CcsConfigDeclaration {
+            path: "/etc/demo/absent.conf".to_string(),
+            noreplace,
+            payload: ConfigPayloadAssociation::Absent,
+        })
+    }
+
+    #[test]
+    fn ccs_absent_declaration_requires_noreplace() {
+        assert!(ccs_absent(true).validate().is_ok());
+        let error = ccs_absent(false).validate().unwrap_err().to_string();
+        assert!(
+            error.contains("must be noreplace"),
+            "absent CCS declarations must carry the exact cross-format contract: {error}"
+        );
+    }
+
+    #[test]
+    fn ccs_matched_declaration_remains_exact() {
+        let matched = SourceConfigDeclaration::Ccs(CcsConfigDeclaration {
+            path: "/etc/demo/app.conf".to_string(),
+            noreplace: false,
+            payload: ConfigPayloadAssociation::Matched,
+        });
+        assert!(matched.validate().is_ok());
     }
 }

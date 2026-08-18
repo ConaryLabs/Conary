@@ -327,13 +327,18 @@ the stated scope, not whether a workstream happens to be active.
   timestamp attribution for the same digest-bound daily-driver artifact. #475
   is closed after adding digest-attributable pristine configuration upgrade.
   #477 is closed after carrying source-declared same-name compatibility
-  provides through the same focused daily-driver authority. The next bounded
-  #110 semantic-corpus slice has not yet been selected.
+  provides through the same focused daily-driver authority. #480 owns the
+  remaining configuration states on that same authority: newly introduced
+  unmatched declarations, local-modification preservation, and
+  deletion-before-update decisions, each bound to the typed v1-to-v2 update
+  artifacts and persisted config rows across RPM, DEB, and ALPM. The next
+  bounded #110 semantic-corpus slice has not yet been selected.
 - **Issues:** #110 as the corpus umbrella; #458 and #463 for focused
   daily-driver attribution; #462 and #464 for payload-topology export gaps;
   #460 and #461 for closed legacy parity defects; #470 for versioned dependency
   resolution; #473 for payload metadata attribution; #475 for configuration
-  upgrade attribution; #477 for same-name compatibility provides; plus #39
+  upgrade attribution; #477 for same-name compatibility provides; #480 for the
+  remaining configuration states; plus #39
   for bootstrap.
 - **User journey:** install the signed release through one documented bootstrap
   entry point; `conary system init` with no hand-edited state; sync and

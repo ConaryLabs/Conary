@@ -429,7 +429,9 @@ Each fixture family should record:
   suite runner, local QEMU validation scripts.
 - **Fast proof:** `cargo run -p conary-test -- list`;
   `cargo test -p conary-test suite_inventory`;
-  `cargo test -p conary-test phase4_native_pm_parity_manifest_carries_cross_source_and_daily_driver_contract`;
+  `cargo test -p conary-test native_corpus`;
+  `cargo test -p conary-test phase4_native_pm_parity_manifest_carries_cross_source_contract`;
+  `cargo test -p conary-test daily_driver::phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states`;
   `cargo test -p conary-test focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract`;
   `cargo test -p conary-test native_cross_source_`.
 - **Medium proof:**
@@ -504,8 +506,16 @@ Each fixture family should record:
   exact/native identity, regular files, one explicit directory,
   one exact symlink, one two-path hardlink set, one queried virtual provide,
   one exact versioned dependency resolved from the bounded loopback repository,
-  matched config, pristine config upgrade, exact payload ownership and timestamp
-  authority, and shell lifecycle; removal covers config cleanup. Each native package is independently
+  matched config, a newly introduced unmatched declaration,
+  local-modification preservation, a deletion-before-update decision, pristine
+  config upgrade, exact payload ownership and timestamp authority, and shell
+  lifecycle; removal covers config cleanup. The update proof stages exact local
+  edits, a deletion, and a user-created path against the installed v1 root,
+  then asserts the source-owned suffix artifacts (`.rpmnew`, `.dpkg-dist`),
+  the recreated or intentionally absent primary bytes, the byte-exact
+  declaration-only path, and the persisted `config_files` rows (original/current
+  hash, status, source, `materialized`, ghost, and remove-on-upgrade flags)
+  lane by lane; no distro gate or path heuristic decides a config outcome. Each native package is independently
   installed or extracted and both hardlink paths must report one device/inode
   identity with a link count of two, uid/gid `0`, and mtime `1700000000` before
   Conary installation begins. The selected-generation proof then requires both
@@ -528,7 +538,9 @@ Each fixture family should record:
   live-root materialization coverage. Do not infer large-file, source-trigger,
   activation, target-helper, conflict, or replacement coverage from the chain's
   2 MiB file, out-of-band trigger, disabled unit, adjacent helper path, or
-  file-collision negative. PRs run only that focused seven-test
+  file-collision negative. The unmatched-declaration claim is the newly
+  introduced declaration-only path's durable state, never a payload invention
+  or a message-text classification. PRs run only that focused seven-test
   chain on Fedora 44, Ubuntu 26.04, and Arch behind the stable
   `native-daily-driver-corpus` aggregate context; every lane applies both the
   ordinary suite-result and typed corpus-result gates.

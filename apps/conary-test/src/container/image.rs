@@ -790,6 +790,30 @@ printf 'fixture\n' > "$output/$file"
     }
 
     #[test]
+    fn arch_container_uses_pinned_image_archive_before_package_sync() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let containerfile =
+            manifest_dir.join("../conary/tests/integration/remi/containers/Containerfile.arch");
+        let contents = fs::read_to_string(containerfile).expect("read Arch containerfile");
+
+        let archive = contents
+            .find("Server = https://archive.archlinux.org/repos/2026/08/02/$repo/os/$arch")
+            .expect("Arch container must select the pinned image's official archive snapshot");
+        let sync = contents
+            .find("pacman -Syyu --noconfirm")
+            .expect("Arch container must force-refresh archive package databases");
+
+        assert!(
+            archive < sync,
+            "Arch archive authority must be configured before package synchronization"
+        );
+        assert!(
+            contents.contains("version 20260802.0.566770"),
+            "Arch archive date must remain visibly coupled to pinned image provenance"
+        );
+    }
+
+    #[test]
     fn package_mode_containerfiles_install_exact_canonical_artifacts() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let containers = manifest_dir.join("../conary/tests/integration/remi/containers");

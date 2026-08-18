@@ -596,15 +596,16 @@ from a bounded repository, and must preserve the native checksum in the
 installed lifecycle bundle while its repository checksum, selected-generation
 config bytes, and persisted pristine config hashes agree. The removal record
 binds to the installed v2 update request. Across the three completed cases the
-suite declares exactly fifteen properties: exact version, native architecture,
+suite declares exactly eighteen properties: exact version, native architecture,
 regular files, directories, symlinks, hardlinks, payload ownership, payload
 timestamps, a versioned dependency, a queried virtual provide, a queried
-source-declared same-name compatibility provide, matched config, pristine
-config upgrade, purge-time config removal, and shell lifecycle. The
-same-name assertion requires the source format's exact native metadata plus
-separate exact-identity and source-declared installed rows with typed version
-scheme and source-format provenance. Directory, symlink, hardlink,
-metadata, and relation claims require direct native metadata,
+source-declared same-name compatibility provide, matched config, a newly
+introduced unmatched declaration, local-modification preservation, a
+deletion-before-update decision, pristine config upgrade, purge-time config
+removal, and shell lifecycle. The same-name assertion requires the source format's exact native
+metadata plus separate exact-identity and source-declared installed rows with
+typed version scheme and source-format provenance. Directory, symlink,
+hardlink, metadata, and relation claims require direct native metadata,
 selected-generation, repository-provenance, and installed reason assertions;
 implicit parents, followed filesystem paths, and recorded metadata without a
 completed resolution do not count. The selected-generation assertion requires
@@ -613,6 +614,31 @@ the target transaction; it does not infer a named identity from RPM's display
 metadata. The source format comes from the explicit distro build-context
 override and must resolve to the closed RPM/DEB/ALPM type before evidence can
 count.
+
+The three configuration-state claims ride the same v1-to-v2 signed update and
+stay format-typed. Before the update the fixture stages an exact local edit on
+`app-local.conf`, deletes `app-deleted.conf`, and creates `app-unmatched.conf`
+with local content; the v2 native artifact ships new bytes for the first two
+and introduces a declaration-only path for the third (RPM `%ghost %config`,
+Debian `remove-on-upgrade`, ALPM backup without a payload member). The update
+must keep the edited `app-local.conf` bytes at the primary path and write the
+incoming v2 bytes to the source-owned suffix (`app-local.conf.rpmnew`,
+`app-local.conf.dpkg-dist`, or `app-local.conf.pacnew`), persisting that row as modified
+with the v2 original hash and the exact local current hash. A deleted
+`app-deleted.conf` is recreated with the v2 bytes under RPM and ALPM while
+Debian keeps the deletion and installs the v2 bytes as `.dpkg-dist`, with the
+persisted row pristine or missing according to the typed decision. The newly
+introduced `app-unmatched.conf` declaration never gains payload bytes and
+never mutates the user-created path: RPM ghost ownership and the ALPM
+declaration leave the file byte-exact on update, and dpkg ignores a
+`remove-on-upgrade` conffile that was never a tracked conffile; every lane
+persists the declaration row with `materialized = 0`, its source authority,
+and the exact ghost or remove-on-upgrade flag. The selected-generation
+assertions bind these outcomes to the v2 artifact digests and to the persisted
+`config_files` rows by exact hash and typed status. Purging the package then
+removes the primaries (including the RPM ghost path) and the Debian backup
+suffixes, while the ALPM declaration-only path and the RPM `.rpmnew` and ALPM
+`.pacnew` auxiliaries remain byte-exact, matching the source contracts.
 
 RPM export emits a directory entry when its mode differs from the implicit
 0755 parent contract or no descendant can create it. Default-mode parents of

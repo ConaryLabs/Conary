@@ -260,6 +260,9 @@ pub fn arch_for_format(arch: Option<&str>, format: &str) -> anyhow::Result<Strin
 mod tests {
     use super::*;
     use crate::packages::PackageFormat;
+    use crate::packages::config_authority::{
+        CcsConfigDeclaration, ConfigPayloadAssociation, SourceConfigDeclaration,
+    };
     use crate::payload::PayloadNodeKind;
     use std::os::unix::fs::PermissionsExt;
 
@@ -315,6 +318,122 @@ mod tests {
         assert!(arch_for_format(Some("noarch"), "deb").is_err());
         assert!(arch_for_format(None, "arch").is_err());
         assert!(arch_for_format(Some("riscv64"), "arch").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_exporters_encode_absent_config_declarations_per_format() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(source.path().join("etc/demo")).unwrap();
+        std::fs::write(source.path().join("etc/demo/app.conf"), b"matched\n").unwrap();
+
+        let mut manifest = crate::ccs::manifest::CcsManifest::new_minimal("config-demo", "1.0.0");
+        manifest.package.license = Some("MIT".to_string());
+        manifest.package.homepage = Some("https://example.invalid/config-demo".to_string());
+        manifest.package.authors = Some(crate::ccs::manifest::Authors {
+            maintainers: vec!["Config Demo <config@example.invalid>".to_string()],
+            upstream: None,
+        });
+        manifest.package.platform = Some(crate::ccs::manifest::Platform {
+            arch: Some("x86_64".to_string()),
+            ..Default::default()
+        });
+        manifest.config.files = vec![
+            SourceConfigDeclaration::Ccs(CcsConfigDeclaration {
+                path: "/etc/demo/app.conf".to_string(),
+                noreplace: true,
+                payload: ConfigPayloadAssociation::Matched,
+            }),
+            SourceConfigDeclaration::Ccs(CcsConfigDeclaration {
+                path: "/etc/demo/absent.conf".to_string(),
+                noreplace: true,
+                payload: ConfigPayloadAssociation::Absent,
+            }),
+        ];
+        let result = crate::ccs::builder::CcsBuilder::new(manifest, source.path())
+            .unwrap()
+            .build()
+            .unwrap();
+        let output = tempfile::tempdir().unwrap();
+
+        let rpm_path = output.path().join("config-demo.rpm");
+        rpm::generate(&result, &rpm_path).unwrap();
+        let rpm = crate::packages::rpm::RpmPackage::parse(rpm_path.to_str().unwrap()).unwrap();
+        assert_absent_declaration("rpm", &rpm, "/etc/demo/absent.conf", |declaration| {
+            let crate::packages::config_authority::SourceConfigDeclaration::Rpm(value) =
+                declaration
+            else {
+                panic!("rpm absent declaration has the wrong source kind");
+            };
+            value.ghost && value.noreplace
+        });
+
+        let deb_path = output.path().join("config-demo.deb");
+        deb::generate(&result, &deb_path).unwrap();
+        let deb = crate::packages::deb::DebPackage::parse(deb_path.to_str().unwrap()).unwrap();
+        assert_absent_declaration("deb", &deb, "/etc/demo/absent.conf", |declaration| {
+            let crate::packages::config_authority::SourceConfigDeclaration::Debian(value) =
+                declaration
+            else {
+                panic!("deb absent declaration has the wrong source kind");
+            };
+            value.remove_on_upgrade
+        });
+
+        let arch_path = output.path().join("config-demo.pkg.tar.zst");
+        arch::generate(&result, &arch_path).unwrap();
+        let arch = crate::packages::arch::ArchPackage::parse(arch_path.to_str().unwrap()).unwrap();
+        assert_absent_declaration("arch", &arch, "/etc/demo/absent.conf", |declaration| {
+            let crate::packages::config_authority::SourceConfigDeclaration::Alpm(value) =
+                declaration
+            else {
+                panic!("arch absent declaration has the wrong source kind");
+            };
+            value.payload == ConfigPayloadAssociation::Absent
+        });
+
+        // The absent declaration never invents payload bytes in any format.
+        for package in [
+            &rpm as &dyn PackageFormat,
+            &deb as &dyn PackageFormat,
+            &arch as &dyn PackageFormat,
+        ] {
+            assert!(
+                package
+                    .package_payload()
+                    .unwrap()
+                    .files()
+                    .iter()
+                    .all(|file| file.path != "/etc/demo/absent.conf"),
+                "absent declaration must not invent a payload member"
+            );
+        }
+    }
+
+    fn assert_absent_declaration(
+        format: &str,
+        package: &impl PackageFormat,
+        path: &str,
+        semantics: impl Fn(&SourceConfigDeclaration) -> bool,
+    ) {
+        let declarations = package.config_declarations().unwrap();
+        let absent = declarations
+            .iter()
+            .find(|declaration| declaration.path() == path)
+            .unwrap_or_else(|| panic!("{format} export dropped the absent declaration {path}"));
+        assert!(
+            semantics(absent),
+            "{format} absent declaration lost its typed source semantics: {absent:?}"
+        );
+        let matched = declarations
+            .iter()
+            .find(|declaration| declaration.path() == "/etc/demo/app.conf")
+            .unwrap_or_else(|| panic!("{format} export dropped the matched declaration"));
+        assert_eq!(
+            matched.payload(),
+            ConfigPayloadAssociation::Matched,
+            "{format} matched declaration changed its payload association"
+        );
     }
 
     #[cfg(unix)]

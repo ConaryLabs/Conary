@@ -641,11 +641,12 @@ impl TestRunner {
             db_path: &self.config.paths.db,
         };
 
-        for step in &test_def.step {
+        for (step_index, step) in test_def.step.iter().enumerate() {
+            let step_number = step_index + 1;
             let action = match StepAction::from_step(step, &self.vars) {
                 Some(a) => a,
                 None => {
-                    failure = Some("step has no recognized type".to_string());
+                    failure = Some(format!("step {step_number} has no recognized type"));
                     break;
                 }
             };
@@ -695,7 +696,9 @@ impl TestRunner {
                 let exec = match last_exec.as_ref() {
                     Some(e) => e,
                     None => {
-                        failure = Some("assertion step has no preceding exec result".to_string());
+                        failure = Some(format!(
+                            "step {step_number} assertion has no preceding exec result"
+                        ));
                         break;
                     }
                 };
@@ -703,7 +706,7 @@ impl TestRunner {
                 if let Err(e) =
                     evaluate_assertion(&assertion, exec.exit_code, &exec.stdout, &exec.stderr)
                 {
-                    failure = Some(format!("assertion failed: {e}"));
+                    failure = Some(format!("step {step_number} assertion failed: {e}"));
                     break;
                 }
             }

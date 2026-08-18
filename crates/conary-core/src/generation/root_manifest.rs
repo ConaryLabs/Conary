@@ -26,7 +26,7 @@ pub use overlay::{
     MountedSelectedRootOverlay, OverlayHardlinkCopyUp, OverlayLowerDirectoryRename,
     OverlayMetadataCopyUp, OverlayOpaqueDirectory, OverlayWhiteoutEncoding, OverlayXattrNamespace,
     SELECTED_ROOT_OVERLAY_CAPABILITIES_VERSION, SELECTED_ROOT_OVERLAY_PROFILE_VERSION,
-    SelectedRootOverlayCapabilities, SelectedRootOverlayProfile,
+    SelectedRootOverlayCapabilities, SelectedRootOverlayProfile, decode_config_state_upper_indexed,
     decode_selected_root_overlay_upper_indexed, encode_selected_root_overlay_upper_node,
     probe_selected_root_overlay_profile,
 };

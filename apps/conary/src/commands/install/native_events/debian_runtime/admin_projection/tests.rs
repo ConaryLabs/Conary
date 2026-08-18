@@ -91,8 +91,21 @@ fn projected_config() -> DebianConfigSnapshot {
         package_version: "1.2-3".to_string(),
         package_arch: Some("amd64".to_string()),
         path: "/etc/demo.conf".to_string(),
-        original_md5: "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+        status_digest: DebianConfigStatusDigest::Md5(
+            "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+        ),
         remove_on_upgrade: false,
+    }
+}
+
+fn projected_remove_on_upgrade_config() -> DebianConfigSnapshot {
+    DebianConfigSnapshot {
+        package_name: "demo".to_string(),
+        package_version: "1.2-3".to_string(),
+        package_arch: Some("amd64".to_string()),
+        path: "/etc/removed.conf".to_string(),
+        status_digest: DebianConfigStatusDigest::NewConffile,
+        remove_on_upgrade: true,
     }
 }
 
@@ -103,7 +116,7 @@ fn materialize_fixture() -> tempfile::TempDir {
         &admin,
         &[projected_package()],
         &[],
-        &[projected_config()],
+        &[projected_config(), projected_remove_on_upgrade_config()],
         None,
     )
     .unwrap();
@@ -118,13 +131,14 @@ fn selected_root_projection_contains_exact_dpkg_layout() {
     assert!(status.contains("Package: demo\nStatus: install ok installed\n"));
     assert!(status.contains("Architecture: amd64\nVersion: 1.2-3\n"));
     assert!(status.contains("Conffiles:\n /etc/demo.conf d41d8cd98f00b204e9800998ecf8427e\n"));
+    assert!(status.contains(" /etc/removed.conf newconffile remove-on-upgrade\n"));
     assert_eq!(
         fs::read_to_string(admin.join("info/demo.list")).unwrap(),
-        "/etc/demo.conf\n/usr/bin/demo\n"
+        "/etc/demo.conf\n/etc/removed.conf\n/usr/bin/demo\n"
     );
     assert_eq!(
         fs::read_to_string(admin.join("info/demo.conffiles")).unwrap(),
-        "/etc/demo.conf\n"
+        "/etc/demo.conf\nremove-on-upgrade /etc/removed.conf\n"
     );
     assert_eq!(
         fs::read_to_string(admin.join("triggers/refresh-cache")).unwrap(),
@@ -133,6 +147,37 @@ fn selected_root_projection_contains_exact_dpkg_layout() {
     assert!(admin.join("triggers/Unincorp").is_file());
     assert!(admin.join("triggers/Lock").is_file());
     assert!(!root.path().join("var/lib/dpkg").exists());
+}
+
+#[test]
+fn declaration_only_remove_on_upgrade_uses_typed_newconffile_status_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let mut trove = conary_core::db::models::Trove::new(
+        "demo".to_string(),
+        "1.2.3".to_string(),
+        conary_core::db::models::TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    trove.architecture = Some("amd64".to_string());
+    let trove_id = trove.insert(&conn).unwrap();
+    let mut config = conary_core::db::models::ConfigFile::new_declaration(
+        "/etc/removed.conf".to_string(),
+        trove_id,
+    );
+    config.source = conary_core::db::models::ConfigSource::Deb;
+    config.remove_on_upgrade = true;
+    config.insert(&conn).unwrap();
+
+    let configs = config_snapshots(&conn).unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(
+        configs[0].status_digest,
+        DebianConfigStatusDigest::NewConffile
+    );
+    assert!(configs[0].remove_on_upgrade);
 }
 
 #[test]

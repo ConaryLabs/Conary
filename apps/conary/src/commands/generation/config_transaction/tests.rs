@@ -482,6 +482,45 @@ fn deb_remove_on_upgrade_is_a_durable_generation_operation() {
 }
 
 #[test]
+fn deb_remove_on_upgrade_without_prior_identity_performs_no_mutation() {
+    // dpkg ignores a remove-on-upgrade conffile that was never a tracked
+    // conffile. The declaration remains durable authority without touching
+    // the user-created path.
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    fs::create_dir_all(root.join("etc")).unwrap();
+    fs::write(root.join("etc/new.conf"), b"user-created").unwrap();
+    let db_path = temp.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open(&db_path).unwrap();
+    let cas = CasStore::new(temp.path().join("objects")).unwrap();
+    let mut trove = conary_core::db::models::Trove::new(
+        "demo".to_string(),
+        "1.0.0".to_string(),
+        conary_core::db::models::TroveType::Package,
+        conary_core::repository::versioning::VersionScheme::Conary,
+    );
+    let trove_id = trove.insert(&conn).unwrap();
+
+    let transaction = capture_install(
+        &conn,
+        &root,
+        &cas,
+        ConfigInstallCapture {
+            source: ConfigSource::Deb,
+            declared: &[deb_remove("/etc/new.conf")],
+            incoming: &[],
+            replacing_trove_id: Some(trove_id),
+            replaced_trove_ids: &[trove_id],
+        },
+    )
+    .unwrap();
+
+    assert!(transaction.entries.is_empty());
+    assert!(root.join("etc/new.conf").exists());
+}
+
+#[test]
 fn generation_and_mutable_paths_share_exact_suffix_decisions() {
     let cases = [
         (ConfigSource::Rpm, true, ConfigSuffix::RpmNew.as_str()),

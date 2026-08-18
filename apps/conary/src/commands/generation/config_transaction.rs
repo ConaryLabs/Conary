@@ -130,6 +130,12 @@ pub(crate) fn capture_install(
                 // the path.
                 continue;
             }
+            if owner.is_none() {
+                // dpkg also ignores a remove-on-upgrade conffile that was
+                // never a tracked conffile: the declaration persists without
+                // any filesystem mutation.
+                continue;
+            }
         }
         let after = match (declaration, incoming_file) {
             (Some(declaration), _) if declaration.ghost() => Some(ConfigPackageState {
@@ -813,7 +819,7 @@ fn write_artifact(path: &Path, cas: &CasStore, artifact: &ConfigArtifact) -> Res
     Ok(())
 }
 
-fn create_whiteout(path: &Path) -> Result<()> {
+pub(super) fn create_whiteout(path: &Path) -> Result<()> {
     remove_overlay_entry(path)?;
     let parent = path
         .parent()

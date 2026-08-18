@@ -77,6 +77,7 @@ commands.
   and publication are owned by
   `apps/conary/src/commands/generation/config_transaction.rs`,
   `apps/conary/src/commands/generation/selected_root.rs`,
+  `apps/conary/src/commands/generation/selected_root/config_state.rs`,
   `apps/conary/src/commands/generation/selected_root/overlay_session.rs`,
   `apps/conary/src/commands/generation/selected_root/publication_authority.rs`, and
   `apps/conary/src/commands/generation/publication.rs`. Single-package install
@@ -166,6 +167,7 @@ commands.
   `crates/conary-core/benches/generation_db_snapshot.rs`,
   `crates/conary-core/src/generation/root_manifest.rs`,
   `crates/conary-core/src/generation/root_manifest/authority.rs`,
+  `crates/conary-core/src/generation/root_manifest/overlay/config_state.rs`,
   `crates/conary-core/src/generation/root_manifest/overlay/indexed.rs`,
   `crates/conary-core/src/generation/builder/carrier_capabilities.rs`,
   `crates/conary-core/src/generation/artifact.rs`,

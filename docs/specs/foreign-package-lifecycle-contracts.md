@@ -752,7 +752,9 @@ the pathname. The path must be absent from the incoming payload. On upgrade,
 Conary removes an unchanged old conffile, renames a locally modified one to
 `.dpkg-old`, removes a stale `.dpkg-dist`, and ignores the declaration while
 another installed package owns the path. Mutable-root and generation
-transactions persist the same operation and rollback snapshot.
+transactions persist the same operation and rollback snapshot. A declaration
+with no prior shipped MD5 projects dpkg's exact `newconffile` sentinel in the
+selected-root `Conffiles` status field; it never invents a payload digest.
 
 Generation config transaction schema version 4 is the only current contract.
 Regular current, incoming, and auxiliary artifacts carry exact SHA-256 plus
@@ -774,6 +776,16 @@ payload ownership. No path is sent to a manual conflict queue.
 RPM `%ghost %config` is ownership without payload: install and update neither
 create nor back up the path. Erase removes the path if it exists. Ghost
 metadata must never be converted into an empty payload artifact.
+
+A newly introduced declaration-only path (RPM ghost, Debian
+`remove-on-upgrade`, or ALPM backup without a payload member) is durable
+authority that performs no filesystem mutation: install and update neither
+create nor remove nor back up the user-created path. dpkg ignores a
+`remove-on-upgrade` conffile that was never a tracked conffile of the old
+version, so the path stays byte-exact there too. Every lane persists the
+incoming declaration with `materialized = false` and its exact source
+authority, ghost, and remove-on-upgrade flags, and no lane invents payload
+bytes for the declared path.
 
 ### Remove And Purge
 

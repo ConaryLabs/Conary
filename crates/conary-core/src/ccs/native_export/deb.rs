@@ -184,11 +184,16 @@ pub fn generate(result: &BuildResult, output_path: &Path) -> Result<GenerationRe
                     config.path()
                 );
             }
-            Ok(if config.remove_on_upgrade() {
-                format!("remove-on-upgrade {}", config.path())
-            } else {
-                config.path().to_string()
-            })
+            Ok(
+                if config.remove_on_upgrade()
+                    || config.payload()
+                        == crate::packages::config_authority::ConfigPayloadAssociation::Absent
+                {
+                    format!("remove-on-upgrade {}", config.path())
+                } else {
+                    config.path().to_string()
+                },
+            )
         })
         .collect::<Result<Vec<_>>>()?;
     if !conffiles.is_empty() {

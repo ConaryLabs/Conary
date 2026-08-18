@@ -31,8 +31,23 @@ pub(in crate::commands::install::native_events) struct DebianConfigSnapshot {
     package_version: String,
     package_arch: Option<String>,
     path: String,
-    original_md5: String,
+    status_digest: DebianConfigStatusDigest,
     remove_on_upgrade: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DebianConfigStatusDigest {
+    Md5(String),
+    NewConffile,
+}
+
+impl DebianConfigStatusDigest {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Md5(value) => value,
+            Self::NewConffile => "newconffile",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -79,22 +94,28 @@ pub(in crate::commands::install::native_events) fn config_snapshots(
     rows.map(|row| {
         let (package_name, package_version, package_arch, path, original_md5, remove) =
             row?;
-        let original_md5 = original_md5.with_context(|| {
-            format!(
-                "Debian conffile {path} for {package_name} {package_version} has no shipped MD5 authority"
-            )
-        })?;
-        validate_md5(&original_md5).with_context(|| {
-            format!(
-                "Debian conffile {path} for {package_name} {package_version} has invalid shipped MD5"
-            )
-        })?;
+        let status_digest = match original_md5 {
+            Some(original_md5) => {
+                validate_md5(&original_md5).with_context(|| {
+                    format!(
+                        "Debian conffile {path} for {package_name} {package_version} has invalid shipped MD5"
+                    )
+                })?;
+                DebianConfigStatusDigest::Md5(original_md5)
+            }
+            None if remove => DebianConfigStatusDigest::NewConffile,
+            None => {
+                bail!(
+                    "Debian conffile {path} for {package_name} {package_version} has no shipped MD5 authority"
+                )
+            }
+        };
         Ok(DebianConfigSnapshot {
             package_name,
             package_version,
             package_arch,
             path: absolute_package_path(&path)?,
-            original_md5,
+            status_digest,
             remove_on_upgrade: remove,
         })
     })
@@ -519,7 +540,11 @@ fn write_status_stanza(
     if !configs.is_empty() {
         status.push_str("Conffiles:\n");
         for config in configs {
-            status.push_str(&format!(" {} {}", config.path, config.original_md5));
+            status.push_str(&format!(
+                " {} {}",
+                config.path,
+                config.status_digest.as_str()
+            ));
             if config.remove_on_upgrade {
                 status.push_str(" remove-on-upgrade");
             }
