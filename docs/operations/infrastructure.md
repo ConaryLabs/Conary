@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-15
-revision: 26
+last_updated: 2026-08-18
+revision: 27
 summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and retired Forge staging guidance for Conary contributors and coding assistants
 ---
 
@@ -280,6 +280,14 @@ old process. That can fail with `Text file busy`.
   assets and creates a GitHub release attestation. Released-artifact proof must
   reject any draft or mutable release; closeout independently runs
   `gh release verify` and `gh release verify-asset`.
+- Conary's release bundle also owns `conary-bootstrap-v1.manifest` and its
+  detached signature. The manifest binds the canonical tag/version plus exact
+  Fedora 44 RPM, Ubuntu 26.04 DEB, and Arch x86_64 package basenames, sizes,
+  and SHA-256 values. The public `/install-conary-preview.sh` endpoint embeds
+  the matching release public key, verifies signed authority before host
+  selection, defaults to preview, and requires `--apply --yes` for the native
+  package transaction. The exact-tag released-artifact workflow proves that
+  path inside a clean container for every supported host.
 - `merge-validation` proves the current source tree through deterministic
   source, build, policy, and test checks. It must not probe mutable production
   endpoints, because production continues to serve the previously deployed

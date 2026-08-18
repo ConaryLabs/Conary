@@ -55,6 +55,35 @@
 				</div>
 			</section>
 
+			<section class="install-step" id="signed-bootstrap">
+				<div class="step-heading">
+					<span class="step-number">00</span>
+					<div>
+						<h2>Use the signed bootstrap protocol when its carrying release is pinned</h2>
+						<p>
+							The installer endpoint is inspectable now. It fails closed until the latest
+							immutable release contains the signed <code>conary-bootstrap-v1.manifest</code>
+							and its detached signature. Preview is the default; installation requires the
+							explicit <code>--apply --yes</code> pair.
+						</p>
+					</div>
+				</div>
+
+				<TerminalFrame title="download, inspect, and preview">
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">curl --proto '=https' --tlsv1.2 -fLO https://conary.io/install-conary-preview.sh</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">less install-conary-preview.sh</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">bash ./install-conary-preview.sh</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">bash ./install-conary-preview.sh --apply --yes</span></span>
+				</TerminalFrame>
+
+				<div class="boundary-note step-note">
+					<strong>Do not pipe the endpoint into a shell.</strong>
+					The script verifies product-signed release authority before selecting a host
+					artifact, verifies that artifact before invoking the native package manager,
+					and leaves system initialization to the native release package.
+				</div>
+			</section>
+
 			<details class="retained-runbook">
 				<summary>Retained {previewRelease.tag} commands — paused, do not run</summary>
 				<section class="install-step" id="preflight">

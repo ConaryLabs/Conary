@@ -15,6 +15,9 @@ artifact_matrix="docs/operations/release-artifact-matrix.md"
 feedback_template=".github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
 site_preview_release="site/src/lib/preview-release.ts"
 site_install_page="site/src/routes/install/+page.svelte"
+site_bootstrap_installer="site/static/install-conary-preview.sh"
+bootstrap_manifest_builder="scripts/bootstrap-manifest.sh"
+bootstrap_installer_tests="scripts/test-install-conary-preview.sh"
 rpm_containerfile="packaging/rpm/Containerfile.build"
 rpm_spec="packaging/rpm/conary.spec"
 deb_containerfile="packaging/deb/Containerfile.build"
@@ -146,6 +149,9 @@ for required_file in \
     "$feedback_template" \
     "$site_preview_release" \
     "$site_install_page" \
+    "$site_bootstrap_installer" \
+    "$bootstrap_manifest_builder" \
+    "$bootstrap_installer_tests" \
     "$rpm_containerfile" \
     "$rpm_spec" \
     "$deb_containerfile" \
@@ -167,6 +173,12 @@ require_match "$release_build" 'issues/new\?template=pre_alpha_feedback\.md' 'pr
 require_match "$artifact_matrix" '\.github/ISSUE_TEMPLATE/pre_alpha_feedback\.md' 'pre-alpha artifact-matrix feedback path'
 require_match "$site_preview_release" 'issues/new\?template=pre_alpha_feedback\.md' 'pre-alpha site feedback URL'
 require_match "$site_install_page" 'Open pre-alpha feedback' 'pre-alpha site feedback label'
+require_match "$site_bootstrap_installer" 'RELEASE_PUBLIC_KEY_DER_BASE64=' 'bootstrap installer embedded release key'
+require_match "$site_bootstrap_installer" 'openssl pkeyutl -verify[\s\S]*manifest signature verification failed' 'bootstrap manifest signature verification before parsing'
+require_match "$site_bootstrap_installer" 'artifact size verification failed[\s\S]*artifact SHA-256 verification failed[\s\S]*install_command=' 'bootstrap artifact verification before package-manager selection'
+require_match "$site_bootstrap_installer" 'installation requires explicit --apply --yes confirmation' 'bootstrap explicit apply confirmation'
+forbid_match "$site_bootstrap_installer" 'conary system init' 'installer-owned system initialization'
+forbid_match "$site_install_page" 'curl[^\n|]*\|[^\n]*sh' 'download-and-execute installer documentation'
 
 require_match "$release_build" "tags: \['v\*'\]" 'single suite release trigger'
 forbid_match "$release_build" 'remi-v\*|conaryd-v\*|conary-test-v\*' 'product-prefixed current release trigger'
@@ -224,6 +236,8 @@ require_job_match "$release_build" bundle-conary 'require_exact_asset DEB[\s\S]*
 require_job_match "$release_build" bundle-conary 'require_exact_asset Arch[\s\S]*release-packages/conary-\$\{VERSION\}-1-x86_64\.pkg\.tar\.zst"[\s\S]*release-packages/\*\.pkg\.tar\.zst' 'exact version-matching Arch release asset assertion'
 require_job_match "$release_build" bundle-conary 'CCS_FILE="release-packages/conary-\$\{VERSION\}\.ccs"' 'direct version-matching CCS signing path'
 forbid_match "$release_build" 'CCS_FILE=\$\(ls ' 'ambiguous first-match CCS signing path'
+require_job_match "$release_build" bundle-conary 'scripts/bootstrap-manifest\.sh[\s\S]*conary-bootstrap-v1\.manifest[\s\S]*sign_hash "\$BOOTSTRAP_MANIFEST"[\s\S]*sign_hash --verify "\$BOOTSTRAP_MANIFEST"' 'signed and verified release bootstrap manifest construction'
+require_job_match "$release_build" bundle-suite 'conary-bootstrap-v1\.manifest[\s\S]*conary-bootstrap-v1\.manifest\.sig[\s\S]*artifact_patterns \| length\) == 13' 'complete bootstrap asset publication'
 require_job_match "$release_build" bundle-conary 'sign_hash --show-public-key[\s\S]*TRUSTED_UPDATE_KEYS[\s\S]*release signing key does not match an embedded trusted update key' 'live signing key must match an embedded trusted update key'
 require_job_match "$release_build" bundle-suite 'Publication and released-package proof do not make[\s\S]*pinned external-tester release[\s\S]*issue #110[\s\S]*tester loop stays[\s\S]*paused' 'release notes must keep publication separate from tester authority'
 forbid_match "$release_build" '### Supported tester lane|blob/\$\{TAG_NAME\}/docs/guides/agent-assisted-tester-loop\.md' 'premature tester-lane release note'
@@ -233,6 +247,7 @@ require_match "$release_build" 'bundle_name: \$\{\{ steps\.meta\.outputs\.bundle
 require_match "$release_build" 'deploy_mode: \$\{\{ steps\.meta\.outputs\.deploy_mode \}\}' 'prepare deploy_mode output'
 require_match "$release_build" 'artifact_patterns: \$\{\{ steps\.meta\.outputs\.artifact_patterns \}\}' 'prepare artifact_patterns output'
 require_match "$release_build" 'build-conary-test:' 'conary-test build lane'
+require_match "$release_build" 'bootstrap-rehearsal:' 'release bootstrap rehearsal lane'
 require_match "$release_build" 'bundle-suite:' 'single suite publication lane'
 forbid_match "$release_build" '^  publish-(remi|conaryd|conary-test):' 'independent product publication lane'
 require_match "$release_build" 'workspace-validation:' 'release workspace validation lane'
@@ -258,6 +273,10 @@ require_job_match "$release_build" workspace-validation "$namespace_before_tests
 require_match "$release_build" 'build-ccs:[\s\S]*needs: \[prepare, workspace-validation\]' 'ccs build should need workspace validation'
 require_match "$release_build" 'build-remi:[\s\S]*needs: \[prepare, workspace-validation\]' 'remi build should need workspace validation'
 require_job_match "$release_build" bundle-suite 'needs:[\s\S]*bundle-conary[\s\S]*build-remi[\s\S]*build-conaryd[\s\S]*build-conary-test' 'suite publication must wait for every product bundle'
+require_job_match "$release_build" bundle-suite 'needs:[\s\S]*bootstrap-rehearsal' 'suite publication must wait for clean-host bootstrap rehearsal'
+require_job_match "$release_build" bootstrap-rehearsal "${fedora_release_image}[\s\S]*${ubuntu_release_image}[\s\S]*${arch_release_image}" 'bootstrap rehearsal pinned supported-host images'
+require_job_match "$release_build" bootstrap-rehearsal 'conary-bootstrap-v1\.manifest[\s\S]*CONARY_BOOTSTRAP_TESTING=1[\s\S]*install-conary-preview\.sh[\s\S]*--apply --yes' 'bootstrap rehearsal signed clean-host lifecycle'
+require_job_match "$release_build" bootstrap-rehearsal 'arch\)[\s\S]*pacman -Syu --noconfirm curl openssl sudo ca-certificates' 'Arch bootstrap rehearsal must avoid an unsupported partial upgrade'
 require_job_match "$release_build" bundle-suite 'copy_exact[\s\S]*conary-\$\{VERSION\}\.ccs[\s\S]*remi-\$\{VERSION\}-linux-x64[\s\S]*conaryd-\$\{VERSION\}-linux-x64[\s\S]*conary-test-\$\{VERSION\}-linux-x64' 'suite bundle must require every product artifact'
 require_job_match "$release_build" bundle-suite '\.artifacts \| map\(\{product, bundle_name, deploy_mode\}\)[\s\S]*"conary"[\s\S]*"remi"[\s\S]*"conaryd"[\s\S]*"conary-test"' 'suite bundle must validate exact artifact identities and routes'
 require_job_match "$release_build" bundle-suite 'cmp[\s\S]*--version[\s\S]*sha256sum -- "\$\{assets\[@\]\}" > SHA256SUMS[\s\S]*sha256sum -c SHA256SUMS' 'suite bundle must prove tar identity, versions, and complete checksums'
@@ -346,6 +365,7 @@ require_job_match "$artifact_proof_workflow" native-package-lifecycle 'release-m
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh api[\s\S]*X-GitHub-Api-Version: 2026-03-10[\s\S]*releases/tags/\$\{RELEASE_TAG\}[\s\S]*\$\(jq -r '\''\.draft'\'' <<< "\$release_state"\)" == "false"[\s\S]*\$\(jq -r '\''\.immutable'\'' <<< "\$release_state"\)" == "true"' 'published artifact proof must reject a draft, mutable, or mismatched GitHub release'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle '\.schema_version == 1 and \(\.dry_run \| type\) == "boolean"' 'published artifact metadata schema and boolean dry-run validation'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh release download "\$RELEASE_TAG"[\s\S]*--pattern metadata\.json[\s\S]*sha256sum -c SHA256SUMS --ignore-missing[\s\S]*published_digest[\s\S]*actual_digest' 'published artifact metadata, checksum, and GitHub digest proof'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle 'Prove the signed bootstrap in a clean supported host[\s\S]*install-conary-preview\.sh[\s\S]*--manifest-url[\s\S]*--apply --yes' 'clean-host signed bootstrap proof'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'images build[\s\S]*--native-package "\$\{\{ steps\.release\.outputs\.native_package \}\}"[\s\S]*CONARY_TEST_REUSE_IMAGE: "1"[\s\S]*--suite native-cross-source-lifecycle' 'published native package installation and Cartesian lifecycle proof'
 require_job_match "$artifact_proof_workflow" release-artifact-proof 'needs: native-package-lifecycle[\s\S]*MATRIX_RESULT[\s\S]*"\$MATRIX_RESULT" != "success"' 'stable all-distro published-artifact proof gate'
 
