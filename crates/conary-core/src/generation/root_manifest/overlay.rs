@@ -6,7 +6,7 @@ mod config_state;
 mod indexed;
 mod probe;
 
-pub use config_state::decode_complete_config_state_upper_indexed;
+pub use config_state::decode_config_state_upper_indexed;
 pub use indexed::decode_selected_root_overlay_upper_indexed;
 pub use probe::{
     MountedSelectedRootOverlay, OverlayHardlinkCopyUp, OverlayLowerDirectoryRename,

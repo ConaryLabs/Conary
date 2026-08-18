@@ -517,10 +517,10 @@ decoding the transaction upper, and never perform complete before/after
 selected-root scans. With no pending publication debt, the current verified
 generation `root.erofs` mounts directly as the immutable-content lower and the
 typed `/etc`, `/var`, and `/srv` manifest is the top lower layer. Before that
-layer is prepared, the active generation's complete `/etc` upper is decoded as
-an opaque `/etc` delta against the indexed generation snapshot, so user edits,
-deletions, new paths, and OverlayFS markers become the transaction's typed
-prior authority instead of being reconstructed from the artifact seed. The
+layer is prepared, the active generation's sparse `/etc` upper is decoded as
+an `/etc`-scoped delta against the indexed generation snapshot, so user edits,
+whiteout deletions, new paths, and OverlayFS markers become the transaction's
+typed prior authority while pristine lower-only paths remain intact. The
 session strictly unmounts the transaction overlay before that nested composefs
 mount.
 Recoverable snapshots and first-generation database authority still use an
@@ -536,7 +536,7 @@ and repository inputs. It retains revision 39's generation database mutation
 epoch and replaces repository chunk-list columns with signed transport
 envelopes.
 
-1. **Select**: Use the latest cumulative selected-root snapshot as lower authority when publication debt is pending. Otherwise decode the current generation's complete config upper into the indexed prior snapshot, then mount the verified composefs image directly beneath that updated typed mutable-state layer; only first-generation database authority still reconstructs the complete lower
+1. **Select**: Use the latest cumulative selected-root snapshot as lower authority when publication debt is pending. Otherwise decode the current generation's sparse config upper into the indexed prior snapshot, then mount the verified composefs image directly beneath that updated typed mutable-state layer; only first-generation database authority still reconstructs the complete lower
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
 3. **Record**: Freeze and strictly unmount, decode the upper into a typed changed-path delta, validate and append only affected indexed authority, and bind recoverable publication debt to that child snapshot before committing package state
 4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content

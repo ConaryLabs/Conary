@@ -819,7 +819,7 @@ fn write_artifact(path: &Path, cas: &CasStore, artifact: &ConfigArtifact) -> Res
     Ok(())
 }
 
-fn create_whiteout(path: &Path) -> Result<()> {
+pub(super) fn create_whiteout(path: &Path) -> Result<()> {
     remove_overlay_entry(path)?;
     let parent = path
         .parent()

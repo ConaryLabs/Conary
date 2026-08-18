@@ -1,6 +1,6 @@
 // conary-core/src/generation/root_manifest/overlay/config_state.rs
 
-//! Complete generation config-upper decoding into indexed root authority.
+//! Generation config-upper decoding into indexed root authority.
 
 use super::{
     SelectedRootOverlayProfile, decode_upper_operations, expand_prior_hardlink_groups, indexed,
@@ -11,16 +11,14 @@ use crate::generation::root_manifest::{
 };
 use std::path::Path;
 
-/// Decode one generation's complete `/etc` upper into selected-root authority.
+/// Decode one generation's sparse `/etc` upper into selected-root authority.
 ///
 /// Generation config uppers are seeded from the complete mutable-state
-/// manifest before typed config mutations are applied. Treating that tree as
-/// an ordinary sparse OverlayFS delta would lose user deletions that need no
-/// whiteout because the composefs lower does not own package config state.
-/// This boundary therefore projects the upper beneath `/etc` and marks that
-/// directory as a complete replacement while retaining ordinary OverlayFS
-/// whiteout and private-xattr decoding for nodes that do carry those markers.
-pub fn decode_complete_config_state_upper_indexed(
+/// manifest before typed config mutations reduce pristine nodes to the
+/// generation lower. User deletions are retained as OverlayFS whiteouts. This
+/// boundary projects that exact sparse tree beneath `/etc`; absence alone is
+/// never interpreted as deletion.
+pub fn decode_config_state_upper_indexed(
     upper: &Path,
     hardlink_namespace: &str,
     conn: &rusqlite::Connection,
@@ -30,12 +28,8 @@ pub fn decode_complete_config_state_upper_indexed(
 ) -> crate::Result<SelectedRootManifestDelta> {
     profile.validate()?;
     let prior_root = prior.root(conn)?;
-    let (mut config_root, entries) =
+    let (config_root, entries) =
         crate::generation::root_manifest::scan_payload_tree(upper, cas, hardlink_namespace)?;
-    config_root
-        .source
-        .xattrs
-        .insert(format!("{}opaque", profile.private_prefix()), b"y".to_vec());
 
     let mut projected = Vec::with_capacity(entries.len() + 1);
     projected.push(GenerationRootEntry {

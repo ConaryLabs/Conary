@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use conary_core::filesystem::CasStore;
 use conary_core::generation::root_manifest::{
     CapturedSelectedRoot, SelectedRootOverlayProfile, SelectedRootSnapshot,
-    decode_complete_config_state_upper_indexed,
+    decode_config_state_upper_indexed,
 };
 use conary_core::runtime_root::ConaryRuntimeRoot;
 use std::fs;
@@ -32,7 +32,7 @@ pub(super) fn capture_active_upper(
     }
 
     let namespace = format!("generation-{generation}-config-state-v1");
-    let delta = decode_complete_config_state_upper_indexed(
+    let delta = decode_config_state_upper_indexed(
         &upper,
         &namespace,
         conn,
@@ -78,6 +78,10 @@ mod tests {
         fs::create_dir_all(upper.join("demo")).unwrap();
         fs::write(upper.join("demo/local.conf"), b"locally edited\n").unwrap();
         fs::write(upper.join("demo/unmatched.conf"), b"user created\n").unwrap();
+        crate::commands::generation::config_transaction::create_whiteout(
+            &upper.join("demo/deleted.conf"),
+        )
+        .unwrap();
 
         let (_, captured) = capture_active_upper(&conn, &runtime_root, 7, snapshot, &cas)
             .unwrap()

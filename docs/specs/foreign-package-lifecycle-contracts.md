@@ -752,7 +752,9 @@ the pathname. The path must be absent from the incoming payload. On upgrade,
 Conary removes an unchanged old conffile, renames a locally modified one to
 `.dpkg-old`, removes a stale `.dpkg-dist`, and ignores the declaration while
 another installed package owns the path. Mutable-root and generation
-transactions persist the same operation and rollback snapshot.
+transactions persist the same operation and rollback snapshot. A declaration
+with no prior shipped MD5 projects dpkg's exact `newconffile` sentinel in the
+selected-root `Conffiles` status field; it never invents a payload digest.
 
 Generation config transaction schema version 4 is the only current contract.
 Regular current, incoming, and auxiliary artifacts carry exact SHA-256 plus
