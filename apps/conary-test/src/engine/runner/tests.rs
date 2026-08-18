@@ -295,6 +295,13 @@ async fn test_runner_fails_on_bad_exit_code() {
             .unwrap()
             .contains("exit code")
     );
+    assert!(
+        suite.results[0]
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("step 1")
+    );
 }
 
 #[tokio::test]
