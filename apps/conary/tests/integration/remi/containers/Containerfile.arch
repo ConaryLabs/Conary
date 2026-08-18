@@ -14,11 +14,16 @@
 #     -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
 #     https://registry-1.docker.io/v2/library/archlinux/manifests/latest
 # and take the Docker-Content-Digest response header.
+# The pinned image reports version 20260802.0.566770. Keep the official archive
+# date below coupled to that image provenance when deliberately bumping it.
 FROM docker.io/library/archlinux:latest@sha256:345a872f6c95e082d4b8c050af637eebb57402c6e2177b411c3acf7df84eb33b
 
 ARG INSTALL_MODE=binary
 
-RUN pacman -Syu --noconfirm \
+RUN printf '%s\n' \
+        'Server = https://archive.archlinux.org/repos/2026/08/02/$repo/os/$arch' \
+        > /etc/pacman.d/mirrorlist \
+    && pacman -Syyu --noconfirm \
         ca-certificates \
         curl \
         diffutils \
