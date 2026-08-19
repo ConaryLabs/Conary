@@ -106,14 +106,6 @@ copy_elf_closure "${install_path}"
 copy_elf_closure /bin/false
 copy_elf_closure /usr/bin/true
 
-# Information-only boot-runtime invocations execute the provider staged from
-# the selected root. The layout fixture owns a deterministic depmod boundary;
-# source packages invoke that target service instead of replacing it.
-if [[ ! -x "${stage}/usr/sbin/depmod" ]]; then
-  echo "Selected-root depmod fixture is missing: ${stage}/usr/sbin/depmod" >&2
-  exit 1
-fi
-
 # A selected root advertises service-manager lifecycle support only when its
 # provider executable is part of that root. The deterministic fixture is the
 # execution boundary, while the booted host's real systemctl remains the
@@ -187,7 +179,6 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   --present /bin/bash \
   --present /bin/false \
   --present /usr/bin/bash \
-  --present /usr/sbin/depmod \
   --present "${systemctl_path:-/usr/bin/true}" \
   --present "${install_path}" \
   --present /lib64/ld-linux-x86-64.so.2 \

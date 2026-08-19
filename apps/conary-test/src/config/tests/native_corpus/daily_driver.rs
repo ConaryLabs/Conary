@@ -125,7 +125,6 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "|repository|dependency",
         "/usr/share/phase4-repository-fixture/probe.txt",
         "/var/lib/phase4-corpus/scriptlet.marker",
-        "/var/lib/phase4-corpus/depmod-help.marker",
         "captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service",
         "pending|1",
         "RuntimeServiceActivation",
@@ -654,7 +653,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "[native_export.arch]",
         "depends = [\"phase4-repository-fixture=1.0.0\"]",
         "provides = [\"phase4-corpus-tool\", \"phase4-daily-driver-corpus=1.0\"]",
-        "/usr/sbin/depmod --help > /var/lib/phase4-corpus/depmod-help.marker",
+        "/usr/sbin/depmod -a",
     ] {
         assert!(
             primary_fixture.contains(required),
@@ -705,12 +704,10 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "if ($1 ~ /^\\//) { print $1 }",
         "print $3",
         "copy_elf_closure /bin/false",
-        "Selected-root depmod fixture is missing",
         "systemctl_path=/usr/bin/systemctl",
         "Selected-root systemctl fixture is missing",
         "rm -f \"${stage}/usr/bin/systemctl\"",
         "--present /bin/false",
-        "--present /usr/sbin/depmod",
         "--present \"${systemctl_path:-/usr/bin/true}\"",
         "--present \"${install_path}\"",
     ] {
@@ -724,12 +721,8 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "selected-root activation capture must ship its deterministic systemctl boundary"
     );
     assert!(
-        conary_fixture_path("native-selected-root-layout/stage/usr/sbin/depmod").is_file(),
-        "selected-root boot capture must ship its deterministic depmod boundary"
-    );
-    assert!(
         !conary_fixture_path("phase4-daily-driver-corpus/stage/usr/sbin/depmod").exists(),
-        "the source package must invoke the target depmod service without replacing it"
+        "the source package must invoke the typed depmod boundary without replacing it"
     );
 
     let selected_generation_helper =
