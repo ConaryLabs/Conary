@@ -352,7 +352,7 @@ run = "sqlite3 ${DB_PATH} \"SELECT COUNT(*) || ' regular files' FROM files WHERE
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["10 regular files", "/etc/phase4-corpus/app.conf", "/etc/phase4-corpus/app-deleted.conf", "/etc/phase4-corpus/app-local.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/sbin/depmod", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
+stdout_contains_all = ["9 regular files", "/etc/phase4-corpus/app.conf", "/etc/phase4-corpus/app-deleted.conf", "/etc/phase4-corpus/app-local.conf", "/usr/bin/phase4-corpus-alt", "/usr/lib/kernel/install.d/95-phase4-corpus.install", "/usr/lib/systemd/system/phase4-corpus.service", "/usr/share/phase4-corpus/large-payload.bin|2097152|regular"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || printf('%04o', json_extract(payload_node_json, '$.source.mode') & 4095) FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path IN ('/opt', '/usr/lib/phase4-corpus/state') ORDER BY path; SELECT path || '|' || json_extract(payload_node_json, '$.source.kind.type') || '|' || json_extract(payload_node_json, '$.source.kind.target') FROM files WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-daily-driver-corpus') AND path = '/usr/bin/phase4-corpus-link'\""

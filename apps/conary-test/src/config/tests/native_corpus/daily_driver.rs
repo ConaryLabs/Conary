@@ -116,7 +116,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "/etc/phase4-corpus/app-local.conf",
         "/etc/phase4-corpus/app-deleted.conf",
         "/etc/phase4-corpus/app-unmatched.conf",
-        "10 regular files",
+        "9 regular files",
         "phase4-corpus-alt",
         "phase4-corpus-user",
         "phase4-corpus-group",
@@ -705,7 +705,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "if ($1 ~ /^\\//) { print $1 }",
         "print $3",
         "copy_elf_closure /bin/false",
-        "copy_elf_closure /usr/sbin/depmod",
+        "Selected-root depmod fixture is missing",
         "systemctl_path=/usr/bin/systemctl",
         "Selected-root systemctl fixture is missing",
         "rm -f \"${stage}/usr/bin/systemctl\"",
@@ -722,6 +722,14 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
     assert!(
         conary_fixture_path("native-selected-root-layout/stage/usr/bin/systemctl").is_file(),
         "selected-root activation capture must ship its deterministic systemctl boundary"
+    );
+    assert!(
+        conary_fixture_path("native-selected-root-layout/stage/usr/sbin/depmod").is_file(),
+        "selected-root boot capture must ship its deterministic depmod boundary"
+    );
+    assert!(
+        !conary_fixture_path("phase4-daily-driver-corpus/stage/usr/sbin/depmod").exists(),
+        "the source package must invoke the target depmod service without replacing it"
     );
 
     let selected_generation_helper =

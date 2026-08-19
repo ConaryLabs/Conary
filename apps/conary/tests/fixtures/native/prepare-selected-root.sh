@@ -107,10 +107,12 @@ copy_elf_closure /bin/false
 copy_elf_closure /usr/bin/true
 
 # Information-only boot-runtime invocations execute the provider staged from
-# the selected root. The daily-driver lifecycle calls the pinned absolute
-# depmod endpoint, so carry its executable and ELF closure into that root;
-# mutation forms remain intercepted by the typed boot-runtime boundary.
-copy_elf_closure /usr/sbin/depmod
+# the selected root. The layout fixture owns a deterministic depmod boundary;
+# source packages invoke that target service instead of replacing it.
+if [[ ! -x "${stage}/usr/sbin/depmod" ]]; then
+  echo "Selected-root depmod fixture is missing: ${stage}/usr/sbin/depmod" >&2
+  exit 1
+fi
 
 # A selected root advertises service-manager lifecycle support only when its
 # provider executable is part of that root. The deterministic fixture is the
