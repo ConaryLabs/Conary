@@ -2,16 +2,8 @@
 
 Conary's canonical repository guidance lives in `AGENTS.md`.
 
-Start with:
+Route the actual task with `scripts/agent-context.sh --path <file>` or
+`--feature <slug>`, then read only the packet's start-here files and canonical
+docs. Use `docs/llms/README.md` only for broader orientation.
 
-- `AGENTS.md`
-- `docs/llms/README.md`
-- the linked canonical docs under `docs/`
-
-Use `docs/ARCHITECTURE.md` and `docs/modules/*.md` for subsystem background,
-`docs/INTEGRATION-TESTING.md` for `conary-test`, and
-`docs/operations/infrastructure.md` for deploy, MCP, and host workflow notes.
-
-Do not treat this file as a separate source of truth. If repo-wide guidance
-changes, update `AGENTS.md` or the canonical docs it links to instead of
-duplicating instructions here.
+This file contains no independent repository policy.

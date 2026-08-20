@@ -2,21 +2,9 @@
 
 # CLAUDE.md
 
-Claude Code reads `CLAUDE.md`, while Conary's shared assistant contract lives in
-`AGENTS.md`. The import above keeps Claude aligned with the repo-wide contract
-without duplicating it here.
+The import above is the complete shared project contract. Route a real task
+with `scripts/agent-context.sh`; do not preload the complete ownership map.
+Use `docs/llms/README.md` only when broader orientation is needed.
 
-After the imported contract, use:
-
-1. `docs/llms/README.md`
-2. `bash scripts/agent-context.sh --feature <slug>` or
-   `bash scripts/agent-context.sh --path <file>`
-3. The linked canonical docs for architecture, testing, modules, and operations
-
-This file is intentionally thin. Do not turn it into a second source of truth.
-If a rule, command, or workflow matters for the repository as a whole, update
-`AGENTS.md` or a linked canonical doc instead.
-
-Keep old `.claude/` harness files out of the tracked repo unless the project
-adopts a shared Claude-specific harness that needs durable versioned
-configuration.
+Keep this file thin. Machine-local preferences and Claude state belong outside
+tracked project guidance.
