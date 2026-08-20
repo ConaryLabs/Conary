@@ -5,6 +5,7 @@
 use super::ActivationExecutableIdentity;
 use crate::boot_runtime::{InvocationDisposition, parse_boot_runtime_invocation};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 pub const BOOT_RUNTIME_ACTIVATION_SCHEMA_VERSION: u32 = 1;
 
@@ -102,6 +103,24 @@ impl BootRuntimeActivationInvocation {
         self.executable
             .validate()
             .map_err(|error| error.to_string())?;
+        let invoked_program = Path::new(&self.executable.invoked_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "boot-runtime invoked path has no UTF-8 basename".to_string())?;
+        if invoked_program != self.program.as_str() {
+            return Err(format!(
+                "boot-runtime program '{}' does not match invoked provider '{}'",
+                self.program.as_str(),
+                self.executable.invoked_path
+            ));
+        }
+        if self
+            .arguments
+            .iter()
+            .any(|argument| argument.contains('\0'))
+        {
+            return Err("boot-runtime argv contains NUL".to_string());
+        }
         let parsed = parse_boot_runtime_invocation(self.program.as_str(), &self.arguments)
             .map_err(|error| error.to_string())?;
         if parsed.disposition() != InvocationDisposition::Mutation {
@@ -135,6 +154,14 @@ mod tests {
                 "depmod",
                 vec!["--version".to_string()],
                 identity("depmod")
+            )
+            .is_err()
+        );
+        assert!(
+            BootRuntimeActivationInvocation::new(
+                "depmod",
+                vec!["-a".to_string()],
+                identity("dracut")
             )
             .is_err()
         );
