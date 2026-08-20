@@ -489,6 +489,16 @@ impl HookExecutor {
                     invocation,
                 }),
         );
+        self.activation_invocations.borrow_mut().extend(
+            executor
+                .take_boot_runtime_invocations()
+                .into_iter()
+                .map(|invocation| CapturedCcsActivation {
+                    source: CcsActivationSource::CapturedRuntime,
+                    source_entry: label.to_string(),
+                    invocation: invocation.into(),
+                }),
+        );
         Ok(())
     }
 

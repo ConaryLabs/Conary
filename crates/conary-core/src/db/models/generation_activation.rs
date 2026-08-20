@@ -18,6 +18,7 @@ pub enum ActivationRequestSourceKind {
     CcsService,
     CapturedSelinux,
     CapturedApparmor,
+    CapturedBootRuntime,
 }
 
 impl ActivationRequestSourceKind {
@@ -28,6 +29,7 @@ impl ActivationRequestSourceKind {
             Self::CcsService => "ccs-service",
             Self::CapturedSelinux => "captured-selinux",
             Self::CapturedApparmor => "captured-apparmor",
+            Self::CapturedBootRuntime => "captured-boot-runtime",
         }
     }
 
@@ -41,6 +43,7 @@ impl ActivationRequestSourceKind {
             RuntimeActivationInvocation::SecurityPolicy(
                 SecurityPolicyActivationInvocation::Apparmor(_),
             ) => Self::CapturedApparmor,
+            RuntimeActivationInvocation::BootRuntime(_) => Self::CapturedBootRuntime,
         }
     }
 
@@ -51,6 +54,7 @@ impl ActivationRequestSourceKind {
             "ccs-service" => Ok(Self::CcsService),
             "captured-selinux" => Ok(Self::CapturedSelinux),
             "captured-apparmor" => Ok(Self::CapturedApparmor),
+            "captured-boot-runtime" => Ok(Self::CapturedBootRuntime),
             _ => Err(Error::InternalError(format!(
                 "persisted activation request has unknown source kind '{value}'"
             ))),
@@ -102,6 +106,9 @@ impl NewActivationRequest {
                 RuntimeActivationInvocation::SecurityPolicy(
                     SecurityPolicyActivationInvocation::Apparmor(_)
                 )
+            ) | (
+                ActivationRequestSourceKind::CapturedBootRuntime,
+                RuntimeActivationInvocation::BootRuntime(_)
             )
         );
         if !compatible {
@@ -583,7 +590,9 @@ impl GenerationActivationIntent {
 mod tests {
     use super::*;
     use crate::activation::{
-        OpenRcActivationAction, OpenRcActivationInvocation, SystemdActivationAction, SystemdJobMode,
+        ActivationExecutableIdentity, BootRuntimeActivationInvocation, BootRuntimeProgram,
+        OpenRcActivationAction, OpenRcActivationInvocation, SystemdActivationAction,
+        SystemdJobMode,
     };
     use crate::db::models::{Changeset, ChangesetStatus, SystemState};
     use crate::db::testing::create_test_db;
@@ -740,6 +749,53 @@ mod tests {
                 .contains("does not match invocation provider"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn boot_runtime_request_round_trips_exact_attribution_and_digest() {
+        let (_temp, conn) = create_test_db();
+        let mut changeset = Changeset::new("install kernel package".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        let invocation = BootRuntimeActivationInvocation::new(
+            "depmod",
+            vec!["-a".to_string(), "6.12.0".to_string()],
+            ActivationExecutableIdentity {
+                invoked_path: "/usr/sbin/depmod".to_string(),
+                canonical_path: "/usr/bin/kmod".to_string(),
+                sha256: format!("sha256:{}", "a".repeat(64)),
+            },
+        )
+        .unwrap();
+        let ids = ActivationRequest::append_batch(
+            &conn,
+            changeset_id,
+            &[NewActivationRequest {
+                source_kind: ActivationRequestSourceKind::CapturedBootRuntime,
+                source_package: "kernel-core".to_string(),
+                source_version: "6.12.0-1".to_string(),
+                source_entry: "rpm:%posttrans".to_string(),
+                invocation: invocation.clone().into(),
+            }],
+        )
+        .unwrap();
+
+        let loaded = ActivationRequest::find_by_id(&conn, ids[0])
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.changeset_id, changeset_id);
+        assert_eq!(loaded.source_package, "kernel-core");
+        assert_eq!(loaded.source_version, "6.12.0-1");
+        assert_eq!(loaded.source_entry, "rpm:%posttrans");
+        assert_eq!(
+            loaded.source_kind,
+            ActivationRequestSourceKind::CapturedBootRuntime
+        );
+        let RuntimeActivationInvocation::BootRuntime(loaded_invocation) = loaded.invocation else {
+            panic!("expected persisted boot-runtime invocation");
+        };
+        assert_eq!(loaded_invocation, invocation);
+        assert_eq!(loaded_invocation.program, BootRuntimeProgram::Depmod);
+        assert_eq!(loaded.invocation_sha256.len(), "sha256:".len() + 64);
     }
 
     #[test]

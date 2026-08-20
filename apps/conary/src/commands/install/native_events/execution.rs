@@ -82,7 +82,13 @@ impl PreparedNativeTransaction {
                 )
                 .map_err(anyhow::Error::from),
         };
-        let captured = executor.take_activation_invocations();
+        let mut captured = executor.take_activation_invocations();
+        captured.extend(
+            executor
+                .take_boot_runtime_invocations()
+                .into_iter()
+                .map(Into::into),
+        );
         if result.is_ok() {
             let source_entry = match &event.program {
                 NativeEventProgram::BundleEntry { entry_id } => entry_id.clone(),

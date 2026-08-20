@@ -903,7 +903,8 @@ CREATE TABLE activation_requests (
                 'captured-openrc',
                 'ccs-service',
                 'captured-selinux',
-                'captured-apparmor'
+                'captured-apparmor',
+                'captured-boot-runtime'
             )),
             source_package TEXT NOT NULL,
             source_version TEXT NOT NULL,

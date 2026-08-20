@@ -7,11 +7,15 @@
 //! are captured as closed contracts and later projected onto the generation
 //! built from the transaction.
 
+mod boot_runtime;
 mod invocation;
 mod openrc;
 mod security_policy;
 mod systemd;
 
+pub use boot_runtime::{
+    BOOT_RUNTIME_ACTIVATION_SCHEMA_VERSION, BootRuntimeActivationInvocation, BootRuntimeProgram,
+};
 pub use invocation::RuntimeActivationInvocation;
 pub use openrc::{
     OpenRcActivationAction, OpenRcActivationCondition, OpenRcActivationInvocation,

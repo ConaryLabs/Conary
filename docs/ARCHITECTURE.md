@@ -729,10 +729,15 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 40 retains revision 39's generation-delta mutation epoch and
-replaces repository publication chunk-list JSON with the signed CCS transport
-envelope. That envelope owns the exact ordered object identities and sizes used
-by publication, acquisition, federation, reference accounting, and GC.
+Schema revision 41 retains revision 40's signed CCS transport-envelope
+authority and adds captured boot-runtime mutation work to the generation
+activation request union. Exact mutation argv plus the selected root's invoked
+and canonical provider paths and executable SHA-256 now commit with the owning
+changeset and remain retryable until one eligible generation applies them.
+Revision 40 replaced repository publication chunk-list JSON with the signed CCS
+transport envelope. That envelope owns the exact ordered object identities and
+sizes used by publication, acquisition, federation, reference accounting, and
+GC.
 Revision 39 added one generation-delta mutation epoch row plus generated
 triggers for every authoritative table. A connection-local SQLite function
 assigns one UUID to all writes in a transaction, and the triggers persist that
@@ -742,7 +747,7 @@ prior generation baseline; `PRAGMA data_version` separately rejects a commit
 from another connection while capture is active. Every Conary write connection
 registers the function before schema validation. An unconfigured writer fails
 closed at the trigger instead of changing authority without advancing the
-epoch. This is a pre-alpha hard cut: revision 39 databases must be rebuilt.
+epoch. This is a pre-alpha hard cut: revision 40 databases must be rebuilt.
 
 `generation_backup_chain.rs` owns the active v3 format: one
 content-addressed SQLite base plus at most 32 ordered, content-addressed session

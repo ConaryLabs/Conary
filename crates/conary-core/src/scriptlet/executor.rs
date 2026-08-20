@@ -27,7 +27,7 @@ pub struct ScriptletExecutor {
     pub(super) activation_invocations:
         Arc<Mutex<Vec<crate::activation::RuntimeActivationInvocation>>>,
     pub(super) boot_runtime_invocations:
-        Arc<Mutex<Vec<crate::boot_runtime::BootRuntimeInvocation>>>,
+        Arc<Mutex<Vec<crate::activation::BootRuntimeActivationInvocation>>>,
     pub(super) lifecycle_bridge: Option<LifecycleBridgeConfig>,
 }
 
@@ -136,7 +136,9 @@ impl ScriptletExecutor {
 
     /// Drain exact boot and kernel maintenance invocations captured at the
     /// selected-root execution boundary.
-    pub fn take_boot_runtime_invocations(&self) -> Vec<crate::boot_runtime::BootRuntimeInvocation> {
+    pub fn take_boot_runtime_invocations(
+        &self,
+    ) -> Vec<crate::activation::BootRuntimeActivationInvocation> {
         std::mem::take(
             &mut *self
                 .boot_runtime_invocations
