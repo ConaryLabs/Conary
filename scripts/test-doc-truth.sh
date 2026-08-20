@@ -54,6 +54,7 @@ make_good_repo() {
     local root="$1"
 
     mkdir -p \
+        "$root/.agents/rules" \
         "$root/apps/conary/src/cli" \
         "$root/apps/conary" \
         "$root/apps/conaryd/src/daemon/routes" \
@@ -412,6 +413,12 @@ EOF
 Current roadmap state lives under `docs/roadmaps/`.
 EOF
 
+    cat > "$root/.agents/rules/conary.md" <<'EOF'
+# Conary Workspace Rule
+
+Read and follow `AGENTS.md`.
+EOF
+
     cat > "$root/CONTRIBUTING.md" <<'EOF'
 # Contributing
 
@@ -726,6 +733,17 @@ break_frontmatter_revision() {
     sed -i '/^revision:/d' "$1/docs/ARCHITECTURE.md"
 }
 
+break_retired_google_entrypoint() {
+    printf '# Retired Google agent entrypoint\n' > "$1/GEMINI.md"
+}
+
+break_assistant_context_budget() {
+    local i
+    for i in $(seq 1 181); do
+        printf 'extra always-loaded instruction %s\n' "$i" >> "$1/AGENTS.md"
+    done
+}
+
 expect_pass
 expect_unassigned_outreach_pass
 expect_failure "schema drift" break_schema_version 'schema.*68.*SCHEMA_VERSION.*69'
@@ -778,5 +796,7 @@ expect_failure "retired plan directory" break_retired_plan_directory 'neutral la
 expect_failure "retired design directory" break_retired_design_directory 'neutral layout.*retired design/plan path'
 expect_failure "missing live documentation directory" break_live_doc_location_claim 'names missing live documentation directory'
 expect_failure "missing frontmatter revision" break_frontmatter_revision 'frontmatter requires a positive integer revision'
+expect_failure "retired Google agent entrypoint" break_retired_google_entrypoint 'retired Google agent entrypoint'
+expect_failure "assistant context budget" break_assistant_context_budget 'assistant context line budget'
 
 echo "docs truth self-tests passed."

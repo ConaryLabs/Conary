@@ -57,9 +57,19 @@ LIVE_DOC_LOCATION_CLAIM_PATHS=(
 
 OPTIONAL_TOOL_SHIMS=(
     "CLAUDE.md"
-    "GEMINI.md"
     "REASONIX.md"
+    ".agents/rules/conary.md"
     ".github/copilot-instructions.md"
+)
+
+ASSISTANT_CONTEXT_BUDGETS=(
+    "AGENTS.md|180|12000"
+    "CLAUDE.md|40|2500"
+    "REASONIX.md|40|2500"
+    ".agents/rules/conary.md|30|1500"
+    ".github/copilot-instructions.md|40|2500"
+    "docs/llms/README.md|150|10000"
+    "docs/llms/subsystem-map.md|160|12000"
 )
 
 report_error() {
@@ -135,6 +145,37 @@ check_live_doc_location_claims() {
         rg -nH -o --pcre2 '`docs/(?:[A-Za-z0-9._-]+/)+`' \
             "${claim_paths[@]}" || true
     )
+}
+
+check_assistant_context_budget() {
+    local budget path max_lines max_bytes actual_lines actual_bytes
+
+    require_file ".agents/rules/conary.md" || true
+
+    if [[ -e "GEMINI.md" ]]; then
+        report_error "retired Google agent entrypoint is still tracked: GEMINI.md"
+    fi
+
+    while IFS=: read -r path line_no text; do
+        report_error "$path:$line_no references retired Google agent entrypoint: $text"
+    done < <(
+        rg -nH -- 'GEMINI\.md|Gemini CLI' \
+            AGENTS.md CONTRIBUTING.md docs/llms scripts/agent-context.sh \
+            scripts/test-agent-context.sh 2>/dev/null || true
+    )
+
+    for budget in "${ASSISTANT_CONTEXT_BUDGETS[@]}"; do
+        IFS='|' read -r path max_lines max_bytes <<<"$budget"
+        [[ -f "$path" ]] || continue
+        actual_lines="$(wc -l < "$path")"
+        actual_bytes="$(wc -c < "$path")"
+        if (( actual_lines > max_lines )); then
+            report_error "$path exceeds assistant context line budget: $actual_lines > $max_lines"
+        fi
+        if (( actual_bytes > max_bytes )); then
+            report_error "$path exceeds assistant context byte budget: $actual_bytes > $max_bytes"
+        fi
+    done
 }
 
 check_canonical_doc_frontmatter() {
@@ -931,6 +972,7 @@ check_third_party_divergence() {
 check_neutral_planning_layout
 check_third_party_divergence
 check_live_doc_location_claims
+check_assistant_context_budget
 check_canonical_doc_frontmatter
 check_required_scan_paths
 check_schema_versions
