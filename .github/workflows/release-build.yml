@@ -107,7 +107,7 @@ jobs:
       - uses: ./.github/actions/setup-rust-workspace
         with:
           components: clippy,rustfmt
-          toolchain: 1.97.1
+          toolchain: 1.98.0
       - name: Enable exact ownership-test namespaces
         uses: ./.github/actions/setup-exact-ownership-tests
       - name: Check formatting
@@ -132,7 +132,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
-          toolchain: 1.97.1
+          toolchain: 1.98.0
       - name: Cache cargo
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -233,7 +233,7 @@ jobs:
             -o /tmp/rustup-init
           echo '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init' | sha256sum -c -
           chmod +x /tmp/rustup-init
-          /tmp/rustup-init -y --default-toolchain 1.97.1 --profile minimal
+          /tmp/rustup-init -y --default-toolchain 1.98.0 --profile minimal
           rm -f /tmp/rustup-init
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -292,7 +292,7 @@ jobs:
             -o /tmp/rustup-init
           echo '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init' | sha256sum -c -
           chmod +x /tmp/rustup-init
-          /tmp/rustup-init -y --default-toolchain 1.97.1 --profile minimal
+          /tmp/rustup-init -y --default-toolchain 1.98.0 --profile minimal
           rm -f /tmp/rustup-init
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -347,8 +347,8 @@ jobs:
           echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
       - name: Install Rust toolchain
         run: |
-          rustup default 1.97.1
-          runuser -u builder -- rustup default 1.97.1
+          rustup default 1.98.0
+          runuser -u builder -- rustup default 1.98.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
@@ -509,7 +509,7 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust-workspace
         with:
-          toolchain: 1.97.1
+          toolchain: 1.98.0
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -572,7 +572,7 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust-workspace
         with:
-          toolchain: 1.97.1
+          toolchain: 1.98.0
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -635,7 +635,7 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust-workspace
         with:
-          toolchain: 1.97.1
+          toolchain: 1.98.0
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-15
-revision: 6
+last_updated: 2026-08-20
+revision: 7
 summary: Run your own Remi conversion server in about 30 minutes
 ---
 
@@ -16,7 +16,7 @@ single Remi service is enough for a private test host.
 
 ## Requirements
 
-- A Linux host with Rust 1.97.1+
+- A Linux host with Rust 1.98.0+
 - At least 8 GiB RAM for the default release build
 - Disk sized to the `[storage] max_cache_size` you choose
 - Outbound HTTPS access to distro mirrors

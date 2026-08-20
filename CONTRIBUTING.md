@@ -19,7 +19,7 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 
 ### Prerequisites
 
-- **Rust 1.97.1+** (edition 2024) -- install via [rustup](https://rustup.rs/)
+- **Rust 1.98.0+** (edition 2024) -- install via [rustup](https://rustup.rs/)
 - **Git**
 - **Linux** -- Conary uses Linux-specific APIs (namespaces, landlock, seccomp) and does not currently build on macOS or Windows
 
@@ -171,7 +171,7 @@ cargo test -p conaryd
 
 ### Rust Specifics
 
-- Edition 2024, minimum supported Rust version 1.97.1
+- Edition 2024, minimum supported Rust version 1.98.0
 - Use `thiserror` for library/module error types
 - Use `anyhow` for application-level error propagation
 - Minimize `.unwrap()` in production code paths -- prefer `?` or explicit error handling

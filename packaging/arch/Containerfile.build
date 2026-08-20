@@ -25,5 +25,5 @@ RUN useradd -m builder && \
 RUN mkdir -p /build /output && chown builder:builder /build /output
 
 USER builder
-RUN rustup default 1.97.1
+RUN rustup default 1.98.0
 WORKDIR /build
