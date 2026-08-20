@@ -69,7 +69,7 @@ fn render_execution_summary(result: &ExecutionResult) -> Vec<String> {
             derivation_id,
             record,
         } => vec![
-            format!("Status: cache hit"),
+            "Status: cache hit".to_string(),
             format!("Derivation ID: {derivation_id}"),
             format!("Output hash: {}", record.output_hash),
         ],
@@ -77,7 +77,7 @@ fn render_execution_summary(result: &ExecutionResult) -> Vec<String> {
             derivation_id,
             output,
         } => vec![
-            format!("Status: built"),
+            "Status: built".to_string(),
             format!("Derivation ID: {derivation_id}"),
             format!("Output hash: {}", output.manifest.output_hash),
         ],

@@ -40,6 +40,26 @@ use axum::response::{IntoResponse, Response};
 use conary_core::db::models::Repository;
 use rusqlite::Connection;
 
+/// A boxed HTTP error response used by handlers whose success value is also a
+/// response. Boxing keeps the `Result` state compact without changing the
+/// status, headers, or body returned to the client.
+#[derive(Debug)]
+pub struct HandlerErrorResponse(Box<Response>);
+
+impl From<Response> for HandlerErrorResponse {
+    fn from(response: Response) -> Self {
+        Self(Box::new(response))
+    }
+}
+
+impl IntoResponse for HandlerErrorResponse {
+    fn into_response(self) -> Response {
+        *self.0
+    }
+}
+
+pub type HandlerResult<T> = Result<T, HandlerErrorResponse>;
+
 /// Compute the CAS object path for a given hex hash.
 ///
 /// Layout mirrors the chunk store used throughout Remi:
@@ -280,6 +300,24 @@ pub fn require_persisted_repository_id(repository: &Repository) -> anyhow::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn handler_error_response_preserves_http_semantics() {
+        let response = Response::builder()
+            .status(StatusCode::IM_A_TEAPOT)
+            .header("x-conary-error", "exact")
+            .body(axum::body::Body::from("proof body"))
+            .expect("build response");
+
+        let response = HandlerErrorResponse::from(response).into_response();
+
+        assert_eq!(response.status(), StatusCode::IM_A_TEAPOT);
+        assert_eq!(response.headers()["x-conary-error"], "exact");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        assert_eq!(&body[..], b"proof body");
+    }
 
     #[test]
     fn open_handler_db_requires_existing_ready_database() {
