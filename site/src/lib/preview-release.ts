@@ -6,8 +6,8 @@ export type PreviewTarget = {
 	installCommand: string;
 };
 
-const version = '0.15.0';
-const tag = 'v0.15.0';
+const version = '0.16.1';
+const tag = `v${version}`;
 const releaseUrl = `https://github.com/ConaryLabs/Conary/releases/tag/${tag}`;
 const downloadBaseUrl = `https://github.com/ConaryLabs/Conary/releases/download/${tag}`;
 const matrixUrl =
@@ -21,7 +21,7 @@ export const previewRelease = {
 	matrixUrl,
 	testerAuthority: 'paused',
 	testerAuthorityReason:
-		'v0.15.0 is published and artifact-verified, but the external tester pin remains paused until the #110 ordinary-package corpus gate passes.',
+		`${tag} is published and artifact-verified, but the external tester pin remains paused until the #110 ordinary-package corpus gate passes.`,
 	testerGuideUrl:
 		'https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md',
 	feedbackUrl: 'https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md',
@@ -31,22 +31,22 @@ export const previewRelease = {
 			id: 'fedora',
 			name: 'Fedora 44',
 			profile: 'fedora-44',
-			asset: 'conary-0.15.0-1.fc44.x86_64.rpm',
-			installCommand: 'sudo dnf install ./conary-0.15.0-1.fc44.x86_64.rpm'
+			asset: `conary-${version}-1.fc44.x86_64.rpm`,
+			installCommand: `sudo dnf install ./conary-${version}-1.fc44.x86_64.rpm`
 		},
 		{
 			id: 'ubuntu',
 			name: 'Ubuntu 26.04 LTS',
 			profile: 'ubuntu-26.04',
-			asset: 'conary_0.15.0-1_amd64.deb',
-			installCommand: 'sudo apt install ./conary_0.15.0-1_amd64.deb'
+			asset: `conary_${version}-1_amd64.deb`,
+			installCommand: `sudo apt install ./conary_${version}-1_amd64.deb`
 		},
 		{
 			id: 'arch',
 			name: 'Arch Linux',
 			profile: 'arch',
-			asset: 'conary-0.15.0-1-x86_64.pkg.tar.zst',
-			installCommand: 'sudo pacman -U ./conary-0.15.0-1-x86_64.pkg.tar.zst'
+			asset: `conary-${version}-1-x86_64.pkg.tar.zst`,
+			installCommand: `sudo pacman -U ./conary-${version}-1-x86_64.pkg.tar.zst`
 		}
 	] satisfies PreviewTarget[]
 } as const;

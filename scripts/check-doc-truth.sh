@@ -209,7 +209,7 @@ published_conary_release_version() {
     local source="site/src/lib/preview-release.ts"
     require_file "$source" || return 1
 
-    sed -nE "s/.*(const[[:space:]]+tag[[:space:]]*=[[:space:]]*|tag:[[:space:]]*)'v([^']+)'.*/\2/p" "$source" | head -n1
+    sed -nE "s/^[[:space:]]*const[[:space:]]+version[[:space:]]*=[[:space:]]*'([^']+)'.*/\1/p" "$source" | head -n1
 }
 
 check_schema_versions() {
@@ -326,22 +326,51 @@ check_release_doc_versions() {
     local prepared_tag="v${workspace_version}"
     local current_artifact_dash="conary-${published_version}"
     local current_artifact_underscore="conary_${published_version}"
-    local path
+    local path file line_no text found_tag
+
+    require_match \
+        "README.md" \
+        'img\.shields\.io/github/v/release/ConaryLabs/Conary\?label=release.*github\.com/ConaryLabs/Conary/releases/latest' \
+        "derived latest-release badge"
+    require_match \
+        "README.md" \
+        'Development head.*Cargo\.toml.*\[workspace\.package\].*Repository source authority' \
+        "development-head release channel authority"
+    require_match \
+        "README.md" \
+        'Latest published, artifact-verified release.*github\.com/ConaryLabs/Conary/releases/latest.*[Rr]elease artifact matrix' \
+        "derived published-release channel"
+    require_match \
+        "README.md" \
+        'Current external tester pin.*\*\*None\*\*' \
+        "unassigned external tester pin"
+    require_match \
+        "SECURITY.md" \
+        'Latest immutable preview release.*github\.com/ConaryLabs/Conary/releases/latest.*Yes' \
+        "derived supported-release row"
+
+    for path in README.md SECURITY.md; do
+        while IFS=: read -r file line_no text; do
+            report_error "$file:$line_no hard-codes a public release version; derive published ${current_tag} from its authority: $text"
+        done < <(
+            rg -nH -P -- '(?<![A-Za-z0-9_-])v[0-9]+\.[0-9]+\.[0-9]+' "$path" || true
+        )
+    done
+
     local -a public_release_docs=(
-        "README.md"
         "docs/guides/agent-assisted-tester-loop.md"
-        "site/src"
     )
 
     for path in "${public_release_docs[@]}"; do
         [[ -e "$path" ]] || continue
         require_match "$path" "$current_tag" "current Conary release tag ${current_tag}"
 
-        local file line_no text
         while IFS=: read -r file line_no text; do
-            if [[ "$text" != *"$current_tag"* ]]; then
-                report_error "$file:$line_no has stale conary release reference; expected ${current_tag}: $text"
-            fi
+            while IFS= read -r found_tag; do
+                if [[ "$found_tag" != "$current_tag" ]]; then
+                    report_error "$file:$line_no has stale conary release reference; expected ${current_tag}: $text"
+                fi
+            done < <(rg -o -P -- '(?<![A-Za-z0-9_-])v[0-9]+\.[0-9]+\.[0-9]+' <<< "$text")
         done < <(
             rg -nH -P -- '(?<![A-Za-z0-9_-])v[0-9]+\.[0-9]+\.[0-9]+' "$path" ||
                 true
@@ -349,10 +378,21 @@ check_release_doc_versions() {
 
         while IFS=: read -r file line_no text; do
             if [[ "$text" != *"$current_artifact_dash"* && "$text" != *"$current_artifact_underscore"* ]]; then
-                report_error "$file:$line_no has stale conary release reference; expected ${published_version}: $text"
+                report_error "$file:$line_no has stale conary release reference; expected ${current_tag}: $text"
             fi
         done < <(rg -nH -- 'conary[-_][0-9]+\.[0-9]+\.[0-9]+' "$path" || true)
     done
+
+    require_match \
+        "site/src/lib/preview-release.ts" \
+        "^const version = '${published_version}';$" \
+        "single published-release version authority ${published_version}"
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no duplicates the site published-release version instead of deriving it: $text"
+    done < <(
+        rg -nH -P -- "(?<!const version = ')${published_version}|v[0-9]+\.[0-9]+\.[0-9]+|conary[-_][0-9]+\.[0-9]+\.[0-9]+" \
+            "site/src/lib/preview-release.ts" || true
+    )
 
     local truth_doc
     local -a release_truth_docs=(
@@ -361,9 +401,20 @@ check_release_doc_versions() {
     )
     for truth_doc in "${release_truth_docs[@]}"; do
         [[ -f "$truth_doc" ]] || continue
-        if ! rg -q -- "$current_tag" "$truth_doc"; then
-            report_error "$truth_doc has stale conary release reference; expected published baseline ${current_tag}"
-        fi
+        case "$truth_doc" in
+            docs/operations/release-artifact-matrix.md)
+                require_match \
+                    "$truth_doc" \
+                    "Version \`${published_version}\` is the current immutable release authority" \
+                    "published release authority ${current_tag}"
+                ;;
+            docs/roadmaps/external-tester-milestone.md)
+                require_match \
+                    "$truth_doc" \
+                    "publication gate for synchronized suite \`${current_tag}\` is complete" \
+                    "completed publication gate ${current_tag}"
+                ;;
+        esac
         if [[ "$prepared_tag" != "$current_tag" ]]; then
             if ! rg -q -- "$prepared_tag" "$truth_doc"; then
                 report_error "$truth_doc has stale conary release reference; expected prepared target ${prepared_tag}"

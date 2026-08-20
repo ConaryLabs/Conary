@@ -223,7 +223,7 @@
 					<h3>Where Conary is still early</h3>
 					<p>
 						Conary {previewRelease.version} is an immutable published preview artifact, but
-						it is not current tester authority while supported-host fixes remain unreleased.
+						it is not current tester authority while the ordinary-package corpus gate remains open.
 						Native CCS packages are few, the cross-distro lifecycle matrix still needs wider
 						installed-host evidence, generation work is VM-only, and the community and
 						operational evidence are small beside established managers.
