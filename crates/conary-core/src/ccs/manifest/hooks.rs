@@ -185,6 +185,9 @@ fn supported_scriptlet_capability_paths(name: &str) -> Option<&'static [&'static
     }
 }
 
+/// Linux VFS xattr carrying executable file-capability authority.
+pub const LINUX_SECURITY_CAPABILITY_XATTR: &str = "security.capability";
+
 /// Linux file capabilities for an executable shipped by the package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileCapability {
@@ -200,6 +203,89 @@ pub struct FileCapability {
 }
 
 impl FileCapability {
+    /// Decode the Linux VFS revision-2 xattr carried by source-package payload
+    /// authority into Conary's typed file-capability contract.
+    pub fn from_security_capability_xattr(
+        path: impl Into<String>,
+        encoded: &[u8],
+    ) -> Result<Self, ManifestError> {
+        const VFS_CAP_REVISION_2: u32 = 0x0200_0000;
+        const VFS_CAP_REVISION_MASK: u32 = 0xff00_0000;
+        const VFS_CAP_FLAGS_EFFECTIVE: u32 = 0x0000_0001;
+        const VFS_CAP_U32_COUNT: usize = 2;
+
+        let path = path.into();
+        if encoded.len() != 20 {
+            return Err(ManifestError::Invalid(format!(
+                "Linux file capability xattr for {path} has {} bytes; expected revision-2 length 20",
+                encoded.len()
+            )));
+        }
+        let magic_etc = u32::from_le_bytes(encoded[0..4].try_into().expect("four-byte prefix"));
+        if magic_etc & VFS_CAP_REVISION_MASK != VFS_CAP_REVISION_2 {
+            return Err(ManifestError::Invalid(format!(
+                "Linux file capability xattr for {path} uses unsupported revision {:#x}",
+                magic_etc & VFS_CAP_REVISION_MASK
+            )));
+        }
+        if magic_etc & !(VFS_CAP_REVISION_MASK | VFS_CAP_FLAGS_EFFECTIVE) != 0 {
+            return Err(ManifestError::Invalid(format!(
+                "Linux file capability xattr for {path} carries unsupported flags {:#x}",
+                magic_etc & !(VFS_CAP_REVISION_MASK | VFS_CAP_FLAGS_EFFECTIVE)
+            )));
+        }
+
+        let mut permitted = BTreeSet::new();
+        let mut inheritable = BTreeSet::new();
+        for word_index in 0..VFS_CAP_U32_COUNT {
+            let offset = 4 + word_index * 8;
+            let permitted_word = u32::from_le_bytes(
+                encoded[offset..offset + 4]
+                    .try_into()
+                    .expect("four-byte word"),
+            );
+            let inheritable_word = u32::from_le_bytes(
+                encoded[offset + 4..offset + 8]
+                    .try_into()
+                    .expect("four-byte word"),
+            );
+            for bit_index in 0..32 {
+                let capability_index = word_index * 32 + bit_index;
+                let mask = 1_u32 << bit_index;
+                if permitted_word & mask == 0 && inheritable_word & mask == 0 {
+                    continue;
+                }
+                let Some(name) = LINUX_FILE_CAPABILITY_NAMES.get(capability_index) else {
+                    return Err(ManifestError::Invalid(format!(
+                        "Linux file capability xattr for {path} sets unknown capability bit {capability_index}"
+                    )));
+                };
+                if permitted_word & mask != 0 {
+                    permitted.insert((*name).to_string());
+                }
+                if inheritable_word & mask != 0 {
+                    inheritable.insert((*name).to_string());
+                }
+            }
+        }
+        if !permitted.is_empty() && !inheritable.is_empty() && permitted != inheritable {
+            return Err(ManifestError::Invalid(format!(
+                "Linux file capability xattr for {path} has distinct permitted and inheritable sets that the current typed authority cannot represent"
+            )));
+        }
+
+        let capabilities = permitted.union(&inheritable).cloned().collect();
+        let capability = Self {
+            path,
+            capabilities,
+            permitted: !permitted.is_empty(),
+            effective: magic_etc & VFS_CAP_FLAGS_EFFECTIVE != 0,
+            inheritable: !inheritable.is_empty(),
+        };
+        capability.validate()?;
+        Ok(capability)
+    }
+
     pub fn validate(&self) -> Result<(), ManifestError> {
         if !self.path.starts_with('/') {
             return Err(ManifestError::Invalid(format!(

@@ -601,6 +601,39 @@ inheritable = false
 }
 
 #[test]
+fn linux_security_capability_xattr_decodes_to_typed_authority() {
+    let decoded = FileCapability::from_security_capability_xattr(
+        "/usr/bin/demo",
+        &hex::decode("0100000200040000000000000000000000000000").unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        decoded,
+        FileCapability {
+            path: "/usr/bin/demo".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }
+    );
+}
+
+#[test]
+fn linux_security_capability_xattr_rejects_unrepresentable_sets() {
+    let encoded = hex::decode("0000000200040000002000000000000000000000").unwrap();
+    let error = FileCapability::from_security_capability_xattr("/usr/bin/demo", &encoded)
+        .expect_err("distinct permitted and inheritable sets must fail closed");
+
+    assert!(
+        error
+            .to_string()
+            .contains("distinct permitted and inheritable sets")
+    );
+}
+
+#[test]
 fn test_manifest_rejects_duplicate_file_capability_authority() {
     let mut manifest = CcsManifest::new_minimal("file-capable", "1.0.0");
     manifest.file_capabilities = vec![FileCapability {

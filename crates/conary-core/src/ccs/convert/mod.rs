@@ -23,12 +23,14 @@
 
 pub mod command_evidence;
 mod converter;
+mod file_capabilities;
 mod input;
 pub mod native_provenance;
 pub mod payload_hints;
 pub mod scriptlet_bundle;
 
 pub use converter::{ConversionOptions, ConversionResult, NativePackageConverter};
+pub use file_capabilities::file_capabilities_from_native_payload;
 pub use input::ForeignConversionInput;
 pub use native_provenance::{NativeProvenance, NativeSignatureEvidence};
 pub use scriptlet_bundle::{

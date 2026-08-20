@@ -103,7 +103,9 @@ fn ensure_live_root_regular_file_target(package_path: &str, target: &Path) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::payload::{PayloadNode, ResolvedPayloadNode};
+    use conary_core::ccs::manifest::LINUX_SECURITY_CAPABILITY_XATTR;
+    use conary_core::packages::payload::{PackagePayloadFile, ReopenablePayload};
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
     use std::path::PathBuf;
 
     #[derive(Default)]
@@ -152,6 +154,31 @@ mod tests {
             content: crate::commands::LiveRootContent::absent(),
             node: ResolvedPayloadNode::from_numeric_source(node).unwrap(),
         }
+    }
+
+    #[test]
+    fn native_payload_capability_becomes_typed_install_authority() {
+        let mut node = PayloadNode::regular(0o755);
+        node.xattrs.insert(
+            LINUX_SECURITY_CAPABILITY_XATTR.to_string(),
+            hex::decode("0100000200040000000000000000000000000000").unwrap(),
+        );
+        let payload = PackagePayloadFile::new(
+            "/usr/bin/server".to_string(),
+            node,
+            Some(PayloadContentAuthority {
+                sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+                size: 0,
+            }),
+            Some(ReopenablePayload::from_in_memory_bytes(Vec::<u8>::new())),
+        )
+        .unwrap();
+
+        assert_eq!(
+            conary_core::ccs::convert::file_capabilities_from_native_payload(&[payload]).unwrap(),
+            vec![file_capability("/usr/bin/server")]
+        );
     }
 
     #[test]

@@ -202,6 +202,9 @@ async fn cmd_install_with_intent(
     let progress = InstallProgress::single("Installing");
     let extraction = extract_and_classify_files(pkg.as_ref(), &component_selection, &progress)?;
     preflight_extracted_file_ownership(&conn, pkg.as_ref(), &extraction, &relation_plan.removals)?;
+    let file_capabilities = conary_core::ccs::convert::file_capabilities_from_native_payload(
+        &extraction.extracted_files,
+    )?;
 
     // --- Phase 8: Scriptlet execution (pre-install) ---
     let old_trove_to_upgrade =
@@ -279,7 +282,7 @@ async fn cmd_install_with_intent(
         selection_reason,
         old_trove_to_upgrade: old_trove_to_upgrade.as_deref(),
         ccs_capabilities: None,
-        ccs_file_capabilities: None,
+        file_capabilities: Some(&file_capabilities),
         defer_generation: false,
         repository_provenance,
         requested_source_identity: from_source.as_deref(),

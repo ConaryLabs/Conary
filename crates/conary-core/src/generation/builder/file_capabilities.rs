@@ -2,11 +2,11 @@
 
 use std::collections::BTreeSet;
 
-use crate::ccs::manifest::FileCapability;
+use crate::ccs::manifest::{FileCapability, LINUX_SECURITY_CAPABILITY_XATTR};
 
 pub(crate) use crate::ccs::manifest::LINUX_FILE_CAPABILITY_NAMES;
 
-pub(crate) const SECURITY_CAPABILITY_XATTR: &str = "security.capability";
+pub(crate) const SECURITY_CAPABILITY_XATTR: &str = LINUX_SECURITY_CAPABILITY_XATTR;
 
 const VFS_CAP_REVISION_2: u32 = 0x02000000;
 const VFS_CAP_FLAGS_EFFECTIVE: u32 = 0x00000001;

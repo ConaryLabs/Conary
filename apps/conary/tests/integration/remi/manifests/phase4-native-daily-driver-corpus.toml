@@ -883,10 +883,18 @@ exit_code = 0
 stdout_contains_any = ["Successfully installed", "Installed", "phase4-w7-capability-corpus"]
 
 [[test.step]]
-run = "test \"$(sqlite3 ${DB_PATH} \"SELECT path || '|' || capabilities_json || '|' || permitted || '|' || effective || '|' || inheritable FROM installed_file_capabilities WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-capability-corpus')\")\" = '/usr/bin/phase4-w7-capability|[\"cap_net_bind_service\"]|1|1|0' && python3 -c 'import os; assert os.getxattr(\"/conary/usr/bin/phase4-w7-capability\", \"security.capability\").hex() == \"0100000200040000000000000000000000000000\"'"
+run = "sqlite3 ${DB_PATH} \"SELECT path || '|' || capabilities_json || '|' || permitted || '|' || effective || '|' || inheritable FROM installed_file_capabilities WHERE trove_id = (SELECT id FROM troves WHERE name = 'phase4-w7-capability-corpus')\""
 
 [test.step.assert]
 exit_code = 0
+stdout_contains = "/usr/bin/phase4-w7-capability|[\"cap_net_bind_service\"]|1|1|0"
+
+[[test.step]]
+run = "python3 -c 'import os; expected=bytes.fromhex(\"0100000200040000000000000000000000000000\"); actual=os.getxattr(\"/conary/usr/bin/phase4-w7-capability\", \"security.capability\"); print(actual.hex()); assert actual == expected'"
+
+[test.step.assert]
+exit_code = 0
+stdout_contains = "0100000200040000000000000000000000000000"
 
 [[test.step]]
 run = "/opt/remi-tests/fixtures/native/write-corpus-evidence.py /tmp/w7-capability/native-fixture-manifest.json /tmp/conary-corpus-w7-capability.json fedora-44 rpm phase4-w7-capability-corpus 1.0.0-1 x86_64 installation"

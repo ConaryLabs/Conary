@@ -374,7 +374,7 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
             .apply_install_files(&through_symlink_files)?;
         self.selected_root
             .apply_remove_paths(&config_plan.remove_paths)?;
-        if let Some(file_capabilities) = self.ctx.ccs_file_capabilities {
+        if let Some(file_capabilities) = self.ctx.file_capabilities {
             super::super::file_capabilities::apply_selected_file_capabilities(
                 self.selected_root.selected_root(),
                 file_capabilities,
