@@ -48,6 +48,8 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/release-cargo-audit.sh
 
   local-validation-inventory:

@@ -5,6 +5,7 @@ repo_root="${DOCS_TRUTH_ROOT:-}"
 if [[ -z "$repo_root" ]]; then
     repo_root="$(git rev-parse --show-toplevel)"
 fi
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$repo_root"
 
 errors=0
@@ -921,7 +922,14 @@ check_neutral_planning_layout() {
     done < <(git grep -n -I -i -F -e "$provider_name" -- . || true)
 }
 
+check_third_party_divergence() {
+    if ! python3 "$script_dir/check-third-party-divergence.py" --root "$repo_root"; then
+        errors=1
+    fi
+}
+
 check_neutral_planning_layout
+check_third_party_divergence
 check_live_doc_location_claims
 check_canonical_doc_frontmatter
 check_required_scan_paths

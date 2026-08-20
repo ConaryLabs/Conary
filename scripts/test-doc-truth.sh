@@ -69,6 +69,7 @@ make_good_repo() {
         "$root/site/src/routes/about" \
         "$root/site/src/routes/features" \
         "$root/site/src/routes/install" \
+        "$root/third_party" \
         "$root/web/src/routes/about"
 
     cat > "$root/Cargo.toml" <<'EOF'
@@ -78,6 +79,18 @@ members = ["apps/conary", "crates/conary-core"]
 [workspace.package]
 version = "0.10.1"
 publish = false
+EOF
+
+    cat > "$root/third_party/README.md" <<'EOF'
+# Third-Party Divergence Inventory
+
+<!-- conary-third-party-divergence:start -->
+```toml
+schema = 1
+cadence = "Every six hours"
+owner = "Dependency reviewers"
+```
+<!-- conary-third-party-divergence:end -->
 EOF
 
     cat > "$root/crates/conary-core/src/db/schema.rs" <<'EOF'
@@ -587,6 +600,32 @@ break_release_artifact_version() {
     sed -i 's/conary-0.10.1/conary-0.9.2/g' "$1/docs/guides/agent-assisted-tester-loop.md"
 }
 
+break_uninventoried_cargo_patch() {
+    mkdir -p "$1/third_party/unlisted"
+    cat > "$1/third_party/unlisted/Cargo.toml" <<'EOF'
+[package]
+name = "unlisted"
+version = "1.0.0"
+EOF
+    cat >> "$1/Cargo.toml" <<'EOF'
+
+[patch.crates-io]
+unlisted = { path = "third_party/unlisted" }
+EOF
+}
+
+break_uninventoried_git_dependency() {
+    cat >> "$1/Cargo.toml" <<'EOF'
+
+[workspace.dependencies]
+unlisted = { git = "https://github.com/example/unlisted", rev = "1111111111111111111111111111111111111111" }
+EOF
+}
+
+break_third_party_inventory() {
+    rm "$1/third_party/README.md"
+}
+
 break_system_init_profile() {
     printf '\n```bash\nconary system init --profile fedora-44\n```\n' >> "$1/README.md"
 }
@@ -713,6 +752,9 @@ expect_failure "release doc version drift" break_release_doc_version 'stale cona
 expect_failure "README release channel drift" break_readme_release_channel 'hard-codes a public release version|derived published-release channel'
 expect_failure "security release version drift" break_security_release_version 'hard-codes a public release version|derived supported-release row'
 expect_failure "release artifact version drift" break_release_artifact_version 'stale conary release reference'
+expect_failure "unlisted Cargo patch" break_uninventoried_cargo_patch 'unlisted Cargo divergence.*patch\.crates-io.*unlisted'
+expect_failure "unlisted git dependency" break_uninventoried_git_dependency 'unlisted Cargo divergence.*workspace\.dependencies.*unlisted'
+expect_failure "missing third-party inventory" break_third_party_inventory 'cannot read divergence inventory'
 expect_failure "system init source independence" break_system_init_profile 'system init depend on a host distro profile'
 expect_failure "site release version drift" break_site_release_version 'stale conary release reference'
 expect_failure "site release version duplication" break_site_release_version_duplication 'duplicates the site published-release version'
