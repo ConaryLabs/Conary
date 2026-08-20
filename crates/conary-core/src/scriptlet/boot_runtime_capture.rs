@@ -96,7 +96,6 @@ impl BootRuntimeCaptureSession {
         let endpoint_contract = endpoint_contract(environment);
         let mut targets = BTreeMap::new();
         let mut providers = BTreeMap::new();
-        let mut providers_by_command = BTreeMap::<&'static str, Vec<ProviderBinding>>::new();
         let mut endpoints = Vec::with_capacity(
             endpoint_contract.len() + fallback.map_or(0, |config| config.endpoints().len()),
         );
@@ -117,11 +116,7 @@ impl BootRuntimeCaptureSession {
                     staged_path: provider,
                     identity: existing.identity,
                 };
-                providers.insert(guest_target.clone(), binding.clone());
-                providers_by_command
-                    .entry(command)
-                    .or_default()
-                    .push(binding);
+                providers.insert(guest_target.clone(), binding);
             }
             endpoints.push(LifecycleBridgeEndpoint::new(
                 target,
@@ -129,14 +124,7 @@ impl BootRuntimeCaptureSession {
             ));
         }
 
-        let command_providers = providers_by_command
-            .into_iter()
-            .filter_map(|(command, providers)| {
-                let mut providers = providers.into_iter();
-                let provider = providers.next()?;
-                providers.next().is_none().then_some((command, provider))
-            })
-            .collect();
+        let command_providers = bare_command_providers(environment, &providers);
         let invocations = Arc::new(Mutex::new(Vec::new()));
         let handler = Arc::new(BootRuntimeHandler {
             root: canonical_root,
@@ -372,22 +360,50 @@ fn endpoint_contract(environment: &[(&str, &str)]) -> BTreeMap<PathBuf, &'static
         .iter()
         .map(|(command, target)| (PathBuf::from(*target), *command))
         .collect::<BTreeMap<_, _>>();
+    for directory in path_directories(environment) {
+        for &(command, _) in DECLARED_ENDPOINTS {
+            endpoints.insert(Path::new(&directory).join(command), command);
+        }
+    }
+    endpoints
+}
+
+fn path_directories(environment: &[(&str, &str)]) -> Vec<String> {
     let effective_path = environment
         .iter()
         .rev()
         .find_map(|(key, value)| (*key == "PATH").then_some(*value))
         .unwrap_or(DEFAULT_SCRIPTLET_PATH);
-    let directories = effective_path
+    let mut seen = BTreeSet::new();
+    effective_path
         .split(':')
         .chain(DEFAULT_SCRIPTLET_PATH.split(':'))
         .filter(|directory| directory.starts_with('/'))
-        .collect::<BTreeSet<_>>();
-    for directory in directories {
-        for &(command, _) in DECLARED_ENDPOINTS {
-            endpoints.insert(Path::new(directory).join(command), command);
-        }
-    }
-    endpoints
+        .filter(|directory| seen.insert(*directory))
+        .map(str::to_string)
+        .collect()
+}
+
+fn bare_command_providers(
+    environment: &[(&str, &str)],
+    providers: &BTreeMap<String, ProviderBinding>,
+) -> BTreeMap<&'static str, ProviderBinding> {
+    let directories = path_directories(environment);
+    DECLARED_ENDPOINTS
+        .iter()
+        .map(|(command, _)| *command)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|command| {
+            directories.iter().find_map(|directory| {
+                let target = Path::new(directory).join(command);
+                providers
+                    .get(&target.to_string_lossy().into_owned())
+                    .cloned()
+                    .map(|provider| (command, provider))
+            })
+        })
+        .collect()
 }
 
 fn existing_provider(root: &Path, guest_target: &Path) -> Result<Option<ExistingProvider>> {
@@ -618,18 +634,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bare_mutation_uses_exact_path_precedence_across_usrmerge_aliases() {
+        const TEST_NAME: &str = concat!(
+            "scriptlet::boot_runtime_capture::tests::",
+            "bare_mutation_uses_exact_path_precedence_across_usrmerge_aliases"
+        );
+        let Some(root) = materialized_root(TEST_NAME, &["/bin/sh"]) else {
+            return;
+        };
+        let helper = root.path().join("usr/sbin/depmod");
+        fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        fs::write(&helper, b"#!/bin/sh\nexit 0\n").unwrap();
+        set_executable(&helper);
+        std::os::unix::fs::symlink("usr/sbin", root.path().join("sbin")).unwrap();
+        let executor = executor(root.path());
+
+        run_script_with_env(
+            &executor,
+            b"depmod -a 6.12.0\n",
+            &[("PATH", "/sbin:/usr/sbin")],
+        )
+        .unwrap();
+
+        let captured = executor.take_boot_runtime_invocations();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].executable.invoked_path, "/sbin/depmod");
+        assert_eq!(captured[0].executable.canonical_path, "/usr/sbin/depmod");
+    }
+
     fn executor(root: &Path) -> ScriptletExecutor {
         ScriptletExecutor::new(root, "boot-capture-fixture", "1", PackageFormat::Deb)
     }
 
     fn run_script(executor: &ScriptletExecutor, script: &[u8]) -> Result<()> {
+        run_script_with_env(executor, script, &[])
+    }
+
+    fn run_script_with_env(
+        executor: &ScriptletExecutor,
+        script: &[u8],
+        env: &[(&str, &str)],
+    ) -> Result<()> {
         executor.execute_in_target(
             super::super::process::ScriptletProcess {
                 phase: "post-install",
                 interpreter: "/bin/sh",
                 interpreter_args: &[],
                 args: &[],
-                env: &[],
+                env,
                 stdin: &[],
             },
             script,
