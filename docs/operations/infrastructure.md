@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-20
-revision: 28
+revision: 29
 summary: Non-secret infrastructure, agent operations, release and Remi deployment, and current remote development tooling
 ---
 
@@ -214,8 +214,8 @@ cache paths under `/conary/dev/cache`, install Rust through rustup, and install
 the assistant CLIs without version pinning:
 
 ```bash
-rustup toolchain install 1.97.1 --profile default
-rustup default 1.97.1
+rustup toolchain install 1.98.0 --profile default
+rustup default 1.98.0
 npm install -g @openai/codex @anthropic-ai/claude-code
 ```
 

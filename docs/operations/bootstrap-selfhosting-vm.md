@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-05-01
-revision: 3
+last_updated: 2026-08-20
+revision: 4
 summary: Operator flow and current caveats for building and validating the x86_64 self-hosting bootstrap VM
 ---
 
@@ -170,7 +170,7 @@ The first self-hosting milestone uses this audited package set:
 | `curl` | `8.19.0` | Matches current BLFS systemd page |
 | `sudo` | `1.9.17p2` | Matches current BLFS systemd page |
 | `nano` | `9.0` | Updated to the current BLFS page |
-| `rust` | `1.97.1` | Version matches the first-party workspace MSRV |
+| `rust` | `1.98.0` | Version matches the first-party workspace MSRV |
 | `conary` | tracked workspace | Built from the staged `conary-workspace.tar.gz` snapshot |
 
 Additional prerequisite note:

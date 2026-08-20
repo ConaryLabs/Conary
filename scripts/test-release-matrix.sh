@@ -108,7 +108,7 @@ resolver = "3"
 [workspace.package]
 version = "0.7.0"
 edition = "2024"
-rust-version = "1.97.1"
+rust-version = "1.98.0"
 authors = ["Conary Contributors"]
 license = "MIT"
 publish = false
@@ -269,6 +269,7 @@ create_release_policy_fixture() {
         "$repo/packaging/deb" \
         "$repo/packaging/arch" \
         "$repo/packaging/ccs"
+    cp "$REPO_ROOT/Cargo.toml" "$repo/Cargo.toml"
     cp "$REPO_ROOT/scripts/release-matrix.sh" "$repo/scripts/release-matrix.sh"
     cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
@@ -898,11 +899,24 @@ test_check_release_matrix_rejects_unverified_rustup_init() {
     assert_check_release_matrix_fails "$repo" "release-build RPM builder checksum-pinned rustup-init flow"
 }
 
+test_check_release_matrix_rejects_workspace_rust_version_drift() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/Cargo.toml" \
+        'rust-version = "1.98.0"' \
+        'rust-version = "1.99.0"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "shared workspace setup exact workspace Rust default"
+}
+
 test_check_release_matrix_rejects_unpinned_ccs_toolchain() {
     local repo
     repo="$(create_release_policy_fixture)"
     sed -i \
-        '/^  build-ccs:/,/^  build-rpm:/{s/toolchain: 1\.97\.1/toolchain: stable/;}' \
+        '/^  build-ccs:/,/^  build-rpm:/{s/toolchain: 1\.98\.0/toolchain: stable/;}' \
         "$repo/.github/workflows/release-build.yml"
 
     assert_check_release_matrix_fails "$repo" "release-build CCS builder pinned Rust toolchain"
@@ -913,7 +927,7 @@ test_check_release_matrix_rejects_unpinned_arch_toolchain() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/release-build.yml" \
-        'rustup default 1.97.1' \
+        'rustup default 1.98.0' \
         'rustup default stable'
 
     assert_check_release_matrix_fails "$repo" "release-build Arch builder pinned Rust toolchain"
@@ -957,7 +971,7 @@ test_check_release_matrix_rejects_moving_release_preparation_toolchain() {
     local repo
     repo="$(create_release_policy_fixture)"
     sed -i \
-        '/^  build-remi:/,/^  build-conaryd:/{s/toolchain: 1\.97\.1/toolchain: stable/;}' \
+        '/^  build-remi:/,/^  build-conaryd:/{s/toolchain: 1\.98\.0/toolchain: stable/;}' \
         "$repo/.github/workflows/release-build.yml"
 
     assert_check_release_matrix_fails \
@@ -975,7 +989,7 @@ test_check_release_matrix_rejects_untyped_workspace_toolchain_setup() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "shared workspace setup typed toolchain input"
+        "shared workspace setup exact workspace Rust default and typed toolchain input"
 }
 
 test_check_release_matrix_rejects_missing_live_version_assertion() {
@@ -1044,7 +1058,7 @@ test_check_release_matrix_rejects_moving_artifact_proof_toolchain() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/release-artifact-proof.yml" \
-        '          toolchain: 1.97.1' \
+        '          toolchain: 1.98.0' \
         '          toolchain: stable'
 
     assert_check_release_matrix_fails \
@@ -1411,6 +1425,7 @@ main() {
         test_check_release_matrix_rejects_arch_debug_split_package_generation
         test_check_release_matrix_rejects_hidden_native_debug_outputs
         test_check_release_matrix_rejects_unverified_rustup_init
+        test_check_release_matrix_rejects_workspace_rust_version_drift
         test_check_release_matrix_rejects_unpinned_ccs_toolchain
         test_check_release_matrix_rejects_unpinned_arch_toolchain
         test_check_release_matrix_rejects_leaf_manifest_native_versions

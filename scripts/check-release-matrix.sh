@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="${1:-$(git rev-parse --show-toplevel)}"
 cd "$repo_root"
 
+workspace_manifest="Cargo.toml"
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
 artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
@@ -138,6 +139,7 @@ validate_release_topology() {
 }
 
 for required_file in \
+    "$workspace_manifest" \
     "$release_build" \
     "$deploy_workflow" \
     "$artifact_proof_workflow" \
@@ -163,6 +165,23 @@ for required_file in \
     "$ccs_build_script"; do
     [[ -f "$required_file" ]] || fail "missing $required_file"
 done
+
+workspace_rust_version="$({
+    awk '
+        /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+        in_workspace_package && /^\[/ { exit }
+        in_workspace_package && /^rust-version[[:space:]]*=/ {
+            value = $0
+            sub(/^[^=]*=[[:space:]]*"/, "", value)
+            sub(/"[[:space:]]*$/, "", value)
+            print value
+            exit
+        }
+    ' "$workspace_manifest"
+} || true)"
+[[ "$workspace_rust_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+    fail "workspace Rust version authority missing or invalid in $workspace_manifest"
+workspace_rust_pattern="${workspace_rust_version//./\\.}"
 
 if rg -n -i -- '\bbeta\b|beta[-_]feedback|beta_feedback' .github docs site/src; then
     fail "public maturity surfaces must identify this project as pre-alpha, not beta"
@@ -199,11 +218,11 @@ require_job_match "$release_build" build-rpm "image: ${fedora_release_image}" 'r
 require_job_match "$release_build" build-deb "image: ${ubuntu_release_image}" 'release-build DEB builder must use the pinned Ubuntu 26.04 image'
 require_job_match "$release_build" build-arch "image: ${arch_release_image}" 'release-build Arch builder must use the pinned Arch image'
 require_job_match "$release_build" build-ccs 'name: Install build dependencies[\s\S]*name: Prepare dry-run release tree' 'release-build CCS dry-run prerequisites must be installed before release preparation'
-require_match "$workspace_setup_action" 'toolchain:[\s\S]*default: stable[\s\S]*toolchain: \$\{\{ inputs\.toolchain \}\}' 'shared workspace setup typed toolchain input'
+require_match "$workspace_setup_action" "toolchain:[\\s\\S]*default: ${workspace_rust_pattern}[\\s\\S]*toolchain: \\\$\\{\\{ inputs\\.toolchain \\}\\}" 'shared workspace setup exact workspace Rust default and typed toolchain input'
 for product_job in build-remi build-conaryd build-conary-test; do
-    require_job_match "$release_build" "$product_job" 'uses: \./\.github/actions/setup-rust-workspace[\s\S]*toolchain: 1\.97\.1[\s\S]*name: Prepare dry-run release tree' "$product_job exact workspace toolchain must precede Cargo-backed release preparation"
+    require_job_match "$release_build" "$product_job" "uses: \\./\\.github/actions/setup-rust-workspace[\\s\\S]*toolchain: ${workspace_rust_pattern}[\\s\\S]*name: Prepare dry-run release tree" "$product_job exact workspace toolchain must precede Cargo-backed release preparation"
 done
-require_job_match "$release_build" workspace-validation 'uses: \./\.github/actions/setup-rust-workspace[\s\S]*components: clippy,rustfmt[\s\S]*toolchain: 1\.97\.1' 'release workspace validation exact Rust toolchain'
+require_job_match "$release_build" workspace-validation "uses: \\./\\.github/actions/setup-rust-workspace[\\s\\S]*components: clippy,rustfmt[\\s\\S]*toolchain: ${workspace_rust_pattern}" 'release workspace validation exact Rust toolchain'
 require_match "$rpm_containerfile" "^FROM ${fedora_release_image}$" 'RPM Containerfile must use the release-build Fedora image digest'
 require_match "$deb_containerfile" "^FROM ${ubuntu_release_image}$" 'DEB Containerfile must use the release-build Ubuntu image digest'
 require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Containerfile must use the release-build Arch image digest'
@@ -217,17 +236,17 @@ forbid_match "$rpm_spec" '-Cdebuginfo(=|[[:space:]])|-Cstrip=none|%\{build_rustf
 require_match "$arch_pkgbuild" '# Suite releases publish one installable package and no discarded debug split package\.[\s\S]*^options=\(!debug !lto\)$' 'Arch package must explicitly disable debug split-package generation'
 forbid_match "$release_build" '\*debug(source|info)?\*' 'native debug artifact filtering'
 
-rustup_flow_pattern="${rustup_init_url}[\\s\\S]*${rustup_init_sha256}  /tmp/rustup-init[\\s\\S]*sha256sum -c -[\\s\\S]*/tmp/rustup-init -y --default-toolchain 1\\.97\\.1 --profile minimal[\\s\\S]*rm -f /tmp/rustup-init"
+rustup_flow_pattern="${rustup_init_url}[\\s\\S]*${rustup_init_sha256}  /tmp/rustup-init[\\s\\S]*sha256sum -c -[\\s\\S]*/tmp/rustup-init -y --default-toolchain ${workspace_rust_pattern} --profile minimal[\\s\\S]*rm -f /tmp/rustup-init"
 require_job_match "$release_build" build-rpm "$rustup_flow_pattern" 'release-build RPM builder checksum-pinned rustup-init flow'
 require_job_match "$release_build" build-deb "$rustup_flow_pattern" 'release-build DEB builder checksum-pinned rustup-init flow'
 require_match "$rpm_containerfile" "$rustup_flow_pattern" 'RPM Containerfile checksum-pinned rustup-init flow'
 require_match "$deb_containerfile" "$rustup_flow_pattern" 'DEB Containerfile checksum-pinned rustup-init flow'
-require_job_match "$release_build" build-ccs 'toolchain: 1\.97\.1' 'release-build CCS builder pinned Rust toolchain'
+require_job_match "$release_build" build-ccs "toolchain: ${workspace_rust_pattern}" 'release-build CCS builder pinned Rust toolchain'
 require_job_match "$release_build" build-ccs 'RELEASE_SIGNING_KEY: \$\{\{ secrets\.RELEASE_SIGNING_KEY \}\}[\s\S]*cargo build[\s\S]*--target-dir target[\s\S]*sign_hash --write-ccs-authority "\$authority_dir"[\s\S]*packaging/ccs/build\.sh[\s\S]*--version "\$VERSION"[\s\S]*--key "\$authority_dir/release\.private"' 'CCS build must derive embedded authority from the configured release seed'
 require_job_match "$release_build" build-ccs 'conary ccs verify[\s\S]*packaging/ccs/output/conary-\$\{VERSION\}\.ccs[\s\S]*--policy "\$authority_dir/trust-policy\.toml"' 'CCS build must verify its embedded release authority'
 require_job_match "$release_build" build-ccs 'RELEASE_SIGNING_KEY must be configured for embedded CCS release authority' 'live CCS build must fail without its release authority'
-require_job_match "$release_build" build-arch 'rustup default 1\.97\.1[\s\S]*runuser -u builder -- rustup default 1\.97\.1' 'release-build Arch builder pinned Rust toolchain'
-require_match "$arch_containerfile" '^RUN rustup default 1\.97\.1$' 'Arch Containerfile pinned Rust toolchain'
+require_job_match "$release_build" build-arch "rustup default ${workspace_rust_pattern}[\\s\\S]*runuser -u builder -- rustup default ${workspace_rust_pattern}" 'release-build Arch builder pinned Rust toolchain'
+require_match "$arch_containerfile" "^RUN rustup default ${workspace_rust_pattern}$" 'Arch Containerfile pinned Rust toolchain'
 require_literal_count "$release_build" 'uses: actions/upload-artifact@' 11 'release artifact upload actions'
 require_literal_count "$release_build" 'if-no-files-found: error' 11 'fail-closed release artifact uploads'
 require_job_match "$release_build" bundle-conary 'require_exact_asset CCS[\s\S]*release-packages/conary-\$\{VERSION\}\.ccs"[\s\S]*release-packages/\*\.ccs' 'exact version-matching CCS release asset assertion'
@@ -359,7 +378,7 @@ forbid_match "$deploy_workflow" 'bootstrap_exception' 'retired bootstrap excepti
 require_match "$artifact_proof_workflow" 'workflow_call:[\s\S]*tag_name:[\s\S]*required: true[\s\S]*type: string' 'reusable published-artifact proof input'
 require_match "$artifact_proof_workflow" 'workflow_dispatch:[\s\S]*tag_name:[\s\S]*required: true[\s\S]*type: string' 'manual published-artifact proof input'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'actions/checkout@[0-9a-f]+[\s\S]*ref: \$\{\{ inputs\.tag_name \}\}[\s\S]*fetch-depth: 0[\s\S]*persist-credentials: false' 'published artifact proof must run the exact tag harness'
-require_job_match "$artifact_proof_workflow" native-package-lifecycle 'uses: \./\.github/actions/setup-rust-workspace[\s\S]*toolchain: 1\.97\.1[\s\S]*name: Require the hosted container runtime' 'published artifact proof exact Rust toolchain'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle "uses: \\./\\.github/actions/setup-rust-workspace[\\s\\S]*toolchain: ${workspace_rust_pattern}[\\s\\S]*name: Require the hosted container runtime" 'published artifact proof exact Rust toolchain'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'distro: fedora44[\s\S]*native_format: rpm[\s\S]*distro: ubuntu-26\.04[\s\S]*native_format: deb[\s\S]*distro: arch[\s\S]*native_format: arch' 'published-artifact three-distro typed matrix'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'release-matrix\.sh resolve-tag "\$RELEASE_TAG"[\s\S]*resolved_version=.*\^version=[\s\S]*git cat-file -t "\$RELEASE_TAG"[\s\S]*== "tag"[\s\S]*git worktree add --detach "\$tag_tree"[\s\S]*"\$version" == "\$resolved_version"[\s\S]*"\$tag_tree/scripts/release-matrix\.sh" assert-owned-version suite "\$version"' 'published artifact proof must bind metadata to the annotated tag version and suite authority'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh api[\s\S]*X-GitHub-Api-Version: 2026-03-10[\s\S]*releases/tags/\$\{RELEASE_TAG\}[\s\S]*\$\(jq -r '\''\.draft'\'' <<< "\$release_state"\)" == "false"[\s\S]*\$\(jq -r '\''\.immutable'\'' <<< "\$release_state"\)" == "true"' 'published artifact proof must reject a draft, mutable, or mismatched GitHub release'
