@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-18
-revision: 27
-summary: Non-secret infrastructure, agent-operations transport, release, Remi deploy, TLS renewal, remote development, and retired Forge staging guidance for Conary contributors and coding assistants
+last_updated: 2026-08-20
+revision: 29
+summary: Non-secret infrastructure, agent operations, release and Remi deployment, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -214,10 +214,18 @@ cache paths under `/conary/dev/cache`, install Rust through rustup, and install
 the assistant CLIs without version pinning:
 
 ```bash
-rustup toolchain install 1.97.1 --profile default
-rustup default 1.97.1
+rustup toolchain install 1.98.0 --profile default
+rustup default 1.98.0
 npm install -g @openai/codex @anthropic-ai/claude-code
 ```
+
+Google agent work uses the supported Antigravity CLI through `agy`. Install it
+from Google's current
+[Antigravity distribution](https://antigravity.google/download), authenticate
+interactively, and verify it with `agy --version`; do not add a second Google
+CLI compatibility path to the repository. Workspace guidance for Antigravity
+lives in `.agents/rules/conary.md` and routes back to the shared `AGENTS.md`
+contract.
 
 The durable interactive entry point is a `dev` wrapper in
 `/conary/dev/home/conary-dev/.local/bin/dev`. It should attach to a tmux session

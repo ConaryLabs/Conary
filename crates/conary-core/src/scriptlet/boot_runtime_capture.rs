@@ -14,9 +14,8 @@ use super::lifecycle_bridge::{
 };
 use super::process::{TargetCommandBindMount, TargetRootScript, configure_target_command_boundary};
 use super::runtime::apply_sanitized_command_env;
-use crate::boot_runtime::{
-    BootRuntimeInvocation, InvocationDisposition, parse_boot_runtime_invocation,
-};
+use crate::activation::{ActivationExecutableIdentity, BootRuntimeActivationInvocation};
+use crate::boot_runtime::{InvocationDisposition, parse_boot_runtime_invocation};
 use crate::child_wait::wait_with_output_process_group;
 use crate::error::{Error, Result, ScriptletFailureKind};
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,7 +49,18 @@ const DECLARED_ENDPOINTS: &[(&str, &str)] = &[
 
 pub(super) struct BootRuntimeCaptureSession {
     bridge: LifecycleBridgeSession,
-    invocations: Arc<Mutex<Vec<BootRuntimeInvocation>>>,
+    invocations: Arc<Mutex<Vec<BootRuntimeActivationInvocation>>>,
+}
+
+#[derive(Clone)]
+struct ProviderBinding {
+    staged_path: String,
+    identity: ActivationExecutableIdentity,
+}
+
+struct ExistingProvider {
+    bytes: Vec<u8>,
+    identity: ActivationExecutableIdentity,
 }
 
 struct BootRuntimeHandler {
@@ -58,9 +68,9 @@ struct BootRuntimeHandler {
     environment: Vec<(String, String)>,
     timeout: Duration,
     targets: BTreeMap<String, &'static str>,
-    providers: BTreeMap<String, String>,
-    command_providers: BTreeMap<&'static str, String>,
-    invocations: Arc<Mutex<Vec<BootRuntimeInvocation>>>,
+    providers: BTreeMap<String, ProviderBinding>,
+    command_providers: BTreeMap<&'static str, ProviderBinding>,
+    invocations: Arc<Mutex<Vec<BootRuntimeActivationInvocation>>>,
 }
 
 struct RoutedHandler {
@@ -86,7 +96,6 @@ impl BootRuntimeCaptureSession {
         let endpoint_contract = endpoint_contract(environment);
         let mut targets = BTreeMap::new();
         let mut providers = BTreeMap::new();
-        let mut providers_by_command = BTreeMap::<&'static str, BTreeSet<String>>::new();
         let mut endpoints = Vec::with_capacity(
             endpoint_contract.len() + fallback.map_or(0, |config| config.endpoints().len()),
         );
@@ -94,16 +103,20 @@ impl BootRuntimeCaptureSession {
         for (index, (target, command)) in endpoint_contract.into_iter().enumerate() {
             let guest_target = target.to_string_lossy().into_owned();
             targets.insert(guest_target.clone(), command);
-            if let Some(bytes) = existing_provider(&canonical_root, &target)? {
+            if let Some(existing) = existing_provider(&canonical_root, &target)? {
                 let directory = format!("boot.runtime.provider.{index}");
-                let provider =
-                    staged.create_extra_directory_file(&directory, command, &bytes, 0o700)?;
+                let provider = staged.create_extra_directory_file(
+                    &directory,
+                    command,
+                    &existing.bytes,
+                    0o700,
+                )?;
                 let provider = guest_path(&canonical_root, &provider)?;
-                providers.insert(guest_target.clone(), provider.clone());
-                providers_by_command
-                    .entry(command)
-                    .or_default()
-                    .insert(provider);
+                let binding = ProviderBinding {
+                    staged_path: provider,
+                    identity: existing.identity,
+                };
+                providers.insert(guest_target.clone(), binding);
             }
             endpoints.push(LifecycleBridgeEndpoint::new(
                 target,
@@ -111,14 +124,7 @@ impl BootRuntimeCaptureSession {
             ));
         }
 
-        let command_providers = providers_by_command
-            .into_iter()
-            .filter_map(|(command, providers)| {
-                let mut providers = providers.into_iter();
-                let provider = providers.next()?;
-                providers.next().is_none().then_some((command, provider))
-            })
-            .collect();
+        let command_providers = bare_command_providers(environment, &providers);
         let invocations = Arc::new(Mutex::new(Vec::new()));
         let handler = Arc::new(BootRuntimeHandler {
             root: canonical_root,
@@ -162,7 +168,7 @@ impl BootRuntimeCaptureSession {
         self.bridge.child_spawned();
     }
 
-    pub(super) fn finish(self) -> Result<Vec<BootRuntimeInvocation>> {
+    pub(super) fn finish(self) -> Result<Vec<BootRuntimeActivationInvocation>> {
         let Self {
             bridge,
             invocations,
@@ -247,20 +253,37 @@ impl BootRuntimeHandler {
             ))
         })?;
         let disposition = invocation.disposition();
-        self.invocations
-            .lock()
-            .map_err(|_| {
-                LifecycleBridgeHandlerError::new("boot runtime invocation collector poisoned")
-            })?
-            .push(invocation);
-
-        if disposition == InvocationDisposition::Mutation {
-            return Ok(LifecycleBridgeResponse::new(Vec::new(), Vec::new(), 0));
-        }
         let provider = self
             .providers
             .get(requested)
             .or_else(|| self.command_providers.get(command));
+
+        if disposition == InvocationDisposition::Mutation {
+            let Some(provider) = provider else {
+                return Ok(LifecycleBridgeResponse::new(
+                    Vec::new(),
+                    format!(
+                        "{command}: mutation cannot be deferred without an exact selected-root provider identity\n"
+                    )
+                    .into_bytes(),
+                    127,
+                ));
+            };
+            let invocation =
+                BootRuntimeActivationInvocation::new(command, argv, provider.identity.clone())
+                    .map_err(|error| {
+                        LifecycleBridgeHandlerError::new(format!(
+                            "{command}: mutation cannot be represented durably: {error}"
+                        ))
+                    })?;
+            self.invocations
+                .lock()
+                .map_err(|_| {
+                    LifecycleBridgeHandlerError::new("boot runtime invocation collector poisoned")
+                })?
+                .push(invocation);
+            return Ok(LifecycleBridgeResponse::new(Vec::new(), Vec::new(), 0));
+        }
         let Some(provider) = provider else {
             return Ok(LifecycleBridgeResponse::new(
                 Vec::new(),
@@ -268,7 +291,7 @@ impl BootRuntimeHandler {
                 127,
             ));
         };
-        self.delegate(provider, &argv)
+        self.delegate(&provider.staged_path, &argv)
     }
 
     fn delegate(
@@ -337,25 +360,53 @@ fn endpoint_contract(environment: &[(&str, &str)]) -> BTreeMap<PathBuf, &'static
         .iter()
         .map(|(command, target)| (PathBuf::from(*target), *command))
         .collect::<BTreeMap<_, _>>();
-    let effective_path = environment
-        .iter()
-        .rev()
-        .find_map(|(key, value)| (*key == "PATH").then_some(*value))
-        .unwrap_or(DEFAULT_SCRIPTLET_PATH);
-    let directories = effective_path
-        .split(':')
-        .chain(DEFAULT_SCRIPTLET_PATH.split(':'))
-        .filter(|directory| directory.starts_with('/'))
-        .collect::<BTreeSet<_>>();
-    for directory in directories {
+    for directory in path_directories(environment) {
         for &(command, _) in DECLARED_ENDPOINTS {
-            endpoints.insert(Path::new(directory).join(command), command);
+            endpoints.insert(Path::new(&directory).join(command), command);
         }
     }
     endpoints
 }
 
-fn existing_provider(root: &Path, guest_target: &Path) -> Result<Option<Vec<u8>>> {
+fn path_directories(environment: &[(&str, &str)]) -> Vec<String> {
+    let effective_path = environment
+        .iter()
+        .rev()
+        .find_map(|(key, value)| (*key == "PATH").then_some(*value))
+        .unwrap_or(DEFAULT_SCRIPTLET_PATH);
+    let mut seen = BTreeSet::new();
+    effective_path
+        .split(':')
+        .chain(DEFAULT_SCRIPTLET_PATH.split(':'))
+        .filter(|directory| directory.starts_with('/'))
+        .filter(|directory| seen.insert(*directory))
+        .map(str::to_string)
+        .collect()
+}
+
+fn bare_command_providers(
+    environment: &[(&str, &str)],
+    providers: &BTreeMap<String, ProviderBinding>,
+) -> BTreeMap<&'static str, ProviderBinding> {
+    let directories = path_directories(environment);
+    DECLARED_ENDPOINTS
+        .iter()
+        .map(|(command, _)| *command)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|command| {
+            directories.iter().find_map(|directory| {
+                let target = Path::new(directory).join(command);
+                providers
+                    .get(&target.to_string_lossy().into_owned())
+                    .cloned()
+                    .map(|provider| (command, provider))
+            })
+        })
+        .collect()
+}
+
+fn existing_provider(root: &Path, guest_target: &Path) -> Result<Option<ExistingProvider>> {
     let target = root.join(guest_target.strip_prefix("/").map_err(|_| {
         capture_contract_error(format!(
             "boot runtime endpoint must be absolute: {}",
@@ -379,7 +430,15 @@ fn existing_provider(root: &Path, guest_target: &Path) -> Result<Option<Vec<u8>>
     if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
         return Ok(None);
     }
-    fs::read(&resolved).map(Some).map_err(capture_setup_error)
+    let bytes = fs::read(&resolved).map_err(capture_setup_error)?;
+    Ok(Some(ExistingProvider {
+        bytes: bytes.clone(),
+        identity: ActivationExecutableIdentity {
+            invoked_path: guest_path(root, &target)?,
+            canonical_path: guest_path(root, &resolved)?,
+            sha256: crate::hash::sha256_prefixed(&bytes),
+        },
+    }))
 }
 
 fn guest_path(root: &Path, host_path: &Path) -> Result<String> {
@@ -407,7 +466,7 @@ fn capture_contract_error(message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boot_runtime::{BootRuntimeInvocation, DepmodAction};
+    use crate::activation::BootRuntimeProgram;
     use crate::scriptlet::test_support::materialized_root;
     use crate::scriptlet::{PackageFormat, ScriptletExecutor};
 
@@ -446,22 +505,21 @@ mod tests {
     }
 
     #[test]
-    fn missing_and_existing_mutation_helpers_are_intercepted_in_the_mount_namespace() {
+    fn mutation_requires_and_records_the_exact_selected_root_provider() {
         const TEST_NAME: &str = concat!(
             "scriptlet::boot_runtime_capture::tests::",
-            "missing_and_existing_mutation_helpers_are_intercepted_in_the_mount_namespace"
+            "mutation_requires_and_records_the_exact_selected_root_provider"
         );
         let Some(missing_root) = materialized_root(TEST_NAME, &["/bin/sh"]) else {
             return;
         };
         let missing = executor(missing_root.path());
-        run_script(&missing, b"/usr/sbin/depmod -a\n").unwrap();
+        let error = run_script(&missing, b"/usr/sbin/depmod -a\n")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exit code 127"), "{error}");
         assert!(!missing_root.path().join("usr/sbin/depmod").exists());
-        assert!(matches!(
-            missing.take_boot_runtime_invocations().as_slice(),
-            [BootRuntimeInvocation::Depmod(invocation)]
-                if matches!(invocation.action, DepmodAction::Generate { .. })
-        ));
+        assert!(missing.take_boot_runtime_invocations().is_empty());
 
         let existing_root =
             materialized_root(TEST_NAME, &["/bin/sh"]).expect("namespace child selected root");
@@ -479,7 +537,15 @@ mod tests {
                 .exists()
         );
         assert_eq!(fs::read(&helper).unwrap(), original);
-        assert_eq!(existing.take_boot_runtime_invocations().len(), 1);
+        let captured = existing.take_boot_runtime_invocations();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].program, BootRuntimeProgram::Depmod);
+        assert_eq!(captured[0].arguments, ["-a"]);
+        assert_eq!(captured[0].executable.invoked_path, "/usr/sbin/depmod");
+        assert_eq!(
+            captured[0].executable.sha256,
+            crate::hash::sha256_prefixed(original)
+        );
     }
 
     #[test]
@@ -505,7 +571,7 @@ mod tests {
               test \"$status\" -eq 23\n",
         )
         .unwrap();
-        assert_eq!(executor.take_boot_runtime_invocations().len(), 1);
+        assert!(executor.take_boot_runtime_invocations().is_empty());
     }
 
     #[test]
@@ -539,18 +605,107 @@ mod tests {
         assert_eq!(executor.take_boot_runtime_invocations().len(), 1);
     }
 
+    #[test]
+    fn rpm_deb_and_alpm_lifecycle_executors_emit_the_same_typed_mutation() {
+        const TEST_NAME: &str = concat!(
+            "scriptlet::boot_runtime_capture::tests::",
+            "rpm_deb_and_alpm_lifecycle_executors_emit_the_same_typed_mutation"
+        );
+        let Some(root) = materialized_root(TEST_NAME, &["/bin/sh"]) else {
+            return;
+        };
+        let helper = root.path().join("usr/sbin/depmod");
+        fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        fs::write(&helper, b"#!/bin/sh\nexit 0\n").unwrap();
+        set_executable(&helper);
+
+        for (format, package) in [
+            (PackageFormat::Rpm, "rpm-kernel"),
+            (PackageFormat::Deb, "deb-kernel"),
+            (PackageFormat::Arch, "alpm-kernel"),
+        ] {
+            let executor = ScriptletExecutor::new(root.path(), package, "1", format);
+            run_script(&executor, b"/usr/sbin/depmod -a 6.12.0\n").unwrap();
+            let captured = executor.take_boot_runtime_invocations();
+            assert_eq!(captured.len(), 1, "{package}");
+            assert_eq!(captured[0].program, BootRuntimeProgram::Depmod);
+            assert_eq!(captured[0].arguments, ["-a", "6.12.0"]);
+            assert_eq!(captured[0].executable.invoked_path, "/usr/sbin/depmod");
+        }
+    }
+
+    #[test]
+    fn bare_mutation_uses_exact_path_precedence_across_usrmerge_aliases() {
+        const TEST_NAME: &str = concat!(
+            "scriptlet::boot_runtime_capture::tests::",
+            "bare_mutation_uses_exact_path_precedence_across_usrmerge_aliases"
+        );
+        let Some(root) = materialized_root(TEST_NAME, &["/bin/sh"]) else {
+            return;
+        };
+        let helper = root.path().join("usr/sbin/depmod");
+        fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        fs::write(&helper, b"#!/bin/sh\nexit 0\n").unwrap();
+        set_executable(&helper);
+        std::os::unix::fs::symlink("usr/sbin", root.path().join("sbin")).unwrap();
+        let executor = executor(root.path());
+
+        run_script_with_env(
+            &executor,
+            b"depmod -a 6.12.0\n",
+            &[("PATH", "/sbin:/usr/sbin")],
+        )
+        .unwrap();
+
+        let captured = executor.take_boot_runtime_invocations();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].executable.invoked_path, "/sbin/depmod");
+        assert_eq!(captured[0].executable.canonical_path, "/usr/sbin/depmod");
+    }
+
+    #[test]
+    fn failed_lifecycle_discards_captured_mutation_work() {
+        const TEST_NAME: &str = concat!(
+            "scriptlet::boot_runtime_capture::tests::",
+            "failed_lifecycle_discards_captured_mutation_work"
+        );
+        let Some(root) = materialized_root(TEST_NAME, &["/bin/sh"]) else {
+            return;
+        };
+        let helper = root.path().join("usr/sbin/depmod");
+        fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        fs::write(&helper, b"#!/bin/sh\nexit 0\n").unwrap();
+        set_executable(&helper);
+        let executor = executor(root.path());
+
+        let error = run_script(&executor, b"/usr/sbin/depmod -a\nexit 42\n")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("exit code 42"), "{error}");
+        assert!(executor.take_boot_runtime_invocations().is_empty());
+    }
+
     fn executor(root: &Path) -> ScriptletExecutor {
         ScriptletExecutor::new(root, "boot-capture-fixture", "1", PackageFormat::Deb)
     }
 
     fn run_script(executor: &ScriptletExecutor, script: &[u8]) -> Result<()> {
+        run_script_with_env(executor, script, &[])
+    }
+
+    fn run_script_with_env(
+        executor: &ScriptletExecutor,
+        script: &[u8],
+        env: &[(&str, &str)],
+    ) -> Result<()> {
         executor.execute_in_target(
             super::super::process::ScriptletProcess {
                 phase: "post-install",
                 interpreter: "/bin/sh",
                 interpreter_args: &[],
                 args: &[],
-                env: &[],
+                env,
                 stdin: &[],
             },
             script,

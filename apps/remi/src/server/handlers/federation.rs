@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::{open_handler_db, run_blocking};
+use super::{HandlerResult, open_handler_db, run_blocking};
 
 #[derive(Serialize)]
 struct DirectoryPeer {
@@ -23,9 +23,7 @@ struct DirectoryPeer {
 /// GET /v1/federation/directory
 ///
 /// Returns a JSON list of known peers (enabled only).
-pub async fn directory(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> Result<Response, Response> {
+pub async fn directory(State(state): State<Arc<RwLock<ServerState>>>) -> HandlerResult<Response> {
     let db_path = state.read().await.config.db_path.clone();
 
     let peers = run_blocking("federation directory", move || {

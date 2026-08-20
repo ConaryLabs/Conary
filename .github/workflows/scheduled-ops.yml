@@ -45,9 +45,13 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.98.0
       - name: Install cargo-audit
         run: cargo install cargo-audit
       - name: Run security audit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/release-cargo-audit.sh
 
   local-validation-inventory:

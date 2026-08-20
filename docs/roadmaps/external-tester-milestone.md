@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-18
-revision: 10
+last_updated: 2026-08-19
+revision: 11
 status: active
 current_result: 0/10
 summary: Outcome tracker for Conary's first cross-distro external tester milestone
@@ -35,22 +35,20 @@ but does not count as a completion.
 
 ## Release Gate
 
-The publication gate for synchronized suite `v0.15.0` is complete. The
+The publication gate for synchronized suite `v0.16.1` is complete. The
 `docs/operations/release-artifact-matrix.md` records its exact reviewed commit,
-annotated tag, immutable 13-asset release across four products, checksums and
+annotated tag, immutable 15-asset release across four products, checksums and
 GitHub digests, release attestation, detached CCS signature, deployments,
-self-update endpoint, build-only routes, and three-distro released-package
-proof. Production Remi runs the exact tagged binary.
+signed bootstrap manifest, build-only routes, and three-distro
+released-package proof. Production Remi runs the exact tagged binary.
 
-Synchronized suite `v0.16.1` is a prepared target only. Protected failed tag
-`v0.16.0` remains reserved and has no release; `v0.16.1` does not become
-publication or tester authority unless its reviewed exact-tag release,
-deployment, and released-artifact workflows pass.
+Protected failed tag `v0.16.0` remains reserved and has no release; it was not
+moved or reused when the strictly higher `v0.16.1` suite was published.
 
 That complete release closeout does not by itself open outreach. The
 ordinary-package corpus gate owned by #110/W7 must also pass before this
 tracker names a pinned tester version. No tester version is assigned in
-advance, and `v0.15.0` must not be presented as one merely because it is the
+advance, and `v0.16.1` must not be presented as one merely because it is the
 current release authority.
 
 Release proof is not an external-user completion. The result therefore remains

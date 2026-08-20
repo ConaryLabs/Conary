@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::{open_handler_db, run_blocking};
+use super::{HandlerResult, open_handler_db, run_blocking};
 
 /// Full package detail response
 #[derive(Debug, Serialize)]
@@ -85,7 +85,7 @@ pub struct OverviewStats {
 pub async fn get_package_detail(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
@@ -111,7 +111,7 @@ pub async fn get_package_detail(
 pub async fn get_versions(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
@@ -132,7 +132,7 @@ pub async fn get_versions(
 pub async fn get_dependencies(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
@@ -155,7 +155,7 @@ pub async fn get_dependencies(
 pub async fn get_reverse_dependencies(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path((distro, name)): Path<(String, String)>,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
     let db_path = state.read().await.config.db_path.clone();
@@ -178,7 +178,7 @@ pub async fn get_reverse_dependencies(
 pub async fn get_popular(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     let db_path = state.read().await.config.db_path.clone();
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
@@ -202,7 +202,7 @@ pub async fn get_popular(
 pub async fn get_recent(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     let db_path = state.read().await.config.db_path.clone();
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
@@ -225,7 +225,7 @@ pub async fn get_recent(
 /// Global statistics: total packages, downloads, distros, conversions.
 pub async fn get_overview(
     State(state): State<Arc<RwLock<ServerState>>>,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     let db_path = state.read().await.config.db_path.clone();
 
     let stats = run_blocking("overview", move || query_overview(&db_path)).await?;

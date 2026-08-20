@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use super::HandlerResult;
+
 /// Query parameters for the search endpoint
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
@@ -53,7 +55,7 @@ pub struct SuggestResponse {
 /// Extract the search engine from server state, returning 503 if unavailable
 async fn get_search_engine(
     state: &Arc<RwLock<ServerState>>,
-) -> Result<Arc<crate::server::SearchEngine>, Response> {
+) -> HandlerResult<Arc<crate::server::SearchEngine>> {
     let guard = state.read().await;
     match &guard.search_engine {
         Some(engine) => Ok(Arc::clone(engine)),
@@ -61,7 +63,8 @@ async fn get_search_engine(
             StatusCode::SERVICE_UNAVAILABLE,
             "Search engine not available",
         )
-            .into_response()),
+            .into_response()
+            .into()),
     }
 }
 
@@ -75,7 +78,7 @@ pub async fn search_packages(
 ) -> Response {
     let search_engine = match get_search_engine(&state).await {
         Ok(engine) => engine,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
 
     let query = params.q.unwrap_or_default();
@@ -139,7 +142,7 @@ pub async fn suggest_packages(
 ) -> Response {
     let search_engine = match get_search_engine(&state).await {
         Ok(engine) => engine,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
 
     let prefix = params.prefix.unwrap_or_default();

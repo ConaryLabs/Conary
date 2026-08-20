@@ -19,7 +19,7 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 
 ### Prerequisites
 
-- **Rust 1.97.1+** (edition 2024) -- install via [rustup](https://rustup.rs/)
+- **Rust 1.98.0+** (edition 2024) -- install via [rustup](https://rustup.rs/)
 - **Git**
 - **Linux** -- Conary uses Linux-specific APIs (namespaces, landlock, seccomp) and does not currently build on macOS or Windows
 
@@ -84,9 +84,10 @@ If you work with an LLM coding tool, start with:
 5. `docs/INTEGRATION-TESTING.md` when validation spans `conary-test`
 6. `docs/operations/infrastructure.md` for MCP, deploy, and host workflow notes
 
-Tool-specific files such as `GEMINI.md` and `.github/copilot-instructions.md`
-are compatibility shims. Prefer the linked
-canonical docs over copied instructions or stale local lore.
+Tool-specific files such as `CLAUDE.md`, `.agents/rules/conary.md`, and
+`.github/copilot-instructions.md` are compatibility shims. Prefer the linked
+canonical docs over copied instructions or stale local lore. Google agent work
+uses Antigravity/`agy`.
 
 ## Building from Source
 
@@ -170,7 +171,7 @@ cargo test -p conaryd
 
 ### Rust Specifics
 
-- Edition 2024, minimum supported Rust version 1.97.1
+- Edition 2024, minimum supported Rust version 1.98.0
 - Use `thiserror` for library/module error types
 - Use `anyhow` for application-level error propagation
 - Minimize `.unwrap()` in production code paths -- prefer `?` or explicit error handling

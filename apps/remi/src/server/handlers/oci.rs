@@ -28,6 +28,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use super::HandlerResult;
+
 // OCI media type constants
 const OCI_MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
 const CONARY_CONFIG_MEDIA_TYPE: &str = "application/vnd.conary.package.config.v1+json";
@@ -112,7 +114,7 @@ fn oci_error_response(status: StatusCode, code: &str, message: &str) -> Response
 async fn blob_allowed_by_public_gate(
     db_path: std::path::PathBuf,
     hash: String,
-) -> std::result::Result<bool, Response> {
+) -> HandlerResult<bool> {
     match tokio::task::spawn_blocking(move || {
         crate::server::publication::local_chunk_servable(&db_path, &hash)
     })
@@ -121,11 +123,15 @@ async fn blob_allowed_by_public_gate(
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => {
             tracing::error!("Failed to check OCI blob publication reachability: {error}");
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                .into_response()
+                .into())
         }
         Err(error) => {
             tracing::error!("OCI blob reachability task failed: {error}");
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                .into_response()
+                .into())
         }
     }
 }
@@ -382,7 +388,7 @@ async fn get_blob_inner(state: Arc<RwLock<ServerState>>, _name: &str, digest: &s
         Ok(false) => {
             return oci_error_response(StatusCode::NOT_FOUND, "BLOB_UNKNOWN", "Blob not found");
         }
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     }
 
     // Check if it exists on disk
@@ -446,7 +452,7 @@ async fn head_blob_inner(state: Arc<RwLock<ServerState>>, _name: &str, digest: &
         Ok(false) => {
             return oci_error_response(StatusCode::NOT_FOUND, "BLOB_UNKNOWN", "Blob not found");
         }
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     }
 
     match tokio::fs::metadata(&chunk_path).await {
