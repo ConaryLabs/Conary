@@ -96,13 +96,33 @@ EOF
     cat > "$root/README.md" <<'EOF'
 # Conary
 
+[![Latest release](https://img.shields.io/github/v/release/ConaryLabs/Conary?label=release)](https://github.com/ConaryLabs/Conary/releases/latest)
+
 Conary is still early. Expect failures.
 Use a VM or disposable host first.
 The primary adoption path is cross-distro package installation.
 The source package format defines the package ABI.
 If a package install fails, capture the command, distro, package name, Conary version, and refusal text.
 Use `conary system adopt --refresh` to refresh adoption tracking.
-Install the pinned preview release from v0.10.1.
+Inspect the latest immutable GitHub release.
+
+## Release Channels
+
+| Channel | Current state | Authority |
+| --- | --- | --- |
+| Development head | Root [`Cargo.toml`](Cargo.toml) `[workspace.package]` version | Repository source authority |
+| Latest published, artifact-verified release | [Latest immutable GitHub release](https://github.com/ConaryLabs/Conary/releases/latest) | [Release artifact matrix](docs/operations/release-artifact-matrix.md) |
+| Current external tester pin | **None** | Paused until the corpus gate completes |
+EOF
+
+    cat > "$root/SECURITY.md" <<'EOF'
+# Security Policy
+
+## Supported Versions
+
+| Version | Supported |
+| --- | --- |
+| [Latest immutable preview release](https://github.com/ConaryLabs/Conary/releases/latest) | Yes |
 EOF
 
     cat > "$root/docs/guides/agent-assisted-tester-loop.md" <<'EOF'
@@ -144,7 +164,7 @@ EOF
     cat > "$root/docs/roadmaps/external-tester-milestone.md" <<'EOF'
 # External Tester Milestone
 
-The currently pinned preview release is v0.10.1.
+The publication gate for synchronized suite `v0.10.1` is complete.
 EOF
 
     cat > "$root/docs/operations/external-tester-outreach.md" <<'EOF'
@@ -176,6 +196,8 @@ EOF
     cat > "$root/docs/operations/release-artifact-matrix.md" <<'EOF'
 # Release Artifact Matrix
 
+Version `0.10.1` is the current immutable release authority.
+
 | Product | Source commit | Binary download or package URL | Required evidence |
 | --- | --- | --- | --- |
 | `conary` | `v0.10.1` | https://github.com/ConaryLabs/Conary/releases/tag/v0.10.1 | release-build green |
@@ -190,8 +212,12 @@ EOF
 EOF
 
     cat > "$root/site/src/lib/preview-release.ts" <<'EOF'
+const version = '0.10.1';
+
 export const previewRelease = {
-    tag: 'v0.10.1',
+    version,
+    tag: `v${version}`,
+    asset: `conary-${version}.ccs`,
 };
 EOF
 
@@ -549,6 +575,14 @@ break_release_doc_version() {
     sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/guides/agent-assisted-tester-loop.md"
 }
 
+break_readme_release_channel() {
+    sed -i 's#github.com/ConaryLabs/Conary/releases/latest#github.com/ConaryLabs/Conary/releases/tag/v0.9.2#g' "$1/README.md"
+}
+
+break_security_release_version() {
+    sed -i 's#github.com/ConaryLabs/Conary/releases/latest#github.com/ConaryLabs/Conary/releases/tag/v0.9.2#' "$1/SECURITY.md"
+}
+
 break_release_artifact_version() {
     sed -i 's/conary-0.10.1/conary-0.9.2/g' "$1/docs/guides/agent-assisted-tester-loop.md"
 }
@@ -558,7 +592,11 @@ break_system_init_profile() {
 }
 
 break_site_release_version() {
-    sed -i 's/v0.10.1/v0.9.2/g' "$1/site/src/lib/preview-release.ts"
+    sed -i "s/const version = '0.10.1'/const version = '0.9.2'/" "$1/site/src/lib/preview-release.ts"
+}
+
+break_site_release_version_duplication() {
+    sed -i 's/tag: `v${version}`/tag: '\''v0.10.1'\''/' "$1/site/src/lib/preview-release.ts"
 }
 
 break_site_generation_apply_intent() {
@@ -664,7 +702,7 @@ expect_failure "stable core API claim" break_core_api_claim 'stable.*conary-core
 expect_failure "preview status drift" break_preview_status 'early preview warning'
 expect_failure "missing detailed roadmap link" break_root_roadmap_link 'detailed.*roadmap'
 expect_failure "missing external tester milestone" break_detailed_roadmap_milestone 'first external tester milestone'
-expect_failure "tracker release version drift" break_tracker_release_version 'stale conary release reference'
+expect_failure "tracker release version drift" break_tracker_release_version 'stale conary release reference|completed publication gate'
 expect_failure "outreach release version drift" break_outreach_release_version 'current-release baseline|outside current/target contract'
 expect_failure "outreach target state" break_outreach_target_state 'exact vMAJOR.MINOR.PATCH tag or unassigned'
 expect_failure "unassigned outreach candidate version" break_unassigned_outreach_candidate_version 'outside current/target contract|outside retained current release'
@@ -672,9 +710,12 @@ expect_failure "missing Forge deployment retirement evidence" break_detailed_for
 expect_failure "missing detailed Group O evidence" break_detailed_group_o_evidence 'dated Group O evidence'
 expect_failure "missing detailed Group P evidence" break_detailed_group_p_evidence 'dated Group P evidence'
 expect_failure "release doc version drift" break_release_doc_version 'stale conary release reference'
+expect_failure "README release channel drift" break_readme_release_channel 'hard-codes a public release version|derived published-release channel'
+expect_failure "security release version drift" break_security_release_version 'hard-codes a public release version|derived supported-release row'
 expect_failure "release artifact version drift" break_release_artifact_version 'stale conary release reference'
 expect_failure "system init source independence" break_system_init_profile 'system init depend on a host distro profile'
 expect_failure "site release version drift" break_site_release_version 'stale conary release reference'
+expect_failure "site release version duplication" break_site_release_version_duplication 'duplicates the site published-release version'
 expect_failure "site generation apply intent" break_site_generation_apply_intent 'generation build apply-intent example'
 expect_failure "site federation boundary" break_site_federation_boundary 'federation preview-boundary caveat'
 expect_failure "package index every-operation claim" break_package_index_every_operation_claim 'public frontend every-operation generation/integrity claim'

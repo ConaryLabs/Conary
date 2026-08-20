@@ -139,8 +139,9 @@
 				The next public loop remains deliberately focused: inspect a foreign-format
 				package, confirm its exact target capabilities, install it through Conary,
 				and prove that query, update planning, removal, and rollback still agree.
-				The published {previewRelease.tag} artifact predates current fixes, so this
-				loop resumes only after a later release is independently verified.
+				The published {previewRelease.tag} artifact is the current immutable release,
+				but this loop resumes only after #110's separate ordinary-package corpus gate
+				passes and an exact tester release is assigned.
 			</p>
 		</div>
 

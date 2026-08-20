@@ -36,7 +36,7 @@ We will coordinate disclosure with you. You will be credited in the advisory unl
 
 | Version | Supported |
 |---------|-----------|
-| Latest `0.11.x` limited preview release | Yes |
+| [Latest immutable preview release](https://github.com/ConaryLabs/Conary/releases/latest) | Yes |
 | Older preview releases | No |
 
 Only the latest release receives security updates. The basic package-manager

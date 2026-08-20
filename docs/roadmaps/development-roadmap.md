@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-08-16
-revision: 29
+last_updated: 2026-08-19
+revision: 30
 summary: Track Conary's active W7 corpus gate, typed semantic coverage, external tester milestone, and later workstreams
-proof_baseline: "immutable synchronized v0.15.0 suite at 642750878d5a59a9aa27976347cafc6f9dd86cfd; exact tagged Remi deployed; external tester result remains 0/10 behind #110"
+proof_baseline: "immutable synchronized v0.16.1 suite at 0fb961bacc6360107506371b16b7f0345ba6f927; exact tagged Remi deployed; external tester result remains 0/10 behind #110"
 current_milestone: first external tester loop
 active_workstream: W7 Just-Works Corpus Gate
 next_workstream: W8 External Tester Outreach
@@ -121,16 +121,16 @@ the stated scope, not whether a workstream happens to be active.
 | CLI and core package operations | solid | Scope is the limited preview; external use and fresh combined proof matter more than new surface area. |
 | Adoption, unadoption, and native handoff | solid | Proof covers the current three-distro scope; the released Arch package initializes only its exact native profile and synchronizes Remi. |
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
-| Packaging, static repositories, trust, and self-update | solid | Immutable synchronized `v0.15.0` has an exact annotated tag, 13 checksum/digest-verified assets across four products, GitHub release attestation, detached CCS signature, self-update endpoint, deployments, and native RPM/DEB/Arch lifecycle proof. No current artifact publishes an SBOM or additional provenance sidecar. |
+| Packaging, static repositories, trust, and self-update | solid | Immutable synchronized `v0.16.1` has an exact annotated tag, 15 checksum/digest-verified assets across four products, GitHub release attestation, detached CCS and bootstrap-manifest signatures, deployments, and native RPM/DEB/Arch lifecycle proof. No current artifact publishes an SBOM or additional provenance sidecar. |
 | CCS conversion and native lifecycle authority | active hard switch | The exact RPM, Debian, and ALPM lifecycle contract is released and deployed; current source-backed format defects are explicit work in #98, #99, and #102 through #105 rather than manual-review authority. These share one root cause: the shared package model normalizes source facts at parse time instead of at each consumer's boundary. W5 owns the structural correction. |
 | Generation build and export | limited | Bootable-image export (raw/qcow2/ISO plus a UEFI QEMU boot proof) is retained and proven from a supported-host fixture rather than from bootstrap; the re-based Group O/P suites passed locally on 2026-07-31. Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
-| Remi core and publication | solid | Exact tagged `remi 0.15.0` is deployed at schema revision 37 with 6/6 populated sources, four exact signing profiles, 110,220 repository packages, 1,798 conversions, and full health 10/10. Its binary hash matches the immutable release asset. Distribution and a wider stranger-operated path remain limited. |
+| Remi core and publication | solid | Exact tagged `remi 0.16.1` is deployed at schema revision 40 with 6/6 populated sources, four exact signing profiles, 110,182 repository packages, 3,855 conversions, and a passing readiness probe. Its binary hash matches the immutable release asset. Distribution and a wider stranger-operated path remain limited. |
 | conaryd package and query service | limited | Authorization is exact root/daemon/configured-group authority; restart semantics, resolver-backed dry-run proof, and deployment remain incomplete. |
 | Federation | experimental | Only `/v1/federation/directory` is routed and no federation call exists in chunk serving, so the router is a library nothing invokes on a local miss. TLS fingerprint pinning is enforced in code; the documented disagreement is a docs defect. See the federation horizon for measured state and slice ordering. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
-| External product readiness | unfinished | The synchronized `v0.15.0` released-package matrix is complete. The revised cross-distro milestone remains 0/10, and outreach is separately gated on W7/#110 corpus proof, cached-history clearance, and venue eligibility. Release proof is not tester readiness. |
+| External product readiness | unfinished | The synchronized `v0.16.1` released-package matrix is complete. The revised cross-distro milestone remains 0/10, and outreach is separately gated on W7/#110 corpus proof, cached-history clearance, and venue eligibility. Release proof is not tester readiness. |
 
 ## Workstreams
 
@@ -176,7 +176,7 @@ the stated scope, not whether a workstream happens to be active.
   a curated lifecycle rather than ordinary repository packages. Outreach state,
   venue eligibility, and the 0/10 tracker are now W8's.
 - **Current truth:** the latest immutable release is synchronized suite
-  `v0.15.0`. Its released RPM, DEB, and Arch packages passed the Cartesian
+  `v0.16.1`. Its released RPM, DEB, and Arch packages passed the Cartesian
   source-format lifecycle on Fedora 44, Ubuntu 26.04 LTS, and Arch. Remi runs
   the exact tagged suite binary; conaryd and conary-test are checksum-verified
   build-only artifacts. This is current release authority, not pinned tester
@@ -185,20 +185,19 @@ the stated scope, not whether a workstream happens to be active.
   published-package proof it owns.
 - **Dependencies:** none remaining.
 - **Proof:** annotated tag object
-  `83ef2d8a264cb49c5deb9e79e2a84a20e6883dab` peels to reviewed merge commit
-  `642750878d5a59a9aa27976347cafc6f9dd86cfd`. Exact-tag release-build
-  `31766900566` published the immutable 13-asset release on 2026-08-13 PDT;
+  `0c90d578fd3dd7b58e0c9f8a04f80228e5f65396` peels to reviewed merge commit
+  `0fb961bacc6360107506371b16b7f0345ba6f927`. Exact-tag release-build
+  `32199379608` published the immutable 15-asset release on 2026-08-18 PDT;
   every asset passed checksum, GitHub digest, and immutable-attestation
-  verification. Protected deployment `31769739765` passed both deployment
+  verification. Protected deployment `32201994359` passed both deployment
   routes, both build-only routes, and all three native-package lifecycle lanes.
   Exact hashes and complete per-product evidence live in the release matrix.
   The CCS has a detached signature; no product publishes an SBOM or additional
   provenance sidecar.
 - **Current deployment evidence:** independent proof reports installed
-  `remi 0.15.0` with the exact release hash, schema revision 37, 6/6 populated
-  sources, four signing profiles, 110,220 repository packages, 1,798
-  conversions, and full health 10/10. The self-update endpoint serves the exact
-  released `conary-0.15.0.ccs`.
+  `remi 0.16.1` with the exact release hash, schema revision 40, 6/6 populated
+  sources, four signing profiles, 110,182 repository packages, and 3,855
+  conversions. The protected deployment readiness probe passed.
 - **Limitations:** the release proof does not establish that ordinary
   repository packages convert. W4 through W7 own that claim.
 
@@ -712,9 +711,9 @@ installed-binary self-update, compatible prewarmed Remi, rollback, and
 clean-host proof. W3's release proof gate was reopened for the supported `htop`
 SONAME repair and again for issue #41's path-safety and support-bundle defects,
 then superseded by the post-hard-cut package authority suite. The latest exact
-immutable release evidence is synchronized `v0.15.0` at
-`642750878d5a59a9aa27976347cafc6f9dd86cfd`; current Remi deployment authority
-is the exact tagged `remi 0.15.0` binary. This release authority remains
+immutable release evidence is synchronized `v0.16.1` at
+`0fb961bacc6360107506371b16b7f0345ba6f927`; current Remi deployment authority
+is the exact tagged `remi 0.16.1` binary. This release authority remains
 separate from the unassigned tester pin and 0/10 external milestone.
 
 W3 was subsequently split. Its release gate is complete, and its external
