@@ -663,6 +663,29 @@ mod tests {
         assert_eq!(captured[0].executable.canonical_path, "/usr/sbin/depmod");
     }
 
+    #[test]
+    fn failed_lifecycle_discards_captured_mutation_work() {
+        const TEST_NAME: &str = concat!(
+            "scriptlet::boot_runtime_capture::tests::",
+            "failed_lifecycle_discards_captured_mutation_work"
+        );
+        let Some(root) = materialized_root(TEST_NAME, &["/bin/sh"]) else {
+            return;
+        };
+        let helper = root.path().join("usr/sbin/depmod");
+        fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        fs::write(&helper, b"#!/bin/sh\nexit 0\n").unwrap();
+        set_executable(&helper);
+        let executor = executor(root.path());
+
+        let error = run_script(&executor, b"/usr/sbin/depmod -a\nexit 42\n")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("exit code 42"), "{error}");
+        assert!(executor.take_boot_runtime_invocations().is_empty());
+    }
+
     fn executor(root: &Path) -> ScriptletExecutor {
         ScriptletExecutor::new(root, "boot-capture-fixture", "1", PackageFormat::Deb)
     }
