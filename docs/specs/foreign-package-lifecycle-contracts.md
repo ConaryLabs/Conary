@@ -243,6 +243,17 @@ work, are selected-root-only and create no runtime request.
 Unmodeled provider options fail the transaction instead of falling through to
 a live binary or an operator queue.
 
+Boot and kernel maintenance use the same process-boundary authority for the
+pinned `depmod`, `modprobe`, `dracut`, `mkinitcpio`, `update-initramfs`,
+`kernel-install`, `installkernel`, `dkms`, `grub-mkconfig`, `update-grub`, and
+`bootctl` grammars. Information and status forms execute immediately through a
+staged copy of the exact selected-root provider and create no request. Mutation
+forms never run against the build host: they become generation work only when
+the selected root supplies an executable provider whose invoked path,
+canonical path, and SHA-256 can be persisted. Missing or ambiguous provider
+identity fails the lifecycle event rather than reporting work as deferred and
+dismissed.
+
 Each successful selected-root transaction appends the canonical invocation,
 source package/version/entry, source kind, exact sequence, canonical JSON, and
 SHA-256 to `activation_requests` before its changeset can become applied.
@@ -253,11 +264,12 @@ become applied. The row mirrors the current evidence type: source
 package/version/entry, failure kind, phase, requested and effective sandbox,
 and message. It does not synthesize an exit-code or stderr column absent from
 `ScriptletFailureOutcome`; `conary system history` is the read surface.
-Security-policy requests also retain the exact invoked path, canonical path,
-and executable SHA-256 observed inside that selected root. Current-only
-database schema revision 36 stores the tagged systemd/OpenRC/SELinux/AppArmor
-union and distinct captured source kinds; revision-35 databases must be rebuilt
-and no compatibility decoder or migration exists.
+Security-policy and boot-runtime requests also retain the exact invoked path,
+canonical path, and executable SHA-256 observed inside that selected root.
+Current-only database schema revision 41 extends the tagged
+systemd/OpenRC/SELinux/AppArmor activation union with a versioned boot-runtime
+mutation variant and distinct captured source kind; revision-40 databases must
+be rebuilt and no compatibility decoder or migration exists.
 Every generation build projects all eligible requests through that
 generation's applied-changeset high-water mark into
 `generation_activation_intents`. Thus a request projected onto generation N
@@ -273,9 +285,10 @@ revalidates the persisted active init capability and exact `systemctl` or
 `rc-service` executable identity before each sequence begins. If a legitimate
 generation upgrade changed that interface, the consumer structurally
 rediscovers and persists the booted generation's typed capability inventory
-instead of requiring operator reconciliation. A security-policy request instead requires
-the booted provider's invoked path to resolve to the captured canonical path
-with the captured executable SHA-256, then runs the exact captured arguments.
+instead of requiring operator reconciliation. A security-policy or boot-runtime
+request instead requires the booted provider's invoked path to resolve to the
+captured canonical path with the captured executable SHA-256, then runs the
+exact captured arguments.
 A missing or changed provider is a durable failed request and remains
 automatically retryable; it never falls back to a same-named executable,
 metadata intent, distro default, or silent dormant state. The consumer never

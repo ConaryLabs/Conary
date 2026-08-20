@@ -18,6 +18,7 @@ pub enum ActivationRequestSourceKind {
     CcsService,
     CapturedSelinux,
     CapturedApparmor,
+    CapturedBootRuntime,
 }
 
 impl ActivationRequestSourceKind {
@@ -28,6 +29,7 @@ impl ActivationRequestSourceKind {
             Self::CcsService => "ccs-service",
             Self::CapturedSelinux => "captured-selinux",
             Self::CapturedApparmor => "captured-apparmor",
+            Self::CapturedBootRuntime => "captured-boot-runtime",
         }
     }
 
@@ -41,6 +43,7 @@ impl ActivationRequestSourceKind {
             RuntimeActivationInvocation::SecurityPolicy(
                 SecurityPolicyActivationInvocation::Apparmor(_),
             ) => Self::CapturedApparmor,
+            RuntimeActivationInvocation::BootRuntime(_) => Self::CapturedBootRuntime,
         }
     }
 
@@ -51,6 +54,7 @@ impl ActivationRequestSourceKind {
             "ccs-service" => Ok(Self::CcsService),
             "captured-selinux" => Ok(Self::CapturedSelinux),
             "captured-apparmor" => Ok(Self::CapturedApparmor),
+            "captured-boot-runtime" => Ok(Self::CapturedBootRuntime),
             _ => Err(Error::InternalError(format!(
                 "persisted activation request has unknown source kind '{value}'"
             ))),
@@ -102,6 +106,9 @@ impl NewActivationRequest {
                 RuntimeActivationInvocation::SecurityPolicy(
                     SecurityPolicyActivationInvocation::Apparmor(_)
                 )
+            ) | (
+                ActivationRequestSourceKind::CapturedBootRuntime,
+                RuntimeActivationInvocation::BootRuntime(_)
             )
         );
         if !compatible {

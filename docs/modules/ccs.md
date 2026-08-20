@@ -131,6 +131,12 @@ operation. Author-declared systemd and service fields are pathless names; raw
 native lifecycle argv has a separate exact provider-operand contract and is
 not narrowed by this declarative safety envelope.
 
+Signed CCS lifecycle scripts share the native lifecycle boot-runtime capture
+boundary. Mutation forms from the closed bootloader, initramfs, kernel, and
+module-maintenance grammars become exact generation activation requests only
+after a successful hook; information and status forms execute immediately and
+remain non-persisted.
+
 SELinux/AppArmor conversion adapters record discovery evidence only. CCS has no
 parallel `SecurityPolicyIntent` mutation contract. During selected-root
 lifecycle execution, `crates/conary-core/src/scriptlet/activation_capture.rs`

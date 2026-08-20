@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-30
-revision: 24
+last_updated: 2026-08-20
+revision: 25
 summary: Define exact source-ABI lifecycle authority, selected-root execution, and generation-scoped activation
 ---
 
@@ -39,9 +39,10 @@ This document owns the execution and security boundary around those contracts.
    transaction. A source-declared non-critical RPM script execution failure
    retains its already-applied selected-root effects, emits a warning, and
    continues exactly as the RPM transaction ABI requires.
-8. Runtime service-manager and security-policy actions are generation work.
-   They are captured as exact typed intents and are not sent to the currently
-   running host during package installation.
+8. Runtime service-manager, security-policy, bootloader, initramfs, kernel,
+   and module-maintenance actions are generation work. They are captured as
+   exact typed intents and are not sent to the currently running host during
+   package installation.
 
 ## Authority Flow
 
@@ -163,6 +164,17 @@ changed, or failing provider leaves a durable retryable failure; it is never a
 silent no-op, distro fallback, or manual reconciliation item. Skipped
 generations carry unapplied requests forward; completed requests are not
 replayed into later generations.
+
+The same boundary intercepts the pinned `depmod`, `modprobe`, `dracut`,
+`mkinitcpio`, `update-initramfs`, `kernel-install`, `installkernel`, `dkms`,
+`grub-mkconfig`, `update-grub`, and `bootctl` contracts. Help, version, query,
+and status forms execute immediately through the staged selected-root provider
+and create no durable request. A mutation form succeeds only when Conary can
+bind it to that provider's exact invoked path, canonical path, and executable
+SHA-256; otherwise the lifecycle event fails. Successful mutations append a
+closed, versioned generation request with their exact argv. At boot, provider
+drift or execution failure remains a durable automatic retry under the same
+generation activation state machine.
 
 ## Source-Format Failure Semantics
 

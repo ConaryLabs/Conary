@@ -210,6 +210,11 @@ fn resolve_activation_command(
                 provider: policy.provider(),
             })
         }
+        RuntimeActivationInvocation::BootRuntime(boot_runtime) => Ok(ResolvedActivationCommand {
+            executable: verify_booted_provider_executable(&boot_runtime.executable)?,
+            arguments: boot_runtime.arguments.clone(),
+            provider: boot_runtime.program.as_str(),
+        }),
     }
 }
 
@@ -335,8 +340,9 @@ mod tests {
     use super::*;
     use clap::Parser;
     use conary_core::activation::{
-        OpenRcActivationInvocation, SecurityPolicyInvocationDisposition, SystemdActivationAction,
-        SystemdActivationInvocation, parse_security_policy_invocation,
+        BootRuntimeActivationInvocation, OpenRcActivationInvocation,
+        SecurityPolicyInvocationDisposition, SystemdActivationAction, SystemdActivationInvocation,
+        parse_security_policy_invocation,
     };
     use conary_core::ccs::{
         ExecutableInterface, HostExecutableContract, HostExecutableImplementation,
@@ -404,6 +410,26 @@ mod tests {
             source_version: "1".to_string(),
             source_entry: source_entry.to_string(),
             invocation: invocation.into(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn boot_runtime_request(
+        source_entry: &str,
+        identity: ActivationExecutableIdentity,
+    ) -> NewActivationRequest {
+        NewActivationRequest {
+            source_kind: ActivationRequestSourceKind::CapturedBootRuntime,
+            source_package: "kernel-tools".to_string(),
+            source_version: "1".to_string(),
+            source_entry: source_entry.to_string(),
+            invocation: BootRuntimeActivationInvocation::new(
+                "depmod",
+                vec!["-a".to_string(), "6.12.0".to_string()],
+                identity,
+            )
+            .unwrap()
+            .into(),
         }
     }
 
@@ -779,6 +805,55 @@ mod tests {
             vec![(
                 executable,
                 vec!["-P", "demo_can_network", "on"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            )]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_boot_runtime_provider_identity_and_argv_are_consumed_once() {
+        let conn = create_test_db();
+        let (_tools, executable, identity) = write_test_provider("depmod");
+        let mut changeset = Changeset::new("install kernel tools".to_string());
+        let changeset_id = changeset.insert(&conn).unwrap();
+        ActivationRequest::append_batch(
+            &conn,
+            changeset_id,
+            &[boot_runtime_request("rpm:%posttrans", identity)],
+        )
+        .unwrap();
+        changeset
+            .update_status(&conn, ChangesetStatus::Applied)
+            .unwrap();
+        SystemState::new(8, "generation 8".to_string())
+            .insert(&conn)
+            .unwrap();
+        GenerationActivationIntent::project_through(&conn, 8, Some(changeset_id)).unwrap();
+
+        let mut calls = Vec::new();
+        let first = apply_generation_intents(&conn, 8, |path, args| {
+            calls.push((path.to_path_buf(), args.to_vec()));
+            Ok(ActivationCommandOutcome {
+                success: true,
+                code: Some(0),
+            })
+        })
+        .unwrap();
+        let second = apply_generation_intents(&conn, 8, |_, _| {
+            panic!("applied boot-runtime request must not replay")
+        })
+        .unwrap();
+
+        assert_eq!(first.applied, 1);
+        assert_eq!(second.applied, 0);
+        assert_eq!(
+            calls,
+            vec![(
+                executable,
+                vec!["-a", "6.12.0"]
                     .into_iter()
                     .map(str::to_string)
                     .collect()

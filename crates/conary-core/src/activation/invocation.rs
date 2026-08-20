@@ -3,7 +3,8 @@
 //! Persisted closed union of runtime work consumed by an exact generation.
 
 use super::{
-    OpenRcActivationInvocation, SecurityPolicyActivationInvocation, SystemdActivationInvocation,
+    BootRuntimeActivationInvocation, OpenRcActivationInvocation,
+    SecurityPolicyActivationInvocation, SystemdActivationInvocation,
 };
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,7 @@ pub enum RuntimeActivationInvocation {
     Systemd(SystemdActivationInvocation),
     OpenRc(OpenRcActivationInvocation),
     SecurityPolicy(SecurityPolicyActivationInvocation),
+    BootRuntime(BootRuntimeActivationInvocation),
 }
 
 impl RuntimeActivationInvocation {
@@ -23,6 +25,7 @@ impl RuntimeActivationInvocation {
             Self::SecurityPolicy(invocation) => {
                 invocation.validate().map_err(|error| error.to_string())
             }
+            Self::BootRuntime(invocation) => invocation.validate(),
         }
     }
 
@@ -32,6 +35,7 @@ impl RuntimeActivationInvocation {
             Self::OpenRc(_) => "openrc",
             Self::SecurityPolicy(SecurityPolicyActivationInvocation::Selinux(_)) => "selinux",
             Self::SecurityPolicy(SecurityPolicyActivationInvocation::Apparmor(_)) => "apparmor",
+            Self::BootRuntime(invocation) => invocation.program.as_str(),
         }
     }
 }
@@ -51,5 +55,11 @@ impl From<SystemdActivationInvocation> for RuntimeActivationInvocation {
 impl From<SecurityPolicyActivationInvocation> for RuntimeActivationInvocation {
     fn from(invocation: SecurityPolicyActivationInvocation) -> Self {
         Self::SecurityPolicy(invocation)
+    }
+}
+
+impl From<BootRuntimeActivationInvocation> for RuntimeActivationInvocation {
+    fn from(invocation: BootRuntimeActivationInvocation) -> Self {
+        Self::BootRuntime(invocation)
     }
 }
