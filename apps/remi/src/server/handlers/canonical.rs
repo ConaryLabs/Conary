@@ -19,7 +19,7 @@ use tokio::sync::RwLock;
 
 use conary_core::db::models::CanonicalMappingAuthority;
 
-use super::{open_handler_db, run_blocking};
+use super::{HandlerResult, open_handler_db, run_blocking};
 
 type CanonicalMapAccumulator = (String, Option<String>, BTreeMap<String, String>);
 
@@ -53,7 +53,7 @@ pub struct CanonicalSearchQuery {
 pub async fn canonical_lookup(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     super::validate_name(&name)?;
 
     let db_path = state.read().await.config.db_path.clone();
@@ -102,7 +102,7 @@ pub async fn canonical_lookup(
 pub async fn canonical_search(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<CanonicalSearchQuery>,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     let query = params.q.unwrap_or_default();
     if query.is_empty() {
         return Ok((
@@ -138,9 +138,7 @@ pub async fn canonical_search(
 }
 
 /// GET /v1/groups -- list all canonical groups (kind = "group").
-pub async fn groups_list(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> Result<Response, Response> {
+pub async fn groups_list(State(state): State<Arc<RwLock<ServerState>>>) -> HandlerResult<Response> {
     let db_path = state.read().await.config.db_path.clone();
 
     let items = run_blocking("groups list", move || {
@@ -192,7 +190,7 @@ pub struct CanonicalMapResponse {
 pub async fn canonical_map(
     State(state): State<Arc<RwLock<ServerState>>>,
     headers: HeaderMap,
-) -> Result<Response, Response> {
+) -> HandlerResult<Response> {
     let db_path = state.read().await.config.db_path.clone();
 
     let response = run_blocking("canonical_map", move || {

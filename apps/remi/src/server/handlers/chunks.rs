@@ -26,6 +26,8 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::RwLock;
 use tokio_util::io::ReaderStream;
 
+use super::HandlerResult;
+
 /// Maximum size for a single range request (64 MB)
 /// Prevents OOM from malicious Range headers requesting the entire file into memory.
 const MAX_RANGE_SIZE: u64 = 64 * 1024 * 1024;
@@ -86,7 +88,7 @@ fn durable_chunk_unavailable(hash: &str) -> Response {
 async fn chunk_servable_by_authority(
     db_path: std::path::PathBuf,
     hash: String,
-) -> std::result::Result<bool, Response> {
+) -> HandlerResult<bool> {
     match tokio::task::spawn_blocking(move || {
         crate::server::publication::local_chunk_servable(&db_path, &hash)
     })
@@ -95,11 +97,15 @@ async fn chunk_servable_by_authority(
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => {
             tracing::error!("Failed to check chunk conversion reachability: {error}");
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response())
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Database error")
+                .into_response()
+                .into())
         }
         Err(error) => {
             tracing::error!("Chunk reachability task failed: {error}");
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response())
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+                .into_response()
+                .into())
         }
     }
 }
@@ -128,7 +134,7 @@ pub async fn head_chunk(
     match chunk_servable_by_authority(db_path, hash.clone()).await {
         Ok(true) => {}
         Ok(false) => return chunk_not_found(),
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     }
 
     if let Some(r2_store) = r2_store {
@@ -241,7 +247,7 @@ pub async fn get_chunk(
     match chunk_servable_by_authority(db_path, hash.clone()).await {
         Ok(true) => {}
         Ok(false) => return chunk_not_found(),
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     }
 
     if let Some(r2_store) = r2_store {
@@ -648,7 +654,7 @@ pub async fn find_missing(
                 missing.push(hash);
                 continue;
             }
-            Err(response) => return response,
+            Err(response) => return response.into_response(),
         }
 
         if let Some(r2_store) = &r2_store {

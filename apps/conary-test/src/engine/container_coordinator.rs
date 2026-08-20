@@ -70,7 +70,7 @@ impl<'a> ContainerCoordinator<'a> {
     /// Tear down all tracked containers. Logs warnings on failure but does not
     /// propagate errors, ensuring best-effort cleanup.
     pub async fn teardown_all(&mut self) {
-        let ids: Vec<ContainerId> = self.tracked.drain(..).collect();
+        let ids = std::mem::take(&mut self.tracked);
         for id in &ids {
             if let Err(err) = self.backend.stop(id).await {
                 warn!(id = %id, error = %err, "coordinator: failed to stop container during cleanup");
@@ -90,7 +90,7 @@ impl<'a> ContainerCoordinator<'a> {
     /// Drain all tracked container IDs without stopping/removing them.
     /// Used by cleanup guards that take ownership of the IDs.
     pub fn drain_tracked(&mut self) -> Vec<ContainerId> {
-        self.tracked.drain(..).collect()
+        std::mem::take(&mut self.tracked)
     }
 
     /// Run an async closure with guaranteed cleanup on `Ok` or `Err`.
