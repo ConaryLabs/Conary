@@ -18,6 +18,10 @@ fn every_remi_job_state_has_one_shared_poll_decision() {
             "failed",
             protocol::JobPollDecision::Failed("conversion failed"),
         ),
+        (
+            "cancelled",
+            protocol::JobPollDecision::Failed("conversion failed"),
+        ),
     ];
     for (wire_state, expected) in cases {
         let json = format!(

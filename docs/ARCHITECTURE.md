@@ -404,12 +404,13 @@ Client                        Remi Server
   |                               |
   |  200 OK (chunks, version) <---|  [if cached]
   |                               |
-  |  202 Accepted + job_id <------|  [if not cached]
+  |  202 {status: "pending"} <----|  [if not cached]
+  |      + job_id                  |
   |                               |-- Fetch upstream RPM
   |  GET /v1/jobs/{id} ---------->|-- Parse + convert to CCS
   |  200 {status: "converting"}<--|-- Store chunks in CAS
   |  ...polling...                |-- Record conversion result in SQLite
-  |  200 {status: "complete"} <---|
+  |  200 {status: "ready"} <------|
   |                               |
   |  GET /v1/chunks/{hash} ------>|-- Bloom filter check
   |  200 <chunk bytes> <----------|-- Read from local CAS

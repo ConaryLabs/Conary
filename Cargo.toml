@@ -95,6 +95,7 @@ webpki = { package = "rustls-webpki", version = "0.103", features = ["std"], def
 x509-cert = { version = "0.2", features = ["pem", "std"] }
 
 # Archives
+ar = "0.9"
 tar = "0.4"
 flate2 = "1.0"
 # Pin the upstream Sequoia signature backend until it reaches a crates.io release.

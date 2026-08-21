@@ -7,7 +7,7 @@
 
 use crate::server::ServerState;
 use crate::server::conversion::ScriptletPackageMetadata;
-use crate::server::jobs::{JobId, JobStatus};
+use crate::server::jobs::{ConversionJob, JobId, JobStatus};
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -61,6 +61,128 @@ pub struct ConversionAccepted {
     pub poll_url: String,
     /// Estimated seconds until ready (if known)
     pub eta_seconds: Option<u32>,
+}
+
+fn active_conversion_response(job: &ConversionJob, eta_seconds: Option<u32>) -> Response {
+    let status = match job.status {
+        JobStatus::Pending => "pending",
+        JobStatus::Converting => "converting",
+        JobStatus::Ready | JobStatus::Failed(_) | JobStatus::Cancelled(_) => {
+            unreachable!("terminal conversion jobs cannot own package-key deduplication")
+        }
+    };
+    (
+        StatusCode::ACCEPTED,
+        Json(ConversionAccepted {
+            status,
+            job_id: job.id.to_string(),
+            poll_url: format!("/v1/jobs/{}", job.id),
+            eta_seconds,
+        }),
+    )
+        .into_response()
+}
+
+fn conversion_job_key(distro: &str, name: &str, query: &PackageQuery) -> String {
+    format!(
+        "{}:{}:{}:{}:{}",
+        distro,
+        name,
+        query.version.as_deref().unwrap_or("latest"),
+        query.release.as_deref().unwrap_or("default"),
+        query.arch.as_deref().unwrap_or("default")
+    )
+}
+
+async fn converted_manifest_for_request(
+    db_path: &std::path::Path,
+    distro: &str,
+    name: &str,
+    query: &PackageQuery,
+) -> Result<ConvertedManifestLookup, (StatusCode, &'static str)> {
+    let check_db = db_path.to_path_buf();
+    let check_distro = distro.to_string();
+    let check_name = name.to_string();
+    let check_version = query.version.clone();
+    let check_arch = query.arch.clone();
+    match tokio::task::spawn_blocking(move || {
+        check_converted(
+            &check_db,
+            &check_distro,
+            &check_name,
+            check_version.as_deref(),
+            check_arch.as_deref(),
+        )
+    })
+    .await
+    {
+        Ok(Ok(lookup)) => Ok(lookup),
+        Ok(Err(error)) => {
+            tracing::error!("Database error checking conversion: {}", error);
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Database error"))
+        }
+        Err(error) => {
+            tracing::error!("Blocking task failed: {}", error);
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))
+        }
+    }
+}
+
+async fn start_conversion_after_cache_miss(
+    state: Arc<RwLock<ServerState>>,
+    db_path: &std::path::Path,
+    distro: &str,
+    name: &str,
+    query: &PackageQuery,
+) -> Response {
+    let job_key = conversion_job_key(distro, name, query);
+    let mut state_guard = state.write().await;
+    if let Some(existing_job) = state_guard.job_manager.get_active_job_by_key(&job_key) {
+        return active_conversion_response(existing_job, None);
+    }
+
+    // Keep job-key coordination stable across the final persisted lookup. A
+    // conversion can commit after the caller's first cache miss, and its ready
+    // polling record can then be evicted. Holding this lock makes the lookup
+    // and any replacement reservation one atomic decision relative to job
+    // creation, completion, and cleanup.
+    match converted_manifest_for_request(db_path, distro, name, query).await {
+        Ok(ConvertedManifestLookup::Ready(manifest)) => {
+            return Json(manifest).into_response();
+        }
+        Ok(ConvertedManifestLookup::Missing) => {}
+        Err(error) => return error.into_response(),
+    }
+
+    match state_guard.job_manager.create_job(
+        job_key,
+        distro.to_string(),
+        name.to_string(),
+        query.version.clone(),
+        query.arch.clone(),
+    ) {
+        Ok(job_id) => {
+            let state_clone = Arc::clone(&state);
+            tokio::spawn(async move {
+                run_conversion(state_clone, job_id).await;
+            });
+
+            (
+                StatusCode::ACCEPTED,
+                Json(ConversionAccepted {
+                    status: "pending",
+                    job_id: job_id.to_string(),
+                    poll_url: format!("/v1/jobs/{}", job_id),
+                    eta_seconds: Some(30),
+                }),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            tracing::error!("Failed to create conversion job: {}", error);
+            (StatusCode::SERVICE_UNAVAILABLE, "Conversion queue full").into_response()
+        }
+    }
 }
 
 enum ConvertedManifestLookup {
@@ -206,109 +328,13 @@ pub async fn get_package(
 
     // Check if package is already converted (use spawn_blocking to avoid blocking
     // the async runtime with synchronous SQLite I/O)
-    let check_distro = distro.clone();
-    let check_name = name.clone();
-    let check_version = query.version.clone();
-    let check_arch = query.arch.clone();
-    let check_db = db_path.clone();
-    match tokio::task::spawn_blocking(move || {
-        check_converted(
-            &check_db,
-            &check_distro,
-            &check_name,
-            check_version.as_deref(),
-            check_arch.as_deref(),
-        )
-    })
-    .await
-    {
-        Ok(Ok(ConvertedManifestLookup::Ready(manifest))) => return Json(manifest).into_response(),
-        Ok(Ok(ConvertedManifestLookup::Missing)) => {}
-        Ok(Err(e)) => {
-            tracing::error!("Database error checking conversion: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
-        }
-        Err(e) => {
-            tracing::error!("Blocking task failed: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
-        }
+    match converted_manifest_for_request(&db_path, &distro, &name, &query).await {
+        Ok(ConvertedManifestLookup::Ready(manifest)) => return Json(manifest).into_response(),
+        Ok(ConvertedManifestLookup::Missing) => {}
+        Err(error) => return error.into_response(),
     }
 
-    let state_guard = state.read().await;
-
-    // Package not converted - check if conversion is already in progress
-    let job_key = format!(
-        "{}:{}:{}:{}:{}",
-        distro,
-        name,
-        query.version.as_deref().unwrap_or("latest"),
-        query.release.as_deref().unwrap_or("default"),
-        query.arch.as_deref().unwrap_or("default")
-    );
-
-    if let Some(existing_job) = state_guard.job_manager.get_job_by_key(&job_key) {
-        // Return existing job ID
-        return (
-            StatusCode::ACCEPTED,
-            Json(ConversionAccepted {
-                status: "converting",
-                job_id: existing_job.to_string(),
-                poll_url: format!("/v1/jobs/{}", existing_job),
-                eta_seconds: None, // TODO: estimate based on package size
-            }),
-        )
-            .into_response();
-    }
-
-    // Start new conversion job
-    drop(state_guard); // Release read lock before acquiring write
-    let mut state_guard = state.write().await;
-
-    // Re-check for existing job after acquiring write lock (another request may
-    // have created one in the gap between dropping read and acquiring write).
-    if let Some(existing_job) = state_guard.job_manager.get_job_by_key(&job_key) {
-        return (
-            StatusCode::ACCEPTED,
-            Json(ConversionAccepted {
-                status: "converting",
-                job_id: existing_job.to_string(),
-                poll_url: format!("/v1/jobs/{}", existing_job),
-                eta_seconds: None,
-            }),
-        )
-            .into_response();
-    }
-
-    match state_guard.job_manager.create_job(
-        job_key.clone(),
-        distro.clone(),
-        name.clone(),
-        query.version.clone(),
-        query.arch.clone(),
-    ) {
-        Ok(job_id) => {
-            // Spawn conversion task
-            let state_clone = state.clone();
-            tokio::spawn(async move {
-                run_conversion(state_clone, job_id).await;
-            });
-
-            (
-                StatusCode::ACCEPTED,
-                Json(ConversionAccepted {
-                    status: "queued",
-                    job_id: job_id.to_string(),
-                    poll_url: format!("/v1/jobs/{}", job_id),
-                    eta_seconds: Some(30), // Default estimate
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("Failed to create conversion job: {}", e);
-            (StatusCode::SERVICE_UNAVAILABLE, "Conversion queue full").into_response()
-        }
-    }
+    start_conversion_after_cache_miss(state, &db_path, &distro, &name, &query).await
 }
 
 /// Check if a package has already been converted
@@ -384,9 +410,10 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
         Err(_) => {
             tracing::error!("Conversion semaphore closed (job {})", job_id);
             let mut state_guard = state.write().await;
-            state_guard
-                .job_manager
-                .update_status(&job_id, JobStatus::Failed("Semaphore closed".to_string()));
+            state_guard.job_manager.update_status(
+                &job_id,
+                JobStatus::Cancelled("Conversion worker shut down".to_string()),
+            );
             return;
         }
     };
@@ -551,76 +578,17 @@ pub async fn download_package(
 
     let state_guard = state.read().await;
 
-    // Check for conversion job (in-progress or completed)
-    let job_key = format!(
-        "{}:{}:{}:{}:{}",
-        distro,
-        name,
-        query.version.as_deref().unwrap_or("latest"),
-        query.release.as_deref().unwrap_or("default"),
-        query.arch.as_deref().unwrap_or("default")
-    );
+    // Only active jobs own request deduplication. Completed artifacts are
+    // validated against persisted repository authority below; failed work may
+    // be retried through `get_package`.
+    let job_key = conversion_job_key(&distro, &name, &query);
     let job_info = state_guard
         .job_manager
-        .get_job_by_key(&job_key)
-        .and_then(|id| {
-            state_guard
-                .job_manager
-                .get_job(&id)
-                .map(|j| (id, j.clone()))
-        });
+        .get_active_job_by_key(&job_key)
+        .cloned();
 
-    // If job exists, check its status
-    if let Some((job_id, job)) = &job_info {
-        match &job.status {
-            crate::server::jobs::JobStatus::Ready => {
-                // Job completed - use the CCS path from the result
-                if let Some(result) = &job.result
-                    && result.ccs_path.exists()
-                {
-                    // Use the path from the job result (guaranteed to be correct)
-                    let ccs_path = result.ccs_path.clone();
-                    let analytics = state_guard.analytics.clone();
-                    let ua = headers
-                        .get(header::USER_AGENT)
-                        .and_then(|v| v.to_str().ok())
-                        .map(str::to_string);
-                    drop(state_guard);
-                    return stream_ccs_file(
-                        ccs_path,
-                        analytics,
-                        &distro,
-                        &name,
-                        query.version.as_deref(),
-                        query.arch.as_deref(),
-                        ua.as_deref(),
-                    )
-                    .await;
-                }
-                // Result missing or file deleted - fall through to filesystem lookup
-            }
-            crate::server::jobs::JobStatus::Failed(error) => {
-                // Conversion failed - return error
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Conversion failed: {}", error),
-                )
-                    .into_response();
-            }
-            _ => {
-                // Still converting/pending - return 202
-                return (
-                    StatusCode::ACCEPTED,
-                    Json(ConversionAccepted {
-                        status: "converting",
-                        job_id: job_id.to_string(),
-                        poll_url: format!("/v1/jobs/{}", job_id),
-                        eta_seconds: None,
-                    }),
-                )
-                    .into_response();
-            }
-        }
+    if let Some(job) = &job_info {
+        return active_conversion_response(job, None);
     }
 
     // No job found: look up the converted package through the DB instead of

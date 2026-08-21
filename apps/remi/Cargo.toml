@@ -73,6 +73,8 @@ hex.workspace = true
 flate2.workspace = true
 
 [dev-dependencies]
+ar.workspace = true
+sequoia-openpgp.workspace = true
 tar.workspace = true
 liblzma.workspace = true
 zip.workspace = true
