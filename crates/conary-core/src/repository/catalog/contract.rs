@@ -276,7 +276,7 @@ fn canonical_manifest_sha256(value: &impl Serialize) -> Result<String> {
     Ok(crate::hash::sha256(&bytes))
 }
 
-fn validate_identity(value: &str, label: &str) -> Result<()> {
+pub(super) fn validate_identity(value: &str, label: &str) -> Result<()> {
     if value.is_empty()
         || value.len() > 255
         || value.trim() != value
@@ -289,7 +289,7 @@ fn validate_identity(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_sha256(value: &str, label: &str) -> Result<()> {
+pub(super) fn validate_sha256(value: &str, label: &str) -> Result<()> {
     if value.len() != 64
         || !value
             .bytes()
@@ -302,7 +302,7 @@ fn validate_sha256(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_relative_source_path(value: &str) -> Result<()> {
+pub(super) fn validate_relative_source_path(value: &str) -> Result<()> {
     if value.is_empty() || value.len() > 4096 || value.starts_with('/') || value.contains('\\') {
         return Err(Error::ConfigError(
             "authenticated metadata source path must be a non-empty relative slash path"
