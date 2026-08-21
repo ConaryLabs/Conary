@@ -4,6 +4,7 @@
 
 use crate::server::config::RemiConfig;
 use crate::server::repository_manifest::RepositoryManifest;
+use crate::server::runtime_lock::RuntimeRootLock;
 use anyhow::{Context, Result, bail};
 use conary_core::db::schema::{SCHEMA_EPOCH, SCHEMA_VERSION, SchemaCompatibility};
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,7 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-const TRANSITION_SCHEMA: u32 = 1;
+const TRANSITION_SCHEMA: u32 = 2;
 const DEFAULT_REPOSITORY_MANIFEST_TARGET: &str = "/etc/conary/remi-repositories.toml";
 const DEFAULT_REPOSITORY_KEYS_DIR: &str = "/conary/repository-keys";
 
@@ -83,6 +84,7 @@ impl PrepareOptions {
 struct TransitionManifest {
     schema_version: u32,
     deployment_id: String,
+    runtime_root: PathBuf,
     expected_schema_epoch: String,
     expected_schema_revision: i32,
     config: FileTransition,
@@ -135,21 +137,26 @@ pub fn prepare(options: &PrepareOptions) -> Result<PathBuf> {
     if repository_manifest.repositories.is_empty() {
         bail!("deployment repository manifest must declare at least one source");
     }
+    let new_config = build_current_config(options, &repository_manifest)?;
+    let parsed_config: RemiConfig =
+        toml::from_str(&new_config).context("updated Remi config does not match current schema")?;
+    parsed_config.validate()?;
+
+    let runtime_lock = RuntimeRootLock::acquire(parsed_config.storage_root())?;
+    let runtime_root = runtime_lock.root().to_path_buf();
+    let _runtime_lock = runtime_lock;
+    require_plain_directory(&runtime_root, "Remi storage root")?;
+
     crate::server::signing_authority::ensure_repository_authority(
         &repository_manifest,
         &options.repository_keys_dir,
     )?;
 
-    let new_config = build_current_config(options, &repository_manifest)?;
-    let parsed_config: RemiConfig =
-        toml::from_str(&new_config).context("updated Remi config does not match current schema")?;
-    parsed_config.validate()?;
-    let db_path = parsed_config.storage_root().join("metadata/conary.db");
+    let db_path = runtime_root.join("metadata/conary.db");
     let compatibility = conary_core::db::schema::inspect(&db_path)
         .with_context(|| format!("failed to inspect database {}", db_path.display()))?;
 
-    let backup_root = parsed_config.storage_root().join("deployment-backups");
-    require_plain_directory(parsed_config.storage_root(), "Remi storage root")?;
+    let backup_root = runtime_root.join("deployment-backups");
     fs::create_dir_all(&backup_root)
         .with_context(|| format!("failed to create {}", backup_root.display()))?;
     require_plain_directory(&backup_root, "deployment backup root")?;
@@ -168,6 +175,7 @@ pub fn prepare(options: &PrepareOptions) -> Result<PathBuf> {
     let transition = TransitionManifest {
         schema_version: TRANSITION_SCHEMA,
         deployment_id: options.deployment_id.clone(),
+        runtime_root,
         expected_schema_epoch: SCHEMA_EPOCH.to_string(),
         expected_schema_revision: SCHEMA_VERSION,
         config: config_transition,
@@ -182,7 +190,7 @@ pub fn prepare(options: &PrepareOptions) -> Result<PathBuf> {
         &options.repository_manifest_source,
     );
     if let Err(error) = apply_result {
-        let rollback_error = rollback(&manifest_path).err();
+        let rollback_error = rollback_transition(&transition, &manifest_path).err();
         if let Some(rollback_error) = rollback_error {
             return Err(error.context(format!(
                 "automatic rollback also failed: {rollback_error:#}"
@@ -201,13 +209,22 @@ pub fn rollback(manifest_path: &Path) -> Result<()> {
     let transition: TransitionManifest = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
     validate_transition_manifest(&transition)?;
+    let _runtime_lock = RuntimeRootLock::acquire(&transition.runtime_root)?;
 
+    rollback_transition(&transition, manifest_path)
+}
+
+fn rollback_transition(transition: &TransitionManifest, manifest_path: &Path) -> Result<()> {
     rollback_database(&transition.database, manifest_path)?;
     restore_file(&transition.repository_manifest)?;
     restore_file(&transition.config)?;
     Ok(())
 }
 
+/// Inspect deployment state without claiming runtime ownership.
+///
+/// This is a read-only evidence surface. Its result never proves that prepare,
+/// rollback, or another runtime mutation is safe to start.
 pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
     require_plain_file(config_path, "Remi config")?;
     let config = RemiConfig::load(config_path)?;
@@ -699,6 +716,21 @@ fn validate_transition_manifest(transition: &TransitionManifest) -> Result<()> {
             SCHEMA_VERSION
         );
     }
+    if !transition.runtime_root.is_absolute() {
+        bail!("transition runtime root must be absolute");
+    }
+    let canonical_root = fs::canonicalize(&transition.runtime_root).with_context(|| {
+        format!(
+            "failed to resolve transition runtime root {}",
+            transition.runtime_root.display()
+        )
+    })?;
+    if canonical_root != transition.runtime_root {
+        bail!(
+            "transition runtime root is not canonical: {}",
+            transition.runtime_root.display()
+        );
+    }
     validate_deployment_id(&transition.deployment_id)
 }
 
@@ -724,109 +756,34 @@ fn sync_parent(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::DirBuilderExt;
     use std::os::unix::fs::symlink;
 
-    fn write(path: &Path, content: &str) {
-        fs::write(path, content).unwrap();
-    }
+    mod fixtures;
+    mod ownership;
 
-    fn base_config(root: &Path) -> String {
-        format!(
-            r#"
-[server]
-bind = "127.0.0.1:8080"
-admin_bind = "127.0.0.1:8081"
-
-[storage]
-root = "{}"
-eviction_threshold = 0.90
-eviction_min_age = "1h"
-
-[r2]
-enabled = true
-endpoint = "https://r2.example.test"
-account_id = "retired"
-write_through = true
-r2_redirect = false
-
-[upstream.old]
-base_url = "https://legacy.example.test"
-
-[conversion]
-max_concurrent = 4
-"#,
-            root.display()
-        )
-    }
-
-    fn repository_manifest() -> &'static str {
-        r#"
-schema_version = 3
-
-[[repositories]]
-name = "opaque-source"
-url = "https://packages.example.test/repository"
-profile = "fedora-44"
-source_identity = "example-publisher"
-repository_identity = "opaque-source-rpm-x86_64"
-stream_kind = "release"
-stream_identity = "44"
-update_mode = "follow"
-enabled = true
-priority = 100
-metadata_expire_seconds = 21600
-
-[repositories.parser]
-package_format = "rpm"
-architecture = "x86_64"
-
-[repositories.trust]
-ecosystem = "rpm"
-
-[repositories.trust.metadata]
-kind = "metalink"
-url = "https://mirrors.example.test/metalink"
-
-[[repositories.trust.package_keys]]
-url = "https://keys.example.test/fedora.gpg"
-fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-"#
-    }
-
-    fn options(root: &Path) -> PrepareOptions {
-        PrepareOptions {
-            config_path: root.join("etc/remi.toml"),
-            repository_manifest_source: root.join("staged-repositories.toml"),
-            repository_manifest_target: root.join("etc/remi-repositories.toml"),
-            repository_keys_dir: root.join("repository-keys"),
-            deployment_id: "remi-0.8.0".to_string(),
-            max_concurrent: 32,
-        }
-    }
-
-    fn arrange() -> (tempfile::TempDir, PrepareOptions) {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().to_path_buf();
-        fs::create_dir(root.join("etc")).unwrap();
-        fs::create_dir(root.join("metadata")).unwrap();
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(root.join("repository-keys"))
-            .unwrap();
-        write(&root.join("etc/remi.toml"), &base_config(&root));
-        write(
-            &root.join("staged-repositories.toml"),
-            repository_manifest(),
-        );
-        let options = options(&root);
-        (temp, options)
-    }
+    use fixtures::{arrange, repository_manifest};
 
     #[test]
     fn prepare_hard_switches_config_and_initializes_fresh_database() {
         let (temp, options) = arrange();
         let manifest = prepare(&options).unwrap();
+
+        let transition_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        assert_eq!(transition_json["schema_version"], TRANSITION_SCHEMA);
+        assert_eq!(
+            transition_json["runtime_root"],
+            std::fs::canonicalize(temp.path())
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        );
+        let mut retired_shape = transition_json.clone();
+        retired_shape
+            .as_object_mut()
+            .unwrap()
+            .remove("runtime_root");
+        assert!(serde_json::from_value::<TransitionManifest>(retired_shape).is_err());
 
         let config = fs::read_to_string(&options.config_path).unwrap();
         assert!(!config.contains("[upstream"));

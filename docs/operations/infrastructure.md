@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-20
-revision: 29
+last_updated: 2026-08-21
+revision: 30
 summary: Non-secret infrastructure, agent operations, release and Remi deployment, and current remote development tooling
 ---
 
@@ -105,7 +105,15 @@ workflow.
   snapshots a current SQLite epoch or moves a retired epoch plus WAL/SHM into
   `/conary/deployment-backups/`, and emits the transition manifest used for
   automatic rollback. The pre-deploy database remains recoverable; retired
-  schemas are not migrated in place.
+  schemas are not migrated in place. The helper stops Remi before preparation,
+  and the candidate independently enforces that quiescence: prepare acquires
+  the same kernel-backed canonical runtime-root lock as the server before its
+  first mutation. Transition-manifest schema 2 records that exact canonical
+  root, and rollback reacquires it before restoring config, repository
+  authority, or SQLite state. Live ownership fails immediately; service names,
+  PIDs, lock-file contents, timestamps, and stale-file cleanup are not recovery
+  authority. `deployment inspect` is read-only evidence and does not establish
+  quiescence.
 - The helper creates `/conary/repository-keys` as a `conary:conary` mode-0700
   durable authority root before candidate preparation. The candidate
   atomically creates one complete targets/snapshot/timestamp key set under
