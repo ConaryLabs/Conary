@@ -10,9 +10,11 @@ pub(in crate::repository) mod source;
 mod store;
 
 pub use bundle::{
-    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, publish_profile_catalog_bundle,
-    publish_source_catalog_bundle, verify_profile_catalog_bundle, verify_source_catalog_bundle,
-    write_profile_catalog_manifest, write_source_catalog_manifest,
+    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, PublishedCatalogBundle,
+    publish_profile_catalog_bundle, publish_profile_catalog_bundle_with_provenance,
+    publish_source_catalog_bundle, publish_source_catalog_bundle_with_provenance,
+    verify_profile_catalog_bundle, verify_source_catalog_bundle, write_profile_catalog_manifest,
+    write_source_catalog_manifest,
 };
 pub use contract::{
     CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V1, ProfileRevisionV1,

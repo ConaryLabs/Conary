@@ -30,6 +30,21 @@ pub(super) fn validate_identity(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn validate_storage_component(value: &str, label: &str) -> Result<()> {
+    validate_identity(value, label)?;
+    if value == "."
+        || value == ".."
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(Error::ConfigError(format!(
+            "{label} must be a safe ASCII storage-path component"
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_uuid(value: &str, label: &str) -> Result<()> {
     if value.len() != 36 || uuid::Uuid::parse_str(value).is_err() {
         return Err(Error::ConfigError(format!(

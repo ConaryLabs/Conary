@@ -129,6 +129,16 @@ fn source_manifest(binding: &CatalogBindingV1) -> SourceSnapshotV1 {
     }
 }
 
+fn source_candidate(root: &Path, name: &str) -> (PathBuf, SourceSnapshotV1) {
+    let candidate = root.join(name);
+    fs::create_dir(&candidate).unwrap();
+    let binding =
+        write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
+    let manifest = source_manifest(&binding);
+    write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    (candidate, manifest)
+}
+
 #[test]
 fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
     let directory = tempfile::tempdir().unwrap();
@@ -145,10 +155,90 @@ fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
     verify_source_catalog_bundle(&candidate, &manifest).unwrap();
 
     let expected_identity = manifest.manifest_sha256().unwrap();
-    let published = publish_source_catalog_bundle(&candidate, &catalogs, &manifest).unwrap();
+    let publication =
+        publish_source_catalog_bundle_with_provenance(&candidate, &catalogs, &manifest).unwrap();
+    assert!(publication.newly_created);
+    let published = publication.path;
     assert_eq!(published.file_name().unwrap(), expected_identity.as_str());
     assert!(!candidate.exists());
     verify_source_catalog_bundle(&published, &manifest).unwrap();
+}
+
+#[test]
+fn existing_exact_destination_is_reused_and_survives_caller_rollback() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidates = directory.path().join("candidates");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidates).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+
+    let (first_candidate, manifest) = source_candidate(&candidates, "first");
+    let first =
+        publish_source_catalog_bundle_with_provenance(&first_candidate, &catalogs, &manifest)
+            .unwrap();
+    assert!(first.newly_created);
+
+    let (second_candidate, second_manifest) = source_candidate(&candidates, "second");
+    assert_eq!(manifest, second_manifest);
+    let reused = publish_source_catalog_bundle_with_provenance(
+        &second_candidate,
+        &catalogs,
+        &second_manifest,
+    )
+    .unwrap();
+    assert!(!reused.newly_created);
+    assert_eq!(reused.path, first.path);
+
+    if reused.newly_created {
+        fs::remove_dir_all(&reused.path).unwrap();
+    }
+    assert!(reused.path.exists());
+    assert!(second_candidate.exists());
+}
+
+#[test]
+fn malformed_existing_destination_errors_without_removal() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidates = directory.path().join("candidates");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidates).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+    let (candidate, manifest) = source_candidate(&candidates, "source");
+    let destination = catalogs
+        .join("sources")
+        .join(manifest.manifest_sha256().unwrap());
+    fs::create_dir_all(&destination).unwrap();
+    fs::write(destination.join("unexpected"), b"not a catalog bundle").unwrap();
+
+    let error = publish_source_catalog_bundle_with_provenance(&candidate, &catalogs, &manifest)
+        .unwrap_err();
+    assert!(error.to_string().contains("must contain exactly"));
+    assert!(destination.exists());
+    assert!(destination.join("unexpected").exists());
+    assert!(candidate.exists());
+}
+
+#[test]
+fn post_rename_verification_failure_removes_only_new_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("candidate");
+    let parent = directory.path().join("parent");
+    fs::create_dir(&candidate).unwrap();
+    fs::create_dir(&parent).unwrap();
+
+    let error = publish_verified_directory(&candidate, &parent, "bundle", |_| {
+        Err(Error::ConflictError(
+            "verification failed after rename".to_string(),
+        ))
+    })
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("verification failed after rename")
+    );
+    assert!(!candidate.exists());
+    assert!(!parent.join("bundle").exists());
 }
 
 #[test]

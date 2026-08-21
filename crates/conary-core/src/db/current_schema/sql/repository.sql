@@ -126,6 +126,7 @@ CREATE TABLE repository_sync_runs (
             heartbeat_at INTEGER NOT NULL,
             lease_expires_at INTEGER NOT NULL,
             finished_at INTEGER,
+            candidate_cleaned_at INTEGER,
             failure_stage TEXT CHECK(failure_stage IS NULL OR failure_stage IN (
                 'created',
                 'fetching_roots',
@@ -148,6 +149,10 @@ CREATE TABLE repository_sync_runs (
             CHECK(length(owner_instance_uuid) = 36),
             CHECK(heartbeat_at >= started_at),
             CHECK(lease_expires_at >= heartbeat_at),
+            CHECK(candidate_cleaned_at IS NULL OR (
+                finished_at IS NOT NULL
+                AND candidate_cleaned_at >= finished_at
+            )),
             CHECK(
                 (state = 'published'
                     AND finished_at IS NOT NULL
@@ -1173,7 +1178,9 @@ CREATE TABLE remi_catalog_resources (
             CHECK(length(logical_digest_sha256) = 64
                 AND logical_digest_sha256 NOT GLOB '*[^0-9a-f]*'),
             CHECK(length(source_profile) BETWEEN 1 AND 255
-                AND trim(source_profile) = source_profile),
+                AND trim(source_profile) = source_profile
+                AND source_profile NOT IN ('.', '..')
+                AND source_profile NOT GLOB '*[^A-Za-z0-9._-]*'),
             UNIQUE(resource_kind, source_profile, resource_sha256),
             UNIQUE(resource_kind, artifact_sha256)
         );
@@ -1181,6 +1188,37 @@ CREATE INDEX idx_remi_catalog_resources_profile
             ON remi_catalog_resources(source_profile, resource_kind, created_at DESC);
 CREATE INDEX idx_remi_catalog_resources_artifact
             ON remi_catalog_resources(artifact_sha256);
+
+-- Exact durable filesystem deletion journal. Metadata collection records the
+-- content-addressed path identity here before deleting its resource row; the
+-- application removes only that exact bundle and acknowledges the intent.
+CREATE TABLE remi_catalog_gc_deletions (
+            resource_sha256 TEXT PRIMARY KEY,
+            resource_kind TEXT NOT NULL
+                CHECK(resource_kind IN ('source_snapshot', 'profile_revision')),
+            source_profile TEXT NOT NULL,
+            queued_at INTEGER NOT NULL,
+            CHECK(length(resource_sha256) = 64
+                AND resource_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(source_profile) BETWEEN 1 AND 255
+                AND trim(source_profile) = source_profile
+                AND source_profile NOT IN ('.', '..')
+                AND source_profile NOT GLOB '*[^A-Za-z0-9._-]*')
+        );
+CREATE TRIGGER remi_catalog_gc_deletions_immutable
+BEFORE UPDATE ON remi_catalog_gc_deletions
+BEGIN
+    SELECT RAISE(ABORT, 'catalog deletion intents cannot be repointed');
+END;
+CREATE TRIGGER remi_catalog_resources_reject_pending_deletion
+BEFORE INSERT ON remi_catalog_resources
+WHEN EXISTS (
+    SELECT 1 FROM remi_catalog_gc_deletions deletion
+    WHERE deletion.resource_sha256 = NEW.resource_sha256
+)
+BEGIN
+    SELECT RAISE(ABORT, 'catalog resource has an incomplete deletion intent');
+END;
 
 -- A resource is content-addressed and its durability metadata is immutable.
 -- Promotion registers a post-fsync resource as durable; it never edits a
@@ -1236,21 +1274,19 @@ BEGIN
           )
     ) THEN RAISE(ABORT, 'profile revision member requires exact profile and source resources') END;
 END;
-CREATE TRIGGER remi_profile_revision_members_require_exact_resources_update
+CREATE TRIGGER remi_profile_revision_members_immutable_update
 BEFORE UPDATE ON remi_profile_revision_members
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
-        SELECT 1
-        FROM remi_catalog_resources profile
-        WHERE profile.resource_sha256 = NEW.profile_revision_sha256
-          AND profile.resource_kind = 'profile_revision'
-          AND profile.source_profile = (
-              SELECT source_profile
-              FROM remi_catalog_resources source
-              WHERE source.resource_sha256 = NEW.source_snapshot_sha256
-                AND source.resource_kind = 'source_snapshot'
-          )
-    ) THEN RAISE(ABORT, 'profile revision member requires exact profile and source resources') END;
+    SELECT RAISE(ABORT, 'immutable profile revision members cannot be updated');
+END;
+CREATE TRIGGER remi_profile_revision_members_immutable_delete
+BEFORE DELETE ON remi_profile_revision_members
+WHEN EXISTS (
+    SELECT 1 FROM remi_catalog_resources profile
+    WHERE profile.resource_sha256 = OLD.profile_revision_sha256
+)
+BEGIN
+    SELECT RAISE(ABORT, 'immutable profile revision members cannot be deleted directly');
 END;
 
 CREATE TABLE remi_active_profile_revisions (

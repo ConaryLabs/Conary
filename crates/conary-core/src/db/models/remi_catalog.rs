@@ -8,17 +8,25 @@
 //! row belongs here.
 
 mod activation;
+mod gc;
 mod resource;
 mod validation;
 use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use validation::{validate_canonical_manifest, validate_identity, validate_sha256};
+use validation::{
+    validate_canonical_manifest, validate_identity, validate_sha256, validate_storage_component,
+};
 
 #[cfg(test)]
 use activation::activate_profile_revision_at;
 pub use activation::{
     RemiProfileActivationOutcome, RemiProfileRevisionActivation, activate_profile_revision,
+};
+pub use gc::{
+    RemiCatalogCollectionPlan, RemiCatalogCollectionResult, RemiCatalogDeletionIntent,
+    RemiCatalogReachabilitySnapshot, RemiCatalogRunCandidate, acknowledge_catalog_deletion,
+    delete_catalog_collection, list_catalog_deletion_intents, plan_catalog_collection,
 };
 pub use resource::register_profile_catalog_revision;
 
@@ -32,7 +40,7 @@ const PIN_COLUMNS: &str = "pin_id, source_profile, profile_revision_sha256, owne
     owner_identity, pinned_at";
 
 /// The two resource classes that may be referenced by an activated profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RemiCatalogResourceKind {
     SourceSnapshot,
     ProfileRevision,
@@ -134,7 +142,7 @@ impl RemiCatalogResource {
 
     fn validate(&self) -> Result<()> {
         validate_sha256(&self.resource_sha256, "catalog resource SHA-256")?;
-        validate_identity(&self.source_profile, "catalog source profile")?;
+        validate_storage_component(&self.source_profile, "catalog source profile")?;
         validate_sha256(&self.artifact_sha256, "catalog artifact SHA-256")?;
         validate_sha256(&self.logical_digest_sha256, "catalog logical digest")?;
         if self.artifact_size < 0 {
@@ -660,13 +668,13 @@ mod tests {
         // Durability is immutable metadata: replacing the resource is the
         // only valid way to register a post-fsync artifact.
         conn.execute(
-            "DELETE FROM remi_profile_revision_members WHERE profile_revision_sha256 = ?1",
+            "DELETE FROM remi_catalog_resources WHERE resource_sha256 = ?1",
             [resource_digest('d')],
         )
         .unwrap();
         conn.execute(
-            "DELETE FROM remi_catalog_resources WHERE resource_sha256 IN (?1, ?2)",
-            params![resource_digest('d'), resource_digest('e')],
+            "DELETE FROM remi_catalog_resources WHERE resource_sha256 = ?1",
+            [resource_digest('e')],
         )
         .unwrap();
         install_catalog(&conn, 'd', 'e', true);
@@ -847,5 +855,33 @@ mod tests {
         );
         assert_eq!(members[0].source_snapshot_sha256, resource_digest('b'));
         assert_eq!(members[1].source_snapshot_sha256, resource_digest('c'));
+
+        let update_error = conn
+            .execute(
+                "UPDATE remi_profile_revision_members SET priority = 99
+                 WHERE profile_revision_sha256 = ?1 AND ordinal = 0",
+                [resource_digest('a')],
+            )
+            .unwrap_err();
+        assert!(update_error.to_string().contains("cannot be updated"));
+        let delete_error = conn
+            .execute(
+                "DELETE FROM remi_profile_revision_members
+                 WHERE profile_revision_sha256 = ?1 AND ordinal = 0",
+                [resource_digest('a')],
+            )
+            .unwrap_err();
+        assert!(delete_error.to_string().contains("cannot be deleted"));
+
+        conn.execute(
+            "DELETE FROM remi_catalog_resources WHERE resource_sha256 = ?1",
+            [resource_digest('a')],
+        )
+        .unwrap();
+        assert!(
+            RemiProfileRevisionMember::list_for_revision(&conn, &resource_digest('a'))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

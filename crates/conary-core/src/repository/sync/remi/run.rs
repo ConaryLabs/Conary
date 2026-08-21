@@ -11,6 +11,16 @@ use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod recovery;
+
+#[cfg(test)]
+use recovery::recover_expired_profile_sync_runs_at;
+pub use recovery::{
+    ProfileSyncRunRecovery, acknowledge_profile_sync_candidate_cleanup,
+    recover_expired_profile_sync_runs,
+};
+use recovery::{abandon_expired_run, pending_candidate_recovery};
+
 /// One page fetch can make three 300-second attempts. Keep the durable lease
 /// beyond that exact retry envelope; each successfully persisted coordinator
 /// event renews it. Recovery is authorized by this lease, never by a path or
@@ -225,7 +235,14 @@ fn begin_profile_sync_run_in_transaction(
                          {epoch} until {lease_expires_at}"
                     )));
                 }
-                abandon_expired_run(&tx, source_profile, &run_id, now, epoch)?;
+                abandon_expired_run(
+                    &tx,
+                    source_profile,
+                    &run_id,
+                    now,
+                    epoch,
+                    "successor acquisition",
+                )?;
             }
             epoch
         }
@@ -261,16 +278,10 @@ fn begin_profile_sync_run_in_transaction(
              current_run_id = excluded.current_run_id",
         params![source_profile, fencing_epoch, run_id],
     )?;
-    let recovery_run_ids = {
-        let mut statement = tx.prepare(
-            "SELECT run_id FROM repository_sync_runs
-             WHERE source_profile = ?1 AND state = 'abandoned'
-             ORDER BY fencing_epoch",
-        )?;
-        statement
-            .query_map([source_profile], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    let recovery_run_ids = pending_candidate_recovery(&tx, Some(source_profile))?
+        .into_iter()
+        .map(|recovery| recovery.run_id)
+        .collect();
     tx.commit()?;
 
     Ok(RemiSyncRun {
@@ -605,35 +616,6 @@ fn touch_owned_run(tx: &Transaction<'_>, run: &RemiSyncRun, now: i64) -> Result<
     Ok(())
 }
 
-fn abandon_expired_run(
-    tx: &Transaction<'_>,
-    source_profile: &str,
-    run_id: &str,
-    now: i64,
-    fencing_epoch: i64,
-) -> Result<()> {
-    let evidence = format!(
-        "durable lease for profile {source_profile} fencing epoch {fencing_epoch} expired before successor acquisition"
-    );
-    let updated = tx.execute(
-        "UPDATE repository_sync_runs
-         SET state = 'abandoned', heartbeat_at = ?1, lease_expires_at = ?1,
-             finished_at = ?1, failure_stage = 'publishing',
-             failure_category = 'fenced', failure_evidence = ?2
-         WHERE run_id = ?3
-           AND source_profile = ?4
-           AND state NOT IN ('published', 'failed', 'abandoned')
-           AND lease_expires_at <= ?1",
-        params![now, evidence, run_id, source_profile],
-    )?;
-    if updated != 1 {
-        return Err(Error::ConflictError(format!(
-            "profile {source_profile} sync run {run_id} is not durably abandoned"
-        )));
-    }
-    Ok(())
-}
-
 impl RemiSyncRunMember {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
@@ -853,6 +835,38 @@ mod tests {
         );
         let error = heartbeat_profile_sync_run(&conn, &first).unwrap_err();
         assert!(error.to_string().contains("lost fencing epoch 1"));
+    }
+
+    #[test]
+    fn restart_recovery_fences_only_expired_runs_and_replays_cleanup_until_acknowledged() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let expired = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, 100).unwrap();
+        let live = begin_profile_sync_run_at(&conn, "ubuntu-26.04", None, OWNER_TWO, 500).unwrap();
+        let recovery_time = 100 + REMI_SYNC_LEASE_SECONDS;
+
+        let first = recover_expired_profile_sync_runs_at(&conn, recovery_time).unwrap();
+        assert_eq!(
+            first,
+            vec![ProfileSyncRunRecovery {
+                run_id: expired.run_id.clone(),
+                source_profile: expired.source_profile.clone(),
+            }]
+        );
+        assert_eq!(run_state(&conn, &expired), "abandoned");
+        assert_eq!(run_state(&conn, &live), "created");
+
+        assert_eq!(
+            recover_expired_profile_sync_runs_at(&conn, recovery_time).unwrap(),
+            first
+        );
+        assert!(acknowledge_profile_sync_candidate_cleanup(&conn, &expired.run_id).unwrap());
+        assert!(!acknowledge_profile_sync_candidate_cleanup(&conn, &expired.run_id).unwrap());
+        assert!(
+            recover_expired_profile_sync_runs_at(&conn, recovery_time)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

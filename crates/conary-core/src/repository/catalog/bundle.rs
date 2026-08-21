@@ -16,6 +16,25 @@ use crate::error::{Error, Result};
 pub const CATALOG_FILE_NAME: &str = "catalog.sqlite";
 pub const CATALOG_MANIFEST_FILE_NAME: &str = "manifest.json";
 
+/// The durable filesystem result of publishing one immutable catalog bundle.
+///
+/// `newly_created` is the publication provenance needed by a caller that may
+/// have to roll back a larger publication. A false value means the exact
+/// content-addressed destination already existed and was verified; callers
+/// must never remove that destination as part of their rollback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedCatalogBundle {
+    pub path: PathBuf,
+    pub newly_created: bool,
+}
+
+impl PublishedCatalogBundle {
+    /// Consume the publication result and return its destination path.
+    pub fn into_path(self) -> PathBuf {
+        self.path
+    }
+}
+
 pub fn write_source_catalog_manifest(
     candidate_directory: impl AsRef<Path>,
     manifest: &SourceSnapshotV1,
@@ -59,6 +78,17 @@ pub fn publish_source_catalog_bundle(
     catalog_root: impl AsRef<Path>,
     manifest: &SourceSnapshotV1,
 ) -> Result<PathBuf> {
+    publish_source_catalog_bundle_with_provenance(candidate_directory, catalog_root, manifest)
+        .map(PublishedCatalogBundle::into_path)
+}
+
+/// Publish a source bundle and report whether this call created its immutable
+/// content-addressed destination.
+pub fn publish_source_catalog_bundle_with_provenance(
+    candidate_directory: impl AsRef<Path>,
+    catalog_root: impl AsRef<Path>,
+    manifest: &SourceSnapshotV1,
+) -> Result<PublishedCatalogBundle> {
     let candidate_directory = candidate_directory.as_ref();
     verify_source_catalog_bundle(candidate_directory, manifest)?;
     let parent = ensure_real_subdirectory(catalog_root.as_ref(), "sources")?;
@@ -75,6 +105,17 @@ pub fn publish_profile_catalog_bundle(
     catalog_root: impl AsRef<Path>,
     manifest: &ProfileRevisionV1,
 ) -> Result<PathBuf> {
+    publish_profile_catalog_bundle_with_provenance(candidate_directory, catalog_root, manifest)
+        .map(PublishedCatalogBundle::into_path)
+}
+
+/// Publish a profile bundle and report whether this call created its
+/// immutable content-addressed destination.
+pub fn publish_profile_catalog_bundle_with_provenance(
+    candidate_directory: impl AsRef<Path>,
+    catalog_root: impl AsRef<Path>,
+    manifest: &ProfileRevisionV1,
+) -> Result<PublishedCatalogBundle> {
     let candidate_directory = candidate_directory.as_ref();
     verify_profile_catalog_bundle(candidate_directory, manifest)?;
     validate_storage_component(&manifest.profile, "profile catalog storage identity")?;
@@ -222,16 +263,23 @@ fn publish_verified_directory<F>(
     parent: &Path,
     identity: &str,
     verify: F,
-) -> Result<PathBuf>
+) -> Result<PublishedCatalogBundle>
 where
     F: Fn(&Path) -> Result<()>,
 {
     require_real_directory(candidate)?;
     require_real_directory(parent)?;
     let destination = parent.join(identity);
-    if fs::symlink_metadata(&destination).is_ok() {
-        verify(&destination)?;
-        return Ok(destination);
+    match fs::symlink_metadata(&destination) {
+        Ok(_) => {
+            verify(&destination)?;
+            return Ok(PublishedCatalogBundle {
+                path: destination,
+                newly_created: false,
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     require_same_filesystem(candidate, parent)?;
     fs::rename(candidate, &destination).map_err(|error| {
@@ -241,9 +289,37 @@ where
             destination.display()
         ))
     })?;
-    sync_directory(parent)?;
-    verify(&destination)?;
-    Ok(destination)
+    if let Err(error) = sync_directory(parent).and_then(|()| verify(&destination)) {
+        return Err(cleanup_failed_publication(&destination, error));
+    }
+    Ok(PublishedCatalogBundle {
+        path: destination,
+        newly_created: true,
+    })
+}
+
+/// Remove only the destination created by the immediately preceding rename.
+///
+/// Existing destinations take the early return above and never reach this
+/// helper. Refuse to remove anything that is no longer a real directory; that
+/// keeps a replacement symlink or regular file out of the cleanup blast
+/// radius.
+fn cleanup_failed_publication(destination: &Path, publication_error: Error) -> Error {
+    let cleanup_result = (|| -> Result<()> {
+        require_real_directory(destination)?;
+        fs::remove_dir_all(destination)?;
+        if let Some(parent) = destination.parent() {
+            sync_directory(parent)?;
+        }
+        Ok(())
+    })();
+    match cleanup_result {
+        Ok(()) => publication_error,
+        Err(cleanup_error) => Error::IoError(format!(
+            "catalog publication failed after creating {}; cleanup also failed ({cleanup_error}); the newly-created destination may remain: {publication_error}",
+            destination.display()
+        )),
+    }
 }
 
 fn verify_exact_directory(directory: &Path) -> Result<()> {
