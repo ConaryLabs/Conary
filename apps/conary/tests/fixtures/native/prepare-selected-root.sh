@@ -54,6 +54,15 @@ copy_runtime_path() {
   cp --dereference --preserve=mode,timestamps --parents "${source}" "${stage}"
 }
 
+copy_runtime_tree() {
+  local source="$1"
+  if [[ "${source}" != /* || ! -d "${source}" ]]; then
+    echo "Selected-root runtime tree is not an existing absolute directory: ${source}" >&2
+    exit 1
+  fi
+  cp --archive --parents "${source}" "${stage}"
+}
+
 copy_elf_closure() {
   local executable="$1"
   local ldd_output
@@ -105,6 +114,35 @@ done
 copy_elf_closure "${install_path}"
 copy_elf_closure /bin/false
 copy_elf_closure /usr/bin/true
+
+# The pinned RPM lifecycle fixture declares /usr/bin/python3 as its exact
+# non-shell interpreter. Stage the target's real interpreter and standard
+# library so preflight and execution prove that ABI inside the selected root
+# rather than borrowing the container host. Third-party modules and bytecode
+# caches are not part of that interpreter contract.
+python_path=/usr/bin/python3
+copy_elf_closure "${python_path}"
+python_stdlib="$(${python_path} -I -S -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
+python_pathlib="$(${python_path} -I -S -c 'import pathlib; print(pathlib.__file__)')"
+case "${python_stdlib}" in
+  /usr/lib/python* | /usr/local/lib/python*) ;;
+  *)
+    echo "Python standard library is outside the selected-root runtime domain: ${python_stdlib}" >&2
+    exit 1
+    ;;
+esac
+case "${python_pathlib}" in
+  "${python_stdlib}"/*) ;;
+  *)
+    echo "Python pathlib implementation is outside its standard library: ${python_pathlib}" >&2
+    exit 1
+    ;;
+esac
+copy_runtime_tree "${python_stdlib}"
+rm -rf \
+  "${stage}${python_stdlib}/site-packages" \
+  "${stage}${python_stdlib}/dist-packages"
+find "${stage}${python_stdlib}" -type d -name __pycache__ -prune -exec rm -rf {} +
 
 # A selected root advertises service-manager lifecycle support only when its
 # provider executable is part of that root. The deterministic fixture is the
@@ -184,6 +222,8 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   --present /bin/bash \
   --present /bin/false \
   --present /usr/bin/bash \
+  --present "${python_path}" \
+  --present "${python_pathlib}" \
   --present "${systemctl_path:-/usr/bin/true}" \
   --present "${depmod_path}" \
   --present "${install_path}" \

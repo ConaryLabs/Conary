@@ -509,8 +509,10 @@ Each fixture family should record:
   packages, non-shell interpreters, file triggers, transaction hooks, multiple
   valid signing subkeys, and expired, revoked, and unknown trust negatives.
   Runtime proof captures service-manager and `depmod` mutation requests bound
-  to the selected root's exact deterministic providers, invokes the selected
-  root's exact target helper, and records deferred generation work. Forced
+  to the selected root's exact deterministic providers, stages the target's
+  real Python interpreter and standard library for the pinned non-shell RPM
+  lifecycle ABI, invokes the selected root's exact target helper, and records
+  deferred generation work. Forced
   interrupted-download, conversion, payload-mutation, lifecycle, publication,
   and activation failures assert the package database, selected generation,
   filesystem, generation count, and activation state appropriate to their
