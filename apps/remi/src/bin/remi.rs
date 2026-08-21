@@ -401,22 +401,14 @@ fn run_server_command(args: ServeArgs) -> Result<()> {
         return Ok(());
     }
 
-    if args.init {
+    if only_init {
         println!("Initializing Remi storage directories...");
-        for dir in remi_config.storage_dirs() {
-            if !dir.exists() {
-                println!("  Creating: {}", dir.display());
-                std::fs::create_dir_all(&dir)?;
-            }
-        }
+        remi::server::initialize_storage_directories(&remi_config)?;
         println!("Storage directories initialized.");
-
-        if only_init {
-            return Ok(());
-        }
+        return Ok(());
     }
 
-    conary_bootstrap::run_with_runtime(|| run_server_from_config(&remi_config))
+    run_server_from_config(&remi_config)
 }
 
 fn load_remi_config(args: &ServeArgs, default_paths: &[PathBuf]) -> Result<RemiConfig> {
