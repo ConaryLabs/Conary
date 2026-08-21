@@ -217,7 +217,7 @@ pub(super) fn finish_remi_sync_run(
     run: &RemiSyncRun,
     revision: RemiSparseRevision,
 ) -> Result<usize> {
-    prepare_publication(conn, run, revision)?;
+    prepare_publication(conn, run, &revision)?;
 
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     require_owned_run(&tx, run, "ready_to_publish")?;
@@ -338,7 +338,7 @@ pub(super) fn abort_remi_sync_run(
 fn prepare_publication(
     conn: &Connection,
     run: &RemiSyncRun,
-    revision: RemiSparseRevision,
+    revision: &RemiSparseRevision,
 ) -> Result<()> {
     let now = unix_seconds()?;
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
@@ -614,8 +614,41 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        let error =
-            prepare_publication(&conn, &first, RemiSparseRevision { sequence: 1 }).unwrap_err();
+        let revision = RemiSparseRevision::new(1, "00000000000000000000000000000001").unwrap();
+        let error = prepare_publication(&conn, &first, &revision).unwrap_err();
         assert!(error.to_string().contains("lost fencing epoch 1"));
+    }
+
+    #[test]
+    fn repository_deletion_cascades_its_terminal_run_and_scope() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+        let repo = test_repo(&conn);
+        let run = begin_remi_sync_run_at(&conn, &repo, "00000000-0000-4000-8000-000000000001", 100)
+            .unwrap();
+        abort_remi_sync_run(
+            &conn,
+            &run,
+            RemiSyncFailureStage::FetchingObjects,
+            RemiSyncFailureCategory::Transport,
+            "synthetic transport interruption",
+        )
+        .unwrap();
+
+        Repository::delete(&conn, repo.id.unwrap()).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM repository_sync_runs", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM repository_sync_scopes", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
     }
 }

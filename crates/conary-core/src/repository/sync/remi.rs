@@ -408,6 +408,10 @@ mod tests {
     };
     use std::io::{Read, Write};
 
+    fn test_sparse_revision(sequence: u64) -> RemiSparseRevision {
+        RemiSparseRevision::new(sequence, format!("{sequence:032x}")).unwrap()
+    }
+
     fn remi_entry_for_tests(
         name: &str,
         version: &str,
@@ -693,7 +697,7 @@ mod tests {
                 let body = if attempt == 0 {
                     r#"{"distro":"fedora""#
                 } else {
-                    r#"{"distro":"fedora","source_profile":"fedora-44","revision":{"sequence":7},"packages":[{"name":"qemu-img","distro":"fedora","versions":[{"version":"2:10.1.0-7.fc44","architecture":"x86_64","provides":[],"requirement_groups":[],"size":1024}]}],"total":1,"page":1,"per_page":128}"#
+                    r#"{"distro":"fedora","source_profile":"fedora-44","revision":{"projection_schema":1,"sequence":7,"state_id":"00000000000000000000000000000007"},"packages":[{"name":"qemu-img","distro":"fedora","versions":[{"version":"2:10.1.0-7.fc44","architecture":"x86_64","provides":[],"requirement_groups":[],"size":1024}]}],"total":1,"page":1,"per_page":128}"#
                 };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -735,7 +739,7 @@ mod tests {
         let body = serde_json::to_string(&RemiSparsePackagePage {
             distro: "fedora".to_string(),
             source_profile: "fedora-44".to_string(),
-            revision: RemiSparseRevision { sequence: 7 },
+            revision: test_sparse_revision(7),
             packages: vec![sparse_test_entry("alpha"), sparse_test_entry("beta")],
             total: 2,
             page: 1,
@@ -814,7 +818,7 @@ mod tests {
         fetcher.consume_page(RemiSparsePackagePage {
             distro: "fedora".to_string(),
             source_profile: "fedora-44".to_string(),
-            revision: RemiSparseRevision { sequence: 7 },
+            revision: test_sparse_revision(7),
             packages: entries,
             total: package_count,
             page,
@@ -827,7 +831,11 @@ mod tests {
         let emitted = serde_json::json!({
             "distro": "fedora",
             "source_profile": "fedora-44",
-            "revision": {"sequence": 7},
+            "revision": {
+                "projection_schema": 1,
+                "sequence": 7,
+                "state_id": "00000000000000000000000000000007"
+            },
             "packages": [{
                 "name": "hello",
                 "distro": "fedora",

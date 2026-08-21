@@ -106,18 +106,20 @@ fn sparse_projection_revision(
     conn: &Connection,
     source_profile: &str,
 ) -> Result<RemiSparseRevision, anyhow::Error> {
-    let sequence = conn.query_row(
-        "SELECT COALESCE((
-             SELECT sequence
-             FROM remi_sparse_projection_revisions
-             WHERE source_profile = ?1
-         ), 0)",
+    let (sequence, state_id) = conn.query_row(
+        "SELECT COALESCE(revision.sequence, 0),
+                COALESCE(revision.state_id, '00000000000000000000000000000000')
+         FROM (SELECT 1) singleton
+         LEFT JOIN remi_sparse_projection_revisions revision
+           ON revision.source_profile = ?1",
         [source_profile],
-        |row| row.get::<_, i64>(0),
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
     )?;
-    Ok(RemiSparseRevision {
-        sequence: u64::try_from(sequence).context("sparse projection revision is negative")?,
-    })
+    RemiSparseRevision::new(
+        u64::try_from(sequence).context("sparse projection revision is negative")?,
+        state_id,
+    )
+    .map_err(anyhow::Error::msg)
 }
 
 fn build_resolution_version(
@@ -317,6 +319,7 @@ mod tests {
         .unwrap();
         let version_changed = sparse_projection_revision(&conn, "fedora-44").unwrap();
         assert!(version_changed.sequence > initial.sequence);
+        assert_ne!(version_changed.state_id, initial.state_id);
 
         conn.execute(
             "UPDATE repository_provides SET raw = 'alpha = 2' WHERE id = ?1",
@@ -330,6 +333,7 @@ mod tests {
         .unwrap();
         let relations_changed = sparse_projection_revision(&conn, "fedora-44").unwrap();
         assert!(relations_changed.sequence > version_changed.sequence);
+        assert_ne!(relations_changed.state_id, version_changed.state_id);
 
         let mut staging = repository;
         staging.id = None;
@@ -351,5 +355,26 @@ mod tests {
             sparse_projection_revision(&conn, "fedora-44").unwrap(),
             relations_changed
         );
+    }
+
+    #[test]
+    fn rebuilt_database_cannot_reuse_the_same_counter_identity() {
+        let revision = |conn: &Connection| {
+            conary_core::db::schema::ensure_current(conn).unwrap();
+            conn.execute(
+                "INSERT INTO remi_sparse_projection_revisions (source_profile, sequence)
+                 VALUES ('fedora-44', 7)",
+                [],
+            )
+            .unwrap();
+            sparse_projection_revision(conn, "fedora-44").unwrap()
+        };
+        let first = Connection::open_in_memory().unwrap();
+        let second = Connection::open_in_memory().unwrap();
+        let first = revision(&first);
+        let second = revision(&second);
+
+        assert_eq!(first.sequence, second.sequence);
+        assert_ne!(first.state_id, second.state_id);
     }
 }

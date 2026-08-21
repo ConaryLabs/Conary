@@ -4,7 +4,8 @@
 
 use crate::repository::dependency_model::{ProvideArchitectureQualifier, ProvideVersionRelation};
 use crate::repository::versioning::VersionScheme;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use std::fmt;
 
 /// Maximum package-name bytes admitted by Remi's public sparse-index routes.
 ///
@@ -31,16 +32,78 @@ pub const REMI_SPARSE_MIN_PACKAGE_SIZE: i64 = 1;
 pub const REMI_SPARSE_SYNC_PAGE_SIZE: usize = 128;
 const _: () = assert!(REMI_SPARSE_SYNC_PAGE_SIZE <= REMI_SPARSE_MAX_PAGE_SIZE);
 
+/// Wire schema for the exact fields contributing to the sparse revision.
+pub const REMI_SPARSE_PROJECTION_SCHEMA_VERSION: u32 = 1;
+
+/// Strict 128-bit identity for one visible sparse projection state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemiSparseStateId(String);
+
+impl RemiSparseStateId {
+    pub fn parse(value: impl Into<String>) -> Result<Self, &'static str> {
+        let value = value.into();
+        if value.len() != 32
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("sparse state ID must be exactly 32 lowercase hexadecimal characters");
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for RemiSparseStateId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl Serialize for RemiSparseStateId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for RemiSparseStateId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(de::Error::custom)
+    }
+}
+
 /// Monotonic revision of one exact profile's visible sparse-resolution state.
 ///
 /// The server advances this value whenever a package, provide, grouped
 /// requirement, persisted package metadata, or repository membership change
 /// can affect an `include=versions` response. A client pins the first value for
 /// the complete page set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemiSparseRevision {
+    pub projection_schema: u32,
     pub sequence: u64,
+    pub state_id: RemiSparseStateId,
+}
+
+impl RemiSparseRevision {
+    pub fn new(sequence: u64, state_id: impl Into<String>) -> Result<Self, &'static str> {
+        Ok(Self {
+            projection_schema: REMI_SPARSE_PROJECTION_SCHEMA_VERSION,
+            sequence,
+            state_id: RemiSparseStateId::parse(state_id)?,
+        })
+    }
 }
 
 /// Validate one public Remi route component or sparse package name.
@@ -188,6 +251,17 @@ pub struct RemiRequirementGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_revision_rejects_malformed_or_noncanonical_state_identity() {
+        let malformed = serde_json::json!({
+            "projection_schema": REMI_SPARSE_PROJECTION_SCHEMA_VERSION,
+            "sequence": 7,
+            "state_id": "ABCDEF"
+        });
+        let error = serde_json::from_value::<RemiSparseRevision>(malformed).unwrap_err();
+        assert!(error.to_string().contains("32 lowercase hexadecimal"));
+    }
 
     #[test]
     fn public_name_validation_is_the_shared_sparse_wire_contract() {

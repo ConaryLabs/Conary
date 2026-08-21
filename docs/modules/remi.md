@@ -155,10 +155,12 @@ it.
 Remi builds each `include=versions` page inside one SQLite read transaction,
 selects all visible package/version rows for the page together, and batch-loads
 their normalized provides and requirement groups. The page carries a typed
-monotonic revision scoped to the exact public profile. Persisted triggers
-advance that revision whenever visible repository membership, exact package
-identity, size, package metadata, provides, or grouped requirements change;
-disabled candidate writes do not advance public authority. Historical
+revision scoped to the exact public profile: a projection-schema version, a
+monotonic sequence, and a strict 128-bit state identity that cannot collide
+with the same sequence after a database rebuild or replacement. Persisted
+triggers advance that revision whenever visible repository membership, exact
+package identity, size, package metadata, provides, or grouped requirements
+change; disabled candidate writes do not advance public authority. Historical
 zero-sized discovery placeholders are excluded by one shared wire threshold
 used by the name count, name page, bulk page, and per-name lookup; every listed
 name is therefore fetchable and `total` counts that exact set.

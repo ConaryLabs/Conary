@@ -798,8 +798,18 @@ CREATE INDEX idx_repo_req_pkg_kind
             ON repository_requirements(repository_package_id, kind);
 CREATE TABLE remi_sparse_projection_revisions (
             source_profile TEXT PRIMARY KEY,
-            sequence INTEGER NOT NULL CHECK(sequence >= 0)
+            sequence INTEGER NOT NULL CHECK(sequence >= 0),
+            state_id TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+            CHECK(length(state_id) = 32 AND state_id NOT GLOB '*[^0-9a-f]*')
         );
+CREATE TRIGGER remi_sparse_projection_revision_rotate_state_id
+AFTER UPDATE OF sequence ON remi_sparse_projection_revisions
+WHEN NEW.sequence != OLD.sequence AND NEW.state_id = OLD.state_id
+BEGIN
+    UPDATE remi_sparse_projection_revisions
+    SET state_id = lower(hex(randomblob(16)))
+    WHERE source_profile = NEW.source_profile;
+END;
 CREATE TRIGGER remi_sparse_revision_repositories_insert
 AFTER INSERT ON repositories
 WHEN NEW.enabled = 1 AND NEW.source_profile IS NOT NULL

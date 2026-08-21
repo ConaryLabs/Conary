@@ -97,8 +97,9 @@ stages each fixed-size `include=versions` page of resolution-only
 version/provide/requirement documents and trusted package-advisory metadata;
 one final fenced transaction publishes the completed local candidate over the
 previous offline-resolution snapshot. Every page carries one exact-profile
-sparse revision, and the client rejects a mixed-revision page set even when its
-name total and ordering remain unchanged. A durable per-repository run records
+sparse revision with a projection-schema version, monotonic sequence, and
+strict state identity, and the client rejects a mixed-revision page set even
+when its name total and ordering remain unchanged. A durable per-repository run records
 the process owner, fencing epoch, candidate, revision, heartbeat, state, and
 typed failure; restart recovery removes only the exact candidate proven
 abandoned by its expired lease. Sync never fetches the whole-distribution
