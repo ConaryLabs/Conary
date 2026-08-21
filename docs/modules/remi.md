@@ -78,7 +78,9 @@ startup order and both periodic clocks; it awaits each complete cycle, so
 repository publication and canonical publication cannot overlap. Canonical
 cache and rebuild mutations use the same process-local database writer as
 repository synchronization. There is no warm-up timer or blind retry; a later
-cycle occurs at the configured interval and missed ticks use delay semantics.
+cycle occurs at the configured interval, an overdue canonical deadline is
+serviced immediately after the current refresh, and each deadline resets only
+after its owning attempt completes.
 
 Eligible exact-profile prewarm jobs run concurrently under the configured
 conversion bound shared with request-driven conversions. Each profile preserves

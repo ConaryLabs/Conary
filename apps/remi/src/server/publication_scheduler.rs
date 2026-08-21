@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{RwLock, Semaphore};
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::time::Instant;
 
 use crate::server::admin_service::{self, RepoRefreshBatch};
 use crate::server::canonical_fetch::{self, CanonicalCycleReport, CanonicalCycleState};
@@ -43,37 +43,35 @@ pub(crate) fn spawn(schedule: PublicationSchedule) {
                 )
             })
             .await;
+        log_canonical_cycle("Initial", &initial_canonical);
+        let mut next_canonical = Instant::now() + schedule.canonical_interval;
         if let Some(batch) = initial_refresh {
             run_eligible_prewarm(&schedule, &batch).await;
         }
-        log_canonical_cycle("Initial", &initial_canonical);
-
-        let now = Instant::now();
-        let mut refresh_tick =
-            tokio::time::interval_at(now + schedule.refresh_interval, schedule.refresh_interval);
-        refresh_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut canonical_tick = tokio::time::interval_at(
-            now + schedule.canonical_interval,
-            schedule.canonical_interval,
-        );
-        canonical_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut next_refresh = Instant::now() + schedule.refresh_interval;
 
         loop {
-            tokio::select! {
-                biased;
-                _ = refresh_tick.tick() => {
-                    if let Some(batch) = refresh_repositories(&schedule.state).await {
-                        run_eligible_prewarm(&schedule, &batch).await;
-                    }
+            tokio::time::sleep_until(next_refresh.min(next_canonical)).await;
+
+            if Instant::now() >= next_refresh {
+                if let Some(batch) = refresh_repositories(&schedule.state).await {
+                    run_eligible_prewarm(&schedule, &batch).await;
                 }
-                _ = canonical_tick.tick() => {
-                    let report = run_canonical_cycle(
-                        &schedule.state,
-                        &schedule.db_path,
-                        &schedule.canonical_config,
-                    ).await;
-                    log_canonical_cycle("Periodic", &report);
-                }
+                next_refresh = Instant::now() + schedule.refresh_interval;
+            }
+
+            // Re-evaluate after refresh and prewarm. If they crossed the
+            // canonical deadline, service it now instead of letting a shorter
+            // refresh interval starve canonical publication indefinitely.
+            if Instant::now() >= next_canonical {
+                let report = run_canonical_cycle(
+                    &schedule.state,
+                    &schedule.db_path,
+                    &schedule.canonical_config,
+                )
+                .await;
+                log_canonical_cycle("Periodic", &report);
+                next_canonical = Instant::now() + schedule.canonical_interval;
             }
         }
     });
