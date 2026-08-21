@@ -264,6 +264,8 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "conflict|phase4-w7-conflict|< 2",
         "obsolete|phase4-w7-replaced|<= 1",
         "tomllib.loads",
+        "len(raw_entries) == 3",
+        "len(entries) == len(raw_entries)",
         "rpm:%filetriggerin:0",
         "native_slot\\\"] == \\\"%triggerin\\\"",
         "interpreter\\\"] == \\\"/usr/bin/python3\\\"",
