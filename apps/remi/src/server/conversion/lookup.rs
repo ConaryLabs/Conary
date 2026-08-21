@@ -239,9 +239,13 @@ impl ConversionService {
         .await
         .map_err(|e| anyhow!("repository refresh lookup task panicked: {e}"))??;
         let repo_name = repo.name.clone();
-        conary_core::repository::sync_repository_from_db_path(self.db_path.clone(), repo)
-            .await
-            .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo_name, e))?;
+        conary_core::repository::sync_repository_from_db_path(
+            self.db_path.clone(),
+            repo,
+            self.database_writer.clone(),
+        )
+        .await
+        .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo_name, e))?;
 
         let refreshed_pkg = self
             .find_package_for_conversion_async(profile, package_name, version, architecture)

@@ -34,6 +34,15 @@ mod tests {
 
     const STATIC_PACKAGE_PATH: &str = "packages/acme-widget/acme-widget-1.4.2-1-x86_64.ccs";
 
+    #[derive(Clone, Copy)]
+    struct ImmediateWriteAuthority;
+
+    impl RepositoryWriteAuthority for ImmediateWriteAuthority {
+        fn execute<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+            operation()
+        }
+    }
+
     struct StaticSyncFixture {
         _tempdir: tempfile::TempDir,
         repo: Repository,
@@ -227,7 +236,11 @@ mod tests {
         let (temp, _conn) = crate::db::testing::create_test_db();
         let repo = static_repo("static-test", "file:///definitely/missing/static-repo");
 
-        let err = sync_repository_from_db_path(temp.path().to_path_buf(), repo)
+        let err = sync_repository_from_db_path(
+            temp.path().to_path_buf(),
+            repo,
+            ImmediateWriteAuthority,
+        )
             .await
             .unwrap_err();
 
@@ -253,7 +266,11 @@ mod tests {
         repo.tuf_enabled = true;
         repo.insert(&conn).unwrap();
 
-        let err = sync_repository_from_db_path(temp.path().to_path_buf(), repo)
+        let err = sync_repository_from_db_path(
+            temp.path().to_path_buf(),
+            repo,
+            ImmediateWriteAuthority,
+        )
             .await
             .unwrap_err();
 

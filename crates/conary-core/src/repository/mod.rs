@@ -80,7 +80,8 @@ pub use static_repo::{
 };
 pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
-    current_timestamp, needs_sync, parse_timestamp, sync_repository, sync_repository_from_db_path,
+    RepositoryWriteAuthority, current_timestamp, needs_sync, parse_timestamp, sync_repository,
+    sync_repository_from_db_path,
 };
 pub use trust::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,

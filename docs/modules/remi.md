@@ -98,13 +98,13 @@ and project the shared batch.
 
 `apps/remi/src/server/database_writer.rs` owns the process-local gate for short
 SQLite mutation phases. `ServerState` gives that same owner to repository CRUD,
+repository-sync persistence, analytics flush and aggregate refresh,
 authentication-token touches, and conversion publication. Repository create,
 update, and delete acquire it before opening an immediate transaction, and the
-multi-statement source replacement commits before releasing it. Network,
+multi-statement source replacement commits before releasing it. The core
+path-based repository-sync API requires an explicit writer authority and holds
+it around each TUF, package, sparse-stage, and canonical-map commit. Network,
 parsing, CCS emission, CAS work, and read-only lookups stay outside the gate.
-Analytics refresh versus repository-sync coordination remains tracked by
-[issue #443](https://github.com/ConaryLabs/Conary/issues/443); a caller is not
-coordinated merely because it opens the same SQLite file.
 
 ## Sparse Client Sync
 
@@ -140,13 +140,15 @@ by one shared wire threshold used by the name count, name page, bulk page, and
 per-name lookup; every listed name is therefore fetchable and `total` counts
 that exact set.
 
-Each bounded page is written to a disabled staging repository. The previously
-synced repository remains the only enabled snapshot while network and parsing
-work continues. After the declared name total has been consumed, one SQLite
-transaction replaces the old rows, moves the staged rows to the repository,
-links canonical IDs, and advances `last_sync`. A fetch, parsing, duplicate
-identity, or persistence error returned to the running command removes its
-stage and leaves the prior enabled snapshot unchanged.
+`crates/conary-core/src/repository/sync/remi/path.rs` owns the path-based sparse
+sync lifecycle and its writer-authority handoff. Each bounded page is written
+to a disabled staging repository. The previously synced repository remains the
+only enabled snapshot while network and parsing work continues. After the
+declared name total has been consumed, one SQLite transaction replaces the old
+rows, moves the staged rows to the repository, links canonical IDs, and
+advances `last_sync`. A fetch, parsing, duplicate identity, or persistence
+error returned to the running command removes its stage and leaves the prior
+enabled snapshot unchanged.
 
 Sparse pages do not yet carry a server-state revision. Stable totals and global
 name ordering detect structural drift, but a same-count or content-only Remi

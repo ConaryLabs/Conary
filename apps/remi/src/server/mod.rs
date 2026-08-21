@@ -15,7 +15,7 @@
 //! - Rate limiting per IP/peer
 
 pub mod admin_service;
-pub mod analytics;
+mod analytics;
 pub mod artifact_paths;
 pub mod audit;
 pub mod auth;
@@ -55,7 +55,7 @@ pub mod security;
 pub(crate) mod signing_authority;
 pub mod test_db;
 
-pub use analytics::AnalyticsRecorder;
+pub(crate) use analytics::AnalyticsRecorder;
 pub use bloom::{BloomStats, ChunkBloomFilter};
 pub use bounded_cache::{BoundedCache, BoundedCacheReport};
 pub use cache::ChunkCache;
@@ -222,7 +222,7 @@ pub struct ServerState {
     /// Full-text search engine (Tantivy)
     pub search_engine: Option<Arc<SearchEngine>>,
     /// Download analytics recorder (buffered writes)
-    pub analytics: Option<Arc<AnalyticsRecorder>>,
+    pub(crate) analytics: Option<Arc<AnalyticsRecorder>>,
     /// Federated sparse index configuration (from federation peers)
     pub federated_config: Option<federated_index::FederatedIndexConfig>,
     /// Federated sparse index cache (TTL-based in-memory cache)
@@ -498,7 +498,11 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
 
     // Initialize download analytics
     {
-        let analytics = Arc::new(AnalyticsRecorder::new(server_config.db_path.clone()));
+        let database_writer = state.read().await.database_writer.clone();
+        let analytics = Arc::new(AnalyticsRecorder::new(
+            server_config.db_path.clone(),
+            database_writer,
+        ));
         tokio::spawn(analytics::run_analytics_loop(Arc::clone(&analytics)));
         state.write().await.analytics = Some(analytics);
         tracing::info!("  Download analytics: enabled");
