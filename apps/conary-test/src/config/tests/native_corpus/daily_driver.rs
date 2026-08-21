@@ -709,6 +709,7 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "copy_elf_closure \"${python_path}\"",
         "python_stdlib=\"$(${python_path} -I -S -c",
         "python_pathlib=\"$(${python_path} -I -S -c",
+        "/usr/lib*/python* | /usr/local/lib*/python*",
         "copy_runtime_tree \"${python_stdlib}\"",
         "--present \"${python_path}\"",
         "--present \"${python_pathlib}\"",

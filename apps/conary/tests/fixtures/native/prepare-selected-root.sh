@@ -125,7 +125,7 @@ copy_elf_closure "${python_path}"
 python_stdlib="$(${python_path} -I -S -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
 python_pathlib="$(${python_path} -I -S -c 'import pathlib; print(pathlib.__file__)')"
 case "${python_stdlib}" in
-  /usr/lib/python* | /usr/local/lib/python*) ;;
+  /usr/lib*/python* | /usr/local/lib*/python*) ;;
   *)
     echo "Python standard library is outside the selected-root runtime domain: ${python_stdlib}" >&2
     exit 1
