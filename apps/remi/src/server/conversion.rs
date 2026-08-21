@@ -19,6 +19,7 @@ use crate::server::database_writer::DatabaseWriter;
 use crate::server::{BoundedCache, R2Store};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 pub use types::{
     CONVERSION_BENCHMARK_SCHEMA_V1, ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence,
     ConversionBenchmarkSample, ConversionBenchmarkSampleClass, ScriptletPackageMetadata,
@@ -42,6 +43,8 @@ pub struct ConversionService {
     repository_keys_dir: Option<PathBuf>,
     /// Shared owner for the short SQLite mutation phases of conversion work.
     database_writer: DatabaseWriter,
+    /// Shared owner for complete repository publication operations.
+    publication_coordinator: Arc<Mutex<()>>,
 }
 
 impl ConversionService {
@@ -59,11 +62,20 @@ impl ConversionService {
             bounded_cache: None,
             repository_keys_dir: None,
             database_writer: DatabaseWriter::default(),
+            publication_coordinator: Arc::new(Mutex::new(())),
         }
     }
 
     pub(crate) fn with_database_writer(mut self, database_writer: DatabaseWriter) -> Self {
         self.database_writer = database_writer;
+        self
+    }
+
+    pub(crate) fn with_publication_coordinator(
+        mut self,
+        publication_coordinator: Arc<Mutex<()>>,
+    ) -> Self {
+        self.publication_coordinator = publication_coordinator;
         self
     }
 
@@ -105,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn cloned_services_share_the_conversion_database_writer() {
+    fn cloned_services_share_publication_and_database_owners() {
         let service = ConversionService::new(
             PathBuf::from("/chunks"),
             PathBuf::from("/cache"),
@@ -119,5 +131,9 @@ mod tests {
                 .database_writer
                 .shares_owner_with(&clone.database_writer)
         );
+        assert!(Arc::ptr_eq(
+            &service.publication_coordinator,
+            &clone.publication_coordinator
+        ));
     }
 }

@@ -79,13 +79,15 @@ manifest before opening listeners, then immediately refreshes metadata and
 runs the canonical discovery fetch and exact-contract rebuild before eligible
 exact-profile prewarm. `apps/remi/src/server/publication_scheduler.rs` owns that
 startup order and both periodic clocks; one process-local publication
-coordinator also serializes complete background, admin-refresh, and MCP
-canonical cycles, so their network, parsing, and mutation phases cannot
-interleave. The narrower database writer serializes only their SQLite mutation
-phases, including canonical cache and exact-map commits. There is no warm-up
-timer or blind retry; a later cycle occurs at the configured interval, an
-overdue canonical deadline is serviced immediately after the current refresh,
-and each deadline resets only after its owning attempt completes.
+coordinator also serializes background cycles, repository-admin mutations, MCP
+canonical cycles, and package cache-miss readiness/reservation decisions. Their
+network, parsing, and mutation phases therefore cannot invalidate one another's
+publication decision. The narrower database writer serializes only their
+SQLite mutation phases, including canonical cache and exact-map commits. There
+is no warm-up timer or blind retry; a later cycle occurs at the configured
+interval, an overdue canonical deadline is serviced immediately after the
+current refresh, and each deadline resets only after its owning attempt
+completes.
 
 Eligible exact-profile prewarm jobs run concurrently under the configured
 conversion bound shared with request-driven conversions. Each profile preserves

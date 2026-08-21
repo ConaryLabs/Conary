@@ -30,6 +30,7 @@ use crate::server::r2_durability::{
     MAX_BACKFILL_CONCURRENCY, R2DurabilityMode, R2DurabilityReport, run_r2_durability,
 };
 
+mod publication;
 mod refresh;
 mod repository_policy;
 mod test_data;
@@ -641,6 +642,7 @@ pub async fn create_repo(
         validate_repository_trust(trust).await?;
     }
 
+    let _publication_guard = publication::guard(state).await;
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     blocking(move || {
@@ -697,6 +699,7 @@ pub async fn update_repo(
         validate_repository_trust(trust).await?;
     }
 
+    let _publication_guard = publication::guard(state).await;
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     let name_owned = name.to_string();
@@ -763,6 +766,7 @@ pub async fn delete_repo(
     state: &Arc<RwLock<ServerState>>,
     name: &str,
 ) -> Result<bool, ServiceError> {
+    let _publication_guard = publication::guard(state).await;
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     let name_owned = name.to_string();
@@ -863,6 +867,17 @@ pub async fn sync_repo(
     name: &str,
     force: bool,
 ) -> Result<Option<RepoRefreshResult>, ServiceError> {
+    let _publication_guard = publication::guard(state).await;
+    let result = sync_repo_uncoordinated(state, name, force).await;
+    publication::record_single_repository_outcome(state, &result).await;
+    result
+}
+
+async fn sync_repo_uncoordinated(
+    state: &Arc<RwLock<ServerState>>,
+    name: &str,
+    force: bool,
+) -> Result<Option<RepoRefreshResult>, ServiceError> {
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     let name_owned = name.to_string();
@@ -903,8 +918,7 @@ pub async fn refresh_repositories(
     state: &Arc<RwLock<ServerState>>,
     force: bool,
 ) -> Result<RepoRefreshBatch, ServiceError> {
-    let coordinator = state.read().await.publication_coordinator.clone();
-    let _publication_guard = coordinator.lock_owned().await;
+    let _publication_guard = publication::guard(state).await;
     let result = refresh_repositories_uncoordinated(state, force).await;
     let outcome = match result.as_ref().map(RepoRefreshBatch::state) {
         Ok(RepoRefreshBatchState::Complete) => {

@@ -271,6 +271,7 @@ impl ServerState {
             None, // R2 store set later after state initialization
         )
         .with_database_writer(database_writer.clone())
+        .with_publication_coordinator(Arc::clone(&publication_coordinator))
         .with_bounded_cache(bounded_cache.clone())
         .with_repository_keys_dir(config.release_publish.repository_keys_dir.clone());
 

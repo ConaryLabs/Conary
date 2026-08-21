@@ -160,6 +160,22 @@ async fn repository_not_ready_after_cache_miss(
     }
 }
 
+async fn start_conversion_when_repository_ready(
+    state: Arc<RwLock<ServerState>>,
+    db_path: &std::path::Path,
+    distro: &str,
+    name: &str,
+    query: &PackageQuery,
+) -> Response {
+    let coordinator = state.read().await.publication_coordinator.clone();
+    let _publication_guard = coordinator.lock_owned().await;
+    if let Some(response) = repository_not_ready_after_cache_miss(&state, distro).await {
+        return response;
+    }
+
+    start_conversion_after_cache_miss(state, db_path, distro, name, query).await
+}
+
 fn active_conversion_response(job: &ConversionJob, eta_seconds: Option<u32>) -> Response {
     let status = match job.status {
         JobStatus::Pending => "pending",
@@ -442,11 +458,7 @@ pub async fn get_package(
         return active_conversion_response(&job, None);
     }
 
-    if let Some(response) = repository_not_ready_after_cache_miss(&state, &distro).await {
-        return response;
-    }
-
-    start_conversion_after_cache_miss(state, &db_path, &distro, &name, &query).await
+    start_conversion_when_repository_ready(state, &db_path, &distro, &name, &query).await
 }
 
 /// Check if a package has already been converted

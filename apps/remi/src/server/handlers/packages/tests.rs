@@ -733,12 +733,28 @@ async fn package_route_waits_for_repository_population_without_creating_failed_j
         arch: Some("amd64".into()),
     };
 
-    let first = get_package(
-        State(Arc::clone(&state)),
-        Path(("ubuntu".into(), "demo".into())),
-        Query(query()),
-    )
-    .await;
+    let coordinator = state.read().await.publication_coordinator.clone();
+    let held_publication = coordinator.lock_owned().await;
+    let first_state = Arc::clone(&state);
+    let mut first = tokio::spawn(async move {
+        get_package(
+            State(first_state),
+            Path(("ubuntu".into(), "demo".into())),
+            Query(query()),
+        )
+        .await
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut first)
+            .await
+            .is_err(),
+        "package admission bypassed the publication coordinator"
+    );
+    drop(held_publication);
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), first)
+        .await
+        .expect("package admission resumed after publication released")
+        .expect("package request completed");
     assert_eq!(first.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(first.headers().get(header::RETRY_AFTER).unwrap(), "30");
     let first_body = response_json(first).await;

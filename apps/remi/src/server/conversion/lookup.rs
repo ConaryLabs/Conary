@@ -229,6 +229,8 @@ impl ConversionService {
             }
         }
 
+        let publication_coordinator = self.publication_coordinator.clone();
+        let _publication_guard = publication_coordinator.lock_owned().await;
         let db_path = self.db_path.clone();
         let repo_id = repo_pkg.repository_id;
         let repo = tokio::task::spawn_blocking(move || {
