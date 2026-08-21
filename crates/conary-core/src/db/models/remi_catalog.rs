@@ -7,12 +7,15 @@
 //! and retain those files. In particular, no package, provide, or requirement
 //! row belongs here.
 
+mod resource;
 mod validation;
 use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use validation::{validate_canonical_manifest, validate_identity, validate_sha256, validate_uuid};
+
+pub use resource::register_profile_catalog_revision;
 
 const RESOURCE_COLUMNS: &str = "resource_sha256, resource_kind, source_profile, \
     artifact_sha256, artifact_size, logical_digest_sha256, manifest_json, durable, created_at";

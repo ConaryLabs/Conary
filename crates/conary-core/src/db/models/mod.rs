@@ -127,6 +127,7 @@ pub use remi_catalog::{
     RemiActiveProfileRevision, RemiCatalogResource, RemiCatalogResourceKind,
     RemiProfileActivationOutcome, RemiProfileRevisionActivation, RemiProfileRevisionMember,
     RemiProfileRevisionPin, RemiRevisionPinKind, activate_profile_revision,
+    register_profile_catalog_revision,
 };
 pub use remote_collection::{DEFAULT_CACHE_TTL_SECS, RemoteCollection};
 pub use repology_cache::RepologyCacheEntry;
