@@ -426,6 +426,20 @@ implements, and nothing else prints:
 - field line — two-space indent, bold label, shared colon column.
 - heading — bold, ends with a colon, introduces tag rows or fields.
 
+Plus one transient shape that never lands in scrollback: a single in-place
+progress line per phase —
+
+```
+Downloading (2/2)  [==============>-----]  1.6 MB / 2.1 MB  1.1 MB/s  ~1s
+```
+
+— a bar only when the total is known (otherwise the spinner alone), bytes,
+rate, and eta on downloads, a `(n/m)` count on multi-package phases, and on
+completion the line is replaced by the phase's verb line. One live line at a
+time; finished transactions read as history, never as leftover machinery.
+This is the in-flight contract slices 1 and 3 implement, replacing today's
+stacked spinners and zero-length bars.
+
 Composed target frames for install, remove, refusal, untrusted-signer, and
 `list --info` (before/after against the real captures) accompany this audit
 as a rendered mockup page; the mockups add sizes and disk-delta lines and
@@ -511,8 +525,8 @@ persuasion work rather than decoration.
     exactly when the change lands. The typed debt record, recovery paths,
     and the pending-debt surface remain for deferred and interrupted
     cases; `warning:` is reserved for genuinely stuck debt. Scope note:
-    this changes transaction behavior, not just rendering — it takes its
-    own issue and slice with generation-owner review (including the
+    this changes transaction behavior, not just rendering — it is tracked
+    as its own issue (#534) with generation-owner review (including the
     publication-cost question for large transactions), and the
     closing-line reframe shown in the target frames is the floor if that
     slice stalls.
