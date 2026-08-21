@@ -565,6 +565,15 @@ conary 0.16.1 · fedora-44 host
 note: preview updates with 'conary update --dry-run'
 ```
 
+### Follow-up once slice 1 lands
+
+Record a scripted demo of the daily-driver flows for the README with a
+reproducible terminal recorder (for example charmbracelet's `vhs`, driven by
+a tape file checked in under `docs/`), so the recording regenerates from
+source instead of rotting as a screen capture. Deliberately deferred: until
+the TTY progress rendering is fixed, any recording of an install is an
+anti-demo.
+
 ## Constraint compliance for later slices
 
 - Guarded vocabulary and ASCII-only tags stay; slices 2, 5, 7, and 9 must
