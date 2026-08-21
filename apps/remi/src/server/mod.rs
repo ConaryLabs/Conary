@@ -51,6 +51,7 @@ mod readiness;
 pub mod release_publish;
 pub mod repository_manifest;
 mod routes;
+mod runtime_lock;
 pub mod search;
 pub mod security;
 pub(crate) mod signing_authority;
@@ -360,6 +361,36 @@ fn ensure_database_ready(db_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+fn prepare_runtime_storage(
+    remi_config: &RemiConfig,
+    server_config: &ServerConfig,
+) -> Result<runtime_lock::RuntimeRootLock> {
+    let runtime_lock = runtime_lock::RuntimeRootLock::acquire(remi_config.storage_root())?;
+    tracing::info!("  Runtime root lock: {:?}", runtime_lock.lock_path());
+    create_runtime_storage_directories(remi_config)?;
+    ensure_database_ready(&server_config.db_path)?;
+    Ok(runtime_lock)
+}
+
+fn create_runtime_storage_directories(remi_config: &RemiConfig) -> Result<()> {
+    for dir in remi_config.storage_dirs() {
+        if !dir.exists() {
+            tracing::info!("Creating directory: {:?}", dir);
+            std::fs::create_dir_all(&dir)?;
+        }
+    }
+    Ok(())
+}
+
+/// Initialize storage directories without starting listeners.
+///
+/// The one-shot CLI path uses the same process-wide ownership boundary as the
+/// long-running server, then releases it when initialization completes.
+pub fn initialize_storage_directories(remi_config: &RemiConfig) -> Result<()> {
+    let _runtime_lock = runtime_lock::RuntimeRootLock::acquire(remi_config.storage_root())?;
+    create_runtime_storage_directories(remi_config)
+}
+
 /// Start the Remi server from a configuration file
 pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     let server_config = remi_config.to_server_config()?;
@@ -397,18 +428,9 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         tracing::info!("  Trusted proxy header: {}", header);
     }
 
-    // Ensure storage directories exist
-    for dir in remi_config.storage_dirs() {
-        if !dir.exists() {
-            tracing::info!("Creating directory: {:?}", dir);
-            std::fs::create_dir_all(&dir)?;
-        }
-    }
-
-    // Migrate the database before any background tasks start opening their own
-    // connections. This avoids startup races when multiple components touch an
-    // older schema concurrently.
-    ensure_database_ready(&server_config.db_path)?;
+    // The guard remains in this function scope until every listener exits.
+    // Acquire it before any runtime database or storage-tree mutation.
+    let _runtime_lock = prepare_runtime_storage(remi_config, &server_config)?;
     let required_source_profiles = if let Some(manifest_path) =
         remi_config.repository_manifest.as_deref()
     {
@@ -770,6 +792,8 @@ async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> 
 mod tests {
     use super::{
         build_http_client, ensure_admin_bootstrap_token, ensure_database_ready, open_runtime_db,
+        prepare_runtime_storage,
+        runtime_lock::{RuntimeRootLock, RuntimeRootLockError},
     };
 
     fn test_db_path() -> std::path::PathBuf {
@@ -844,6 +868,39 @@ mod tests {
 
         let version = conary_core::db::schema::get_schema_version(&conn).expect("schema version");
         assert_eq!(version, conary_core::db::schema::SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn rejected_runtime_owner_cannot_initialize_the_database() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let root = temp.path().join("runtime");
+        let first = RuntimeRootLock::acquire(&root).expect("acquire first owner");
+        let mut remi_config = super::RemiConfig::default();
+        remi_config.storage.root = root;
+        let server_config = remi_config.to_server_config().expect("server config");
+
+        let error = prepare_runtime_storage(&remi_config, &server_config)
+            .expect_err("second owner must fail before storage initialization");
+
+        assert!(matches!(
+            error.downcast_ref::<RuntimeRootLockError>(),
+            Some(RuntimeRootLockError::AlreadyOwned { .. })
+        ));
+        assert!(!server_config.db_path.exists());
+        assert!(!server_config.chunk_dir.exists());
+
+        drop(first);
+        let second = prepare_runtime_storage(&remi_config, &server_config)
+            .expect("released root should be reusable");
+        assert_eq!(
+            second.lock_path().parent(),
+            Some(
+                std::fs::canonicalize(remi_config.storage_root())
+                    .unwrap()
+                    .as_path()
+            )
+        );
+        assert!(server_config.db_path.exists());
     }
 
     #[test]

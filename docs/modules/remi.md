@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-21
-revision: 30
-summary: Document Remi source identity and update policy, revision-pinned durable sparse sync, signing, canonical-map, repository trust, publication coordination and readiness, database-writer ownership, reproducible conversion profiling, R2 durability inventory, and serving authority
+revision: 31
+summary: Document Remi source identity and update policy, process-wide runtime ownership, revision-pinned durable sparse sync, signing, canonical-map, repository trust, publication coordination and readiness, database-writer ownership, reproducible conversion profiling, R2 durability inventory, and serving authority
 ---
 
 # Remi
@@ -75,16 +75,25 @@ floor is `storage.readiness_min_free`, defaulting to 10 GiB.
 read-only deployment inspection. It snapshots a current database or retires an
 old schema epoch before replacement, so health failure can restore config,
 source authority, and SQLite state together. Startup reconciles the installed
-manifest before opening listeners, then immediately refreshes metadata and
-runs the canonical discovery fetch and exact-contract rebuild before eligible
-exact-profile prewarm. `apps/remi/src/server/publication_scheduler.rs` owns that
-startup order and both periodic clocks; one process-local publication
-coordinator also serializes background cycles, repository-admin mutations, MCP
-canonical cycles, and package cache-miss readiness/reservation decisions. Their
-network, parsing, and mutation phases therefore cannot invalidate one another's
-publication decision. The narrower database writer serializes only their
-SQLite mutation phases, including canonical cache and exact-map commits. There
-is no warm-up timer or blind retry; a later cycle occurs at the configured
+manifest before opening listeners, then immediately refreshes metadata and runs
+the canonical discovery fetch and exact-contract rebuild before eligible
+exact-profile prewarm. Before creating storage subdirectories, opening the
+runtime database, or reconciling that manifest, the server takes a nonblocking
+kernel-backed exclusive lock on `.remi-runtime.lock` inside the canonicalized
+`storage.root` and retains its file descriptor until every listener exits. A
+second process targeting the same root fails startup; lock-file text, PIDs,
+timestamps, and stale-file cleanup are never ownership authority.
+
+`apps/remi/src/server/publication_scheduler.rs` owns startup publication order
+and both periodic clocks; one process-local publication coordinator also
+serializes background cycles, repository-admin mutations, MCP canonical cycles,
+and package cache-miss readiness/reservation decisions. Their network, parsing,
+and mutation phases therefore cannot invalidate one another's publication
+decision. The narrower database writer serializes only their SQLite mutation
+phases, including canonical cache and exact-map commits. The process-wide root
+lock excludes a second Remi runtime; the durable per-repository sync lease then
+fences individual sparse-sync candidates and publication inside that owner.
+There is no warm-up timer or blind retry; a later cycle occurs at the configured
 interval, an overdue canonical deadline is serviced immediately after the
 current refresh, and each deadline resets only after its owning attempt
 completes.
