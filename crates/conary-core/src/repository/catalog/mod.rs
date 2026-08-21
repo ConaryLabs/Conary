@@ -2,10 +2,16 @@
 
 //! Immutable authenticated source and profile catalog contracts.
 
+mod bundle;
 mod contract;
 mod record;
 mod store;
 
+pub use bundle::{
+    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, publish_profile_catalog_bundle,
+    publish_source_catalog_bundle, verify_profile_catalog_bundle, verify_source_catalog_bundle,
+    write_profile_catalog_manifest, write_source_catalog_manifest,
+};
 pub use contract::{
     CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V1, ProfileRevisionV1,
     ProfileSourceMemberV1, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,

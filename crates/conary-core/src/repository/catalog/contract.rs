@@ -142,7 +142,7 @@ impl SourceSnapshotV1 {
                 self.schema_version, SOURCE_SNAPSHOT_SCHEMA_V1
             )));
         }
-        validate_identity(&self.source_profile, "source snapshot profile")?;
+        validate_storage_component(&self.source_profile, "source snapshot profile")?;
         validate_identity(&self.source_identity, "source snapshot source identity")?;
         validate_identity(
             &self.repository_identity,
@@ -213,7 +213,7 @@ impl ProfileRevisionV1 {
                 self.schema_version, PROFILE_REVISION_SCHEMA_V1
             )));
         }
-        validate_identity(&self.profile, "profile revision profile")?;
+        validate_storage_component(&self.profile, "profile revision profile")?;
         if self.projection_version == 0 {
             return Err(Error::ConfigError(
                 "profile revision projection version must be positive".to_string(),
@@ -297,6 +297,21 @@ pub(super) fn validate_sha256(value: &str, label: &str) -> Result<()> {
     {
         return Err(Error::ConfigError(format!(
             "{label} must be exactly 64 lowercase hexadecimal characters"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_storage_component(value: &str, label: &str) -> Result<()> {
+    validate_identity(value, label)?;
+    if value == "."
+        || value == ".."
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(Error::ConfigError(format!(
+            "{label} must be a safe ASCII storage-path component"
         )));
     }
     Ok(())
