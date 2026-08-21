@@ -313,6 +313,26 @@ inconsistent with the rest of the CLI. Build/switch/rollback captures on this
 host therefore stop at clap usage errors; a follow-up capture on a
 Conary-managed host belongs to the generation slice below.
 
+### system history
+
+```
+$ conary system history
+Changeset history:
+  [2] 2026-08-21 22:26:28 - Remove hello-conary-1.0.0 (Applied) [deferred] [publication-failed]
+      deferred generation_publication pending: generation publication is pending Retry: conary system generation publish --yes.
+  [1] 2026-08-21 22:26:28 - Install hello-conary-1.0.0 (Applied) [deferred] [publication-failed]
+      deferred generation_publication pending: generation publication is pending Retry: conary system generation publish --yes.
+
+Total: 2 changeset(s)
+```
+
+The surface exists and carries the right facts, but the rendering leaks the
+same problems as the transaction paths: hand-rolled bracket tags
+(`[deferred]`, `[publication-failed]`) outside the guarded vocabulary,
+expected deferral framed as failure (the #534 problem in historical form),
+and the retry sentence repeated verbatim per row. Slice 7 owns the
+rendering; #534 changes what the rows say about publication.
+
 ### Comparator capture (apt, same host)
 
 ```
@@ -501,10 +521,13 @@ surfaces also run `cargo test -p conary --test cli_output_snapshots`.
    `file(/usr/bin/...)` or the help and matrix claims must change; the fix
    direction is resolution, not documentation. Focused query test.
 7. **Field/heading unification and empty-state phrasing** — flows:
-   `list --info`, `ccs build`, empty states across list/search/update.
-   Route field and heading rendering through `ui::field`/`ui::heading`,
-   ASCII-only text, and one phrasing pattern per empty state. Snapshot
-   tests updated in the same slice.
+   `list --info`, `ccs build`, `system history`, empty states across
+   list/search/update. Route field and heading rendering through
+   `ui::field`/`ui::heading`, ASCII-only text, and one phrasing pattern
+   per empty state. `system history` additionally drops its hand-rolled
+   bracket tags for guarded vocabulary and stops repeating the retry
+   sentence per row (its publication framing changes under #534).
+   Snapshot tests updated in the same slice.
 8. **Generation family conventions** — flows: `system generation
    list/build/switch/rollback`. Give the family the same `--db-path`
    (and where meaningful `--root`) surface as the rest of the CLI or
@@ -558,6 +581,16 @@ persuasion work rather than decoration.
 12. **At-a-glance status screen** — flow: the bare `conary` invocation
     (or a new status subcommand named in its own slice). The bare
     invocation prints a version banner today.
+13. **Interactive variant picker** — flows: the ambiguous-variant
+    refusals in `list --info`, `pin`, `unpin`, `remove`, `update` (today:
+    refuse and instruct `--version`/`--arch`, per the daily-driver UX
+    matrix). On a TTY, list the installed variants as numbered tag rows
+    and let the operator pick; the selection is an explicit intent
+    capture, exactly like candidate 11's confirm prompt. Non-interactive
+    behavior is unchanged: the typed refusal with selector guidance
+    remains, honoring `CONARY_NON_INTERACTIVE`. Selection never widens
+    what the command may do — it only fills the selector the operator
+    would have typed.
     A small status screen — current generation, pending publication debt,
     enabled feeds and last sync age, owned vs adopted package counts —
     gives the CLI an identity moment, gives operators a daily entry point,
@@ -620,6 +653,24 @@ conary 0.16.1 · fedora-44 host
 
 note: preview updates with 'conary update --dry-run'
 ```
+
+### Open question for maintainers
+
+Machine-readable CLI output (a JSON or porcelain mode on query/list/search
+for human scripting) came up in review and is deliberately not a slice or
+an issue yet: the repository contract makes `conary-agent-contract` the
+authority for typed automation surfaces, with MCP as its adapter and never
+a second authority. Whether a human-scripting output mode is an adapter of
+that contract, a rendering of it, or out of scope is a maintainer decision
+that should precede any issue.
+
+### Deferred until after pre-alpha
+
+Localization of user-facing output: the fluent i18n machinery is already in
+the dependency tree, but wiring daily-driver output through it is deferred
+until the wording itself stabilizes — translating strings the UX pass is
+about to rewrite would double the churn. Revisit at the external-tester
+milestone.
 
 ### Follow-up once slice 1 lands
 
