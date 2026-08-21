@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-21
-revision: 1
-summary: CLI UX audit of the daily-driver flows with exact captures, comparator notes against dnf5/apt/pacman, and the ranked beautification slice list for the UX pass
+revision: 2
+summary: CLI UX audit of the daily-driver flows with exact captures, comparator notes against dnf5/apt/pacman, a design evaluation of the CLI's visual language, and the ranked beautification slice list for the UX pass
 ---
 
 # CLI UX Audit: Daily-Driver Flows
@@ -366,6 +366,64 @@ yet: a grouped what-changes summary (new / upgraded / removed), size totals
 8. **Empty-state phrasing drifts** across adjacent states
    ("No packages to update" / "All packages are up to date";
    "No packages found." / "No packages found matching 'x'").
+
+## Design evaluation
+
+Judged as a visual system, from the color pty captures (the audit findings
+above are the mechanics; this section is the look). The diagnosis in one
+sentence: Conary does not need a design system invented — `system init`
+already speaks a complete one (bold green verb lines, the guarded tag column,
+lowercase colored prefixes) — it needs that system to become the only dialect
+on the daily path.
+
+### Dialect inventory
+
+Four visual dialects reach the user today:
+
+1. The `ui::` language (verb lines, tag rows, `note:`/`warning:`/`error:`
+   prefixes) — coherent, and the only one with a guard.
+2. Raw `println!` prose (`Installing CCS package...`,
+   `Removing package: hello-conary`, `WARNING:`, the hand-aligned
+   `Name        :` fields) — unstyled, differently indented, differently
+   voiced (gerund lines, noun-colon lines, caps warnings).
+3. `tracing` log formatting (yellow ` WARN`, italic `key=value` fields)
+   leaking into the user stream at the default level.
+4. clap's help/error styling (bold/underline headings, lowercase `error:`).
+
+### Color semantics
+
+Observed on a TTY: green = completed verbs, `[ok]`, and the install spinner;
+red = failures *and* the routine remove spinner; yellow = the leaked tracing
+`WARN`; cyan = `note:`, `[info]`, and the status spinner; dim = `[skip]`/`[off]`
+only; failures from `app.rs` — the highest-stakes output the tool has — render
+with no color at all.
+
+Target semantics, stated as a contract: green means success and nothing else;
+red means failure and nothing else (the remove spinner loses red); yellow
+means caution needing follow-up; cyan means guidance — the next command to
+run; dim carries secondary metadata (arch, sizes, paths, timestamps), which
+today does not exist as a layer, leaving flat same-weight walls like
+`list --info`; bold carries identity (package names, field labels, verbs).
+All of it stays `console`-routed so NO_COLOR and pipes degrade exactly as
+today.
+
+### Line-shape contract
+
+Every user-visible line becomes one of the five shapes `ui::` already
+implements, and nothing else prints:
+
+- verb line — `Installed nginx 1.27.2-3 (42 files, 5.4 MB)` with bold green
+  verb and dim metadata; completion moments only.
+- tag row — guarded tag at column nine, one item, one result.
+- prefix line — `error:` / `warning:` / `note:`, lowercase, bold, colored;
+  one fact per line.
+- field line — two-space indent, bold label, shared colon column.
+- heading — bold, ends with a colon, introduces tag rows or fields.
+
+Composed target frames for install, remove, refusal, untrusted-signer, and
+`list --info` (before/after against the real captures) accompany this audit
+as a rendered mockup page; the mockups add sizes and disk-delta lines and
+remove nothing, and slices 1–5, 7, and 9 implement them.
 
 ## Ranked slice list
 
