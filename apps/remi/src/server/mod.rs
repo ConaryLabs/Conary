@@ -24,6 +24,8 @@ mod bounded_cache;
 mod cache;
 mod canonical_fetch;
 mod canonical_job;
+pub mod catalog_authority;
+pub mod catalog_refresh;
 pub mod chunk_gc;
 pub mod config;
 mod conversion;
