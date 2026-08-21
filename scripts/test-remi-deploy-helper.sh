@@ -94,6 +94,11 @@ if [[ "\${1:-}" == "deployment" && "\${2:-}" == "prepare" ]]; then
         esac
     done
     [[ -d "\$repository_keys_dir" && ! -L "\$repository_keys_dir" ]]
+    runtime_root="\${config%/etc/conary/remi.toml}/conary"
+    runtime_lock="\${runtime_root}/.remi-runtime.lock"
+    [[ -f "\$runtime_lock" && ! -L "\$runtime_lock" ]]
+    [[ "\$(stat -c '%a' "\$runtime_lock")" == "600" ]]
+    exec 9<>"\$runtime_lock"
     transition="\${config}.transition.json"
     printf '{}\n' >"\$transition"
     printf '%s\n' "\$repository_keys_dir" >"\${config}.repository-keys-path"
@@ -328,6 +333,9 @@ test_deploy_remi_uses_candidate_owned_transition() {
     test "$(cat "$fake_root/etc/conary/remi.toml.repository-keys-path")" = \
         "$fake_root/conary/repository-keys"
     test "$(stat -c '%a' "$fake_root/conary/repository-keys")" = "700"
+    test -f "$fake_root/conary/.remi-runtime.lock"
+    test ! -L "$fake_root/conary/.remi-runtime.lock"
+    test "$(stat -c '%a' "$fake_root/conary/.remi-runtime.lock")" = "600"
     printf 'stable-authority\n' >"$fake_root/conary/repository-keys/preserved"
     test ! -e "$bundle"
     test ! -e "$repositories"

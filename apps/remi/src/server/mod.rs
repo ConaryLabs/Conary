@@ -51,7 +51,7 @@ mod readiness;
 pub mod release_publish;
 pub mod repository_manifest;
 mod routes;
-mod runtime_lock;
+pub(crate) mod runtime_lock;
 pub mod search;
 pub mod security;
 pub(crate) mod signing_authority;

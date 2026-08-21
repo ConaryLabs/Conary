@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-21
-revision: 32
+revision: 33
 summary: Document Remi source identity and update policy, process-wide runtime ownership, revision-pinned durable sparse sync, signing, canonical-map, repository trust, publication coordination and readiness, database-writer ownership, reproducible conversion profiling, R2 durability inventory, and serving authority
 ---
 
@@ -84,6 +84,13 @@ kernel-backed exclusive lock on `.remi-runtime.lock` inside the canonicalized
 finishes shutdown, including outstanding blocking work. A second process
 targeting the same root fails startup; lock-file text, PIDs,
 timestamps, and stale-file cleanup are never ownership authority.
+Deployment prepare derives and canonicalizes that same runtime root from the
+validated candidate config, acquires the same kernel lock before signing-key,
+backup, config, repository-manifest, or database mutation, and records the
+canonical root in transition-manifest schema 2. Rollback reads that typed root
+and acquires the same lock before restoring any target. The superseded manifest
+shape has no compatibility reader. Deployment inspection remains read-only
+evidence and never establishes quiescence or mutation ownership.
 
 `apps/remi/src/server/publication_scheduler.rs` owns startup publication order
 and both periodic clocks; one process-local publication coordinator also

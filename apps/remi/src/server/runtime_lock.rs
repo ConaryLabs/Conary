@@ -42,6 +42,7 @@ pub(crate) enum RuntimeRootLockError {
 #[derive(Debug)]
 pub(crate) struct RuntimeRootLock {
     _file: File,
+    root: PathBuf,
     lock_path: PathBuf,
 }
 
@@ -75,6 +76,7 @@ impl RuntimeRootLock {
         match FileExt::try_lock_exclusive(&file) {
             Ok(()) => Ok(Self {
                 _file: file,
+                root,
                 lock_path,
             }),
             Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
@@ -86,6 +88,10 @@ impl RuntimeRootLock {
 
     pub(crate) fn lock_path(&self) -> &Path {
         &self.lock_path
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
     }
 }
 
@@ -107,6 +113,7 @@ mod tests {
                 .unwrap()
                 .join(RUNTIME_LOCK_FILE)
         );
+        assert_eq!(first.root(), std::fs::canonicalize(&root).unwrap());
 
         drop(first);
         RuntimeRootLock::acquire(&root).unwrap();

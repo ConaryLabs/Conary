@@ -116,6 +116,25 @@ ensure_repository_keys_root() {
     install_owned_dir 0700 "$path"
 }
 
+ensure_runtime_lock_file() {
+    local path="$1"
+    if [[ -e "$path" || -L "$path" ]]; then
+        [[ -f "$path" && ! -L "$path" ]] ||
+            die "Remi runtime lock is not a plain file: $path"
+        [[ "$(stat -c '%a' "$path")" == "600" ]] ||
+            die "Remi runtime lock must have mode 0600: $path"
+        if [[ -z "$ROOT" ]]; then
+            local expected_owner observed_owner
+            expected_owner="$(id -u conary):$(id -g conary)"
+            observed_owner="$(stat -c '%u:%g' "$path")"
+            [[ "$observed_owner" == "$expected_owner" ]] ||
+                die "Remi runtime lock must be owned by conary:conary: $path"
+        fi
+        return
+    fi
+    install_owned_file 0600 /dev/null "$path"
+}
+
 restart_remi() {
     [[ "$SKIP_RESTART" == "1" ]] && return 0
     systemctl restart remi
@@ -198,6 +217,7 @@ deploy_remi() {
         die "repository manifest is not a plain file: $repositories"
 
     local tmpdir bin candidate backup had_previous transition_manifest repository_keys_dir
+    local runtime_root runtime_lock
     tmpdir="$(mktemp -d /tmp/remi-install.XXXXXX)"
     backup="${tmpdir}/remi.previous"
     bin="$(root_path /usr/local/bin/remi)"
@@ -210,7 +230,11 @@ deploy_remi() {
     [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
         die "candidate binary version does not match ${version}"
 
-    repository_keys_dir="$(root_path /conary/repository-keys)"
+    runtime_root="$(root_path /conary)"
+    runtime_lock="${runtime_root}/.remi-runtime.lock"
+    install_owned_dir 0750 "$runtime_root"
+    ensure_runtime_lock_file "$runtime_lock"
+    repository_keys_dir="${runtime_root}/repository-keys"
     ensure_repository_keys_root "$repository_keys_dir"
 
     if [[ -f "$bin" ]]; then
