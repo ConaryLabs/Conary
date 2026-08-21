@@ -6,7 +6,8 @@ use anyhow::Context;
 use conary_core::db::models::RepositoryPackage;
 use conary_core::repository::remi_metadata::{
     REMI_SPARSE_MIN_PACKAGE_SIZE, RemiSparsePackageList, RemiSparsePackagePage,
-    RemiSparseResolutionEntry, RemiSparseResolutionVersionEntry, validate_remi_public_name,
+    RemiSparseResolutionEntry, RemiSparseResolutionVersionEntry, RemiSparseRevision,
+    validate_remi_public_name,
 };
 use rusqlite::Connection;
 use std::collections::BTreeMap;
@@ -39,9 +40,11 @@ pub(super) fn build_package_page(
     per_page: usize,
 ) -> Result<RemiSparsePackagePage, anyhow::Error> {
     let conn = Connection::open(db_path)?;
-    let selection = select_sparse_name_page(&conn, distro, page, per_page)?;
+    let tx = conn.unchecked_transaction()?;
+    let selection = select_sparse_name_page(&tx, distro, page, per_page)?;
+    let revision = sparse_projection_revision(&tx, &selection.source_profile)?;
     let packages =
-        super::load_visible_repository_packages(&conn, &selection.repo_ids, &selection.names)?;
+        super::load_visible_repository_packages(&tx, &selection.repo_ids, &selection.names)?;
     let package_ids = packages
         .iter()
         .map(|package| {
@@ -51,7 +54,7 @@ pub(super) fn build_package_page(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut exact_metadata =
-        crate::server::package_metadata::load_exact_package_metadata_batch(&conn, &package_ids)?;
+        crate::server::package_metadata::load_exact_package_metadata_batch(&tx, &package_ids)?;
     let mut packages_by_name = BTreeMap::<String, Vec<RepositoryPackage>>::new();
     for package in packages {
         packages_by_name
@@ -86,15 +89,37 @@ pub(super) fn build_package_page(
     if !exact_metadata.is_empty() {
         anyhow::bail!("bulk sparse metadata included packages outside the selected name page");
     }
+    tx.commit()?;
 
     Ok(RemiSparsePackagePage {
         distro: distro.to_string(),
         source_profile: selection.source_profile,
+        revision,
         packages: entries,
         total: selection.total,
         page,
         per_page,
     })
+}
+
+fn sparse_projection_revision(
+    conn: &Connection,
+    source_profile: &str,
+) -> Result<RemiSparseRevision, anyhow::Error> {
+    let (sequence, state_id) = conn.query_row(
+        "SELECT COALESCE(revision.sequence, 0),
+                COALESCE(revision.state_id, '00000000000000000000000000000000')
+         FROM (SELECT 1) singleton
+         LEFT JOIN remi_sparse_projection_revisions revision
+           ON revision.source_profile = ?1",
+        [source_profile],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    RemiSparseRevision::new(
+        u64::try_from(sequence).context("sparse projection revision is negative")?,
+        state_id,
+    )
+    .map_err(anyhow::Error::msg)
 }
 
 fn build_resolution_version(
@@ -221,6 +246,11 @@ fn sqlite_page_value(value: usize, field: &str) -> Result<i64, anyhow::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::db::models::{
+        Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
+        RepositoryRequirementGroup,
+    };
+    use conary_core::repository::versioning::VersionScheme;
 
     #[test]
     fn sqlite_page_values_fail_closed_instead_of_wrapping_negative() {
@@ -232,5 +262,119 @@ mod tests {
             let error = sqlite_page_value(overflow, "offset").unwrap_err();
             assert!(error.to_string().contains("exceeds SQLite's range"));
         }
+    }
+
+    #[test]
+    fn sparse_revision_tracks_visible_content_but_not_disabled_staging_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        let mut repository = Repository::new(
+            "fedora-visible".to_string(),
+            "https://packages.test".to_string(),
+        );
+        repository.source_profile = Some("fedora-44".to_string());
+        let repository_id = repository.insert(&conn).unwrap();
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            "alpha".to_string(),
+            "1".to_string(),
+            VersionScheme::Rpm,
+            "sha256:alpha".to_string(),
+            1024,
+            "https://packages.test/alpha".to_string(),
+        );
+        let package_id = package.insert(&conn).unwrap();
+        let mut provide = RepositoryProvide::new(
+            package_id,
+            "alpha".to_string(),
+            Some("1".to_string()),
+            "package".to_string(),
+            Some("alpha = 1".to_string()),
+            VersionScheme::Rpm,
+        );
+        let provide_id = provide.insert(&conn).unwrap();
+        let mut group = RepositoryRequirementGroup::new(
+            package_id,
+            "depends".to_string(),
+            "hard".to_string(),
+            r#"{"kind":"atom","clause":{"name":"glibc","version_constraint":null,"capability_kind":null,"native_text":null}}"#.to_string(),
+        );
+        let group_id = group.insert(&conn).unwrap();
+        let mut requirement = RepositoryRequirement::new(
+            package_id,
+            group_id,
+            "glibc".to_string(),
+            None,
+            "package".to_string(),
+            "runtime".to_string(),
+            Some("glibc".to_string()),
+        );
+        let requirement_id = requirement.insert(&conn).unwrap();
+        let initial = sparse_projection_revision(&conn, "fedora-44").unwrap();
+
+        conn.execute(
+            "UPDATE repository_packages SET version = '2' WHERE id = ?1",
+            [package_id],
+        )
+        .unwrap();
+        let version_changed = sparse_projection_revision(&conn, "fedora-44").unwrap();
+        assert!(version_changed.sequence > initial.sequence);
+        assert_ne!(version_changed.state_id, initial.state_id);
+
+        conn.execute(
+            "UPDATE repository_provides SET raw = 'alpha = 2' WHERE id = ?1",
+            [provide_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE repository_requirements SET raw = 'glibc >= 2.39' WHERE id = ?1",
+            [requirement_id],
+        )
+        .unwrap();
+        let relations_changed = sparse_projection_revision(&conn, "fedora-44").unwrap();
+        assert!(relations_changed.sequence > version_changed.sequence);
+        assert_ne!(relations_changed.state_id, version_changed.state_id);
+
+        let mut staging = repository;
+        staging.id = None;
+        staging.name = "disabled-candidate".to_string();
+        staging.enabled = false;
+        let staging_id = staging.insert(&conn).unwrap();
+        let mut staged_package = RepositoryPackage::new(
+            staging_id,
+            "candidate".to_string(),
+            "1".to_string(),
+            VersionScheme::Rpm,
+            "sha256:candidate".to_string(),
+            1024,
+            "https://packages.test/candidate".to_string(),
+        );
+        staged_package.insert(&conn).unwrap();
+
+        assert_eq!(
+            sparse_projection_revision(&conn, "fedora-44").unwrap(),
+            relations_changed
+        );
+    }
+
+    #[test]
+    fn rebuilt_database_cannot_reuse_the_same_counter_identity() {
+        let revision = |conn: &Connection| {
+            conary_core::db::schema::ensure_current(conn).unwrap();
+            conn.execute(
+                "INSERT INTO remi_sparse_projection_revisions (source_profile, sequence)
+                 VALUES ('fedora-44', 7)",
+                [],
+            )
+            .unwrap();
+            sparse_projection_revision(conn, "fedora-44").unwrap()
+        };
+        let first = Connection::open_in_memory().unwrap();
+        let second = Connection::open_in_memory().unwrap();
+        let first = revision(&first);
+        let second = revision(&second);
+
+        assert_eq!(first.sequence, second.sequence);
+        assert_ne!(first.state_id, second.state_id);
     }
 }
