@@ -408,7 +408,7 @@ fn run_server_command(args: ServeArgs) -> Result<()> {
         return Ok(());
     }
 
-    conary_bootstrap::run_with_runtime(|| run_server_from_config(&remi_config))
+    run_server_from_config(&remi_config)
 }
 
 fn load_remi_config(args: &ServeArgs, default_paths: &[PathBuf]) -> Result<RemiConfig> {

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-21
-revision: 31
+revision: 32
 summary: Document Remi source identity and update policy, process-wide runtime ownership, revision-pinned durable sparse sync, signing, canonical-map, repository trust, publication coordination and readiness, database-writer ownership, reproducible conversion profiling, R2 durability inventory, and serving authority
 ---
 
@@ -80,8 +80,9 @@ the canonical discovery fetch and exact-contract rebuild before eligible
 exact-profile prewarm. Before creating storage subdirectories, opening the
 runtime database, or reconciling that manifest, the server takes a nonblocking
 kernel-backed exclusive lock on `.remi-runtime.lock` inside the canonicalized
-`storage.root` and retains its file descriptor until every listener exits. A
-second process targeting the same root fails startup; lock-file text, PIDs,
+`storage.root` and retains its file descriptor until the owned Tokio runtime
+finishes shutdown, including outstanding blocking work. A second process
+targeting the same root fails startup; lock-file text, PIDs,
 timestamps, and stale-file cleanup are never ownership authority.
 
 `apps/remi/src/server/publication_scheduler.rs` owns startup publication order

@@ -79,6 +79,7 @@ pub use security::BanList;
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -391,8 +392,11 @@ pub fn initialize_storage_directories(remi_config: &RemiConfig) -> Result<()> {
     create_runtime_storage_directories(remi_config)
 }
 
-/// Start the Remi server from a configuration file
-pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
+/// Start the Remi server from a configuration file.
+///
+/// This boundary owns both the Tokio runtime and the runtime-root lock so the
+/// kernel lock remains held while Tokio finishes any blocking shutdown work.
+pub fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     let server_config = remi_config.to_server_config()?;
     let admin_bind = remi_config.admin_bind_addr()?;
     let negative_cache_ttl = remi_config.negative_cache_duration()?;
@@ -428,9 +432,39 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         tracing::info!("  Trusted proxy header: {}", header);
     }
 
-    // The guard remains in this function scope until every listener exits.
-    // Acquire it before any runtime database or storage-tree mutation.
-    let _runtime_lock = prepare_runtime_storage(remi_config, &server_config)?;
+    // Acquire before any runtime database or storage-tree mutation, then keep
+    // the guard outside Tokio so runtime shutdown cannot outlive ownership.
+    let runtime_lock = prepare_runtime_storage(remi_config, &server_config)?;
+    run_with_runtime_lock(runtime_lock, move || {
+        run_server_on_runtime(
+            remi_config,
+            server_config,
+            admin_bind,
+            negative_cache_ttl,
+            trusted_proxy_header,
+        )
+    })
+}
+
+fn run_with_runtime_lock<F, Fut>(
+    runtime_lock: runtime_lock::RuntimeRootLock,
+    entry: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    let _runtime_lock = runtime_lock;
+    conary_bootstrap::run_with_runtime(entry)
+}
+
+async fn run_server_on_runtime(
+    remi_config: &RemiConfig,
+    server_config: ServerConfig,
+    admin_bind: SocketAddr,
+    negative_cache_ttl: Duration,
+    trusted_proxy_header: Option<String>,
+) -> Result<()> {
     let required_source_profiles = if let Some(manifest_path) =
         remi_config.repository_manifest.as_deref()
     {
@@ -792,7 +826,7 @@ async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> 
 mod tests {
     use super::{
         build_http_client, ensure_admin_bootstrap_token, ensure_database_ready, open_runtime_db,
-        prepare_runtime_storage,
+        prepare_runtime_storage, run_with_runtime_lock,
         runtime_lock::{RuntimeRootLock, RuntimeRootLockError},
     };
 
@@ -901,6 +935,37 @@ mod tests {
             )
         );
         assert!(server_config.db_path.exists());
+    }
+
+    #[test]
+    fn runtime_shutdown_finishes_before_the_root_lock_is_released() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let root = temp.path().join("runtime");
+        let owner = RuntimeRootLock::acquire(&root).expect("acquire runtime owner");
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(0);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
+
+        let runtime_thread = std::thread::spawn(move || {
+            run_with_runtime_lock(owner, move || async move {
+                tokio::task::spawn_blocking(move || {
+                    started_tx.send(()).expect("report blocking work start");
+                    release_rx.recv().expect("wait for blocking work release");
+                });
+                Ok(())
+            })
+        });
+
+        started_rx.recv().expect("observe blocking shutdown work");
+        let error = RuntimeRootLock::acquire(&root)
+            .expect_err("runtime shutdown must retain root ownership");
+        assert!(matches!(error, RuntimeRootLockError::AlreadyOwned { .. }));
+
+        release_tx.send(()).expect("release blocking shutdown work");
+        runtime_thread
+            .join()
+            .expect("join runtime owner")
+            .expect("runtime owner result");
+        RuntimeRootLock::acquire(&root).expect("runtime shutdown should release root ownership");
     }
 
     #[test]
