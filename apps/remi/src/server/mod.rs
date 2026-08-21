@@ -55,6 +55,7 @@ pub mod release_publish;
 pub mod repository_manifest;
 mod routes;
 pub(crate) mod runtime_lock;
+mod runtime_session;
 pub mod search;
 pub mod security;
 pub(crate) mod signing_authority;
@@ -373,10 +374,20 @@ fn prepare_runtime_storage(
     remi_config: &RemiConfig,
     server_config: &ServerConfig,
 ) -> Result<runtime_lock::RuntimeRootLock> {
+    let locked_db_path = remi_config.storage_root().join("metadata/conary.db");
+    if server_config.db_path != locked_db_path {
+        anyhow::bail!(
+            "Remi runtime database {} is outside the locked storage-root authority {}",
+            server_config.db_path.display(),
+            locked_db_path.display()
+        );
+    }
     let runtime_lock = runtime_lock::RuntimeRootLock::acquire(remi_config.storage_root())?;
     tracing::info!("  Runtime root lock: {:?}", runtime_lock.lock_path());
     create_runtime_storage_directories(remi_config)?;
     ensure_database_ready(&server_config.db_path)?;
+    runtime_session::begin(&server_config.db_path)?;
+    tracing::info!("  Runtime reader session: installed with stale-reader recovery");
     Ok(runtime_lock)
 }
 

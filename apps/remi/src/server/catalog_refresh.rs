@@ -20,6 +20,7 @@ const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 1;
 const MAX_CONCURRENT_SOURCE_FETCHES: usize = 4;
 
 /// One exact source member and its explicitly assigned profile ordinal.
+#[derive(Clone)]
 pub struct ProfileSourcePlan {
     pub ordinal: u32,
     pub priority: i32,

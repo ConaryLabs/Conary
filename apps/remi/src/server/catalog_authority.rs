@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::{
     RemiActiveProfileRevision, RemiCatalogResource, RemiCatalogResourceKind,
-    RemiProfileRevisionPin, RemiRevisionPinKind,
+    RemiProfileRevisionPin, RemiRevisionPinKind, RemiRuntimeSession,
 };
 use conary_core::repository::catalog::{
     CatalogReader, ProfileRevisionV1, verify_profile_catalog_bundle,
@@ -21,32 +21,30 @@ use conary_core::repository::catalog::{
 use rusqlite::Connection;
 use rusqlite::{Transaction, TransactionBehavior};
 
-use super::{ServerConfig, open_runtime_db};
+use super::database_writer::DatabaseWriter;
+use super::open_runtime_db;
 
 /// The configured roots used to resolve one active immutable profile catalog.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct CatalogAuthority {
     db_path: PathBuf,
     catalog_dir: PathBuf,
+    database_writer: DatabaseWriter,
 }
 
 impl CatalogAuthority {
-    /// Build an authority from the server's typed storage configuration.
-    #[must_use]
-    pub fn new(config: &ServerConfig) -> Self {
-        Self {
-            db_path: config.db_path.clone(),
-            catalog_dir: config.catalog_dir.clone(),
-        }
-    }
-
     /// Build an authority from explicit roots. This is useful for narrowly
     /// scoped owners and keeps path derivation in one place.
     #[must_use]
-    pub fn from_paths(db_path: impl Into<PathBuf>, catalog_dir: impl Into<PathBuf>) -> Self {
+    pub(crate) fn from_paths(
+        db_path: impl Into<PathBuf>,
+        catalog_dir: impl Into<PathBuf>,
+        database_writer: DatabaseWriter,
+    ) -> Self {
         Self {
             db_path: db_path.into(),
             catalog_dir: catalog_dir.into(),
+            database_writer,
         }
     }
 
@@ -56,35 +54,47 @@ impl CatalogAuthority {
     /// activation can therefore publish a new pointer without changing what
     /// this handle reads.
     pub fn open_active_profile(&self, source_profile: &str) -> Result<PinnedProfileCatalog> {
-        let conn = open_runtime_db(&self.db_path).with_context(|| {
-            format!("open Remi operational database for profile '{source_profile}'")
-        })?;
-        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
-            .context("acquire immutable catalog reader-pin transaction")?;
-        let resolved = resolve_active_profile(&tx, &self.catalog_dir, source_profile)?;
         let pin_id = uuid::Uuid::new_v4().to_string();
-        RemiProfileRevisionPin {
-            pin_id: pin_id.clone(),
-            source_profile: resolved.pointer.source_profile.clone(),
-            profile_revision_sha256: resolved.pointer.profile_revision_sha256.clone(),
-            owner_kind: RemiRevisionPinKind::Reader,
-            owner_identity: pin_id.clone(),
-            pinned_at: unix_seconds()?,
-        }
-        .insert(&tx)
-        .context("pin exact immutable profile revision for reader lifetime")?;
-        tx.commit().context("commit immutable catalog reader pin")?;
+        let resolved = self.database_writer.execute(|| {
+            let conn = open_runtime_db(&self.db_path).with_context(|| {
+                format!("open Remi operational database for profile '{source_profile}'")
+            })?;
+            let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
+                .context("acquire immutable catalog reader-pin transaction")?;
+            let resolved = resolve_active_profile(&tx, &self.catalog_dir, source_profile)?;
+            let runtime_session = RemiRuntimeSession::current(&tx)
+                .context("resolve current Remi runtime session for reader pin")?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "cannot pin immutable profile reader without a current Remi runtime session"
+                    )
+                })?;
+            RemiProfileRevisionPin {
+                pin_id: pin_id.clone(),
+                source_profile: resolved.pointer.source_profile.clone(),
+                profile_revision_sha256: resolved.pointer.profile_revision_sha256.clone(),
+                owner_kind: RemiRevisionPinKind::Reader,
+                owner_identity: pin_id.clone(),
+                runtime_session_id: Some(runtime_session.session_id),
+                pinned_at: unix_seconds()?,
+            }
+            .insert(&tx)
+            .context("pin exact immutable profile revision for reader lifetime")?;
+            tx.commit().context("commit immutable catalog reader pin")?;
+            Ok::<_, anyhow::Error>(resolved)
+        })?;
 
         match open_resolved_profile(resolved) {
             Ok(mut pinned) => {
                 pinned.pin = Some(ReaderPin {
                     db_path: self.db_path.clone(),
                     pin_id,
+                    database_writer: self.database_writer.clone(),
                 });
                 Ok(pinned)
             }
             Err(error) => {
-                release_reader_pin(&self.db_path, &pin_id);
+                release_reader_pin(&self.db_path, &pin_id, &self.database_writer);
                 Err(error)
             }
         }
@@ -97,14 +107,6 @@ impl CatalogAuthority {
     }
 }
 
-/// Open one active profile through the configured server authority.
-pub fn open_active_profile_catalog(
-    config: &ServerConfig,
-    source_profile: &str,
-) -> Result<PinnedProfileCatalog> {
-    CatalogAuthority::new(config).open_active_profile(source_profile)
-}
-
 /// An owned, exact-revision profile catalog reader.
 ///
 /// `CatalogReader` is opened with SQLite's immutable, read-only URI. The
@@ -113,13 +115,14 @@ pub fn open_active_profile_catalog(
 pub struct PinnedProfileCatalog {
     pointer: RemiActiveProfileRevision,
     manifest: ProfileRevisionV1,
-    reader: CatalogReader,
+    reader: Option<CatalogReader>,
     pin: Option<ReaderPin>,
 }
 
 struct ReaderPin {
     db_path: PathBuf,
     pin_id: String,
+    database_writer: DatabaseWriter,
 }
 
 impl fmt::Debug for PinnedProfileCatalog {
@@ -128,7 +131,10 @@ impl fmt::Debug for PinnedProfileCatalog {
             .debug_struct("PinnedProfileCatalog")
             .field("pointer", &self.pointer)
             .field("manifest", &self.manifest)
-            .field("catalog_path", &self.reader.path())
+            .field(
+                "catalog_path",
+                &self.reader.as_ref().map(CatalogReader::path),
+            )
             .field("reader_pin", &self.pin.as_ref().map(|pin| &pin.pin_id))
             .finish()
     }
@@ -174,13 +180,15 @@ impl PinnedProfileCatalog {
     /// The verified immutable catalog reader.
     #[must_use]
     pub fn reader(&self) -> &CatalogReader {
-        &self.reader
+        self.reader
+            .as_ref()
+            .expect("profile catalog reader is present before drop")
     }
 
     /// The canonicalized path of the verified catalog SQLite file.
     #[must_use]
     pub fn catalog_path(&self) -> &Path {
-        self.reader.path()
+        self.reader().path()
     }
 }
 
@@ -188,21 +196,36 @@ impl Deref for PinnedProfileCatalog {
     type Target = CatalogReader;
 
     fn deref(&self) -> &Self::Target {
-        &self.reader
+        self.reader()
     }
 }
 
 impl Drop for PinnedProfileCatalog {
     fn drop(&mut self) {
+        drop(self.reader.take());
         if let Some(pin) = self.pin.take() {
-            release_reader_pin(&pin.db_path, &pin.pin_id);
+            release_reader_pin(&pin.db_path, &pin.pin_id, &pin.database_writer);
         }
     }
 }
 
-fn release_reader_pin(db_path: &Path, pin_id: &str) {
-    let result =
-        open_runtime_db(db_path).and_then(|conn| RemiProfileRevisionPin::release(&conn, pin_id));
+fn release_reader_pin(db_path: &Path, pin_id: &str, database_writer: &DatabaseWriter) {
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        let db_path = db_path.to_path_buf();
+        let pin_id = pin_id.to_string();
+        let database_writer = database_writer.clone();
+        runtime.spawn_blocking(move || {
+            release_reader_pin_now(&db_path, &pin_id, &database_writer);
+        });
+        return;
+    }
+    release_reader_pin_now(db_path, pin_id, database_writer);
+}
+
+fn release_reader_pin_now(db_path: &Path, pin_id: &str, database_writer: &DatabaseWriter) {
+    let result = database_writer.execute(|| {
+        open_runtime_db(db_path).and_then(|conn| RemiProfileRevisionPin::release(&conn, pin_id))
+    });
     match result {
         Ok(true) => {}
         Ok(false) => tracing::error!(pin_id, "immutable catalog reader pin was already absent"),
@@ -370,7 +393,7 @@ fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfi
     Ok(PinnedProfileCatalog {
         pointer,
         manifest,
-        reader,
+        reader: Some(reader),
         pin: None,
     })
 }

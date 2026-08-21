@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use conary_core::db::models::{RemiCatalogResource, RemiCatalogResourceKind};
+use conary_core::db::models::{RemiCatalogResource, RemiCatalogResourceKind, RemiRuntimeSession};
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CatalogContentV1, CatalogScopeV1, CatalogSourceEvidenceV1,
     ProfileRevisionV1, ProfileSourceMemberV1, SourceStreamKindV1, SourceStreamV1,
@@ -52,17 +52,24 @@ fn fixture() -> Fixture {
              owner_instance_uuid TEXT NOT NULL,
              activated_at INTEGER NOT NULL
          );
+         CREATE TABLE remi_runtime_sessions (
+             session_slot INTEGER PRIMARY KEY,
+             session_id TEXT NOT NULL UNIQUE,
+             started_at INTEGER NOT NULL
+         );
          CREATE TABLE remi_profile_revision_pins (
              pin_id TEXT PRIMARY KEY,
              source_profile TEXT NOT NULL,
              profile_revision_sha256 TEXT NOT NULL,
              owner_kind TEXT NOT NULL,
              owner_identity TEXT NOT NULL,
+             runtime_session_id TEXT,
              pinned_at INTEGER NOT NULL,
              UNIQUE(owner_kind, owner_identity, source_profile)
          );",
     )
     .expect("create authority metadata tables");
+    RemiRuntimeSession::begin(&conn, 1).expect("install fixture runtime session");
     Fixture {
         root,
         catalog_dir,
@@ -271,14 +278,19 @@ fn public_reader_holds_and_releases_exact_revision_pin() {
         .backup(rusqlite::MAIN_DB, &db_path, None)
         .expect("copy authority fixture database");
 
-    let authority = super::CatalogAuthority::from_paths(&db_path, &fixture.catalog_dir);
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
     let pinned = authority
         .open_active_profile(PROFILE)
         .expect("open and pin exact active profile");
     let conn = Connection::open(&db_path).expect("reopen authority database");
     let stored = conn
         .query_row(
-            "SELECT source_profile, profile_revision_sha256, owner_kind
+            "SELECT source_profile, profile_revision_sha256, owner_kind,
+                    runtime_session_id
              FROM remi_profile_revision_pins",
             [],
             |row| {
@@ -286,13 +298,22 @@ fn public_reader_holds_and_releases_exact_revision_pin() {
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             },
         )
         .expect("reader pin exists");
     assert_eq!(
         stored,
-        (PROFILE.to_string(), revision.digest, "reader".to_string())
+        (
+            PROFILE.to_string(),
+            revision.digest,
+            "reader".to_string(),
+            RemiRuntimeSession::current(&conn)
+                .unwrap()
+                .unwrap()
+                .session_id,
+        )
     );
 
     drop(pinned);
@@ -304,4 +325,80 @@ fn public_reader_holds_and_releases_exact_revision_pin() {
         )
         .expect("count released reader pins");
     assert_eq!(remaining, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_reader_drop_queues_release_without_blocking_the_executor() {
+    let fixture = fixture();
+    let _revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("async-drop-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    let database_writer = crate::server::database_writer::DatabaseWriter::default();
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        database_writer.clone(),
+    );
+    let pinned = tokio::task::spawn_blocking(move || authority.open_active_profile(PROFILE))
+        .await
+        .expect("reader open task")
+        .expect("open pinned reader");
+    let release_writer = database_writer.pause_next_for_test();
+
+    drop(pinned);
+    release_writer
+        .send(())
+        .expect("release queued reader-pin deletion");
+
+    tokio::task::spawn_blocking(move || {
+        for _ in 0..100 {
+            let conn = Connection::open(&db_path).expect("reopen authority database");
+            let remaining = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM remi_profile_revision_pins",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("count reader pins");
+            if remaining == 0 {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("queued reader pin was not released");
+    })
+    .await
+    .expect("wait for queued reader-pin deletion");
+}
+
+#[test]
+fn public_reader_fails_closed_without_a_runtime_session() {
+    let fixture = fixture();
+    let _revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("missing-session-authority.db");
+    fixture
+        .conn
+        .execute("DELETE FROM remi_runtime_sessions", [])
+        .expect("remove fixture runtime session");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let error = authority
+        .open_active_profile(PROFILE)
+        .expect_err("reader without a runtime session must fail closed");
+
+    assert!(
+        format!("{error:#}").contains("without a current Remi runtime session"),
+        "unexpected error: {error:#}"
+    );
 }

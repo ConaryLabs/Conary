@@ -260,13 +260,20 @@ async fn active_catalog_matches_plan(
     source_profile: &str,
     plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
 ) -> bool {
-    let authority = CatalogAuthority::from_paths(&roots.db_path, &roots.catalog_dir);
+    let authority = CatalogAuthority::from_paths(
+        &roots.db_path,
+        &roots.catalog_dir,
+        roots.database_writer.clone(),
+    );
     let source_profile = source_profile.to_string();
-    let opened =
-        tokio::task::spawn_blocking(move || authority.open_active_profile(&source_profile)).await;
-    opened.is_ok_and(|result| {
-        result.is_ok_and(|catalog| profile_members_match_plan(&catalog.manifest().members, plans))
+    let plans = plans.to_vec();
+    tokio::task::spawn_blocking(move || {
+        authority
+            .open_active_profile(&source_profile)
+            .is_ok_and(|catalog| profile_members_match_plan(&catalog.manifest().members, &plans))
     })
+    .await
+    .unwrap_or(false)
 }
 
 pub(super) fn profile_members_match_plan(
