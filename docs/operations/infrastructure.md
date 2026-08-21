@@ -113,7 +113,10 @@ workflow.
   authority, or SQLite state. Live ownership fails immediately; service names,
   PIDs, lock-file contents, timestamps, and stale-file cleanup are not recovery
   authority. `deployment inspect` is read-only evidence and does not establish
-  quiescence.
+  quiescence. Before invoking the root-run candidate, the helper creates the
+  lock file as `conary:conary` mode 0600, or verifies an existing plain file has
+  that exact access contract, so first deployment cannot strand a root-owned
+  lock that the `User=conary` service cannot open.
 - The helper creates `/conary/repository-keys` as a `conary:conary` mode-0700
   durable authority root before candidate preparation. The candidate
   atomically creates one complete targets/snapshot/timestamp key set under
