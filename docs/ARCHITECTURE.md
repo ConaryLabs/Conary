@@ -730,10 +730,15 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 41 retains revision 40's signed CCS transport-envelope
-authority and adds captured boot-runtime mutation work to the generation
+Schema revision 42 retains revision 41's boot-runtime mutation authority and
+adds durable repository synchronization runs, per-repository fencing epochs,
+and exact-profile sparse projection revisions. A current run records its
+process owner, candidate, input/output revision, heartbeat, lease, typed state,
+and typed failure; publication transactionally proves the current fence before
+replacing active rows. Earlier pre-alpha databases must be rebuilt.
+Revision 41 added captured boot-runtime mutation work to the generation
 activation request union. Exact mutation argv plus the selected root's invoked
-and canonical provider paths and executable SHA-256 now commit with the owning
+and canonical provider paths and executable SHA-256 commit with the owning
 changeset and remain retryable until one eligible generation applies them.
 Revision 40 replaced repository publication chunk-list JSON with the signed CCS
 transport envelope. That envelope owns the exact ordered object identities and

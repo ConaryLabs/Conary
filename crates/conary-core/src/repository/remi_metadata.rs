@@ -31,6 +31,18 @@ pub const REMI_SPARSE_MIN_PACKAGE_SIZE: i64 = 1;
 pub const REMI_SPARSE_SYNC_PAGE_SIZE: usize = 128;
 const _: () = assert!(REMI_SPARSE_SYNC_PAGE_SIZE <= REMI_SPARSE_MAX_PAGE_SIZE);
 
+/// Monotonic revision of one exact profile's visible sparse-resolution state.
+///
+/// The server advances this value whenever a package, provide, grouped
+/// requirement, persisted package metadata, or repository membership change
+/// can affect an `include=versions` response. A client pins the first value for
+/// the complete page set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemiSparseRevision {
+    pub sequence: u64,
+}
+
 /// Validate one public Remi route component or sparse package name.
 ///
 /// The server applies this before exposing database-owned names and the client
@@ -132,6 +144,8 @@ pub struct RemiSparsePackagePage {
     pub distro: String,
     /// Exact supported source profile behind the stable distribution route.
     pub source_profile: String,
+    /// Exact visible sparse-resolution state used to build this page.
+    pub revision: RemiSparseRevision,
     pub packages: Vec<RemiSparseResolutionEntry>,
     pub total: usize,
     pub page: usize,

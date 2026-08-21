@@ -20,7 +20,6 @@ use crate::repository::remi_metadata::{
 };
 use crate::repository::versioning::VersionScheme;
 use rusqlite::Connection;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
 use super::apply_trusted_package_security_advisory;
@@ -28,9 +27,14 @@ use super::native::append_synced_package_rows;
 use super::types::SyncedPackageRow;
 
 mod path;
+mod run;
 mod sparse;
 
 pub(super) use path::sync_repository_remi_from_db_path;
+use run::{
+    RemiSyncFailureCategory, RemiSyncFailureStage, abort_remi_sync_run, append_remi_sync_page,
+    begin_remi_sync_run, finish_remi_sync_run,
+};
 use sparse::RemiSparseSync;
 #[cfg(test)]
 use sparse::fetch_sparse_page_with_retry;
@@ -286,85 +290,6 @@ fn validate_remi_relation_group(
     validate_native_relation(&relation, scheme).map_err(Error::ConfigError)
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RemiSyncStage {
-    repository_id: i64,
-    staging_repository_id: i64,
-}
-
-fn begin_remi_sync_stage(conn: &Connection, repo: &Repository) -> Result<RemiSyncStage> {
-    let repository_id = repo
-        .id
-        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let mut staging = repo.clone();
-    staging.id = None;
-    staging.name = format!("__conary_sparse_sync_{repository_id}_{nonce}");
-    staging.enabled = false;
-    staging.last_sync = None;
-    staging.created_at = None;
-    staging.tuf_enabled = false;
-    staging.tuf_root_version = None;
-    staging.tuf_root_url = None;
-    let staging_repository_id = staging.insert(conn)?;
-    Ok(RemiSyncStage {
-        repository_id,
-        staging_repository_id,
-    })
-}
-
-fn append_remi_sync_page(
-    conn: &Connection,
-    stage: RemiSyncStage,
-    mut rows: Vec<SyncedPackageRow>,
-) -> Result<usize> {
-    for row in &mut rows {
-        row.package.repository_id = stage.staging_repository_id;
-    }
-    let tx = conn.unchecked_transaction()?;
-    let count = append_synced_package_rows(&tx, rows)?;
-    tx.commit()?;
-    Ok(count)
-}
-
-fn finish_remi_sync_stage(
-    conn: &Connection,
-    repo: &mut Repository,
-    stage: RemiSyncStage,
-) -> Result<usize> {
-    let tx = conn.unchecked_transaction()?;
-    let count = tx.query_row(
-        "SELECT COUNT(*) FROM repository_packages WHERE repository_id = ?1",
-        [stage.staging_repository_id],
-        |row| row.get::<_, i64>(0),
-    )?;
-    let count = usize::try_from(count)
-        .map_err(|_| Error::InitError("sparse sync package count exceeds usize".to_string()))?;
-    RepositoryPackage::delete_by_repository(&tx, stage.repository_id)?;
-    tx.execute(
-        "UPDATE repository_packages SET repository_id = ?1 WHERE repository_id = ?2",
-        [stage.repository_id, stage.staging_repository_id],
-    )?;
-    Repository::delete(&tx, stage.staging_repository_id)?;
-    super::link_canonical_ids(&tx, stage.repository_id)?;
-    repo.last_sync = Some(super::current_timestamp());
-    repo.update(&tx)?;
-    tx.commit()?;
-    Ok(count)
-}
-
-fn abort_remi_sync_stage(conn: &Connection, stage: RemiSyncStage) {
-    if let Err(error) = Repository::delete(conn, stage.staging_repository_id) {
-        debug!(
-            "Failed to remove sparse-sync staging repository {}: {}",
-            stage.staging_repository_id, error
-        );
-    }
-}
-
 pub(super) async fn sync_repository_remi(
     conn: &Connection,
     repo: &mut Repository,
@@ -374,25 +299,55 @@ pub(super) async fn sync_repository_remi(
         repo.name
     );
     let mut fetcher = RemiSparseSync::new(repo)?;
-    let stage = begin_remi_sync_stage(conn, repo)?;
+    let run = begin_remi_sync_run(conn, repo)?;
     loop {
         let rows = match fetcher.next_rows().await {
             Ok(Some(rows)) => rows,
             Ok(None) => break,
             Err(error) => {
-                abort_remi_sync_stage(conn, stage);
+                if let Err(abort_error) = abort_remi_sync_run(
+                    conn,
+                    &run,
+                    RemiSyncFailureStage::FetchingObjects,
+                    RemiSyncFailureCategory::from_error(&error),
+                    &error.to_string(),
+                ) {
+                    debug!("Failed to abandon sparse-sync run: {abort_error}");
+                }
                 return Err(error);
             }
         };
-        if let Err(error) = append_remi_sync_page(conn, stage, rows) {
-            abort_remi_sync_stage(conn, stage);
+        let revision = fetcher.revision().ok_or_else(|| {
+            Error::InternalError("Remi sparse page did not establish a server revision".to_string())
+        })?;
+        if let Err(error) = append_remi_sync_page(conn, &run, rows, revision) {
+            if let Err(abort_error) = abort_remi_sync_run(
+                conn,
+                &run,
+                RemiSyncFailureStage::Ingesting,
+                RemiSyncFailureCategory::from_error(&error),
+                &error.to_string(),
+            ) {
+                debug!("Failed to abandon sparse-sync run: {abort_error}");
+            }
             return Err(error);
         }
     }
-    let count = match finish_remi_sync_stage(conn, repo, stage) {
+    let revision = fetcher.revision().ok_or_else(|| {
+        Error::InternalError("Remi sparse sync completed without a server revision".to_string())
+    })?;
+    let count = match finish_remi_sync_run(conn, repo, &run, revision) {
         Ok(count) => count,
         Err(error) => {
-            abort_remi_sync_stage(conn, stage);
+            if let Err(abort_error) = abort_remi_sync_run(
+                conn,
+                &run,
+                RemiSyncFailureStage::Publishing,
+                RemiSyncFailureCategory::from_error(&error),
+                &error.to_string(),
+            ) {
+                debug!("Failed to abandon sparse-sync run: {abort_error}");
+            }
             return Err(error);
         }
     };
@@ -449,6 +404,7 @@ mod tests {
     use crate::repository::remi_metadata::{
         REMI_SPARSE_SYNC_PAGE_SIZE, RemiProvide, RemiRequirement, RemiRequirementGroup,
         RemiSparsePackagePage, RemiSparseResolutionEntry, RemiSparseResolutionVersionEntry,
+        RemiSparseRevision,
     };
     use std::io::{Read, Write};
 
@@ -737,7 +693,7 @@ mod tests {
                 let body = if attempt == 0 {
                     r#"{"distro":"fedora""#
                 } else {
-                    r#"{"distro":"fedora","source_profile":"fedora-44","packages":[{"name":"qemu-img","distro":"fedora","versions":[{"version":"2:10.1.0-7.fc44","architecture":"x86_64","provides":[],"requirement_groups":[],"size":1024}]}],"total":1,"page":1,"per_page":128}"#
+                    r#"{"distro":"fedora","source_profile":"fedora-44","revision":{"sequence":7},"packages":[{"name":"qemu-img","distro":"fedora","versions":[{"version":"2:10.1.0-7.fc44","architecture":"x86_64","provides":[],"requirement_groups":[],"size":1024}]}],"total":1,"page":1,"per_page":128}"#
                 };
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -779,6 +735,7 @@ mod tests {
         let body = serde_json::to_string(&RemiSparsePackagePage {
             distro: "fedora".to_string(),
             source_profile: "fedora-44".to_string(),
+            revision: RemiSparseRevision { sequence: 7 },
             packages: vec![sparse_test_entry("alpha"), sparse_test_entry("beta")],
             total: 2,
             page: 1,
@@ -857,6 +814,7 @@ mod tests {
         fetcher.consume_page(RemiSparsePackagePage {
             distro: "fedora".to_string(),
             source_profile: "fedora-44".to_string(),
+            revision: RemiSparseRevision { sequence: 7 },
             packages: entries,
             total: package_count,
             page,
@@ -869,6 +827,7 @@ mod tests {
         let emitted = serde_json::json!({
             "distro": "fedora",
             "source_profile": "fedora-44",
+            "revision": {"sequence": 7},
             "packages": [{
                 "name": "hello",
                 "distro": "fedora",
@@ -955,12 +914,13 @@ mod tests {
         old.insert(&conn).unwrap();
 
         let mut fetcher = RemiSparseSync::new(&repo).unwrap();
-        let stage = begin_remi_sync_stage(&conn, &repo).unwrap();
+        let run = begin_remi_sync_run(&conn, &repo).unwrap();
         while fetcher.names_seen < 300 {
             let rows = consume_synthetic_page(&mut fetcher, 300).unwrap();
-            append_remi_sync_page(&conn, stage, rows).unwrap();
+            append_remi_sync_page(&conn, &run, rows, fetcher.revision().unwrap()).unwrap();
         }
-        let count = finish_remi_sync_stage(&conn, &mut repo, stage).unwrap();
+        let count =
+            finish_remi_sync_run(&conn, &mut repo, &run, fetcher.revision().unwrap()).unwrap();
 
         assert_eq!(count, 300);
         let packages = RepositoryPackage::find_by_repository(&conn, repo.id.unwrap()).unwrap();
@@ -990,11 +950,19 @@ mod tests {
         old.insert(&conn).unwrap();
 
         let mut fetcher = RemiSparseSync::new(&repo).unwrap();
-        let stage = begin_remi_sync_stage(&conn, &repo).unwrap();
+        let run = begin_remi_sync_run(&conn, &repo).unwrap();
         let mut rows = consume_synthetic_page(&mut fetcher, 2).unwrap();
         rows[1].package.name = rows[0].package.name.clone();
-        let error = append_remi_sync_page(&conn, stage, rows).unwrap_err();
-        abort_remi_sync_stage(&conn, stage);
+        let error =
+            append_remi_sync_page(&conn, &run, rows, fetcher.revision().unwrap()).unwrap_err();
+        abort_remi_sync_run(
+            &conn,
+            &run,
+            RemiSyncFailureStage::Ingesting,
+            RemiSyncFailureCategory::from_error(&error),
+            &error.to_string(),
+        )
+        .unwrap();
 
         assert!(error.to_string().contains("UNIQUE constraint failed"));
         let packages = RepositoryPackage::find_by_repository(&conn, repo.id.unwrap()).unwrap();
@@ -1045,13 +1013,14 @@ mod tests {
         crate::db::schema::ensure_current(&conn).unwrap();
         let mut repo = sparse_test_repo("https://remi.test".to_string(), &conn);
         let mut fetcher = RemiSparseSync::new(&repo).unwrap();
-        let stage = begin_remi_sync_stage(&conn, &repo).unwrap();
+        let run = begin_remi_sync_run(&conn, &repo).unwrap();
         while fetcher.names_seen < package_count {
             let rows = consume_synthetic_page(&mut fetcher, package_count).unwrap();
             assert!(rows.len() <= REMI_SPARSE_SYNC_PAGE_SIZE);
-            append_remi_sync_page(&conn, stage, rows).unwrap();
+            append_remi_sync_page(&conn, &run, rows, fetcher.revision().unwrap()).unwrap();
         }
-        let count = finish_remi_sync_stage(&conn, &mut repo, stage).unwrap();
+        let count =
+            finish_remi_sync_run(&conn, &mut repo, &run, fetcher.revision().unwrap()).unwrap();
         assert_eq!(count, package_count);
         drop(conn);
 

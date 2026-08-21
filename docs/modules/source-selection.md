@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-15
-revision: 41
+last_updated: 2026-08-21
+revision: 42
 summary: Document coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
@@ -95,18 +95,21 @@ sync and package fetches translate the stored public ID to the profile-owned
 route slug. Remi sync pages through the sparse name index and incrementally
 stages each fixed-size `include=versions` page of resolution-only
 version/provide/requirement documents and trusted package-advisory metadata;
-one final transaction publishes the completed local candidate over the
-previous offline-resolution snapshot. The page set is not yet pinned to one
-server revision; `docs/modules/remi.md` records that boundary and its tracked
-lease/revision fix. Sync never fetches the whole-distribution metadata
-document, retains a distribution-sized package vector, or issues one HTTP
-request per package. Persisted Remi package identity requires the exact public
-ID; route slugs and generic `rpm`/`deb`/`arch` format labels are never accepted
-as source-identity aliases. Native repository sync instead consumes the exact
-persisted native source policy described below. A configured public profile
-remains an optional feed preset during W10 and is copied into native package
-rows when present; it is not required for repository identity or refresh
-authority. The superseded
+one final fenced transaction publishes the completed local candidate over the
+previous offline-resolution snapshot. Every page carries one exact-profile
+sparse revision, and the client rejects a mixed-revision page set even when its
+name total and ordering remain unchanged. A durable per-repository run records
+the process owner, fencing epoch, candidate, revision, heartbeat, state, and
+typed failure; restart recovery removes only the exact candidate proven
+abandoned by its expired lease. Sync never fetches the whole-distribution
+metadata document, retains a distribution-sized package vector, or issues one
+HTTP request per package. Persisted Remi package identity requires the exact
+public ID; route slugs and generic `rpm`/`deb`/`arch` format labels are never
+accepted as source-identity aliases. Native repository sync instead consumes
+the exact persisted native source policy described below. A configured public
+profile remains an optional feed preset during W10 and is copied into native
+package rows when present; it is not required for repository identity or
+refresh authority. The superseded
 `data/distros.toml` catalog was deleted in M4d.
 
 An accepted Remi conversion remains server-owned work until the typed job

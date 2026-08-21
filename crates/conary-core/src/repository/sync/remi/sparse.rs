@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::remi_metadata::{
     REMI_SPARSE_SYNC_PAGE_SIZE, RemiSparsePackagePage, RemiSparseResolutionEntry,
-    validate_remi_public_name,
+    RemiSparseRevision, validate_remi_public_name,
 };
 use crate::repository::retry::{RetryConfig, with_retry_async};
 use std::collections::HashSet;
@@ -24,6 +24,7 @@ pub(super) struct RemiSparseSync {
     repo_id: i64,
     pub(super) next_page: usize,
     expected_total_names: Option<usize>,
+    expected_revision: Option<RemiSparseRevision>,
     pub(super) names_seen: usize,
     last_name: Option<String>,
 }
@@ -60,6 +61,7 @@ impl RemiSparseSync {
             repo_id,
             next_page: 1,
             expected_total_names: None,
+            expected_revision: None,
             names_seen: 0,
             last_name: None,
         })
@@ -127,9 +129,14 @@ impl RemiSparseSync {
 
         self.names_seen = next_names_seen;
         self.expected_total_names.get_or_insert(page_total);
+        self.expected_revision.get_or_insert(page.revision);
         self.last_name = page_last_name.or(self.last_name.take());
         self.next_page = next_page;
         Ok(rows)
+    }
+
+    pub(super) fn revision(&self) -> Option<RemiSparseRevision> {
+        self.expected_revision
     }
 
     fn validate_page(&self, page: &RemiSparsePackagePage) -> Result<()> {
@@ -163,6 +170,15 @@ impl RemiSparseSync {
                 return Err(Error::ParseError(format!(
                     "Remi sparse page changed total package-name count during sync: {total} -> {}",
                     page.total
+                )));
+            }
+            _ => {}
+        }
+        match self.expected_revision {
+            Some(revision) if revision != page.revision => {
+                return Err(Error::ParseError(format!(
+                    "Remi sparse page changed server revision during sync: {} -> {}",
+                    revision.sequence, page.revision.sequence
                 )));
             }
             _ => {}
@@ -316,6 +332,7 @@ mod tests {
         RemiSparsePackagePage {
             distro: "fedora".to_string(),
             source_profile: "fedora-44".to_string(),
+            revision: RemiSparseRevision { sequence: 7 },
             packages,
             total,
             page,
@@ -346,6 +363,20 @@ mod tests {
             .consume_page(test_page(2, 2, vec![test_entry("alpha")]))
             .unwrap_err();
         assert!(error.to_string().contains("globally unique and ordered"));
+    }
+
+    #[test]
+    fn page_validation_rejects_a_changed_server_revision_with_the_same_total() {
+        let mut sync = test_sync();
+        sync.consume_page(test_page(1, 2, vec![test_entry("alpha")]))
+            .unwrap();
+        let mut changed = test_page(2, 2, vec![test_entry("bravo")]);
+        changed.revision.sequence += 1;
+
+        let error = sync.consume_page(changed).unwrap_err();
+        assert!(error.to_string().contains("changed server revision"));
+        assert_eq!(sync.names_seen, 1);
+        assert_eq!(sync.revision(), Some(RemiSparseRevision { sequence: 7 }));
     }
 
     #[test]

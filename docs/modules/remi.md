@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-21
-revision: 29
-summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, publication coordination and readiness, database-writer ownership, reproducible conversion profiling, R2 durability inventory, and serving authority
+revision: 30
+summary: Document Remi source identity and update policy, revision-pinned durable sparse sync, signing, canonical-map, repository trust, publication coordination and readiness, database-writer ownership, reproducible conversion profiling, R2 durability inventory, and serving authority
 ---
 
 # Remi
@@ -152,30 +152,37 @@ primary filter solvable, and it is the dominant row population: Fedora 44
 sparse pages, their wire payload, and the replace transaction all scale with
 it.
 
-Remi opens SQLite once for each HTTP page, selects all visible package/version
-rows for the page together, and batch-loads their normalized provides and
-requirement groups. Historical zero-sized discovery placeholders are excluded
-by one shared wire threshold used by the name count, name page, bulk page, and
-per-name lookup; every listed name is therefore fetchable and `total` counts
-that exact set.
+Remi builds each `include=versions` page inside one SQLite read transaction,
+selects all visible package/version rows for the page together, and batch-loads
+their normalized provides and requirement groups. The page carries a typed
+monotonic revision scoped to the exact public profile. Persisted triggers
+advance that revision whenever visible repository membership, exact package
+identity, size, package metadata, provides, or grouped requirements change;
+disabled candidate writes do not advance public authority. Historical
+zero-sized discovery placeholders are excluded by one shared wire threshold
+used by the name count, name page, bulk page, and per-name lookup; every listed
+name is therefore fetchable and `total` counts that exact set.
 
 `crates/conary-core/src/repository/sync/remi/path.rs` owns the path-based sparse
-sync lifecycle and its writer-authority handoff. Each bounded page is written
-to a disabled staging repository. The previously synced repository remains the
-only enabled snapshot while network and parsing work continues. After the
-declared name total has been consumed, one SQLite transaction replaces the old
-rows, moves the staged rows to the repository, links canonical IDs, and
-advances `last_sync`. A fetch, parsing, duplicate identity, or persistence
-error returned to the running command removes its stage and leaves the prior
-enabled snapshot unchanged.
+sync writer-authority handoff;
+`crates/conary-core/src/repository/sync/remi/run.rs` owns its durable lifecycle.
+Every run records the repository scope, process instance UUID, monotonically
+increasing fencing epoch, disabled candidate repository ID, input and candidate
+revisions, typed state and failure, and start/heartbeat/lease/finish facts.
+Each persisted page renews the lease. The client pins the first server revision
+and rejects any later page whose revision differs, including same-total
+package, version, relation, or metadata mutations.
 
-Sparse pages do not yet carry a server-state revision. Stable totals and global
-name ordering detect structural drift, but a same-count or content-only Remi
-update can currently span requests. Process termination can also leave a
-disabled stage because in-process error cleanup is not crash recovery.
-[Issue #163](https://github.com/ConaryLabs/Conary/issues/163) owns the typed
-server revision plus the durable per-repository lease required to reject mixed
-page sets, serialize publication, and prove an abandoned stage before cleanup.
+The previously synced repository remains the only enabled snapshot while
+network, parsing, and validation work continues. Publication first commits a
+`ready_to_publish` state, then one SQLite transaction proves the run still owns
+the scope's current process identity and fencing epoch, replaces the old rows,
+moves the candidate rows, links canonical IDs, advances `last_sync`, records
+the active revision, and marks the run published. A stale worker can continue
+computation but cannot publish. Returned failures abandon and remove their
+exact candidate. After process termination, the next run recovers only the
+candidate ID named by an expired durable lease; repository-name prefixes and
+candidate age never authorize cleanup.
 
 The fixed name page is the structural owner of distribution scaling:
 distribution growth increases page count, not the retained metadata set or
