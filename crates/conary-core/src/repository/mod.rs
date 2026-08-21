@@ -10,6 +10,7 @@
 //! - Ecosystem-native repository and package signature verification
 //! - Native metadata format parsing (Arch, Debian, Fedora)
 
+pub mod catalog;
 mod client;
 mod dependencies;
 pub mod distro;

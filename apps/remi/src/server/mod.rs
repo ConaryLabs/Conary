@@ -121,6 +121,10 @@ pub struct ServerConfig {
     pub chunk_dir: PathBuf,
     /// Path to the cache/scratch directory
     pub cache_dir: PathBuf,
+    /// Root containing immutable activated source and profile catalogs.
+    pub catalog_dir: PathBuf,
+    /// Private disposable catalog construction root.
+    pub catalog_candidate_dir: PathBuf,
     /// Maximum concurrent conversions
     pub max_concurrent_conversions: usize,
     /// LRU eviction threshold in bytes (default 700GB)

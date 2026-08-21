@@ -735,6 +735,8 @@ impl RemiConfig {
             db_path: self.storage.root.join("metadata/conary.db"),
             chunk_dir: self.storage.root.join("chunks"),
             cache_dir: self.storage.root.join("cache"),
+            catalog_dir: self.storage.root.join("catalogs"),
+            catalog_candidate_dir: self.storage.root.join("catalog-candidates"),
             max_concurrent_conversions: self.conversion.max_concurrent,
             cache_max_bytes: self.cache_max_bytes()?,
             readiness_min_free_bytes: self.readiness_min_free_bytes()?,
@@ -787,6 +789,8 @@ impl RemiConfig {
             self.storage.root.join("manifests"),
             self.storage.root.join("keys"),
             self.storage.root.join("cache"),
+            self.storage.root.join("catalogs"),
+            self.storage.root.join("catalog-candidates"),
         ];
 
         // Add search index directory
