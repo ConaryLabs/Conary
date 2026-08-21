@@ -483,6 +483,40 @@ surfaces also run `cargo test -p conary --test cli_output_snapshots`.
    paragraph. `live_host_mutation_safety` expectations update in the same
    slice.
 
+## Candidate slices surfaced by the design pass
+
+Ranked below the audit slices; each needs its own scoping before it becomes
+committed work, and each is a place where the CLI's look does real
+persuasion work rather than decoration.
+
+10. **Reframe the generation line as signature, not debt** — flows: every
+    apply. Today Conary's most distinctive capability (generations and
+    rollback) appears on the happy path only as a scary doubled WARNING
+    about publication debt. When publication is expected follow-up rather
+    than an error, the transaction should close with one calm line naming
+    the generation transition and the publish command (prefix-line shape,
+    cyan `note:`), reserving `warning:` for genuinely stuck debt
+    (`generation pending` surfaced by `system generation pending`). The
+    typed debt record and its `--verbose` detail stay.
+11. **TTY confirmation prompt** — flows: `install`, `update`, `remove`,
+    `autoremove` on an interactive terminal. dnf5, apt, and pacman all put
+    their transaction table behind `Proceed? [y/N]`; Conary instead refuses
+    and makes the operator retype with `--yes`. After slice 3 exists, an
+    interactive confirm on a TTY (default no; `--yes` unchanged for
+    scripts; non-interactive contexts keep the refusal, honoring
+    `CONARY_NON_INTERACTIVE`) turns the refusal friction into the moment
+    the summary actually gets read. Must not weaken the live-mutation
+    intent boundary: the prompt is an explicit intent capture, not a
+    bypass.
+12. **`conary status` at-a-glance screen** — flow: bare `conary` /
+    `conary status`. The bare invocation prints a version banner today.
+    A small status screen — current generation, pending publication debt,
+    enabled feeds and last sync age, owned vs adopted package counts —
+    gives the CLI an identity moment, gives operators a daily entry point,
+    and gives every README and demo a screen worth screenshotting. Tag
+    rows and field lines only; no new authority, read-only over existing
+    typed state.
+
 ## Constraint compliance for later slices
 
 - Guarded vocabulary and ASCII-only tags stay; slices 2, 5, 7, and 9 must
