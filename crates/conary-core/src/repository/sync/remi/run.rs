@@ -80,11 +80,23 @@ impl RemiSyncFailureStage {
 }
 
 pub(super) fn begin_remi_sync_run(conn: &Connection, repo: &Repository) -> Result<RemiSyncRun> {
-    begin_remi_sync_run_at(conn, repo, &PROCESS_INSTANCE_UUID, unix_seconds()?)
+    let (tx, now) = begin_immediate_with_current_time(conn)?;
+    begin_remi_sync_run_in_transaction(tx, repo, &PROCESS_INSTANCE_UUID, now)
 }
 
+#[cfg(test)]
 fn begin_remi_sync_run_at(
     conn: &Connection,
+    repo: &Repository,
+    owner_instance_uuid: &str,
+    now: i64,
+) -> Result<RemiSyncRun> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    begin_remi_sync_run_in_transaction(tx, repo, owner_instance_uuid, now)
+}
+
+fn begin_remi_sync_run_in_transaction(
+    tx: Transaction<'_>,
     repo: &Repository,
     owner_instance_uuid: &str,
     now: i64,
@@ -92,7 +104,6 @@ fn begin_remi_sync_run_at(
     let repository_id = repo
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let current = tx
         .query_row(
             "SELECT scope.fencing_epoch, scope.current_run_id, scope.active_revision,
@@ -203,8 +214,7 @@ pub(super) fn append_remi_sync_page(
     for row in &mut rows {
         row.package.repository_id = run.staging_repository_id;
     }
-    let now = unix_seconds()?;
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let (tx, now) = begin_immediate_with_current_time(conn)?;
     renew_owned_run(&tx, run, now, Some(revision))?;
     let count = append_synced_package_rows(&tx, rows)?;
     tx.commit()?;
@@ -219,8 +229,8 @@ pub(super) fn finish_remi_sync_run(
 ) -> Result<usize> {
     prepare_publication(conn, run, &revision)?;
 
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    require_owned_run(&tx, run, "ready_to_publish", unix_seconds()?)?;
+    let (tx, now) = begin_immediate_with_current_time(conn)?;
+    require_owned_run(&tx, run, "ready_to_publish", now)?;
     let candidate_revision = serde_json::to_string(&revision)?;
     let stored_revision = tx.query_row(
         "SELECT candidate_revision FROM repository_sync_runs WHERE run_id = ?1",
@@ -293,8 +303,7 @@ pub(super) fn abort_remi_sync_run(
     category: RemiSyncFailureCategory,
     evidence: &str,
 ) -> Result<()> {
-    let now = unix_seconds()?;
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let (tx, now) = begin_immediate_with_current_time(conn)?;
     let state = tx
         .query_row(
             "SELECT state FROM repository_sync_runs WHERE run_id = ?1",
@@ -341,8 +350,7 @@ fn prepare_publication(
     run: &RemiSyncRun,
     revision: &RemiSparseRevision,
 ) -> Result<()> {
-    let now = unix_seconds()?;
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let (tx, now) = begin_immediate_with_current_time(conn)?;
     require_owned_run(&tx, run, "fetching_objects", now)?;
     let candidate_revision = serde_json::to_string(&revision)?;
     let stored_revision = tx.query_row(
@@ -531,6 +539,15 @@ fn lease_expiry(now: i64) -> Result<i64> {
         .ok_or_else(|| Error::InternalError("repository sync lease expiry overflow".to_string()))
 }
 
+/// Acquire SQLite publication authority before reading the lease clock. A
+/// timestamp captured while waiting for this writer lock could already be
+/// expired by the time it is used to renew or publish a run.
+fn begin_immediate_with_current_time(conn: &Connection) -> Result<(Transaction<'_>, i64)> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let now = unix_seconds()?;
+    Ok((tx, now))
+}
+
 fn unix_seconds() -> Result<i64> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -652,6 +669,60 @@ mod tests {
             .unwrap();
         assert_eq!(heartbeat_at, 100);
         assert_eq!(lease_expires_at, 100 + REMI_SYNC_LEASE_SECONDS);
+        assert!(candidate_revision.is_none());
+    }
+
+    #[test]
+    fn writer_lock_wait_cannot_reuse_a_pre_wait_lease_timestamp() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("lease-clock-order.db");
+        crate::db::init(&db_path).unwrap();
+        let conn = crate::db::open_fast(&db_path).unwrap();
+        let repo = test_repo(&conn);
+        let started_at = unix_seconds().unwrap();
+        let run = begin_remi_sync_run_at(
+            &conn,
+            &repo,
+            "00000000-0000-4000-8000-000000000001",
+            started_at - REMI_SYNC_LEASE_SECONDS + 3,
+        )
+        .unwrap();
+        let lease_expires_at = started_at + 3;
+        drop(conn);
+
+        let blocker = crate::db::open_fast(&db_path).unwrap();
+        let blocker_tx =
+            Transaction::new_unchecked(&blocker, TransactionBehavior::Immediate).unwrap();
+        let worker = crate::db::open_fast(&db_path).unwrap();
+        worker
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let worker_run = run.clone();
+        let handle = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let revision = RemiSparseRevision::new(1, "00000000000000000000000000000001").unwrap();
+            append_remi_sync_page(&worker, &worker_run, Vec::new(), revision)
+        });
+        started_rx.recv().unwrap();
+        assert!(unix_seconds().unwrap() < lease_expires_at);
+        while unix_seconds().unwrap() < lease_expires_at {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        blocker_tx.commit().unwrap();
+
+        let error = handle.join().unwrap().unwrap_err();
+        assert!(error.to_string().contains("lost fencing epoch 1"));
+        let conn = crate::db::open_fast(&db_path).unwrap();
+        let (stored_expiry, candidate_revision) = conn
+            .query_row(
+                "SELECT lease_expires_at, candidate_revision
+                 FROM repository_sync_runs WHERE run_id = ?1",
+                [&run.run_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored_expiry, lease_expires_at);
         assert!(candidate_revision.is_none());
     }
 
