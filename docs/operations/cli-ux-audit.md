@@ -369,6 +369,12 @@ yet: a grouped what-changes summary (new / upgraded / removed), size totals
 
 ## Design evaluation
 
+Guiding feel (maintainer direction, 2026-08-21): the operator should feel in
+control, never nervous and never nagged. Every mutation is previewable
+(`--dry-run`), confirmable, and reversible (generation rollback), the
+reversal path is visible at the moment it matters, and no successful
+transaction ends by instructing the operator to retype another command.
+
 Judged as a visual system, from the color pty captures (the audit findings
 above are the mechanics; this section is the look). The diagnosis in one
 sentence: Conary does not need a design system invented — `system init`
@@ -489,15 +495,27 @@ Ranked below the audit slices; each needs its own scoping before it becomes
 committed work, and each is a place where the CLI's look does real
 persuasion work rather than decoration.
 
-10. **Reframe the generation line as signature, not debt** — flows: every
-    apply. Today Conary's most distinctive capability (generations and
-    rollback) appears on the happy path only as a scary doubled WARNING
-    about publication debt. When publication is expected follow-up rather
-    than an error, the transaction should close with one calm line naming
-    the generation transition and the publish command (prefix-line shape,
-    cyan `note:`), reserving `warning:` for genuinely stuck debt
-    (`generation pending` surfaced by `system generation pending`). The
-    typed debt record and its `--verbose` detail stay.
+10. **Publication follows apply intent** — flows: every apply. Maintainer
+    direction (2026-08-21): a daily-driver apply must not end by telling
+    the operator to retype a second command. The `--yes` given to
+    install/update/remove already expresses "change my system"; clearing
+    the transaction's own publication debt is a consequence of that
+    intent, not a new decision — and the CLI can pass its exact changeset
+    assertion internally, which is stricter than the retype the warning
+    suggests today (that command line carries no assertion). Default
+    becomes publish-as-part-of-apply; deferring is the explicit choice via
+    a defer flag on apply commands, preserving the
+    batch-several-installs-then-publish-once workflow. `--dry-run` keeps
+    previewing with no mutation and no publication; rollback stays one
+    command, and the closing line names it so the escape hatch is visible
+    exactly when the change lands. The typed debt record, recovery paths,
+    and the pending-debt surface remain for deferred and interrupted
+    cases; `warning:` is reserved for genuinely stuck debt. Scope note:
+    this changes transaction behavior, not just rendering — it takes its
+    own issue and slice with generation-owner review (including the
+    publication-cost question for large transactions), and the
+    closing-line reframe shown in the target frames is the floor if that
+    slice stalls.
 11. **TTY confirmation prompt** — flows: `install`, `update`, `remove`,
     `autoremove` on an interactive terminal. dnf5, apt, and pacman all put
     their transaction table behind `Proceed? [y/N]`; Conary instead refuses
@@ -524,11 +542,20 @@ Composed from the same five shapes; content is illustrative, structure is the
 proposal.
 
 Candidate 10 — every successful mutation currently ends with the doubled
-publication warning; the proposed ending:
+publication warning; under publication-follows-intent the default ending
+names the landed generation and the escape hatch:
 
 ```
 Installed 2 packages (49 files, 4.2 s)
-  Generation: 41 -> 42 (pending publish)
+  Generation: 41 -> 42 published · roll back with 'conary system generation rollback'
+```
+
+Deferring stays available as the explicit choice (defer flag on the apply
+command), and only then does the transaction end with the publish route:
+
+```
+Installed 2 packages (49 files, 4.2 s)
+  Generation: changeset 41 staged, publication deferred
 note: publish with 'conary system generation publish --yes'
 ```
 
@@ -547,7 +574,7 @@ Changes (2 install):
 
 Proceed with install? [y/N] y
 Installed 2 packages (49 files, 4.2 s)
-note: publish with 'conary system generation publish --yes'
+  Generation: 41 -> 42 published · roll back with 'conary system generation rollback'
 ```
 
 Candidate 12 — the bare invocation as an at-a-glance screen instead of a
