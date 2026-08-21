@@ -435,10 +435,25 @@ Downloading (2/2)  [==============>-----]  1.6 MB / 2.1 MB  1.1 MB/s  ~1s
 
 — a bar only when the total is known (otherwise the spinner alone), bytes,
 rate, and eta on downloads, a `(n/m)` count on multi-package phases, and on
-completion the line is replaced by the phase's verb line. One live line at a
-time; finished transactions read as history, never as leftover machinery.
+completion the line is replaced by the phase's verb line. One live line per
+phase; finished transactions read as history, never as leftover machinery.
 This is the in-flight contract slices 1 and 3 implement, replacing today's
 stacked spinners and zero-length bars.
+
+When downloads become parallel (#535), the download phase extends to one
+aggregate line plus one line per active worker, capped at the worker count,
+with queued items as a single dim count line:
+
+```
+Downloading 3.4 MB / 18.2 MB  4.1 MB/s  ~4s
+  nginx-core     [============>-------]  864 kB / 1.2 MB
+  openssl-libs   [=====>--------------]  1.1 MB / 3.9 MB
+  zlib           [==================>-]  92 kB / 96 kB
+  2 more queued
+```
+
+The whole block is transient under the same rule — replaced by the phase
+verb line on completion — and non-TTY output keeps phase lines only.
 
 Composed target frames for install, remove, refusal, untrusted-signer, and
 `list --info` (before/after against the real captures) accompany this audit
