@@ -263,10 +263,13 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "package_requirement_groups",
         "conflict|phase4-w7-conflict|< 2",
         "obsolete|phase4-w7-replaced|<= 1",
-        "native_slot = \\\"%post\\\"",
-        "native_slot = \\\"%pretrans\\\"",
-        "native_slot = \\\"%filetriggerin\\\"",
-        "interpreter = \\\"/usr/bin/python3\\\"",
+        "tomllib.loads",
+        "rpm:%filetriggerin:0",
+        "native_slot\\\"] == \\\"%triggerin\\\"",
+        "interpreter\\\"] == \\\"/usr/bin/python3\\\"",
+        "rpm_trigger",
+        "target_constraints",
+        "3 exact lifecycle entries verified",
     ] {
         assert!(
             rendered_rpm_semantics.contains(required),
