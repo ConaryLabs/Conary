@@ -6,20 +6,66 @@
 //! A probe that cannot establish its fact reports that as a failure, never as
 //! success.
 //!
-//! Deploy verification currently polls `/health`, which is an unconditional
-//! liveness reply and proves only that the process is listening. Pointing it at
-//! `/health/ready` is the remaining half of this work and is tracked on the
-//! owning issue; until then this endpoint is correct but unconsumed.
+//! Deploy verification and the operator health script consume
+//! `/health/ready`; `/health` remains a separate liveness-only probe.
 //!
 //! The evaluation here is pure over its inputs so every failure mode is
 //! provable in a focused test. The route handler stays thin.
 
 use conary_core::db::schema::{SCHEMA_VERSION, SchemaCompatibility};
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Free space a serving root must have before Remi reports ready.
 pub const DEFAULT_MIN_FREE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+
+/// Latest usable outcome for one startup publication phase.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PublicationPhaseState {
+    #[default]
+    Pending,
+    Complete,
+    Partial,
+    Failed,
+    Unavailable,
+}
+
+impl PublicationPhaseState {
+    fn is_usable(self) -> bool {
+        matches!(self, Self::Complete | Self::Partial)
+    }
+}
+
+/// Typed startup evidence shared by the scheduler and readiness route.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct PublicationReadiness {
+    pub repository: PublicationPhaseState,
+    pub canonical: PublicationPhaseState,
+}
+
+impl PublicationReadiness {
+    pub(crate) fn is_ready(&self) -> bool {
+        self.repository.is_usable() && self.canonical.is_usable()
+    }
+
+    /// Preserve a previously usable publication through a later failed
+    /// refresh; a failed candidate must not retire the active state.
+    pub(crate) fn record_repository(&mut self, outcome: PublicationPhaseState) {
+        if outcome.is_usable() || !self.repository.is_usable() {
+            self.repository = outcome;
+        }
+    }
+
+    /// Preserve a previously usable canonical publication through a later
+    /// failed derived cycle for the same reason.
+    pub(crate) fn record_canonical(&mut self, outcome: PublicationPhaseState) {
+        if outcome.is_usable() || !self.canonical.is_usable() {
+            self.canonical = outcome;
+        }
+    }
+}
 
 /// Outcome of a single readiness probe.
 ///
@@ -60,6 +106,8 @@ pub struct ReadinessInputs {
     pub chunk_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub min_free_bytes: u64,
+    pub required_source_profiles: Vec<String>,
+    pub publication: PublicationReadiness,
 }
 
 /// Complete readiness report.
@@ -70,7 +118,9 @@ pub struct ReadinessInputs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReadinessReport {
     pub ready: bool,
+    pub publication: PublicationReadiness,
     pub database: ProbeOutcome,
+    pub source_profiles: ProbeOutcome,
     pub chunk_dir: ProbeOutcome,
     pub cache_dir: ProbeOutcome,
     pub free_space: ProbeOutcome,
@@ -79,18 +129,24 @@ pub struct ReadinessReport {
 
 impl ReadinessReport {
     fn from_probes(
+        publication: PublicationReadiness,
         database: ProbeOutcome,
+        source_profiles: ProbeOutcome,
         chunk_dir: ProbeOutcome,
         cache_dir: ProbeOutcome,
         free_space: ProbeOutcome,
     ) -> Self {
-        let ready = database.is_ready()
+        let ready = publication.is_ready()
+            && database.is_ready()
+            && source_profiles.is_ready()
             && chunk_dir.is_ready()
             && cache_dir.is_ready()
             && free_space.is_ready();
         Self {
             ready,
+            publication,
             database,
+            source_profiles,
             chunk_dir,
             cache_dir,
             free_space,
@@ -102,11 +158,131 @@ impl ReadinessReport {
 /// Evaluate readiness. Blocking: callers must run this off the async runtime.
 pub fn evaluate(inputs: &ReadinessInputs) -> ReadinessReport {
     ReadinessReport::from_probes(
+        inputs.publication.clone(),
         probe_database(&inputs.db_path),
+        probe_source_profiles(&inputs.db_path, &inputs.required_source_profiles),
         probe_directory(&inputs.chunk_dir, "chunk directory"),
         probe_directory(&inputs.cache_dir, "cache directory"),
         probe_free_space(&inputs.chunk_dir, inputs.min_free_bytes),
     )
+}
+
+/// Require at least one persisted package for every enabled public profile.
+///
+/// Both the repository and package row must carry the same exact profile ID.
+/// Names, URLs, and distro-family aliases are deliberately irrelevant here.
+fn probe_source_profiles(db_path: &Path, required_profiles: &[String]) -> ProbeOutcome {
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = match rusqlite::Connection::open_with_flags(db_path, flags) {
+        Ok(conn) => conn,
+        Err(error) => {
+            return ProbeOutcome::unavailable(format!(
+                "could not inspect source-profile population in {}: {error}",
+                db_path.display()
+            ));
+        }
+    };
+
+    let mut statement = match conn.prepare(
+        "SELECT DISTINCT source_profile
+         FROM repositories
+         WHERE enabled = 1 AND source_profile IS NOT NULL
+         ORDER BY source_profile",
+    ) {
+        Ok(statement) => statement,
+        Err(error) => {
+            return ProbeOutcome::unavailable(format!(
+                "could not prepare source-profile population query in {}: {error}",
+                db_path.display()
+            ));
+        }
+    };
+    let configured = match statement.query_map([], |row| row.get::<_, String>(0)) {
+        Ok(rows) => match rows.collect::<Result<Vec<_>, _>>() {
+            Ok(configured) => configured.into_iter().collect::<BTreeSet<_>>(),
+            Err(error) => {
+                return ProbeOutcome::unavailable(format!(
+                    "could not read source-profile population in {}: {error}",
+                    db_path.display()
+                ));
+            }
+        },
+        Err(error) => {
+            return ProbeOutcome::unavailable(format!(
+                "could not query source-profile population in {}: {error}",
+                db_path.display()
+            ));
+        }
+    };
+
+    if configured.is_empty() {
+        return ProbeOutcome::not_ready("no enabled exact source profiles are configured");
+    }
+
+    let required = if required_profiles.is_empty() {
+        configured.clone()
+    } else {
+        required_profiles.iter().cloned().collect::<BTreeSet<_>>()
+    };
+    let missing_configuration = required
+        .difference(&configured)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !missing_configuration.is_empty() {
+        return ProbeOutcome::not_ready(format!(
+            "required source profiles are not enabled: {}",
+            missing_configuration.join(", ")
+        ));
+    }
+
+    let mut missing = Vec::new();
+    for profile in required {
+        match profile_is_populated(&conn, &profile) {
+            Ok(true) => {}
+            Ok(false) => missing.push(profile),
+            Err(error) => {
+                return ProbeOutcome::unavailable(format!(
+                    "could not query source-profile population in {}: {error}",
+                    db_path.display()
+                ));
+            }
+        }
+    }
+
+    if missing.is_empty() {
+        ProbeOutcome::Ready
+    } else {
+        ProbeOutcome::not_ready(format!(
+            "enabled source profiles have no persisted packages: {}",
+            missing.join(", ")
+        ))
+    }
+}
+
+fn profile_is_populated(conn: &rusqlite::Connection, profile: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM repositories r
+             JOIN repository_packages rp ON rp.repository_id = r.id
+             WHERE r.enabled = 1
+               AND r.source_profile = ?1
+               AND rp.source_profile = ?1
+         )",
+        [profile],
+        |row| row.get(0),
+    )
+}
+
+/// Check one exact public profile without deriving authority from its route.
+pub(crate) fn source_profile_is_populated(db_path: &Path, profile: &str) -> Result<bool, String> {
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = rusqlite::Connection::open_with_flags(db_path, flags)
+        .map_err(|error| format!("could not open {}: {error}", db_path.display()))?;
+    profile_is_populated(&conn, profile)
+        .map_err(|error| format!("could not query {}: {error}", db_path.display()))
 }
 
 /// Open the database read-only, run a query, and require the exact schema epoch.
@@ -205,6 +381,11 @@ mod tests {
             chunk_dir,
             cache_dir,
             min_free_bytes: 0,
+            required_source_profiles: Vec::new(),
+            publication: PublicationReadiness {
+                repository: PublicationPhaseState::Complete,
+                canonical: PublicationPhaseState::Complete,
+            },
         }
     }
 
@@ -213,17 +394,148 @@ mod tests {
         schema::ensure_current(&conn).expect("initialize current schema");
     }
 
+    fn configure_profile(db_path: &Path, profile: &str) -> i64 {
+        use conary_core::db::models::Repository;
+
+        let conn = conary_core::db::open_fast(db_path).expect("open database");
+        let mut repository = Repository::new(
+            format!("{profile}-readiness"),
+            format!("https://example.invalid/{profile}"),
+        );
+        repository.source_profile = Some(profile.to_string());
+        repository.insert(&conn).expect("insert repository")
+    }
+
+    fn mark_profile_populated(db_path: &Path, profile: &str) {
+        use conary_core::db::models::RepositoryPackage;
+        use conary_core::repository::versioning::VersionScheme;
+
+        let repository_id = configure_profile(db_path, profile);
+        let conn = conary_core::db::open_fast(db_path).expect("open database");
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            "readiness-probe".to_string(),
+            "1.0.0".to_string(),
+            VersionScheme::Conary,
+            format!("sha256:{profile}"),
+            1,
+            format!("https://example.invalid/{profile}/package.ccs"),
+        );
+        package.source_profile = Some(profile.to_string());
+        package.insert(&conn).expect("insert repository package");
+    }
+
     #[test]
     fn ready_when_database_directories_and_space_all_satisfy_their_probes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let inputs = inputs_for(dir.path());
         initialize_database(&inputs.db_path);
+        mark_profile_populated(&inputs.db_path, "fedora-44");
 
         let report = evaluate(&inputs);
 
         assert!(report.ready, "expected ready, got {report:?}");
         assert_eq!(report.database, ProbeOutcome::Ready);
         assert_eq!(report.expected_schema_revision, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn not_ready_when_no_exact_source_profile_is_configured() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inputs = inputs_for(dir.path());
+        initialize_database(&inputs.db_path);
+
+        let report = evaluate(&inputs);
+
+        assert!(!report.ready);
+        assert!(matches!(
+            report.source_profiles,
+            ProbeOutcome::NotReady { .. }
+        ));
+    }
+
+    #[test]
+    fn not_ready_while_initial_publication_is_pending() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut inputs = inputs_for(dir.path());
+        initialize_database(&inputs.db_path);
+        mark_profile_populated(&inputs.db_path, "fedora-44");
+        inputs.publication.canonical = PublicationPhaseState::Pending;
+
+        let report = evaluate(&inputs);
+
+        assert!(!report.ready);
+        assert_eq!(report.publication.canonical, PublicationPhaseState::Pending);
+    }
+
+    #[test]
+    fn failed_candidate_does_not_retire_usable_publication() {
+        let mut publication = PublicationReadiness::default();
+        publication.record_repository(PublicationPhaseState::Complete);
+        publication.record_canonical(PublicationPhaseState::Partial);
+
+        publication.record_repository(PublicationPhaseState::Failed);
+        publication.record_canonical(PublicationPhaseState::Unavailable);
+
+        assert_eq!(publication.repository, PublicationPhaseState::Complete);
+        assert_eq!(publication.canonical, PublicationPhaseState::Partial);
+        assert!(publication.is_ready());
+    }
+
+    #[test]
+    fn not_ready_when_a_required_profile_has_zero_packages() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut inputs = inputs_for(dir.path());
+        inputs.required_source_profiles = vec!["fedora-44".to_string()];
+        initialize_database(&inputs.db_path);
+        configure_profile(&inputs.db_path, "fedora-44");
+
+        let report = evaluate(&inputs);
+
+        assert!(!report.ready);
+        assert!(matches!(
+            report.source_profiles,
+            ProbeOutcome::NotReady { .. }
+        ));
+    }
+
+    #[test]
+    fn not_ready_when_only_some_required_profiles_are_populated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut inputs = inputs_for(dir.path());
+        inputs.required_source_profiles = vec!["fedora-44".to_string(), "ubuntu-26.04".to_string()];
+        initialize_database(&inputs.db_path);
+        mark_profile_populated(&inputs.db_path, "fedora-44");
+        configure_profile(&inputs.db_path, "ubuntu-26.04");
+
+        let report = evaluate(&inputs);
+
+        assert!(!report.ready);
+        match report.source_profiles {
+            ProbeOutcome::NotReady { reason } => {
+                assert!(
+                    reason.contains("ubuntu-26.04"),
+                    "unexpected reason: {reason}"
+                );
+                assert!(!reason.contains("fedora-44"), "unexpected reason: {reason}");
+            }
+            other => panic!("expected NotReady, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ready_when_every_required_profile_is_populated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut inputs = inputs_for(dir.path());
+        inputs.required_source_profiles = vec!["fedora-44".to_string(), "ubuntu-26.04".to_string()];
+        initialize_database(&inputs.db_path);
+        mark_profile_populated(&inputs.db_path, "fedora-44");
+        mark_profile_populated(&inputs.db_path, "ubuntu-26.04");
+
+        let report = evaluate(&inputs);
+
+        assert!(report.ready, "expected ready, got {report:?}");
+        assert_eq!(report.source_profiles, ProbeOutcome::Ready);
     }
 
     /// The exact defect this module replaces: the previous check accepted a

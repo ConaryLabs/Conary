@@ -555,12 +555,10 @@ fn default_audit_retention_days() -> u32 {
 
 /// Canonical registry settings
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CanonicalSection {
     /// Hours between Repology/AppStream fetch cycles (default: 24)
     pub fetch_interval_hours: u64,
-    /// Minutes of cooldown between rebuilds (default: 5)
-    pub rebuild_cooldown_minutes: u64,
     /// Max Repology projects to fetch per cycle (default: 5000)
     pub repology_batch_size: usize,
     /// Path to curated rules directory
@@ -571,7 +569,6 @@ impl Default for CanonicalSection {
     fn default() -> Self {
         Self {
             fetch_interval_hours: 24,
-            rebuild_cooldown_minutes: 5,
             repology_batch_size: 5000,
             rules_dir: "/usr/share/conary/canonical-rules".to_string(),
         }
@@ -649,6 +646,16 @@ impl RemiConfig {
             .context("prewarm.metadata_sync_interval is invalid")?;
         if prewarm_interval.is_zero() {
             anyhow::bail!("prewarm.metadata_sync_interval must be greater than zero");
+        }
+        if self.canonical.fetch_interval_hours == 0 {
+            anyhow::bail!("canonical.fetch_interval_hours must be greater than zero");
+        }
+        self.canonical
+            .fetch_interval_hours
+            .checked_mul(3600)
+            .context("canonical.fetch_interval_hours is too large")?;
+        if self.canonical.repology_batch_size == 0 {
+            anyhow::bail!("canonical.repology_batch_size must be greater than zero");
         }
         if self.prewarm.convert_top_n == 0 {
             anyhow::bail!("prewarm.convert_top_n must be greater than zero");

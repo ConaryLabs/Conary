@@ -49,23 +49,26 @@ fn create_test_state(root: &tempfile::TempDir) -> Arc<RwLock<ServerState>> {
     std::fs::set_permissions(&private_key, std::fs::Permissions::from_mode(0o600)).unwrap();
     std::fs::set_permissions(&public_key, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-    Arc::new(RwLock::new(
-        ServerState::new(crate::server::ServerConfig {
-            db_path,
-            chunk_dir,
-            cache_dir,
-            max_concurrent_conversions: 1,
-            enable_rate_limit: false,
-            enable_audit_log: false,
-            enable_bloom_filter: false,
-            release_publish: crate::server::config::ReleasePublishSection {
-                repository_keys_dir: Some(repository_keys_dir),
-                trusted_build_attestation_signers: Vec::new(),
-            },
-            ..crate::server::ServerConfig::default()
-        })
-        .unwrap(),
-    ))
+    let mut state = ServerState::new(crate::server::ServerConfig {
+        db_path,
+        chunk_dir,
+        cache_dir,
+        max_concurrent_conversions: 1,
+        enable_rate_limit: false,
+        enable_audit_log: false,
+        enable_bloom_filter: false,
+        release_publish: crate::server::config::ReleasePublishSection {
+            repository_keys_dir: Some(repository_keys_dir),
+            trusted_build_attestation_signers: Vec::new(),
+        },
+        ..crate::server::ServerConfig::default()
+    })
+    .unwrap();
+    state.publication_readiness = crate::server::readiness::PublicationReadiness {
+        repository: crate::server::readiness::PublicationPhaseState::Complete,
+        canonical: crate::server::readiness::PublicationPhaseState::Complete,
+    };
+    Arc::new(RwLock::new(state))
 }
 
 async fn response_json(response: Response) -> serde_json::Value {
@@ -534,7 +537,7 @@ async fn existing_pending_job_response_reports_pending() {
 }
 
 #[tokio::test]
-async fn failed_job_stays_pollable_but_same_package_request_gets_a_fresh_job() {
+async fn failed_job_stays_pollable_while_unpopulated_repository_returns_typed_503() {
     let root = tempfile::tempdir().unwrap();
     let state = create_test_state(&root);
     let query = PackageQuery {
@@ -562,10 +565,11 @@ async fn failed_job_stays_pollable_but_same_package_request_gets_a_fresh_job() {
     )
     .await;
 
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = response_json(response).await;
-    assert_eq!(body["status"], "pending");
-    assert_ne!(body["job_id"], failed_id.to_string());
+    assert_eq!(body["code"], "REPOSITORY_NOT_READY");
+    assert_eq!(body["profile"], "fedora-44");
+    assert_eq!(body["reason"], "profile_empty");
     assert!(matches!(
         state
             .read()
@@ -720,7 +724,7 @@ async fn collected_ready_mapping_revalidates_persisted_artifact_before_new_work(
 }
 
 #[tokio::test]
-async fn package_route_retries_failed_lookup_after_repository_population() {
+async fn package_route_waits_for_repository_population_without_creating_failed_job() {
     let root = tempfile::tempdir().unwrap();
     let state = create_test_state(&root);
     let query = || PackageQuery {
@@ -729,25 +733,42 @@ async fn package_route_retries_failed_lookup_after_repository_population() {
         arch: Some("amd64".into()),
     };
 
-    let first = get_package(
-        State(Arc::clone(&state)),
-        Path(("ubuntu".into(), "demo".into())),
-        Query(query()),
-    )
-    .await;
-    assert_eq!(first.status(), StatusCode::ACCEPTED);
-    let failed_id: JobId = response_json(first).await["job_id"]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
-    let failed = poll_job(&state, failed_id).await;
-    assert_eq!(failed["status"], "failed");
+    let coordinator = state.read().await.publication_coordinator.clone();
+    let held_publication = coordinator.lock_owned().await;
+    let first_state = Arc::clone(&state);
+    let mut first = tokio::spawn(async move {
+        get_package(
+            State(first_state),
+            Path(("ubuntu".into(), "demo".into())),
+            Query(query()),
+        )
+        .await
+    });
     assert!(
-        failed["error"]
-            .as_str()
-            .unwrap()
-            .contains("repository sync")
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut first)
+            .await
+            .is_err(),
+        "package admission bypassed the publication coordinator"
+    );
+    drop(held_publication);
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), first)
+        .await
+        .expect("package admission resumed after publication released")
+        .expect("package request completed");
+    assert_eq!(first.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(first.headers().get(header::RETRY_AFTER).unwrap(), "30");
+    let first_body = response_json(first).await;
+    assert_eq!(first_body["code"], "REPOSITORY_NOT_READY");
+    assert_eq!(first_body["profile"], "ubuntu-26.04");
+    assert_eq!(first_body["reason"], "profile_empty");
+    assert!(
+        state
+            .read()
+            .await
+            .job_manager
+            .get_job_by_key(&conversion_job_key("ubuntu", "demo", &query()))
+            .is_none(),
+        "a pre-ready request must not create a doomed conversion job"
     );
 
     let db_path = state.read().await.config.db_path.clone();
@@ -768,7 +789,6 @@ async fn package_route_retries_failed_lookup_after_repository_population() {
     let retry_body = response_json(retry).await;
     assert_eq!(retry_body["status"], "pending");
     let retry_id: JobId = retry_body["job_id"].as_str().unwrap().parse().unwrap();
-    assert_ne!(retry_id, failed_id);
 
     drop(permit);
 
@@ -777,5 +797,4 @@ async fn package_route_retries_failed_lookup_after_repository_population() {
     assert!(ready["manifest"].is_object());
     assert_eq!(ready["manifest"]["name"], "demo");
     assert_eq!(ready["manifest"]["version"], "1.0");
-    assert_eq!(poll_job(&state, failed_id).await["status"], "failed");
 }

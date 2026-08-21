@@ -661,10 +661,13 @@ impl RemiMcpServer {
         let state = self.state.read().await;
         let db_path = state.config.db_path.clone();
         let config = state.canonical_config.clone();
+        let database_writer = state.database_writer.clone();
+        let publication_coordinator = state.publication_coordinator.clone();
         drop(state);
+        let _publication_guard = publication_coordinator.lock_owned().await;
 
         let count = tokio::task::spawn_blocking(move || {
-            crate::server::canonical_job::rebuild_canonical_map(&db_path, &config)
+            crate::server::canonical_job::rebuild_canonical_map(&db_path, &config, &database_writer)
         })
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
@@ -677,38 +680,29 @@ impl RemiMcpServer {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    /// Trigger an immediate Repology + AppStream fetch cycle.
+    /// Trigger an immediate Repology + AppStream fetch and rebuild cycle.
     ///
-    /// Populates discovery caches. AppStream metadata may enrich an exact
-    /// contract mapping during `canonical_rebuild`; Repology remains
-    /// diagnostics and discovery evidence only.
+    /// Populates discovery caches and rebuilds exact canonical contracts.
+    /// Every source and rebuild phase returns its typed persistence outcome;
+    /// two failed sources can never masquerade as a successful zero-row fetch.
     #[tool(
-        description = "Refresh Repology and AppStream discovery caches. AppStream may enrich an existing exact contract mapping; neither source may establish mapping or ranking authority. Returns cached-entry counts. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+        description = "Refresh Repology and AppStream discovery caches, then rebuild exact canonical contracts. AppStream may enrich an existing exact contract mapping; neither source may establish mapping or ranking authority. Returns typed source persistence and rebuild outcomes. Risk: medium. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn canonical_fetch(&self) -> Result<CallToolResult, McpError> {
         let state = self.state.read().await;
-        let db_path = std::path::PathBuf::from(&state.config.db_path);
-        let batch_size = state.canonical_config.repology_batch_size;
+        let db_path = state.config.db_path.clone();
+        let config = state.canonical_config.clone();
+        let database_writer = state.database_writer.clone();
+        let publication_coordinator = state.publication_coordinator.clone();
         drop(state);
+        let _publication_guard = publication_coordinator.lock_owned().await;
 
-        let mut repology_count = 0usize;
-        let mut appstream_count = 0usize;
-
-        match crate::server::canonical_fetch::fetch_repology_data(&db_path, batch_size).await {
-            Ok(n) => repology_count = n,
-            Err(e) => tracing::warn!("Repology fetch failed: {e}"),
-        }
-
-        match crate::server::canonical_fetch::fetch_appstream_data(&db_path).await {
-            Ok(n) => appstream_count = n,
-            Err(e) => tracing::warn!("AppStream fetch failed: {e}"),
-        }
-
-        let text = to_json_text(&serde_json::json!({
-            "status": "ok",
-            "repology_cached": repology_count,
-            "appstream_cached": appstream_count,
-        }))?;
+        let report =
+            crate::server::canonical_fetch::run_canonical_cycle(&db_path, &config, database_writer)
+                .await;
+        crate::server::publication_scheduler::record_canonical_readiness(&self.state, &report)
+            .await;
+        let text = to_json_text(&report)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }

@@ -22,8 +22,8 @@ pub mod auth;
 mod bloom;
 mod bounded_cache;
 mod cache;
-pub mod canonical_fetch;
-pub mod canonical_job;
+mod canonical_fetch;
+mod canonical_job;
 pub mod chunk_gc;
 pub mod config;
 mod conversion;
@@ -43,10 +43,11 @@ mod package_metadata;
 pub mod popularity;
 mod prewarm;
 pub mod publication;
+mod publication_scheduler;
 pub mod r2;
 pub mod r2_durability;
 pub mod rate_limit;
-pub mod readiness;
+mod readiness;
 pub mod release_publish;
 pub mod repository_manifest;
 mod routes;
@@ -77,15 +78,15 @@ pub use security::BanList;
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
-use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 async fn ensure_admin_bootstrap_token(
     db_path: PathBuf,
+    database_writer: database_writer::DatabaseWriter,
     token: &str,
     source_name: &str,
     source_description: &str,
@@ -94,28 +95,17 @@ async fn ensure_admin_bootstrap_token(
     let source_name = source_name.to_string();
     let source_description = source_description.to_string();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let conn = open_runtime_db(&db_path)?;
-        if conary_core::db::models::admin_token::find_by_hash(&conn, &hash)?.is_none() {
-            conary_core::db::models::admin_token::create(&conn, &source_name, &hash, "admin")?;
-            tracing::info!("  Admin token created from {}", source_description);
-        }
-        Ok(())
+        database_writer.execute(|| {
+            let conn = open_runtime_db(&db_path)?;
+            if conary_core::db::models::admin_token::find_by_hash(&conn, &hash)?.is_none() {
+                conary_core::db::models::admin_token::create(&conn, &source_name, &hash, "admin")?;
+                tracing::info!("  Admin token created from {}", source_description);
+            }
+            Ok(())
+        })
     })
     .await??;
     Ok(())
-}
-
-fn successful_refresh_profile_ids(batch: &admin_service::RepoRefreshBatch) -> HashSet<&str> {
-    batch
-        .results
-        .iter()
-        .filter_map(|result| result.source_profile.as_deref())
-        .collect()
-}
-
-fn prewarm_route_refreshed(route: &str, successful_profile_ids: &HashSet<&str>) -> bool {
-    conary_core::repository::supported_profiles::profile_for_remi_route(route)
-        .is_some_and(|profile| successful_profile_ids.contains(profile.id()))
 }
 
 /// Server configuration
@@ -201,6 +191,9 @@ pub struct AdminEvent {
 pub struct ServerState {
     pub config: ServerConfig,
     pub(crate) database_writer: database_writer::DatabaseWriter,
+    pub(crate) publication_coordinator: Arc<Mutex<()>>,
+    pub(crate) publication_readiness: readiness::PublicationReadiness,
+    pub(crate) required_source_profiles: Vec<String>,
     pub job_manager: JobManager,
     pub chunk_cache: ChunkCache,
     pub bounded_cache: BoundedCache,
@@ -264,6 +257,7 @@ impl ServerState {
     ) -> Result<Self> {
         let job_manager = JobManager::new(config.max_concurrent_conversions);
         let database_writer = database_writer::DatabaseWriter::default();
+        let publication_coordinator = Arc::new(Mutex::new(()));
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
             config.cache_max_bytes,
@@ -277,6 +271,7 @@ impl ServerState {
             None, // R2 store set later after state initialization
         )
         .with_database_writer(database_writer.clone())
+        .with_publication_coordinator(Arc::clone(&publication_coordinator))
         .with_bounded_cache(bounded_cache.clone())
         .with_repository_keys_dir(config.release_publish.repository_keys_dir.clone());
 
@@ -305,6 +300,9 @@ impl ServerState {
         Ok(Self {
             config,
             database_writer,
+            publication_coordinator,
+            publication_readiness: readiness::PublicationReadiness::default(),
+            required_source_profiles: Vec::new(),
             job_manager,
             chunk_cache,
             bounded_cache,
@@ -411,7 +409,9 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     // connections. This avoids startup races when multiple components touch an
     // older schema concurrently.
     ensure_database_ready(&server_config.db_path)?;
-    if let Some(manifest_path) = remi_config.repository_manifest.as_deref() {
+    let required_source_profiles = if let Some(manifest_path) =
+        remi_config.repository_manifest.as_deref()
+    {
         let manifest = repository_manifest::RepositoryManifest::load(manifest_path)?;
         let keys_root = server_config
             .release_publish
@@ -428,7 +428,18 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
             reconciled.removed,
             reconciled.unchanged
         );
-    }
+        let mut profiles = manifest
+            .repositories
+            .iter()
+            .filter(|repository| repository.enabled)
+            .map(|repository| repository.profile.clone())
+            .collect::<Vec<_>>();
+        profiles.sort();
+        profiles.dedup();
+        profiles
+    } else {
+        Vec::new()
+    };
 
     let state = Arc::new(RwLock::new(ServerState::with_options(
         server_config.clone(),
@@ -436,10 +447,12 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         negative_cache_ttl,
     )?));
 
-    // Set canonical config on state
+    // Retain the validated configuration policy separately from persisted
+    // runtime state so readiness can prove that every required profile exists.
     {
         let mut state_w = state.write().await;
         state_w.canonical_config = remi_config.canonical.clone();
+        state_w.required_source_profiles = required_source_profiles;
     }
 
     // Initialize R2 storage if enabled
@@ -560,13 +573,19 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         });
     }
 
-    // Start background upstream metadata refresh loop.
-    // This keeps repository package URLs reasonably fresh even when no one
-    // manually hits the admin sync endpoints.
+    // One scheduler owns initial and periodic repository/canonical publication.
+    // Its startup cycle is repository refresh -> canonical fetch/rebuild ->
+    // eligible prewarm, and its two periodic clocks cannot overlap.
     {
-        let refresh_state = state.clone();
         let refresh_interval =
             crate::server::config::parse_duration(&remi_config.prewarm.metadata_sync_interval)?;
+        let canonical_config = remi_config.canonical.clone();
+        let canonical_interval = Duration::from_secs(
+            canonical_config
+                .fetch_interval_hours
+                .checked_mul(3600)
+                .context("canonical.fetch_interval_hours is too large")?,
+        );
         let prewarm_jobs = if remi_config.prewarm.enabled {
             remi_config
                 .prewarm
@@ -599,6 +618,10 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
             "  Metadata refresh: enabled every {}s",
             refresh_interval.as_secs()
         );
+        tracing::info!(
+            "  Canonical fetch: sequenced after startup refresh, then every {}h",
+            canonical_config.fetch_interval_hours
+        );
         for job in &prewarm_jobs {
             tracing::info!(
                 "  Pre-warm: enabled for {} after each metadata refresh (top {})",
@@ -606,83 +629,16 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
                 job.max_packages
             );
         }
-        tokio::spawn(async move {
-            loop {
-                match crate::server::admin_service::refresh_repositories(&refresh_state, false)
-                    .await
-                {
-                    Ok(batch) => {
-                        let synced = batch.synced_count();
-                        let skipped = batch.skipped_count();
-                        tracing::info!(
-                            "Background metadata refresh {}: {} synced, {} skipped, {} failed",
-                            batch.state().as_str(),
-                            synced,
-                            skipped,
-                            batch.failures.len()
-                        );
-                        for failure in &batch.failures {
-                            tracing::warn!(
-                                repository = %failure.name,
-                                source_profile = failure.source_profile.as_deref().unwrap_or("<none>"),
-                                kind = ?failure.kind,
-                                "Repository metadata refresh failed: {}",
-                                failure.message
-                            );
-                        }
-                        let successful_profiles = successful_refresh_profile_ids(&batch);
-                        let mut eligible_jobs = Vec::new();
-                        for job in &prewarm_jobs {
-                            if !prewarm_route_refreshed(&job.distro, &successful_profiles) {
-                                tracing::warn!(
-                                    "Post-refresh pre-warm for {} skipped: its exact profile did not complete refresh",
-                                    job.distro
-                                );
-                                continue;
-                            }
-                            eligible_jobs.push(job.clone());
-                        }
-                        for outcome in prewarm::run_prewarm_jobs(
-                            eligible_jobs,
-                            Arc::clone(&prewarm_conversion_permits),
-                            prewarm_conversion_service.clone(),
-                        )
-                        .await
-                        {
-                            match outcome.result {
-                                Ok(result) => tracing::info!(
-                                    "Post-refresh pre-warm for {}: {} converted, {} skipped, {} failed",
-                                    outcome.distro,
-                                    result.packages_converted,
-                                    result.packages_skipped,
-                                    result.packages_failed
-                                ),
-                                Err(error) => tracing::warn!(
-                                    "Post-refresh pre-warm for {} failed: {}",
-                                    outcome.distro,
-                                    error
-                                ),
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Background metadata refresh failed: {}", e);
-                    }
-                }
-                tokio::time::sleep(refresh_interval).await;
-            }
+        publication_scheduler::spawn(publication_scheduler::PublicationSchedule {
+            state: state.clone(),
+            refresh_interval,
+            canonical_interval,
+            canonical_config,
+            db_path: server_config.db_path.clone(),
+            prewarm_jobs,
+            prewarm_conversion_permits,
+            prewarm_conversion_service,
         });
-    }
-
-    // Start canonical fetch background loop
-    {
-        let canonical_config = remi_config.canonical.clone();
-        let canonical_db = server_config.db_path.clone();
-        tracing::info!(
-            "  Canonical fetch: enabled every {}h",
-            canonical_config.fetch_interval_hours
-        );
-        canonical_fetch::spawn_canonical_fetch_loop(canonical_config, canonical_db);
     }
 
     // Admin rate limiters live outside ServerState to avoid per-request RwLock
@@ -709,10 +665,12 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         )));
 
         admin_rate_limiters = Some(limiters);
+        let bootstrap_writer = state.read().await.database_writer.clone();
 
         if let Some(config_token) = remi_config.admin.bootstrap_token.as_deref() {
             ensure_admin_bootstrap_token(
                 server_config.db_path.clone(),
+                bootstrap_writer.clone(),
                 config_token,
                 "config-bootstrap",
                 "admin.bootstrap_token config",
@@ -724,6 +682,7 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         if let Ok(env_token) = std::env::var("REMI_ADMIN_TOKEN") {
             ensure_admin_bootstrap_token(
                 server_config.db_path.clone(),
+                bootstrap_writer,
                 &env_token,
                 "env-bootstrap",
                 "REMI_ADMIN_TOKEN env var",
@@ -742,7 +701,7 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     let public_listener = tokio::net::TcpListener::bind(server_config.bind_addr).await?;
     let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
 
-    tracing::info!("Remi is ready to serve");
+    tracing::info!("Remi listeners are active; publication readiness is reported at /health/ready");
 
     // Create the external admin router only if enabled
     let external_admin_future = if let Some(listener) = external_admin_listener {
@@ -811,10 +770,6 @@ async fn initialize_bloom_filter(state: Arc<RwLock<ServerState>>) -> Result<()> 
 mod tests {
     use super::{
         build_http_client, ensure_admin_bootstrap_token, ensure_database_ready, open_runtime_db,
-        prewarm_route_refreshed, successful_refresh_profile_ids,
-    };
-    use crate::server::admin_service::{
-        RepoRefreshBatch, RepoRefreshFailure, RepoRefreshFailureKind, RepoRefreshResult,
     };
 
     fn test_db_path() -> std::path::PathBuf {
@@ -832,8 +787,10 @@ mod tests {
     #[tokio::test]
     async fn ensure_admin_bootstrap_token_inserts_once() {
         let db_path = test_db_path();
+        let database_writer = crate::server::database_writer::DatabaseWriter::default();
         ensure_admin_bootstrap_token(
             db_path.clone(),
+            database_writer.clone(),
             "bootstrap-token",
             "config-bootstrap",
             "admin.bootstrap_token config",
@@ -842,6 +799,7 @@ mod tests {
         .expect("seed bootstrap token");
         ensure_admin_bootstrap_token(
             db_path.clone(),
+            database_writer,
             "bootstrap-token",
             "config-bootstrap",
             "admin.bootstrap_token config",
@@ -893,41 +851,6 @@ mod tests {
         let err = build_http_client(std::time::Duration::from_secs(30), "bad\0agent")
             .expect_err("invalid user agent should be surfaced as an error");
         assert!(err.to_string().contains("HTTP client"));
-    }
-
-    #[test]
-    fn failed_source_does_not_remove_successful_prewarm_profiles() {
-        let batch = RepoRefreshBatch {
-            results: vec![
-                RepoRefreshResult {
-                    name: "fedora".to_string(),
-                    source_profile: Some("fedora-44".to_string()),
-                    packages_synced: 76_354,
-                    skipped: false,
-                },
-                RepoRefreshResult {
-                    name: "ubuntu".to_string(),
-                    source_profile: Some("ubuntu-26.04".to_string()),
-                    packages_synced: 6_487,
-                    skipped: false,
-                },
-            ],
-            failures: vec![RepoRefreshFailure {
-                name: "arch-extra".to_string(),
-                source_profile: Some("arch".to_string()),
-                kind: RepoRefreshFailureKind::Internal,
-                message: "source unavailable".to_string(),
-            }],
-        };
-
-        let profiles = successful_refresh_profile_ids(&batch);
-        assert_eq!(profiles.len(), 2);
-        assert!(profiles.contains("fedora-44"));
-        assert!(profiles.contains("ubuntu-26.04"));
-        assert!(!profiles.contains("arch"));
-        assert!(prewarm_route_refreshed("fedora", &profiles));
-        assert!(prewarm_route_refreshed("ubuntu", &profiles));
-        assert!(!prewarm_route_refreshed("arch", &profiles));
     }
 
     #[test]

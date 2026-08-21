@@ -1,7 +1,8 @@
 // apps/remi/src/server/canonical_job.rs
 
-//! Scheduled job that builds the canonical package mapping from all
-//! indexed distros. Runs after mirror sync or on demand.
+//! Canonical package-map rebuild from exact contracts and discovery metadata.
+//! The publication scheduler runs it after the ordered startup fetch and on its
+//! canonical clock; the confirmed MCP mutation can also run it on demand.
 //!
 //! The rebuild runs a 2-phase pipeline, each phase committing independently
 //! for short write locks:
@@ -26,29 +27,7 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 use crate::server::config::CanonicalSection;
-
-// ---------------------------------------------------------------------------
-// Debounce helpers
-// ---------------------------------------------------------------------------
-
-/// Check whether enough time has elapsed since the last rebuild.
-///
-/// Reads `last_canonical_rebuild` from `server_metadata`. Returns `true`
-/// if the timestamp is missing or older than `cooldown_minutes`.
-pub fn should_rebuild(conn: &Connection, cooldown_minutes: u64) -> bool {
-    let value = match get_metadata(conn, MetadataTable::Server, "last_canonical_rebuild") {
-        Ok(Some(v)) => v,
-        _ => return true,
-    };
-
-    let last = match chrono::DateTime::parse_from_rfc3339(&value) {
-        Ok(dt) => dt.with_timezone(&Utc),
-        Err(_) => return true,
-    };
-
-    let elapsed = Utc::now().signed_duration_since(last);
-    elapsed.num_minutes() >= cooldown_minutes as i64
-}
+use crate::server::database_writer::DatabaseWriter;
 
 /// Record the current UTC time as the last rebuild timestamp.
 pub fn record_rebuild_timestamp(conn: &Connection) -> Result<()> {
@@ -87,12 +66,19 @@ pub fn bump_map_revision(conn: &Connection) -> Result<u64> {
 /// AppStream enrichment commits separately because it does not alter that map.
 ///
 /// Returns the total count of newly created canonical package entries.
-pub fn rebuild_canonical_map(db_path: &Path, config: &CanonicalSection) -> Result<u64> {
+pub(crate) fn rebuild_canonical_map(
+    db_path: &Path,
+    config: &CanonicalSection,
+    database_writer: &DatabaseWriter,
+) -> Result<u64> {
     let conn = crate::server::open_runtime_db(db_path)?;
     let rules_dir = Path::new(&config.rules_dir);
-    let (total_new, revision) = phase_exact_contract(&conn, rules_dir)?;
+    let contract = load_exact_contract(rules_dir)?;
+    let (total_new, revision) =
+        database_writer.execute(|| persist_exact_contract(&conn, &contract))?;
 
-    phase_appstream_enrichment(&conn)?;
+    let appstream_entries = AppstreamCacheEntry::find_all(&conn)?;
+    database_writer.execute(|| persist_appstream_enrichment(&conn, &appstream_entries))?;
 
     info!(
         "Canonical map rebuild complete: {} new mappings, map revision {}",
@@ -107,23 +93,28 @@ pub fn rebuild_canonical_map(db_path: &Path, config: &CanonicalSection) -> Resul
 // ---------------------------------------------------------------------------
 
 /// Load versioned YAML contracts and persist their literal mappings.
-fn phase_exact_contract(conn: &Connection, rules_dir: &Path) -> Result<(u64, u64)> {
-    let contract = if rules_dir.is_dir() {
+fn load_exact_contract(rules_dir: &Path) -> Result<CanonicalMapContract> {
+    if rules_dir.is_dir() {
         let contract = CanonicalMapContract::load_from_dir(rules_dir)?;
         info!(
             "Phase 1: loaded {} exact mappings from {}",
             contract.len(),
             rules_dir.display()
         );
-        contract
+        Ok(contract)
     } else {
         debug!(
             "Phase 1: no canonical contract directory at {}; replacing Contract authority with an empty map",
             rules_dir.display()
         );
-        CanonicalMapContract::new(Vec::new())?
-    };
+        Ok(CanonicalMapContract::new(Vec::new())?)
+    }
+}
 
+fn persist_exact_contract(
+    conn: &Connection,
+    contract: &CanonicalMapContract,
+) -> Result<(u64, u64)> {
     let tx = conn.unchecked_transaction()?;
     let mut new_count: u64 = 0;
     tx.execute(
@@ -179,6 +170,12 @@ fn phase_exact_contract(conn: &Connection, rules_dir: &Path) -> Result<(u64, u64
     Ok((new_count, revision))
 }
 
+#[cfg(test)]
+fn phase_exact_contract(conn: &Connection, rules_dir: &Path) -> Result<(u64, u64)> {
+    let contract = load_exact_contract(rules_dir)?;
+    persist_exact_contract(conn, &contract)
+}
+
 // ---------------------------------------------------------------------------
 // Phase 2 — AppStream metadata
 // ---------------------------------------------------------------------------
@@ -191,9 +188,7 @@ fn phase_exact_contract(conn: &Connection, rules_dir: &Path) -> Result<(u64, u64
 ///
 /// AppStream is useful metadata but is not package-equivalence authority. A
 /// cache row without a contract-owned implementation is ignored.
-fn phase_appstream_enrichment(conn: &Connection) -> Result<u64> {
-    let entries = AppstreamCacheEntry::find_all(conn)?;
-
+fn persist_appstream_enrichment(conn: &Connection, entries: &[AppstreamCacheEntry]) -> Result<u64> {
     if entries.is_empty() {
         debug!("Phase 2: appstream_cache is empty, skipping");
         return Ok(0);
@@ -202,7 +197,7 @@ fn phase_appstream_enrichment(conn: &Connection) -> Result<u64> {
     let tx = conn.unchecked_transaction()?;
     let mut enriched_count: u64 = 0;
 
-    for entry in &entries {
+    for entry in entries {
         let existing =
             PackageImplementation::find_by_distro_name(&tx, &entry.distro, &entry.pkgname)?;
 
@@ -250,6 +245,12 @@ fn phase_appstream_enrichment(conn: &Connection) -> Result<u64> {
         entries.len()
     );
     Ok(enriched_count)
+}
+
+#[cfg(test)]
+fn phase_appstream_enrichment(conn: &Connection) -> Result<u64> {
+    let entries = AppstreamCacheEntry::find_all(conn)?;
+    persist_appstream_enrichment(conn, &entries)
 }
 
 #[cfg(test)]
@@ -337,21 +338,6 @@ mod tests {
     }
 
     #[test]
-    fn test_should_rebuild_respects_cooldown() {
-        let conn = Connection::open_in_memory().unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
-
-        // No previous rebuild -- should proceed
-        assert!(should_rebuild(&conn, 5));
-
-        // Record a rebuild
-        record_rebuild_timestamp(&conn).unwrap();
-
-        // Immediately after -- should skip (within 5 min cooldown)
-        assert!(!should_rebuild(&conn, 5));
-    }
-
-    #[test]
     fn test_bump_map_revision() {
         let conn = Connection::open_in_memory().unwrap();
         conary_core::db::schema::ensure_current(&conn).unwrap();
@@ -392,7 +378,7 @@ mod tests {
             rules_dir: dir.path().join("rules").to_string_lossy().to_string(),
             ..Default::default()
         };
-        let count = rebuild_canonical_map(&db_path, &config).unwrap();
+        let count = rebuild_canonical_map(&db_path, &config, &DatabaseWriter::default()).unwrap();
         assert_eq!(count, 0);
     }
 
@@ -405,7 +391,7 @@ mod tests {
             ..Default::default()
         };
 
-        let count = rebuild_canonical_map(&db_path, &config).unwrap();
+        let count = rebuild_canonical_map(&db_path, &config, &DatabaseWriter::default()).unwrap();
         assert_eq!(count, 0);
 
         let conn = conary_core::db::open(&db_path).unwrap();
@@ -440,7 +426,7 @@ mod tests {
             rules_dir: rules_dir.to_string_lossy().to_string(),
             ..Default::default()
         };
-        let count = rebuild_canonical_map(&db_path, &config).unwrap();
+        let count = rebuild_canonical_map(&db_path, &config, &DatabaseWriter::default()).unwrap();
         assert!(count > 0);
 
         // Verify the exact contract took effect

@@ -279,6 +279,8 @@ async fn readiness_check(
             chunk_dir: config.chunk_dir.clone(),
             cache_dir: config.cache_dir.clone(),
             min_free_bytes: config.readiness_min_free_bytes,
+            required_source_profiles: state_guard.required_source_profiles.clone(),
+            publication: state_guard.publication_readiness.clone(),
         }
     };
 

@@ -63,6 +63,119 @@ pub struct ConversionAccepted {
     pub eta_seconds: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RepositoryNotReadyReason {
+    PublicationPending,
+    ProfileEmpty,
+    PopulationProbeUnavailable,
+}
+
+#[derive(Serialize)]
+struct RepositoryNotReady {
+    code: &'static str,
+    profile: String,
+    reason: RepositoryNotReadyReason,
+    publication: crate::server::readiness::PublicationReadiness,
+    retry_after_seconds: u32,
+}
+
+fn repository_not_ready_response(
+    profile: &str,
+    reason: RepositoryNotReadyReason,
+    publication: crate::server::readiness::PublicationReadiness,
+) -> Response {
+    let mut response = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(RepositoryNotReady {
+            code: "REPOSITORY_NOT_READY",
+            profile: profile.to_string(),
+            reason,
+            publication,
+            retry_after_seconds: 30,
+        }),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        axum::http::HeaderValue::from_static("30"),
+    );
+    response
+}
+
+async fn repository_not_ready_after_cache_miss(
+    state: &Arc<RwLock<ServerState>>,
+    route: &str,
+) -> Option<Response> {
+    let profile = conary_core::repository::supported_profiles::profile_for_remi_route(route)?;
+    let (publication, db_path) = {
+        let state = state.read().await;
+        (
+            state.publication_readiness.clone(),
+            state.config.db_path.clone(),
+        )
+    };
+    if !publication.is_ready() {
+        return Some(repository_not_ready_response(
+            profile.id(),
+            RepositoryNotReadyReason::PublicationPending,
+            publication,
+        ));
+    }
+
+    let profile_id = profile.id().to_string();
+    match tokio::task::spawn_blocking(move || {
+        crate::server::readiness::source_profile_is_populated(&db_path, &profile_id)
+    })
+    .await
+    {
+        Ok(Ok(true)) => None,
+        Ok(Ok(false)) => Some(repository_not_ready_response(
+            profile.id(),
+            RepositoryNotReadyReason::ProfileEmpty,
+            publication,
+        )),
+        Ok(Err(error)) => {
+            tracing::warn!(
+                profile = profile.id(),
+                "Repository readiness probe failed: {error}"
+            );
+            Some(repository_not_ready_response(
+                profile.id(),
+                RepositoryNotReadyReason::PopulationProbeUnavailable,
+                publication,
+            ))
+        }
+        Err(error) => {
+            tracing::warn!(
+                profile = profile.id(),
+                "Repository readiness task failed: {error}"
+            );
+            Some(repository_not_ready_response(
+                profile.id(),
+                RepositoryNotReadyReason::PopulationProbeUnavailable,
+                publication,
+            ))
+        }
+    }
+}
+
+async fn start_conversion_when_repository_ready(
+    state: Arc<RwLock<ServerState>>,
+    db_path: &std::path::Path,
+    distro: &str,
+    name: &str,
+    query: &PackageQuery,
+) -> Response {
+    let coordinator = state.read().await.publication_coordinator.clone();
+    let _publication_guard = coordinator.lock_owned().await;
+    if let Some(response) = repository_not_ready_after_cache_miss(&state, distro).await {
+        return response;
+    }
+
+    start_conversion_after_cache_miss(state, db_path, distro, name, query).await
+}
+
 fn active_conversion_response(job: &ConversionJob, eta_seconds: Option<u32>) -> Response {
     let status = match job.status {
         JobStatus::Pending => "pending",
@@ -334,7 +447,18 @@ pub async fn get_package(
         Err(error) => return error.into_response(),
     }
 
-    start_conversion_after_cache_miss(state, &db_path, &distro, &name, &query).await
+    let job_key = conversion_job_key(&distro, &name, &query);
+    if let Some(job) = state
+        .read()
+        .await
+        .job_manager
+        .get_active_job_by_key(&job_key)
+        .cloned()
+    {
+        return active_conversion_response(&job, None);
+    }
+
+    start_conversion_when_repository_ready(state, &db_path, &distro, &name, &query).await
 }
 
 /// Check if a package has already been converted

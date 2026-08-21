@@ -30,6 +30,7 @@ use crate::server::r2_durability::{
     MAX_BACKFILL_CONCURRENCY, R2DurabilityMode, R2DurabilityReport, run_r2_durability,
 };
 
+mod publication;
 mod refresh;
 mod repository_policy;
 mod test_data;
@@ -641,6 +642,7 @@ pub async fn create_repo(
         validate_repository_trust(trust).await?;
     }
 
+    let _publication_guard = publication::guard(state).await;
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     blocking(move || {
@@ -697,6 +699,7 @@ pub async fn update_repo(
         validate_repository_trust(trust).await?;
     }
 
+    let _publication_guard = publication::guard(state).await;
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     let name_owned = name.to_string();
@@ -763,6 +766,7 @@ pub async fn delete_repo(
     state: &Arc<RwLock<ServerState>>,
     name: &str,
 ) -> Result<bool, ServiceError> {
+    let _publication_guard = publication::guard(state).await;
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     let name_owned = name.to_string();
@@ -863,6 +867,17 @@ pub async fn sync_repo(
     name: &str,
     force: bool,
 ) -> Result<Option<RepoRefreshResult>, ServiceError> {
+    let _publication_guard = publication::guard(state).await;
+    let result = sync_repo_uncoordinated(state, name, force).await;
+    publication::record_single_repository_outcome(state, &result).await;
+    result
+}
+
+async fn sync_repo_uncoordinated(
+    state: &Arc<RwLock<ServerState>>,
+    name: &str,
+    force: bool,
+) -> Result<Option<RepoRefreshResult>, ServiceError> {
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     let name_owned = name.to_string();
@@ -903,6 +918,34 @@ pub async fn refresh_repositories(
     state: &Arc<RwLock<ServerState>>,
     force: bool,
 ) -> Result<RepoRefreshBatch, ServiceError> {
+    let _publication_guard = publication::guard(state).await;
+    let result = refresh_repositories_uncoordinated(state, force).await;
+    let outcome = match result.as_ref().map(RepoRefreshBatch::state) {
+        Ok(RepoRefreshBatchState::Complete) => {
+            crate::server::readiness::PublicationPhaseState::Complete
+        }
+        Ok(RepoRefreshBatchState::Partial) => {
+            crate::server::readiness::PublicationPhaseState::Partial
+        }
+        Ok(RepoRefreshBatchState::Failed) => {
+            crate::server::readiness::PublicationPhaseState::Failed
+        }
+        Err(_) => crate::server::readiness::PublicationPhaseState::Unavailable,
+    };
+    state
+        .write()
+        .await
+        .publication_readiness
+        .record_repository(outcome);
+    result
+}
+
+/// Synchronize enabled repositories while the caller owns the complete
+/// publication-cycle coordinator.
+pub(crate) async fn refresh_repositories_uncoordinated(
+    state: &Arc<RwLock<ServerState>>,
+    force: bool,
+) -> Result<RepoRefreshBatch, ServiceError> {
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     let repos = blocking_anyhow({
@@ -940,37 +983,5 @@ pub async fn refresh_repositories(
             }
         });
     let batch = collect_refresh_outcomes(jobs).await;
-
-    // After at least one successful source, trigger canonical rebuild if the
-    // cooldown elapsed. One failed source must not starve successful sources.
-    // Failures here are non-fatal -- the sync result is returned regardless.
-    if !batch.results.is_empty() {
-        let db_path = db_path(state).await;
-        let canonical_cfg = state.read().await.canonical_config.clone();
-        let database_writer = state.read().await.database_writer.clone();
-        blocking(move || {
-            database_writer.execute(|| {
-                let conn = crate::server::open_runtime_db(&db_path)?;
-                if crate::server::canonical_job::should_rebuild(
-                    &conn,
-                    canonical_cfg.rebuild_cooldown_minutes,
-                ) {
-                    match crate::server::canonical_job::rebuild_canonical_map(
-                        &db_path,
-                        &canonical_cfg,
-                    ) {
-                        Ok(count) => {
-                            tracing::info!("Post-sync canonical rebuild: {count} new mappings")
-                        }
-                        Err(e) => tracing::warn!("Post-sync canonical rebuild failed: {e}"),
-                    }
-                }
-                Ok(())
-            })
-        })
-        .await
-        .unwrap_or_else(|e| tracing::warn!("Post-sync canonical rebuild task failed: {e}"));
-    }
-
     Ok(batch)
 }

@@ -48,6 +48,24 @@ fn prewarm_contract_rejects_invalid_interval_and_profile() {
 }
 
 #[test]
+fn canonical_contract_rejects_zero_or_overflowing_interval() {
+    let mut zero = RemiConfig::default();
+    zero.canonical.fetch_interval_hours = 0;
+    assert!(zero.validate().is_err());
+
+    let mut overflowing = RemiConfig::default();
+    overflowing.canonical.fetch_interval_hours = u64::MAX;
+    assert!(overflowing.validate().is_err());
+
+    let mut empty_batch = RemiConfig::default();
+    empty_batch.canonical.repology_batch_size = 0;
+    assert!(empty_batch.validate().is_err());
+
+    let retired = toml::from_str::<RemiConfig>("[canonical]\nrebuild_cooldown_minutes = 5\n");
+    assert!(retired.is_err());
+}
+
+#[test]
 fn conversion_contract_rejects_invalid_concurrency() {
     let mut invalid_concurrency = RemiConfig::default();
     invalid_concurrency.conversion.max_concurrent = 0;
