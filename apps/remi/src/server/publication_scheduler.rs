@@ -15,9 +15,10 @@ use std::time::Duration;
 use tokio::sync::{RwLock, Semaphore};
 use tokio::time::Instant;
 
-use crate::server::admin_service::{self, RepoRefreshBatch};
+use crate::server::admin_service::{self, RepoRefreshBatch, RepoRefreshBatchState};
 use crate::server::canonical_fetch::{self, CanonicalCycleReport, CanonicalCycleState};
 use crate::server::config::CanonicalSection;
+use crate::server::readiness::PublicationPhaseState;
 use crate::server::{ConversionService, PrewarmConfig, ServerState, prewarm};
 
 pub(crate) struct PublicationSchedule {
@@ -34,15 +35,18 @@ pub(crate) struct PublicationSchedule {
 /// Start the sole owner of repository and canonical background publication.
 pub(crate) fn spawn(schedule: PublicationSchedule) {
     tokio::spawn(async move {
-        let (initial_refresh, initial_canonical) =
-            run_ordered_initial(refresh_repositories(&schedule.state), || {
-                run_canonical_cycle(
+        let (initial_refresh, initial_canonical) = run_initial_publication_with(
+            &schedule.state,
+            refresh_repositories_uncoordinated(&schedule.state),
+            || {
+                run_canonical_cycle_uncoordinated(
                     &schedule.state,
                     &schedule.db_path,
                     &schedule.canonical_config,
                 )
-            })
-            .await;
+            },
+        )
+        .await;
         log_canonical_cycle("Initial", &initial_canonical);
         let mut next_canonical = Instant::now() + schedule.canonical_interval;
         if let Some(batch) = initial_refresh {
@@ -64,12 +68,7 @@ pub(crate) fn spawn(schedule: PublicationSchedule) {
             // canonical deadline, service it now instead of letting a shorter
             // refresh interval starve canonical publication indefinitely.
             if Instant::now() >= next_canonical {
-                let report = run_canonical_cycle(
-                    &schedule.state,
-                    &schedule.db_path,
-                    &schedule.canonical_config,
-                )
-                .await;
+                let report = run_canonical_cycle(&schedule).await;
                 log_canonical_cycle("Periodic", &report);
                 next_canonical = Instant::now() + schedule.canonical_interval;
             }
@@ -77,28 +76,37 @@ pub(crate) fn spawn(schedule: PublicationSchedule) {
     });
 }
 
-async fn run_ordered_initial<
-    RefreshFuture,
-    RefreshOutput,
-    Canonical,
-    CanonicalFuture,
-    CanonicalOutput,
->(
+async fn run_initial_publication_with<RefreshFuture, Canonical, CanonicalFuture>(
+    state: &Arc<RwLock<ServerState>>,
     refresh: RefreshFuture,
     canonical: Canonical,
-) -> (RefreshOutput, CanonicalOutput)
+) -> (Option<RepoRefreshBatch>, CanonicalCycleReport)
 where
-    RefreshFuture: Future<Output = RefreshOutput>,
+    RefreshFuture: Future<Output = Option<RepoRefreshBatch>>,
     Canonical: FnOnce() -> CanonicalFuture,
-    CanonicalFuture: Future<Output = CanonicalOutput>,
+    CanonicalFuture: Future<Output = CanonicalCycleReport>,
 {
+    let coordinator = state.read().await.publication_coordinator.clone();
+    let _publication_guard = coordinator.lock_owned().await;
     let refresh_output = refresh.await;
     let canonical_output = canonical().await;
+    record_repository_readiness(state, refresh_output.as_ref()).await;
+    record_canonical_readiness(state, &canonical_output).await;
     (refresh_output, canonical_output)
 }
 
 async fn refresh_repositories(state: &Arc<RwLock<ServerState>>) -> Option<RepoRefreshBatch> {
-    match admin_service::refresh_repositories(state, false).await {
+    let coordinator = state.read().await.publication_coordinator.clone();
+    let _publication_guard = coordinator.lock_owned().await;
+    let batch = refresh_repositories_uncoordinated(state).await;
+    record_repository_readiness(state, batch.as_ref()).await;
+    batch
+}
+
+async fn refresh_repositories_uncoordinated(
+    state: &Arc<RwLock<ServerState>>,
+) -> Option<RepoRefreshBatch> {
+    match admin_service::refresh_repositories_uncoordinated(state, false).await {
         Ok(batch) => {
             tracing::info!(
                 "Background metadata refresh {}: {} synced, {} skipped, {} failed",
@@ -125,13 +133,59 @@ async fn refresh_repositories(state: &Arc<RwLock<ServerState>>) -> Option<RepoRe
     }
 }
 
-async fn run_canonical_cycle(
+async fn run_canonical_cycle(schedule: &PublicationSchedule) -> CanonicalCycleReport {
+    let coordinator = schedule.state.read().await.publication_coordinator.clone();
+    let _publication_guard = coordinator.lock_owned().await;
+    let report = run_canonical_cycle_uncoordinated(
+        &schedule.state,
+        &schedule.db_path,
+        &schedule.canonical_config,
+    )
+    .await;
+    record_canonical_readiness(&schedule.state, &report).await;
+    report
+}
+
+async fn run_canonical_cycle_uncoordinated(
     state: &Arc<RwLock<ServerState>>,
     db_path: &std::path::Path,
     config: &CanonicalSection,
 ) -> CanonicalCycleReport {
     let database_writer = state.read().await.database_writer.clone();
     canonical_fetch::run_canonical_cycle(db_path, config, database_writer).await
+}
+
+async fn record_repository_readiness(
+    state: &Arc<RwLock<ServerState>>,
+    batch: Option<&RepoRefreshBatch>,
+) {
+    let outcome = match batch.map(RepoRefreshBatch::state) {
+        Some(RepoRefreshBatchState::Complete) => PublicationPhaseState::Complete,
+        Some(RepoRefreshBatchState::Partial) => PublicationPhaseState::Partial,
+        Some(RepoRefreshBatchState::Failed) => PublicationPhaseState::Failed,
+        None => PublicationPhaseState::Unavailable,
+    };
+    state
+        .write()
+        .await
+        .publication_readiness
+        .record_repository(outcome);
+}
+
+pub(crate) async fn record_canonical_readiness(
+    state: &Arc<RwLock<ServerState>>,
+    report: &CanonicalCycleReport,
+) {
+    let outcome = match report.state {
+        CanonicalCycleState::Complete => PublicationPhaseState::Complete,
+        CanonicalCycleState::Partial => PublicationPhaseState::Partial,
+        CanonicalCycleState::Failed => PublicationPhaseState::Failed,
+    };
+    state
+        .write()
+        .await
+        .publication_readiness
+        .record_canonical(outcome);
 }
 
 fn log_canonical_cycle(label: &str, report: &CanonicalCycleReport) {
@@ -216,11 +270,25 @@ mod tests {
     async fn initial_canonical_persistence_waits_for_held_repository_transaction() {
         let temp_dir = tempfile::tempdir().expect("create tempdir");
         let db_path = temp_dir.path().join("remi.db");
+        let chunk_dir = temp_dir.path().join("chunks");
+        let cache_dir = temp_dir.path().join("cache");
+        std::fs::create_dir_all(&chunk_dir).expect("create chunk directory");
+        std::fs::create_dir_all(&cache_dir).expect("create cache directory");
         conary_core::db::init(&db_path).expect("initialize database");
-        let writer = crate::server::database_writer::DatabaseWriter::default();
+        let state = Arc::new(RwLock::new(
+            ServerState::new(crate::server::ServerConfig {
+                db_path: db_path.clone(),
+                chunk_dir,
+                cache_dir,
+                ..Default::default()
+            })
+            .expect("create server state"),
+        ));
+        let writer = state.read().await.database_writer.clone();
         let (transaction_started_tx, transaction_started_rx) = mpsc::channel();
         let (release_transaction_tx, release_transaction_rx) = mpsc::channel();
         let (canonical_started_tx, canonical_started_rx) = mpsc::channel();
+        let (contender_acquired_tx, contender_acquired_rx) = mpsc::channel();
 
         let refresh_db = db_path.clone();
         let refresh_writer = writer.clone();
@@ -254,35 +322,53 @@ mod tests {
             })
             .await
             .expect("refresh task completed")
-            .expect("refresh transaction committed")
+            .expect("refresh transaction committed");
+            Some(RepoRefreshBatch {
+                results: vec![crate::server::admin_service::RepoRefreshResult {
+                    name: "fedora-bootstrap".to_string(),
+                    source_profile: Some("fedora-44".to_string()),
+                    packages_synced: 1,
+                    skipped: false,
+                }],
+                failures: Vec::new(),
+            })
         };
 
         let canonical_db = db_path.clone();
         let canonical_writer = writer.clone();
-        let initial = tokio::spawn(run_ordered_initial(refresh, move || async move {
-            canonical_started_tx
-                .send(())
-                .expect("signal canonical start");
-            let projects = vec![RepologyProject {
-                name: "bash".to_string(),
-                implementations: vec![RepologyImplementation {
-                    repo: "fedora_44".to_string(),
-                    visiblename: "bash".to_string(),
-                    version: "5.2.0".to_string(),
-                    status: "newest".to_string(),
-                }],
-            }];
-            tokio::task::spawn_blocking(move || {
-                canonical_fetch::persist_repology_projects(
-                    &canonical_db,
-                    &projects,
-                    &canonical_writer,
+        let initial_state = Arc::clone(&state);
+        let initial = tokio::spawn(async move {
+            run_initial_publication_with(&initial_state, refresh, move || async move {
+                canonical_started_tx
+                    .send(())
+                    .expect("signal canonical start");
+                let projects = vec![RepologyProject {
+                    name: "bash".to_string(),
+                    implementations: vec![RepologyImplementation {
+                        repo: "fedora_44".to_string(),
+                        visiblename: "bash".to_string(),
+                        version: "5.2.0".to_string(),
+                        status: "newest".to_string(),
+                    }],
+                }];
+                let records = tokio::task::spawn_blocking(move || {
+                    canonical_fetch::persist_repology_projects(
+                        &canonical_db,
+                        &projects,
+                        &canonical_writer,
+                    )
+                })
+                .await
+                .expect("canonical persistence task completed")
+                .expect("canonical persistence succeeded");
+                canonical_fetch::CanonicalCycleReport::new(
+                    canonical_fetch::CanonicalSourceOutcome::Persisted { records },
+                    canonical_fetch::CanonicalSourceOutcome::Persisted { records: 0 },
+                    canonical_fetch::CanonicalRebuildOutcome::Completed { new_mappings: 0 },
                 )
             })
             .await
-            .expect("canonical persistence task completed")
-            .expect("canonical persistence succeeded")
-        }));
+        });
 
         transaction_started_rx
             .recv_timeout(Duration::from_secs(2))
@@ -291,6 +377,17 @@ mod tests {
             canonical_started_rx.try_recv().is_err(),
             "canonical persistence must not start while repository publication is held"
         );
+        let contender_coordinator = state.read().await.publication_coordinator.clone();
+        let contender = tokio::spawn(async move {
+            let _guard = contender_coordinator.lock_owned().await;
+            contender_acquired_tx
+                .send(())
+                .expect("signal coordinator acquisition");
+        });
+        assert!(
+            contender_acquired_rx.try_recv().is_err(),
+            "manual publication must wait for the complete startup cycle"
+        );
         release_transaction_tx
             .send(())
             .expect("release repository transaction");
@@ -298,6 +395,10 @@ mod tests {
             .await
             .expect("initial publication does not wait for a periodic timer")
             .expect("initial publication task completed");
+        contender.await.expect("publication contender completed");
+        contender_acquired_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("publication coordinator released after canonical persistence");
 
         let conn = crate::server::open_runtime_db(&db_path).expect("open database");
         let repository_packages: i64 = conn
@@ -310,6 +411,7 @@ mod tests {
             .expect("count canonical cache rows");
         assert_eq!(repository_packages, 1);
         assert_eq!(canonical_cache, 1);
+        assert!(state.read().await.publication_readiness.is_ready());
     }
 
     #[test]

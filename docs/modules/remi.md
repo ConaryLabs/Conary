@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-21
-revision: 28
-summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, database-writer ownership, reproducible conversion profiling, R2 durability inventory, publication, and serving authority
+revision: 29
+summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, publication coordination and readiness, database-writer ownership, reproducible conversion profiling, R2 durability inventory, and serving authority
 ---
 
 # Remi
@@ -58,14 +58,18 @@ the URL as another metadata format or continue unsigned.
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
 `/health/ready` is the evidence-bearing one. It opens the database read-only,
-requires the expected schema revision, requires at least one persisted package
-whose repository and package rows carry each enabled repository profile's exact
-public ID, and checks the serving directories and configured free-space floor.
-A probe that cannot run reports `unavailable` rather than success, so an
-unmeasurable resource never reads as ready. Deploy verification and
-`scripts/remi-health.sh` assert `ready == true` from that endpoint; liveness
-alone is not deployment evidence. The free-space floor is
-`storage.readiness_min_free`, defaulting to 10 GiB.
+requires the expected schema revision, and requires usable typed repository and
+canonical publication outcomes from the initial scheduler cycle. The validated
+manifest supplies the required exact-profile policy; persisted enabled
+repositories and packages must populate every required profile, and a server
+without an exact configured profile is not ready. It also checks the serving
+directories and configured free-space floor. A probe that cannot run reports
+`unavailable` rather than success, so an unmeasurable resource never reads as
+ready. A public package cache miss before that profile is populated returns the
+typed retryable `REPOSITORY_NOT_READY` 503 response and creates no conversion
+job. Deploy verification and `scripts/remi-health.sh` assert `ready == true`
+from that endpoint; liveness alone is not deployment evidence. The free-space
+floor is `storage.readiness_min_free`, defaulting to 10 GiB.
 
 `apps/remi/src/deployment.rs` owns recoverable config/schema transitions and
 read-only deployment inspection. It snapshots a current database or retires an
@@ -74,13 +78,14 @@ source authority, and SQLite state together. Startup reconciles the installed
 manifest before opening listeners, then immediately refreshes metadata and
 runs the canonical discovery fetch and exact-contract rebuild before eligible
 exact-profile prewarm. `apps/remi/src/server/publication_scheduler.rs` owns that
-startup order and both periodic clocks; it awaits each complete cycle, so
-repository publication and canonical publication cannot overlap. Canonical
-cache and rebuild mutations use the same process-local database writer as
-repository synchronization. There is no warm-up timer or blind retry; a later
-cycle occurs at the configured interval, an overdue canonical deadline is
-serviced immediately after the current refresh, and each deadline resets only
-after its owning attempt completes.
+startup order and both periodic clocks; one process-local publication
+coordinator also serializes complete background, admin-refresh, and MCP
+canonical cycles, so their network, parsing, and mutation phases cannot
+interleave. The narrower database writer serializes only their SQLite mutation
+phases, including canonical cache and exact-map commits. There is no warm-up
+timer or blind retry; a later cycle occurs at the configured interval, an
+overdue canonical deadline is serviced immediately after the current refresh,
+and each deadline resets only after its owning attempt completes.
 
 Eligible exact-profile prewarm jobs run concurrently under the configured
 conversion bound shared with request-driven conversions. Each profile preserves

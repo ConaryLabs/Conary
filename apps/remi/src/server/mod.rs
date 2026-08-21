@@ -47,7 +47,7 @@ mod publication_scheduler;
 pub mod r2;
 pub mod r2_durability;
 pub mod rate_limit;
-pub mod readiness;
+mod readiness;
 pub mod release_publish;
 pub mod repository_manifest;
 mod routes;
@@ -82,10 +82,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 async fn ensure_admin_bootstrap_token(
     db_path: PathBuf,
+    database_writer: database_writer::DatabaseWriter,
     token: &str,
     source_name: &str,
     source_description: &str,
@@ -94,12 +95,14 @@ async fn ensure_admin_bootstrap_token(
     let source_name = source_name.to_string();
     let source_description = source_description.to_string();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let conn = open_runtime_db(&db_path)?;
-        if conary_core::db::models::admin_token::find_by_hash(&conn, &hash)?.is_none() {
-            conary_core::db::models::admin_token::create(&conn, &source_name, &hash, "admin")?;
-            tracing::info!("  Admin token created from {}", source_description);
-        }
-        Ok(())
+        database_writer.execute(|| {
+            let conn = open_runtime_db(&db_path)?;
+            if conary_core::db::models::admin_token::find_by_hash(&conn, &hash)?.is_none() {
+                conary_core::db::models::admin_token::create(&conn, &source_name, &hash, "admin")?;
+                tracing::info!("  Admin token created from {}", source_description);
+            }
+            Ok(())
+        })
     })
     .await??;
     Ok(())
@@ -188,6 +191,9 @@ pub struct AdminEvent {
 pub struct ServerState {
     pub config: ServerConfig,
     pub(crate) database_writer: database_writer::DatabaseWriter,
+    pub(crate) publication_coordinator: Arc<Mutex<()>>,
+    pub(crate) publication_readiness: readiness::PublicationReadiness,
+    pub(crate) required_source_profiles: Vec<String>,
     pub job_manager: JobManager,
     pub chunk_cache: ChunkCache,
     pub bounded_cache: BoundedCache,
@@ -251,6 +257,7 @@ impl ServerState {
     ) -> Result<Self> {
         let job_manager = JobManager::new(config.max_concurrent_conversions);
         let database_writer = database_writer::DatabaseWriter::default();
+        let publication_coordinator = Arc::new(Mutex::new(()));
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
             config.cache_max_bytes,
@@ -292,6 +299,9 @@ impl ServerState {
         Ok(Self {
             config,
             database_writer,
+            publication_coordinator,
+            publication_readiness: readiness::PublicationReadiness::default(),
+            required_source_profiles: Vec::new(),
             job_manager,
             chunk_cache,
             bounded_cache,
@@ -398,7 +408,9 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     // connections. This avoids startup races when multiple components touch an
     // older schema concurrently.
     ensure_database_ready(&server_config.db_path)?;
-    if let Some(manifest_path) = remi_config.repository_manifest.as_deref() {
+    let required_source_profiles = if let Some(manifest_path) =
+        remi_config.repository_manifest.as_deref()
+    {
         let manifest = repository_manifest::RepositoryManifest::load(manifest_path)?;
         let keys_root = server_config
             .release_publish
@@ -415,7 +427,18 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
             reconciled.removed,
             reconciled.unchanged
         );
-    }
+        let mut profiles = manifest
+            .repositories
+            .iter()
+            .filter(|repository| repository.enabled)
+            .map(|repository| repository.profile.clone())
+            .collect::<Vec<_>>();
+        profiles.sort();
+        profiles.dedup();
+        profiles
+    } else {
+        Vec::new()
+    };
 
     let state = Arc::new(RwLock::new(ServerState::with_options(
         server_config.clone(),
@@ -423,10 +446,12 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         negative_cache_ttl,
     )?));
 
-    // Set canonical publication configuration on state.
+    // Retain the validated configuration policy separately from persisted
+    // runtime state so readiness can prove that every required profile exists.
     {
         let mut state_w = state.write().await;
         state_w.canonical_config = remi_config.canonical.clone();
+        state_w.required_source_profiles = required_source_profiles;
     }
 
     // Initialize R2 storage if enabled
@@ -639,10 +664,12 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         )));
 
         admin_rate_limiters = Some(limiters);
+        let bootstrap_writer = state.read().await.database_writer.clone();
 
         if let Some(config_token) = remi_config.admin.bootstrap_token.as_deref() {
             ensure_admin_bootstrap_token(
                 server_config.db_path.clone(),
+                bootstrap_writer.clone(),
                 config_token,
                 "config-bootstrap",
                 "admin.bootstrap_token config",
@@ -654,6 +681,7 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
         if let Ok(env_token) = std::env::var("REMI_ADMIN_TOKEN") {
             ensure_admin_bootstrap_token(
                 server_config.db_path.clone(),
+                bootstrap_writer,
                 &env_token,
                 "env-bootstrap",
                 "REMI_ADMIN_TOKEN env var",
@@ -672,7 +700,7 @@ pub async fn run_server_from_config(remi_config: &RemiConfig) -> Result<()> {
     let public_listener = tokio::net::TcpListener::bind(server_config.bind_addr).await?;
     let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
 
-    tracing::info!("Remi is ready to serve");
+    tracing::info!("Remi listeners are active; publication readiness is reported at /health/ready");
 
     // Create the external admin router only if enabled
     let external_admin_future = if let Some(listener) = external_admin_listener {
@@ -758,8 +786,10 @@ mod tests {
     #[tokio::test]
     async fn ensure_admin_bootstrap_token_inserts_once() {
         let db_path = test_db_path();
+        let database_writer = crate::server::database_writer::DatabaseWriter::default();
         ensure_admin_bootstrap_token(
             db_path.clone(),
+            database_writer.clone(),
             "bootstrap-token",
             "config-bootstrap",
             "admin.bootstrap_token config",
@@ -768,6 +798,7 @@ mod tests {
         .expect("seed bootstrap token");
         ensure_admin_bootstrap_token(
             db_path.clone(),
+            database_writer,
             "bootstrap-token",
             "config-bootstrap",
             "admin.bootstrap_token config",

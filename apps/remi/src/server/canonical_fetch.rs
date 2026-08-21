@@ -67,7 +67,7 @@ pub(crate) struct CanonicalCycleReport {
 }
 
 impl CanonicalCycleReport {
-    fn new(
+    pub(crate) fn new(
         repology: CanonicalSourceOutcome,
         appstream: CanonicalSourceOutcome,
         rebuild: CanonicalRebuildOutcome,

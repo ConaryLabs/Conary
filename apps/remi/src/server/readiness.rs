@@ -14,10 +14,58 @@
 
 use conary_core::db::schema::{SCHEMA_VERSION, SchemaCompatibility};
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Free space a serving root must have before Remi reports ready.
 pub const DEFAULT_MIN_FREE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+
+/// Latest usable outcome for one startup publication phase.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PublicationPhaseState {
+    #[default]
+    Pending,
+    Complete,
+    Partial,
+    Failed,
+    Unavailable,
+}
+
+impl PublicationPhaseState {
+    fn is_usable(self) -> bool {
+        matches!(self, Self::Complete | Self::Partial)
+    }
+}
+
+/// Typed startup evidence shared by the scheduler and readiness route.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct PublicationReadiness {
+    pub repository: PublicationPhaseState,
+    pub canonical: PublicationPhaseState,
+}
+
+impl PublicationReadiness {
+    pub(crate) fn is_ready(&self) -> bool {
+        self.repository.is_usable() && self.canonical.is_usable()
+    }
+
+    /// Preserve a previously usable publication through a later failed
+    /// refresh; a failed candidate must not retire the active state.
+    pub(crate) fn record_repository(&mut self, outcome: PublicationPhaseState) {
+        if outcome.is_usable() || !self.repository.is_usable() {
+            self.repository = outcome;
+        }
+    }
+
+    /// Preserve a previously usable canonical publication through a later
+    /// failed derived cycle for the same reason.
+    pub(crate) fn record_canonical(&mut self, outcome: PublicationPhaseState) {
+        if outcome.is_usable() || !self.canonical.is_usable() {
+            self.canonical = outcome;
+        }
+    }
+}
 
 /// Outcome of a single readiness probe.
 ///
@@ -58,6 +106,8 @@ pub struct ReadinessInputs {
     pub chunk_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub min_free_bytes: u64,
+    pub required_source_profiles: Vec<String>,
+    pub publication: PublicationReadiness,
 }
 
 /// Complete readiness report.
@@ -68,6 +118,7 @@ pub struct ReadinessInputs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReadinessReport {
     pub ready: bool,
+    pub publication: PublicationReadiness,
     pub database: ProbeOutcome,
     pub source_profiles: ProbeOutcome,
     pub chunk_dir: ProbeOutcome,
@@ -78,19 +129,22 @@ pub struct ReadinessReport {
 
 impl ReadinessReport {
     fn from_probes(
+        publication: PublicationReadiness,
         database: ProbeOutcome,
         source_profiles: ProbeOutcome,
         chunk_dir: ProbeOutcome,
         cache_dir: ProbeOutcome,
         free_space: ProbeOutcome,
     ) -> Self {
-        let ready = database.is_ready()
+        let ready = publication.is_ready()
+            && database.is_ready()
             && source_profiles.is_ready()
             && chunk_dir.is_ready()
             && cache_dir.is_ready()
             && free_space.is_ready();
         Self {
             ready,
+            publication,
             database,
             source_profiles,
             chunk_dir,
@@ -104,8 +158,9 @@ impl ReadinessReport {
 /// Evaluate readiness. Blocking: callers must run this off the async runtime.
 pub fn evaluate(inputs: &ReadinessInputs) -> ReadinessReport {
     ReadinessReport::from_probes(
+        inputs.publication.clone(),
         probe_database(&inputs.db_path),
-        probe_source_profiles(&inputs.db_path),
+        probe_source_profiles(&inputs.db_path, &inputs.required_source_profiles),
         probe_directory(&inputs.chunk_dir, "chunk directory"),
         probe_directory(&inputs.cache_dir, "cache directory"),
         probe_free_space(&inputs.chunk_dir, inputs.min_free_bytes),
@@ -116,7 +171,7 @@ pub fn evaluate(inputs: &ReadinessInputs) -> ReadinessReport {
 ///
 /// Both the repository and package row must carry the same exact profile ID.
 /// Names, URLs, and distro-family aliases are deliberately irrelevant here.
-fn probe_source_profiles(db_path: &Path) -> ProbeOutcome {
+fn probe_source_profiles(db_path: &Path, required_profiles: &[String]) -> ProbeOutcome {
     let flags =
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = match rusqlite::Connection::open_with_flags(db_path, flags) {
@@ -130,14 +185,10 @@ fn probe_source_profiles(db_path: &Path) -> ProbeOutcome {
     };
 
     let mut statement = match conn.prepare(
-        "SELECT r.source_profile
-         FROM repositories r
-         LEFT JOIN repository_packages rp
-           ON rp.repository_id = r.id AND rp.source_profile = r.source_profile
-         WHERE r.enabled = 1 AND r.source_profile IS NOT NULL
-         GROUP BY r.source_profile
-         HAVING COUNT(rp.id) = 0
-         ORDER BY r.source_profile",
+        "SELECT DISTINCT source_profile
+         FROM repositories
+         WHERE enabled = 1 AND source_profile IS NOT NULL
+         ORDER BY source_profile",
     ) {
         Ok(statement) => statement,
         Err(error) => {
@@ -147,9 +198,9 @@ fn probe_source_profiles(db_path: &Path) -> ProbeOutcome {
             ));
         }
     };
-    let missing = match statement.query_map([], |row| row.get::<_, String>(0)) {
+    let configured = match statement.query_map([], |row| row.get::<_, String>(0)) {
         Ok(rows) => match rows.collect::<Result<Vec<_>, _>>() {
-            Ok(missing) => missing,
+            Ok(configured) => configured.into_iter().collect::<BTreeSet<_>>(),
             Err(error) => {
                 return ProbeOutcome::unavailable(format!(
                     "could not read source-profile population in {}: {error}",
@@ -165,6 +216,40 @@ fn probe_source_profiles(db_path: &Path) -> ProbeOutcome {
         }
     };
 
+    if configured.is_empty() {
+        return ProbeOutcome::not_ready("no enabled exact source profiles are configured");
+    }
+
+    let required = if required_profiles.is_empty() {
+        configured.clone()
+    } else {
+        required_profiles.iter().cloned().collect::<BTreeSet<_>>()
+    };
+    let missing_configuration = required
+        .difference(&configured)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !missing_configuration.is_empty() {
+        return ProbeOutcome::not_ready(format!(
+            "required source profiles are not enabled: {}",
+            missing_configuration.join(", ")
+        ));
+    }
+
+    let mut missing = Vec::new();
+    for profile in required {
+        match profile_is_populated(&conn, &profile) {
+            Ok(true) => {}
+            Ok(false) => missing.push(profile),
+            Err(error) => {
+                return ProbeOutcome::unavailable(format!(
+                    "could not query source-profile population in {}: {error}",
+                    db_path.display()
+                ));
+            }
+        }
+    }
+
     if missing.is_empty() {
         ProbeOutcome::Ready
     } else {
@@ -173,6 +258,31 @@ fn probe_source_profiles(db_path: &Path) -> ProbeOutcome {
             missing.join(", ")
         ))
     }
+}
+
+fn profile_is_populated(conn: &rusqlite::Connection, profile: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM repositories r
+             JOIN repository_packages rp ON rp.repository_id = r.id
+             WHERE r.enabled = 1
+               AND r.source_profile = ?1
+               AND rp.source_profile = ?1
+         )",
+        [profile],
+        |row| row.get(0),
+    )
+}
+
+/// Check one exact public profile without deriving authority from its route.
+pub(crate) fn source_profile_is_populated(db_path: &Path, profile: &str) -> Result<bool, String> {
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = rusqlite::Connection::open_with_flags(db_path, flags)
+        .map_err(|error| format!("could not open {}: {error}", db_path.display()))?;
+    profile_is_populated(&conn, profile)
+        .map_err(|error| format!("could not query {}: {error}", db_path.display()))
 }
 
 /// Open the database read-only, run a query, and require the exact schema epoch.
@@ -271,6 +381,11 @@ mod tests {
             chunk_dir,
             cache_dir,
             min_free_bytes: 0,
+            required_source_profiles: Vec::new(),
+            publication: PublicationReadiness {
+                repository: PublicationPhaseState::Complete,
+                canonical: PublicationPhaseState::Complete,
+            },
         }
     }
 
@@ -315,6 +430,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let inputs = inputs_for(dir.path());
         initialize_database(&inputs.db_path);
+        mark_profile_populated(&inputs.db_path, "fedora-44");
 
         let report = evaluate(&inputs);
 
@@ -324,9 +440,53 @@ mod tests {
     }
 
     #[test]
-    fn not_ready_when_a_required_profile_has_zero_packages() {
+    fn not_ready_when_no_exact_source_profile_is_configured() {
         let dir = tempfile::tempdir().expect("tempdir");
         let inputs = inputs_for(dir.path());
+        initialize_database(&inputs.db_path);
+
+        let report = evaluate(&inputs);
+
+        assert!(!report.ready);
+        assert!(matches!(
+            report.source_profiles,
+            ProbeOutcome::NotReady { .. }
+        ));
+    }
+
+    #[test]
+    fn not_ready_while_initial_publication_is_pending() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut inputs = inputs_for(dir.path());
+        initialize_database(&inputs.db_path);
+        mark_profile_populated(&inputs.db_path, "fedora-44");
+        inputs.publication.canonical = PublicationPhaseState::Pending;
+
+        let report = evaluate(&inputs);
+
+        assert!(!report.ready);
+        assert_eq!(report.publication.canonical, PublicationPhaseState::Pending);
+    }
+
+    #[test]
+    fn failed_candidate_does_not_retire_usable_publication() {
+        let mut publication = PublicationReadiness::default();
+        publication.record_repository(PublicationPhaseState::Complete);
+        publication.record_canonical(PublicationPhaseState::Partial);
+
+        publication.record_repository(PublicationPhaseState::Failed);
+        publication.record_canonical(PublicationPhaseState::Unavailable);
+
+        assert_eq!(publication.repository, PublicationPhaseState::Complete);
+        assert_eq!(publication.canonical, PublicationPhaseState::Partial);
+        assert!(publication.is_ready());
+    }
+
+    #[test]
+    fn not_ready_when_a_required_profile_has_zero_packages() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut inputs = inputs_for(dir.path());
+        inputs.required_source_profiles = vec!["fedora-44".to_string()];
         initialize_database(&inputs.db_path);
         configure_profile(&inputs.db_path, "fedora-44");
 
@@ -342,7 +502,8 @@ mod tests {
     #[test]
     fn not_ready_when_only_some_required_profiles_are_populated() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let inputs = inputs_for(dir.path());
+        let mut inputs = inputs_for(dir.path());
+        inputs.required_source_profiles = vec!["fedora-44".to_string(), "ubuntu-26.04".to_string()];
         initialize_database(&inputs.db_path);
         mark_profile_populated(&inputs.db_path, "fedora-44");
         configure_profile(&inputs.db_path, "ubuntu-26.04");
@@ -365,7 +526,8 @@ mod tests {
     #[test]
     fn ready_when_every_required_profile_is_populated() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let inputs = inputs_for(dir.path());
+        let mut inputs = inputs_for(dir.path());
+        inputs.required_source_profiles = vec!["fedora-44".to_string(), "ubuntu-26.04".to_string()];
         initialize_database(&inputs.db_path);
         mark_profile_populated(&inputs.db_path, "fedora-44");
         mark_profile_populated(&inputs.db_path, "ubuntu-26.04");

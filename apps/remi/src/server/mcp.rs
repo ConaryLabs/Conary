@@ -662,7 +662,9 @@ impl RemiMcpServer {
         let db_path = state.config.db_path.clone();
         let config = state.canonical_config.clone();
         let database_writer = state.database_writer.clone();
+        let publication_coordinator = state.publication_coordinator.clone();
         drop(state);
+        let _publication_guard = publication_coordinator.lock_owned().await;
 
         let count = tokio::task::spawn_blocking(move || {
             crate::server::canonical_job::rebuild_canonical_map(&db_path, &config, &database_writer)
@@ -691,11 +693,15 @@ impl RemiMcpServer {
         let db_path = state.config.db_path.clone();
         let config = state.canonical_config.clone();
         let database_writer = state.database_writer.clone();
+        let publication_coordinator = state.publication_coordinator.clone();
         drop(state);
+        let _publication_guard = publication_coordinator.lock_owned().await;
 
         let report =
             crate::server::canonical_fetch::run_canonical_cycle(&db_path, &config, database_writer)
                 .await;
+        crate::server::publication_scheduler::record_canonical_readiness(&self.state, &report)
+            .await;
         let text = to_json_text(&report)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }

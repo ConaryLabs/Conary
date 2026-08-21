@@ -903,6 +903,35 @@ pub async fn refresh_repositories(
     state: &Arc<RwLock<ServerState>>,
     force: bool,
 ) -> Result<RepoRefreshBatch, ServiceError> {
+    let coordinator = state.read().await.publication_coordinator.clone();
+    let _publication_guard = coordinator.lock_owned().await;
+    let result = refresh_repositories_uncoordinated(state, force).await;
+    let outcome = match result.as_ref().map(RepoRefreshBatch::state) {
+        Ok(RepoRefreshBatchState::Complete) => {
+            crate::server::readiness::PublicationPhaseState::Complete
+        }
+        Ok(RepoRefreshBatchState::Partial) => {
+            crate::server::readiness::PublicationPhaseState::Partial
+        }
+        Ok(RepoRefreshBatchState::Failed) => {
+            crate::server::readiness::PublicationPhaseState::Failed
+        }
+        Err(_) => crate::server::readiness::PublicationPhaseState::Unavailable,
+    };
+    state
+        .write()
+        .await
+        .publication_readiness
+        .record_repository(outcome);
+    result
+}
+
+/// Synchronize enabled repositories while the caller owns the complete
+/// publication-cycle coordinator.
+pub(crate) async fn refresh_repositories_uncoordinated(
+    state: &Arc<RwLock<ServerState>>,
+    force: bool,
+) -> Result<RepoRefreshBatch, ServiceError> {
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
     let repos = blocking_anyhow({
