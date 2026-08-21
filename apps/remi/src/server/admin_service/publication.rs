@@ -68,6 +68,7 @@ mod tests {
             .set_parser_config(RepositoryParserConfig::Json)
             .expect("set parser configuration");
         repository.insert(&conn).expect("insert repository");
+        repository.update(&conn).expect("persist fresh sync time");
         drop(conn);
 
         let state = Arc::new(RwLock::new(
