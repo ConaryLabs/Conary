@@ -36,6 +36,24 @@ pub struct PublishedSourceCatalog {
     pub path: PathBuf,
 }
 
+/// One fully bound and verified source bundle still private to its fenced run.
+pub struct StagedSourceCatalog {
+    pub ordinal: u32,
+    pub priority: i32,
+    pub required: bool,
+    pub manifest: SourceSnapshotV1,
+    pub path: PathBuf,
+}
+
+/// Complete verified filesystem candidate before immutable publication begins.
+pub struct StagedProfileCatalog {
+    pub profile: String,
+    pub manifest: ProfileRevisionV1,
+    pub path: PathBuf,
+    pub sources: Vec<StagedSourceCatalog>,
+    pub candidate_run_dir: PathBuf,
+}
+
 /// Complete durable filesystem result, still inactive in operational SQLite.
 pub struct PublishedProfileCatalog {
     pub profile: String,
@@ -107,16 +125,15 @@ pub fn plan_profile_sources(
         .collect()
 }
 
-/// Fetch every required native source, then build and durably publish exact
-/// source bundles and their deterministic containing profile bundle.
-pub async fn build_profile_catalog(
+/// Fetch every required native source, then bind and verify all source/profile
+/// candidates without exposing any immutable publication path.
+pub async fn stage_profile_catalog(
     run_id: &str,
     profile: &str,
     repositories: Vec<Repository>,
     keyring_dir: &Path,
     catalog_candidate_root: &Path,
-    catalog_root: &Path,
-) -> Result<PublishedProfileCatalog> {
+) -> Result<StagedProfileCatalog> {
     let plans = plan_profile_sources(profile, repositories)?;
     let mut fetches = futures::stream::iter(plans.into_iter().map(|plan| {
         let keyring_dir = keyring_dir.to_path_buf();
@@ -145,30 +162,21 @@ pub async fn build_profile_catalog(
     let run_id = run_id.to_string();
     let profile = profile.to_string();
     let catalog_candidate_root = catalog_candidate_root.to_path_buf();
-    let catalog_root = catalog_root.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        publish_profile_candidates(
-            &run_id,
-            &profile,
-            fetched,
-            &catalog_candidate_root,
-            &catalog_root,
-        )
+        stage_profile_candidates(&run_id, &profile, fetched, &catalog_candidate_root)
     })
     .await
-    .context("profile catalog publication task panicked")?
+    .context("profile catalog staging task panicked")?
 }
 
-fn publish_profile_candidates(
+fn stage_profile_candidates(
     run_id: &str,
     profile: &str,
     fetched: Vec<(ProfileSourcePlan, SourceCatalogCandidateV1)>,
     catalog_candidate_root: &Path,
-    catalog_root: &Path,
-) -> Result<PublishedProfileCatalog> {
+) -> Result<StagedProfileCatalog> {
     let candidate_run_dir = create_candidate_run_dir(catalog_candidate_root, run_id)?;
-    require_real_directory(catalog_root, "immutable catalog root")?;
-    let mut published_sources = Vec::with_capacity(fetched.len());
+    let mut staged_sources = Vec::with_capacity(fetched.len());
 
     for (plan, candidate) in fetched {
         let candidate_directory = candidate_run_dir.join(format!("source-{:08}", plan.ordinal));
@@ -190,21 +198,21 @@ fn publish_profile_candidates(
             )
         })?;
         write_source_catalog_manifest(&candidate_directory, &manifest)?;
-        let path = publish_source_catalog_bundle(&candidate_directory, catalog_root, &manifest)?;
-        published_sources.push(PublishedSourceCatalog {
+        verify_source_catalog_bundle(&candidate_directory, &manifest)?;
+        staged_sources.push(StagedSourceCatalog {
             ordinal: plan.ordinal,
             priority: plan.priority,
             required: plan.required,
             manifest,
-            path,
+            path: candidate_directory,
         });
     }
 
-    let readers = published_sources
+    let readers = staged_sources
         .iter()
         .map(|source| verify_source_catalog_bundle(&source.path, &source.manifest))
         .collect::<conary_core::Result<Vec<_>>>()?;
-    let inputs = published_sources
+    let inputs = staged_sources
         .iter()
         .zip(&readers)
         .map(|(source, reader)| ProfileCatalogMemberInputV1 {
@@ -225,15 +233,55 @@ fn publish_profile_candidates(
     )?;
     let manifest = candidate.bind(&binding)?;
     write_profile_catalog_manifest(&profile_candidate_directory, &manifest)?;
-    let path =
-        publish_profile_catalog_bundle(&profile_candidate_directory, catalog_root, &manifest)?;
+    conary_core::repository::catalog::verify_profile_catalog_bundle(
+        &profile_candidate_directory,
+        &manifest,
+    )?;
 
-    Ok(PublishedProfileCatalog {
+    Ok(StagedProfileCatalog {
         profile: profile.to_string(),
         manifest,
+        path: profile_candidate_directory,
+        sources: staged_sources,
+        candidate_run_dir,
+    })
+}
+
+/// Publish one completely staged profile only after its exact candidate
+/// identities have been durably journaled by the fenced run.
+pub async fn publish_staged_profile_catalog(
+    staged: StagedProfileCatalog,
+    catalog_root: &Path,
+) -> Result<PublishedProfileCatalog> {
+    let catalog_root = catalog_root.to_path_buf();
+    tokio::task::spawn_blocking(move || publish_staged_profile(staged, &catalog_root))
+        .await
+        .context("profile catalog publication task panicked")?
+}
+
+fn publish_staged_profile(
+    staged: StagedProfileCatalog,
+    catalog_root: &Path,
+) -> Result<PublishedProfileCatalog> {
+    require_real_directory(catalog_root, "immutable catalog root")?;
+    let mut published_sources = Vec::with_capacity(staged.sources.len());
+    for source in staged.sources {
+        let path = publish_source_catalog_bundle(&source.path, catalog_root, &source.manifest)?;
+        published_sources.push(PublishedSourceCatalog {
+            ordinal: source.ordinal,
+            priority: source.priority,
+            required: source.required,
+            manifest: source.manifest,
+            path,
+        });
+    }
+    let path = publish_profile_catalog_bundle(&staged.path, catalog_root, &staged.manifest)?;
+    Ok(PublishedProfileCatalog {
+        profile: staged.profile,
+        manifest: staged.manifest,
         path,
         sources: published_sources,
-        candidate_run_dir,
+        candidate_run_dir: staged.candidate_run_dir,
     })
 }
 

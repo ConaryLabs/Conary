@@ -25,6 +25,7 @@ mod cache;
 mod canonical_fetch;
 mod canonical_job;
 pub mod catalog_authority;
+pub mod catalog_gc;
 pub mod catalog_refresh;
 pub mod chunk_gc;
 pub mod config;
@@ -516,6 +517,24 @@ async fn run_server_on_runtime(
         state_w.canonical_config = remi_config.canonical.clone();
         state_w.required_source_profiles = required_source_profiles;
     }
+
+    let recovered_catalog_runs = catalog_gc::recover_catalog_refresh_runs(&state)
+        .await
+        .context("recover expired immutable catalog refresh runs during startup")?;
+    tracing::info!(
+        recovered_runs = recovered_catalog_runs,
+        "  Catalog recovery: exact terminal candidates removed"
+    );
+
+    let catalog_gc = catalog_gc::collect_catalog_garbage(&state)
+        .await
+        .context("collect unreachable immutable catalogs during startup")?;
+    tracing::info!(
+        deleted_profiles = catalog_gc.deleted_profile_resources,
+        deleted_sources = catalog_gc.deleted_source_resources,
+        removed_bundles = catalog_gc.removed_bundles,
+        "  Catalog GC: exact reachability collection complete"
+    );
 
     // Initialize R2 storage if enabled
     if remi_config.r2.enabled {

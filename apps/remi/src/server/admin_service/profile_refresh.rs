@@ -12,15 +12,16 @@ use conary_core::db::models::{
 use conary_core::repository::catalog::{ProfileSourceMemberV1, SourceStreamKindV1};
 use conary_core::repository::{
     ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
-    RepositoryFormat, abort_profile_sync_run, begin_profile_sync_run_with_members,
-    ready_profile_sync_run, record_profile_sync_run_member,
+    RepositoryFormat, abort_profile_sync_run, acknowledge_profile_sync_candidate_cleanup,
+    begin_profile_sync_run_with_members, ready_profile_sync_run, record_profile_sync_run_member,
 };
 
 use super::refresh::RepoRefreshResult;
 use super::{ServiceError, blocking_anyhow};
 use crate::server::catalog_authority::CatalogAuthority;
 use crate::server::catalog_refresh::{
-    PublishedProfileCatalog, cleanup_candidate_run, plan_profile_sources,
+    PublishedProfileCatalog, StagedProfileCatalog, cleanup_candidate_run, plan_profile_sources,
+    publish_staged_profile_catalog, stage_profile_catalog,
 };
 use crate::server::{ServerState, database_writer::DatabaseWriter};
 
@@ -96,7 +97,7 @@ pub(super) async fn refresh_native_profile(
     let owner_instance_uuid = uuid::Uuid::new_v4().to_string();
     let run = begin_run(&roots, &source_profile, &owner_instance_uuid, &plans).await?;
     for recovery_run_id in &run.recovery_run_ids {
-        if let Err(error) = cleanup_run(&roots.catalog_candidate_dir, recovery_run_id).await {
+        if let Err(error) = cleanup_run(&roots, recovery_run_id).await {
             abort_run(
                 &roots,
                 &run,
@@ -104,17 +105,28 @@ pub(super) async fn refresh_native_profile(
                 &error.to_string(),
             )
             .await;
+            log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
             return Err(error);
         }
     }
+    if let Err(error) = collect_catalog_garbage(&roots).await {
+        abort_run(
+            &roots,
+            &run,
+            ProfileSyncFailureStage::Publishing,
+            &error.to_string(),
+        )
+        .await;
+        log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+        return Err(error);
+    }
 
-    let published = match crate::server::catalog_refresh::build_profile_catalog(
+    let staged = match stage_profile_catalog(
         &run.run_id,
         &source_profile,
         repositories,
         &roots.keyring_dir,
         &roots.catalog_candidate_dir,
-        &roots.catalog_dir,
     )
     .await
     {
@@ -127,15 +139,18 @@ pub(super) async fn refresh_native_profile(
                 &format!("{error:#}"),
             )
             .await;
-            log_cleanup_failure(
-                cleanup_run(&roots.catalog_candidate_dir, &run.run_id).await,
-                &run.run_id,
-            );
-            return Err(ServiceError::Internal(format!("{error:#}")));
+            log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+            let primary = ServiceError::Internal(format!("{error:#}"));
+            return match collect_catalog_garbage(&roots).await {
+                Ok(_) => Err(primary),
+                Err(cleanup) => Err(ServiceError::Internal(format!(
+                    "{primary}; exact catalog recovery also failed: {cleanup}"
+                ))),
+            };
         }
     };
 
-    let results = match profile_refresh_results(&source_profile, &names, &published) {
+    let results = match profile_refresh_results(&source_profile, &names, &staged) {
         Ok(results) => results,
         Err(error) => {
             abort_run(
@@ -145,18 +160,42 @@ pub(super) async fn refresh_native_profile(
                 &error.to_string(),
             )
             .await;
-            log_cleanup_failure(
-                cleanup_run(&roots.catalog_candidate_dir, &run.run_id).await,
-                &run.run_id,
-            );
+            log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
             return Err(error);
         }
     };
+    if let Err(error) = record_publication_intent(&roots, &run, &plans, &staged).await {
+        abort_run(
+            &roots,
+            &run,
+            ProfileSyncFailureStage::Publishing,
+            &error.to_string(),
+        )
+        .await;
+        log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+        return Err(error);
+    }
+    let published = match publish_staged_profile_catalog(staged, &roots.catalog_dir).await {
+        Ok(published) => published,
+        Err(error) => {
+            abort_run(
+                &roots,
+                &run,
+                ProfileSyncFailureStage::Publishing,
+                &format!("{error:#}"),
+            )
+            .await;
+            log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+            let primary = ServiceError::Internal(format!("{error:#}"));
+            return match collect_catalog_garbage(&roots).await {
+                Ok(_) => Err(primary),
+                Err(cleanup) => Err(ServiceError::Internal(format!(
+                    "{primary}; exact catalog recovery also failed: {cleanup}"
+                ))),
+            };
+        }
+    };
     let finalize = finalize_profile(&roots, &run, &plans, &published).await;
-    log_cleanup_failure(
-        cleanup_run(&roots.catalog_candidate_dir, &run.run_id).await,
-        &run.run_id,
-    );
     if let Err(error) = finalize {
         abort_run(
             &roots,
@@ -165,7 +204,18 @@ pub(super) async fn refresh_native_profile(
             &error.to_string(),
         )
         .await;
-        return Err(error);
+        log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+        return match collect_catalog_garbage(&roots).await {
+            Ok(_) => Err(error),
+            Err(cleanup) => Err(ServiceError::Internal(format!(
+                "{error}; exact catalog recovery also failed: {cleanup}"
+            ))),
+        };
+    }
+    log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+
+    if let Err(error) = collect_catalog_garbage(&roots).await {
+        tracing::error!(%error, "profile activated but exact catalog collection failed");
     }
 
     Ok(results)
@@ -174,9 +224,9 @@ pub(super) async fn refresh_native_profile(
 fn profile_refresh_results(
     source_profile: &str,
     names: &BTreeMap<String, String>,
-    published: &PublishedProfileCatalog,
+    staged: &StagedProfileCatalog,
 ) -> Result<Vec<RepoRefreshResult>, ServiceError> {
-    published
+    staged
         .sources
         .iter()
         .map(|source| {
@@ -185,7 +235,7 @@ fn profile_refresh_results(
                 .cloned()
                 .ok_or_else(|| {
                     ServiceError::Internal(format!(
-                        "published source '{}' was not in the profile plan",
+                        "staged source '{}' was not in the profile plan",
                         source.manifest.repository_identity
                     ))
                 })?;
@@ -328,11 +378,11 @@ async fn begin_run(
     .await
 }
 
-async fn finalize_profile(
+async fn record_publication_intent(
     roots: &RefreshRoots,
     run: &ProfileSyncRun,
     plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
-    published: &PublishedProfileCatalog,
+    staged: &StagedProfileCatalog,
 ) -> Result<(), ServiceError> {
     let db_path = roots.db_path.clone();
     let database_writer = roots.database_writer.clone();
@@ -371,14 +421,14 @@ async fn finalize_profile(
     for member in &mut members {
         member.input_source_snapshot_sha256 =
             input_members.get(&member.repository_identity).cloned();
-        let source = published
+        let source = staged
             .sources
             .iter()
             .find(|source| i64::from(source.ordinal) == member.ordinal)
             .ok_or_else(|| {
                 ServiceError::Internal(format!(
-                    "profile '{}' lacks published source ordinal {}",
-                    published.profile, member.ordinal
+                    "profile '{}' lacks staged source ordinal {}",
+                    staged.profile, member.ordinal
                 ))
             })?;
         member.candidate_source_snapshot_sha256 = Some(
@@ -388,6 +438,33 @@ async fn finalize_profile(
                 .map_err(ServiceError::from)?,
         );
     }
+    let profile_digest = staged
+        .manifest
+        .manifest_sha256()
+        .map_err(ServiceError::from)?;
+    blocking_anyhow(move || {
+        database_writer
+            .execute(|| {
+                let conn = conary_core::db::open_fast(&db_path)?;
+                for member in &members {
+                    record_profile_sync_run_member(&conn, &run, member)?;
+                }
+                ready_profile_sync_run(&conn, &run, &profile_digest)
+            })
+            .map_err(anyhow::Error::from)
+    })
+    .await
+}
+
+async fn finalize_profile(
+    roots: &RefreshRoots,
+    run: &ProfileSyncRun,
+    plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
+    published: &PublishedProfileCatalog,
+) -> Result<(), ServiceError> {
+    let db_path = roots.db_path.clone();
+    let database_writer = roots.database_writer.clone();
+    let run = run.clone();
     let source_manifests = published
         .sources
         .iter()
@@ -408,10 +485,14 @@ async fn finalize_profile(
         owner_instance_uuid: run.owner_instance_uuid.clone(),
         fencing_epoch: run.fencing_epoch,
     };
-    let repository_ids = members
+    let repository_ids = plans
         .iter()
-        .map(|member| member.repository_id)
-        .collect::<Vec<_>>();
+        .map(|plan| {
+            plan.repository.id.ok_or_else(|| {
+                ServiceError::Internal(format!("repository '{}' has no ID", plan.repository.name))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     blocking_anyhow(move || {
         database_writer.execute(|| {
             let conn = conary_core::db::open_fast(&db_path)?;
@@ -421,10 +502,6 @@ async fn finalize_profile(
                 &profile_manifest,
                 unix_seconds()?,
             )?;
-            for member in &members {
-                record_profile_sync_run_member(&conn, &run, member)?;
-            }
-            ready_profile_sync_run(&conn, &run, &profile_digest)?;
             activate_profile_revision(&conn, &activation)?;
             let last_sync = conary_core::repository::current_timestamp();
             for repository_id in repository_ids {
@@ -497,10 +574,28 @@ async fn abort_run(
     }
 }
 
-async fn cleanup_run(root: &Path, run_id: &str) -> Result<(), ServiceError> {
-    let root = root.to_path_buf();
+async fn cleanup_run(roots: &RefreshRoots, run_id: &str) -> Result<(), ServiceError> {
+    let root = roots.catalog_candidate_dir.clone();
+    let db_path = roots.db_path.clone();
+    let database_writer = roots.database_writer.clone();
     let run_id = run_id.to_string();
-    match tokio::task::spawn_blocking(move || cleanup_candidate_run(&root, &run_id)).await {
+    match tokio::task::spawn_blocking(move || {
+        cleanup_candidate_run(&root, &run_id)?;
+        let acknowledged = database_writer
+            .execute(|| {
+                let conn = conary_core::db::open_fast(&db_path)?;
+                acknowledge_profile_sync_candidate_cleanup(&conn, &run_id)
+            })
+            .map_err(anyhow::Error::from)?;
+        if !acknowledged {
+            anyhow::bail!(
+                "terminal profile candidate run {run_id} was not pending cleanup acknowledgement"
+            );
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    {
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => Err(ServiceError::Internal(format!(
             "failed to clean exact profile candidate run: {error:#}"
@@ -509,6 +604,18 @@ async fn cleanup_run(root: &Path, run_id: &str) -> Result<(), ServiceError> {
             "profile candidate cleanup task panicked: {error}"
         ))),
     }
+}
+
+async fn collect_catalog_garbage(
+    roots: &RefreshRoots,
+) -> Result<crate::server::catalog_gc::CatalogGcReport, ServiceError> {
+    crate::server::catalog_gc::collect_catalog_garbage_uncoordinated(
+        roots.db_path.clone(),
+        roots.catalog_dir.clone(),
+        roots.database_writer.clone(),
+    )
+    .await
+    .map_err(|error| ServiceError::Internal(format!("exact catalog collection failed: {error:#}")))
 }
 
 fn log_cleanup_failure(result: Result<(), ServiceError>, run_id: &str) {
