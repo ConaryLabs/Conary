@@ -1,7 +1,8 @@
 // apps/remi/src/server/canonical_job.rs
 
-//! Scheduled job that builds the canonical package mapping from all
-//! indexed distros. Runs after mirror sync or on demand.
+//! Canonical package-map rebuild from exact contracts and discovery metadata.
+//! The publication scheduler runs it after the ordered startup fetch and on its
+//! canonical clock; the confirmed MCP mutation can also run it on demand.
 //!
 //! The rebuild runs a 2-phase pipeline, each phase committing independently
 //! for short write locks:
@@ -26,29 +27,6 @@ use rusqlite::Connection;
 use tracing::{debug, info};
 
 use crate::server::config::CanonicalSection;
-
-// ---------------------------------------------------------------------------
-// Debounce helpers
-// ---------------------------------------------------------------------------
-
-/// Check whether enough time has elapsed since the last rebuild.
-///
-/// Reads `last_canonical_rebuild` from `server_metadata`. Returns `true`
-/// if the timestamp is missing or older than `cooldown_minutes`.
-pub fn should_rebuild(conn: &Connection, cooldown_minutes: u64) -> bool {
-    let value = match get_metadata(conn, MetadataTable::Server, "last_canonical_rebuild") {
-        Ok(Some(v)) => v,
-        _ => return true,
-    };
-
-    let last = match chrono::DateTime::parse_from_rfc3339(&value) {
-        Ok(dt) => dt.with_timezone(&Utc),
-        Err(_) => return true,
-    };
-
-    let elapsed = Utc::now().signed_duration_since(last);
-    elapsed.num_minutes() >= cooldown_minutes as i64
-}
 
 /// Record the current UTC time as the last rebuild timestamp.
 pub fn record_rebuild_timestamp(conn: &Connection) -> Result<()> {
@@ -334,21 +312,6 @@ mod tests {
         .unwrap();
 
         db_path
-    }
-
-    #[test]
-    fn test_should_rebuild_respects_cooldown() {
-        let conn = Connection::open_in_memory().unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
-
-        // No previous rebuild -- should proceed
-        assert!(should_rebuild(&conn, 5));
-
-        // Record a rebuild
-        record_rebuild_timestamp(&conn).unwrap();
-
-        // Immediately after -- should skip (within 5 min cooldown)
-        assert!(!should_rebuild(&conn, 5));
     }
 
     #[test]

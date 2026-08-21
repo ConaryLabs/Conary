@@ -940,37 +940,5 @@ pub async fn refresh_repositories(
             }
         });
     let batch = collect_refresh_outcomes(jobs).await;
-
-    // After at least one successful source, trigger canonical rebuild if the
-    // cooldown elapsed. One failed source must not starve successful sources.
-    // Failures here are non-fatal -- the sync result is returned regardless.
-    if !batch.results.is_empty() {
-        let db_path = db_path(state).await;
-        let canonical_cfg = state.read().await.canonical_config.clone();
-        let database_writer = state.read().await.database_writer.clone();
-        blocking(move || {
-            database_writer.execute(|| {
-                let conn = crate::server::open_runtime_db(&db_path)?;
-                if crate::server::canonical_job::should_rebuild(
-                    &conn,
-                    canonical_cfg.rebuild_cooldown_minutes,
-                ) {
-                    match crate::server::canonical_job::rebuild_canonical_map(
-                        &db_path,
-                        &canonical_cfg,
-                    ) {
-                        Ok(count) => {
-                            tracing::info!("Post-sync canonical rebuild: {count} new mappings")
-                        }
-                        Err(e) => tracing::warn!("Post-sync canonical rebuild failed: {e}"),
-                    }
-                }
-                Ok(())
-            })
-        })
-        .await
-        .unwrap_or_else(|e| tracing::warn!("Post-sync canonical rebuild task failed: {e}"));
-    }
-
     Ok(batch)
 }

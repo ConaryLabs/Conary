@@ -6,10 +6,8 @@
 //! A probe that cannot establish its fact reports that as a failure, never as
 //! success.
 //!
-//! Deploy verification currently polls `/health`, which is an unconditional
-//! liveness reply and proves only that the process is listening. Pointing it at
-//! `/health/ready` is the remaining half of this work and is tracked on the
-//! owning issue; until then this endpoint is correct but unconsumed.
+//! Deploy verification and the operator health script consume
+//! `/health/ready`; `/health` remains a separate liveness-only probe.
 //!
 //! The evaluation here is pure over its inputs so every failure mode is
 //! provable in a focused test. The route handler stays thin.
@@ -71,6 +69,7 @@ pub struct ReadinessInputs {
 pub struct ReadinessReport {
     pub ready: bool,
     pub database: ProbeOutcome,
+    pub source_profiles: ProbeOutcome,
     pub chunk_dir: ProbeOutcome,
     pub cache_dir: ProbeOutcome,
     pub free_space: ProbeOutcome,
@@ -80,17 +79,20 @@ pub struct ReadinessReport {
 impl ReadinessReport {
     fn from_probes(
         database: ProbeOutcome,
+        source_profiles: ProbeOutcome,
         chunk_dir: ProbeOutcome,
         cache_dir: ProbeOutcome,
         free_space: ProbeOutcome,
     ) -> Self {
         let ready = database.is_ready()
+            && source_profiles.is_ready()
             && chunk_dir.is_ready()
             && cache_dir.is_ready()
             && free_space.is_ready();
         Self {
             ready,
             database,
+            source_profiles,
             chunk_dir,
             cache_dir,
             free_space,
@@ -103,10 +105,74 @@ impl ReadinessReport {
 pub fn evaluate(inputs: &ReadinessInputs) -> ReadinessReport {
     ReadinessReport::from_probes(
         probe_database(&inputs.db_path),
+        probe_source_profiles(&inputs.db_path),
         probe_directory(&inputs.chunk_dir, "chunk directory"),
         probe_directory(&inputs.cache_dir, "cache directory"),
         probe_free_space(&inputs.chunk_dir, inputs.min_free_bytes),
     )
+}
+
+/// Require at least one persisted package for every enabled public profile.
+///
+/// Both the repository and package row must carry the same exact profile ID.
+/// Names, URLs, and distro-family aliases are deliberately irrelevant here.
+fn probe_source_profiles(db_path: &Path) -> ProbeOutcome {
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = match rusqlite::Connection::open_with_flags(db_path, flags) {
+        Ok(conn) => conn,
+        Err(error) => {
+            return ProbeOutcome::unavailable(format!(
+                "could not inspect source-profile population in {}: {error}",
+                db_path.display()
+            ));
+        }
+    };
+
+    let mut statement = match conn.prepare(
+        "SELECT r.source_profile
+         FROM repositories r
+         LEFT JOIN repository_packages rp
+           ON rp.repository_id = r.id AND rp.source_profile = r.source_profile
+         WHERE r.enabled = 1 AND r.source_profile IS NOT NULL
+         GROUP BY r.source_profile
+         HAVING COUNT(rp.id) = 0
+         ORDER BY r.source_profile",
+    ) {
+        Ok(statement) => statement,
+        Err(error) => {
+            return ProbeOutcome::unavailable(format!(
+                "could not prepare source-profile population query in {}: {error}",
+                db_path.display()
+            ));
+        }
+    };
+    let missing = match statement.query_map([], |row| row.get::<_, String>(0)) {
+        Ok(rows) => match rows.collect::<Result<Vec<_>, _>>() {
+            Ok(missing) => missing,
+            Err(error) => {
+                return ProbeOutcome::unavailable(format!(
+                    "could not read source-profile population in {}: {error}",
+                    db_path.display()
+                ));
+            }
+        },
+        Err(error) => {
+            return ProbeOutcome::unavailable(format!(
+                "could not query source-profile population in {}: {error}",
+                db_path.display()
+            ));
+        }
+    };
+
+    if missing.is_empty() {
+        ProbeOutcome::Ready
+    } else {
+        ProbeOutcome::not_ready(format!(
+            "enabled source profiles have no persisted packages: {}",
+            missing.join(", ")
+        ))
+    }
 }
 
 /// Open the database read-only, run a query, and require the exact schema epoch.
@@ -213,6 +279,37 @@ mod tests {
         schema::ensure_current(&conn).expect("initialize current schema");
     }
 
+    fn configure_profile(db_path: &Path, profile: &str) -> i64 {
+        use conary_core::db::models::Repository;
+
+        let conn = conary_core::db::open_fast(db_path).expect("open database");
+        let mut repository = Repository::new(
+            format!("{profile}-readiness"),
+            format!("https://example.invalid/{profile}"),
+        );
+        repository.source_profile = Some(profile.to_string());
+        repository.insert(&conn).expect("insert repository")
+    }
+
+    fn mark_profile_populated(db_path: &Path, profile: &str) {
+        use conary_core::db::models::RepositoryPackage;
+        use conary_core::repository::versioning::VersionScheme;
+
+        let repository_id = configure_profile(db_path, profile);
+        let conn = conary_core::db::open_fast(db_path).expect("open database");
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            "readiness-probe".to_string(),
+            "1.0.0".to_string(),
+            VersionScheme::Conary,
+            format!("sha256:{profile}"),
+            1,
+            format!("https://example.invalid/{profile}/package.ccs"),
+        );
+        package.source_profile = Some(profile.to_string());
+        package.insert(&conn).expect("insert repository package");
+    }
+
     #[test]
     fn ready_when_database_directories_and_space_all_satisfy_their_probes() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -224,6 +321,59 @@ mod tests {
         assert!(report.ready, "expected ready, got {report:?}");
         assert_eq!(report.database, ProbeOutcome::Ready);
         assert_eq!(report.expected_schema_revision, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn not_ready_when_a_required_profile_has_zero_packages() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inputs = inputs_for(dir.path());
+        initialize_database(&inputs.db_path);
+        configure_profile(&inputs.db_path, "fedora-44");
+
+        let report = evaluate(&inputs);
+
+        assert!(!report.ready);
+        assert!(matches!(
+            report.source_profiles,
+            ProbeOutcome::NotReady { .. }
+        ));
+    }
+
+    #[test]
+    fn not_ready_when_only_some_required_profiles_are_populated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inputs = inputs_for(dir.path());
+        initialize_database(&inputs.db_path);
+        mark_profile_populated(&inputs.db_path, "fedora-44");
+        configure_profile(&inputs.db_path, "ubuntu-26.04");
+
+        let report = evaluate(&inputs);
+
+        assert!(!report.ready);
+        match report.source_profiles {
+            ProbeOutcome::NotReady { reason } => {
+                assert!(
+                    reason.contains("ubuntu-26.04"),
+                    "unexpected reason: {reason}"
+                );
+                assert!(!reason.contains("fedora-44"), "unexpected reason: {reason}");
+            }
+            other => panic!("expected NotReady, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ready_when_every_required_profile_is_populated() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inputs = inputs_for(dir.path());
+        initialize_database(&inputs.db_path);
+        mark_profile_populated(&inputs.db_path, "fedora-44");
+        mark_profile_populated(&inputs.db_path, "ubuntu-26.04");
+
+        let report = evaluate(&inputs);
+
+        assert!(report.ready, "expected ready, got {report:?}");
+        assert_eq!(report.source_profiles, ProbeOutcome::Ready);
     }
 
     /// The exact defect this module replaces: the previous check accepted a

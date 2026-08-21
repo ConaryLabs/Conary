@@ -58,11 +58,13 @@ the URL as another metadata format or continue unsigned.
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
 `/health/ready` is the evidence-bearing one. It opens the database read-only,
-requires the expected schema revision, and checks the serving directories and
-configured free-space floor. A probe that cannot run reports `unavailable`
-rather than success, so an unmeasurable resource never reads as ready. Deploy
-verification and `scripts/remi-health.sh` assert `ready == true` from that
-endpoint; liveness alone is not deployment evidence. The free-space floor is
+requires the expected schema revision, requires at least one persisted package
+whose repository and package rows carry each enabled repository profile's exact
+public ID, and checks the serving directories and configured free-space floor.
+A probe that cannot run reports `unavailable` rather than success, so an
+unmeasurable resource never reads as ready. Deploy verification and
+`scripts/remi-health.sh` assert `ready == true` from that endpoint; liveness
+alone is not deployment evidence. The free-space floor is
 `storage.readiness_min_free`, defaulting to 10 GiB.
 
 `apps/remi/src/deployment.rs` owns recoverable config/schema transitions and
@@ -70,7 +72,15 @@ read-only deployment inspection. It snapshots a current database or retires an
 old schema epoch before replacement, so health failure can restore config,
 source authority, and SQLite state together. Startup reconciles the installed
 manifest before opening listeners, then immediately refreshes metadata and
-runs eligible exact-profile prewarm jobs concurrently under the configured
+runs the canonical discovery fetch and exact-contract rebuild before eligible
+exact-profile prewarm. `apps/remi/src/server/publication_scheduler.rs` owns that
+startup order and both periodic clocks; it awaits each complete cycle, so
+repository publication and canonical publication cannot overlap. Canonical
+cache and rebuild mutations use the same process-local database writer as
+repository synchronization. There is no warm-up timer or blind retry; a later
+cycle occurs at the configured interval and missed ticks use delay semantics.
+
+Eligible exact-profile prewarm jobs run concurrently under the configured
 conversion bound shared with request-driven conversions. Each profile preserves
 its own top-N ordering and sequential conversion semantics, while a slow first
 profile cannot starve the profiles after it. Multi-source refresh returns one
@@ -218,6 +228,11 @@ Remi builds canonical package equivalence only from the versioned literal
 contracts loaded by `apps/remi/src/server/canonical_job.rs`. Repology remains a
 discovery cache. AppStream may enrich an already-authorized canonical identity
 with one unique application ID, but it cannot create an implementation row.
+`apps/remi/src/server/canonical_fetch.rs` returns a typed persisted-or-failed
+outcome for each discovery source and a typed rebuild outcome. Two persistence
+failures therefore report a failed cycle, never a successful zero-entry fetch;
+the exact-contract rebuild still runs because discovery does not own mapping
+authority.
 The exact contract rows, rebuild timestamp, and content revision commit in one
 SQLite transaction, so a reader cannot observe new mappings under an old
 revision.
