@@ -524,7 +524,7 @@ fn install_ccs_package_transactionally_inner(
         selection_reason: opts.selection_reason,
         old_trove_to_upgrade: old_trove,
         ccs_capabilities: pkg.manifest().capabilities.as_ref(),
-        ccs_file_capabilities: Some(&normalized_file_capabilities),
+        file_capabilities: Some(&normalized_file_capabilities),
         // Deferral is an ownership contract for try sessions: that caller
         // captures the exact root after this transaction. Normal installs
         // always persist and publish their selected-root authority here.

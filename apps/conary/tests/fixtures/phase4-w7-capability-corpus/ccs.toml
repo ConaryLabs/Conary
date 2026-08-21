@@ -1,0 +1,30 @@
+[package]
+name = "phase4-w7-capability-corpus"
+version = "1.0.0"
+version_scheme = "rpm"
+release = "1"
+kind = "package"
+description = "Pinned W7 native file-capability fixture"
+license = "MIT"
+homepage = "https://conary.io/fixtures/phase4-w7-capability-corpus"
+
+[package.platform]
+os = "linux"
+arch = "x86_64"
+libc = "gnu"
+
+[package.authors]
+maintainers = ["Conary Fixture Maintainers <fixtures@conary.io>"]
+
+[provides]
+capabilities = ["phase4-w7-capability-corpus"]
+
+[components]
+default = ["runtime"]
+
+[[file_capabilities]]
+path = "/usr/bin/phase4-w7-capability"
+capabilities = ["cap_net_bind_service"]
+permitted = true
+effective = true
+inheritable = false

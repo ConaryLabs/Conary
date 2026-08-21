@@ -1,0 +1,10 @@
+#!/bin/sh
+# Deterministic selected-root provider for boot-runtime capture tests. Mutation
+# forms are intercepted before this body can run; version probes are the only
+# direct execution supported by the fixture contract.
+if [ "$#" -eq 1 ] && { [ "$1" = "--version" ] || [ "$1" = "-V" ]; }; then
+    printf 'kmod version 999 (Conary selected-root fixture)\n'
+    exit 0
+fi
+printf 'unexpected selected-root depmod invocation\n' >&2
+exit 64

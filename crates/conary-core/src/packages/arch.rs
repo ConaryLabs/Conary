@@ -123,7 +123,7 @@ impl ArchPackage {
         {
             entries_seen += 1;
             bounds.admit_archive_entry("ALPM archive entries", entries_seen)?;
-            let entry =
+            let mut entry =
                 entry.map_err(|error| Error::ParseError(format!("read ALPM entry: {error}")))?;
             let path_bytes = entry.path_bytes();
             let path = std::str::from_utf8(path_bytes.as_ref()).map_err(|error| {
@@ -135,7 +135,7 @@ impl ArchPackage {
             required = bounds.add_payload_bytes(
                 "ALPM declared payload bytes",
                 required,
-                payload::declared_spool_bytes(&entry),
+                payload::declared_spool_bytes(&mut entry, bounds)?,
             )?;
         }
         Ok(required)
@@ -468,12 +468,13 @@ impl PackageFormat for ArchPackage {
                     declared_payload_bytes = bounds.add_payload_bytes(
                         "ALPM declared payload bytes",
                         declared_payload_bytes,
-                        payload::declared_spool_bytes(&entry),
+                        payload::declared_spool_bytes(&mut entry, &bounds)?,
                     )?;
                     let entry_index = usize::try_from(entries_seen).map_err(|_| {
                         Error::ParseError("ALPM entry index exceeds usize".to_string())
                     })?;
-                    let parsed = payload::parse_entry(&mut entry, &payload_spool, entry_index)?;
+                    let parsed =
+                        payload::parse_entry(&mut entry, &payload_spool, entry_index, &bounds)?;
                     // Only the package-owned system hook directory is
                     // source-package ABI. `/etc/pacman.d/hooks` belongs to
                     // the selected target's explicit Conary hook policy.

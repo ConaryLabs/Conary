@@ -912,7 +912,7 @@ fn restore_transaction_context<'a>(
             .ccs_contract
             .as_ref()
             .and_then(|contract| contract.capabilities.as_ref()),
-        ccs_file_capabilities: file_capabilities,
+        file_capabilities,
         defer_generation: false,
         repository_provenance: prepared.repository_provenance.clone(),
         requested_source_identity: None,

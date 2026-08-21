@@ -2,19 +2,17 @@
 
 use std::collections::BTreeSet;
 
-use crate::ccs::manifest::FileCapability;
+use crate::ccs::manifest::{FileCapability, LINUX_SECURITY_CAPABILITY_XATTR};
 
 pub(crate) use crate::ccs::manifest::LINUX_FILE_CAPABILITY_NAMES;
 
-pub(crate) const SECURITY_CAPABILITY_XATTR: &str = "security.capability";
+pub(crate) const SECURITY_CAPABILITY_XATTR: &str = LINUX_SECURITY_CAPABILITY_XATTR;
 
 const VFS_CAP_REVISION_2: u32 = 0x02000000;
 const VFS_CAP_FLAGS_EFFECTIVE: u32 = 0x00000001;
 const VFS_CAP_U32_COUNT: usize = 2;
 
-pub(crate) fn encode_security_capability_xattr(
-    capability: &FileCapability,
-) -> crate::Result<Vec<u8>> {
+pub fn encode_security_capability_xattr(capability: &FileCapability) -> crate::Result<Vec<u8>> {
     let capability = normalized_capability(capability)?;
     let mut permitted = [0_u32; VFS_CAP_U32_COUNT];
     let mut inheritable = [0_u32; VFS_CAP_U32_COUNT];

@@ -23,7 +23,7 @@ pub(super) struct TransactionContext<'a> {
     pub(super) selection_reason: Option<&'a str>,
     pub(super) old_trove_to_upgrade: Option<&'a conary_core::db::models::Trove>,
     pub(super) ccs_capabilities: Option<&'a conary_core::capability::CapabilityDeclaration>,
-    pub(super) ccs_file_capabilities: Option<&'a [conary_core::ccs::manifest::FileCapability]>,
+    pub(super) file_capabilities: Option<&'a [conary_core::ccs::manifest::FileCapability]>,
     pub(super) defer_generation: bool,
     pub(super) repository_provenance: Option<RepositoryInstallProvenance>,
     /// Exact source identity explicitly supplied for a local artifact.
@@ -73,7 +73,7 @@ pub(super) fn preflight_generation_file_capabilities_for_install(
     extraction: &ExtractionResult,
 ) -> Result<()> {
     preflight_generation_file_capabilities(
-        ctx.ccs_file_capabilities,
+        ctx.file_capabilities,
         ctx.defer_generation,
         &extraction.extracted_files,
     )
@@ -112,13 +112,13 @@ fn preflight_selected_generation_file_capability_targets(
         };
         if conary_core::generation::metadata::is_excluded(&capability.path) {
             anyhow::bail!(
-                "CCS file_capabilities target {} is excluded from generation; selected-root installs require file capability authority to be represented in the generated artifact",
+                "file capability target {} is excluded from generation; selected-root installs require file capability authority to be represented in the generated artifact",
                 capability.path
             );
         }
         if !super::file_capabilities::is_regular_file_capability_payload(&selected_file.node.kind) {
             anyhow::bail!(
-                "CCS file_capabilities target {} is not a regular installed file; selected-root installs require file capability authority on regular generated payload files",
+                "file capability target {} is not a regular installed file; selected-root installs require file capability authority on regular generated payload files",
                 capability.path
             );
         }
@@ -144,12 +144,12 @@ fn preflight_generation_file_capabilities_with_xattr_support(
     }
     if defer_generation {
         anyhow::bail!(
-            "CCS file_capabilities require immediate generation publication and cannot use --defer-generation"
+            "file capabilities require immediate generation publication and cannot use --defer-generation"
         );
     }
     if !xattr_image_support_available {
         anyhow::bail!(
-            "CCS file_capabilities require generation image xattr propagation, but generation image xattr propagation is unavailable in this build"
+            "file capabilities require generation image xattr propagation, but generation image xattr propagation is unavailable in this build"
         );
     }
     preflight_selected_generation_file_capability_targets(Some(file_capabilities), extracted_files)

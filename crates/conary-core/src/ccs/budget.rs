@@ -241,6 +241,7 @@ pub struct AuthorityCensus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArchiveDecodeBounds {
     pub max_archive_entries: u64,
+    pub max_payload_references: u64,
     pub max_payload_object_bytes: u64,
     pub max_total_payload_bytes: u64,
     pub max_metadata_bytes: u64,
@@ -263,6 +264,15 @@ impl ArchiveDecodeBounds {
             field,
             declared,
             self.max_payload_object_bytes,
+        )
+    }
+
+    pub fn admit_payload_references(&self, field: &str, declared: u64) -> BudgetResult<()> {
+        admit(
+            BudgetDimension::PayloadReferenceCount,
+            field,
+            declared,
+            self.max_payload_references,
         )
     }
 
@@ -413,6 +423,7 @@ impl CcsStructuralBudget {
         )?;
         Ok(ArchiveDecodeBounds {
             max_archive_entries,
+            max_payload_references: self.max_payload_references(),
             max_payload_object_bytes: self.max_payload_object_bytes,
             max_total_payload_bytes: self.max_total_payload_bytes,
             max_metadata_bytes: self.max_metadata_bytes,

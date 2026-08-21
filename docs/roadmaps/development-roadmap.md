@@ -326,12 +326,15 @@ the stated scope, not whether a workstream happens to be active.
   timestamp attribution for the same digest-bound daily-driver artifact. #475
   is closed after adding digest-attributable pristine configuration upgrade.
   #477 is closed after carrying source-declared same-name compatibility
-  provides through the same focused daily-driver authority. #480 owns the
-  remaining configuration states on that same authority: newly introduced
-  unmatched declarations, local-modification preservation, and
-  deletion-before-update decisions, each bound to the typed v1-to-v2 update
-  artifacts and persisted config rows across RPM, DEB, and ALPM. The next
-  bounded #110 semantic-corpus slice has not yet been selected.
+  provides through the same focused daily-driver authority. #480 is closed
+  after proving newly introduced unmatched declarations, local-modification
+  preservation, and deletion-before-update decisions across RPM, DEB, and
+  ALPM. PR #487 owns the selected closure slice: TNPM13 through TNPM32 declare
+  all 44 required semantic properties, add exact preview-before-apply proof to
+  the shared three-by-three lifecycle contract, and make each forced failure
+  assert the state appropriate to its typed boundary. #39 remains the release
+  bootstrap prerequisite and is implemented in PR #486 pending immutable
+  publication proof.
 - **Issues:** #110 as the corpus umbrella; #458 and #463 for focused
   daily-driver attribution; #462 and #464 for payload-topology export gaps;
   #460 and #461 for closed legacy parity defects; #470 for versioned dependency
@@ -367,8 +370,16 @@ the stated scope, not whether a workstream happens to be active.
   metadata, select the exact platform artifact, verify digest and signature,
   install atomically, initialize current-profile repository authority, and run
   a non-mutating health proof.
-- **Gate:** the full three-by-three corpus passes through hosted Remi with zero
-  package-specific exceptions, and remote KVM validation is restored.
+- **KVM limitation and replacement gate:** forge-backed remote KVM remains
+  unavailable. Until a KVM-capable hosted runner replaces it, the named boot
+  gate is `scripts/local-qemu-validation.sh` on a local KVM host; the retained
+  2026-07-31 Group O/P result is the current boot evidence. Hosted
+  `native-daily-driver-corpus` and `native-cross-source-lifecycle` are the
+  ordinary-package semantic and lifecycle gates, not substitutes for boot.
+- **Gate:** the full three-by-three corpus passes in the hosted PR gate with
+  zero package-specific exceptions, #39 has immutable public release proof,
+  and the KVM limitation plus named local replacement gate remains explicit
+  until remote KVM is restored.
 
 ### W8 External Tester Outreach
 
@@ -418,7 +429,7 @@ acceptance criteria, and proof.
 | W4 Source Fidelity Hard Cut | #102, #103, #98, #99 (slices 99a-99c), #107 | P0 |
 | W5 Source Authority Model | #108 specification, #104, #105 | P0 |
 | W6 Authority Audit Closure | #67 epic, #109, plus narrow ledger slices | P1 |
-| W7 Just-Works Corpus Gate | #110 umbrella, next bounded slice unselected, #39 | P0 |
+| W7 Just-Works Corpus Gate | #110 closure in PR #487, #39 bootstrap in PR #486 | P0 |
 | W8 External Tester Outreach | #48 | gated |
 | W9 Common Package Capability Classes | #74, #50, #46, #67 P2 remainder | P1 |
 | W10 Distro-Agnostic Takeover | #62 epic decomposed, #68 | P2 |

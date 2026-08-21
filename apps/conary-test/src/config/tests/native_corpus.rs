@@ -4,6 +4,7 @@ use super::{conary_fixture_path, load_manifest, remi_manifest_path};
 
 mod daily_driver;
 mod evidence;
+mod rejection;
 mod version_rewrite;
 
 #[test]
@@ -55,6 +56,8 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_contract() {
         "source_profile=\"ubuntu-26.04\"",
         "source_profile=\"arch\"",
         "--from \"${source_profile}\"",
+        "--dry-run 2>&1",
+        "Dry run complete. No changes made.",
         "expected_trace_digest",
         "assert_trace",
         "forbid-native-pm",
@@ -342,6 +345,18 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_contract() {
         assert!(
             contents.contains("command -v setsid"),
             "{containerfile} must prove the synchronous exec supervisor capability"
+        );
+    }
+    for containerfile in [
+        "Containerfile.fedora44",
+        "Containerfile.ubuntu-26.04",
+        "Containerfile.arch",
+    ] {
+        let contents = std::fs::read_to_string(container_root.join(containerfile))
+            .unwrap_or_else(|error| panic!("read {containerfile}: {error}"));
+        assert!(
+            contents.contains("command -v systemctl"),
+            "{containerfile} must prove its declared systemd provider"
         );
     }
 }

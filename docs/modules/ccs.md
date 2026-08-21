@@ -759,11 +759,15 @@ currently visible directory metadata. See
 For `[[file_capabilities]]`, the v3 writer canonicalizes the declarations into
 signed authority and verification proves each unique path names an exact
 regular signed payload file. The verified install projection never consults
-debug TOML. The selected-root transaction applies `security.capability` before
-capturing the publication candidate and persists the same declaration for
-database-derived generation and rollback authority. Generation metadata
-reports the resulting xattr count through `conary system generation info`.
-There is no mutable live-root application path.
+debug TOML. Foreign conversion decodes source-native `security.capability`
+payload authority into that same typed declaration before signing; a native
+install projects it through the same transaction contract. An exact source
+layout the current declaration cannot represent fails before mutation. The
+selected-root transaction applies `security.capability` before capturing the
+publication candidate and persists the same declaration for database-derived
+generation and rollback authority. Generation metadata reports the resulting
+xattr count through `conary system generation info`. There is no mutable
+live-root application path.
 
 Implementation routing: `apps/conary/src/commands/ccs/install.rs` is the
 stable command hub. Command execution lives in

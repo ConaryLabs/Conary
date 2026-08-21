@@ -291,6 +291,38 @@ fn conversion_requires_typed_sha256_source_identity() {
     );
 }
 
+#[test]
+fn conversion_signs_native_file_capability_authority() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let metadata = make_test_metadata();
+    let mut files = make_test_files();
+    files[0].node.xattrs.insert(
+        crate::ccs::manifest::LINUX_SECURITY_CAPABILITY_XATTR.to_string(),
+        hex::decode("0100000200040000000000000000000000000000").unwrap(),
+    );
+
+    let result = passive_test_converter(temp_dir.path())
+        .convert_in_memory_for_test(
+            &metadata,
+            &files,
+            "rpm",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+    let package = verified_converted_package(&result);
+
+    assert_eq!(
+        package.manifest().file_capabilities,
+        vec![crate::ccs::manifest::FileCapability {
+            path: "/usr/bin/test".to_string(),
+            capabilities: vec!["cap_net_bind_service".to_string()],
+            permitted: true,
+            effective: true,
+            inheritable: false,
+        }]
+    );
+}
+
 fn verified_converted_package(result: &ConversionResult) -> crate::ccs::CcsPackage {
     let path = result
         .package_path

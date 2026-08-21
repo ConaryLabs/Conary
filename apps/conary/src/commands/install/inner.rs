@@ -631,7 +631,7 @@ fn persist_declared_file_capabilities(
     installed_file_metadata: &HashMap<String, (i64, Option<String>)>,
     stored_files: &[ResolvedInstallFile],
 ) -> Result<()> {
-    let Some(file_capabilities) = ctx.ccs_file_capabilities else {
+    let Some(file_capabilities) = ctx.file_capabilities else {
         return Ok(());
     };
 

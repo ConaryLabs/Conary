@@ -251,6 +251,25 @@ for source_format in "${source_formats[@]}"; do
   "${conary_env[@]}" "${conary_bin}" system init --db-path "${db}"
   CONARY_BIN="${conary_bin}" "${prepare_selected_root}" "${db}" "${case_root}"
 
+  preview="$("${matrix_env[@]}" "${conary_bin}" install "${v1_package}" \
+    --convert-to-ccs \
+    --db-path "${db}" \
+    --sandbox always \
+    --no-deps \
+    --from "${source_profile}" \
+    --dry-run 2>&1)"
+  printf '%s\n' "${preview}"
+  grep -F "Would install package: ${package_name} version ${v1_version}" <<<"${preview}"
+  grep -F "Dry run complete. No changes made." <<<"${preview}"
+  test "$(
+    sqlite3 "${db}" \
+      "SELECT COUNT(*) FROM troves WHERE name = '${package_name}'"
+  )" = "0"
+  "${assert_generation}" \
+    --root "${case_root}" \
+    --absent "/usr/bin/conary-native-lifecycle-parity" \
+    --absent "/usr/share/conary-native-lifecycle-parity/payload-version"
+
   begin_corpus_stage installation
   "${matrix_env[@]}" "${conary_bin}" install "${v1_package}" \
     --convert-to-ccs \

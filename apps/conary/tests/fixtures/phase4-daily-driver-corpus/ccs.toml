@@ -90,7 +90,7 @@ path = "/usr/bin/phase4-corpus-alt"
 priority = 40
 
 [hooks.post_install]
-script = "mkdir -p /var/lib/phase4-corpus; printf installed > /var/lib/phase4-corpus/scriptlet.marker"
+script = "mkdir -p /var/lib/phase4-corpus; printf installed > /var/lib/phase4-corpus/scriptlet.marker; systemctl start phase4-corpus.service; /usr/sbin/depmod -a"
 
 [hooks.pre_remove]
 script = "mkdir -p /var/lib/phase4-corpus; printf removed > /var/lib/phase4-corpus/remove.marker"

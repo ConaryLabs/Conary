@@ -1,0 +1,23 @@
+[package]
+name = "phase4-w7-semantic-corpus"
+version = "2:1.0.0"
+version_scheme = "arch"
+release = "3"
+kind = "package"
+description = "Pinned W7 identity, payload, and metadata semantic fixture"
+license = "MIT"
+homepage = "https://conary.io/fixtures/phase4-w7-semantic-corpus"
+
+[package.platform]
+os = "linux"
+arch = "any"
+libc = "any"
+
+[package.authors]
+maintainers = ["Conary Fixture Maintainers <fixtures@conary.io>"]
+
+[provides]
+capabilities = ["phase4-w7-semantic-corpus"]
+
+[components]
+default = ["runtime"]

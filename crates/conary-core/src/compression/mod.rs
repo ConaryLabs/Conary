@@ -350,6 +350,7 @@ mod tests {
         ];
         let bounds = crate::ccs::ArchiveDecodeBounds {
             max_archive_entries: 1,
+            max_payload_references: 1,
             max_payload_object_bytes: 4,
             max_total_payload_bytes: 4,
             max_metadata_bytes: 4,

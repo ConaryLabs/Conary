@@ -34,6 +34,13 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tracing::info;
 
+/// The single request boundary between local artifacts and repository
+/// package identities. Component parsing must use the same decision as source
+/// resolution so native versions containing `:` remain valid file names.
+pub(super) fn is_local_package_request(package: &str) -> bool {
+    Path::new(package).exists()
+}
+
 /// Result of resolving a package path
 pub struct ResolvedPackage {
     pub path: PathBuf,
@@ -120,7 +127,7 @@ pub async fn resolve_package_path_with_policy(
         architecture,
     } = request;
     // Check if package is a local file
-    if Path::new(package).exists() {
+    if is_local_package_request(package) {
         info!("Installing from local file: {}", package);
         progress.set_status(&format!("Loading local file: {}", package));
         return Ok(ResolutionOutcome::Resolved(ResolvedPackage {

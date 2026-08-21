@@ -54,6 +54,15 @@ copy_runtime_path() {
   cp --dereference --preserve=mode,timestamps --parents "${source}" "${stage}"
 }
 
+copy_runtime_tree() {
+  local source="$1"
+  if [[ "${source}" != /* || ! -d "${source}" ]]; then
+    echo "Selected-root runtime tree is not an existing absolute directory: ${source}" >&2
+    exit 1
+  fi
+  cp --archive --parents "${source}" "${stage}"
+}
+
 copy_elf_closure() {
   local executable="$1"
   local ldd_output
@@ -106,10 +115,55 @@ copy_elf_closure "${install_path}"
 copy_elf_closure /bin/false
 copy_elf_closure /usr/bin/true
 
-# A selected root advertises OpenRC lifecycle support only when its provider
-# executable is part of that root. Preserve the target's actual provider and
-# runtime closure so foreign scriptlets cross the same typed capture boundary
-# that production generations use.
+# The pinned RPM lifecycle fixture declares /usr/bin/python3 as its exact
+# non-shell interpreter. Stage the target's real interpreter and standard
+# library so preflight and execution prove that ABI inside the selected root
+# rather than borrowing the container host. Third-party modules and bytecode
+# caches are not part of that interpreter contract.
+python_path=/usr/bin/python3
+copy_elf_closure "${python_path}"
+python_stdlib="$(${python_path} -I -S -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
+python_pathlib="$(${python_path} -I -S -c 'import pathlib; print(pathlib.__file__)')"
+case "${python_stdlib}" in
+  /usr/lib*/python* | /usr/local/lib*/python*) ;;
+  *)
+    echo "Python standard library is outside the selected-root runtime domain: ${python_stdlib}" >&2
+    exit 1
+    ;;
+esac
+case "${python_pathlib}" in
+  "${python_stdlib}"/*) ;;
+  *)
+    echo "Python pathlib implementation is outside its standard library: ${python_pathlib}" >&2
+    exit 1
+    ;;
+esac
+copy_runtime_tree "${python_stdlib}"
+rm -rf \
+  "${stage}${python_stdlib}/site-packages" \
+  "${stage}${python_stdlib}/dist-packages"
+find "${stage}${python_stdlib}" -type d -name __pycache__ -prune -exec rm -rf {} +
+
+# A selected root advertises service-manager lifecycle support only when its
+# provider executable is part of that root. The deterministic fixture is the
+# execution boundary, while the booted host's real systemctl remains the
+# persisted capability authority. Runtime verbs are bind-intercepted before
+# the fixture body can execute, avoiding target-specific dlopen dependencies.
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl_path=/usr/bin/systemctl
+  if [[ ! -x "${stage}${systemctl_path}" ]]; then
+    echo "Selected-root systemctl fixture is missing: ${stage}${systemctl_path}" >&2
+    exit 1
+  fi
+else
+  systemctl_path=
+  rm -f "${stage}/usr/bin/systemctl"
+fi
+depmod_path=/usr/sbin/depmod
+if [[ ! -x "${stage}${depmod_path}" ]]; then
+  echo "Selected-root depmod fixture is missing: ${stage}${depmod_path}" >&2
+  exit 1
+fi
 if openrc_path="$(command -v rc-service 2>/dev/null)"; then
   copy_elf_closure "${openrc_path}"
 fi
@@ -168,6 +222,10 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   --present /bin/bash \
   --present /bin/false \
   --present /usr/bin/bash \
+  --present "${python_path}" \
+  --present "${python_pathlib}" \
+  --present "${systemctl_path:-/usr/bin/true}" \
+  --present "${depmod_path}" \
   --present "${install_path}" \
   --present /lib64/ld-linux-x86-64.so.2 \
   --present /etc/passwd \

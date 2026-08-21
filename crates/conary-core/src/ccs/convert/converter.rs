@@ -174,6 +174,12 @@ impl NativePackageConverter {
         })?;
 
         let mut manifest = self.build_manifest(&final_metadata, &Hooks::default())?;
+        manifest.file_capabilities =
+            super::file_capabilities_from_native_payload(files).map_err(|error| {
+                ConversionError::ManifestError(format!(
+                    "Failed to project native file capability authority: {error}"
+                ))
+            })?;
         let repository_enrollments = if format == "rpm" {
             crate::repository::enrollment::derive::derive_rpm_repository_enrollments(
                 files,

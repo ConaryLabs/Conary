@@ -33,11 +33,11 @@ fn required_bytes(path: &Path, bounds: &ArchiveDecodeBounds) -> Result<u64> {
     {
         count += 1;
         bounds.admit_archive_entry("eopkg payload entries", count)?;
-        let entry = entry.map_err(|error| Error::ParseError(error.to_string()))?;
+        let mut entry = entry.map_err(|error| Error::ParseError(error.to_string()))?;
         total = bounds.add_payload_bytes(
             "eopkg declared payload bytes",
             total,
-            payload::declared_spool_bytes(&entry),
+            payload::declared_spool_bytes(&mut entry, bounds)?,
         )?;
     }
     Ok(total)
@@ -64,13 +64,14 @@ pub(super) fn parse(
         total = bounds.add_payload_bytes(
             "eopkg declared payload bytes",
             total,
-            payload::declared_spool_bytes(&entry),
+            payload::declared_spool_bytes(&mut entry, bounds)?,
         )?;
         parsed.push(payload::parse_entry(
             &mut entry,
             &spool,
             usize::try_from(count)
                 .map_err(|_| Error::ParseError("eopkg entry index exceeds usize".to_string()))?,
+            bounds,
         )?);
     }
     if total != required {
