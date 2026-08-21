@@ -220,7 +220,7 @@ pub(super) fn finish_remi_sync_run(
     prepare_publication(conn, run, &revision)?;
 
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    require_owned_run(&tx, run, "ready_to_publish")?;
+    require_owned_run(&tx, run, "ready_to_publish", unix_seconds()?)?;
     let candidate_revision = serde_json::to_string(&revision)?;
     let stored_revision = tx.query_row(
         "SELECT candidate_revision FROM repository_sync_runs WHERE run_id = ?1",
@@ -259,7 +259,8 @@ pub(super) fn finish_remi_sync_run(
          WHERE run_id = ?2
            AND owner_instance_uuid = ?3
            AND fencing_epoch = ?4
-           AND state = 'ready_to_publish'",
+           AND state = 'ready_to_publish'
+           AND lease_expires_at > ?1",
         params![now, run.run_id, run.owner_instance_uuid, run.fencing_epoch],
     )?;
     if updated != 1 {
@@ -342,7 +343,7 @@ fn prepare_publication(
 ) -> Result<()> {
     let now = unix_seconds()?;
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    require_owned_run(&tx, run, "fetching_objects")?;
+    require_owned_run(&tx, run, "fetching_objects", now)?;
     let candidate_revision = serde_json::to_string(&revision)?;
     let stored_revision = tx.query_row(
         "SELECT candidate_revision FROM repository_sync_runs WHERE run_id = ?1",
@@ -383,7 +384,7 @@ fn renew_owned_run(
     now: i64,
     revision: Option<RemiSparseRevision>,
 ) -> Result<()> {
-    require_owned_run(tx, run, "fetching_objects")?;
+    require_owned_run(tx, run, "fetching_objects", now)?;
     let revision = revision
         .map(|value| serde_json::to_string(&value))
         .transpose()?;
@@ -395,6 +396,7 @@ fn renew_owned_run(
            AND owner_instance_uuid = ?5
            AND fencing_epoch = ?6
            AND state = 'fetching_objects'
+           AND lease_expires_at > ?1
            AND (candidate_revision IS NULL OR candidate_revision = ?3)",
         params![
             now,
@@ -414,7 +416,7 @@ fn renew_owned_run(
     Ok(())
 }
 
-fn require_owned_run(tx: &Transaction<'_>, run: &RemiSyncRun, state: &str) -> Result<()> {
+fn require_owned_run(tx: &Transaction<'_>, run: &RemiSyncRun, state: &str, now: i64) -> Result<()> {
     let owned = tx.query_row(
         "SELECT EXISTS(
              SELECT 1
@@ -425,6 +427,7 @@ fn require_owned_run(tx: &Transaction<'_>, run: &RemiSyncRun, state: &str) -> Re
                AND scope.fencing_epoch = ?3
                AND current.owner_instance_uuid = ?4
                AND current.state = ?5
+               AND current.lease_expires_at > ?6
          )",
         params![
             run.repository_id,
@@ -432,6 +435,7 @@ fn require_owned_run(tx: &Transaction<'_>, run: &RemiSyncRun, state: &str) -> Re
             run.fencing_epoch,
             run.owner_instance_uuid,
             state,
+            now,
         ],
         |row| row.get::<_, bool>(0),
     )?;
@@ -457,7 +461,8 @@ fn transition_owned_run(
          WHERE run_id = ?4
            AND owner_instance_uuid = ?5
            AND fencing_epoch = ?6
-           AND state = ?7",
+           AND state = ?7
+           AND lease_expires_at > ?2",
         params![
             to,
             now,
@@ -620,22 +625,45 @@ mod tests {
     }
 
     #[test]
-    fn repository_deletion_cascades_its_terminal_run_and_scope() {
+    fn expired_owner_cannot_renew_its_lease_before_takeover() {
         let conn = Connection::open_in_memory().unwrap();
         crate::db::schema::ensure_current(&conn).unwrap();
         let repo = test_repo(&conn);
         let run = begin_remi_sync_run_at(&conn, &repo, "00000000-0000-4000-8000-000000000001", 100)
             .unwrap();
-        abort_remi_sync_run(
-            &conn,
-            &run,
-            RemiSyncFailureStage::FetchingObjects,
-            RemiSyncFailureCategory::Transport,
-            "synthetic transport interruption",
-        )
-        .unwrap();
+        let revision = RemiSparseRevision::new(1, "00000000000000000000000000000001").unwrap();
+
+        let error = append_remi_sync_page(&conn, &run, Vec::new(), revision).unwrap_err();
+
+        assert!(error.to_string().contains("lost fencing epoch 1"));
+        let (heartbeat_at, lease_expires_at, candidate_revision) = conn
+            .query_row(
+                "SELECT heartbeat_at, lease_expires_at, candidate_revision
+                 FROM repository_sync_runs WHERE run_id = ?1",
+                [&run.run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(heartbeat_at, 100);
+        assert_eq!(lease_expires_at, 100 + REMI_SYNC_LEASE_SECONDS);
+        assert!(candidate_revision.is_none());
+    }
+
+    #[test]
+    fn repository_deletion_cascades_its_live_run_scope_and_candidate() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::schema::ensure_current(&conn).unwrap();
+        let repo = test_repo(&conn);
+        begin_remi_sync_run_at(&conn, &repo, "00000000-0000-4000-8000-000000000001", 100).unwrap();
 
         Repository::delete(&conn, repo.id.unwrap()).unwrap();
+        assert!(Repository::list_all(&conn).unwrap().is_empty());
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM repository_sync_runs", [], |row| {
                 row.get::<_, i64>(0)

@@ -174,6 +174,16 @@ CREATE TABLE repository_sync_scopes (
             UNIQUE(current_run_id),
             FOREIGN KEY(current_run_id) REFERENCES repository_sync_runs(run_id) ON DELETE RESTRICT
         );
+CREATE TRIGGER repositories_delete_live_sync_candidates
+BEFORE DELETE ON repositories
+BEGIN
+    DELETE FROM repositories
+    WHERE id IN (
+        SELECT staging_repository_id
+        FROM repository_sync_runs
+        WHERE repository_id = OLD.id
+    );
+END;
 CREATE TABLE repository_source_pins (
             repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
             snapshot_sha256 TEXT NOT NULL,
