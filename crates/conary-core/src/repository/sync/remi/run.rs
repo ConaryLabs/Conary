@@ -561,6 +561,15 @@ fn unix_seconds() -> Result<i64> {
 mod tests {
     use super::*;
 
+    static LEASE_WRITER_BUSY: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    fn observe_lease_writer_busy(_attempt: i32) -> bool {
+        LEASE_WRITER_BUSY.store(true, std::sync::atomic::Ordering::SeqCst);
+        std::thread::yield_now();
+        true
+    }
+
     fn test_repo(conn: &Connection) -> Repository {
         let mut repo = Repository::new("fedora-remi".to_string(), "https://remi.test".to_string());
         repo.default_strategy = Some("remi".to_string());
@@ -694,17 +703,23 @@ mod tests {
         let blocker_tx =
             Transaction::new_unchecked(&blocker, TransactionBehavior::Immediate).unwrap();
         let worker = crate::db::open_fast(&db_path).unwrap();
+        LEASE_WRITER_BUSY.store(false, std::sync::atomic::Ordering::SeqCst);
         worker
-            .busy_timeout(std::time::Duration::from_secs(5))
+            .busy_handler(Some(observe_lease_writer_busy))
             .unwrap();
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
         let worker_run = run.clone();
         let handle = std::thread::spawn(move || {
-            started_tx.send(()).unwrap();
             let revision = RemiSparseRevision::new(1, "00000000000000000000000000000001").unwrap();
             append_remi_sync_page(&worker, &worker_run, Vec::new(), revision)
         });
-        started_rx.recv().unwrap();
+        let busy_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !LEASE_WRITER_BUSY.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < busy_deadline,
+                "worker never reached SQLite writer contention"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert!(unix_seconds().unwrap() < lease_expires_at);
         while unix_seconds().unwrap() < lease_expires_at {
             std::thread::sleep(std::time::Duration::from_millis(10));
