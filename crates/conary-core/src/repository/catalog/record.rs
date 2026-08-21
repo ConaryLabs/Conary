@@ -849,3 +849,6 @@ fn require_canonical_order<T: Serialize>(values: &[T], label: &str) -> Result<()
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

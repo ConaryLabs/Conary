@@ -37,11 +37,13 @@ use types::{
     JsonPackageDelta, JsonRepositorySyncSnapshot, RepositorySyncSnapshot, SyncedPackageRow,
 };
 
+mod immutable_catalog;
 mod native;
 mod remi;
 mod support;
 pub(in crate::repository) mod types;
 
+pub use immutable_catalog::fetch_native_source_catalog;
 pub use support::{current_timestamp, parse_timestamp};
 use support::{has_trusted_root, rebase_download_url, run_blocking_sync};
 
@@ -66,7 +68,7 @@ where
     run_blocking_sync(move || authority.execute(operation)).await
 }
 
-async fn fetch_repository_native_snapshot(
+pub(super) async fn fetch_repository_native_snapshot(
     repo: &Repository,
     keyring_dir: &Path,
 ) -> Result<RepositorySyncSnapshot> {
@@ -121,6 +123,7 @@ async fn fetch_repository_native_snapshot(
     Ok(RepositorySyncSnapshot::NativeRows {
         packages: synced_packages,
         snapshot: metadata.snapshot,
+        authenticated_objects: metadata.authenticated_objects,
     })
 }
 
@@ -723,9 +726,11 @@ fn persist_repository_sync_snapshot(
     snapshot: RepositorySyncSnapshot,
 ) -> Result<usize> {
     match snapshot {
-        RepositorySyncSnapshot::NativeRows { packages, snapshot } => {
-            persist_native_sync_rows(conn, repo, packages, snapshot)
-        }
+        RepositorySyncSnapshot::NativeRows {
+            packages,
+            snapshot,
+            authenticated_objects: _,
+        } => persist_native_sync_rows(conn, repo, packages, snapshot),
         RepositorySyncSnapshot::StaticRows {
             packages,
             package_keys,

@@ -14,7 +14,11 @@ pub mod eopkg;
 pub mod fedora;
 mod snapshot;
 
-pub use snapshot::{AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity};
+pub(crate) use snapshot::authenticated_metadata_object;
+pub use snapshot::{
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
+    AuthenticatedSnapshotIdentity,
+};
 
 use crate::error::Result;
 use crate::repository::dependency_model::{

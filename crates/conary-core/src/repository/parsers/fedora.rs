@@ -14,8 +14,9 @@
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
-    AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
-    RepositoryParser,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
+    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    authenticated_metadata_object,
 };
 use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
@@ -178,8 +179,17 @@ impl FedoraParser {
     }
 
     /// Download, verify, and decompress primary.xml.
-    async fn download_primary_xml(&self, repo_url: &str, record: &RepoMdRecord) -> Result<String> {
+    async fn download_primary_xml(
+        &self,
+        repo_url: &str,
+        record: &RepoMdRecord,
+    ) -> Result<(String, AuthenticatedMetadataObject)> {
         let (primary_url, raw_bytes) = self.download_verified_document(repo_url, record).await?;
+        let authenticated_object = authenticated_metadata_object(
+            AuthenticatedMetadataObjectRole::RpmPrimary,
+            &record.href,
+            &raw_bytes,
+        );
         let decompressed =
             decompress_metadata_auto(&raw_bytes, &format!("RPM primary metadata {primary_url}"))?;
         let content = String::from_utf8(decompressed).map_err(|error| {
@@ -187,7 +197,7 @@ impl FedoraParser {
         })?;
 
         debug!("Decompressed primary.xml: {} bytes", content.len());
-        Ok(content)
+        Ok((content, authenticated_object))
     }
 
     /// Parse primary.xml and extract package metadata
@@ -796,9 +806,11 @@ impl RepositoryParser for FedoraParser {
         let (repomd, snapshot) = self.fetch_repomd_index(repo_url).await?;
 
         // Download, verify, and parse primary.xml.
-        let primary_xml = self.download_primary_xml(repo_url, &repomd.primary).await?;
+        let (primary_xml, primary_object) =
+            self.download_primary_xml(repo_url, &repomd.primary).await?;
         let mut packages = self.parse_primary_xml(&primary_xml, repo_url)?;
         drop(primary_xml);
+        let mut authenticated_objects = vec![primary_object];
 
         // primary.xml carries only the generator-selected file set, so
         // complete package file ownership comes from filelists.xml.
@@ -806,6 +818,11 @@ impl RepositoryParser for FedoraParser {
             Some(record) => {
                 let (filelists_url, raw_bytes) =
                     self.download_verified_document(repo_url, &record).await?;
+                authenticated_objects.push(authenticated_metadata_object(
+                    AuthenticatedMetadataObjectRole::RpmFilelists,
+                    &record.href,
+                    &raw_bytes,
+                ));
                 let compressed =
                     crate::compression::CompressionFormat::from_magic_bytes(&raw_bytes)
                         != crate::compression::CompressionFormat::None;
@@ -828,7 +845,11 @@ impl RepositoryParser for FedoraParser {
         }
 
         info!("Parsed {} packages from Fedora repository", packages.len());
-        Ok(AuthenticatedRepositoryMetadata { packages, snapshot })
+        Ok(AuthenticatedRepositoryMetadata {
+            packages,
+            snapshot,
+            authenticated_objects,
+        })
     }
 }
 

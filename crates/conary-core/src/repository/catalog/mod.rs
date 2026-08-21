@@ -4,7 +4,9 @@
 
 mod bundle;
 mod contract;
+mod profile;
 mod record;
+pub(in crate::repository) mod source;
 mod store;
 
 pub use bundle::{
@@ -18,9 +20,11 @@ pub use contract::{
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
     SourceStreamKindV1, SourceStreamV1,
 };
+pub use profile::{ProfileCatalogCandidateV1, ProfileCatalogMemberInputV1};
 pub use record::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, CatalogScopeV1,
     CatalogSourceEvidenceV1,
 };
+pub use source::{SOURCE_CATALOG_PROJECTION_VERSION_V1, SourceCatalogCandidateV1};
 pub use store::{CatalogBindingV1, CatalogReader, write_catalog_candidate};

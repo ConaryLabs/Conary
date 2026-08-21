@@ -4,6 +4,7 @@ use crate::db::models::{
     AuthenticatedSnapshotIdentity, RepositoryPackage, RepositoryPackageKey, RepositoryProvide,
     RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
 };
+use crate::repository::catalog::SourceMetadataObjectV1;
 /// A single synced package row with all its normalized capability data.
 #[derive(Debug, Clone)]
 pub(in crate::repository) struct SyncedPackageRow {
@@ -19,6 +20,7 @@ pub(in crate::repository) enum RepositorySyncSnapshot {
     NativeRows {
         packages: Vec<SyncedPackageRow>,
         snapshot: AuthenticatedSnapshotIdentity,
+        authenticated_objects: Vec<SourceMetadataObjectV1>,
     },
     StaticRows {
         packages: Vec<SyncedPackageRow>,

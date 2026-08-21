@@ -7,8 +7,9 @@
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
-    AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
-    RepositoryParser,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
+    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    authenticated_metadata_object,
 };
 use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
@@ -66,7 +67,11 @@ impl DebianParser {
     async fn download_packages_file(
         &self,
         repo_url: &str,
-    ) -> Result<(String, AuthenticatedSnapshotIdentity)> {
+    ) -> Result<(
+        String,
+        AuthenticatedSnapshotIdentity,
+        AuthenticatedMetadataObject,
+    )> {
         let release_path = format!(
             "{}/binary-{}/Packages.gz",
             self.component, self.architecture
@@ -110,7 +115,15 @@ impl DebianParser {
         })?;
 
         debug!("Decompressed Packages file: {} bytes", content.len());
-        Ok((content, snapshot))
+        Ok((
+            content,
+            snapshot,
+            authenticated_metadata_object(
+                AuthenticatedMetadataObjectRole::DebianPackages,
+                &release_path,
+                &raw_bytes,
+            ),
+        ))
     }
 
     async fn download_authenticated_release(&self, repo_url: &str) -> Result<Vec<u8>> {
@@ -504,7 +517,8 @@ impl RepositoryParser for DebianParser {
         );
 
         // Download and decompress Packages file
-        let (packages_content, snapshot) = self.download_packages_file(repo_url).await?;
+        let (packages_content, snapshot, packages_object) =
+            self.download_packages_file(repo_url).await?;
 
         // Parse RFC 822-like format
         let entries: Vec<DebianPackageEntry> = rfc822_like::from_str(&packages_content)
@@ -518,7 +532,11 @@ impl RepositoryParser for DebianParser {
         }
 
         info!("Parsed {} packages from Debian repository", packages.len());
-        Ok(AuthenticatedRepositoryMetadata { packages, snapshot })
+        Ok(AuthenticatedRepositoryMetadata {
+            packages,
+            snapshot,
+            authenticated_objects: vec![packages_object],
+        })
     }
 }
 
@@ -988,6 +1006,10 @@ mod tests {
     #[test]
     fn snapshot_identity_owns_the_verified_cleartext_release_payload() {
         let release = b"Origin: Example\nSHA256:\n";
+        assert_eq!(
+            authenticated_release_snapshot(release).size(),
+            Some(release.len() as u64)
+        );
         assert_eq!(
             authenticated_release_snapshot(release),
             AuthenticatedSnapshotIdentity::for_bytes(release)

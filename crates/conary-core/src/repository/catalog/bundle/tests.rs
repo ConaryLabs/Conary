@@ -9,6 +9,9 @@ use crate::repository::catalog::{
     write_catalog_candidate,
 };
 use crate::repository::versioning::VersionScheme;
+use crate::repository::{
+    OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
+};
 
 fn digest(byte: char) -> String {
     byte.to_string().repeat(64)
@@ -79,6 +82,21 @@ fn source_content() -> CatalogContentV1 {
 }
 
 fn source_manifest(binding: &CatalogBindingV1) -> SourceSnapshotV1 {
+    let parser_config = RepositoryParserConfig::Rpm {
+        architecture: "x86_64".to_string(),
+    };
+    let trust_policy = RepositoryTrustPolicy::Rpm {
+        metadata: RpmMetadataAuthority::Metalink {
+            url: "https://example.test/metalink".to_string(),
+        },
+        package_keys: vec![
+            OpenPgpTrustRoot::new(
+                "https://example.test/fedora.gpg".to_string(),
+                "A".repeat(40),
+            )
+            .unwrap(),
+        ],
+    };
     SourceSnapshotV1 {
         schema_version: SOURCE_SNAPSHOT_SCHEMA_V1,
         source_profile: "fedora-44".to_string(),
@@ -92,8 +110,16 @@ fn source_manifest(binding: &CatalogBindingV1) -> SourceSnapshotV1 {
         parser_projection_version: 1,
         provenance: SourceProvenanceV1 {
             ecosystem: SourceEcosystemV1::Rpm,
-            parser_config_sha256: digest('f'),
-            trust_policy_sha256: digest('1'),
+            metadata_url: "https://example.test/repository".to_string(),
+            content_url: Some("https://content.example.test/repository".to_string()),
+            parser_config_sha256: crate::hash::sha256(
+                &crate::json::canonical_json(&parser_config).unwrap(),
+            ),
+            parser_config,
+            trust_policy_sha256: crate::hash::sha256(
+                &crate::json::canonical_json(&trust_policy).unwrap(),
+            ),
+            trust_policy,
         },
         authenticated_root: artifact('2', 512),
         authenticated_objects: vec![source_object()],

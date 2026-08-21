@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
 
 pub const SOURCE_SNAPSHOT_SCHEMA_V1: u32 = 1;
 pub const PROFILE_REVISION_SCHEMA_V1: u32 = 1;
@@ -39,7 +40,11 @@ pub struct SourceStreamV1 {
 #[serde(deny_unknown_fields)]
 pub struct SourceProvenanceV1 {
     pub ecosystem: SourceEcosystemV1,
+    pub metadata_url: String,
+    pub content_url: Option<String>,
+    pub parser_config: RepositoryParserConfig,
     pub parser_config_sha256: String,
+    pub trust_policy: RepositoryTrustPolicy,
     pub trust_policy_sha256: String,
 }
 
@@ -166,6 +171,7 @@ impl SourceSnapshotV1 {
             &self.provenance.trust_policy_sha256,
             "source snapshot trust policy digest",
         )?;
+        self.provenance.validate()?;
         self.authenticated_root
             .validate("authenticated source root SHA-256")?;
         self.catalog.validate("source catalog SHA-256")?;
@@ -276,6 +282,69 @@ fn canonical_manifest_sha256(value: &impl Serialize) -> Result<String> {
     Ok(crate::hash::sha256(&bytes))
 }
 
+impl SourceProvenanceV1 {
+    fn validate(&self) -> Result<()> {
+        self.parser_config.validate()?;
+        self.trust_policy.validate()?;
+        let parser_format = self.parser_config.format();
+        let trust_format = self.trust_policy.format();
+        let ecosystem_format = match self.ecosystem {
+            SourceEcosystemV1::Rpm => RepositoryFormat::Fedora,
+            SourceEcosystemV1::Deb => RepositoryFormat::Debian,
+            SourceEcosystemV1::Alpm => RepositoryFormat::Arch,
+            SourceEcosystemV1::Eopkg => RepositoryFormat::Eopkg,
+        };
+        if parser_format != ecosystem_format || trust_format != ecosystem_format {
+            return Err(Error::ConfigError(format!(
+                "source provenance ecosystem {:?}, parser '{}', and trust '{}' must describe one native format",
+                self.ecosystem,
+                parser_format.as_str(),
+                trust_format.as_str()
+            )));
+        }
+        validate_source_url(&self.metadata_url, "source metadata URL")?;
+        if let Some(content_url) = &self.content_url {
+            validate_source_url(content_url, "source content URL")?;
+        }
+        let parser_digest = canonical_value_sha256(&self.parser_config)?;
+        if parser_digest != self.parser_config_sha256 {
+            return Err(Error::ChecksumMismatch {
+                expected: parser_digest,
+                actual: self.parser_config_sha256.clone(),
+            });
+        }
+        let trust_digest = canonical_value_sha256(&self.trust_policy)?;
+        if trust_digest != self.trust_policy_sha256 {
+            return Err(Error::ChecksumMismatch {
+                expected: trust_digest,
+                actual: self.trust_policy_sha256.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn canonical_value_sha256(value: &impl Serialize) -> Result<String> {
+    let bytes = crate::json::canonical_json(value).map_err(|error| {
+        Error::ParseError(format!("serialize source provenance authority: {error}"))
+    })?;
+    Ok(crate::hash::sha256(&bytes))
+}
+
+fn validate_source_url(value: &str, label: &str) -> Result<()> {
+    let parsed = url::Url::parse(value)
+        .map_err(|error| Error::ConfigError(format!("{label} is invalid: {error}")))?;
+    if !matches!(parsed.scheme(), "https" | "http" | "file") {
+        return Err(Error::ConfigError(format!(
+            "{label} must use an explicit https, http, or file scheme"
+        )));
+    }
+    if matches!(parsed.scheme(), "https" | "http") && parsed.host_str().is_none() {
+        return Err(Error::ConfigError(format!("{label} has no host")));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_identity(value: &str, label: &str) -> Result<()> {
     if value.is_empty()
         || value.len() > 255
@@ -353,6 +422,21 @@ mod tests {
     }
 
     fn source_snapshot() -> SourceSnapshotV1 {
+        let parser_config = RepositoryParserConfig::Rpm {
+            architecture: "x86_64".to_string(),
+        };
+        let trust_policy = RepositoryTrustPolicy::Rpm {
+            metadata: crate::repository::RpmMetadataAuthority::Metalink {
+                url: "https://example.test/metalink".to_string(),
+            },
+            package_keys: vec![
+                crate::repository::OpenPgpTrustRoot::new(
+                    "https://example.test/fedora.gpg".to_string(),
+                    "A".repeat(40),
+                )
+                .unwrap(),
+            ],
+        };
         SourceSnapshotV1 {
             schema_version: SOURCE_SNAPSHOT_SCHEMA_V1,
             source_profile: "fedora-44".to_string(),
@@ -366,8 +450,12 @@ mod tests {
             parser_projection_version: 1,
             provenance: SourceProvenanceV1 {
                 ecosystem: SourceEcosystemV1::Rpm,
-                parser_config_sha256: digest('7'),
-                trust_policy_sha256: digest('8'),
+                metadata_url: "https://example.test/repository".to_string(),
+                content_url: Some("https://content.example.test/repository".to_string()),
+                parser_config_sha256: canonical_value_sha256(&parser_config).unwrap(),
+                parser_config,
+                trust_policy_sha256: canonical_value_sha256(&trust_policy).unwrap(),
+                trust_policy,
             },
             authenticated_root: artifact('b', 128),
             authenticated_objects: vec![
