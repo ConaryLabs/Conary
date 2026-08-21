@@ -518,6 +518,53 @@ persuasion work rather than decoration.
     rows and field lines only; no new authority, read-only over existing
     typed state.
 
+### Candidate target frames
+
+Composed from the same five shapes; content is illustrative, structure is the
+proposal.
+
+Candidate 10 — every successful mutation currently ends with the doubled
+publication warning; the proposed ending:
+
+```
+Installed 2 packages (49 files, 4.2 s)
+  Generation: 41 -> 42 (pending publish)
+note: publish with 'conary system generation publish --yes'
+```
+
+Candidate 11 — the transaction summary behind an interactive confirm
+(TTY only; `--yes` and non-interactive behavior unchanged):
+
+```
+$ sudo conary install nginx
+Resolved nginx 1.27.2-3 from remi-fedora-44 (rpm)
+
+Changes (2 install):
+  install  nginx        1.27.2-3  x86_64  rpm  1.2 MB
+  install  nginx-core   1.27.2-3  x86_64  rpm  864 kB  dependency
+
+  2.1 MB to download · 5.4 MB on disk after
+
+Proceed with install? [y/N] y
+Installed 2 packages (49 files, 4.2 s)
+note: publish with 'conary system generation publish --yes'
+```
+
+Candidate 12 — the bare invocation as an at-a-glance screen instead of a
+version banner:
+
+```
+$ conary
+conary 0.16.1 · fedora-44 host
+
+  Generation : 42 (current, published)
+  Packages   : 1,284 owned · 96 adopted · 3 pinned
+  Feeds      : 4 enabled · synced 2 h ago
+  Updates    : 6 available (1 security)
+
+note: preview updates with 'conary update --dry-run'
+```
+
 ## Constraint compliance for later slices
 
 - Guarded vocabulary and ASCII-only tags stay; slices 2, 5, 7, and 9 must
