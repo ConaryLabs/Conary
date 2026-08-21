@@ -1020,7 +1020,7 @@ semantic = "trust_signing_subkeys"
 artifact_roles = ["install_request"]
 
 [[test.step]]
-run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install w7-trust-valid-a --convert-to-ccs --repo w7trust --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always && test -f /conary/usr/share/w7-trust-valid-a/proof.txt"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install w7-trust-valid-a --convert-to-ccs --repo w7trust --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always && /opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/share/w7-trust-valid-a/proof.txt=3051767c0e742d3f169b1e952d973faa885cf47a84285cdf06c70a2f271b8d5d"
 
 [test.step.assert]
 exit_code = 0
@@ -1061,7 +1061,7 @@ semantic = "trust_signing_subkeys"
 artifact_roles = ["install_request"]
 
 [[test.step]]
-run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install w7-trust-valid-b --convert-to-ccs --repo w7trust --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always && test -f /conary/usr/share/w7-trust-valid-b/proof.txt"
+run = "CONARY_TEST_SKIP_GENERATION_MOUNT=1 ${CONARY_BIN} install w7-trust-valid-b --convert-to-ccs --repo w7trust --db-path ${DB_PATH} --root /conary --no-deps --yes --sandbox always && /opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --expect-sha256 /usr/share/w7-trust-valid-b/proof.txt=3051767c0e742d3f169b1e952d973faa885cf47a84285cdf06c70a2f271b8d5d"
 
 [test.step.assert]
 exit_code = 0
@@ -1353,7 +1353,7 @@ exit_code = 0
 stdout_contains = "pending"
 
 [[test.step]]
-run = "test -f /conary/usr/share/w7-trust-valid-a/proof.txt && test \"$(sqlite3 ${DB_PATH} \"SELECT COUNT(*) FROM troves WHERE name = 'w7-trust-valid-a'\")\" = 1 && sqlite3 ${DB_PATH} \"PRAGMA quick_check; SELECT status || '|' || retry_count || '|' || recoverable || '|' || COALESCE(last_error, '') FROM generation_publications WHERE trigger_changeset_id = (SELECT id FROM changesets WHERE description LIKE 'Install w7-trust-valid-a-%' ORDER BY id DESC LIMIT 1) ORDER BY id DESC LIMIT 1; SELECT status || '|' || COUNT(*) FROM generation_activation_intents GROUP BY status ORDER BY status\""
+run = "/opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --absent /usr/share/w7-trust-valid-a/proof.txt && test \"$(sqlite3 ${DB_PATH} \"SELECT COUNT(*) FROM troves WHERE name = 'w7-trust-valid-a'\")\" = 1 && sqlite3 ${DB_PATH} \"PRAGMA quick_check; SELECT status || '|' || retry_count || '|' || recoverable || '|' || COALESCE(last_error, '') FROM generation_publications WHERE trigger_changeset_id = (SELECT id FROM changesets WHERE description LIKE 'Install w7-trust-valid-a-%' ORDER BY id DESC LIMIT 1) ORDER BY id DESC LIMIT 1; SELECT status || '|' || COUNT(*) FROM generation_activation_intents GROUP BY status ORDER BY status\""
 
 [test.step.assert]
 exit_code = 0
@@ -1395,7 +1395,7 @@ semantic = "failure_activation"
 artifact_roles = ["install_request"]
 
 [[test.step]]
-run = "generation=$(sqlite3 ${DB_PATH} \"SELECT MAX(generation_number) FROM generation_activation_intents WHERE status = 'pending'\") && test -n \"$generation\" && test -f \"/conary/generations/$generation/.conary-artifact.json\" && printf 'quiet conary.generation=%s\\n' \"$generation\" > /tmp/w7-proc-cmdline && before_current=$(readlink /conary/current) && before_generations=$(find /conary/generations -mindepth 1 -maxdepth 1 -type d | wc -l) && before_requests=$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM activation_requests') && before_troves=$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM troves') && if CONARY_TEST_PROC_CMDLINE_PATH=/tmp/w7-proc-cmdline ${CONARY_BIN} generation activate --db-path ${DB_PATH} > /tmp/w7-activation-failure.log 2>&1; then cat /tmp/w7-activation-failure.log; exit 1; fi && grep -F 'generation activation request(s) remain retryable' /tmp/w7-activation-failure.log && test \"$(readlink /conary/current)\" = \"$before_current\" && test \"$(find /conary/generations -mindepth 1 -maxdepth 1 -type d | wc -l)\" = \"$before_generations\" && test \"$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM activation_requests')\" = \"$before_requests\" && test \"$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM troves')\" = \"$before_troves\" && test -f /conary/usr/share/w7-trust-valid-a/proof.txt && sqlite3 ${DB_PATH} \"PRAGMA quick_check; SELECT status || '|' || attempt_count || '|' || COALESCE(last_error, '') FROM generation_activation_intents WHERE generation_number = $generation ORDER BY request_id\""
+run = "generation=$(sqlite3 ${DB_PATH} \"SELECT MAX(generation_number) FROM generation_activation_intents WHERE status = 'pending'\") && test -n \"$generation\" && test -f \"/conary/generations/$generation/.conary-artifact.json\" && printf 'quiet conary.generation=%s\\n' \"$generation\" > /tmp/w7-proc-cmdline && before_current=$(readlink /conary/current) && before_generations=$(find /conary/generations -mindepth 1 -maxdepth 1 -type d | wc -l) && before_requests=$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM activation_requests') && before_troves=$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM troves') && if CONARY_TEST_PROC_CMDLINE_PATH=/tmp/w7-proc-cmdline ${CONARY_BIN} system generation activate --db-path ${DB_PATH} > /tmp/w7-activation-failure.log 2>&1; then cat /tmp/w7-activation-failure.log; exit 1; fi && grep -F 'generation activation request(s) remain retryable' /tmp/w7-activation-failure.log && test \"$(readlink /conary/current)\" = \"$before_current\" && test \"$(find /conary/generations -mindepth 1 -maxdepth 1 -type d | wc -l)\" = \"$before_generations\" && test \"$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM activation_requests')\" = \"$before_requests\" && test \"$(sqlite3 ${DB_PATH} 'SELECT COUNT(*) FROM troves')\" = \"$before_troves\" && /opt/remi-tests/fixtures/native/assert-selected-generation.py --root /conary --absent /usr/share/w7-trust-valid-a/proof.txt && sqlite3 ${DB_PATH} \"PRAGMA quick_check; SELECT status || '|' || attempt_count || '|' || COALESCE(last_error, '') FROM generation_activation_intents WHERE generation_number = $generation ORDER BY request_id\""
 
 [test.step.assert]
 exit_code = 0
