@@ -88,3 +88,31 @@ fn member_plan_rejects_mixed_profiles_before_fetch() {
         .expect("mixed profile must fail");
     assert!(error.to_string().contains("cannot plan"));
 }
+
+#[test]
+fn candidate_cleanup_removes_only_the_exact_canonical_run() {
+    let root = tempfile::tempdir().unwrap();
+    let run_id = "00000000-0000-4000-8000-000000000001";
+    let candidate = root.path().join(run_id);
+    let unrelated = root.path().join("keep-me");
+    std::fs::create_dir(&candidate).unwrap();
+    std::fs::write(candidate.join("partial"), b"candidate").unwrap();
+    std::fs::create_dir(&unrelated).unwrap();
+
+    cleanup_candidate_run(root.path(), run_id).unwrap();
+
+    assert!(!candidate.exists());
+    assert!(unrelated.exists());
+}
+
+#[test]
+fn candidate_cleanup_rejects_noncanonical_or_path_like_identity() {
+    let root = tempfile::tempdir().unwrap();
+    for invalid in [
+        "../00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-00000000000A",
+        "not-a-run",
+    ] {
+        assert!(cleanup_candidate_run(root.path(), invalid).is_err());
+    }
+}

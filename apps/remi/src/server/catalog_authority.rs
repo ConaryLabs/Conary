@@ -13,11 +13,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::{
     RemiActiveProfileRevision, RemiCatalogResource, RemiCatalogResourceKind,
+    RemiProfileRevisionPin, RemiRevisionPinKind,
 };
 use conary_core::repository::catalog::{
     CatalogReader, ProfileRevisionV1, verify_profile_catalog_bundle,
 };
 use rusqlite::Connection;
+use rusqlite::{Transaction, TransactionBehavior};
 
 use super::{ServerConfig, open_runtime_db};
 
@@ -57,7 +59,35 @@ impl CatalogAuthority {
         let conn = open_runtime_db(&self.db_path).with_context(|| {
             format!("open Remi operational database for profile '{source_profile}'")
         })?;
-        open_active_profile_from_connection(&conn, &self.catalog_dir, source_profile)
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
+            .context("acquire immutable catalog reader-pin transaction")?;
+        let resolved = resolve_active_profile(&tx, &self.catalog_dir, source_profile)?;
+        let pin_id = uuid::Uuid::new_v4().to_string();
+        RemiProfileRevisionPin {
+            pin_id: pin_id.clone(),
+            source_profile: resolved.pointer.source_profile.clone(),
+            profile_revision_sha256: resolved.pointer.profile_revision_sha256.clone(),
+            owner_kind: RemiRevisionPinKind::Reader,
+            owner_identity: pin_id.clone(),
+            pinned_at: unix_seconds()?,
+        }
+        .insert(&tx)
+        .context("pin exact immutable profile revision for reader lifetime")?;
+        tx.commit().context("commit immutable catalog reader pin")?;
+
+        match open_resolved_profile(resolved) {
+            Ok(mut pinned) => {
+                pinned.pin = Some(ReaderPin {
+                    db_path: self.db_path.clone(),
+                    pin_id,
+                });
+                Ok(pinned)
+            }
+            Err(error) => {
+                release_reader_pin(&self.db_path, &pin_id);
+                Err(error)
+            }
+        }
     }
 
     /// Alias kept intentionally small for callers that treat the authority as
@@ -84,6 +114,12 @@ pub struct PinnedProfileCatalog {
     pointer: RemiActiveProfileRevision,
     manifest: ProfileRevisionV1,
     reader: CatalogReader,
+    pin: Option<ReaderPin>,
+}
+
+struct ReaderPin {
+    db_path: PathBuf,
+    pin_id: String,
 }
 
 impl fmt::Debug for PinnedProfileCatalog {
@@ -93,6 +129,7 @@ impl fmt::Debug for PinnedProfileCatalog {
             .field("pointer", &self.pointer)
             .field("manifest", &self.manifest)
             .field("catalog_path", &self.reader.path())
+            .field("reader_pin", &self.pin.as_ref().map(|pin| &pin.pin_id))
             .finish()
     }
 }
@@ -145,12 +182,6 @@ impl PinnedProfileCatalog {
     pub fn catalog_path(&self) -> &Path {
         self.reader.path()
     }
-
-    /// Consume the pinned handle and return its owned immutable reader.
-    #[must_use]
-    pub fn into_reader(self) -> CatalogReader {
-        self.reader
-    }
 }
 
 impl Deref for PinnedProfileCatalog {
@@ -161,17 +192,54 @@ impl Deref for PinnedProfileCatalog {
     }
 }
 
+impl Drop for PinnedProfileCatalog {
+    fn drop(&mut self) {
+        if let Some(pin) = self.pin.take() {
+            release_reader_pin(&pin.db_path, &pin.pin_id);
+        }
+    }
+}
+
+fn release_reader_pin(db_path: &Path, pin_id: &str) {
+    let result =
+        open_runtime_db(db_path).and_then(|conn| RemiProfileRevisionPin::release(&conn, pin_id));
+    match result {
+        Ok(true) => {}
+        Ok(false) => tracing::error!(pin_id, "immutable catalog reader pin was already absent"),
+        Err(error) => tracing::error!(
+            pin_id,
+            error = %error,
+            "failed to release immutable catalog reader pin"
+        ),
+    }
+}
+
 /// Resolve and verify an active profile using an already-open operational
 /// SQLite connection.
 ///
 /// This narrow helper keeps the authority testable without introducing a
 /// second database-opening policy. It intentionally queries only pointer and
 /// resource metadata; package rows in operational SQLite are never consulted.
+#[cfg(test)]
 fn open_active_profile_from_connection(
     conn: &Connection,
     catalog_dir: &Path,
     source_profile: &str,
 ) -> Result<PinnedProfileCatalog> {
+    open_resolved_profile(resolve_active_profile(conn, catalog_dir, source_profile)?)
+}
+
+struct ResolvedProfileCatalog {
+    pointer: RemiActiveProfileRevision,
+    manifest: ProfileRevisionV1,
+    bundle_path: PathBuf,
+}
+
+fn resolve_active_profile(
+    conn: &Connection,
+    catalog_dir: &Path,
+    source_profile: &str,
+) -> Result<ResolvedProfileCatalog> {
     let pointer = RemiActiveProfileRevision::find(conn, source_profile)
         .context("resolve active Remi profile revision pointer")?
         .ok_or_else(|| {
@@ -278,6 +346,20 @@ fn open_active_profile_from_connection(
         .join("profiles")
         .join(&manifest.profile)
         .join(&pointer.profile_revision_sha256);
+
+    Ok(ResolvedProfileCatalog {
+        pointer,
+        manifest,
+        bundle_path,
+    })
+}
+
+fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfileCatalog> {
+    let ResolvedProfileCatalog {
+        pointer,
+        manifest,
+        bundle_path,
+    } = resolved;
     let reader = verify_profile_catalog_bundle(&bundle_path, &manifest).with_context(|| {
         format!(
             "verify active profile catalog bundle {}",
@@ -289,7 +371,16 @@ fn open_active_profile_from_connection(
         pointer,
         manifest,
         reader,
+        pin: None,
     })
+}
+
+fn unix_seconds() -> Result<i64> {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system time precedes Unix epoch")?
+        .as_secs();
+    i64::try_from(seconds).context("system time exceeds SQLite integer range")
 }
 
 fn deserialize_profile_revision(resource: &RemiCatalogResource) -> Result<ProfileRevisionV1> {

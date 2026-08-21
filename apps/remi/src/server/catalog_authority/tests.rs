@@ -51,6 +51,15 @@ fn fixture() -> Fixture {
              activation_run_id TEXT NOT NULL,
              owner_instance_uuid TEXT NOT NULL,
              activated_at INTEGER NOT NULL
+         );
+         CREATE TABLE remi_profile_revision_pins (
+             pin_id TEXT PRIMARY KEY,
+             source_profile TEXT NOT NULL,
+             profile_revision_sha256 TEXT NOT NULL,
+             owner_kind TEXT NOT NULL,
+             owner_identity TEXT NOT NULL,
+             pinned_at INTEGER NOT NULL,
+             UNIQUE(owner_kind, owner_identity, source_profile)
          );",
     )
     .expect("create authority metadata tables");
@@ -250,4 +259,49 @@ fn old_handle_remains_pinned_after_new_activation() {
     assert_eq!(new_handle.reader().source_evidence().unwrap().len(), 1);
     assert_eq!(old_handle.manifest().members[0].source_identity, "source-a");
     assert_eq!(new_handle.manifest().members[0].source_identity, "source-b");
+}
+
+#[test]
+fn public_reader_holds_and_releases_exact_revision_pin() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+
+    let authority = super::CatalogAuthority::from_paths(&db_path, &fixture.catalog_dir);
+    let pinned = authority
+        .open_active_profile(PROFILE)
+        .expect("open and pin exact active profile");
+    let conn = Connection::open(&db_path).expect("reopen authority database");
+    let stored = conn
+        .query_row(
+            "SELECT source_profile, profile_revision_sha256, owner_kind
+             FROM remi_profile_revision_pins",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .expect("reader pin exists");
+    assert_eq!(
+        stored,
+        (PROFILE.to_string(), revision.digest, "reader".to_string())
+    );
+
+    drop(pinned);
+    let remaining = conn
+        .query_row(
+            "SELECT COUNT(*) FROM remi_profile_revision_pins",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count released reader pins");
+    assert_eq!(remaining, 0);
 }

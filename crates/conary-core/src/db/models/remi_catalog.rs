@@ -300,6 +300,19 @@ impl RemiActiveProfileRevision {
         Ok(pointers)
     }
 
+    /// Retire the exact active pointer for one source profile.
+    ///
+    /// Immutable resources and pins remain intact; readers that already hold
+    /// the old revision may finish while new readers fail closed until the
+    /// profile is refreshed and activated again.
+    pub fn retire(conn: &Connection, source_profile: &str) -> Result<bool> {
+        validate_identity(source_profile, "active source profile")?;
+        Ok(conn.execute(
+            "DELETE FROM remi_active_profile_revisions WHERE source_profile = ?1",
+            [source_profile],
+        )? == 1)
+    }
+
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             source_profile: row.get(0)?,
@@ -743,6 +756,32 @@ mod tests {
         assert_eq!(
             RemiActiveProfileRevision::find(&conn, "fedora-44").unwrap(),
             Some(after_second)
+        );
+    }
+
+    #[test]
+    fn retiring_active_pointer_preserves_immutable_resources() {
+        let (conn, repo) = setup();
+        insert_run(&conn, &repo, RUN_ONE, OWNER_ONE, 1);
+        install_catalog(&conn, 'd', 'e', true);
+        activate_profile_revision_at(&conn, &activation(1, RUN_ONE, OWNER_ONE, 'd'), 200).unwrap();
+
+        assert!(RemiActiveProfileRevision::retire(&conn, "fedora-44").unwrap());
+        assert!(
+            RemiActiveProfileRevision::find(&conn, "fedora-44")
+                .unwrap()
+                .is_none()
+        );
+        assert!(!RemiActiveProfileRevision::retire(&conn, "fedora-44").unwrap());
+        assert!(
+            RemiCatalogResource::find_by_sha256(&conn, &resource_digest('d'))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            RemiCatalogResource::find_by_sha256(&conn, &resource_digest('e'))
+                .unwrap()
+                .is_some()
         );
     }
 

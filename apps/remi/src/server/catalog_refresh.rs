@@ -238,14 +238,42 @@ fn publish_profile_candidates(
 }
 
 fn create_candidate_run_dir(root: &Path, run_id: &str) -> Result<PathBuf> {
-    let parsed = uuid::Uuid::parse_str(run_id).context("catalog run ID must be a UUID")?;
-    if parsed.hyphenated().to_string() != run_id {
-        bail!("catalog run ID must use canonical lowercase hyphenated UUID form");
-    }
+    validate_run_id(run_id)?;
     require_real_directory(root, "catalog candidate root")?;
     let path = root.join(run_id);
     create_private_directory(&path, root)?;
     Ok(path)
+}
+
+/// Remove only one exact private candidate run after publication or failure.
+/// Immutable source/profile destinations are never beneath this path.
+pub fn cleanup_candidate_run(root: &Path, run_id: &str) -> Result<()> {
+    validate_run_id(run_id)?;
+    require_real_directory(root, "catalog candidate root")?;
+    let path = root.join(run_id);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        bail!(
+            "catalog candidate run {} must be a real directory",
+            path.display()
+        );
+    }
+    fs::remove_dir_all(&path)
+        .with_context(|| format!("remove exact catalog candidate run {}", path.display()))?;
+    File::open(root)?.sync_all()?;
+    Ok(())
+}
+
+fn validate_run_id(run_id: &str) -> Result<()> {
+    let parsed = uuid::Uuid::parse_str(run_id).context("catalog run ID must be a UUID")?;
+    if parsed.hyphenated().to_string() != run_id {
+        bail!("catalog run ID must use canonical lowercase hyphenated UUID form");
+    }
+    Ok(())
 }
 
 fn create_private_directory(path: &Path, parent: &Path) -> Result<()> {
