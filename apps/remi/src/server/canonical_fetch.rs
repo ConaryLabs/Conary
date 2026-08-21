@@ -109,10 +109,13 @@ pub(crate) async fn run_canonical_cycle(
 
     let rebuild_db = db_path.to_path_buf();
     let rebuild_config = config.clone();
+    let rebuild_writer = database_writer.clone();
     let rebuild = match tokio::task::spawn_blocking(move || {
-        database_writer.execute(|| {
-            crate::server::canonical_job::rebuild_canonical_map(&rebuild_db, &rebuild_config)
-        })
+        crate::server::canonical_job::rebuild_canonical_map(
+            &rebuild_db,
+            &rebuild_config,
+            &rebuild_writer,
+        )
     })
     .await
     {

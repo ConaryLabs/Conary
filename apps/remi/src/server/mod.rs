@@ -23,7 +23,7 @@ mod bloom;
 mod bounded_cache;
 mod cache;
 mod canonical_fetch;
-pub mod canonical_job;
+mod canonical_job;
 pub mod chunk_gc;
 pub mod config;
 mod conversion;

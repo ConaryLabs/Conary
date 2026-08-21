@@ -665,8 +665,7 @@ impl RemiMcpServer {
         drop(state);
 
         let count = tokio::task::spawn_blocking(move || {
-            database_writer
-                .execute(|| crate::server::canonical_job::rebuild_canonical_map(&db_path, &config))
+            crate::server::canonical_job::rebuild_canonical_map(&db_path, &config, &database_writer)
         })
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
