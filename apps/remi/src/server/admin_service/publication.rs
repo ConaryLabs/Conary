@@ -41,6 +41,7 @@ mod tests {
     use std::time::Duration;
 
     use conary_core::db::models::Repository;
+    use conary_core::repository::RepositoryParserConfig;
 
     use super::*;
     use crate::server::admin_service::sync_repo;
@@ -63,6 +64,9 @@ mod tests {
         );
         repository.source_profile = Some("fedora-44".to_string());
         repository.last_sync = Some(conary_core::repository::current_timestamp());
+        repository
+            .set_parser_config(RepositoryParserConfig::Json)
+            .expect("set parser configuration");
         repository.insert(&conn).expect("insert repository");
         drop(conn);
 
