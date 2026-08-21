@@ -28,7 +28,8 @@ pub use create::{
     build_generation_from_db_with_boot_root_and_activation, materialize_selected_root_from_db,
     materialize_selected_root_from_db_with_authority,
 };
-pub(crate) use file_capabilities::{SECURITY_CAPABILITY_XATTR, encode_security_capability_xattr};
+pub(crate) use file_capabilities::SECURITY_CAPABILITY_XATTR;
+pub use file_capabilities::encode_security_capability_xattr;
 pub(crate) use rebuild::rebuild_generation_image;
 
 /// Result of serializing one exact generation-root manifest to EROFS.

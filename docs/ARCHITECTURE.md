@@ -798,7 +798,9 @@ truth. If `/conary/current` names a missing or invalid artifact, recovery
 rebuilds from DB/CAS state while explicit boot-selection recovery owns scanning,
 promotion, and remounting.
 Generation-aware CCS installs follow the same model for file capabilities by
-persisting file-capability authority in SQLite first, attaching
+writing the typed Linux revision-2 xattr through an `O_NOFOLLOW` descriptor in
+the selected root without an external `setcap` dependency, persisting
+file-capability authority in SQLite, attaching
 `security.capability` during runtime-input collection, requiring immediate
 publication instead of `--defer-generation`, and surfacing the resulting
 capability-xattr count through generation inspection metadata.
