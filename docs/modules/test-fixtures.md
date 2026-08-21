@@ -508,7 +508,8 @@ Each fixture family should record:
   xattrs, file capabilities, typed conflict/replacement relations, no-lifecycle
   packages, non-shell interpreters, file triggers, transaction hooks, multiple
   valid signing subkeys, and expired, revoked, and unknown trust negatives.
-  Runtime proof captures a service activation intent, invokes the selected
+  Runtime proof captures service-manager and `depmod` mutation requests bound
+  to the selected root's exact deterministic providers, invokes the selected
   root's exact target helper, and records deferred generation work. Forced
   interrupted-download, conversion, payload-mutation, lifecycle, publication,
   and activation failures assert the package database, selected generation,

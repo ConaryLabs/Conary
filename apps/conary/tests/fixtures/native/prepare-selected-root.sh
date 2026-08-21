@@ -121,6 +121,11 @@ else
   systemctl_path=
   rm -f "${stage}/usr/bin/systemctl"
 fi
+depmod_path=/usr/sbin/depmod
+if [[ ! -x "${stage}${depmod_path}" ]]; then
+  echo "Selected-root depmod fixture is missing: ${stage}${depmod_path}" >&2
+  exit 1
+fi
 if openrc_path="$(command -v rc-service 2>/dev/null)"; then
   copy_elf_closure "${openrc_path}"
 fi
@@ -180,6 +185,7 @@ CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   --present /bin/false \
   --present /usr/bin/bash \
   --present "${systemctl_path:-/usr/bin/true}" \
+  --present "${depmod_path}" \
   --present "${install_path}" \
   --present /lib64/ld-linux-x86-64.so.2 \
   --present /etc/passwd \

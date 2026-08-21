@@ -347,6 +347,18 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_contract() {
             "{containerfile} must prove the synchronous exec supervisor capability"
         );
     }
+    for containerfile in [
+        "Containerfile.fedora44",
+        "Containerfile.ubuntu-26.04",
+        "Containerfile.arch",
+    ] {
+        let contents = std::fs::read_to_string(container_root.join(containerfile))
+            .unwrap_or_else(|error| panic!("read {containerfile}: {error}"));
+        assert!(
+            contents.contains("command -v systemctl"),
+            "{containerfile} must prove its declared systemd provider"
+        );
+    }
 }
 
 #[test]

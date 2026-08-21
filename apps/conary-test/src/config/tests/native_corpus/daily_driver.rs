@@ -126,7 +126,8 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "/usr/share/phase4-repository-fixture/probe.txt",
         "/var/lib/phase4-corpus/scriptlet.marker",
         "captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service",
-        "pending|1",
+        "captured-boot-runtime|phase4-daily-driver-corpus|boot-runtime|depmod|-a",
+        "pending|2",
         "RuntimeServiceActivation",
         "RuntimeTargetHelper",
         "FailureInterruptedDownload",
@@ -707,8 +708,11 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "systemctl_path=/usr/bin/systemctl",
         "Selected-root systemctl fixture is missing",
         "rm -f \"${stage}/usr/bin/systemctl\"",
+        "depmod_path=/usr/sbin/depmod",
+        "Selected-root depmod fixture is missing",
         "--present /bin/false",
         "--present \"${systemctl_path:-/usr/bin/true}\"",
+        "--present \"${depmod_path}\"",
         "--present \"${install_path}\"",
     ] {
         assert!(
@@ -719,6 +723,10 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
     assert!(
         conary_fixture_path("native-selected-root-layout/stage/usr/bin/systemctl").is_file(),
         "selected-root activation capture must ship its deterministic systemctl boundary"
+    );
+    assert!(
+        conary_fixture_path("native-selected-root-layout/stage/usr/sbin/depmod").is_file(),
+        "selected-root boot-runtime capture must ship its deterministic depmod boundary"
     );
     assert!(
         !conary_fixture_path("phase4-daily-driver-corpus/stage/usr/sbin/depmod").exists(),

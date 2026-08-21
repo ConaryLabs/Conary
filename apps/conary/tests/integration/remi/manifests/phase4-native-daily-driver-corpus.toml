@@ -397,11 +397,11 @@ exit_code = 0
 stdout_contains_all = ["1 lifecycle bundles", "${native_target}|phase4-daily-driver-corpus|${native_corpus_fixture_version}|${native_corpus_lifecycle_fidelity}|installed"]
 
 [[test.step]]
-run = "sqlite3 ${DB_PATH} \"SELECT source_kind || '|' || source_package || '|' || json_extract(invocation_json, '$.kind') || '|' || json_extract(invocation_json, '$.invocation.action') || '|' || json_extract(invocation_json, '$.invocation.units[0]') FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus' ORDER BY id; SELECT status || '|' || COUNT(*) FROM generation_activation_intents WHERE request_id IN (SELECT id FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus') GROUP BY status\""
+run = "sqlite3 ${DB_PATH} \"SELECT source_kind || '|' || source_package || '|' || json_extract(invocation_json, '$.kind') || '|' || COALESCE(json_extract(invocation_json, '$.invocation.action'), json_extract(invocation_json, '$.invocation.program')) || '|' || COALESCE(json_extract(invocation_json, '$.invocation.units[0]'), json_extract(invocation_json, '$.invocation.arguments[0]')) FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus' ORDER BY id; SELECT status || '|' || COUNT(*) FROM generation_activation_intents WHERE request_id IN (SELECT id FROM activation_requests WHERE source_package = 'phase4-daily-driver-corpus') GROUP BY status\""
 
 [test.step.assert]
 exit_code = 0
-stdout_contains_all = ["captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service", "pending|1"]
+stdout_contains_all = ["captured-systemctl|phase4-daily-driver-corpus|systemd|start|phase4-corpus.service", "captured-boot-runtime|phase4-daily-driver-corpus|boot-runtime|depmod|-a", "pending|2"]
 
 [[test.step]]
 run = "sqlite3 ${DB_PATH} \"SELECT t.name || '|' || ct.status || '|' || ct.matched_files FROM changeset_triggers ct JOIN triggers t ON t.id = ct.trigger_id WHERE t.name = 'phase4-corpus-trigger' ORDER BY ct.id DESC LIMIT 1\""

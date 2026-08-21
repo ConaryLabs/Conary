@@ -22,6 +22,7 @@ RUN dnf install -y \
         python3 \
         shadow-utils \
         sqlite \
+        systemd \
     && dnf clean all
 
 # Copy all conary* files from build context (binary or package)
@@ -40,6 +41,7 @@ RUN /usr/bin/conary --version \
     && command -v cmp \
     && command -v diff \
     && command -v setsid \
+    && command -v systemctl \
     && test -e /lib64/ld-linux-x86-64.so.2
 
 COPY config.toml /opt/remi-tests/config.toml
