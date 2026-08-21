@@ -130,7 +130,7 @@ const DELETE_BY_REPOSITORY_SQL: &str = "DELETE FROM repository_provides
                  SELECT id FROM repository_packages WHERE repository_id = ?1
              )";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RepositoryProvide {
     pub id: Option<i64>,
     pub repository_package_id: i64,

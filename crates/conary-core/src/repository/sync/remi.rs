@@ -20,20 +20,24 @@ use crate::repository::remi_metadata::{
 };
 use crate::repository::versioning::VersionScheme;
 use rusqlite::Connection;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use super::apply_trusted_package_security_advisory;
+#[cfg(test)]
 use super::native::append_synced_package_rows;
 use super::types::SyncedPackageRow;
 
+mod client;
 mod path;
 mod run;
 mod sparse;
 
 pub(super) use path::sync_repository_remi_from_db_path;
-use run::{
-    RemiSyncFailureCategory, RemiSyncFailureStage, abort_remi_sync_run, append_remi_sync_page,
-    begin_remi_sync_run, finish_remi_sync_run,
+pub use run::{
+    ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
+    abort_profile_sync_run, begin_profile_sync_run, begin_profile_sync_run_with_input,
+    begin_profile_sync_run_with_members, heartbeat_profile_sync_run, ready_profile_sync_run,
+    record_profile_sync_run_member,
 };
 use sparse::RemiSparseSync;
 #[cfg(test)]
@@ -294,68 +298,9 @@ pub(super) async fn sync_repository_remi(
     conn: &Connection,
     repo: &mut Repository,
 ) -> Result<usize> {
-    info!(
-        "Syncing repository {} from the paginated Remi sparse index",
-        repo.name
-    );
-    let mut fetcher = RemiSparseSync::new(repo)?;
-    let run = begin_remi_sync_run(conn, repo)?;
-    loop {
-        let rows = match fetcher.next_rows().await {
-            Ok(Some(rows)) => rows,
-            Ok(None) => break,
-            Err(error) => {
-                if let Err(abort_error) = abort_remi_sync_run(
-                    conn,
-                    &run,
-                    RemiSyncFailureStage::FetchingObjects,
-                    RemiSyncFailureCategory::from_error(&error),
-                    &error.to_string(),
-                ) {
-                    debug!("Failed to abandon sparse-sync run: {abort_error}");
-                }
-                return Err(error);
-            }
-        };
-        let revision = fetcher.revision().ok_or_else(|| {
-            Error::InternalError("Remi sparse page did not establish a server revision".to_string())
-        })?;
-        if let Err(error) = append_remi_sync_page(conn, &run, rows, revision) {
-            if let Err(abort_error) = abort_remi_sync_run(
-                conn,
-                &run,
-                RemiSyncFailureStage::Ingesting,
-                RemiSyncFailureCategory::from_error(&error),
-                &error.to_string(),
-            ) {
-                debug!("Failed to abandon sparse-sync run: {abort_error}");
-            }
-            return Err(error);
-        }
-    }
-    let revision = fetcher.revision().ok_or_else(|| {
-        Error::InternalError("Remi sparse sync completed without a server revision".to_string())
-    })?;
-    let count = match finish_remi_sync_run(conn, repo, &run, revision) {
-        Ok(count) => count,
-        Err(error) => {
-            if let Err(abort_error) = abort_remi_sync_run(
-                conn,
-                &run,
-                RemiSyncFailureStage::Publishing,
-                RemiSyncFailureCategory::from_error(&error),
-                &error.to_string(),
-            ) {
-                debug!("Failed to abandon sparse-sync run: {abort_error}");
-            }
-            return Err(error);
-        }
-    };
-    info!(
-        "Synchronized {} packages from Remi repository {}",
-        count, repo.name
-    );
-    Ok(count)
+    let fence = client::begin_client_sync(conn, repo)?;
+    let candidate = client::fetch_client_candidate(repo).await?;
+    client::publish_client_candidate(conn, repo, &fence, candidate)
 }
 
 /// Fetch the canonical package map from a Remi endpoint and persist it locally.
@@ -395,10 +340,7 @@ pub(super) async fn fetch_and_persist_canonical_map(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::{
-        RepositoryPackageKey, RepositoryPackageKeyStatus,
-        RepositoryRequirementGroup as DbRequirementGroup,
-    };
+    use crate::db::models::RepositoryRequirementGroup as DbRequirementGroup;
     use crate::db::testing::create_test_db;
     use crate::repository::package_relation::parse_native_relation;
     use crate::repository::remi_metadata::{
@@ -406,7 +348,6 @@ mod tests {
         RemiSparsePackagePage, RemiSparseResolutionEntry, RemiSparseResolutionVersionEntry,
         RemiSparseRevision,
     };
-    use std::io::{Read, Write};
 
     fn test_sparse_revision(sequence: u64) -> RemiSparseRevision {
         RemiSparseRevision::new(sequence, format!("{sequence:032x}")).unwrap()
@@ -802,30 +743,6 @@ mod tests {
         }
     }
 
-    fn consume_synthetic_page(
-        fetcher: &mut RemiSparseSync,
-        package_count: usize,
-    ) -> Result<Vec<SyncedPackageRow>> {
-        let page = fetcher.next_page;
-        let start = (page - 1) * REMI_SPARSE_SYNC_PAGE_SIZE;
-        let end = start
-            .saturating_add(REMI_SPARSE_SYNC_PAGE_SIZE)
-            .min(package_count);
-        let entries = (start..end)
-            .map(|index| format!("pkg-{index:08}"))
-            .map(|name| sparse_test_entry(&name))
-            .collect();
-        fetcher.consume_page(RemiSparsePackagePage {
-            distro: "fedora".to_string(),
-            source_profile: "fedora-44".to_string(),
-            revision: test_sparse_revision(7),
-            packages: entries,
-            total: package_count,
-            page,
-            per_page: REMI_SPARSE_SYNC_PAGE_SIZE,
-        })
-    }
-
     #[test]
     fn sparse_wire_contract_round_trips_complete_resolution_page() {
         let emitted = serde_json::json!({
@@ -891,166 +808,5 @@ mod tests {
             page.packages[0].versions[0].metadata.as_ref().unwrap()["security_advisory"]["id"],
             "FEDORA-2026-0001"
         );
-    }
-
-    #[test]
-    fn sparse_sync_atomically_replaces_rows_and_cleans_staging_repository() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::db::schema::ensure_current(&conn).unwrap();
-        let mut repo = sparse_test_repo("https://remi.test".to_string(), &conn);
-        RepositoryPackageKey::replace_for_repository(
-            &conn,
-            repo.id.unwrap(),
-            &[RepositoryPackageKey {
-                repository_id: repo.id.unwrap(),
-                public_key: "release-tracked-key".to_string(),
-                key_id: Some("targets".to_string()),
-                status: RepositoryPackageKeyStatus::Active,
-                synced_at: None,
-            }],
-        )
-        .unwrap();
-        let mut old = RepositoryPackage::new(
-            repo.id.unwrap(),
-            "retired".to_string(),
-            "0".to_string(),
-            VersionScheme::Rpm,
-            "old".to_string(),
-            1,
-            "https://old.invalid".to_string(),
-        );
-        old.insert(&conn).unwrap();
-
-        let mut fetcher = RemiSparseSync::new(&repo).unwrap();
-        let run = begin_remi_sync_run(&conn, &repo).unwrap();
-        while fetcher.names_seen < 300 {
-            let rows = consume_synthetic_page(&mut fetcher, 300).unwrap();
-            append_remi_sync_page(&conn, &run, rows, fetcher.revision().unwrap()).unwrap();
-        }
-        let count =
-            finish_remi_sync_run(&conn, &mut repo, &run, fetcher.revision().unwrap()).unwrap();
-
-        assert_eq!(count, 300);
-        let packages = RepositoryPackage::find_by_repository(&conn, repo.id.unwrap()).unwrap();
-        assert_eq!(packages.len(), 300);
-        assert!(!packages.iter().any(|package| package.name == "retired"));
-        assert_eq!(
-            RepositoryPackageKey::trusted_keys_for_repository(&conn, repo.id.unwrap()).unwrap(),
-            vec!["release-tracked-key".to_string()]
-        );
-        assert_eq!(Repository::list_all(&conn).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn sparse_sync_failure_preserves_previous_snapshot() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::db::schema::ensure_current(&conn).unwrap();
-        let repo = sparse_test_repo("https://remi.test".to_string(), &conn);
-        let mut old = RepositoryPackage::new(
-            repo.id.unwrap(),
-            "still-current".to_string(),
-            "1".to_string(),
-            VersionScheme::Rpm,
-            "old".to_string(),
-            1,
-            "https://old.invalid".to_string(),
-        );
-        old.insert(&conn).unwrap();
-
-        let mut fetcher = RemiSparseSync::new(&repo).unwrap();
-        let run = begin_remi_sync_run(&conn, &repo).unwrap();
-        let mut rows = consume_synthetic_page(&mut fetcher, 2).unwrap();
-        rows[1].package.name = rows[0].package.name.clone();
-        let error =
-            append_remi_sync_page(&conn, &run, rows, fetcher.revision().unwrap()).unwrap_err();
-        abort_remi_sync_run(
-            &conn,
-            &run,
-            RemiSyncFailureStage::Ingesting,
-            RemiSyncFailureCategory::from_error(&error),
-            &error.to_string(),
-        )
-        .unwrap();
-
-        assert!(error.to_string().contains("UNIQUE constraint failed"));
-        let packages = RepositoryPackage::find_by_repository(&conn, repo.id.unwrap()).unwrap();
-        assert_eq!(packages.len(), 1);
-        assert_eq!(packages[0].name, "still-current");
-        assert_eq!(Repository::list_all(&conn).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn sparse_sync_peak_rss_is_independent_of_distribution_package_count() {
-        const CHILD_ENV: &str = "CONARY_ISSUE_156_PACKAGE_COUNT";
-        const TEST_NAME: &str = "repository::sync::remi::tests::sparse_sync_peak_rss_is_independent_of_distribution_package_count";
-        if std::env::var_os(CHILD_ENV).is_none() {
-            const FEDORA_SPARSE_NAME_COUNT: usize = 67_430;
-            let package_counts = [512usize, FEDORA_SPARSE_NAME_COUNT];
-            let mut measurements = Vec::new();
-            for package_count in package_counts {
-                let output = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args(["--exact", TEST_NAME, "--nocapture"])
-                    .env(CHILD_ENV, package_count.to_string())
-                    .output()
-                    .unwrap();
-                std::io::stdout().write_all(&output.stdout).unwrap();
-                std::io::stderr().write_all(&output.stderr).unwrap();
-                assert!(output.status.success(), "sparse RSS child failed");
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let high_water_kib = stdout
-                    .lines()
-                    .find_map(|line| line.strip_prefix("ISSUE156_VM_HWM_KIB="))
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .expect("sparse RSS child did not report VmHWM");
-                measurements.push(high_water_kib);
-            }
-            let growth_kib = measurements[1].saturating_sub(measurements[0]);
-            assert!(
-                growth_kib < 32 * 1024,
-                "VmHWM grew by {growth_kib} KiB when package count grew from {} to {}",
-                package_counts[0],
-                package_counts[1]
-            );
-            return;
-        }
-
-        let package_count = std::env::var(CHILD_ENV).unwrap().parse::<usize>().unwrap();
-        let temp = tempfile::tempdir().unwrap();
-        let db_path = temp.path().join("sparse-sync.db");
-        let conn = Connection::open(&db_path).unwrap();
-        crate::db::schema::ensure_current(&conn).unwrap();
-        let mut repo = sparse_test_repo("https://remi.test".to_string(), &conn);
-        let mut fetcher = RemiSparseSync::new(&repo).unwrap();
-        let run = begin_remi_sync_run(&conn, &repo).unwrap();
-        while fetcher.names_seen < package_count {
-            let rows = consume_synthetic_page(&mut fetcher, package_count).unwrap();
-            assert!(rows.len() <= REMI_SPARSE_SYNC_PAGE_SIZE);
-            append_remi_sync_page(&conn, &run, rows, fetcher.revision().unwrap()).unwrap();
-        }
-        let count =
-            finish_remi_sync_run(&conn, &mut repo, &run, fetcher.revision().unwrap()).unwrap();
-        assert_eq!(count, package_count);
-        drop(conn);
-
-        let high_water_kib = vm_hwm_kib().unwrap();
-        println!("ISSUE156_PACKAGE_COUNT={package_count}");
-        println!("ISSUE156_VM_HWM_KIB={high_water_kib}");
-        assert!(
-            high_water_kib < 256 * 1024,
-            "VmHWM {high_water_kib} KiB exceeded fixed 262144 KiB bound"
-        );
-    }
-
-    fn vm_hwm_kib() -> Option<u64> {
-        let mut status = String::new();
-        std::fs::File::open("/proc/self/status")
-            .ok()?
-            .read_to_string(&mut status)
-            .ok()?;
-        status.lines().find_map(|line| {
-            line.strip_prefix("VmHWM:")
-                .and_then(|value| value.split_whitespace().next())
-                .and_then(|value| value.parse().ok())
-        })
     }
 }

@@ -6,7 +6,8 @@ use crate::db::models::{
 };
 use crate::repository::catalog::SourceMetadataObjectV1;
 /// A single synced package row with all its normalized capability data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::repository) struct SyncedPackageRow {
     pub(in crate::repository) package: RepositoryPackage,
     pub(in crate::repository) provides: Vec<RepositoryProvide>,

@@ -7,14 +7,19 @@
 //! and retain those files. In particular, no package, provide, or requirement
 //! row belongs here.
 
+mod activation;
 mod resource;
 mod validation;
 use crate::error::{Error, Result};
-use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
-use std::time::{SystemTime, UNIX_EPOCH};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use validation::{validate_canonical_manifest, validate_identity, validate_sha256, validate_uuid};
+use validation::{validate_canonical_manifest, validate_identity, validate_sha256};
 
+#[cfg(test)]
+use activation::activate_profile_revision_at;
+pub use activation::{
+    RemiProfileActivationOutcome, RemiProfileRevisionActivation, activate_profile_revision,
+};
 pub use resource::register_profile_catalog_revision;
 
 const RESOURCE_COLUMNS: &str = "resource_sha256, resource_kind, source_profile, \
@@ -435,282 +440,17 @@ impl RemiProfileRevisionPin {
     }
 }
 
-/// The exact proof required before moving a profile pointer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemiProfileRevisionActivation {
-    pub source_profile: String,
-    pub profile_revision_sha256: String,
-    pub artifact_sha256: String,
-    pub artifact_size: i64,
-    pub logical_digest_sha256: String,
-    pub run_id: String,
-    pub owner_instance_uuid: String,
-    pub fencing_epoch: i64,
-}
-
-impl RemiProfileRevisionActivation {
-    fn validate(&self) -> Result<()> {
-        validate_identity(&self.source_profile, "activation source profile")?;
-        validate_sha256(
-            &self.profile_revision_sha256,
-            "activation profile revision SHA-256",
-        )?;
-        validate_sha256(&self.artifact_sha256, "activation catalog artifact SHA-256")?;
-        validate_sha256(
-            &self.logical_digest_sha256,
-            "activation catalog logical digest",
-        )?;
-        if self.artifact_size < 0 {
-            return Err(Error::ConfigError(
-                "activation catalog artifact size must not be negative".to_string(),
-            ));
-        }
-        validate_uuid(&self.run_id, "activation run ID")?;
-        validate_uuid(&self.owner_instance_uuid, "activation owner instance UUID")?;
-        if self.fencing_epoch <= 0 {
-            return Err(Error::ConfigError(
-                "activation fencing epoch must be positive".to_string(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Whether the transaction moved the pointer or proved an exact replay.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RemiProfileActivationOutcome {
-    Activated(RemiActiveProfileRevision),
-    AlreadyActive(RemiActiveProfileRevision),
-}
-
-/// Prove the exact current run owner and durable catalog metadata, then move
-/// one profile pointer under a single immediate SQLite transaction.
-pub fn activate_profile_revision(
-    conn: &Connection,
-    request: &RemiProfileRevisionActivation,
-) -> Result<RemiProfileActivationOutcome> {
-    request.validate()?;
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    // Read the lease clock only after acquiring the writer lock. A timestamp
-    // captured while waiting could already be expired when the transaction
-    // finally obtains activation authority.
-    let now = current_unix_seconds()?;
-    let outcome = activate_profile_revision_in_transaction(&tx, request, now)?;
-    tx.commit()?;
-    Ok(outcome)
-}
-
-#[cfg(test)]
-fn activate_profile_revision_at(
-    conn: &Connection,
-    request: &RemiProfileRevisionActivation,
-    now: i64,
-) -> Result<RemiProfileActivationOutcome> {
-    request.validate()?;
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    let outcome = activate_profile_revision_in_transaction(&tx, request, now)?;
-    tx.commit()?;
-    Ok(outcome)
-}
-
-fn activate_profile_revision_in_transaction(
-    tx: &Transaction<'_>,
-    request: &RemiProfileRevisionActivation,
-    now: i64,
-) -> Result<RemiProfileActivationOutcome> {
-    let profile_resource = tx
-        .query_row(
-            &format!(
-                "SELECT {RESOURCE_COLUMNS} FROM remi_catalog_resources
-                 WHERE resource_sha256 = ?1
-                   AND resource_kind = 'profile_revision'
-                   AND source_profile = ?2"
-            ),
-            params![&request.profile_revision_sha256, &request.source_profile],
-            RemiCatalogResource::from_row,
-        )
-        .optional()?;
-    let Some(profile_resource) = profile_resource else {
-        return Err(Error::ConflictError(format!(
-            "profile {} revision {} lacks exact durable catalog metadata",
-            request.source_profile, request.profile_revision_sha256
-        )));
-    };
-    profile_resource.validate()?;
-    let resource_matches = profile_resource.durable
-        && profile_resource.artifact_sha256 == request.artifact_sha256
-        && profile_resource.artifact_size == request.artifact_size
-        && profile_resource.logical_digest_sha256 == request.logical_digest_sha256;
-    if !resource_matches {
-        return Err(Error::ConflictError(format!(
-            "profile {} revision {} lacks exact durable catalog metadata",
-            request.source_profile, request.profile_revision_sha256
-        )));
-    }
-
-    let (member_count, min_ordinal, max_ordinal) = tx.query_row(
-        "SELECT COUNT(*), COALESCE(MIN(ordinal), -1), COALESCE(MAX(ordinal), -1)
-         FROM remi_profile_revision_members
-         WHERE profile_revision_sha256 = ?1",
-        params![&request.profile_revision_sha256,],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        },
-    )?;
-    if member_count == 0 || min_ordinal != 0 || max_ordinal != member_count - 1 {
-        return Err(Error::ConflictError(format!(
-            "profile {} revision {} has noncanonical ordered members",
-            request.source_profile, request.profile_revision_sha256
-        )));
-    }
-
-    let mut source_statement = tx.prepare(&format!(
-        "SELECT source.{RESOURCE_COLUMNS}
-         FROM remi_profile_revision_members member
-         JOIN remi_catalog_resources source
-           ON source.resource_sha256 = member.source_snapshot_sha256
-         WHERE member.profile_revision_sha256 = ?1
-         ORDER BY member.ordinal"
-    ))?;
-    let mut source_rows = source_statement.query([&request.profile_revision_sha256])?;
-    let mut source_count = 0_i64;
-    while let Some(row) = source_rows.next()? {
-        let source = RemiCatalogResource::from_row(row)?;
-        source.validate()?;
-        if source.kind != RemiCatalogResourceKind::SourceSnapshot
-            || source.source_profile != request.source_profile
-            || !source.durable
-        {
-            return Err(Error::ConflictError(format!(
-                "profile {} revision {} has a missing or non-durable source snapshot",
-                request.source_profile, request.profile_revision_sha256
-            )));
-        }
-        source_count += 1;
-    }
-    if source_count != member_count {
-        return Err(Error::ConflictError(format!(
-            "profile {} revision {} has a missing source snapshot member",
-            request.source_profile, request.profile_revision_sha256
-        )));
-    }
-
-    let owned_run = tx.query_row(
-        "SELECT EXISTS(
-             SELECT 1
-             FROM repository_sync_runs run
-             JOIN repository_sync_scopes scope
-               ON scope.repository_id = run.repository_id
-              AND scope.current_run_id = run.run_id
-              AND scope.fencing_epoch = run.fencing_epoch
-             JOIN repositories repository ON repository.id = run.repository_id
-             WHERE run.run_id = ?1
-               AND run.owner_instance_uuid = ?2
-               AND run.fencing_epoch = ?3
-               AND run.state = 'ready_to_publish'
-               AND run.lease_expires_at > ?4
-               AND COALESCE(run.source_profile, repository.source_profile) = ?5
-         )",
-        params![
-            &request.run_id,
-            &request.owner_instance_uuid,
-            request.fencing_epoch,
-            now,
-            &request.source_profile,
-        ],
-        |row| row.get::<_, bool>(0),
-    )?;
-    if !owned_run {
-        return Err(Error::ConflictError(format!(
-            "profile {} activation lost run {} fencing epoch {}",
-            request.source_profile, request.run_id, request.fencing_epoch
-        )));
-    }
-
-    let current = RemiActiveProfileRevision::find_in_transaction(tx, &request.source_profile)?;
-    if let Some(current) = current {
-        if current.fencing_epoch > request.fencing_epoch {
-            return Err(Error::ConflictError(format!(
-                "profile {} activation fencing epoch {} is stale behind {}",
-                request.source_profile, request.fencing_epoch, current.fencing_epoch
-            )));
-        }
-        if current.fencing_epoch == request.fencing_epoch {
-            if current.profile_revision_sha256 == request.profile_revision_sha256
-                && current.activation_run_id == request.run_id
-                && current.owner_instance_uuid == request.owner_instance_uuid
-            {
-                return Ok(RemiProfileActivationOutcome::AlreadyActive(current));
-            }
-            return Err(Error::ConflictError(format!(
-                "profile {} activation replay conflicts at fencing epoch {}",
-                request.source_profile, request.fencing_epoch
-            )));
-        }
-    }
-
-    let updated = tx.execute(
-        "INSERT INTO remi_active_profile_revisions (
-             source_profile, profile_revision_sha256, fencing_epoch,
-             activation_run_id, owner_instance_uuid, activated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(source_profile) DO UPDATE SET
-             profile_revision_sha256 = excluded.profile_revision_sha256,
-             fencing_epoch = excluded.fencing_epoch,
-             activation_run_id = excluded.activation_run_id,
-             owner_instance_uuid = excluded.owner_instance_uuid,
-             activated_at = excluded.activated_at
-         WHERE excluded.fencing_epoch > remi_active_profile_revisions.fencing_epoch",
-        params![
-            &request.source_profile,
-            &request.profile_revision_sha256,
-            request.fencing_epoch,
-            &request.run_id,
-            &request.owner_instance_uuid,
-            now,
-        ],
-    )?;
-    if updated != 1 {
-        return Err(Error::ConflictError(format!(
-            "profile {} activation was rejected by monotonic fencing",
-            request.source_profile
-        )));
-    }
-    let active = RemiActiveProfileRevision::find_in_transaction(tx, &request.source_profile)?
-        .ok_or_else(|| Error::InternalError("activated profile pointer disappeared".to_string()))?;
-    Ok(RemiProfileActivationOutcome::Activated(active))
-}
-
-impl RemiActiveProfileRevision {
-    fn find_in_transaction(tx: &Transaction<'_>, source_profile: &str) -> Result<Option<Self>> {
-        let sql = format!(
-            "SELECT {ACTIVE_COLUMNS} FROM remi_active_profile_revisions
-             WHERE source_profile = ?1"
-        );
-        tx.query_row(&sql, [source_profile], Self::from_row)
-            .optional()
-            .map_err(Into::into)
-    }
-}
-
-fn current_unix_seconds() -> Result<i64> {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| Error::InternalError(format!("system time precedes Unix epoch: {error}")))?
-        .as_secs();
-    i64::try_from(seconds)
-        .map_err(|_| Error::InternalError("system time exceeds SQLite integer range".to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::models::Repository;
+    use crate::db::models::{
+        NativeSourceEcosystem, NativeSourceStream, Repository, RepositoryPolicyScope,
+        RepositorySourcePolicy, RepositoryUpdateMode,
+    };
     use crate::db::schema::ensure_current;
+    use crate::repository::{
+        OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
+    };
 
     const OWNER_ONE: &str = "00000000-0000-4000-8000-000000000001";
     const OWNER_TWO: &str = "00000000-0000-4000-8000-000000000002";
@@ -749,8 +489,8 @@ mod tests {
             profile_revision_sha256: resource_digest(profile),
             ordinal,
             source_snapshot_sha256: resource_digest(source),
-            source_identity: format!("source-{source}"),
-            repository_identity: format!("repository-{source}"),
+            source_identity: "fixture-source".to_string(),
+            repository_identity: "fixture-repository".to_string(),
             stream_kind: "release".to_string(),
             stream_identity: "fixture".to_string(),
             priority: ordinal,
@@ -766,30 +506,82 @@ mod tests {
             "https://fixture.test".to_string(),
         );
         repo.source_profile = Some("fedora-44".to_string());
+        repo.set_parser_config(RepositoryParserConfig::Rpm {
+            architecture: "x86_64".to_string(),
+        })
+        .unwrap();
+        repo.set_trust_policy(RepositoryTrustPolicy::Rpm {
+            metadata: RpmMetadataAuthority::Metalink {
+                url: "https://fixture.test/metalink".to_string(),
+            },
+            package_keys: vec![
+                OpenPgpTrustRoot::new("https://fixture.test/key".to_string(), "A".repeat(40))
+                    .unwrap(),
+            ],
+        })
+        .unwrap();
+        repo.set_native_source_policy(
+            RepositorySourcePolicy::new(
+                "fixture-source",
+                RepositoryPolicyScope::repository("fixture-repository").unwrap(),
+                NativeSourceEcosystem::Rpm,
+                NativeSourceStream::release("fixture").unwrap(),
+                RepositoryUpdateMode::Follow,
+            )
+            .unwrap(),
+            "fixture-repository",
+            None,
+        )
+        .unwrap();
         repo.id = Some(repo.insert(&conn).unwrap());
         (conn, repo)
     }
 
     fn insert_run(conn: &Connection, repo: &Repository, run_id: &str, owner: &str, epoch: i64) {
         let repository_id = repo.id.unwrap();
+        let (profile, source) = if run_id == RUN_ONE {
+            ('d', 'e')
+        } else {
+            ('f', '0')
+        };
         conn.execute(
             "INSERT INTO repository_sync_runs (
-                 run_id, repository_id, scope_kind, scope_identity, source_profile,
-                 owner_instance_uuid, fencing_epoch, staging_repository_id, state,
-                 started_at, heartbeat_at, lease_expires_at
-             ) VALUES (?1, ?2, 'repository', ?2, ?3, ?4, ?5, ?2, 'ready_to_publish', 100, 100, 1000)",
-            params![run_id, repository_id, repo.source_profile.as_deref(), owner, epoch],
+                 run_id, source_profile, owner_instance_uuid, fencing_epoch,
+                 candidate_profile_digest, state, started_at, heartbeat_at,
+                 lease_expires_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready_to_publish', 100, 100, 1000)",
+            params![
+                run_id,
+                repo.source_profile.as_deref(),
+                owner,
+                epoch,
+                resource_digest(profile),
+            ],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO repository_sync_scopes (
-                 repository_id, fencing_epoch, current_run_id, active_revision
-             ) VALUES (?1, ?2, ?3, NULL)
-             ON CONFLICT(repository_id) DO UPDATE SET
+             source_profile, fencing_epoch, current_run_id
+             ) VALUES (?1, ?2, ?3)
+             ON CONFLICT(source_profile) DO UPDATE SET
                  fencing_epoch = excluded.fencing_epoch,
-                 current_run_id = excluded.current_run_id,
-                 active_revision = excluded.active_revision",
-            params![repository_id, epoch, run_id],
+                 current_run_id = excluded.current_run_id",
+            params![repo.source_profile.as_deref(), epoch, run_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO repository_sync_run_members (
+                 run_id, ordinal, repository_id, source_identity,
+                 repository_identity, stream_kind, stream_identity, priority,
+                 required, candidate_source_snapshot_sha256
+             ) VALUES (?1, 0, ?2, ?3, ?4, 'release', 'fixture', 0, 1, ?5)",
+            params![
+                run_id,
+                repository_id,
+                "fixture-source",
+                "fixture-repository",
+                resource_digest(source),
+            ],
         )
         .unwrap();
     }
@@ -886,6 +678,29 @@ mod tests {
     }
 
     #[test]
+    fn activation_rejects_repository_precedence_changed_after_run_start() {
+        let (conn, repo) = setup();
+        insert_run(&conn, &repo, RUN_ONE, OWNER_ONE, 1);
+        install_catalog(&conn, 'd', 'e', true);
+        conn.execute(
+            "UPDATE repositories SET priority = priority + 1 WHERE id = ?1",
+            [repo.id.unwrap()],
+        )
+        .unwrap();
+
+        let error =
+            activate_profile_revision_at(&conn, &activation(1, RUN_ONE, OWNER_ONE, 'd'), 200)
+                .unwrap_err();
+
+        assert!(error.to_string().contains("repository binding changed"));
+        assert!(
+            RemiActiveProfileRevision::find(&conn, "fedora-44")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn stale_and_replayed_activation_leave_pointer_unchanged() {
         let (conn, repo) = setup();
         insert_run(&conn, &repo, RUN_ONE, OWNER_ONE, 1);
@@ -978,7 +793,9 @@ mod tests {
         resource('a', 'b', RemiCatalogResourceKind::ProfileRevision, true)
             .insert(&conn)
             .unwrap();
-        member('a', 'c', 1).insert(&conn).unwrap();
+        let mut second = member('a', 'c', 1);
+        second.repository_identity = "fixture-updates".to_string();
+        second.insert(&conn).unwrap();
         member('a', 'b', 0).insert(&conn).unwrap();
         let members =
             RemiProfileRevisionMember::list_for_revision(&conn, &resource_digest('a')).unwrap();

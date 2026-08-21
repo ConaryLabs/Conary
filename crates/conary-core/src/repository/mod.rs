@@ -81,8 +81,12 @@ pub use static_repo::{
 };
 pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
-    RepositoryWriteAuthority, current_timestamp, fetch_native_source_catalog, needs_sync,
-    parse_timestamp, sync_repository, sync_repository_from_db_path,
+    ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
+    RepositoryWriteAuthority, abort_profile_sync_run, begin_profile_sync_run,
+    begin_profile_sync_run_with_input, begin_profile_sync_run_with_members, current_timestamp,
+    fetch_native_source_catalog, heartbeat_profile_sync_run, needs_sync, parse_timestamp,
+    ready_profile_sync_run, record_profile_sync_run_member, sync_repository,
+    sync_repository_from_db_path,
 };
 pub use trust::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,

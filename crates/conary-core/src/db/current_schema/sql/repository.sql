@@ -96,18 +96,20 @@ BEGIN
 END;
 CREATE TABLE repository_sync_runs (
             run_id TEXT PRIMARY KEY,
-            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            scope_kind TEXT NOT NULL CHECK(scope_kind = 'repository'),
-            scope_identity TEXT NOT NULL,
-            source_profile TEXT CHECK(source_profile IS NULL OR (
+            source_profile TEXT NOT NULL CHECK(
                 length(source_profile) BETWEEN 1 AND 255
                 AND trim(source_profile) = source_profile
-            )),
+            ),
             owner_instance_uuid TEXT NOT NULL,
             fencing_epoch INTEGER NOT NULL CHECK(fencing_epoch > 0),
-            staging_repository_id INTEGER NOT NULL,
-            input_revision TEXT CHECK(input_revision IS NULL OR json_valid(input_revision)),
-            candidate_revision TEXT CHECK(candidate_revision IS NULL OR json_valid(candidate_revision)),
+            input_profile_digest TEXT CHECK(input_profile_digest IS NULL OR (
+                length(input_profile_digest) = 64
+                AND input_profile_digest NOT GLOB '*[^0-9a-f]*'
+            )),
+            candidate_profile_digest TEXT CHECK(candidate_profile_digest IS NULL OR (
+                length(candidate_profile_digest) = 64
+                AND candidate_profile_digest NOT GLOB '*[^0-9a-f]*'
+            )),
             state TEXT NOT NULL CHECK(state IN (
                 'created',
                 'fetching_roots',
@@ -144,7 +146,6 @@ CREATE TABLE repository_sync_runs (
             failure_evidence TEXT,
             CHECK(length(run_id) = 36),
             CHECK(length(owner_instance_uuid) = 36),
-            CHECK(scope_identity = CAST(repository_id AS TEXT)),
             CHECK(heartbeat_at >= started_at),
             CHECK(lease_expires_at >= heartbeat_at),
             CHECK(
@@ -164,30 +165,113 @@ CREATE TABLE repository_sync_runs (
                     AND failure_category IS NULL
                     AND failure_evidence IS NULL)
             ),
-            UNIQUE(repository_id, fencing_epoch)
+            UNIQUE(source_profile, fencing_epoch)
         );
-CREATE INDEX idx_repository_sync_runs_repository
-            ON repository_sync_runs(repository_id, fencing_epoch DESC);
+CREATE INDEX idx_repository_sync_runs_profile
+            ON repository_sync_runs(source_profile, fencing_epoch DESC);
 CREATE INDEX idx_repository_sync_runs_state
             ON repository_sync_runs(state);
 CREATE TABLE repository_sync_scopes (
-            repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+            source_profile TEXT PRIMARY KEY CHECK(
+                length(source_profile) BETWEEN 1 AND 255
+                AND trim(source_profile) = source_profile
+            ),
             fencing_epoch INTEGER NOT NULL CHECK(fencing_epoch > 0),
             current_run_id TEXT NOT NULL,
-            active_revision TEXT CHECK(active_revision IS NULL OR json_valid(active_revision)),
             UNIQUE(current_run_id),
             FOREIGN KEY(current_run_id) REFERENCES repository_sync_runs(run_id) ON DELETE RESTRICT
         );
-CREATE TRIGGER repositories_delete_live_sync_candidates
-BEFORE DELETE ON repositories
+CREATE TRIGGER repository_sync_scopes_require_exact_run
+BEFORE INSERT ON repository_sync_scopes
 BEGIN
-    DELETE FROM repositories
-    WHERE id IN (
-        SELECT staging_repository_id
-        FROM repository_sync_runs
-        WHERE repository_id = OLD.id
-    );
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repository_sync_runs run
+        WHERE run.run_id = NEW.current_run_id
+          AND run.source_profile = NEW.source_profile
+          AND run.fencing_epoch = NEW.fencing_epoch
+    ) THEN RAISE(ABORT, 'sync scope must bind the exact profile run and fencing epoch') END;
 END;
+CREATE TRIGGER repository_sync_scopes_require_exact_run_update
+BEFORE UPDATE ON repository_sync_scopes
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repository_sync_runs run
+        WHERE run.run_id = NEW.current_run_id
+          AND run.source_profile = NEW.source_profile
+          AND run.fencing_epoch = NEW.fencing_epoch
+    ) THEN RAISE(ABORT, 'sync scope must bind the exact profile run and fencing epoch') END;
+END;
+CREATE TABLE repository_sync_run_members (
+            run_id TEXT NOT NULL REFERENCES repository_sync_runs(run_id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+            -- Historical audit identity, deliberately not a foreign key. Native
+            -- source replacement deletes and recreates repository rows; a live
+            -- run is fenced at activation by resolving this exact ID again.
+            repository_id INTEGER NOT NULL,
+            source_identity TEXT NOT NULL,
+            repository_identity TEXT NOT NULL,
+            stream_kind TEXT NOT NULL CHECK(stream_kind IN ('release', 'channel', 'rolling')),
+            stream_identity TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            required INTEGER NOT NULL CHECK(required IN (0, 1)),
+            input_source_snapshot_sha256 TEXT CHECK(
+                input_source_snapshot_sha256 IS NULL
+                OR (
+                    length(input_source_snapshot_sha256) = 64
+                    AND input_source_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'
+                )
+            ),
+            candidate_source_snapshot_sha256 TEXT CHECK(
+                candidate_source_snapshot_sha256 IS NULL
+                OR (
+                    length(candidate_source_snapshot_sha256) = 64
+                    AND candidate_source_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'
+                )
+            ),
+            CHECK(length(source_identity) BETWEEN 1 AND 255
+                AND trim(source_identity) = source_identity),
+            CHECK(length(repository_identity) BETWEEN 1 AND 255
+                AND trim(repository_identity) = repository_identity),
+            CHECK(length(stream_identity) BETWEEN 1 AND 255
+                AND trim(stream_identity) = stream_identity),
+            PRIMARY KEY(run_id, ordinal),
+            UNIQUE(run_id, repository_id),
+            UNIQUE(run_id, repository_identity)
+        );
+CREATE INDEX idx_repository_sync_run_members_repository
+            ON repository_sync_run_members(repository_id, run_id);
+CREATE TRIGGER repository_sync_run_members_require_profile_repository
+BEFORE INSERT ON repository_sync_run_members
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM repository_sync_runs run
+        JOIN repositories repository ON repository.id = NEW.repository_id
+        WHERE run.run_id = NEW.run_id
+          AND repository.source_profile = run.source_profile
+    ) THEN RAISE(ABORT, 'sync run member repository must belong to the run source profile') END;
+END;
+CREATE TRIGGER repository_sync_run_members_require_profile_repository_update
+BEFORE UPDATE ON repository_sync_run_members
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM repository_sync_runs run
+        JOIN repositories repository ON repository.id = NEW.repository_id
+        WHERE run.run_id = NEW.run_id
+          AND repository.source_profile = run.source_profile
+    ) THEN RAISE(ABORT, 'sync run member repository must belong to the run source profile') END;
+END;
+-- Client-side Remi sparse consumption retains only a monotonic publication
+-- fence and the exact active wire revision. Bounded candidates live in private
+-- temporary files, never disabled repository rows in operational SQLite.
+CREATE TABLE remi_client_sync_state (
+            repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+            fencing_epoch INTEGER NOT NULL CHECK(fencing_epoch > 0),
+            active_revision_json TEXT CHECK(
+                active_revision_json IS NULL OR json_valid(active_revision_json)
+            )
+        );
 CREATE TABLE repository_source_pins (
             repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
             snapshot_sha256 TEXT NOT NULL,
@@ -1130,7 +1214,8 @@ CREATE TABLE remi_profile_revision_members (
             CHECK(length(source_snapshot_sha256) = 64
                 AND source_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'),
             PRIMARY KEY(profile_revision_sha256, ordinal),
-            UNIQUE(profile_revision_sha256, source_snapshot_sha256)
+            UNIQUE(profile_revision_sha256, source_snapshot_sha256),
+            UNIQUE(profile_revision_sha256, repository_identity)
         );
 CREATE INDEX idx_remi_profile_revision_members_snapshot
             ON remi_profile_revision_members(source_snapshot_sha256);

@@ -44,6 +44,12 @@ mod support;
 pub(in crate::repository) mod types;
 
 pub use immutable_catalog::fetch_native_source_catalog;
+pub use remi::{
+    ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
+    abort_profile_sync_run, begin_profile_sync_run, begin_profile_sync_run_with_input,
+    begin_profile_sync_run_with_members, heartbeat_profile_sync_run, ready_profile_sync_run,
+    record_profile_sync_run_member,
+};
 pub use support::{current_timestamp, parse_timestamp};
 use support::{has_trusted_root, rebase_download_url, run_blocking_sync};
 
