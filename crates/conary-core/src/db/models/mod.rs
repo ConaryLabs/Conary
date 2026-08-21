@@ -128,9 +128,9 @@ pub use remi_catalog::{
     RemiCatalogDeletionIntent, RemiCatalogReachabilitySnapshot, RemiCatalogResource,
     RemiCatalogResourceKind, RemiCatalogRunCandidate, RemiProfileActivationOutcome,
     RemiProfileRevisionActivation, RemiProfileRevisionMember, RemiProfileRevisionPin,
-    RemiRevisionPinKind, acknowledge_catalog_deletion, activate_profile_revision,
-    delete_catalog_collection, list_catalog_deletion_intents, plan_catalog_collection,
-    register_profile_catalog_revision,
+    RemiRevisionPinKind, RemiRuntimeSession, acknowledge_catalog_deletion,
+    activate_profile_revision, delete_catalog_collection, list_catalog_deletion_intents,
+    plan_catalog_collection, register_profile_catalog_revision,
 };
 pub use remote_collection::{DEFAULT_CACHE_TTL_SECS, RemoteCollection};
 pub use repology_cache::RepologyCacheEntry;

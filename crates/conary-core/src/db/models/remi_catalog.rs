@@ -10,6 +10,7 @@
 mod activation;
 mod gc;
 mod resource;
+mod session;
 mod validation;
 use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -29,6 +30,7 @@ pub use gc::{
     delete_catalog_collection, list_catalog_deletion_intents, plan_catalog_collection,
 };
 pub use resource::register_profile_catalog_revision;
+pub use session::RemiRuntimeSession;
 
 const RESOURCE_COLUMNS: &str = "resource_sha256, resource_kind, source_profile, \
     artifact_sha256, artifact_size, logical_digest_sha256, manifest_json, durable, created_at";
@@ -37,7 +39,7 @@ const MEMBER_COLUMNS: &str = "profile_revision_sha256, ordinal, source_snapshot_
 const ACTIVE_COLUMNS: &str = "source_profile, profile_revision_sha256, fencing_epoch, \
     activation_run_id, owner_instance_uuid, activated_at";
 const PIN_COLUMNS: &str = "pin_id, source_profile, profile_revision_sha256, owner_kind, \
-    owner_identity, pinned_at";
+    owner_identity, runtime_session_id, pinned_at";
 
 /// The two resource classes that may be referenced by an activated profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -372,6 +374,7 @@ pub struct RemiProfileRevisionPin {
     pub profile_revision_sha256: String,
     pub owner_kind: RemiRevisionPinKind,
     pub owner_identity: String,
+    pub runtime_session_id: Option<String>,
     pub pinned_at: i64,
 }
 
@@ -381,14 +384,15 @@ impl RemiProfileRevisionPin {
         conn.execute(
             "INSERT INTO remi_profile_revision_pins (
                  pin_id, source_profile, profile_revision_sha256, owner_kind,
-                 owner_identity, pinned_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 owner_identity, runtime_session_id, pinned_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 &self.pin_id,
                 &self.source_profile,
                 &self.profile_revision_sha256,
                 self.owner_kind.as_str(),
                 &self.owner_identity,
+                &self.runtime_session_id,
                 self.pinned_at,
             ],
         )?;
@@ -441,6 +445,22 @@ impl RemiProfileRevisionPin {
             "pinned profile revision SHA-256",
         )?;
         validate_identity(&self.owner_identity, "profile revision pin owner")?;
+        match (self.owner_kind, self.runtime_session_id.as_deref()) {
+            (RemiRevisionPinKind::Reader, Some(session_id)) => {
+                validation::validate_uuid(session_id, "Remi reader pin runtime session ID")?;
+            }
+            (RemiRevisionPinKind::Reader, None) => {
+                return Err(Error::ConfigError(
+                    "reader pins require a runtime session ID".to_string(),
+                ));
+            }
+            (RemiRevisionPinKind::Conversion | RemiRevisionPinKind::Work, Some(_)) => {
+                return Err(Error::ConfigError(
+                    "non-reader pins must not carry a runtime session ID".to_string(),
+                ));
+            }
+            (RemiRevisionPinKind::Conversion | RemiRevisionPinKind::Work, None) => {}
+        }
         if self.pinned_at < 0 {
             return Err(Error::ConfigError(
                 "profile revision pin time must not be negative".to_string(),
@@ -456,7 +476,8 @@ impl RemiProfileRevisionPin {
             profile_revision_sha256: row.get(2)?,
             owner_kind: RemiRevisionPinKind::from_db(&row.get::<_, String>(3)?, 3)?,
             owner_identity: row.get(4)?,
-            pinned_at: row.get(5)?,
+            runtime_session_id: row.get(5)?,
+            pinned_at: row.get(6)?,
         })
     }
 }
@@ -803,6 +824,7 @@ mod tests {
             profile_revision_sha256: resource_digest('d'),
             owner_kind: RemiRevisionPinKind::Conversion,
             owner_identity: "conversion-work-1".to_string(),
+            runtime_session_id: None,
             pinned_at: 200,
         };
         pin.insert(&conn).unwrap();

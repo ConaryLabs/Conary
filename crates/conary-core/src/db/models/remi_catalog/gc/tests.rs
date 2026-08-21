@@ -203,6 +203,7 @@ fn every_pin_kind_retains_its_exact_profile_revision() {
         profile_revision_sha256: resource_digest('p'),
         owner_kind: RemiRevisionPinKind::Work,
         owner_identity: "work-owner".to_string(),
+        runtime_session_id: None,
         pinned_at: 100,
     }
     .insert(&conn)

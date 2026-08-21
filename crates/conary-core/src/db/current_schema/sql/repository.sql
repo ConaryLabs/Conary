@@ -1386,6 +1386,17 @@ BEGIN
     SELECT RAISE(ABORT, 'active profile revision fencing epoch must increase monotonically');
 END;
 
+-- One durable server session owns the reader pins created by the current
+-- Remi runtime. A new exclusive runtime owner replaces this row only after
+-- deleting the prior session's reader pins in the same transaction.
+CREATE TABLE remi_runtime_sessions (
+            session_slot INTEGER PRIMARY KEY CHECK(session_slot = 1),
+            session_id TEXT NOT NULL UNIQUE,
+            started_at INTEGER NOT NULL,
+            CHECK(length(session_id) = 36),
+            CHECK(started_at >= 0)
+        );
+
 -- Pins are explicit durable roots. There is no timeout, age heuristic, or
 -- source-profile-only retention rule: the exact owner releases its exact
 -- profile revision when the work is complete.
@@ -1396,6 +1407,8 @@ CREATE TABLE remi_profile_revision_pins (
                 REFERENCES remi_catalog_resources(resource_sha256) ON DELETE RESTRICT,
             owner_kind TEXT NOT NULL CHECK(owner_kind IN ('conversion', 'work', 'reader')),
             owner_identity TEXT NOT NULL,
+            runtime_session_id TEXT
+                REFERENCES remi_runtime_sessions(session_id) ON DELETE RESTRICT,
             pinned_at INTEGER NOT NULL,
             CHECK(length(pin_id) BETWEEN 1 AND 255 AND trim(pin_id) = pin_id),
             CHECK(length(source_profile) BETWEEN 1 AND 255
@@ -1404,10 +1417,14 @@ CREATE TABLE remi_profile_revision_pins (
                 AND profile_revision_sha256 NOT GLOB '*[^0-9a-f]*'),
             CHECK(length(owner_identity) BETWEEN 1 AND 255
                 AND trim(owner_identity) = owner_identity),
+            CHECK((owner_kind = 'reader' AND runtime_session_id IS NOT NULL)
+                  OR (owner_kind IN ('conversion', 'work') AND runtime_session_id IS NULL)),
             UNIQUE(owner_kind, owner_identity, source_profile)
         );
 CREATE INDEX idx_remi_profile_revision_pins_revision
             ON remi_profile_revision_pins(source_profile, profile_revision_sha256);
+CREATE INDEX idx_remi_profile_revision_pins_runtime_session
+            ON remi_profile_revision_pins(runtime_session_id);
 
 CREATE TRIGGER remi_profile_revision_pins_require_durable_profile
 BEFORE INSERT ON remi_profile_revision_pins
