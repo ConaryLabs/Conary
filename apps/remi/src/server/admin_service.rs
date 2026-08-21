@@ -806,12 +806,14 @@ pub async fn repo_exists(
 async fn refresh_loaded_repo(
     db: PathBuf,
     repo: Repository,
+    database_writer: crate::server::database_writer::DatabaseWriter,
 ) -> Result<RepoRefreshResult, ServiceError> {
     let name = repo.name.clone();
     let source_profile = repo.source_profile.clone();
-    let packages_synced = conary_core::repository::sync_repository_from_db_path(db, repo)
-        .await
-        .map_err(ServiceError::from)?;
+    let packages_synced =
+        conary_core::repository::sync_repository_from_db_path(db, repo, database_writer)
+            .await
+            .map_err(ServiceError::from)?;
 
     Ok(RepoRefreshResult {
         name,
@@ -862,6 +864,7 @@ pub async fn sync_repo(
     force: bool,
 ) -> Result<Option<RepoRefreshResult>, ServiceError> {
     let db = db_path(state).await;
+    let database_writer = state.read().await.database_writer.clone();
     let name_owned = name.to_string();
     let db_for_lookup = db.clone();
     let plan = blocking_anyhow(move || {
@@ -889,7 +892,9 @@ pub async fn sync_repo(
     match plan {
         RepoRefreshPlan::Missing => Ok(None),
         RepoRefreshPlan::Skipped(result) => Ok(Some(result)),
-        RepoRefreshPlan::Sync(repo) => refresh_loaded_repo(db_for_lookup, *repo).await.map(Some),
+        RepoRefreshPlan::Sync(repo) => refresh_loaded_repo(db_for_lookup, *repo, database_writer)
+            .await
+            .map(Some),
     }
 }
 
@@ -899,6 +904,7 @@ pub async fn refresh_repositories(
     force: bool,
 ) -> Result<RepoRefreshBatch, ServiceError> {
     let db = db_path(state).await;
+    let database_writer = state.read().await.database_writer.clone();
     let repos = blocking_anyhow({
         let db = db.clone();
         move || {
@@ -911,6 +917,7 @@ pub async fn refresh_repositories(
     let jobs =
         repos.into_iter().map(|repo| {
             let db = db.clone();
+            let database_writer = database_writer.clone();
             let name = repo.name.clone();
             let source_profile = repo.source_profile.clone();
             async move {
@@ -922,7 +929,7 @@ pub async fn refresh_repositories(
                         skipped: true,
                     })
                 } else {
-                    refresh_loaded_repo(db, repo).await
+                    refresh_loaded_repo(db, repo, database_writer).await
                 };
                 match result {
                     Ok(result) => RepoRefreshOutcome::Success(result),
@@ -940,21 +947,26 @@ pub async fn refresh_repositories(
     if !batch.results.is_empty() {
         let db_path = db_path(state).await;
         let canonical_cfg = state.read().await.canonical_config.clone();
+        let database_writer = state.read().await.database_writer.clone();
         blocking(move || {
-            let conn = crate::server::open_runtime_db(&db_path)?;
-            if crate::server::canonical_job::should_rebuild(
-                &conn,
-                canonical_cfg.rebuild_cooldown_minutes,
-            ) {
-                match crate::server::canonical_job::rebuild_canonical_map(&db_path, &canonical_cfg)
-                {
-                    Ok(count) => {
-                        tracing::info!("Post-sync canonical rebuild: {count} new mappings")
+            database_writer.execute(|| {
+                let conn = crate::server::open_runtime_db(&db_path)?;
+                if crate::server::canonical_job::should_rebuild(
+                    &conn,
+                    canonical_cfg.rebuild_cooldown_minutes,
+                ) {
+                    match crate::server::canonical_job::rebuild_canonical_map(
+                        &db_path,
+                        &canonical_cfg,
+                    ) {
+                        Ok(count) => {
+                            tracing::info!("Post-sync canonical rebuild: {count} new mappings")
+                        }
+                        Err(e) => tracing::warn!("Post-sync canonical rebuild failed: {e}"),
                     }
-                    Err(e) => tracing::warn!("Post-sync canonical rebuild failed: {e}"),
                 }
-            }
-            Ok(())
+                Ok(())
+            })
         })
         .await
         .unwrap_or_else(|e| tracing::warn!("Post-sync canonical rebuild task failed: {e}"));

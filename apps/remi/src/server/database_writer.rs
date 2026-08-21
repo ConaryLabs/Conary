@@ -4,6 +4,23 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+#[cfg(test)]
+use std::sync::mpsc::{Receiver, Sender};
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DatabaseWriteEvent {
+    Attempted,
+    Acquired,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct DatabaseWriterTestControl {
+    observer: Option<Sender<DatabaseWriteEvent>>,
+    pause_next: Option<Receiver<()>>,
+}
+
 /// Serializes short SQLite mutation phases within one Remi server.
 ///
 /// Work that does not mutate SQLite stays outside this owner. Callers acquire
@@ -13,12 +30,48 @@ use std::sync::Arc;
 #[derive(Clone, Default)]
 pub(crate) struct DatabaseWriter {
     gate: Arc<Mutex<()>>,
+    #[cfg(test)]
+    test_control: Arc<Mutex<DatabaseWriterTestControl>>,
 }
 
 impl DatabaseWriter {
     pub(crate) fn execute<T, E>(&self, operation: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+        #[cfg(test)]
+        self.notify_test_observer(DatabaseWriteEvent::Attempted);
         let _guard = self.gate.lock();
+        #[cfg(test)]
+        {
+            self.notify_test_observer(DatabaseWriteEvent::Acquired);
+            let release = self.test_control.lock().pause_next.take();
+            if let Some(release) = release {
+                release
+                    .recv()
+                    .expect("paused database writer test must release the write");
+            }
+        }
         operation()
+    }
+
+    #[cfg(test)]
+    fn notify_test_observer(&self, event: DatabaseWriteEvent) {
+        let observer = self.test_control.lock().observer.clone();
+        if let Some(observer) = observer {
+            let _ = observer.send(event);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_for_test(&self) -> Receiver<DatabaseWriteEvent> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.test_control.lock().observer = Some(sender);
+        receiver
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_next_for_test(&self) -> Sender<()> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.test_control.lock().pause_next = Some(receiver);
+        sender
     }
 
     #[cfg(test)]
@@ -29,6 +82,15 @@ impl DatabaseWriter {
     #[cfg(test)]
     pub(crate) fn hold_for_test(&self) -> impl Drop + '_ {
         self.gate.lock()
+    }
+}
+
+impl conary_core::repository::RepositoryWriteAuthority for DatabaseWriter {
+    fn execute<T>(
+        &self,
+        operation: impl FnOnce() -> conary_core::Result<T>,
+    ) -> conary_core::Result<T> {
+        DatabaseWriter::execute(self, operation)
     }
 }
 

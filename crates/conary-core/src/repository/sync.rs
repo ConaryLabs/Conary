@@ -45,6 +45,27 @@ pub(in crate::repository) mod types;
 pub use support::{current_timestamp, parse_timestamp};
 use support::{has_trusted_root, rebase_download_url, run_blocking_sync};
 
+/// Process-local authority for repository synchronization writes.
+///
+/// Path-based synchronization fetches remote metadata without holding this
+/// authority, then acquires it for each short SQLite persistence phase. The
+/// application supplies the authority so every database-writing subsystem in
+/// that process can share one owner.
+pub trait RepositoryWriteAuthority: Clone + Send + Sync + 'static {
+    fn execute<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T>;
+}
+
+async fn run_blocking_write<W, T>(
+    authority: W,
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    W: RepositoryWriteAuthority,
+    T: Send + 'static,
+{
+    run_blocking_sync(move || authority.execute(operation)).await
+}
+
 async fn fetch_repository_native_snapshot(
     repo: &Repository,
     keyring_dir: &Path,
@@ -151,11 +172,18 @@ async fn fetch_repository_sync_snapshot(
 
 /// Synchronize repository metadata by opening short-lived database connections
 /// around blocking persistence phases.
-pub async fn sync_repository_from_db_path(db_path: PathBuf, repo: Repository) -> Result<usize> {
+pub async fn sync_repository_from_db_path<W>(
+    db_path: PathBuf,
+    repo: Repository,
+    write_authority: W,
+) -> Result<usize>
+where
+    W: RepositoryWriteAuthority,
+{
     info!("Synchronizing repository: {}", repo.name);
 
     if is_static_repository(&repo) {
-        return sync_static_repository_from_db_path(db_path, repo).await;
+        return sync_static_repository_from_db_path(db_path, repo, write_authority).await;
     }
 
     if repo.tuf_enabled {
@@ -184,7 +212,7 @@ pub async fn sync_repository_from_db_path(db_path: PathBuf, repo: Repository) ->
             .map_err(|e| Error::TrustError(e.to_string()))?;
 
         let persist_db_path = db_path.clone();
-        let verified = run_blocking_sync(move || {
+        let verified = run_blocking_write(write_authority.clone(), move || {
             let conn = crate::db::open_fast(&persist_db_path)?;
             tuf_client
                 .persist_update_snapshot(&conn, update_snapshot)
@@ -201,7 +229,8 @@ pub async fn sync_repository_from_db_path(db_path: PathBuf, repo: Repository) ->
     }
 
     let count = if repo.default_strategy.as_deref() == Some("remi") {
-        sync_repository_remi_from_db_path(db_path.clone(), repo.clone()).await?
+        sync_repository_remi_from_db_path(db_path.clone(), repo.clone(), write_authority.clone())
+            .await?
     } else {
         let keyring_dir = crate::db::paths::keyring_dir(&db_path.display().to_string());
         let snapshot = fetch_repository_sync_snapshot(&repo, &keyring_dir).await?;
@@ -210,7 +239,7 @@ pub async fn sync_repository_from_db_path(db_path: PathBuf, repo: Repository) ->
             .id
             .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
         let persist_db_path = db_path.clone();
-        run_blocking_sync(move || {
+        run_blocking_write(write_authority.clone(), move || {
             let conn = crate::db::open_fast(&persist_db_path)?;
             let mut repo = Repository::find_by_id(&conn, persist_repo_id)?.ok_or_else(|| {
                 Error::NotFound(format!(
@@ -226,7 +255,7 @@ pub async fn sync_repository_from_db_path(db_path: PathBuf, repo: Repository) ->
         match fetch_canonical_map_snapshot(remi_endpoint).await {
             Ok(map) => {
                 let canonical_db_path = db_path.clone();
-                match run_blocking_sync(move || {
+                match run_blocking_write(write_authority.clone(), move || {
                     let conn = crate::db::open_fast(&canonical_db_path)?;
                     persist_canonical_map(&conn, &map)
                 })
@@ -332,7 +361,14 @@ fn static_trust_not_established_error(repo: &Repository) -> Error {
     ))
 }
 
-async fn sync_static_repository_from_db_path(db_path: PathBuf, repo: Repository) -> Result<usize> {
+async fn sync_static_repository_from_db_path<W>(
+    db_path: PathBuf,
+    repo: Repository,
+    write_authority: W,
+) -> Result<usize>
+where
+    W: RepositoryWriteAuthority,
+{
     if !repo.tuf_enabled {
         return Err(static_trust_not_established_error(&repo));
     }
@@ -378,7 +414,7 @@ async fn sync_static_repository_from_db_path(db_path: PathBuf, repo: Repository)
         .map_err(|error| Error::TrustError(error.to_string()))?;
 
     let persist_db_path = db_path.clone();
-    let verified = run_blocking_sync(move || {
+    let verified = run_blocking_write(write_authority.clone(), move || {
         let conn = crate::db::open_fast(&persist_db_path)?;
         tuf_client
             .persist_update_snapshot(&conn, update_snapshot)
@@ -395,7 +431,7 @@ async fn sync_static_repository_from_db_path(db_path: PathBuf, repo: Repository)
 
     let snapshot = fetch_static_sync_snapshot(&repo, &verified).await?;
     let persist_db_path = db_path.clone();
-    run_blocking_sync(move || {
+    run_blocking_write(write_authority, move || {
         let conn = crate::db::open_fast(&persist_db_path)?;
         let mut repo = Repository::find_by_id(&conn, repo_id)?.ok_or_else(|| {
             Error::NotFound(format!("Repository {repo_id} not found during static sync"))
