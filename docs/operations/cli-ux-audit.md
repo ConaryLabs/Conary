@@ -508,8 +508,9 @@ persuasion work rather than decoration.
     the summary actually gets read. Must not weaken the live-mutation
     intent boundary: the prompt is an explicit intent capture, not a
     bypass.
-12. **`conary status` at-a-glance screen** — flow: bare `conary` /
-    `conary status`. The bare invocation prints a version banner today.
+12. **At-a-glance status screen** — flow: the bare `conary` invocation
+    (or a new status subcommand named in its own slice). The bare
+    invocation prints a version banner today.
     A small status screen — current generation, pending publication debt,
     enabled feeds and last sync age, owned vs adopted package counts —
     gives the CLI an identity moment, gives operators a daily entry point,
