@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-15
-revision: 27
+last_updated: 2026-08-21
+revision: 28
 summary: Document Remi source identity and update policy, sparse sync, signing, canonical-map, repository trust, database-writer ownership, reproducible conversion profiling, R2 durability inventory, publication, and serving authority
 ---
 
@@ -327,7 +327,7 @@ local filesystem paths are not part of any public response.
 
 ### Current Converted Artifact Serving
 
-Server conversion has two terminal outcomes: ready or failed. A ready
+Server conversion has three terminal outcomes: ready, failed, or cancelled. A ready
 conversion is advertised and served when its conversion version and lifecycle
 summary are current, its stored repository-provide cache digest exactly matches
 the current normalized repository metadata, and its CCS/CAS objects exist. A native
@@ -345,6 +345,14 @@ cache files use their emitted content hash as the local filename
 instead of a mutable package-name/version slot. Lifecycle program content,
 diagnostic classes, package names, and command-name matches do not create a
 second serving decision.
+
+Only pending and converting jobs own in-memory package-key deduplication. A
+failed or cancelled job remains available through its original poll URL with
+its exact outcome, but releases the key immediately so the next package or
+download request creates a fresh attempt. Ready jobs also remain pollable by ID; reuse
+is decided by the persisted converted-package lookup and its current-artifact
+validation, never by stale in-memory job state. Accepted responses publish the
+actual pending or converting state rather than flattening both to converting.
 
 Every route resolves the public route slug to one exact persisted source
 profile and uses the same current-row validation. A stale row is reconverted;

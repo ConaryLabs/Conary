@@ -34,7 +34,7 @@ pub struct JobStatusResponse {
 /// GET /v1/jobs/:job_id
 ///
 /// Poll conversion job status. Returns:
-/// - 200 OK with status (pending, converting, ready, failed)
+/// - 200 OK with status (pending, converting, ready, failed, cancelled)
 /// - 404 Not Found if job doesn't exist or expired
 pub async fn get_job_status(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -63,10 +63,11 @@ pub async fn get_job_status(
         JobStatus::Converting => "converting",
         JobStatus::Ready => "ready",
         JobStatus::Failed(_) => "failed",
+        JobStatus::Cancelled(_) => "cancelled",
     };
 
     let error = match &job.status {
-        JobStatus::Failed(msg) => Some(msg.clone()),
+        JobStatus::Failed(msg) | JobStatus::Cancelled(msg) => Some(msg.clone()),
         _ => None,
     };
     // Include manifest if ready and result is available

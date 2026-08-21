@@ -3,7 +3,7 @@
 //!
 //! Handles the 202 Accepted async conversion pattern:
 //! - Create jobs for package conversion requests
-//! - Track job status (pending, converting, ready, failed)
+//! - Track job status (pending, converting, ready, failed, cancelled)
 //! - Prevent stampede (same package = same job)
 //! - Clean up completed jobs after TTL
 
@@ -55,6 +55,8 @@ pub enum JobStatus {
     Ready,
     /// Conversion failed
     Failed(String),
+    /// Conversion was cancelled before completion
+    Cancelled(String),
 }
 
 /// Conversion result data for completed jobs
@@ -122,7 +124,10 @@ impl JobManager {
 
     /// Create a new conversion job
     ///
-    /// Returns existing job ID if a job for this key already exists.
+    /// Returns the existing job ID only while work for this key is active.
+    /// Terminal jobs remain available by ID for polling, but they cannot own
+    /// deduplication for a later request. A ready artifact is reused through
+    /// the persisted converted-package lookup before this method is called.
     /// Returns error if queue is full.
     pub fn create_job(
         &mut self,
@@ -132,9 +137,18 @@ impl JobManager {
         version: Option<String>,
         architecture: Option<String>,
     ) -> Result<JobId, &'static str> {
-        // Check if job already exists for this key
+        // Deduplicate only genuinely active work. Keep terminal jobs in
+        // `jobs` so existing poll URLs retain their exact outcome, while
+        // releasing the package key for a fresh attempt.
         if let Some(&existing_id) = self.key_to_id.get(&key) {
-            return Ok(existing_id);
+            if self
+                .jobs
+                .get(&existing_id)
+                .is_some_and(|job| is_active_status(&job.status))
+            {
+                return Ok(existing_id);
+            }
+            self.key_to_id.remove(&key);
         }
 
         self.evict_terminal_jobs_for_capacity();
@@ -183,7 +197,7 @@ impl JobManager {
             };
 
             if let Some(job) = self.jobs.remove(&oldest_terminal_id) {
-                self.key_to_id.remove(&job.key);
+                self.remove_key_mapping_if_current(&job.key, oldest_terminal_id);
                 tracing::debug!(
                     "Evicted terminal conversion job for capacity: {} ({})",
                     oldest_terminal_id,
@@ -198,9 +212,20 @@ impl JobManager {
         self.jobs.get(id)
     }
 
-    /// Get a job ID by key
-    pub fn get_job_by_key(&self, key: &str) -> Option<JobId> {
-        self.key_to_id.get(key).copied()
+    /// Get the latest job associated with a package key, including terminal
+    /// state retained for polling and persisted-artifact revalidation.
+    pub fn get_job_by_key(&self, key: &str) -> Option<&ConversionJob> {
+        self.key_to_id.get(key).and_then(|id| self.jobs.get(id))
+    }
+
+    /// Get the active job for a package key.
+    ///
+    /// Ready, failed, and cancelled jobs remain addressable through [`Self::get_job`], but
+    /// package requests must consult persisted artifact authority for ready
+    /// work and may retry failed work.
+    pub fn get_active_job_by_key(&self, key: &str) -> Option<&ConversionJob> {
+        self.get_job_by_key(key)
+            .filter(|job| is_active_status(&job.status))
     }
 
     /// Update job status
@@ -246,9 +271,15 @@ impl JobManager {
 
         for id in expired {
             if let Some(job) = self.jobs.remove(&id) {
-                self.key_to_id.remove(&job.key);
+                self.remove_key_mapping_if_current(&job.key, id);
                 tracing::debug!("Cleaned up expired job: {} ({})", id, job.key);
             }
+        }
+    }
+
+    fn remove_key_mapping_if_current(&mut self, key: &str, id: JobId) {
+        if self.key_to_id.get(key) == Some(&id) {
+            self.key_to_id.remove(key);
         }
     }
 
@@ -271,7 +302,7 @@ impl JobManager {
                 JobStatus::Pending => pending += 1,
                 JobStatus::Converting => converting += 1,
                 JobStatus::Ready => completed += 1,
-                JobStatus::Failed(_) => failed += 1,
+                JobStatus::Failed(_) | JobStatus::Cancelled(_) => failed += 1,
             }
         }
 
@@ -286,7 +317,14 @@ impl JobManager {
 }
 
 fn is_terminal_status(status: &JobStatus) -> bool {
-    matches!(status, JobStatus::Ready | JobStatus::Failed(_))
+    matches!(
+        status,
+        JobStatus::Ready | JobStatus::Failed(_) | JobStatus::Cancelled(_)
+    )
+}
+
+fn is_active_status(status: &JobStatus) -> bool {
+    matches!(status, JobStatus::Pending | JobStatus::Converting)
 }
 
 /// Job statistics
@@ -383,9 +421,9 @@ mod tests {
             )
             .expect("terminal jobs should be evicted before rejecting new work");
 
-        assert!(manager.get_job_by_key("done").is_none());
+        assert!(manager.get_active_job_by_key("done").is_none());
         assert!(manager.get_job(&fresh).is_some());
-        assert!(manager.get_job_by_key("pending-1").is_some());
+        assert!(manager.get_active_job_by_key("pending-1").is_some());
     }
 
     #[test]
@@ -411,5 +449,85 @@ mod tests {
             .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
             .expect("existing keys should still deduplicate");
         assert_eq!(deduped, existing);
+    }
+
+    #[test]
+    fn failed_job_remains_pollable_while_retry_gets_a_new_id() {
+        let mut manager = JobManager::new(1);
+        let failed = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
+            .expect("first job");
+        manager.update_status(&failed, JobStatus::Failed("repository not ready".into()));
+
+        assert!(manager.get_active_job_by_key("shared").is_none());
+
+        let retry = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
+            .expect("terminal failure must release the package key");
+
+        assert_ne!(retry, failed);
+        assert!(matches!(
+            manager.get_job(&failed).map(|job| &job.status),
+            Some(JobStatus::Failed(error)) if error == "repository not ready"
+        ));
+        assert_eq!(manager.get_active_job_by_key("shared").unwrap().id, retry);
+    }
+
+    #[test]
+    fn cancelled_job_remains_pollable_while_retry_gets_a_new_id() {
+        let mut manager = JobManager::new(1);
+        let cancelled = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
+            .expect("first job");
+        manager.update_status(&cancelled, JobStatus::Cancelled("server shutdown".into()));
+
+        let retry = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
+            .expect("cancelled work must release the package key");
+
+        assert_ne!(retry, cancelled);
+        assert!(matches!(
+            manager.get_job(&cancelled).map(|job| &job.status),
+            Some(JobStatus::Cancelled(error)) if error == "server shutdown"
+        ));
+        assert_eq!(manager.get_active_job_by_key("shared").unwrap().id, retry);
+    }
+
+    #[test]
+    fn expired_old_attempt_cannot_remove_a_replacement_key_mapping() {
+        let mut manager = JobManager::new(1);
+        let failed = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
+            .expect("first job");
+        manager.update_status(&failed, JobStatus::Failed("transient failure".into()));
+        let retry = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
+            .expect("retry job");
+
+        manager.jobs.get_mut(&failed).unwrap().completed_at =
+            Some(Instant::now() - manager.job_ttl - Duration::from_secs(1));
+        manager.cleanup_expired();
+
+        assert!(manager.get_job(&failed).is_none());
+        assert_eq!(manager.get_active_job_by_key("shared").unwrap().id, retry);
+    }
+
+    #[test]
+    fn ready_job_does_not_replace_persisted_artifact_validation() {
+        let mut manager = JobManager::new(1);
+        let ready = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
+            .expect("first job");
+        manager.update_status(&ready, JobStatus::Ready);
+
+        let retry = manager
+            .create_job("shared".into(), "arch".into(), "pkg".into(), None, None)
+            .expect("a caller reaching job creation already missed persisted artifact lookup");
+
+        assert_ne!(retry, ready);
+        assert!(matches!(
+            manager.get_job(&ready).map(|job| &job.status),
+            Some(JobStatus::Ready)
+        ));
     }
 }

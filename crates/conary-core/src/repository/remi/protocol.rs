@@ -37,6 +37,7 @@ pub enum ConversionJobState {
     Converting,
     Ready,
     Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +52,7 @@ impl JobStatus {
         match self.status {
             ConversionJobState::Pending | ConversionJobState::Converting => JobPollDecision::Wait,
             ConversionJobState::Ready => JobPollDecision::Ready,
-            ConversionJobState::Failed => {
+            ConversionJobState::Failed | ConversionJobState::Cancelled => {
                 JobPollDecision::Failed(self.error.as_deref().unwrap_or("Unknown error"))
             }
         }
