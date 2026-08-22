@@ -11,13 +11,8 @@ use crate::server::ServerState;
 use crate::server::readiness::PublicationPhaseState;
 
 pub(super) async fn guard(state: &Arc<RwLock<ServerState>>) -> OwnedMutexGuard<()> {
-    state
-        .read()
-        .await
-        .publication_coordinator
-        .clone()
-        .lock_owned()
-        .await
+    let coordinator = state.read().await.publication_coordinator.clone();
+    coordinator.lock_owned().await
 }
 
 pub(super) async fn record_single_repository_outcome(
@@ -96,6 +91,10 @@ mod tests {
                 .is_err(),
             "single-repository sync bypassed the publication coordinator"
         );
+        let state_writer = tokio::time::timeout(Duration::from_secs(2), state.write())
+            .await
+            .expect("waiting sync retained the server-state read lock");
+        drop(state_writer);
         drop(held_publication);
 
         let result = tokio::time::timeout(Duration::from_secs(2), sync)

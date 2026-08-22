@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 42
+revision: 43
 summary: Document Remi immutable source and profile catalogs, exact revision activation and pinning, source identity and update policy, process-wide runtime ownership, signing, repository trust, publication coordination and readiness, conversion profiling, R2 durability inventory, and serving authority
 ---
 
@@ -164,7 +164,9 @@ and both periodic clocks; one process-local publication coordinator also
 serializes background cycles, repository-admin mutations, MCP canonical cycles,
 and package cache-miss readiness/reservation decisions. Their network, parsing,
 and mutation phases therefore cannot invalidate one another's publication
-decision. The narrower database writer serializes only their SQLite mutation
+decision. A queued coordinator waiter releases its server-state read guard
+before awaiting ownership, so the current cycle can record readiness through
+the state write boundary. The narrower database writer serializes only their SQLite mutation
 phases, including catalog-pointer, canonical-cache, and exact-map commits. The process-wide root
 lock excludes a second Remi runtime; durable refresh-run leases and monotonic
 fencing epochs authorize private source/profile candidates and activation
