@@ -277,9 +277,11 @@ fn remove_exact_bundle(
 ) -> Result<bool> {
     require_storage_component(source_profile, "catalog deletion source profile")?;
     require_digest(resource_sha256, "catalog deletion resource digest")?;
-    let parent = require_bundle_parent(catalog_root, kind, source_profile)?;
-    let path = parent.join(resource_sha256);
     let tombstone = tombstone_path(catalog_root, kind, source_profile, resource_sha256);
+    let Some(parent) = require_bundle_parent(catalog_root, kind, source_profile)? else {
+        return remove_gc_tombstone(&tombstone);
+    };
+    let path = parent.join(resource_sha256);
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -320,22 +322,36 @@ fn require_bundle_parent(
     catalog_root: &Path,
     kind: RemiCatalogResourceKind,
     source_profile: &str,
-) -> Result<PathBuf> {
+) -> Result<Option<PathBuf>> {
     require_real_directory(catalog_root, "catalog root")?;
     match kind {
         RemiCatalogResourceKind::SourceSnapshot => {
             let sources = catalog_root.join("sources");
             require_real_directory(&sources, "source catalog parent")?;
-            Ok(sources)
+            Ok(Some(sources))
         }
         RemiCatalogResourceKind::ProfileRevision => {
             let profiles = catalog_root.join("profiles");
             require_real_directory(&profiles, "profile catalog parent")?;
             let profile = profiles.join(source_profile);
-            require_real_directory(&profile, "profile revision catalog parent")?;
-            Ok(profile)
+            optional_real_directory(&profile, "profile revision catalog parent")
+                .map(|exists| exists.then_some(profile))
         }
     }
+}
+
+fn optional_real_directory(path: &Path, label: &str) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspect {label} {}", path.display()));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        bail!("{label} {} is not a real directory", path.display());
+    }
+    Ok(true)
 }
 
 fn require_real_directory(path: &Path, label: &str) -> Result<()> {
@@ -668,6 +684,23 @@ mod tests {
         );
         assert!(!original.exists());
         assert!(!tombstone.exists());
+    }
+
+    #[test]
+    fn absent_profile_namespace_is_idempotent_bundle_absence() {
+        let root = tempfile::tempdir().unwrap();
+        let catalog_root = root.path().join("catalogs");
+        fs::create_dir_all(catalog_root.join("profiles")).unwrap();
+
+        assert!(
+            !remove_exact_bundle(
+                &catalog_root,
+                RemiCatalogResourceKind::ProfileRevision,
+                "fedora-44",
+                &digest('a'),
+            )
+            .unwrap()
+        );
     }
 
     #[tokio::test]

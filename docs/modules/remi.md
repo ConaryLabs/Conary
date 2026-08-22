@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 41
+revision: 42
 summary: Document Remi immutable source and profile catalogs, exact revision activation and pinning, source identity and update policy, process-wide runtime ownership, signing, repository trust, publication coordination and readiness, conversion profiling, R2 durability inventory, and serving authority
 ---
 
@@ -118,7 +118,9 @@ readers see the complete new revision. Conversion outcomes own durable exact
 revision pins. Catalog garbage collection computes reachability from active,
 reader, work, and conversion pins and removes only resources absent from that
 exact graph; age, repository names, process liveness, and guessed retention
-windows are not collection authority.
+windows are not collection authority. An absent exact bundle or
+never-published profile namespace is idempotent absence during collection; a
+symlink or non-directory at either boundary still fails closed.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
