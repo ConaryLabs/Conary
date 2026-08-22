@@ -490,9 +490,13 @@ phase; finished transactions read as history, never as leftover machinery.
 This is the in-flight contract slices 1 and 3 implement, replacing today's
 stacked spinners and zero-length bars.
 
-If parallel downloads land through #535, that issue owns scheduling,
-configuration, verification, ordering, and its bounded multi-line progress
-contract. This audit does not make parallel downloads part of the UX pass.
+The progress vocabulary and renderer must support the future parallel-download
+experience tracked by #535: one aggregate phase line, a bounded row per active
+download, and one queued-count row, all transient under a TTY and reduced to
+phase lines for piped output. This audit owns that visual compatibility. #535
+owns the concurrent scheduler, configuration, verification, ordering, and the
+feature's end-to-end proof; this audit does not claim parallel fetching exists
+today.
 
 ## Ranked UI slices
 
@@ -509,8 +513,9 @@ to public claims also run `bash scripts/check-doc-truth.sh`.
    under a TTY. Stop rendering zero-length bars from
    `InstallProgress`/`RemoveProgress`/`UpdateProgress`; single-package
    operations get one spinner line that clears to the final summary; bars
-   appear only with known non-zero totals. Proof adds a pty capture
-   (`script -qec`) before/after.
+   appear only with known non-zero totals. Keep the rendering primitive capable
+   of a bounded aggregate-plus-worker layout so #535 does not need a second
+   progress dialect. Proof adds a pty capture (`script -qec`) before/after.
 2. **One warning/error voice** — flows: every mutation and refusal path.
    Route deferred or stuck generation-publication warnings once through
    `ui::warn`; stop duplicate tracing output on the default user path (tracing
@@ -559,7 +564,9 @@ not inherit priority or implementation authority from this audit:
   scoping if their help or routing changes. This audit does not require flag
   uniformity.
 - #534 owns publication semantics and exact changeset intent.
-- #535 owns parallel download scheduling and its eventual progress contract.
+- #535 owns parallel download scheduling, configuration, verification, and
+  end-to-end delivery. Its progress UI extends the visual contract defined
+  here rather than inventing a separate dialect.
 
 Future interaction proposals also require their own issue and intent-boundary
 review before implementation:
