@@ -136,7 +136,7 @@ impl RepositoryRequirement {
     ) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository_package_id, group_id, capability, version_constraint, kind, dependency_type, raw
-             FROM repository_requirements
+             FROM resolved_repository_requirements
              WHERE repository_package_id = ?1
              ORDER BY capability, version_constraint",
         )?;
@@ -171,7 +171,7 @@ impl RepositoryRequirement {
             let sql = format!(
                 "SELECT id, repository_package_id, group_id, capability, version_constraint, kind,
                         dependency_type, raw
-                 FROM repository_requirements
+                 FROM resolved_repository_requirements
                  WHERE repository_package_id IN ({placeholders})"
             );
             let mut stmt = conn.prepare(&sql)?;
@@ -204,7 +204,7 @@ impl RepositoryRequirement {
     pub fn find_by_group(conn: &Connection, group_id: i64) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository_package_id, group_id, capability, version_constraint, kind, dependency_type, raw
-             FROM repository_requirements
+             FROM resolved_repository_requirements
              WHERE group_id = ?1
              ORDER BY capability, version_constraint",
         )?;
@@ -349,7 +349,7 @@ impl RepositoryRequirementGroup {
     ) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
             "SELECT id, repository_package_id, kind, behavior, description, native_text, expression_json
-             FROM repository_requirement_groups
+             FROM resolved_repository_requirement_groups
              WHERE repository_package_id = ?1
              ORDER BY id",
         )?;
@@ -384,7 +384,7 @@ impl RepositoryRequirementGroup {
             let sql = format!(
                 "SELECT id, repository_package_id, kind, behavior, description, native_text,
                         expression_json
-                 FROM repository_requirement_groups
+                 FROM resolved_repository_requirement_groups
                  WHERE repository_package_id IN ({placeholders})"
             );
             let mut stmt = conn.prepare(&sql)?;

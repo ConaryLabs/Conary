@@ -267,16 +267,90 @@ BEGIN
           AND repository.source_profile = run.source_profile
     ) THEN RAISE(ABORT, 'sync run member repository must belong to the run source profile') END;
 END;
--- Client-side Remi sparse consumption retains only a monotonic publication
--- fence and the exact active wire revision. Bounded candidates live in private
--- temporary files, never disabled repository rows in operational SQLite.
-CREATE TABLE remi_client_sync_state (
-            repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
-            fencing_epoch INTEGER NOT NULL CHECK(fencing_epoch > 0),
-            active_revision_json TEXT CHECK(
-                active_revision_json IS NULL OR json_valid(active_revision_json)
-            )
+-- Client Remi trust and activation keep only endpoint metadata, immutable
+-- object/index identities, and one active pointer in operational SQLite. The
+-- package/provider/requirement/canonical index lives in a private immutable
+-- SQLite artifact selected when each connection opens.
+CREATE TABLE remi_client_universe_trust (
+            endpoint TEXT PRIMARY KEY,
+            trusted_root_sha256 TEXT NOT NULL,
+            trusted_root_json TEXT NOT NULL
+                CHECK(json_valid(trusted_root_json) AND json_type(trusted_root_json) = 'object'),
+            root_version INTEGER NOT NULL CHECK(root_version > 0),
+            fencing_epoch INTEGER NOT NULL DEFAULT 0 CHECK(fencing_epoch >= 0),
+            timestamp_json TEXT CHECK(timestamp_json IS NULL OR json_valid(timestamp_json)),
+            snapshot_json TEXT CHECK(snapshot_json IS NULL OR json_valid(snapshot_json)),
+            targets_json TEXT CHECK(targets_json IS NULL OR json_valid(targets_json)),
+            CHECK(length(endpoint) BETWEEN 1 AND 2048 AND trim(endpoint) = endpoint),
+            CHECK(length(trusted_root_sha256) = 64
+                AND trusted_root_sha256 NOT GLOB '*[^0-9a-f]*')
         );
+
+CREATE TABLE remi_client_universe_objects (
+            endpoint TEXT NOT NULL
+                REFERENCES remi_client_universe_trust(endpoint) ON DELETE CASCADE,
+            sha256 TEXT NOT NULL,
+            size INTEGER NOT NULL CHECK(size >= 0),
+            object_kind TEXT NOT NULL CHECK(object_kind IN ('catalog', 'canonical_map')),
+            local_path TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL CHECK(created_at >= 0),
+            CHECK(length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(local_path) > 0),
+            PRIMARY KEY(endpoint, sha256)
+        );
+
+CREATE TRIGGER remi_client_universe_objects_immutable
+BEFORE UPDATE ON remi_client_universe_objects
+BEGIN
+    SELECT RAISE(ABORT, 'immutable client universe objects cannot be updated');
+END;
+
+CREATE TABLE remi_client_universe_revisions (
+            endpoint TEXT NOT NULL
+                REFERENCES remi_client_universe_trust(endpoint) ON DELETE CASCADE,
+            manifest_sha256 TEXT NOT NULL,
+            sequence INTEGER NOT NULL CHECK(sequence > 0),
+            manifest_json TEXT NOT NULL
+                CHECK(json_valid(manifest_json) AND json_type(manifest_json) = 'object'),
+            index_sha256 TEXT NOT NULL,
+            index_size INTEGER NOT NULL CHECK(index_size >= 0),
+            index_path TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL CHECK(created_at >= 0),
+            CHECK(length(manifest_sha256) = 64
+                AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(index_sha256) = 64
+                AND index_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(index_path) > 0),
+            PRIMARY KEY(endpoint, manifest_sha256),
+            UNIQUE(endpoint, sequence)
+        );
+
+CREATE TRIGGER remi_client_universe_revisions_immutable
+BEFORE UPDATE ON remi_client_universe_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'immutable client universe revisions cannot be updated');
+END;
+
+CREATE TABLE remi_active_client_universe (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            endpoint TEXT NOT NULL,
+            manifest_sha256 TEXT NOT NULL,
+            sequence INTEGER NOT NULL CHECK(sequence > 0),
+            fencing_epoch INTEGER NOT NULL CHECK(fencing_epoch > 0),
+            activated_at INTEGER NOT NULL CHECK(activated_at >= 0),
+            FOREIGN KEY(endpoint, manifest_sha256)
+                REFERENCES remi_client_universe_revisions(endpoint, manifest_sha256)
+                ON DELETE RESTRICT,
+            FOREIGN KEY(endpoint)
+                REFERENCES remi_client_universe_trust(endpoint) ON DELETE RESTRICT
+        );
+
+CREATE TRIGGER remi_active_client_universe_monotonic
+BEFORE UPDATE ON remi_active_client_universe
+WHEN NEW.sequence <= OLD.sequence OR NEW.fencing_epoch <= OLD.fencing_epoch
+BEGIN
+    SELECT RAISE(ABORT, 'active client universe sequence and fence must increase monotonically');
+END;
 CREATE TABLE repository_source_pins (
             repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
             snapshot_sha256 TEXT NOT NULL,
@@ -899,265 +973,6 @@ CREATE INDEX idx_repo_requirements_group
             ON repository_requirements(group_id);
 CREATE INDEX idx_repo_req_pkg_kind
             ON repository_requirements(repository_package_id, kind);
-CREATE TABLE remi_sparse_projection_revisions (
-            source_profile TEXT PRIMARY KEY,
-            sequence INTEGER NOT NULL CHECK(sequence >= 0),
-            state_id TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
-            CHECK(length(state_id) = 32 AND state_id NOT GLOB '*[^0-9a-f]*')
-        );
-CREATE TRIGGER remi_sparse_projection_revision_rotate_state_id
-AFTER UPDATE OF sequence ON remi_sparse_projection_revisions
-WHEN NEW.sequence != OLD.sequence AND NEW.state_id = OLD.state_id
-BEGIN
-    UPDATE remi_sparse_projection_revisions
-    SET state_id = lower(hex(randomblob(16)))
-    WHERE source_profile = NEW.source_profile;
-END;
-CREATE TRIGGER remi_sparse_revision_repositories_insert
-AFTER INSERT ON repositories
-WHEN NEW.enabled = 1 AND NEW.source_profile IS NOT NULL
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    VALUES (NEW.source_profile, 1)
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_repositories_delete
-AFTER DELETE ON repositories
-WHEN OLD.enabled = 1 AND OLD.source_profile IS NOT NULL
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    VALUES (OLD.source_profile, 1)
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_repositories_update_old
-AFTER UPDATE OF enabled, source_profile ON repositories
-WHEN OLD.enabled = 1 AND OLD.source_profile IS NOT NULL
-     AND (OLD.enabled IS NOT NEW.enabled OR OLD.source_profile IS NOT NEW.source_profile)
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    VALUES (OLD.source_profile, 1)
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_repositories_update_new
-AFTER UPDATE OF enabled, source_profile ON repositories
-WHEN NEW.enabled = 1 AND NEW.source_profile IS NOT NULL
-     AND (OLD.enabled IS NOT NEW.enabled OR OLD.source_profile IS NOT NEW.source_profile)
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    VALUES (NEW.source_profile, 1)
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_packages_insert
-AFTER INSERT ON repository_packages
-WHEN NEW.size >= 1
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repositories repository
-    WHERE repository.id = NEW.repository_id
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_packages_delete
-AFTER DELETE ON repository_packages
-WHEN OLD.size >= 1
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repositories repository
-    WHERE repository.id = OLD.repository_id
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_packages_update_old
-AFTER UPDATE OF repository_id, name, version, package_release, architecture, size, metadata
-ON repository_packages
-WHEN OLD.size >= 1 AND (
-    OLD.repository_id IS NOT NEW.repository_id
-    OR OLD.name IS NOT NEW.name
-    OR OLD.version IS NOT NEW.version
-    OR OLD.package_release IS NOT NEW.package_release
-    OR OLD.architecture IS NOT NEW.architecture
-    OR OLD.size IS NOT NEW.size
-    OR OLD.metadata IS NOT NEW.metadata
-)
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repositories repository
-    WHERE repository.id = OLD.repository_id
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_packages_update_new
-AFTER UPDATE OF repository_id, name, version, package_release, architecture, size, metadata
-ON repository_packages
-WHEN NEW.size >= 1 AND (
-    OLD.repository_id IS NOT NEW.repository_id
-    OR OLD.name IS NOT NEW.name
-    OR OLD.version IS NOT NEW.version
-    OR OLD.package_release IS NOT NEW.package_release
-    OR OLD.architecture IS NOT NEW.architecture
-    OR OLD.size IS NOT NEW.size
-    OR OLD.metadata IS NOT NEW.metadata
-)
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repositories repository
-    WHERE repository.id = NEW.repository_id
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_provides_insert
-AFTER INSERT ON repository_provides
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repository_packages package
-    JOIN repositories repository ON repository.id = package.repository_id
-    WHERE package.id = NEW.repository_package_id
-      AND package.size >= 1
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_provides_delete
-AFTER DELETE ON repository_provides
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repository_packages package
-    JOIN repositories repository ON repository.id = package.repository_id
-    WHERE package.id = OLD.repository_package_id
-      AND package.size >= 1
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_provides_update
-AFTER UPDATE OF repository_package_id, capability, version, version_relation, kind, raw,
-                version_scheme, architecture_qualifier_kind, architecture
-ON repository_provides
-WHEN OLD.repository_package_id IS NOT NEW.repository_package_id
-     OR OLD.capability IS NOT NEW.capability
-     OR OLD.version IS NOT NEW.version
-     OR OLD.version_relation IS NOT NEW.version_relation
-     OR OLD.kind IS NOT NEW.kind
-     OR OLD.raw IS NOT NEW.raw
-     OR OLD.version_scheme IS NOT NEW.version_scheme
-     OR OLD.architecture_qualifier_kind IS NOT NEW.architecture_qualifier_kind
-     OR OLD.architecture IS NOT NEW.architecture
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT DISTINCT repository.source_profile, 1
-    FROM repository_packages package
-    JOIN repositories repository ON repository.id = package.repository_id
-    WHERE package.id IN (OLD.repository_package_id, NEW.repository_package_id)
-      AND package.size >= 1
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_requirement_groups_insert
-AFTER INSERT ON repository_requirement_groups
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repository_packages package
-    JOIN repositories repository ON repository.id = package.repository_id
-    WHERE package.id = NEW.repository_package_id
-      AND package.size >= 1
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_requirement_groups_delete
-AFTER DELETE ON repository_requirement_groups
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repository_packages package
-    JOIN repositories repository ON repository.id = package.repository_id
-    WHERE package.id = OLD.repository_package_id
-      AND package.size >= 1
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_requirement_groups_update
-AFTER UPDATE OF repository_package_id, kind, behavior, description, native_text, expression_json
-ON repository_requirement_groups
-WHEN OLD.repository_package_id IS NOT NEW.repository_package_id
-     OR OLD.kind IS NOT NEW.kind
-     OR OLD.behavior IS NOT NEW.behavior
-     OR OLD.description IS NOT NEW.description
-     OR OLD.native_text IS NOT NEW.native_text
-     OR OLD.expression_json IS NOT NEW.expression_json
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT DISTINCT repository.source_profile, 1
-    FROM repository_packages package
-    JOIN repositories repository ON repository.id = package.repository_id
-    WHERE package.id IN (OLD.repository_package_id, NEW.repository_package_id)
-      AND package.size >= 1
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_requirements_insert
-AFTER INSERT ON repository_requirements
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repository_packages package
-    JOIN repositories repository ON repository.id = package.repository_id
-    WHERE package.id = NEW.repository_package_id
-      AND package.size >= 1
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_requirements_delete
-AFTER DELETE ON repository_requirements
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT repository.source_profile, 1
-    FROM repository_packages package
-    JOIN repositories repository ON repository.id = package.repository_id
-    WHERE package.id = OLD.repository_package_id
-      AND package.size >= 1
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-CREATE TRIGGER remi_sparse_revision_requirements_update
-AFTER UPDATE OF repository_package_id, group_id, capability, version_constraint, kind,
-                dependency_type, raw
-ON repository_requirements
-WHEN OLD.repository_package_id IS NOT NEW.repository_package_id
-     OR OLD.group_id IS NOT NEW.group_id
-     OR OLD.capability IS NOT NEW.capability
-     OR OLD.version_constraint IS NOT NEW.version_constraint
-     OR OLD.kind IS NOT NEW.kind
-     OR OLD.dependency_type IS NOT NEW.dependency_type
-     OR OLD.raw IS NOT NEW.raw
-BEGIN
-    INSERT INTO remi_sparse_projection_revisions(source_profile, sequence)
-    SELECT DISTINCT repository.source_profile, 1
-    FROM repository_packages package
-    JOIN repositories repository ON repository.id = package.repository_id
-    WHERE package.id IN (OLD.repository_package_id, NEW.repository_package_id)
-      AND package.size >= 1
-      AND repository.enabled = 1
-      AND repository.source_profile IS NOT NULL
-    ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
-END;
-
 -- Immutable Remi catalog metadata lives in the operational database only as
 -- exact, durable reachability metadata. Package, provide, and requirement
 -- rows belong to the standalone catalog SQLite files, never these tables.
@@ -1701,3 +1516,37 @@ CREATE INDEX idx_native_publications_repo_package
             ON native_package_publications(repository_package_id);
 CREATE INDEX idx_native_publications_chunk_hash
             ON native_package_publications(content_hash);
+
+-- Read authorities default to operational rows. When a client universe is
+-- active, db::remi_universe shadows these names with connection-local views
+-- that union the immutable attached index. Mutation code continues to target
+-- the concrete operational table names above.
+CREATE VIEW resolved_repository_packages AS
+SELECT id, repository_id, name, version, package_release, architecture,
+       debian_multi_arch, description, checksum, size, download_url, metadata,
+       synced_at, is_security_update, severity, cve_ids, advisory_id,
+       advisory_url, source_profile, version_scheme, canonical_id
+FROM repository_packages;
+
+CREATE VIEW resolved_repository_provides AS
+SELECT id, repository_package_id, capability, version, version_relation, kind,
+       raw, version_scheme, architecture_qualifier_kind, architecture, provenance
+FROM repository_provides;
+
+CREATE VIEW resolved_repository_requirement_groups AS
+SELECT id, repository_package_id, kind, behavior, description, native_text,
+       expression_json
+FROM repository_requirement_groups;
+
+CREATE VIEW resolved_repository_requirements AS
+SELECT id, repository_package_id, group_id, capability, version_constraint,
+       kind, dependency_type, raw
+FROM repository_requirements;
+
+CREATE VIEW resolved_canonical_packages AS
+SELECT id, name, appstream_id, description, kind, category
+FROM canonical_packages;
+
+CREATE VIEW resolved_package_implementations AS
+SELECT id, canonical_id, distro, distro_name, source
+FROM package_implementations;

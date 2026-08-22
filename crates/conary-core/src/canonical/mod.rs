@@ -4,7 +4,7 @@
 //!
 //! This module provides:
 //! - Versioned exact contracts mapping literal profile/package identities
-//! - Remi map exchange for repository-authorized contract snapshots
+//! - Signed-universe canonical-map contracts
 //! - Repology and AppStream discovery caches that cannot create equivalence
 //!
 //! Regexes, filename precedence, payload paths, package-name similarity,
@@ -20,7 +20,7 @@ pub use exchange::{
 };
 
 pub mod appstream;
-pub mod client;
 pub(crate) mod exchange;
 pub mod repology;
 pub mod rules;
+pub(crate) mod stream;

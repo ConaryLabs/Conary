@@ -54,7 +54,7 @@ impl<'db> CanonicalResolver<'db> {
     /// variants rather than treating a distro name as a repository alias.
     fn lookup_repo_names(&self, canonical_id: i64, distro_name: &str) -> Result<Vec<String>> {
         let mut statement = self.conn.prepare(
-            "SELECT DISTINCT r.name FROM repository_packages rp
+            "SELECT DISTINCT r.name FROM resolved_repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
                  WHERE rp.canonical_id = ?1 AND rp.name = ?2 AND r.enabled = 1
                  ORDER BY r.priority DESC, r.id ASC",

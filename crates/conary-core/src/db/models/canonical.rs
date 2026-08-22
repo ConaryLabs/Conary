@@ -148,7 +148,7 @@ impl CanonicalPackage {
     /// Find by canonical name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM canonical_packages WHERE name = ?1",
+            "SELECT {} FROM resolved_canonical_packages WHERE name = ?1",
             Self::COLUMNS
         );
         let result = conn.query_row(&sql, [name], Self::from_row).optional()?;
@@ -161,7 +161,7 @@ impl CanonicalPackage {
     /// row by SQLite iteration order.
     pub fn find_by_appstream_id(conn: &Connection, appstream_id: &str) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM canonical_packages WHERE appstream_id = ?1 ORDER BY id",
+            "SELECT {} FROM resolved_canonical_packages WHERE appstream_id = ?1 ORDER BY id",
             Self::COLUMNS
         );
         let mut statement = conn.prepare(&sql)?;
@@ -180,7 +180,7 @@ impl CanonicalPackage {
     /// Find by id
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM canonical_packages WHERE id = ?1",
+            "SELECT {} FROM resolved_canonical_packages WHERE id = ?1",
             Self::COLUMNS
         );
         let result = conn.query_row(&sql, [id], Self::from_row).optional()?;
@@ -213,7 +213,7 @@ impl CanonicalPackage {
     /// List all canonical packages of a given kind
     pub fn list_by_kind(conn: &Connection, kind: &str) -> Result<Vec<Self>> {
         let sql = format!(
-            "SELECT {} FROM canonical_packages WHERE kind = ?1 ORDER BY name",
+            "SELECT {} FROM resolved_canonical_packages WHERE kind = ?1 ORDER BY name",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -227,7 +227,7 @@ impl CanonicalPackage {
     pub fn search(conn: &Connection, query: &str) -> Result<Vec<Self>> {
         let pattern = format!("%{query}%");
         let sql = format!(
-            "SELECT {} FROM canonical_packages \
+            "SELECT {} FROM resolved_canonical_packages \
              WHERE name LIKE ?1 OR description LIKE ?1 ORDER BY name",
             Self::COLUMNS
         );
@@ -346,7 +346,7 @@ impl PackageImplementation {
     /// Find all implementations for a canonical package.
     pub fn find_by_canonical(conn: &Connection, canonical_id: i64) -> Result<Vec<Self>> {
         let sql = format!(
-            "SELECT {} FROM package_implementations
+            "SELECT {} FROM resolved_package_implementations
              WHERE canonical_id = ?1 ORDER BY distro, distro_name, id",
             Self::COLUMNS
         );
@@ -364,7 +364,7 @@ impl PackageImplementation {
         name: &str,
     ) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM package_implementations \
+            "SELECT {} FROM resolved_package_implementations \
              WHERE distro = ?1 AND distro_name = ?2 ORDER BY canonical_id, id",
             Self::COLUMNS
         );
@@ -385,7 +385,7 @@ impl PackageImplementation {
     /// points to one canonical identity.
     pub fn find_by_any_distro_name(conn: &Connection, name: &str) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM package_implementations
+            "SELECT {} FROM resolved_package_implementations
              WHERE distro_name = ?1 ORDER BY canonical_id, distro, id",
             Self::COLUMNS
         );
@@ -415,7 +415,7 @@ impl PackageImplementation {
         distro: &str,
     ) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM package_implementations \
+            "SELECT {} FROM resolved_package_implementations \
              WHERE canonical_id = ?1 AND distro = ?2 ORDER BY id",
             Self::COLUMNS
         );

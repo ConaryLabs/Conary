@@ -32,7 +32,7 @@ const INSERT_PROVIDE_SQL: &str = "INSERT INTO repository_provides
 const SELECT_BY_PACKAGE_SQL: &str =
     "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
                     version_scheme, architecture_qualifier_kind, architecture, provenance
-             FROM repository_provides
+             FROM resolved_repository_provides
              WHERE repository_package_id = ?1
              ORDER BY capability, version";
 
@@ -40,15 +40,15 @@ const SELECT_BY_PACKAGE_SQL: &str =
 const SELECT_BY_PACKAGES_TEMPLATE: &str =
     "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
                         version_scheme, architecture_qualifier_kind, architecture, provenance
-                 FROM repository_provides
+                 FROM resolved_repository_provides
                  WHERE repository_package_id IN ({placeholders})";
 
 const SELECT_BY_CAPABILITY_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
                     rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             FROM resolved_repository_provides rp
+             JOIN resolved_repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
              WHERE repo.enabled = 1 AND rp.capability = ?1
              ORDER BY rp.capability, rp.version";
@@ -61,8 +61,8 @@ const SELECT_BY_CLI_EXACT_QUERY_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
                     rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             FROM resolved_repository_provides rp
+             JOIN resolved_repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
              WHERE repo.enabled = 1
                AND rp.capability = ?1
@@ -87,8 +87,8 @@ const SELECT_BY_CLI_RAW_QUERY_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
                     rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             FROM resolved_repository_provides rp
+             JOIN resolved_repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
              WHERE repo.enabled = 1
                AND rp.raw = ?1
@@ -100,8 +100,8 @@ const SELECT_BY_CAPABILITY_AND_KIND_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
                     rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             FROM resolved_repository_provides rp
+             JOIN resolved_repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
              WHERE repo.enabled = 1 AND rp.capability = ?1 AND rp.kind = ?2
              ORDER BY rp.capability, rp.version";

@@ -51,6 +51,7 @@ const UNIVERSE_FILES: [&str; 6] = [
     UNIVERSE_TARGETS_FILE,
     UNIVERSE_TIMESTAMP_FILE,
 ];
+const UNIVERSE_RENEWAL_WINDOW: Duration = Duration::hours(6);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UniversePublicationOutcome {
@@ -140,10 +141,12 @@ pub(crate) fn publish_current_universe(
         && same_authority(active, &inputs.profiles, &canonical_map_sha256)
     {
         verify_published_bundle(catalog_dir, active, manifest_sha256)?;
-        return Ok(UniversePublicationOutcome::Unchanged {
-            manifest_sha256: manifest_sha256.clone(),
-            sequence: inputs.base_sequence,
-        });
+        if active_bundle_is_fresh(catalog_dir, active, manifest_sha256, Utc::now())? {
+            return Ok(UniversePublicationOutcome::Unchanged {
+                manifest_sha256: manifest_sha256.clone(),
+                sequence: inputs.base_sequence,
+            });
+        }
     }
 
     let root = load_or_create_root(catalog_dir, keys_root, &inputs)?;
@@ -244,6 +247,33 @@ fn same_authority(
             .iter()
             .zip(profiles)
             .all(|(left, right)| left.revision == *right)
+}
+
+fn active_bundle_is_fresh(
+    catalog_dir: &Path,
+    active: &RemiUniverseManifestV1,
+    manifest_sha256: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<bool> {
+    let timestamp_bytes =
+        fs::read(universe_bundle_path(catalog_dir, manifest_sha256).join(UNIVERSE_TIMESTAMP_FILE))
+            .with_context(|| format!("read active universe timestamp for {manifest_sha256}"))?;
+    let timestamp: Signed<TimestampMetadata> =
+        serde_json::from_slice(&timestamp_bytes).context("parse active universe timestamp")?;
+    Ok(!requires_renewal(
+        now,
+        active.expires_at,
+        timestamp.signed.expires,
+    ))
+}
+
+fn requires_renewal(
+    now: chrono::DateTime<Utc>,
+    manifest_expires: chrono::DateTime<Utc>,
+    timestamp_expires: chrono::DateTime<Utc>,
+) -> bool {
+    manifest_expires <= now + UNIVERSE_RENEWAL_WINDOW
+        || timestamp_expires <= now + UNIVERSE_RENEWAL_WINDOW
 }
 
 fn load_or_create_root(
@@ -1039,5 +1069,25 @@ mod tests {
             .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn unchanged_authority_renews_before_timestamp_expiry() {
+        let now = "2026-08-22T12:00:00Z".parse().unwrap();
+        assert!(!requires_renewal(
+            now,
+            now + Duration::days(7),
+            now + Duration::hours(7),
+        ));
+        assert!(requires_renewal(
+            now,
+            now + Duration::days(7),
+            now + Duration::hours(6),
+        ));
+        assert!(requires_renewal(
+            now,
+            now + Duration::hours(5),
+            now + Duration::days(1),
+        ));
     }
 }

@@ -199,8 +199,8 @@ mod tests {
         let mut stmt = conn.prepare(
             "SELECT rp.capability, rp.version, rp.version_relation, rp.version_scheme,
                     rp.repository_package_id
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON rp.repository_package_id = pkg.id
+             FROM resolved_repository_provides rp
+             JOIN resolved_repository_packages pkg ON rp.repository_package_id = pkg.id
              JOIN repositories r ON pkg.repository_id = r.id
              WHERE r.enabled = 1",
         )?;

@@ -146,7 +146,7 @@ impl<'a> AutomationChecker<'a> {
                     rp.security_cves, rp.security_severity,
                     t.version_scheme, rp.version_scheme
              FROM troves t
-             JOIN repository_packages rp ON t.name = rp.name
+             JOIN resolved_repository_packages rp ON t.name = rp.name
              JOIN repositories r ON rp.repository_id = r.id
              WHERE rp.is_security_update = 1
                AND t.source_profile IS r.source_profile",
@@ -402,7 +402,7 @@ impl<'a> AutomationChecker<'a> {
             "SELECT t.name, t.version, rp.version,
                     t.version_scheme, rp.version_scheme
              FROM troves t
-             JOIN repository_packages rp ON t.name = rp.name
+             JOIN resolved_repository_packages rp ON t.name = rp.name
              JOIN repositories r ON rp.repository_id = r.id
              WHERE (rp.is_security_update IS NULL OR rp.is_security_update = 0)
                AND t.source_profile IS r.source_profile",

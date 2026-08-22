@@ -50,9 +50,9 @@ impl PackageIdentity {
             "SELECT rp.id, rp.name, rp.version, rp.package_release, rp.architecture, rp.debian_multi_arch, rp.version_scheme,
                     rp.repository_id, r.name, r.source_profile, r.priority,
                     rp.canonical_id, cp.name
-             FROM repository_packages rp
+             FROM resolved_repository_packages rp
              JOIN repositories r ON rp.repository_id = r.id
-             LEFT JOIN canonical_packages cp ON rp.canonical_id = cp.id
+             LEFT JOIN resolved_canonical_packages cp ON rp.canonical_id = cp.id
              WHERE rp.name = ?1 AND r.enabled = 1",
         )?;
 
@@ -93,8 +93,8 @@ impl PackageIdentity {
     /// Find all cross-distro equivalent names via canonical_id.
     pub fn find_canonical_equivalents(conn: &Connection, name: &str) -> Result<Vec<String>> {
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT rp2.name FROM repository_packages rp1
-             JOIN repository_packages rp2 ON rp1.canonical_id = rp2.canonical_id
+            "SELECT DISTINCT rp2.name FROM resolved_repository_packages rp1
+             JOIN resolved_repository_packages rp2 ON rp1.canonical_id = rp2.canonical_id
              WHERE rp1.name = ?1 AND rp2.name != ?1 AND rp1.canonical_id IS NOT NULL",
         )?;
 

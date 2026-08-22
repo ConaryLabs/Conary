@@ -276,7 +276,7 @@ pub(super) fn install_inner_with_stored_files(
         {
             let repo_id: Option<i64> = tx
                 .query_row(
-                    "SELECT r.id FROM repository_packages rp
+                    "SELECT r.id FROM resolved_repository_packages rp
                      JOIN repositories r ON rp.repository_id = r.id
                      WHERE rp.name = ?1 AND rp.version = ?2
                        AND (?3 IS NULL OR rp.architecture IS NULL OR rp.architecture = ?3)

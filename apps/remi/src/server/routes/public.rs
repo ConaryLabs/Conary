@@ -71,7 +71,6 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             get(recipes::download_recipe_package),
         )
         .route("/v1/index/{distro}/{name}", get(sparse::get_sparse_entry))
-        .route("/v1/index/{distro}", get(sparse::list_packages))
         .route("/v1/search", get(search::search_packages))
         .route("/v1/suggest", get(search::suggest_packages))
         .route("/v1/canonical/map", get(canonical::canonical_map))

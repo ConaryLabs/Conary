@@ -147,7 +147,7 @@ impl RepositoryPackage {
     /// Find a repository package by ID
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM repository_packages WHERE id = ?1",
+            "SELECT {} FROM resolved_repository_packages WHERE id = ?1",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -158,7 +158,7 @@ impl RepositoryPackage {
     /// Find repository packages by name
     pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<Self>> {
         let sql = format!(
-            "SELECT {} FROM repository_packages WHERE name = ?1",
+            "SELECT {} FROM resolved_repository_packages WHERE name = ?1",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -171,7 +171,7 @@ impl RepositoryPackage {
     /// Find repository packages by repository ID
     pub fn find_by_repository(conn: &Connection, repository_id: i64) -> Result<Vec<Self>> {
         let sql = format!(
-            "SELECT {} FROM repository_packages WHERE repository_id = ?1",
+            "SELECT {} FROM resolved_repository_packages WHERE repository_id = ?1",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -193,7 +193,7 @@ impl RepositoryPackage {
             .replace('_', "\\_");
         let search_pattern = format!("%{escaped}%");
         let sql = format!(
-            "SELECT {} FROM repository_packages \
+            "SELECT {} FROM resolved_repository_packages \
              WHERE name LIKE ?1 ESCAPE '\\' OR description LIKE ?1 ESCAPE '\\' \
              ORDER BY name, version",
             Self::COLUMNS
@@ -223,7 +223,7 @@ impl RepositoryPackage {
     /// List all packages in all enabled repositories
     pub fn list_all(conn: &Connection) -> Result<Vec<Self>> {
         let sql = format!(
-            "SELECT {} FROM repository_packages rp \
+            "SELECT {} FROM resolved_repository_packages rp \
              JOIN repositories r ON rp.repository_id = r.id \
              WHERE r.enabled = 1 \
              ORDER BY rp.name, rp.version",
@@ -245,7 +245,7 @@ impl RepositoryPackage {
     ) -> Result<Vec<Self>> {
         let pattern = format!("%{dependency_name}%");
         let sql = format!(
-            "SELECT {} FROM repository_packages rp \
+            "SELECT {} FROM resolved_repository_packages rp \
              JOIN repositories r ON rp.repository_id = r.id \
              WHERE r.enabled = 1 AND rp.metadata LIKE ?1",
             Self::COLUMNS_PREFIXED
@@ -264,7 +264,7 @@ impl RepositoryPackage {
         version: &str,
     ) -> Result<Option<Self>> {
         let sql = format!(
-            "SELECT {} FROM repository_packages rp \
+            "SELECT {} FROM resolved_repository_packages rp \
              JOIN repositories r ON rp.repository_id = r.id \
              WHERE r.enabled = 1 AND rp.name = ?1 AND rp.version = ?2",
             Self::COLUMNS_PREFIXED
@@ -318,7 +318,7 @@ impl RepositoryPackage {
     /// Find all security updates available
     pub fn find_security_updates(conn: &Connection) -> Result<Vec<Self>> {
         let sql = format!(
-            "SELECT {} FROM repository_packages rp \
+            "SELECT {} FROM resolved_repository_packages rp \
              JOIN repositories r ON rp.repository_id = r.id \
              WHERE r.enabled = 1 AND rp.is_security_update = 1 \
              ORDER BY CASE rp.severity \
