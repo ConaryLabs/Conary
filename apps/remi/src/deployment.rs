@@ -151,6 +151,7 @@ pub fn prepare(options: &PrepareOptions) -> Result<PathBuf> {
         &repository_manifest,
         &options.repository_keys_dir,
     )?;
+    crate::server::signing_authority::ensure_universe_authority(&options.repository_keys_dir)?;
 
     let db_path = runtime_root.join("metadata/conary.db");
     let compatibility = conary_core::db::schema::inspect(&db_path)
@@ -202,6 +203,13 @@ pub fn prepare(options: &PrepareOptions) -> Result<PathBuf> {
     Ok(manifest_path)
 }
 
+/// Initialize or verify the durable endpoint-wide universe signing authority
+/// and return its public, self-signed metadata root path.
+pub fn initialize_universe_authority(repository_keys_dir: &Path) -> Result<PathBuf> {
+    crate::server::signing_authority::ensure_universe_authority(repository_keys_dir)?;
+    Ok(crate::server::signing_authority::universe_root_metadata_path(repository_keys_dir))
+}
+
 pub fn rollback(manifest_path: &Path) -> Result<()> {
     require_plain_file(manifest_path, "transition manifest")?;
     let content = fs::read_to_string(manifest_path)
@@ -244,6 +252,7 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         &repository_manifest,
         repository_keys_dir,
     )?;
+    crate::server::signing_authority::inspect_universe_authority(repository_keys_dir)?;
     let db_path = config.storage_root().join("metadata/conary.db");
     match conary_core::db::schema::inspect(&db_path)? {
         SchemaCompatibility::Current => {}

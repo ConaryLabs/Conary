@@ -253,7 +253,13 @@ fn streamed_relations_preserve_exact_v1_logical_identity() {
         package.provide(provide).unwrap();
     }
     for group in &requirement_groups {
-        package.requirement_group(group).unwrap();
+        let mut base = group.clone();
+        let atoms = std::mem::take(&mut base.atoms);
+        let mut streamed_group = package.begin_requirement_group(&base).unwrap();
+        for atom in atoms {
+            streamed_group.atom(&atom).unwrap();
+        }
+        streamed_group.finish().unwrap();
     }
     package.finish().unwrap();
     let (actual_digest, actual_counts) = streamed.finish().unwrap();

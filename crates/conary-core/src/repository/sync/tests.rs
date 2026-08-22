@@ -23,9 +23,6 @@ mod tests {
         ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, OpenPgpTrustRoot,
         RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
     };
-    use crate::repository::remi_metadata::{
-        RemiProvide, RemiRequirement, RemiRequirementGroup, RemiSparseResolutionVersionEntry,
-    };
     use crate::repository::versioning::VersionScheme;
     use crate::trust::metadata::{TargetDescription, VerifiedTufState};
     use serde_json::json;

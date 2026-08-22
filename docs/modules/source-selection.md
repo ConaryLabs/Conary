@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-22
-revision: 48
-summary: Document immutable Remi source/profile catalog authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+revision: 49
+summary: Document signed Remi universe and canonical-map authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -92,19 +92,14 @@ such as `fedora` and `ubuntu` are not feed IDs. The
 requires the declared profile's package format to match the repository parser.
 Remi
 sync and package fetches translate the stored public ID to the profile-owned
-route slug. Remi sync pages through the sparse name index and incrementally
-stages each fixed-size `include=versions` page of resolution-only
-version/provide/requirement documents and trusted package-advisory metadata;
-one final fenced transaction publishes the completed local candidate over the
-previous offline-resolution snapshot. Every page carries one exact-profile
-sparse revision with a projection-schema version, monotonic sequence, and
-strict state identity, and the client rejects a mixed-revision page set even
-when its name total and ordering remain unchanged. A durable per-repository run records
-the process owner, fencing epoch, candidate, revision, heartbeat, state, and
-typed failure; restart recovery removes only the exact candidate proven
-abandoned by its expired lease. Sync never fetches the whole-distribution
-metadata document, retains a distribution-sized package vector, or issues one
-HTTP request per package. Persisted Remi package identity requires the exact
+route slug. Remi sync verifies the endpoint-wide signed universe, downloads
+only missing digest-addressed catalogs, and replays each configured exact
+profile directly into one private immutable resolution index. One final fenced
+transaction activates the complete index and its universe-bound canonical map.
+The client rejects mixed revisions, rollback, forks, expiry, altered objects,
+and a manifest that does not authorize the exact object set. Sync neither
+fetches whole-distribution JSON nor retains distribution-sized package or
+relation vectors in Rust. Persisted Remi package identity requires the exact
 public ID; route slugs and generic `rpm`/`deb`/`arch` format labels are never
 accepted as source-identity aliases. Native repository sync instead consumes
 the exact persisted native source policy described below. A configured public
@@ -139,9 +134,18 @@ and its `repository_package_keys` rows in the same transaction. An explicit
 The self-hosted key option cannot override that release-tracked canonical
 authority.
 Repeated initialization compares the semantic key set without rewriting its
-sync timestamps, and Remi sparse sync replaces package rows without replacing
-the repository's package authority. A same-name repository whose endpoint or
+sync timestamps. Signed-universe activation leaves the repository's CCS
+package authority intact and stores Remi resolution rows only in the selected
+private immutable client index. A same-name repository whose endpoint or
 strategy is operator-managed is left unchanged.
+
+Universe metadata trust is a second independent authority. A noncanonical
+endpoint requires an independently supplied `--remi-metadata-root`, and
+replacement uses only a future root signed through the already-enrolled TUF
+root chain. The canonical endpoint currently requires the same explicit root;
+its first durable server ceremony must supply the public `root.json` before a
+release can track and enroll that exact origin automatically. The root is never
+derived from a CCS package key.
 
 For a noncanonical Remi endpoint, `repo add` requires one or more authenticated
 `targets.public` files through the repeatable `--ccs-package-key` option and
@@ -164,8 +168,8 @@ Only two typed authorities can create an implementation mapping:
 
 - `Contract`: a versioned local document containing literal canonical names,
   package names, and exact public profile IDs.
-- `Remi`: one checksum-verified canonical-map snapshot fetched from an
-  explicitly configured Remi endpoint.
+- `Remi`: one canonical-map object bound into the verified signed universe for
+  the explicitly configured Remi endpoint.
 
 The current schema permits one implementation for each
 `canonical_id`/public-profile pair and rejects every other authority string.
@@ -185,14 +189,15 @@ requires:
 - each canonical name's exact `kind`, optional `category`, and exact
   public-profile-to-package map
 
-The response body is bounded and must match
-`X-Conary-Canonical-Sha256`; the server reports the content revision through
-`X-Conary-Canonical-Revision`. Unknown fields, unsupported schema versions,
-route aliases, unknown profiles, duplicate keys, duplicate canonical entries,
-and conflicting mappings fail before persistence. Remi snapshot replacement is
-transactional. Identical Remi data never demotes an existing `Contract` row;
-a local contract may promote an identical Remi row, and a package-name
-disagreement rolls the whole snapshot back.
+The browsing response remains checksum-bound, but Conary synchronization does
+not fetch or persist it independently. The universe manifest binds its exact
+digest, size, revision, and entry count; the client streams the object into the
+same private candidate as every configured package catalog. Unknown fields,
+unsupported schema versions, route aliases, unknown profiles, duplicate keys,
+reordered entries, and conflicting mappings fail before the single universe
+pointer transaction. Identical Remi data never demotes existing local
+`Contract` authority; a local contract may supply the same mapping, and any
+package-name disagreement rejects the complete candidate.
 
 There is no persisted per-package override table. Cross-profile movement is an
 explicit scoped request or replatform transaction, not a decorative ranking

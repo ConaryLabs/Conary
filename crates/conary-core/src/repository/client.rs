@@ -307,7 +307,7 @@ pub(crate) async fn download_static_or_http_file_with_expected_size(
 ) -> Result<()> {
     if url_or_path.starts_with("http://") || url_or_path.starts_with("https://") {
         return RepositoryClient::new()?
-            .download_file(url_or_path, dest_path)
+            .download_file_with_size_limit(url_or_path, dest_path, expected_size)
             .await;
     }
 
@@ -323,49 +323,60 @@ pub(crate) async fn download_static_or_http_file_with_expected_size(
 /// Always streams data in chunks, never buffering the entire response in memory.
 /// This is safe for files of any size.
 ///
-/// The `offset` parameter indicates how many bytes were already written (for resumed
-/// downloads). The progress bar position starts from `offset` so the user sees
-/// correct overall progress.
+/// The options carry how many bytes were already written for a resumed
+/// download. Progress starts from that offset so the user sees the complete
+/// transfer position.
+struct ResponseStreamOptions<'a> {
+    total_size: u64,
+    offset: u64,
+    progress_bar: Option<&'a ProgressBar>,
+    display_name: &'a str,
+    max_size: Option<u64>,
+}
+
 async fn stream_response_to_file(
     mut response: reqwest::Response,
     file: &mut File,
-    total_size: u64,
-    offset: u64,
-    progress_bar: Option<&ProgressBar>,
-    display_name: &str,
     hasher: &mut crate::hash::Hasher,
+    options: ResponseStreamOptions<'_>,
 ) -> Result<u64> {
     // Set up progress bar if provided
-    if let Some(pb) = progress_bar {
-        if total_size > 0 {
-            pb.set_length(total_size);
-            pb.set_position(offset);
-            pb.set_message(display_name.to_string());
+    if let Some(pb) = options.progress_bar {
+        if options.total_size > 0 {
+            pb.set_length(options.total_size);
+            pb.set_position(options.offset);
+            pb.set_message(options.display_name.to_string());
         } else {
             // Unknown size - show bytes downloaded without percentage
-            pb.set_message(format!("{} (unknown size)", display_name));
+            pb.set_message(format!("{} (unknown size)", options.display_name));
         }
     }
 
-    let mut downloaded: u64 = offset;
+    let mut downloaded: u64 = options.offset;
 
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|e| Error::DownloadError(format!("read response stream: {e}")))?
     {
-        file.write_all(&chunk).io_context("write download data")?;
-        hasher.update(&chunk);
-
-        downloaded = downloaded
+        let next_size = downloaded
             .checked_add(u64::try_from(chunk.len()).map_err(|_| {
                 Error::DownloadError("response chunk length exceeds u64".to_string())
             })?)
             .ok_or_else(|| {
                 Error::DownloadError("downloaded response size exceeds u64".to_string())
             })?;
+        if options.max_size.is_some_and(|maximum| next_size > maximum) {
+            return Err(Error::DownloadError(format!(
+                "response exceeded declared size limit of {} bytes",
+                options.max_size.expect("checked maximum")
+            )));
+        }
+        file.write_all(&chunk).io_context("write download data")?;
+        hasher.update(&chunk);
+        downloaded = next_size;
 
-        if let Some(pb) = progress_bar {
+        if let Some(pb) = options.progress_bar {
             pb.set_position(downloaded);
         }
     }
@@ -514,18 +525,25 @@ impl RepositoryClient {
     /// Transient transport and server failures use the configured bounded retry
     /// policy. Permanent HTTP failures such as 404 return immediately.
     pub async fn download_to_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        self.download_to_bytes_with_headers(url)
+        self.download_to_bytes_with_limit(url, MAX_BYTES_RESPONSE_SIZE)
+            .await
+    }
+
+    /// Download a response body while enforcing the caller's exact byte cap.
+    pub(crate) async fn download_to_bytes_with_limit(
+        &self,
+        url: &str,
+        max_size: u64,
+    ) -> Result<Vec<u8>> {
+        self.download_to_bytes_with_headers_limit(url, max_size)
             .await
             .map(|(_, body)| body)
     }
 
-    /// Download a URL to response headers and bounded body bytes.
-    ///
-    /// Authority contracts whose body integrity is declared by a response
-    /// header must validate both from the same HTTP response.
-    pub(crate) async fn download_to_bytes_with_headers(
+    async fn download_to_bytes_with_headers_limit(
         &self,
         url: &str,
+        max_size: u64,
     ) -> Result<(header::HeaderMap, Vec<u8>)> {
         validate_url_scheme(url)?;
 
@@ -554,9 +572,7 @@ impl RepositoryClient {
                         return Err(http_status_error(response.status(), url));
                     }
                     let headers = response.headers().clone();
-                    let body =
-                        read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, url)
-                            .await?;
+                    let body = read_response_bytes_with_limit(response, max_size, url).await?;
                     return Ok((headers, body));
                 }
                 Err(error) => {
@@ -635,7 +651,18 @@ impl RepositoryClient {
 
     /// Download a file to the specified path with retry support
     pub async fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
-        self.download_file_internal(url, dest_path, "", None)
+        self.download_file_internal(url, dest_path, "", None, None)
+            .await
+            .map(|_| ())
+    }
+
+    async fn download_file_with_size_limit(
+        &self,
+        url: &str,
+        dest_path: &Path,
+        max_size: Option<u64>,
+    ) -> Result<()> {
+        self.download_file_internal(url, dest_path, "", None, max_size)
             .await
             .map(|_| ())
     }
@@ -646,7 +673,19 @@ impl RepositoryClient {
         url: &str,
         dest_path: &Path,
     ) -> Result<DownloadedFileIdentity> {
-        self.download_file_internal(url, dest_path, "", None).await
+        self.download_file_internal(url, dest_path, "", None, None)
+            .await
+    }
+
+    /// Download while hashing and reject a stream larger than its authority.
+    pub(crate) async fn download_file_with_identity_limit(
+        &self,
+        url: &str,
+        dest_path: &Path,
+        max_size: u64,
+    ) -> Result<DownloadedFileIdentity> {
+        self.download_file_internal(url, dest_path, "", None, Some(max_size))
+            .await
     }
 
     /// Download a file with optional progress bar display
@@ -663,7 +702,7 @@ impl RepositoryClient {
         display_name: &str,
         progress_bar: Option<&ProgressBar>,
     ) -> Result<()> {
-        self.download_file_internal(url, dest_path, display_name, progress_bar)
+        self.download_file_internal(url, dest_path, display_name, progress_bar, None)
             .await
             .map(|_| ())
     }
@@ -674,6 +713,7 @@ impl RepositoryClient {
         dest_path: &Path,
         display_name: &str,
         progress_bar: Option<&ProgressBar>,
+        max_size: Option<u64>,
     ) -> Result<DownloadedFileIdentity> {
         validate_url_scheme(url)?;
         info!("Downloading {} to {}", url, dest_path.display());
@@ -696,6 +736,13 @@ impl RepositoryClient {
 
             // Check for existing partial download
             let existing_len = fs::metadata(&temp_path).map(|m| m.len()).unwrap_or(0);
+            if max_size.is_some_and(|maximum| existing_len > maximum) {
+                let _ = fs::remove_file(&temp_path);
+                return Err(Error::DownloadError(format!(
+                    "partial download exceeds declared size limit of {} bytes",
+                    max_size.expect("checked maximum")
+                )));
+            }
 
             let mut request = self
                 .client
@@ -815,11 +862,14 @@ impl RepositoryClient {
                     let downloaded = stream_response_to_file(
                         response,
                         &mut file,
-                        total_size,
-                        offset,
-                        progress_bar,
-                        display_name,
                         &mut hasher,
+                        ResponseStreamOptions {
+                            total_size,
+                            offset,
+                            progress_bar,
+                            display_name,
+                            max_size,
+                        },
                     )
                     .await?;
 

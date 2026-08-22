@@ -30,14 +30,26 @@ pub async fn cmd_registry_update(db_path: &str) -> Result<()> {
     let mut errors = Vec::new();
     for (name, configured_endpoint) in &authorities {
         let endpoint = configured_endpoint.trim_end_matches('/');
-        match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint).await {
-            Ok(Some(count)) => {
-                println!("Fetched {count} canonical mappings from {name} ({endpoint})");
+        match conary_core::repository::universe::sync_remi_universe(
+            std::path::Path::new(db_path),
+            endpoint,
+        )
+        .await
+        {
+            Ok(conary_core::repository::universe::RemiUniverseSyncOutcome::Activated {
+                package_count,
+                ..
+            }) => {
+                println!(
+                    "Activated a signed universe with {package_count} packages from {name} ({endpoint})"
+                );
                 crate::ui::status("Updated", "registry.");
                 return Ok(());
             }
-            Ok(None) => {
-                println!("Canonical map is current (server returned 304)");
+            Ok(conary_core::repository::universe::RemiUniverseSyncOutcome::Unchanged {
+                ..
+            }) => {
+                println!("Signed Remi universe is current");
                 crate::ui::status("Updated", "registry.");
                 return Ok(());
             }
@@ -48,23 +60,25 @@ pub async fn cmd_registry_update(db_path: &str) -> Result<()> {
     }
 
     anyhow::bail!(
-        "All configured canonical authorities failed: {}",
+        "All configured signed-universe authorities failed: {}",
         errors.join("; ")
     )
 }
 
 pub async fn cmd_registry_stats(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
-    let canonical_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM canonical_packages", [], |row| {
-            row.get(0)
-        })?;
-    let impl_count: i64 =
-        conn.query_row("SELECT COUNT(*) FROM package_implementations", [], |row| {
-            row.get(0)
-        })?;
+    let canonical_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM resolved_canonical_packages",
+        [],
+        |row| row.get(0),
+    )?;
+    let impl_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM resolved_package_implementations",
+        [],
+        |row| row.get(0),
+    )?;
     let group_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM canonical_packages WHERE kind = 'group'",
+        "SELECT COUNT(*) FROM resolved_canonical_packages WHERE kind = 'group'",
         [],
         |row| row.get(0),
     )?;
@@ -76,7 +90,7 @@ pub async fn cmd_registry_stats(db_path: &str) -> Result<()> {
     println!();
 
     let mut stmt = conn.prepare(
-        "SELECT source, COUNT(*) FROM package_implementations GROUP BY source ORDER BY COUNT(*) DESC",
+        "SELECT source, COUNT(*) FROM resolved_package_implementations GROUP BY source ORDER BY COUNT(*) DESC",
     )?;
     let sources: Vec<(String, i64)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?

@@ -32,7 +32,7 @@ const INSERT_PROVIDE_SQL: &str = "INSERT INTO repository_provides
 const SELECT_BY_PACKAGE_SQL: &str =
     "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
                     version_scheme, architecture_qualifier_kind, architecture, provenance
-             FROM repository_provides
+             FROM resolved_repository_provides
              WHERE repository_package_id = ?1
              ORDER BY capability, version";
 
@@ -40,15 +40,15 @@ const SELECT_BY_PACKAGE_SQL: &str =
 const SELECT_BY_PACKAGES_TEMPLATE: &str =
     "SELECT id, repository_package_id, capability, version, version_relation, kind, raw,
                         version_scheme, architecture_qualifier_kind, architecture, provenance
-                 FROM repository_provides
+                 FROM resolved_repository_provides
                  WHERE repository_package_id IN ({placeholders})";
 
 const SELECT_BY_CAPABILITY_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
                     rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             FROM resolved_repository_provides rp
+             JOIN resolved_repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
              WHERE repo.enabled = 1 AND rp.capability = ?1
              ORDER BY rp.capability, rp.version";
@@ -61,8 +61,8 @@ const SELECT_BY_CLI_EXACT_QUERY_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
                     rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             FROM resolved_repository_provides rp
+             JOIN resolved_repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
              WHERE repo.enabled = 1
                AND rp.capability = ?1
@@ -87,8 +87,8 @@ const SELECT_BY_CLI_RAW_QUERY_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
                     rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             FROM resolved_repository_provides rp
+             JOIN resolved_repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
              WHERE repo.enabled = 1
                AND rp.raw = ?1
@@ -100,8 +100,8 @@ const SELECT_BY_CAPABILITY_AND_KIND_SQL: &str =
     "SELECT rp.id, rp.repository_package_id, rp.capability, rp.version,
                     rp.version_relation, rp.kind, rp.raw, rp.version_scheme,
                     rp.architecture_qualifier_kind, rp.architecture, rp.provenance
-             FROM repository_provides rp
-             JOIN repository_packages pkg ON pkg.id = rp.repository_package_id
+             FROM resolved_repository_provides rp
+             JOIN resolved_repository_packages pkg ON pkg.id = rp.repository_package_id
              JOIN repositories repo ON repo.id = pkg.repository_id
              WHERE repo.enabled = 1 AND rp.capability = ?1 AND rp.kind = ?2
              ORDER BY rp.capability, rp.version";
@@ -623,22 +623,26 @@ mod tests {
             }
         }
 
-        for (label, expected_step) in [
+        for (label, expected_index, expected_constraint) in [
             (
                 "find_by_capability",
-                "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)",
+                "idx_repository_provides_capability",
+                "(capability=?)",
             ),
             (
                 "find_by_cli_exact_query",
-                "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)",
+                "idx_repository_provides_capability",
+                "(capability=?)",
             ),
             (
                 "find_by_capability_and_kind",
-                "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)",
+                "idx_repository_provides_capability",
+                "(capability=?)",
             ),
             (
                 "find_by_cli_raw_query",
-                "SEARCH rp USING INDEX idx_repository_provides_raw (raw=?)",
+                "idx_repository_provides_raw",
+                "(raw=?)",
             ),
         ] {
             let (_, sql) = owned_statements()
@@ -647,7 +651,11 @@ mod tests {
                 .expect("statement is inventoried");
             let plan = query_plan(&conn, &sql);
             assert!(
-                plan.iter().any(|step| step == expected_step),
+                plan.iter().any(|step| {
+                    step.starts_with("SEARCH ")
+                        && step.contains(&format!("USING INDEX {expected_index}"))
+                        && step.ends_with(expected_constraint)
+                }),
                 "{label} must seek its expected index: {plan:?}"
             );
         }

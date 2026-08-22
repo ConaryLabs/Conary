@@ -26,7 +26,7 @@ use tracing::info;
 use authority::resolve_ccs_package_authority;
 
 /// Add a new repository
-pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
+pub async fn cmd_repo_add(mut opts: RepoAddOptions) -> Result<()> {
     info!("Adding repository: {} ({})", opts.name, opts.url);
 
     // Validate Remi strategy configuration before any static-repository probe.
@@ -41,7 +41,9 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     {
         anyhow::bail!("--ccs-package-key requires --default-strategy=remi or binary");
     }
-
+    if opts.remi_metadata_root.is_some() && opts.default_strategy.as_deref() != Some("remi") {
+        anyhow::bail!("--remi-metadata-root requires --default-strategy=remi");
+    }
     let supplied_profile = opts
         .source_profile
         .as_deref()
@@ -54,6 +56,25 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
                 })
         })
         .transpose()?;
+    let remi_root = if opts.default_strategy.as_deref() == Some("remi") {
+        let endpoint = opts
+            .remi_endpoint
+            .as_deref()
+            .context("--remi-endpoint is required when --default-strategy=remi")?;
+        let endpoint = conary_core::repository::universe::normalize_remi_endpoint(endpoint)?;
+        opts.remi_endpoint = Some(endpoint);
+        let path = opts.remi_metadata_root.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "--remi-metadata-root is required until this Conary release carries the canonical Remi signed root"
+            )
+        })?;
+        Some(
+            std::fs::read(path)
+                .with_context(|| format!("read Remi metadata root {}", path.display()))?,
+        )
+    } else {
+        None
+    };
 
     if opts.package_format.is_none()
         && (opts.source_id.is_some()
@@ -227,6 +248,13 @@ pub async fn cmd_repo_add(opts: RepoAddOptions) -> Result<()> {
     let db_path = opts.db_path;
     let mut conn = open_db(&db_path)?;
     let tx = conn.transaction()?;
+    if let (Some(endpoint), Some(root)) = (
+        repo.default_strategy_endpoint.as_deref(),
+        remi_root.as_deref(),
+    ) {
+        conary_core::repository::universe::enroll_remi_universe_root(&tx, endpoint, root)
+            .context("enroll independent Remi universe metadata root")?;
+    }
     if opts.replace
         && let Some(existing) = conary_core::db::models::Repository::find_by_name(&tx, &repo.name)?
     {
@@ -693,48 +721,6 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
         }
     }
 
-    // Canonical authority comes only from explicitly configured Remi
-    // strategy endpoints. Ordered endpoint failover is transport behavior;
-    // failure of every declared authority fails the sync.
-    {
-        let endpoints: Vec<String> = conn
-            .prepare(
-                "SELECT default_strategy_endpoint
-                 FROM repositories
-                 WHERE enabled = 1
-                   AND default_strategy = 'remi'
-                   AND default_strategy_endpoint IS NOT NULL
-                 GROUP BY default_strategy_endpoint
-                 ORDER BY MAX(priority) DESC",
-            )?
-            .query_map([], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        let mut canonical_synced = endpoints.is_empty();
-        let mut canonical_errors = Vec::new();
-        for configured_endpoint in &endpoints {
-            let endpoint = configured_endpoint.trim_end_matches('/');
-            match conary_core::canonical::client::fetch_canonical_map(&conn, endpoint).await {
-                Ok(Some(n)) => {
-                    tracing::info!("Canonical map updated: {n} entries from {endpoint}");
-                    canonical_synced = true;
-                    break;
-                }
-                Ok(None) => {
-                    tracing::debug!("Canonical map is current (304)");
-                    canonical_synced = true;
-                    break;
-                }
-                Err(e) => {
-                    canonical_errors.push(format!("{endpoint}: {e}"));
-                }
-            }
-        }
-        if !canonical_synced {
-            failures.push(("canonical map".to_string(), canonical_errors.join("; ")));
-        }
-    }
-
     if !failures.is_empty() {
         let failed_names = failures
             .into_iter()
@@ -803,6 +789,7 @@ mod tests {
             replace: false,
             default_strategy: Some("remi".to_string()),
             remi_endpoint: Some("https://remi.example.invalid".to_string()),
+            remi_metadata_root: None,
             ccs_package_keys: Vec::new(),
             source_profile: Some("fedora".to_string()),
             source_id: None,
@@ -855,6 +842,7 @@ mod tests {
             replace: false,
             default_strategy: None,
             remi_endpoint: None,
+            remi_metadata_root: None,
             ccs_package_keys: Vec::new(),
             source_profile: Some("fedora-44".to_string()),
             source_id: None,
@@ -922,6 +910,7 @@ mod tests {
                 replace,
                 default_strategy: None,
                 remi_endpoint: None,
+                remi_metadata_root: None,
                 ccs_package_keys: Vec::new(),
                 source_profile: None,
                 source_id: Some(source_id.to_string()),
@@ -986,6 +975,7 @@ mod tests {
             replace: false,
             default_strategy: None,
             remi_endpoint: None,
+            remi_metadata_root: None,
             ccs_package_keys: Vec::new(),
             source_profile: None,
             source_id: Some("source".to_string()),

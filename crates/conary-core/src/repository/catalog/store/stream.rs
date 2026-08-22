@@ -6,8 +6,8 @@ use rusqlite::Connection;
 
 use super::super::record::CatalogLogicalDigestV1;
 use super::super::{
-    CatalogCountsV1, CatalogPackageOriginV1, CatalogRequirementGroupV1, CatalogScopeV1,
-    CatalogSourceEvidenceV1,
+    CatalogCountsV1, CatalogPackageOriginV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
+    CatalogScopeV1, CatalogSourceEvidenceV1,
 };
 use super::{
     CatalogReader, SELECT_PACKAGES, insert_package_base, insert_provide, insert_requirement_group,
@@ -135,13 +135,35 @@ pub(in crate::repository) fn digest_catalog_connection(
         let mut group_rows = groups.query([&package_key])?;
         while let Some(group_row) = group_rows.next()? {
             let ordinal: i64 = group_row.get(0)?;
-            let mut group = requirement_group_from_row(group_row)?;
-            group.atoms = load_requirement_atoms(connection, &package_key, ordinal)?;
-            package_digest.requirement_group(&group)?;
+            let group = requirement_group_from_row(group_row)?;
+            let mut group_digest = package_digest.begin_requirement_group(&group)?;
+            let mut atoms = connection.prepare(
+                "SELECT capability, version_constraint, kind, dependency_type, raw
+                 FROM catalog_requirement_atoms
+                 WHERE package_key_sha256 = ?1 AND group_ordinal = ?2
+                 ORDER BY ordinal",
+            )?;
+            let mut atom_rows = atoms.query(rusqlite::params![&package_key, ordinal])?;
+            while let Some(atom_row) = atom_rows.next()? {
+                group_digest.atom(&requirement_atom_from_row(atom_row)?)?;
+            }
+            group_digest.finish()?;
         }
         package_digest.finish()?;
     }
     digest.finish()
+}
+
+fn requirement_atom_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<CatalogRequirementAtomV1> {
+    Ok(CatalogRequirementAtomV1 {
+        capability: row.get(0)?,
+        version_constraint: row.get(1)?,
+        kind: row.get(2)?,
+        dependency_type: row.get(3)?,
+        raw: row.get(4)?,
+    })
 }
 
 fn requirement_group_from_row(

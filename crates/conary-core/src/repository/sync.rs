@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, info};
+use tracing::info;
 
 use super::client::RepositoryClient;
 use super::metadata::{
@@ -27,12 +27,7 @@ pub(in crate::repository) use native::{
     capability_kind_to_db, convert_requirement_groups, persist_synced_package_rows,
     synced_package_row,
 };
-#[cfg(test)]
-use remi::remi_sync_row;
-use remi::{
-    fetch_and_persist_canonical_map, fetch_canonical_map_snapshot, persist_canonical_map,
-    sync_repository_remi, sync_repository_remi_from_db_path,
-};
+use remi::{sync_repository_remi, sync_repository_remi_from_db_path};
 use types::{
     JsonPackageDelta, JsonRepositorySyncSnapshot, RepositorySyncSnapshot, SyncedPackageRow,
 };
@@ -271,30 +266,6 @@ where
         .await?
     };
 
-    if let Some(ref remi_endpoint) = repo.default_strategy_endpoint {
-        match fetch_canonical_map_snapshot(remi_endpoint).await {
-            Ok(map) => {
-                let canonical_db_path = db_path.clone();
-                match run_blocking_write(write_authority.clone(), move || {
-                    let conn = crate::db::open_fast(&canonical_db_path)?;
-                    persist_canonical_map(&conn, &map)
-                })
-                .await
-                {
-                    Ok(mapping_count) => {
-                        info!("Synced {} canonical mappings from Remi", mapping_count);
-                    }
-                    Err(e) => {
-                        debug!("Failed to persist canonical map: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                debug!("Failed to fetch canonical map: {}", e);
-            }
-        }
-    }
-
     Ok(count)
 }
 
@@ -347,18 +318,6 @@ pub async fn sync_repository(conn: &Connection, repo: &mut Repository) -> Result
             }
         }
     };
-
-    // After package sync completes, fetch the canonical map from Remi (non-fatal)
-    if let Some(ref remi_endpoint) = repo.default_strategy_endpoint {
-        match fetch_and_persist_canonical_map(conn, remi_endpoint).await {
-            Ok(mapping_count) => {
-                info!("Synced {} canonical mappings from Remi", mapping_count);
-            }
-            Err(e) => {
-                debug!("Failed to fetch canonical map: {}", e);
-            }
-        }
-    }
 
     Ok(count)
 }

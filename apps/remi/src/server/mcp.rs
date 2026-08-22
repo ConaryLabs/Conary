@@ -678,6 +678,9 @@ impl RemiMcpServer {
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        crate::server::universe_publish::publish_current_universe_from_state(&self.state)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e:#}"), None))?;
 
         let text = to_json_text(&serde_json::json!({
             "status": "ok",
@@ -706,6 +709,19 @@ impl RemiMcpServer {
         let report =
             crate::server::canonical_fetch::run_canonical_cycle(&db_path, &config, database_writer)
                 .await;
+        let report = if matches!(
+            report.rebuild,
+            crate::server::canonical_fetch::CanonicalRebuildOutcome::Completed { .. }
+        ) {
+            match crate::server::universe_publish::publish_current_universe_from_state(&self.state)
+                .await
+            {
+                Ok(_) => report,
+                Err(error) => report.with_publication_failure(&error),
+            }
+        } else {
+            report
+        };
         crate::server::publication_scheduler::record_canonical_readiness(&self.state, &report)
             .await;
         let text = to_json_text(&report)?;

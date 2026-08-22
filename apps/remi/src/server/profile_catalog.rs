@@ -12,10 +12,7 @@ use conary_core::repository::catalog::{
     CatalogPackageNamePageV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
     CatalogRequirementGroupV1, ProfileRevisionV1,
 };
-use conary_core::repository::remi_metadata::{
-    RemiProvide, RemiRequirement, RemiRequirementGroup, RemiSparseResolutionVersionEntry,
-    RemiSparseRevision,
-};
+use conary_core::repository::remi_metadata::{RemiProvide, RemiRequirement, RemiRequirementGroup};
 
 use super::catalog_authority::PinnedProfileCatalog;
 
@@ -57,17 +54,6 @@ impl<'a> ProfileCatalog<'a> {
         self.pinned.fencing_epoch()
     }
 
-    /// Return the sparse wire revision for this exact profile reader.
-    ///
-    /// The wire state ID is the first 128 bits of the already verified
-    /// profile-revision SHA-256. The complete 256-bit identity remains
-    /// available through [`Self::profile_revision_sha256`]; the bounded wire
-    /// field is only the sparse protocol's state token. A non-positive fencing
-    /// epoch is rejected rather than converted with a wrapping cast.
-    pub fn revision(&self) -> Result<RemiSparseRevision> {
-        sparse_revision(self.fencing_epoch(), self.profile_revision_sha256())
-    }
-
     /// Return one deterministic page of downloadable package names.
     pub fn package_name_page(
         &self,
@@ -89,7 +75,7 @@ impl<'a> ProfileCatalog<'a> {
         &self,
         name: &str,
         minimum_size: u64,
-    ) -> Result<Vec<RemiSparseResolutionVersionEntry>> {
+    ) -> Result<Vec<conary_core::repository::remi_metadata::RemiSparseVersionEntry>> {
         self.find_downloadable_package_records_by_name(name, minimum_size)?
             .into_iter()
             .map(|package| project_package(&package))
@@ -214,7 +200,7 @@ impl<'a> ProfileCatalog<'a> {
     pub fn project_package(
         &self,
         package: &CatalogPackageRecordV1,
-    ) -> Result<RemiSparseResolutionVersionEntry> {
+    ) -> Result<conary_core::repository::remi_metadata::RemiSparseVersionEntry> {
         project_package(package)
     }
 
@@ -328,37 +314,9 @@ fn sort_packages(packages: &mut [CatalogPackageRecordV1]) {
     });
 }
 
-fn sparse_revision(
-    fencing_epoch: i64,
-    profile_revision_sha256: &str,
-) -> Result<RemiSparseRevision> {
-    if fencing_epoch <= 0 {
-        bail!("immutable profile fencing epoch must be positive");
-    }
-    let sequence = u64::try_from(fencing_epoch)
-        .context("immutable profile fencing epoch exceeds wire range")?;
-    if profile_revision_sha256.len() != 64
-        || !profile_revision_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        bail!("immutable profile revision must be exactly 64 lowercase hexadecimal characters");
-    }
-    RemiSparseRevision::new(sequence, &profile_revision_sha256[..32]).map_err(anyhow::Error::msg)
-}
-
-fn project_package(package: &CatalogPackageRecordV1) -> Result<RemiSparseResolutionVersionEntry> {
-    let metadata = package
-        .metadata
-        .as_deref()
-        .map(serde_json::from_str)
-        .transpose()
-        .with_context(|| {
-            format!(
-                "immutable catalog package '{}' version '{}' has malformed persisted metadata",
-                package.name, package.version
-            )
-        })?;
+fn project_package(
+    package: &CatalogPackageRecordV1,
+) -> Result<conary_core::repository::remi_metadata::RemiSparseVersionEntry> {
     let size = i64::try_from(package.size).with_context(|| {
         format!(
             "immutable catalog package '{}' version '{}' size {} exceeds Remi wire range",
@@ -366,31 +324,34 @@ fn project_package(package: &CatalogPackageRecordV1) -> Result<RemiSparseResolut
         )
     })?;
 
-    Ok(RemiSparseResolutionVersionEntry {
-        version: package.version.clone(),
-        release: (!package.package_release.is_empty()).then(|| package.package_release.clone()),
-        provides: package
-            .provides
-            .iter()
-            .map(|provide| RemiProvide {
-                capability: provide.capability.clone(),
-                version: provide.version.clone(),
-                version_relation: provide.version_relation,
-                kind: provide.kind.clone(),
-                raw: provide.raw.clone(),
-                version_scheme: provide.version_scheme,
-                architecture_qualifier: provide.architecture_qualifier.clone(),
-            })
-            .collect(),
-        requirement_groups: package
-            .requirement_groups
-            .iter()
-            .map(project_requirement_group)
-            .collect(),
-        architecture: package.architecture.clone(),
-        size,
-        metadata,
-    })
+    Ok(
+        conary_core::repository::remi_metadata::RemiSparseVersionEntry {
+            version: package.version.clone(),
+            release: (!package.package_release.is_empty()).then(|| package.package_release.clone()),
+            provides: package
+                .provides
+                .iter()
+                .map(|provide| RemiProvide {
+                    capability: provide.capability.clone(),
+                    version: provide.version.clone(),
+                    version_relation: provide.version_relation,
+                    kind: provide.kind.clone(),
+                    raw: provide.raw.clone(),
+                    version_scheme: provide.version_scheme,
+                    architecture_qualifier: provide.architecture_qualifier.clone(),
+                })
+                .collect(),
+            requirement_groups: package
+                .requirement_groups
+                .iter()
+                .map(project_requirement_group)
+                .collect(),
+            architecture: package.architecture.clone(),
+            size,
+            converted: false,
+            content_hash: None,
+        },
+    )
 }
 
 fn project_requirement_group(group: &CatalogRequirementGroupV1) -> RemiRequirementGroup {
@@ -537,36 +498,12 @@ mod tests {
     }
 
     #[test]
-    fn sparse_revision_preserves_exact_sequence_and_digest_identity() {
-        let digest = "0123456789abcdef".repeat(4);
-        let revision = sparse_revision(17, &digest).expect("valid profile revision");
-
-        assert_eq!(revision.sequence, 17);
-        assert_eq!(
-            revision.state_id.as_str(),
-            "0123456789abcdef0123456789abcdef"
-        );
-    }
-
-    #[test]
-    fn sparse_revision_rejects_negative_or_malformed_identity() {
-        assert!(sparse_revision(-1, &"a".repeat(64)).is_err());
-        assert!(sparse_revision(0, &"a".repeat(64)).is_err());
-        assert!(sparse_revision(1, &"A".repeat(64)).is_err());
-        assert!(sparse_revision(1, &"a".repeat(63)).is_err());
-    }
-
-    #[test]
     fn package_projection_maps_metadata_and_typed_dependency_groups() {
         let projected = project_package(&package()).expect("project immutable package");
 
         assert_eq!(projected.version, "1.2.3");
         assert_eq!(projected.release.as_deref(), Some("4"));
         assert_eq!(projected.size, 4096);
-        assert_eq!(
-            projected.metadata,
-            Some(serde_json::json!({"z": 2, "a": 1}))
-        );
         assert_eq!(projected.provides.len(), 1);
         assert_eq!(projected.provides[0].capability, "demo");
         assert_eq!(projected.requirement_groups.len(), 1);

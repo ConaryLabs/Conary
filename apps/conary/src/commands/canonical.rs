@@ -63,10 +63,10 @@ pub async fn cmd_canonical_unmapped(db_path: &str) -> Result<()> {
          WHERE t.is_collection = 0
          AND t.is_component = 0
          AND NOT EXISTS (
-             SELECT 1 FROM package_implementations pi WHERE pi.distro_name = t.name
+             SELECT 1 FROM resolved_package_implementations pi WHERE pi.distro_name = t.name
          )
          AND NOT EXISTS (
-             SELECT 1 FROM canonical_packages cp WHERE cp.name = t.name
+             SELECT 1 FROM resolved_canonical_packages cp WHERE cp.name = t.name
          )
          ORDER BY t.name",
     )?;

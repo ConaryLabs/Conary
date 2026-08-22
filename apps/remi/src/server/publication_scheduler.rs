@@ -152,7 +152,17 @@ async fn run_canonical_cycle_uncoordinated(
     config: &CanonicalSection,
 ) -> CanonicalCycleReport {
     let database_writer = state.read().await.database_writer.clone();
-    canonical_fetch::run_canonical_cycle(db_path, config, database_writer).await
+    let report = canonical_fetch::run_canonical_cycle(db_path, config, database_writer).await;
+    if !matches!(
+        report.rebuild,
+        crate::server::canonical_fetch::CanonicalRebuildOutcome::Completed { .. }
+    ) {
+        return report;
+    }
+    match crate::server::universe_publish::publish_current_universe_from_state(state).await {
+        Ok(_) => report,
+        Err(error) => report.with_publication_failure(&error),
+    }
 }
 
 async fn record_repository_readiness(

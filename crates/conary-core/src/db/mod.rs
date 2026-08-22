@@ -16,6 +16,7 @@ pub mod generation_snapshot;
 pub mod models;
 pub mod paths;
 pub mod rebuild;
+pub(crate) mod remi_universe;
 pub mod schema;
 
 use crate::error::{Error, Result};
@@ -37,7 +38,6 @@ const CONNECTION_PRAGMAS: &str = "\
 ";
 
 const READ_ONLY_CONNECTION_PRAGMAS: &str = "\
-    PRAGMA query_only = ON;\
     PRAGMA foreign_keys = ON;\
     PRAGMA busy_timeout = 5000;\
 ";
@@ -145,6 +145,7 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection> {
     let conn = Connection::open(path)?;
     configure(&conn)?;
     schema::ensure_current(&conn)?;
+    remi_universe::attach_active_index(&conn, path)?;
 
     Ok(conn)
 }
@@ -180,6 +181,8 @@ pub fn open_read_only(path: impl AsRef<Path>) -> Result<Connection> {
     )?;
     conn.execute_batch(READ_ONLY_CONNECTION_PRAGMAS)?;
     schema::require_current(&conn)?;
+    remi_universe::attach_active_index(&conn, path)?;
+    conn.execute_batch("PRAGMA query_only = ON;")?;
     Ok(conn)
 }
 
@@ -205,6 +208,7 @@ pub fn open_fast(path: impl AsRef<Path>) -> Result<Connection> {
     validate_wal_file(path)?;
     let conn = Connection::open(path)?;
     configure(&conn)?;
+    remi_universe::attach_active_index(&conn, path)?;
 
     Ok(conn)
 }

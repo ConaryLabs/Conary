@@ -60,6 +60,7 @@ pub mod search;
 pub mod security;
 pub(crate) mod signing_authority;
 pub mod test_db;
+mod universe_publish;
 
 pub(crate) use analytics::AnalyticsRecorder;
 pub use bloom::{BloomStats, ChunkBloomFilter};
@@ -504,6 +505,7 @@ async fn run_server_on_runtime(
             .as_deref()
             .context("release_publish.repository_keys_dir is required with repository_manifest")?;
         signing_authority::ensure_repository_authority(&manifest, keys_root)?;
+        signing_authority::ensure_universe_authority(keys_root)?;
         let mut conn = open_runtime_db(&server_config.db_path)?;
         let reconciled = manifest.reconcile(&mut conn)?;
         tracing::info!(

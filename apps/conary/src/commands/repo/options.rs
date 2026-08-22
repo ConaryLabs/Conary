@@ -35,6 +35,7 @@ pub struct RepoAddOptions {
     pub replace: bool,
     pub default_strategy: Option<String>,
     pub remi_endpoint: Option<String>,
+    pub remi_metadata_root: Option<PathBuf>,
     pub ccs_package_keys: Vec<PathBuf>,
     pub source_profile: Option<String>,
     pub source_id: Option<String>,

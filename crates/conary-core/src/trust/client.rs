@@ -47,25 +47,26 @@ pub struct TufClient {
 }
 
 /// Blocking DB state required before an async TUF update.
+#[derive(Clone)]
 pub(crate) struct TufUpdateState {
-    trusted_root: Signed<RootMetadata>,
-    stored_timestamp_version: Option<u64>,
-    stored_timestamp_hash: Option<String>,
-    stored_snapshot_version: Option<u64>,
-    stored_targets_version: Option<u64>,
-    stored_snapshot: Option<Signed<SnapshotMetadata>>,
-    stored_targets: Option<Signed<TargetsMetadata>>,
+    pub(crate) trusted_root: Signed<RootMetadata>,
+    pub(crate) stored_timestamp_version: Option<u64>,
+    pub(crate) stored_timestamp_hash: Option<String>,
+    pub(crate) stored_snapshot_version: Option<u64>,
+    pub(crate) stored_targets_version: Option<u64>,
+    pub(crate) stored_snapshot: Option<Signed<SnapshotMetadata>>,
+    pub(crate) stored_targets: Option<Signed<TargetsMetadata>>,
 }
 
 /// Fully verified TUF metadata ready to persist in a blocking DB phase.
 pub(crate) struct TufUpdateSnapshot {
-    current_root: Signed<RootMetadata>,
-    rotated_roots: Vec<Signed<RootMetadata>>,
-    signed_timestamp: Signed<TimestampMetadata>,
-    signed_snapshot: Signed<SnapshotMetadata>,
-    signed_targets: Signed<TargetsMetadata>,
-    snapshot_changed: bool,
-    targets_changed: bool,
+    pub(crate) current_root: Signed<RootMetadata>,
+    pub(crate) rotated_roots: Vec<Signed<RootMetadata>>,
+    pub(crate) signed_timestamp: Signed<TimestampMetadata>,
+    pub(crate) signed_snapshot: Signed<SnapshotMetadata>,
+    pub(crate) signed_targets: Signed<TargetsMetadata>,
+    pub(crate) snapshot_changed: bool,
+    pub(crate) targets_changed: bool,
 }
 
 impl TufClient {
@@ -855,7 +856,7 @@ fn verify_type_field(type_field: &str, expected: &str) -> TrustResult<()> {
     Ok(())
 }
 
-fn metadata_hash_for_persistence<T: serde::Serialize + TufMetadataFields>(
+pub(crate) fn metadata_hash_for_persistence<T: serde::Serialize + TufMetadataFields>(
     signed: &Signed<T>,
 ) -> TrustResult<String> {
     let json = serde_json::to_string(signed)?;

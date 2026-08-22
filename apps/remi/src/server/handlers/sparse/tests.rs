@@ -7,7 +7,7 @@ use crate::server::catalog_authority::test_support::{
     ActiveCatalogFixture, package as catalog_package,
 };
 use crate::server::native_publish::test_support::seed_native_publication;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use conary_core::db::models::{Repository, RepositoryPackage};
 use conary_core::repository::catalog::{
     CatalogPackageRecordV1, CatalogProvideRecordV1, CatalogRequirementAtomV1,
@@ -16,9 +16,6 @@ use conary_core::repository::catalog::{
 use conary_core::repository::dependency_model::{
     CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation,
     RepositoryRequirementClause, RepositoryRequirementExpression,
-};
-use conary_core::repository::remi_metadata::{
-    RemiSparseListInclude, RemiSparsePackageList, RemiSparsePackagePage,
 };
 use conary_core::repository::versioning::VersionScheme;
 use std::sync::Arc;
@@ -76,39 +73,6 @@ fn sparse_entry(fixture: &ActiveCatalogFixture, name: &str) -> SparseIndexEntry 
         .expect("catalog package should be visible")
 }
 
-fn sparse_list(
-    fixture: &ActiveCatalogFixture,
-    page: usize,
-    per_page: usize,
-) -> RemiSparsePackageList {
-    build_package_list(fixture.authority(), "fedora", page, per_page).unwrap()
-}
-
-fn sparse_page(
-    fixture: &ActiveCatalogFixture,
-    page: usize,
-    per_page: usize,
-) -> RemiSparsePackagePage {
-    build_package_page(fixture.authority(), "fedora", page, per_page).unwrap()
-}
-
-#[tokio::test]
-async fn sparse_index_rejects_unsupported_distro_before_db_lookup() {
-    let (_temp, state) = remi_empty_db_state();
-    let response = list_packages(
-        State(state),
-        Path("debian".to_string()),
-        Query(ListQuery {
-            page: None,
-            per_page: None,
-            include: RemiSparseListInclude::Names,
-        }),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
 #[tokio::test]
 async fn sparse_entry_rejects_unsupported_distro_before_db_lookup() {
     let (_temp, state) = remi_empty_db_state();
@@ -122,7 +86,7 @@ async fn sparse_entry_rejects_unsupported_distro_before_db_lookup() {
 }
 
 #[test]
-fn catalog_only_entry_list_and_page_do_not_need_operational_package_rows() {
+fn catalog_only_entry_does_not_need_operational_package_rows() {
     let fixture = ActiveCatalogFixture::new();
     activate(
         &fixture,
@@ -133,27 +97,13 @@ fn catalog_only_entry_list_and_page_do_not_need_operational_package_rows() {
     );
 
     let entry = sparse_entry(&fixture, "nginx");
-    let list = sparse_list(&fixture, 1, 100);
-    let page = sparse_page(&fixture, 1, 100);
-
     assert_eq!(entry.name, "nginx");
     assert_eq!(entry.versions.len(), 1);
     assert_eq!(entry.versions[0].version, "1.24.0");
-    assert_eq!(list.source_profile, "fedora-44");
-    assert_eq!(list.packages, vec!["curl", "nginx"]);
-    assert_eq!(page.source_profile, "fedora-44");
-    assert_eq!(
-        page.packages
-            .iter()
-            .map(|package| package.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["curl", "nginx"]
-    );
-    assert_eq!(page.packages[1].versions[0].version, "1.24.0");
 }
 
 #[test]
-fn zero_sized_catalog_packages_are_excluded_from_entry_list_and_page() {
+fn zero_sized_catalog_packages_are_excluded_from_entry() {
     let fixture = ActiveCatalogFixture::new();
     activate(
         &fixture,
@@ -173,12 +123,7 @@ fn zero_sized_catalog_packages_are_excluded_from_entry_list_and_page() {
         .unwrap()
         .is_none()
     );
-    let list = sparse_list(&fixture, 1, 100);
-    let page = sparse_page(&fixture, 1, 100);
-
-    assert_eq!(list.packages, vec!["visible"]);
-    assert_eq!(page.packages.len(), 1);
-    assert_eq!(page.packages[0].name, "visible");
+    assert_eq!(sparse_entry(&fixture, "visible").versions.len(), 1);
 }
 
 fn rich_package(version: &str, marker: &str, advisory: &str) -> CatalogPackageRecordV1 {
@@ -234,7 +179,6 @@ fn sparse_projection_is_deterministic_for_versions_metadata_provides_and_require
     );
 
     let entry = sparse_entry(&fixture, "openssl");
-    let page = sparse_page(&fixture, 1, 100);
     assert_eq!(
         entry
             .versions
@@ -243,24 +187,6 @@ fn sparse_projection_is_deterministic_for_versions_metadata_provides_and_require
             .collect::<Vec<_>>(),
         vec!["1.0", "2.0"]
     );
-    assert_eq!(
-        page.packages[0]
-            .versions
-            .iter()
-            .map(|version| version.version.as_str())
-            .collect::<Vec<_>>(),
-        vec!["1.0", "2.0"]
-    );
-    assert_eq!(
-        page.packages[0].versions[0].metadata,
-        Some(serde_json::json!({
-            "security_advisory": {
-                "id": "FEDORA-2026-0001",
-                "source": "immutable-fixture",
-                "fixed_version": "1.0"
-            }
-        }))
-    );
     assert_eq!(entry.versions[0].provides[0].capability, "openssl = 1.0");
     assert_eq!(entry.versions[0].requirement_groups.len(), 1);
     assert_eq!(
@@ -268,7 +194,6 @@ fn sparse_projection_is_deterministic_for_versions_metadata_provides_and_require
         "libc"
     );
     assert_eq!(entry, sparse_entry(&fixture, "openssl"));
-    assert_eq!(page, sparse_page(&fixture, 1, 100));
 }
 
 #[test]
@@ -285,11 +210,7 @@ fn operational_repository_row_mutation_and_deletion_do_not_change_catalog_output
             "stable",
         )],
     );
-    let before = (
-        sparse_entry(&fixture, "stable"),
-        sparse_list(&fixture, 1, 100),
-        sparse_page(&fixture, 1, 100),
-    );
+    let before = sparse_entry(&fixture, "stable");
 
     let conn = fixture.connection();
     let mut repository = Repository::new(
@@ -317,25 +238,11 @@ fn operational_repository_row_mutation_and_deletion_do_not_change_catalog_output
         [shadow_id],
     )
     .unwrap();
-    assert_eq!(
-        before,
-        (
-            sparse_entry(&fixture, "stable"),
-            sparse_list(&fixture, 1, 100),
-            sparse_page(&fixture, 1, 100),
-        )
-    );
+    assert_eq!(before, sparse_entry(&fixture, "stable"));
 
     conn.execute("DELETE FROM repository_packages WHERE id = ?1", [shadow_id])
         .unwrap();
-    assert_eq!(
-        before,
-        (
-            sparse_entry(&fixture, "stable"),
-            sparse_list(&fixture, 1, 100),
-            sparse_page(&fixture, 1, 100),
-        )
-    );
+    assert_eq!(before, sparse_entry(&fixture, "stable"));
 }
 
 #[test]
@@ -345,8 +252,6 @@ fn sparse_readers_fail_closed_without_an_active_catalog() {
     assert!(
         build_sparse_entry(fixture.authority(), fixture.db_path(), "fedora", "missing",).is_err()
     );
-    assert!(build_package_list(fixture.authority(), "fedora", 1, 100).is_err());
-    assert!(build_package_page(fixture.authority(), "fedora", 1, 100).is_err());
 }
 
 #[test]

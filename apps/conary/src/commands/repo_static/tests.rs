@@ -232,6 +232,7 @@ async fn add_static_repo_with(
         arch_database_signature: None,
         default_strategy: None,
         remi_endpoint: None,
+        remi_metadata_root: None,
         ccs_package_keys: Vec::new(),
         source_profile: source_profile.map(str::to_string),
         source_id: None,
@@ -263,6 +264,24 @@ async fn add_repo_with_declared_format(
         .with_key_id("targets")
         .save_to_files(&private_key, &public_key)
         .unwrap();
+    let root_path = authority_dir.path().join("universe-root.json");
+    let root_key = conary_core::ccs::signing::SigningKeyPair::generate();
+    let targets_key = conary_core::ccs::signing::SigningKeyPair::generate();
+    let snapshot_key = conary_core::ccs::signing::SigningKeyPair::generate();
+    let timestamp_key = conary_core::ccs::signing::SigningKeyPair::generate();
+    let root = conary_core::trust::ceremony::create_initial_root(
+        &root_key,
+        &targets_key,
+        &snapshot_key,
+        &timestamp_key,
+        30,
+    )
+    .unwrap();
+    std::fs::write(
+        &root_path,
+        conary_core::json::canonical_json(&root).unwrap(),
+    )
+    .unwrap();
     cmd_repo_add(RepoAddOptions {
         name: "acme".to_string(),
         url: url.to_string(),
@@ -286,6 +305,7 @@ async fn add_repo_with_declared_format(
         arch_database_signature: None,
         default_strategy: Some("remi".to_string()),
         remi_endpoint: Some(url.to_string()),
+        remi_metadata_root: Some(root_path),
         ccs_package_keys: vec![public_key],
         source_profile: Some(source_profile.to_string()),
         source_id: None,
@@ -526,22 +546,15 @@ async fn static_repo_add_rejects_native_trust_flags_after_probe_without_fingerpr
     assert_no_repo(&db.conn(), "acme");
 }
 
-/// A host that answers every path with a 200 body — an SPA fallback, a captive
-/// portal, an error page — makes the identity probe see a `conary-repo.toml`
-/// that is not one. Declaring the package format settles the repository kind
-/// before any of that is fetched, so the probe's answer cannot decide the add.
+/// A host whose identity probe would fail must not decide a repository whose
+/// package format was already declared. The reserved `.invalid` origin also
+/// proves this path performs no discovery request.
 #[tokio::test]
 async fn declared_package_format_adds_a_native_repo_whatever_the_identity_probe_would_find() {
     let db = TestDb::new();
-    let served = tempfile::tempdir().unwrap();
-    std::fs::write(
-        served.path().join("conary-repo.toml"),
-        b"<!doctype html>\n<html lang=\"en\"><head><title>index</title></head></html>\n",
-    )
-    .unwrap();
-    let base_url = format!("file://{}", served.path().display());
+    let base_url = "http://identity-probe-must-not-run.invalid";
 
-    add_repo_with_declared_format(&db, &base_url, "fedora-44")
+    add_repo_with_declared_format(&db, base_url, "fedora-44")
         .await
         .unwrap();
 
@@ -849,6 +862,7 @@ async fn static_identity_probe_error_does_not_fall_back_to_native_add() {
         arch_database_signature: None,
         default_strategy: None,
         remi_endpoint: None,
+        remi_metadata_root: None,
         ccs_package_keys: Vec::new(),
         source_profile: None,
         source_id: None,

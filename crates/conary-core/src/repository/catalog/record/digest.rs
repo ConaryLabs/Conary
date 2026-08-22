@@ -4,7 +4,7 @@
 
 use super::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageRecordV1, CatalogProvideRecordV1,
-    CatalogRequirementGroupV1, CatalogScopeV1, CatalogSourceEvidenceV1,
+    CatalogRequirementAtomV1, CatalogRequirementGroupV1, CatalogScopeV1, CatalogSourceEvidenceV1,
 };
 use crate::error::{Error, Result};
 use crate::repository::catalog::CatalogCountsV1;
@@ -147,7 +147,6 @@ impl CatalogLogicalDigestV1 {
             middle,
             suffix,
             previous_provide: None,
-            previous_requirement_group: None,
             first_provide: true,
             first_requirement_group: true,
             requirements_started: false,
@@ -185,13 +184,12 @@ pub(in crate::repository) struct CatalogPackageLogicalDigestV1<'a> {
     middle: Vec<u8>,
     suffix: Vec<u8>,
     previous_provide: Option<Vec<u8>>,
-    previous_requirement_group: Option<Vec<u8>>,
     first_provide: bool,
     first_requirement_group: bool,
     requirements_started: bool,
 }
 
-impl CatalogPackageLogicalDigestV1<'_> {
+impl<'digest> CatalogPackageLogicalDigestV1<'digest> {
     pub(in crate::repository) fn provide(
         &mut self,
         provide: &CatalogProvideRecordV1,
@@ -217,36 +215,37 @@ impl CatalogPackageLogicalDigestV1<'_> {
         Ok(())
     }
 
-    pub(in crate::repository) fn requirement_group(
-        &mut self,
+    /// Begin one requirement group whose atoms arrive in canonical order.
+    pub(in crate::repository) fn begin_requirement_group<'package>(
+        &'package mut self,
         group: &CatalogRequirementGroupV1,
-    ) -> Result<()> {
+    ) -> Result<CatalogRequirementGroupLogicalDigestV1<'package, 'digest>> {
+        if !group.atoms.is_empty() {
+            return Err(Error::InternalError(
+                "streamed requirement group must not retain its atom array".to_string(),
+            ));
+        }
+        group.validate_base()?;
+        let group_json = canonical_relation(group, "catalog requirement group")?;
+        let (prefix, suffix) = split_group_atom_array(&group_json)?;
         self.start_requirements();
-        group.validate()?;
-        let canonical = canonical_relation(group, "catalog requirement group")?;
-        require_next_canonical(
-            &mut self.previous_requirement_group,
-            &canonical,
-            "catalog package requirement groups",
-        )?;
         if !self.first_requirement_group {
             self.digest.hasher.update(b",");
         }
         self.first_requirement_group = false;
-        self.digest.hasher.update(&canonical);
+        self.digest.hasher.update(&prefix);
         self.digest.counts.requirement_groups = checked_add(
             self.digest.counts.requirement_groups,
             1,
             "requirement group",
         )?;
-        self.digest.counts.requirement_atoms = checked_add(
-            self.digest.counts.requirement_atoms,
-            u64::try_from(group.atoms.len()).map_err(|_| {
-                Error::InternalError("catalog requirement atom count exceeds u64".to_string())
-            })?,
-            "requirement atom",
-        )?;
-        Ok(())
+        Ok(CatalogRequirementGroupLogicalDigestV1 {
+            package: self,
+            suffix,
+            previous_atom: None,
+            first_atom: true,
+            atom_count: 0,
+        })
     }
 
     pub(in crate::repository) fn finish(mut self) -> Result<()> {
@@ -264,6 +263,49 @@ impl CatalogPackageLogicalDigestV1<'_> {
     }
 }
 
+/// Streaming atom writer for one canonical requirement-group digest entry.
+pub(in crate::repository) struct CatalogRequirementGroupLogicalDigestV1<'package, 'digest> {
+    package: &'package mut CatalogPackageLogicalDigestV1<'digest>,
+    suffix: Vec<u8>,
+    previous_atom: Option<Vec<u8>>,
+    first_atom: bool,
+    atom_count: u64,
+}
+
+impl CatalogRequirementGroupLogicalDigestV1<'_, '_> {
+    pub(in crate::repository) fn atom(&mut self, atom: &CatalogRequirementAtomV1) -> Result<()> {
+        atom.validate()?;
+        let canonical = canonical_relation(atom, "catalog requirement atom")?;
+        require_next_canonical(
+            &mut self.previous_atom,
+            &canonical,
+            "catalog requirement atoms",
+        )?;
+        if !self.first_atom {
+            self.package.digest.hasher.update(b",");
+        }
+        self.first_atom = false;
+        self.package.digest.hasher.update(&canonical);
+        self.atom_count = checked_add(self.atom_count, 1, "requirement atom")?;
+        Ok(())
+    }
+
+    pub(in crate::repository) fn finish(self) -> Result<()> {
+        if self.atom_count == 0 {
+            return Err(Error::ConfigError(
+                "catalog requirement group must contain at least one atom".to_string(),
+            ));
+        }
+        self.package.digest.hasher.update(&self.suffix);
+        self.package.digest.counts.requirement_atoms = checked_add(
+            self.package.digest.counts.requirement_atoms,
+            self.atom_count,
+            "requirement atom",
+        )?;
+        Ok(())
+    }
+}
+
 fn split_package_relation_arrays(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let provides = relation_array_open(bytes, b"\"provides\":[]", "provides")?;
     let requirements =
@@ -278,6 +320,11 @@ fn split_package_relation_arrays(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<
         bytes[provides + 1..=requirements].to_vec(),
         bytes[requirements + 1..].to_vec(),
     ))
+}
+
+fn split_group_atom_array(bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    let atoms = relation_array_open(bytes, b"\"atoms\":[]", "requirement atoms")?;
+    Ok((bytes[..=atoms].to_vec(), bytes[atoms + 1..].to_vec()))
 }
 
 fn relation_array_open(bytes: &[u8], marker: &[u8], label: &str) -> Result<usize> {

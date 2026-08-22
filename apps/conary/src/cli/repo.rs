@@ -225,6 +225,14 @@ pub struct RepoAddArgs {
     #[arg(long, value_name = "URL")]
     pub remi_endpoint: Option<String>,
 
+    /// Independently obtained signed TUF root for this Remi universe
+    #[arg(
+        long = "remi-metadata-root",
+        value_name = "ROOT_JSON",
+        requires = "remi_endpoint"
+    )]
+    pub remi_metadata_root: Option<PathBuf>,
+
     /// Authenticated Ed25519 public key allowed to sign CCS packages; repeatable
     ///
     /// Canonical remi.conary.io keys ship with Conary. Self-hosted Remi and

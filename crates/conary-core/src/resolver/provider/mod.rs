@@ -564,7 +564,7 @@ impl<'db> ConaryProvider<'db> {
                 continue;
             };
             let mut cid_stmt = self.conn.prepare(
-                "SELECT rp.id FROM repository_packages rp
+                "SELECT rp.id FROM resolved_repository_packages rp
                  JOIN repositories r ON rp.repository_id = r.id
                  WHERE rp.canonical_id = ?1 AND r.enabled = 1",
             )?;
@@ -931,8 +931,8 @@ impl<'db> ConaryProvider<'db> {
     pub fn load_canonical_index(&mut self) -> Result<()> {
         let mut stmt = self.conn.prepare(
             "SELECT pi1.distro_name, pi2.distro_name
-             FROM package_implementations pi1
-             JOIN package_implementations pi2 ON pi1.canonical_id = pi2.canonical_id
+             FROM resolved_package_implementations pi1
+             JOIN resolved_package_implementations pi2 ON pi1.canonical_id = pi2.canonical_id
              WHERE pi1.distro_name != pi2.distro_name",
         )?;
 

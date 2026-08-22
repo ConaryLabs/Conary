@@ -196,8 +196,32 @@ pub struct CatalogReader {
 
 impl CatalogReader {
     pub fn open_verified(path: impl AsRef<Path>, expected: &CatalogBindingV1) -> Result<Self> {
+        Self::open_verified_inner(path.as_ref(), expected, true)
+    }
+
+    /// Open an exact signed catalog artifact without replaying its complete
+    /// logical projection through Rust values.
+    ///
+    /// The Remi publisher performs the logical/schema replay before its
+    /// dedicated universe role signs the artifact. A universe client has
+    /// already verified that signature and the exact file SHA-256; it repeats
+    /// the physical schema, integrity, binding, and relational-count checks
+    /// here, then copies normalized rows directly between SQLite databases.
+    /// This avoids turning one arbitrarily large presentation or expression
+    /// field into synchronization memory.
+    pub(in crate::repository) fn open_verified_signed_artifact(
+        path: impl AsRef<Path>,
+        expected: &CatalogBindingV1,
+    ) -> Result<Self> {
+        Self::open_verified_inner(path.as_ref(), expected, false)
+    }
+
+    fn open_verified_inner(
+        path: &Path,
+        expected: &CatalogBindingV1,
+        verify_logical_content: bool,
+    ) -> Result<Self> {
         expected.validate()?;
-        let path = path.as_ref();
         let metadata = fs::symlink_metadata(path).map_err(|error| {
             Error::IoError(format!(
                 "inspect immutable catalog {}: {error}",
@@ -271,7 +295,9 @@ impl CatalogReader {
             binding: expected.clone(),
             connection,
         };
-        reader.verify_logical_content()?;
+        if verify_logical_content {
+            reader.verify_logical_content()?;
+        }
         Ok(reader)
     }
 

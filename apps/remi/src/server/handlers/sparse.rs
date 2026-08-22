@@ -1,51 +1,23 @@
 // apps/remi/src/server/handlers/sparse.rs
-//! Sparse HTTP index - crates.io-style per-package JSON documents
-//!
-//! Each package gets a single CDN-cacheable JSON document containing all
-//! available versions, conversion status, and metadata. This enables
-//! efficient incremental client sync without downloading full indices.
+//! Read-only per-package browsing documents.
 
 use crate::server::ServerState;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use conary_core::db::models::{NativePackagePublication, normalize_native_architecture};
-use conary_core::repository::remi_metadata::{
-    REMI_SPARSE_MAX_PAGE_SIZE, REMI_SPARSE_MIN_PACKAGE_SIZE, RemiSparseListInclude,
-    RemiSparsePackageList as PackageListResponse, RemiSparsePackagePage,
-};
+use conary_core::repository::remi_metadata::REMI_SPARSE_MIN_PACKAGE_SIZE;
 pub use conary_core::repository::remi_metadata::{
     RemiSparseIndexEntry as SparseIndexEntry, RemiSparseVersionEntry as SparseVersionEntry,
 };
 use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::server::catalog_authority::CatalogAuthority;
 use crate::server::profile_catalog::ProfileCatalog;
-
-mod page;
-
-use page::{build_package_list, build_package_page};
-
-/// Query parameters for the package list endpoint
-#[derive(Debug, Deserialize)]
-pub struct ListQuery {
-    pub page: Option<usize>,
-    pub per_page: Option<usize>,
-    #[serde(default)]
-    pub include: RemiSparseListInclude,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum PackageListProjection {
-    Names(PackageListResponse),
-    Versions(RemiSparsePackagePage),
-}
 
 /// GET /v1/index/{distro}/{name}
 ///
@@ -115,61 +87,6 @@ pub async fn get_sparse_entry(
         Ok(Ok(None)) => (StatusCode::NOT_FOUND, "Package not found").into_response(),
         Ok(Err(e)) => {
             tracing::error!("Failed to build sparse entry: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Blocking task failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-    }
-}
-
-/// GET /v1/index/{distro}?page=1&per_page=100&include=versions
-///
-/// Returns package names by default, or complete resolution entries when the
-/// typed `include=versions` expansion is selected.
-pub async fn list_packages(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    Path(distro): Path<String>,
-    Query(query): Query<ListQuery>,
-) -> Response {
-    if let Err(e) = super::validate_supported_distro_route(&distro) {
-        return e;
-    }
-
-    let page = query.page.unwrap_or(1).max(1);
-    let per_page = query
-        .per_page
-        .unwrap_or(100)
-        .clamp(1, REMI_SPARSE_MAX_PAGE_SIZE);
-    let include = query.include;
-
-    let state_guard = state.read().await;
-    let catalog_authority = state_guard.catalog_authority.clone();
-    drop(state_guard);
-
-    let result = tokio::task::spawn_blocking(move || match include {
-        RemiSparseListInclude::Names => {
-            build_package_list(&catalog_authority, &distro, page, per_page)
-                .map(PackageListProjection::Names)
-        }
-        RemiSparseListInclude::Versions => {
-            build_package_page(&catalog_authority, &distro, page, per_page)
-                .map(PackageListProjection::Versions)
-        }
-    })
-    .await;
-
-    match result {
-        Ok(Ok(list)) => {
-            let json = match super::serialize_json(&list, "package list") {
-                Ok(j) => j,
-                Err(e) => return e,
-            };
-            super::json_response(json, 60)
-        }
-        Ok(Err(e)) => {
-            tracing::error!("Failed to list packages: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
         }
         Err(e) => {

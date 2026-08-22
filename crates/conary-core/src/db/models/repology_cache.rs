@@ -72,7 +72,7 @@ impl RepologyCacheEntry {
         let sql = format!(
             "SELECT rc.project_name, rc.distro, rc.distro_name, rc.version, rc.status, rc.fetched_at
              FROM repology_cache rc
-             JOIN canonical_packages cp ON cp.name = rc.project_name
+             JOIN resolved_canonical_packages cp ON cp.name = rc.project_name
              WHERE cp.id = ?1 AND rc.distro IN ({})
              ORDER BY rc.distro",
             placeholders

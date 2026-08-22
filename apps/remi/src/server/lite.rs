@@ -333,7 +333,6 @@ fn create_proxy_router(state: Arc<RwLock<ProxyState>>) -> Router {
         .route("/v1/chunks/{hash}", get(proxy_chunk))
         // Sparse index proxy
         .route("/v1/index/{distro}/{name}", get(proxy_index_entry))
-        .route("/v1/index/{distro}", get(proxy_index_list))
         // Package list proxy
         .route("/v1/{distro}/packages/", get(proxy_package_list))
         .route("/v1/{distro}/packages/{name}", get(proxy_package_detail))
@@ -432,17 +431,6 @@ async fn proxy_index_entry(
     Path((distro, name)): Path<(String, String)>,
 ) -> Response {
     let path = format!("v1/index/{}/{}", distro, name);
-    proxy_pass_through(state, &path).await
-}
-
-/// GET /v1/index/:distro
-///
-/// Proxy index package list to upstream with file-based caching.
-async fn proxy_index_list(
-    State(state): State<Arc<RwLock<ProxyState>>>,
-    Path(distro): Path<String>,
-) -> Response {
-    let path = format!("v1/index/{}", distro);
     proxy_pass_through(state, &path).await
 }
 

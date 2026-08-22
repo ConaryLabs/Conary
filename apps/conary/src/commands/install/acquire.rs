@@ -266,8 +266,8 @@ fn find_package_suggestions(
     {
         let mut stmt = conn.prepare(
             "SELECT cp.name, pi.distro
-             FROM canonical_packages cp
-             LEFT JOIN package_implementations pi ON pi.canonical_id = cp.id
+             FROM resolved_canonical_packages cp
+             LEFT JOIN resolved_package_implementations pi ON pi.canonical_id = cp.id
              WHERE cp.name LIKE '%' || ?1 || '%'
              LIMIT 10",
         )?;
@@ -289,7 +289,7 @@ fn find_package_suggestions(
     {
         let mut stmt = conn.prepare(
             "SELECT DISTINCT rp.name, r.name
-             FROM repository_packages rp
+             FROM resolved_repository_packages rp
              JOIN repositories r ON r.id = rp.repository_id
              WHERE rp.name LIKE ?1 || '%'
              LIMIT 10",

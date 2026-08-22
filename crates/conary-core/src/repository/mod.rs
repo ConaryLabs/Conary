@@ -31,6 +31,7 @@ pub mod substituter;
 pub mod supported_profiles;
 mod sync;
 pub mod trust;
+pub mod universe;
 
 pub mod declarations;
 pub mod dependency_model;
@@ -52,7 +53,6 @@ pub mod chunk_fetcher;
 
 // Re-export main types and functions
 pub use client::RepositoryClient;
-pub(crate) use client::{MAX_BYTES_RESPONSE_SIZE, read_response_bytes_with_limit};
 pub use dependencies::download_dependencies;
 pub use download::{
     DownloadOptions, DownloadProgress, download_binary_package_verified,

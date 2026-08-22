@@ -6,6 +6,25 @@ use conary_core::ccs::signing::SigningKeyPair;
 use conary_core::db::models::{Repository, RepositoryPackageKey, SecurityAdvisorySupport};
 use std::path::PathBuf;
 
+fn universe_root(db_path: &std::path::Path) -> PathBuf {
+    let path = db_path
+        .parent()
+        .unwrap()
+        .join("test-remi-universe-root.json");
+    if !path.exists() {
+        let root = SigningKeyPair::generate();
+        let targets = SigningKeyPair::generate();
+        let snapshot = SigningKeyPair::generate();
+        let timestamp = SigningKeyPair::generate();
+        let signed = conary_core::trust::ceremony::create_initial_root(
+            &root, &targets, &snapshot, &timestamp, 30,
+        )
+        .unwrap();
+        std::fs::write(&path, conary_core::json::canonical_json(&signed).unwrap()).unwrap();
+    }
+    path
+}
+
 fn remi_repo_options(
     name: &str,
     db_path: &std::path::Path,
@@ -39,6 +58,7 @@ fn remi_repo_options(
         replace: false,
         default_strategy: Some("remi".to_string()),
         remi_endpoint: Some(endpoint.to_string()),
+        remi_metadata_root: Some(universe_root(db_path)),
         ccs_package_keys,
         source_profile: Some(profile.to_string()),
         source_id: None,
@@ -62,6 +82,7 @@ fn binary_repo_options(
     let mut options = remi_repo_options(name, db_path, endpoint, profile, ccs_package_keys);
     options.default_strategy = Some("binary".to_string());
     options.remi_endpoint = None;
+    options.remi_metadata_root = None;
     options
 }
 

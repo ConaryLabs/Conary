@@ -71,7 +71,6 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             get(recipes::download_recipe_package),
         )
         .route("/v1/index/{distro}/{name}", get(sparse::get_sparse_entry))
-        .route("/v1/index/{distro}", get(sparse::list_packages))
         .route("/v1/search", get(search::search_packages))
         .route("/v1/suggest", get(search::suggest_packages))
         .route("/v1/canonical/map", get(canonical::canonical_map))
@@ -105,6 +104,15 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
         .route("/v1/{distro}/tuf/targets.json", get(tuf::get_targets))
         .route("/v1/{distro}/tuf/root.json", get(tuf::get_root))
         .route("/v1/{distro}/tuf/{version}", get(tuf::get_versioned_root))
+        .route("/v1/universe/tuf/{name}", get(universe::get_metadata))
+        .route(
+            "/v1/universe/targets/universe/{manifest}",
+            get(universe::get_manifest_target),
+        )
+        .route(
+            "/v1/universe/targets/objects/sha256/{sha256}",
+            get(universe::get_object_target),
+        )
         .route("/v1/ccs/conary/latest", get(self_update::get_latest))
         .route("/v1/ccs/conary/versions", get(self_update::get_versions))
         .route(

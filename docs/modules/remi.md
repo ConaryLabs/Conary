@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-22
-revision: 44
-summary: Document Remi immutable source and profile catalogs, exact revision activation and pinning, source identity and update policy, process-wide runtime ownership, signing, repository trust, publication coordination and readiness, conversion profiling, R2 durability inventory, and serving authority
+revision: 45
+summary: Document Remi immutable source and profile catalogs, signed endpoint-wide universe publication and client activation, exact revision pinning, source identity and update policy, signing, repository trust, publication coordination, readiness, and serving authority
 ---
 
 # Remi
@@ -213,86 +213,70 @@ authentication-token touches, and conversion publication. Repository create,
 update, and delete acquire it before opening an immediate transaction, and the
 multi-statement source replacement commits before releasing it. The core
 path-based repository-sync API requires an explicit writer authority and holds
-it around each TUF, package, sparse-stage, and canonical-map commit. Network,
-parsing, CCS emission, CAS work, and read-only lookups stay outside the gate.
+it around each short operational mutation. Signed-universe network transfer,
+verification, private index construction, CCS emission, CAS work, and read-only
+lookups stay outside the gate; one fenced transaction activates the complete
+universe.
 
-## Sparse Client Sync
+## Signed Client Universe
 
-The Conary `remi` repository strategy consumes only Remi's sparse index. It
-pages through
-`GET /v1/index/{distro}?page=N&per_page=128&include=versions`. The typed
-expansion returns one resolution-only document per name, including every
-version plus the exact normalized provides and grouped native requirements
-needed for offline resolution, together with persisted package metadata such
-as explicitly trusted security advisories. Conversion-cache state, diagnostic
-scriptlet summaries, and content hashes stay on other public projections
-because sync does not consume them. Both sparse list projections identify the
-exact `source_profile` behind the stable family route, and the client rejects a
-page whose profile disagrees with its configured target. The former unbounded
-`GET /v1/{distro}/metadata` route has been removed; health and sync use bounded
-sparse pages rather than constructing repository-wide JSON.
+The Conary `remi` strategy synchronizes one endpoint-wide signed immutable
+universe. `RemiUniverseManifestV1` binds one monotonic sequence, the complete
+ordered set of public `ProfileRevisionV1` catalogs, the exact canonical-map
+object, every content digest and size, schema versions, row counts, generation
+time, expiry, and the dedicated metadata-root digest. The universe
+`targets` role authorizes exactly that manifest and its digest-addressed
+objects; extra, missing, repeated, reordered, mixed, wrong-sized, or
+wrong-schema authority fails before activation.
 
-For Fedora, normalized provides include every package-owned `<file>` record
-from authenticated `primary.xml` and `filelists.xml` as `kind = "file"` with
-exact `source-derived-file` provenance. The sparse page and per-name lookup
-project that persisted typed row unchanged; Remi does not derive file
-providers from package names or filter them through its own path rules.
-Complete file ownership is what makes a path dependency outside createrepo's
-primary filter solvable, and it is the dominant row population: Fedora 44
-`Everything/x86_64` carries 9.5M file providers against 76,354 packages, so
-sparse pages, their wire payload, and the replace transaction all scale with
-it.
+Publication writes and synchronizes every referenced object and the signed
+`root`/`targets`/`snapshot`/`timestamp` metadata beneath one immutable bundle,
+reopens the complete bundle, then advances `remi_active_universe_revision` in
+one short transaction. A publication fault, stale base pointer, or damaged
+active bundle leaves the previous universe selected. An unchanged authority is
+reused until either its manifest or timestamp enters the six-hour renewal
+window; renewal advances the sequence and refreshes signed freshness rather
+than serving authority near expiry.
 
-Remi opens one pinned immutable profile catalog for each sparse request. The
-name page, exact package batch, normalized provides, grouped requirements, and
-trusted advisory metadata all come from that verified read-only handle. The
-per-name batch contains only the highest-priority eligible source-member tier,
-so the sparse wire cannot advertise a lower-priority package universe that the
-conversion path would refuse. The
-wire revision uses the activation fence as its monotonic sequence and the first
-128 bits of the complete profile-revision SHA-256 as its bounded state ID; the
-full 256-bit identity remains the server's reader and retention authority.
-Historical zero-sized discovery placeholders are excluded by one shared wire
-threshold used by the name count, name page, bulk page, and per-name lookup;
-every listed name is therefore fetchable and `total` counts that exact set.
-Missing, invalid, or unregistered active catalog state fails closed and never
-falls back to operational `repository_packages` rows.
+Clients enroll the universe metadata root independently of CCS package keys.
+Self-hosted `repo add` requires `--remi-metadata-root` from an independently
+authenticated channel. The canonical endpoint currently requires that option
+too, until its first durable authority ceremony supplies the public root for
+release tracking and automatic system enrollment. Sync first verifies the TUF
+chain, freshness, root digest, target set, and rollback/fork rules. It streams
+only missing digest-addressed catalog or canonical objects to private immutable
+files. A manifest-identical sync updates verified freshness state without
+replacing a catalog.
 
-`crates/conary-core/src/repository/sync/remi/path.rs` owns the path-based sparse
-sync writer-authority handoff;
-`crates/conary-core/src/repository/sync/remi/run.rs` owns its durable lifecycle.
-`crates/conary-core/src/repository/sync/remi/run/contract.rs` owns the typed run
-identity, digest, state, and member validation boundary.
-Every run records the repository scope, process instance UUID, monotonically
-increasing fencing epoch, disabled candidate repository ID, input and candidate
-revisions, typed state and failure, and start/heartbeat/lease/finish facts.
-Each persisted page renews the lease. The client pins the first server revision
-and rejects any later page whose revision differs, including same-total
-package, version, relation, or metadata mutations.
+Candidate construction verifies every signed catalog's immutable SQLite
+artifact, physical schema, integrity, manifest binding, and relational counts.
+The Remi publisher already performed the canonical logical/schema replay before
+the dedicated universe role signed those exact bytes. Configured profiles are
+copied SQLite-to-SQLite into one private immutable resolution index; the
+canonical map streams one entry at a time into the same candidate. One fenced
+operational transaction records the immutable object/index identities, selects
+the complete universe, advances repository timestamps, and removes retired
+mutable Remi package and canonical rows. Operational SQLite retains repository
+configuration, independent trust enrollment, verified TUF state, object
+identities, and the active pointer; it is not Remi package, provide,
+requirement, or canonical-map authority.
 
-The previously synced repository remains the only enabled snapshot while
-network, parsing, and validation work continues. Publication first commits a
-`ready_to_publish` state, then one SQLite transaction proves the run still owns
-the scope's current process identity and fencing epoch, replaces the old rows,
-moves the candidate rows, links canonical IDs, advances the distinct checked,
-changed, validated, and published repository facts, records
-the active revision, and marks the run published. A stale worker can continue
-computation but cannot publish. Returned failures abandon and remove their
-exact candidate. After process termination, the next run recovers only the
-candidate ID named by an expired durable lease; repository-name prefixes and
-candidate age never authorize cleanup.
+Each database connection attaches the index selected when that connection
+opens and shadows the `resolved_*` views locally. Existing readers therefore
+finish against their open immutable inode while later readers attach the new
+index. Reachability collection first removes inactive metadata in a fenced
+transaction, then unlinks retired indices and objects; an activation that wins
+during collection cancels the stale deletion candidate. Per-name sparse routes
+remain read-only browsing surfaces. The whole-client bulk
+`GET /v1/index/{distro}` protocol, sparse candidates, mutable replacement
+tables, and independent canonical-map client fetch have been deleted.
 
-The fixed name page is the structural owner of distribution scaling:
-distribution growth increases page count, not the retained metadata set or
-HTTP request count within one page. Relation collections remain exact native
-semantics and are never truncated to satisfy a guessed byte ceiling. The name
-page does not yet structurally bound independently growing version, relation,
-expression, or metadata cardinality; [issue
-#164](https://github.com/ConaryLabs/Conary/issues/164) owns typed sub-page
-continuation plus streaming server/client processing. The client validates
-stable totals, global name ordering, page identity, non-empty version sets, and
-unique version/release/architecture identities before a page enters the
-staging repository.
+The generated client proof holds one package name while independently scaling
+512 versions, 10,000 provides, 10,000 requirement atoms, and 4 MiB expression
+and presentation fields. Direct normalized replay retains SQLite pages rather
+than package or relation vectors; the measured debug-test high-water mark is
+73,728 KiB under the fixed 262,144 KiB limit. Catalog logical verification also
+streams provides, requirement groups, and atoms in canonical row order.
 
 ## Durable Repository Signing Authority
 
@@ -304,6 +288,17 @@ repository manifest and provisions one complete Ed25519
 are mode `0700`, private files are `0600`, and public files are `0644`. A
 profile role set is staged, synced, and atomically published; a repeat deploy
 validates and preserves the existing bytes.
+
+The endpoint-wide universe has a separate `universe/` namespace containing
+dedicated `root`, `targets`, `snapshot`, and `timestamp` key pairs plus one
+canonical self-signed `root.json`. `remi deployment
+initialize-universe-authority` is the explicit first ceremony; it atomically
+creates and synchronizes that public root and prints only its path. Deployment
+prepare and inspection validate the exact persisted root, role thresholds,
+public/private agreement, ownership, modes, expiry, and canonical bytes.
+Universe publication loads this durable root verbatim, so a timestamp chosen
+during later publication cannot silently change the client trust anchor. CCS
+package keys cannot sign universe metadata.
 
 Existing authority is never repaired by replacement. Missing halves,
 malformed keys, mismatched private/public material, incorrect role IDs,
@@ -359,18 +354,20 @@ identity's exact kind, optional category, and public-profile package map.
 `generated_at` is `null` only for the empty revision-zero map, so the response
 body and ETag stay stable between rebuilds.
 
-The response carries `X-Conary-Canonical-Sha256` for the exact bounded body and
-`X-Conary-Canonical-Revision` for its content revision. Both Conary fetch paths
-verify the checksum before parsing or opening a persistence transaction. The
-parser denies unknown fields, unsupported schema versions, route aliases,
-unknown profiles, duplicate keys, duplicate identities, and empty or
-conflicting mappings.
+The browsing response carries `X-Conary-Canonical-Sha256` for the exact bounded
+body and `X-Conary-Canonical-Revision` for its content revision. Conary sync
+instead verifies the digest, size, revision, and entry count bound by the
+signed universe manifest before streaming the object into the private
+candidate index. The parser denies unknown fields, unsupported schema versions,
+route aliases, unknown profiles, duplicate keys, duplicate identities, and
+empty or conflicting mappings.
 
-Snapshot application atomically replaces Remi-owned rows while preserving
-non-conflicting local `Contract` authority. An identical Remi mapping cannot
-demote a contract; an exact local contract can promote an identical Remi row.
-Any package-name disagreement rolls the replacement back. The current schema
-also makes AppStream IDs unique, removes the unused implementation repository
+Universe activation makes Remi-owned mappings visible with the package catalogs
+from the same manifest while preserving non-conflicting local `Contract`
+authority. An identical Remi mapping cannot demote a contract; an exact local
+contract can supply the same mapping. Any package-name disagreement rejects the
+complete candidate. The current schema also makes AppStream IDs unique, removes
+the unused implementation repository
 column, and permits exactly one package implementation per canonical identity
 and public profile.
 
