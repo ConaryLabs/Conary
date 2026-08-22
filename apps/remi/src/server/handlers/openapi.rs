@@ -226,7 +226,7 @@ pub async fn openapi_spec() -> Response {
                                 "url": { "type": "string", "description": "Base URL for repository metadata" },
                                 "content_url": { "type": "string", "description": "Separate URL for package downloads, if different from metadata URL" },
                                 "enabled": { "type": "boolean", "description": "Whether the repo is active. Default: true" },
-                                "priority": { "type": "integer", "description": "Lower values are preferred when resolving. Default: 0" },
+                                "priority": { "type": "integer", "description": "Higher values are preferred when resolving. Default: 0" },
                                 "parser": { "$ref": "#/components/schemas/RepositoryParser" },
                                 "trust": { "$ref": "#/components/schemas/RepositoryTrustPolicy", "description": "Required for rpm, deb, and arch parsers; forbidden for json." },
                                 "native_source": { "$ref": "#/components/schemas/NativeSourcePolicy" },
@@ -263,7 +263,7 @@ pub async fn openapi_spec() -> Response {
                                 "url": { "type": "string", "description": "Base URL for repository metadata" },
                                 "content_url": { "type": "string", "description": "Separate URL for package downloads" },
                                 "enabled": { "type": "boolean", "description": "Whether the repo is active" },
-                                "priority": { "type": "integer", "description": "Lower values are preferred when resolving" },
+                                "priority": { "type": "integer", "description": "Higher values are preferred when resolving" },
                                 "parser": { "$ref": "#/components/schemas/RepositoryParser" },
                                 "trust": { "$ref": "#/components/schemas/RepositoryTrustPolicy", "description": "Required for rpm, deb, and arch parsers; forbidden for json." },
                                 "native_source": { "$ref": "#/components/schemas/NativeSourcePolicy" },
@@ -772,6 +772,30 @@ mod tests {
             description.contains("native_package_publications")
                 && description.contains("converted_packages")
         );
+    }
+
+    #[tokio::test]
+    async fn openapi_spec_documents_higher_repository_priority_as_preferred() {
+        let resp = openapi_spec().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let spec: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        for priority in [
+            &spec["paths"]["/v1/admin/repos"]["post"]["requestBody"]["content"]["application/json"]
+                ["schema"]["properties"]["priority"],
+            &spec["paths"]["/v1/admin/repos/{name}"]["put"]["requestBody"]["content"]["application/json"]
+                ["schema"]["properties"]["priority"],
+        ] {
+            assert!(
+                priority["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains("Higher values are preferred")),
+                "repository priority direction must match selection authority"
+            );
+        }
     }
 
     #[tokio::test]

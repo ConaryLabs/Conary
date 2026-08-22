@@ -1,12 +1,12 @@
 // apps/remi/src/server/conversion/persistence.rs
 //! Converted-package persistence and cache-hit reconstruction.
 
-use super::metadata::repository_package_conversion_inputs_match;
+use super::lookup::PinnedConversionSource;
 use super::{ConversionService, ScriptletPackageMetadata, ServerConversionResult};
 use anyhow::{Context, Result, anyhow, ensure};
 use conary_core::ccs::convert::ConversionResult;
 use conary_core::ccs::convert::ForeignConversionInput;
-use conary_core::db::models::{ConvertedPackage, RepositoryPackage, RepositoryProvide};
+use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
 use rusqlite::{Connection, TransactionBehavior};
 use std::path::PathBuf;
 use tracing::info;
@@ -17,8 +17,9 @@ pub(super) struct PersistConversionInput {
     pub(super) format: &'static str,
     pub(super) source_checksum: String,
     pub(super) conversion_result: ConversionResult,
-    pub(super) repo_pkg: RepositoryPackage,
-    pub(super) repository_provides_digest: String,
+    /// Owns the pinned profile reader through the complete persistence call.
+    pub(super) source: PinnedConversionSource,
+    pub(super) profile_revision_sha256: String,
     pub(super) transport: conary_core::ccs::CcsTransportEnvelopeV1,
 }
 
@@ -38,26 +39,27 @@ impl ConversionService {
         &self,
         conn: &Connection,
         source_profile: &str,
+        profile_revision_sha256: &str,
         repo_pkg: &RepositoryPackage,
         source_checksum: &str,
-        repository_provides_digest: &str,
     ) -> Result<CacheInspection> {
-        let repository_package_id = repo_pkg
-            .id
-            .context("repository conversion package has no persisted identity")?;
-        let current_package = RepositoryPackage::find_by_id(conn, repository_package_id)?
-            .context("repository package metadata changed during conversion cache lookup")?;
-        ensure!(
-            repository_package_conversion_inputs_match(repo_pkg, &current_package),
-            "repository package identity changed during conversion cache lookup"
-        );
-        let Some(existing) =
-            ConvertedPackage::find_repository_by_checksum(conn, source_profile, source_checksum)?
+        let Some(existing) = ConvertedPackage::find_repository_by_checksum(
+            conn,
+            profile_revision_sha256,
+            source_checksum,
+        )?
         else {
             return Ok(CacheInspection::Missing);
         };
 
         let artifact = existing.repository_artifact()?;
+        let existing_id = existing
+            .id
+            .context("repository conversion cache row has no durable identity")?;
+        // A row with a missing or mismatched conversion pin is durable-state
+        // corruption.  Never downgrade it to a cache miss and silently
+        // replace the evidence.
+        ConvertedPackage::require_conversion_pin(conn, existing_id)?;
         let expected_architecture = repo_pkg
             .architecture
             .as_deref()
@@ -66,18 +68,14 @@ impl ConversionService {
             && artifact.package_name == repo_pkg.name
             && artifact.package_version == repo_pkg.version
             && artifact.package_architecture == expected_architecture;
-        let metadata_is_current = existing.repository_metadata_is_current(conn)?;
+        ensure!(
+            artifact_matches_package,
+            "conversion checksum maps to a conflicting catalog package identity"
+        );
+        let conversion_is_current =
+            existing.repository_conversion_is_current_for_revision(profile_revision_sha256)?;
         let ccs_path = PathBuf::from(artifact.ccs_path);
-        if metadata_is_current {
-            ensure!(
-                artifact_matches_package,
-                "current conversion checksum maps to a conflicting repository package identity"
-            );
-        }
-        if metadata_is_current
-            && artifact.repository_provides_digest == repository_provides_digest
-            && ccs_path.exists()
-        {
+        if conversion_is_current && ccs_path.exists() {
             return Ok(CacheInspection::Current(Box::new(
                 self.build_result_from_existing(&existing)?,
             )));
@@ -91,13 +89,13 @@ impl ConversionService {
         source_profile: &str,
         repo_pkg: &RepositoryPackage,
         source_checksum: &str,
-        repository_provides_digest: &str,
+        profile_revision_sha256: &str,
     ) -> Result<Option<ServerConversionResult>> {
         let service = self.clone();
         let source_profile = source_profile.to_string();
         let repo_pkg = repo_pkg.clone();
         let source_checksum = source_checksum.to_string();
-        let repository_provides_digest = repository_provides_digest.to_string();
+        let profile_revision_sha256 = profile_revision_sha256.to_string();
 
         tokio::task::spawn_blocking(move || {
             let mut conn = crate::server::open_runtime_db(&service.db_path)?;
@@ -105,9 +103,9 @@ impl ConversionService {
             let inspection = service.inspect_cached_conversion(
                 &tx,
                 &source_profile,
+                &profile_revision_sha256,
                 &repo_pkg,
                 &source_checksum,
-                &repository_provides_digest,
             )?;
             tx.commit()?;
             match inspection {
@@ -126,9 +124,9 @@ impl ConversionService {
                 let inspection = service.inspect_cached_conversion(
                     &tx,
                     &source_profile,
+                    &profile_revision_sha256,
                     &repo_pkg,
                     &source_checksum,
-                    &repository_provides_digest,
                 )?;
                 let result = match inspection {
                     CacheInspection::Current(result) => Some(*result),
@@ -137,11 +135,15 @@ impl ConversionService {
                         info!(
                             "Stale conversion record (CCS file missing or conversion input changed), re-converting"
                         );
-                        ConvertedPackage::delete_repository_by_checksum(
+                        if let Some(id) = ConvertedPackage::find_repository_by_checksum(
                             &tx,
-                            &source_profile,
+                            &profile_revision_sha256,
                             &source_checksum,
-                        )?;
+                        )?
+                        .and_then(|converted| converted.id)
+                        {
+                            ConvertedPackage::delete_with_conversion_pin_in_transaction(&tx, id)?;
+                        }
                         None
                     }
                 };
@@ -163,10 +165,20 @@ impl ConversionService {
             format,
             source_checksum,
             conversion_result,
-            repo_pkg,
-            repository_provides_digest,
+            source,
+            profile_revision_sha256,
             transport,
         } = input;
+        ensure!(
+            source.source_profile() == source_profile,
+            "pinned conversion source profile contradicts persistence input"
+        );
+        ensure!(
+            source.profile_revision_sha256() == profile_revision_sha256,
+            "pinned conversion source revision contradicts persistence input"
+        );
+        let repo_pkg = source.repo_pkg.clone();
+        let repository_provides_digest = source.catalog_provides_digest()?;
 
         let ccs_path = conversion_result
             .package_path
@@ -182,20 +194,15 @@ impl ConversionService {
         let package_architecture = repo_pkg
             .architecture
             .clone()
-            .or_else(|| metadata.architecture().map(str::to_string))
-            .ok_or_else(|| anyhow!("converted package has no exact architecture identity"))?;
+            .context("pinned catalog package has no exact architecture identity")?;
         let ccs_filename = format!("{}.ccs", content_hash.as_str());
         let final_ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
 
-        if let Some(parent) = final_ccs_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(ccs_path, &final_ccs_path)?;
-
         let mut converted = ConvertedPackage::new_repository(
             source_profile.clone(),
-            metadata.name().to_string(),
-            metadata.version().to_string(),
+            profile_revision_sha256.clone(),
+            repo_pkg.name.clone(),
+            repo_pkg.version.clone(),
             package_architecture.clone(),
             format.to_string(),
             source_checksum.clone(),
@@ -203,60 +210,62 @@ impl ConversionService {
             persisted_total_size,
             content_hash_text.clone(),
             final_ccs_path.to_string_lossy().to_string(),
-            repository_provides_digest,
+            repository_provides_digest.clone(),
         );
         converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
+        let final_ccs_preexisting = final_ccs_path.exists();
+        if let Some(parent) = final_ccs_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(ccs_path, &final_ccs_path)?;
+        // `source` owns the PinnedProfileCatalog. Keep it alive while this
+        // transaction inserts the conversion row and its durable pin.
         let writer = self.database_writer.clone();
-        let outcome = writer.execute(|| {
+        let outcome = match writer.execute(|| -> Result<PersistOutcome> {
             let mut conn = crate::server::open_runtime_db(&self.db_path)?;
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
             match self.inspect_cached_conversion(
                 &tx,
                 &source_profile,
+                &profile_revision_sha256,
                 &repo_pkg,
                 &source_checksum,
-                converted.repository_artifact()?.repository_provides_digest,
             )? {
                 CacheInspection::Current(result) => {
                     tx.commit()?;
                     return Ok(PersistOutcome::Existing(result));
                 }
                 CacheInspection::Stale => {
-                    ConvertedPackage::delete_repository_by_checksum(
+                    if let Some(id) = ConvertedPackage::find_repository_by_checksum(
                         &tx,
-                        &source_profile,
+                        &profile_revision_sha256,
                         &source_checksum,
-                    )?;
+                    )?
+                    .and_then(|existing| existing.id)
+                    {
+                        ConvertedPackage::delete_with_conversion_pin_in_transaction(&tx, id)?;
+                    }
                 }
                 CacheInspection::Missing => {}
             }
 
-            let repository_package_id = repo_pkg
-                .id
-                .context("converted repository package has no persisted identity")?;
-            let current_package = RepositoryPackage::find_by_id(&tx, repository_package_id)?
-                .context("repository package metadata changed while conversion was running")?;
-            ensure!(
-                repository_package_conversion_inputs_match(&repo_pkg, &current_package),
-                "repository package identity changed while conversion was running"
-            );
-            let current_repository_provides_digest =
-                RepositoryProvide::conversion_capabilities_digest(&tx, repository_package_id)?;
-            ensure!(
-                current_repository_provides_digest
-                    == converted.repository_artifact()?.repository_provides_digest,
-                "repository provide authority changed while conversion was running"
-            );
-            ensure!(
-                converted.repository_metadata_is_current(&tx)?,
-                "repository source metadata changed while conversion was running"
-            );
-            converted.insert(&tx)?;
+            converted.insert_with_conversion_pin_in_transaction(&tx, unix_seconds()?)?;
             tx.commit()?;
             Ok(PersistOutcome::Inserted)
-        })?;
+        }) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if !final_ccs_preexisting {
+                    let _ = std::fs::remove_file(&final_ccs_path);
+                }
+                return Err(error);
+            }
+        };
         if let PersistOutcome::Existing(result) = outcome {
+            if !final_ccs_preexisting {
+                let _ = std::fs::remove_file(&final_ccs_path);
+            }
             return Ok(*result);
         }
 
@@ -304,12 +313,139 @@ impl ConversionService {
     }
 }
 
+fn unix_seconds() -> Result<i64> {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system time precedes Unix epoch")?
+        .as_secs();
+    i64::try_from(seconds).context("system time exceeds SQLite integer range")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{create_test_db, insert_repo};
+    use super::super::test_support::create_test_db;
     use super::*;
-    use conary_core::db::models::RepositoryProvide;
+    use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
+    use conary_core::db::models::{RemiCatalogResource, RemiCatalogResourceKind};
     use conary_core::repository::versioning::VersionScheme;
+
+    const PROFILE_REVISION: &str =
+        "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
+
+    #[test]
+    fn conversion_finishing_after_activation_keeps_its_exact_input_revision() {
+        let fixture = ActiveCatalogFixture::new();
+        let revision_a = fixture.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "fixture",
+                "1.0-1.fc44",
+                "",
+                Some("x86_64"),
+                42,
+                "revision-a",
+            )],
+        );
+        let old = fixture
+            .authority()
+            .open_active_profile("fedora-44")
+            .expect("open revision A");
+        let package_a = old
+            .reader()
+            .find_packages_by_name("fixture")
+            .expect("read package from revision A")
+            .pop()
+            .expect("revision A package");
+
+        let revision_b = fixture.activate(
+            "fedora-44",
+            2,
+            vec![package(
+                "fedora-44",
+                "fixture",
+                "1.0-1.fc44",
+                "",
+                Some("x86_64"),
+                42,
+                "revision-b",
+            )],
+        );
+        let new = fixture
+            .authority()
+            .open_active_profile("fedora-44")
+            .expect("open revision B");
+
+        let transport = crate::server::conversion::test_support::test_transport(&[]);
+        let mut converted = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
+            revision_a.clone(),
+            package_a.name.clone(),
+            package_a.version.clone(),
+            package_a.architecture.clone().expect("exact architecture"),
+            "rpm".to_string(),
+            package_a.checksum.clone(),
+            &transport,
+            42,
+            "sha256:converted-a".to_string(),
+            "/tmp/converted-a.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
+        );
+        let conn = fixture.connection();
+        let converted_id = converted
+            .insert_with_conversion_pin(&conn, 2)
+            .expect("persist conversion and exact pin for revision A");
+
+        assert_eq!(old.profile_revision_sha256(), revision_a);
+        assert_eq!(new.profile_revision_sha256(), revision_b);
+        assert_eq!(new.fencing_epoch(), 2);
+        assert_ne!(
+            package_a.checksum,
+            new.reader()
+                .find_packages_by_name("fixture")
+                .expect("read package from revision B")[0]
+                .checksum
+        );
+        let persisted =
+            ConvertedPackage::find_repository_by_checksum(&conn, &revision_a, &package_a.checksum)
+                .expect("query exact revision A conversion")
+                .expect("revision A conversion remains present");
+        assert_eq!(persisted.id, Some(converted_id));
+        assert_eq!(
+            persisted.profile_revision_sha256.as_deref(),
+            Some(revision_a.as_str())
+        );
+        assert!(
+            ConvertedPackage::find_repository_by_checksum(&conn, &revision_b, &package_a.checksum,)
+                .expect("query revision B conversion")
+                .is_none()
+        );
+        let conversion_pin = ConvertedPackage::require_conversion_pin(&conn, converted_id)
+            .expect("exact revision A conversion pin");
+        assert_eq!(conversion_pin.profile_revision_sha256, revision_a);
+        assert_eq!(conversion_pin.owner_identity, converted_id.to_string());
+
+        drop(old);
+        let reader_a_count = conn
+            .query_row(
+                "SELECT COUNT(*) FROM remi_profile_revision_pins
+                 WHERE owner_kind = 'reader' AND profile_revision_sha256 = ?1",
+                [&revision_a],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count revision A reader pins");
+        let conversion_a_count = conn
+            .query_row(
+                "SELECT COUNT(*) FROM remi_profile_revision_pins
+                 WHERE owner_kind = 'conversion' AND profile_revision_sha256 = ?1",
+                [&revision_a],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count revision A conversion pins");
+        assert_eq!(reader_a_count, 0);
+        assert_eq!(conversion_a_count, 1);
+    }
 
     fn cache_fixture(
         bind_current_digest: bool,
@@ -333,7 +469,7 @@ mod tests {
 
     fn cache_fixture_for_source(
         bind_current_digest: bool,
-        repository_name: &str,
+        _repository_name: &str,
         profile: &str,
         format: &str,
         version_scheme: VersionScheme,
@@ -347,7 +483,6 @@ mod tests {
         String,
     ) {
         let (database, conn) = create_test_db();
-        let repository_id = insert_repo(&conn, repository_name, profile);
         let exact_profile =
             conary_core::repository::supported_profiles::profile_by_public_id(profile)
                 .or_else(|| {
@@ -356,7 +491,7 @@ mod tests {
                 .unwrap()
                 .id();
         let mut package = RepositoryPackage::new(
-            repository_id,
+            1,
             "systemd-udev".to_string(),
             "259.5-1.fc44".to_string(),
             version_scheme,
@@ -366,24 +501,21 @@ mod tests {
         );
         package.architecture = Some("x86_64".to_string());
         package.source_profile = Some(exact_profile.to_string());
-        package.insert(&conn).unwrap();
-        let package = RepositoryPackage::find_by_name(&conn, "systemd-udev")
-            .unwrap()
-            .pop()
-            .unwrap();
-        let package_id = package.id.unwrap();
         let source_checksum = package.checksum.clone();
-        let mut provide = RepositoryProvide::new(
-            package_id,
-            "/usr/bin/kernel-install".to_string(),
-            None,
-            "file".to_string(),
-            Some("/usr/bin/kernel-install".to_string()),
-            version_scheme,
-        );
-        provide.insert(&conn).unwrap();
-        let current_digest =
-            RepositoryProvide::conversion_capabilities_digest(&conn, package_id).unwrap();
+        let current_digest = conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string();
+        RemiCatalogResource {
+            resource_sha256: PROFILE_REVISION.to_string(),
+            kind: RemiCatalogResourceKind::ProfileRevision,
+            source_profile: exact_profile.to_string(),
+            artifact_sha256: "b".repeat(64),
+            artifact_size: 1,
+            logical_digest_sha256: "c".repeat(64),
+            manifest_json: "{}".to_string(),
+            durable: true,
+            created_at: 1,
+        }
+        .insert(&conn)
+        .unwrap();
 
         let storage = tempfile::tempdir().unwrap();
         let cache_dir = storage.path().join("cache");
@@ -393,11 +525,12 @@ mod tests {
         let converted_digest = if bind_current_digest {
             current_digest.clone()
         } else {
-            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string()
+            "sha256:".to_string() + &"1".repeat(64)
         };
         let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut converted = ConvertedPackage::new_repository(
             exact_profile.to_string(),
+            PROFILE_REVISION.to_string(),
             "systemd-udev".to_string(),
             "259.5-1.fc44".to_string(),
             "x86_64".to_string(),
@@ -409,7 +542,7 @@ mod tests {
             ccs_path.to_string_lossy().to_string(),
             converted_digest,
         );
-        converted.insert(&conn).unwrap();
+        converted.insert_with_conversion_pin(&conn, 1).unwrap();
         drop(conn);
 
         let service = ConversionService::new(
@@ -424,13 +557,13 @@ mod tests {
             service,
             package,
             source_checksum,
-            current_digest,
+            PROFILE_REVISION.to_string(),
         )
     }
 
     #[tokio::test]
-    async fn cache_hit_requires_the_current_repository_provide_digest() {
-        let (_database, _storage, service, package, source_checksum, current_digest) =
+    async fn cache_hit_ignores_the_catalog_provides_digest() {
+        let (_database, _storage, service, package, source_checksum, profile_revision) =
             cache_fixture(false);
 
         let result = service
@@ -438,27 +571,88 @@ mod tests {
                 "fedora-44",
                 &package,
                 &source_checksum,
-                &current_digest,
+                &profile_revision,
             )
             .await
             .unwrap();
 
-        assert!(result.is_none());
+        assert_eq!(
+            result.as_ref().map(|result| result.cache_state.as_str()),
+            Some("hot")
+        );
         let conn = conary_core::db::open(&service.db_path).unwrap();
         assert!(
-            ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", &source_checksum)
-                .unwrap()
-                .is_none()
+            ConvertedPackage::find_repository_by_checksum(
+                &conn,
+                &profile_revision,
+                &source_checksum,
+            )
+            .unwrap()
+            .is_some()
         );
     }
 
     #[tokio::test]
-    async fn cache_miss_remains_read_only_while_another_writer_is_active() {
-        let (_database, _storage, service, package, source_checksum, current_digest) =
+    async fn cache_hit_allows_missing_catalog_provides_digest() {
+        let (_database, _storage, service, package, source_checksum, profile_revision) =
             cache_fixture(true);
         let conn = conary_core::db::open(&service.db_path).unwrap();
-        ConvertedPackage::delete_repository_by_checksum(&conn, "fedora-44", &source_checksum)
-            .unwrap();
+        let id = ConvertedPackage::find_repository_by_checksum(
+            &conn,
+            &profile_revision,
+            &source_checksum,
+        )
+        .unwrap()
+        .unwrap()
+        .id
+        .unwrap();
+        conn.execute(
+            "UPDATE converted_packages
+             SET repository_provides_digest = NULL
+             WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+        drop(conn);
+
+        let result = service
+            .cached_conversion_result_async(
+                "fedora-44",
+                &package,
+                &source_checksum,
+                &profile_revision,
+            )
+            .await
+            .unwrap()
+            .expect("missing diagnostic evidence must not invalidate cache");
+
+        assert_eq!(result.cache_state, "hot");
+        let conn = conary_core::db::open(&service.db_path).unwrap();
+        let persisted = ConvertedPackage::find_repository_by_checksum(
+            &conn,
+            &profile_revision,
+            &source_checksum,
+        )
+        .unwrap()
+        .expect("cache hit must not delete a row without diagnostic evidence");
+        assert_eq!(persisted.repository_provides_digest, None);
+    }
+
+    #[tokio::test]
+    async fn cache_miss_remains_read_only_while_another_writer_is_active() {
+        let (_database, _storage, service, package, source_checksum, profile_revision) =
+            cache_fixture(true);
+        let conn = conary_core::db::open(&service.db_path).unwrap();
+        let id = ConvertedPackage::find_repository_by_checksum(
+            &conn,
+            &profile_revision,
+            &source_checksum,
+        )
+        .unwrap()
+        .unwrap()
+        .id
+        .unwrap();
+        ConvertedPackage::delete_with_conversion_pin(&conn, id).unwrap();
         drop(conn);
 
         let db_path = service.db_path.clone();
@@ -481,7 +675,7 @@ mod tests {
                 "fedora-44",
                 &package,
                 &source_checksum,
-                &current_digest,
+                &profile_revision,
             ),
         )
         .await;
@@ -497,16 +691,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cache_hit_reuses_an_exact_metadata_bound_artifact() {
-        let (_database, _storage, service, package, source_checksum, current_digest) =
+    async fn cache_hit_uses_exact_revision_without_operational_package_rows() {
+        let (_database, _storage, service, package, source_checksum, profile_revision) =
             cache_fixture(true);
+        let conn = conary_core::db::open(&service.db_path).unwrap();
+        let operational_packages: i64 = conn
+            .query_row("SELECT COUNT(*) FROM repository_packages", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(operational_packages, 0);
+        drop(conn);
 
         let result = service
             .cached_conversion_result_async(
                 "fedora-44",
                 &package,
                 &source_checksum,
-                &current_digest,
+                &profile_revision,
             )
             .await
             .unwrap()
@@ -519,7 +721,7 @@ mod tests {
     #[tokio::test]
     async fn cache_hit_preserves_eopkg_sha1_source_authority() {
         let source_checksum = "sha1:1826421aded2a344b7864ffff2fae2430778b1f0";
-        let (_database, _storage, service, package, persisted_checksum, current_digest) =
+        let (_database, _storage, service, package, persisted_checksum, profile_revision) =
             cache_fixture_for_source(
                 true,
                 "solus-polaris",
@@ -530,7 +732,12 @@ mod tests {
             );
 
         let result = service
-            .cached_conversion_result_async("solus", &package, &persisted_checksum, &current_digest)
+            .cached_conversion_result_async(
+                "solus",
+                &package,
+                &persisted_checksum,
+                &profile_revision,
+            )
             .await
             .unwrap()
             .expect("exact SHA-1 conversion cache hit");
@@ -542,9 +749,8 @@ mod tests {
 
     #[tokio::test]
     async fn cache_hit_rejects_a_checksum_alias_with_conflicting_package_identity() {
-        let (_database, _storage, service, package, source_checksum, current_digest) =
+        let (_database, _storage, service, package, source_checksum, profile_revision) =
             cache_fixture(true);
-        let conn = conary_core::db::open(&service.db_path).unwrap();
         let mut alias = RepositoryPackage::new(
             package.repository_id,
             "aliased-systemd".to_string(),
@@ -555,35 +761,28 @@ mod tests {
             "https://example.com/aliased-systemd.rpm".to_string(),
         );
         alias.architecture = package.architecture.clone();
-        alias.insert(&conn).unwrap();
-        let alias_id = alias.id.unwrap();
-        let mut provide = RepositoryProvide::new(
-            alias_id,
-            "/usr/bin/kernel-install".to_string(),
-            None,
-            "file".to_string(),
-            Some("/usr/bin/kernel-install".to_string()),
-            VersionScheme::Rpm,
-        );
-        provide.insert(&conn).unwrap();
-        assert_eq!(
-            RepositoryProvide::conversion_capabilities_digest(&conn, alias_id).unwrap(),
-            current_digest
-        );
-        drop(conn);
 
         let error = service
-            .cached_conversion_result_async("fedora-44", &alias, &source_checksum, &current_digest)
+            .cached_conversion_result_async(
+                "fedora-44",
+                &alias,
+                &source_checksum,
+                &profile_revision,
+            )
             .await
             .expect_err("one checksum cannot alias two current package identities")
             .to_string();
 
-        assert!(error.contains("conflicting repository package identity"));
+        assert!(error.contains("conflicting catalog package identity"));
         let conn = conary_core::db::open(&service.db_path).unwrap();
         assert!(
-            ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", &source_checksum)
-                .unwrap()
-                .is_some(),
+            ConvertedPackage::find_repository_by_checksum(
+                &conn,
+                &profile_revision,
+                &source_checksum,
+            )
+            .unwrap()
+            .is_some(),
             "the current artifact for the original identity must not be deleted"
         );
     }

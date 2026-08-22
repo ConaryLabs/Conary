@@ -48,7 +48,6 @@ CREATE TABLE repositories (
             source_policy_id INTEGER REFERENCES repository_source_policies(id) ON DELETE RESTRICT,
             repository_identity TEXT,
             stream_binding_sha256 TEXT,
-            authenticated_snapshot_sha256 TEXT,
             CHECK(
                 (package_format = 'unspecified' AND parser_config_json IS NULL)
                 OR (package_format != 'unspecified' AND parser_config_json IS NOT NULL)
@@ -61,12 +60,10 @@ CREATE TABLE repositories (
                 OR (package_format NOT IN ('arch', 'deb', 'rpm', 'eopkg')
                     AND source_policy_id IS NULL
                     AND repository_identity IS NULL
-                    AND stream_binding_sha256 IS NULL
-                    AND authenticated_snapshot_sha256 IS NULL)
+                    AND stream_binding_sha256 IS NULL)
             ),
             CHECK(repository_identity IS NULL OR (length(repository_identity) BETWEEN 1 AND 255 AND trim(repository_identity) = repository_identity)),
             CHECK(stream_binding_sha256 IS NULL OR (length(stream_binding_sha256) = 64 AND stream_binding_sha256 NOT GLOB '*[^0-9a-f]*')),
-            CHECK(authenticated_snapshot_sha256 IS NULL OR (length(authenticated_snapshot_sha256) = 64 AND authenticated_snapshot_sha256 NOT GLOB '*[^0-9a-f]*')),
             UNIQUE(source_policy_id, repository_identity)
         );
 CREATE INDEX idx_repositories_name ON repositories(name);

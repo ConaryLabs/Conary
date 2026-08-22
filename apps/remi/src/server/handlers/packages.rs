@@ -18,6 +18,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+mod serving;
+#[cfg(test)]
+use serving::check_converted;
+use serving::{
+    ConvertedDownloadLookup, ConvertedManifestLookup, active_profile_revision_for_request,
+    converted_ccs_path_for_download, converted_manifest_for_request,
+};
+
 /// Query parameters for package requests
 #[derive(Debug, Deserialize)]
 pub struct PackageQuery {
@@ -207,40 +215,6 @@ fn conversion_job_key(distro: &str, name: &str, query: &PackageQuery) -> String 
     )
 }
 
-async fn converted_manifest_for_request(
-    db_path: &std::path::Path,
-    distro: &str,
-    name: &str,
-    query: &PackageQuery,
-) -> Result<ConvertedManifestLookup, (StatusCode, &'static str)> {
-    let check_db = db_path.to_path_buf();
-    let check_distro = distro.to_string();
-    let check_name = name.to_string();
-    let check_version = query.version.clone();
-    let check_arch = query.arch.clone();
-    match tokio::task::spawn_blocking(move || {
-        check_converted(
-            &check_db,
-            &check_distro,
-            &check_name,
-            check_version.as_deref(),
-            check_arch.as_deref(),
-        )
-    })
-    .await
-    {
-        Ok(Ok(lookup)) => Ok(lookup),
-        Ok(Err(error)) => {
-            tracing::error!("Database error checking conversion: {}", error);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Database error"))
-        }
-        Err(error) => {
-            tracing::error!("Blocking task failed: {}", error);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))
-        }
-    }
-}
-
 async fn start_conversion_after_cache_miss(
     state: Arc<RwLock<ServerState>>,
     db_path: &std::path::Path,
@@ -259,7 +233,8 @@ async fn start_conversion_after_cache_miss(
     // polling record can then be evicted. Holding this lock makes the lookup
     // and any replacement reservation one atomic decision relative to job
     // creation, completion, and cleanup.
-    match converted_manifest_for_request(db_path, distro, name, query).await {
+    let catalog_authority = state_guard.catalog_authority.clone();
+    match converted_manifest_for_request(db_path, &catalog_authority, distro, name, query).await {
         Ok(ConvertedManifestLookup::Ready(manifest)) => {
             return Json(manifest).into_response();
         }
@@ -296,16 +271,6 @@ async fn start_conversion_after_cache_miss(
             (StatusCode::SERVICE_UNAVAILABLE, "Conversion queue full").into_response()
         }
     }
-}
-
-enum ConvertedManifestLookup {
-    Ready(Box<PackageManifest>),
-    Missing,
-}
-
-enum ConvertedDownloadLookup {
-    Ready(std::path::PathBuf),
-    Missing,
 }
 
 fn native_ambiguity_response(releases: Vec<String>) -> Response {
@@ -397,9 +362,12 @@ pub async fn get_package(
         return e;
     }
 
-    let db_path = {
+    let (db_path, catalog_authority) = {
         let state_guard = state.read().await;
-        state_guard.config.db_path.clone()
+        (
+            state_guard.config.db_path.clone(),
+            state_guard.catalog_authority.clone(),
+        )
     };
 
     // Check if package is already converted (use spawn_blocking to avoid blocking
@@ -441,7 +409,8 @@ pub async fn get_package(
 
     // Check if package is already converted (use spawn_blocking to avoid blocking
     // the async runtime with synchronous SQLite I/O)
-    match converted_manifest_for_request(&db_path, &distro, &name, &query).await {
+    match converted_manifest_for_request(&db_path, &catalog_authority, &distro, &name, &query).await
+    {
         Ok(ConvertedManifestLookup::Ready(manifest)) => return Json(manifest).into_response(),
         Ok(ConvertedManifestLookup::Missing) => {}
         Err(error) => return error.into_response(),
@@ -459,64 +428,6 @@ pub async fn get_package(
     }
 
     start_conversion_when_repository_ready(state, &db_path, &distro, &name, &query).await
-}
-
-/// Check if a package has already been converted
-///
-/// Maps the public distro route to one exact source profile, then queries
-/// `converted_packages` by that profile, name, and version. Returns the
-/// manifest if found and the CCS file still exists.
-fn check_converted(
-    db_path: &std::path::Path,
-    distro: &str,
-    name: &str,
-    version: Option<&str>,
-    architecture: Option<&str>,
-) -> Result<ConvertedManifestLookup, anyhow::Error> {
-    use conary_core::db::models::ConvertedPackage;
-
-    // Startup already validated the current schema, so this hot path can skip it.
-    let conn = conary_core::db::open_fast(db_path)?;
-    let source_profile =
-        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
-
-    // Query for existing conversion
-    let existing = ConvertedPackage::find_by_package_identity_with_arch(
-        &conn,
-        source_profile.id(),
-        name,
-        version,
-        architecture,
-    )?;
-
-    if let Some(converted) = existing {
-        if !converted.repository_metadata_is_current(&conn)? {
-            return Ok(ConvertedManifestLookup::Missing);
-        }
-        let artifact = converted.repository_artifact()?;
-        let ccs_path = std::path::Path::new(artifact.ccs_path);
-        if ccs_path.exists() {
-            let scriptlet_summary = converted.scriptlet_summary()?;
-            let manifest = PackageManifest {
-                name: artifact.package_name.to_string(),
-                version: artifact.package_version.to_string(),
-                release: None,
-                distro: distro.to_string(),
-                transport: artifact.transport,
-                total_size: artifact.total_size,
-                content_hash: artifact.content_hash.to_string(),
-                native: false,
-                converted: true,
-                source_kind: Some("converted".to_string()),
-                scriptlets: Some(ScriptletPackageMetadata::from(&scriptlet_summary)),
-            };
-
-            return Ok(ConvertedManifestLookup::Ready(Box::new(manifest)));
-        }
-    }
-
-    Ok(ConvertedManifestLookup::Missing)
 }
 
 /// Run the actual conversion in a background task
@@ -719,6 +630,7 @@ pub async fn download_package(
     // trusting a cache filename. Conversion-version bumps make old CCS files
     // stale even when the bytes are still on disk.
     let db_path = state_guard.config.db_path.clone();
+    let catalog_authority = state_guard.catalog_authority.clone();
     let analytics = state_guard.analytics.clone();
     let ua = headers
         .get(header::USER_AGENT)
@@ -727,14 +639,18 @@ pub async fn download_package(
     drop(state_guard);
 
     let lookup_db = db_path.clone();
-    let lookup_distro = distro.clone();
     let lookup_name = name.clone();
     let lookup_version = query.version.clone();
     let lookup_arch = query.arch.clone();
+    let Some(profile_revision_sha256) =
+        active_profile_revision_for_request(catalog_authority, &distro).await
+    else {
+        return get_package(State(state), Path((distro, name)), Query(query)).await;
+    };
     let ccs_path = match tokio::task::spawn_blocking(move || {
         converted_ccs_path_for_download(
             &lookup_db,
-            &lookup_distro,
+            &profile_revision_sha256,
             &lookup_name,
             lookup_version.as_deref(),
             lookup_arch.as_deref(),
@@ -767,43 +683,6 @@ pub async fn download_package(
         ua.as_deref(),
     )
     .await
-}
-
-fn converted_ccs_path_for_download(
-    db_path: &std::path::Path,
-    distro: &str,
-    name: &str,
-    version: Option<&str>,
-    architecture: Option<&str>,
-) -> Result<ConvertedDownloadLookup, anyhow::Error> {
-    use conary_core::db::models::ConvertedPackage;
-
-    let conn = conary_core::db::open_fast(db_path)?;
-    let source_profile =
-        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
-    let Some(converted) = ConvertedPackage::find_by_package_identity_with_arch(
-        &conn,
-        source_profile.id(),
-        name,
-        version,
-        architecture,
-    )?
-    else {
-        return Ok(ConvertedDownloadLookup::Missing);
-    };
-
-    if !converted.repository_metadata_is_current(&conn)? {
-        return Ok(ConvertedDownloadLookup::Missing);
-    }
-    converted.scriptlet_summary()?;
-    let artifact = converted.repository_artifact()?;
-    let ccs_path = std::path::PathBuf::from(artifact.ccs_path);
-    if ccs_path.exists() {
-        Ok(ConvertedDownloadLookup::Ready(ccs_path))
-    } else {
-        Ok(ConvertedDownloadLookup::Missing)
-    }
 }
 
 /// Stream a CCS file as a response, recording analytics only on success.

@@ -286,17 +286,6 @@ pub fn find_repositories_for_profile(
         .collect())
 }
 
-/// Return the database identity required to use a repository as persisted
-/// serving authority.
-pub fn require_persisted_repository_id(repository: &Repository) -> anyhow::Result<i64> {
-    repository.id.ok_or_else(|| {
-        anyhow::anyhow!(
-            "repository '{}' was loaded for public serving without a persisted ID",
-            repository.name
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

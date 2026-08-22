@@ -1,3 +1,5 @@
+// crates/conary-core/src/repository/sync/immutable_catalog/tests.rs
+
 use super::*;
 use crate::db::models::{RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode};
 use crate::repository::catalog::{
@@ -139,4 +141,34 @@ fn legacy_sha_only_root_cannot_claim_byte_complete_source_authority() {
     .err()
     .expect("legacy SHA-only identity must fail");
     assert!(error.to_string().contains("no exact byte length"));
+}
+
+#[test]
+fn pinned_native_root_mismatch_is_refused_before_catalog_construction() {
+    let mut repository = repository();
+    let pinned = AuthenticatedSnapshotIdentity::for_bytes(b"pinned repomd.xml");
+    repository
+        .set_native_source_policy(
+            RepositorySourcePolicy::new(
+                "fedora-project",
+                RepositoryPolicyScope::repository("fedora-everything-x86_64").unwrap(),
+                NativeSourceEcosystem::Rpm,
+                NativeSourceStream::release("44").unwrap(),
+                RepositoryUpdateMode::Pin,
+            )
+            .unwrap(),
+            "fedora-everything-x86_64",
+            Some(pinned),
+        )
+        .unwrap();
+
+    let error = source_catalog_candidate(
+        &repository,
+        vec![package(&repository)],
+        AuthenticatedSnapshotIdentity::for_bytes(b"different repomd.xml"),
+        vec![authenticated_object()],
+    )
+    .err()
+    .expect("pinned snapshot mismatch must fail");
+    assert!(matches!(error, Error::TrustError(_)), "{error}");
 }

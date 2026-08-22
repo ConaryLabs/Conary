@@ -1,8 +1,8 @@
 // conary-core/src/repository/sync/native.rs
 
 use crate::db::models::{
-    AuthenticatedSnapshotIdentity, ConvertedPackage, Repository, RepositoryPackage,
-    RepositoryProvide, RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
+    AuthenticatedSnapshotIdentity, Repository, RepositoryPackage, RepositoryProvide,
+    RepositoryRequirement, RepositoryRequirementGroup as DbRequirementGroup,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
@@ -28,13 +28,9 @@ pub(super) fn persist_native_sync_rows(
 
     let tx = conn.unchecked_transaction()?;
 
-    repo.admit_authenticated_snapshot(snapshot)?;
+    repo.validate_authenticated_snapshot(&snapshot)?;
     persist_synced_package_rows(&tx, repo_id, synced_packages)?;
     link_canonical_ids(&tx, repo_id)?;
-    if let Some(source_profile) = repo.source_profile.as_deref() {
-        ConvertedPackage::reconcile_repository_metadata(&tx, source_profile)?;
-    }
-
     repo.last_sync = Some(current_timestamp());
     repo.update(&tx)?;
 

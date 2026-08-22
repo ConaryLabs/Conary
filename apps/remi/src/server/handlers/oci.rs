@@ -14,6 +14,7 @@
 //! - GET /v2/{name}/tags/list - List tags (versions)
 
 use crate::server::ServerState;
+use crate::server::catalog_authority::CatalogAuthority;
 use anyhow::Context;
 use axum::{
     body::Body,
@@ -112,11 +113,12 @@ fn oci_error_response(status: StatusCode, code: &str, message: &str) -> Response
 }
 
 async fn blob_allowed_by_public_gate(
+    catalog_authority: CatalogAuthority,
     db_path: std::path::PathBuf,
     hash: String,
 ) -> HandlerResult<bool> {
     match tokio::task::spawn_blocking(move || {
-        crate::server::publication::local_chunk_servable(&db_path, &hash)
+        local_chunk_servable_for_active_revision(&catalog_authority, &db_path, &hash)
     })
     .await
     {
@@ -152,9 +154,11 @@ pub async fn version_check() -> impl IntoResponse {
 pub async fn catalog(State(state): State<Arc<RwLock<ServerState>>>) -> Response {
     let state_guard = state.read().await;
     let db_path = state_guard.config.db_path.clone();
+    let catalog_authority = state_guard.catalog_authority.clone();
     drop(state_guard);
 
-    let result = tokio::task::spawn_blocking(move || build_catalog(&db_path)).await;
+    let result =
+        tokio::task::spawn_blocking(move || build_catalog(&catalog_authority, &db_path)).await;
 
     match result {
         Ok(Ok(catalog)) => {
@@ -317,6 +321,7 @@ async fn manifest_inner(
 
     let state_guard = state.read().await;
     let db_path = state_guard.config.db_path.clone();
+    let catalog_authority = state_guard.catalog_authority.clone();
     let chunk_cache = state_guard.chunk_cache.clone();
     drop(state_guard);
 
@@ -325,7 +330,14 @@ async fn manifest_inner(
     let reference = reference.to_string();
 
     let result = tokio::task::spawn_blocking(move || {
-        build_manifest(&db_path, &distro, &package, &reference, &chunk_cache)
+        build_manifest(
+            &catalog_authority,
+            &db_path,
+            &distro,
+            &package,
+            &reference,
+            &chunk_cache,
+        )
     })
     .await;
 
@@ -376,14 +388,15 @@ async fn get_blob_inner(state: Arc<RwLock<ServerState>>, _name: &str, digest: &s
     // Normalize hash to lowercase to prevent cache bypass with mixed-case digests
     let hash = super::chunks::normalize_hash(hash);
 
-    let (db_path, chunk_path) = {
+    let (db_path, chunk_path, catalog_authority) = {
         let state_guard = state.read().await;
         (
             state_guard.config.db_path.clone(),
             state_guard.chunk_cache.chunk_path(&hash),
+            state_guard.catalog_authority.clone(),
         )
     };
-    match blob_allowed_by_public_gate(db_path, hash.clone()).await {
+    match blob_allowed_by_public_gate(catalog_authority, db_path, hash.clone()).await {
         Ok(true) => {}
         Ok(false) => {
             return oci_error_response(StatusCode::NOT_FOUND, "BLOB_UNKNOWN", "Blob not found");
@@ -440,14 +453,15 @@ async fn head_blob_inner(state: Arc<RwLock<ServerState>>, _name: &str, digest: &
     };
 
     let hash = super::chunks::normalize_hash(hash);
-    let (db_path, chunk_path) = {
+    let (db_path, chunk_path, catalog_authority) = {
         let state_guard = state.read().await;
         (
             state_guard.config.db_path.clone(),
             state_guard.chunk_cache.chunk_path(&hash),
+            state_guard.catalog_authority.clone(),
         )
     };
-    match blob_allowed_by_public_gate(db_path, hash).await {
+    match blob_allowed_by_public_gate(catalog_authority, db_path, hash).await {
         Ok(true) => {}
         Ok(false) => {
             return oci_error_response(StatusCode::NOT_FOUND, "BLOB_UNKNOWN", "Blob not found");
@@ -482,14 +496,17 @@ async fn list_tags_inner(state: Arc<RwLock<ServerState>>, name: &str) -> Respons
 
     let state_guard = state.read().await;
     let db_path = state_guard.config.db_path.clone();
+    let catalog_authority = state_guard.catalog_authority.clone();
     drop(state_guard);
 
     let oci_name = format!("conary/{}/{}", distro, package);
     let distro = distro.to_string();
     let package = package.to_string();
 
-    let result =
-        tokio::task::spawn_blocking(move || build_tags_list(&db_path, &distro, &package)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        build_tags_list(&catalog_authority, &db_path, &distro, &package)
+    })
+    .await;
 
     match result {
         Ok(Ok(tags)) => {
@@ -522,6 +539,7 @@ async fn list_tags_inner(state: Arc<RwLock<ServerState>>, name: &str) -> Respons
 
 /// Build OCI manifest for a specific package version
 fn build_manifest(
+    catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
     distro: &str,
     package: &str,
@@ -541,13 +559,20 @@ fn build_manifest(
     let source_profile =
         conary_core::repository::supported_profiles::profile_for_remi_route(distro)
             .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
+    let catalog = catalog_authority.open_active_profile(source_profile.id())?;
+    let profile_revision_sha256 = catalog.profile_revision_sha256();
 
     let converted = if let Some(ver) = version {
-        ConvertedPackage::find_by_package_identity(&conn, source_profile.id(), package, Some(ver))?
+        ConvertedPackage::find_by_package_identity(
+            &conn,
+            profile_revision_sha256,
+            package,
+            Some(ver),
+        )?
     } else {
         ConvertedPackage::find_by_content_hash_identity(
             &conn,
-            source_profile.id(),
+            profile_revision_sha256,
             package,
             reference,
         )?
@@ -556,9 +581,13 @@ fn build_manifest(
     let Some(converted) = converted else {
         return Ok(None);
     };
-    if !converted.repository_metadata_is_current(&conn)? {
+    if !converted.repository_conversion_is_current_for_revision(profile_revision_sha256)? {
         return Ok(None);
     }
+    let id = converted
+        .id
+        .ok_or_else(|| anyhow::anyhow!("repository converted package has no database identity"))?;
+    ConvertedPackage::require_conversion_pin(&conn, id)?;
     converted.scriptlet_summary()?;
 
     let artifact = converted.repository_artifact()?;
@@ -635,6 +664,7 @@ fn build_manifest(
 
 /// Build tags list for a package (available versions)
 fn build_tags_list(
+    catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
     distro: &str,
     package: &str,
@@ -643,10 +673,16 @@ fn build_tags_list(
     let source_profile =
         conary_core::repository::supported_profiles::profile_for_remi_route(distro)
             .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
+    let catalog = catalog_authority.open_active_profile(source_profile.id())?;
+    let profile_revision_sha256 = catalog.profile_revision_sha256();
     let mut tags = Vec::new();
     for converted in
-        ConvertedPackage::find_current_conversions(&conn, source_profile.id(), Some(package))?
+        ConvertedPackage::find_current_conversions(&conn, profile_revision_sha256, Some(package))?
     {
+        let id = converted.id.ok_or_else(|| {
+            anyhow::anyhow!("repository converted package has no database identity")
+        })?;
+        ConvertedPackage::require_conversion_pin(&conn, id)?;
         converted.scriptlet_summary()?;
         tags.push(converted.repository_artifact()?.package_version.to_string());
     }
@@ -657,24 +693,44 @@ fn build_tags_list(
 }
 
 /// Build the OCI catalog (list of all repositories)
-fn build_catalog(db_path: &std::path::Path) -> Result<OciCatalog, anyhow::Error> {
+fn build_catalog(
+    catalog_authority: &CatalogAuthority,
+    db_path: &std::path::Path,
+) -> Result<OciCatalog, anyhow::Error> {
     let conn = Connection::open(db_path)?;
+    let mut active_revisions: HashMap<String, String> = HashMap::new();
     let mut repositories = Vec::new();
     for converted in ConvertedPackage::list_repository_conversions(&conn)? {
-        if !converted.repository_metadata_is_current(&conn)? {
+        let source_profile = converted.source_profile.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("repository converted package is missing source profile")
+        })?;
+        let profile =
+            conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "converted artifact carries unsupported source profile '{source_profile}'"
+                    )
+                })?;
+        let profile_revision_sha256 = match active_revisions.get(source_profile) {
+            Some(revision) => revision.clone(),
+            None => {
+                let revision = catalog_authority
+                    .open_active_profile(source_profile)?
+                    .profile_revision_sha256()
+                    .to_string();
+                active_revisions.insert(source_profile.to_string(), revision.clone());
+                revision
+            }
+        };
+        if !converted.repository_conversion_is_current_for_revision(&profile_revision_sha256)? {
             continue;
         }
+        let id = converted.id.ok_or_else(|| {
+            anyhow::anyhow!("repository converted package has no database identity")
+        })?;
+        ConvertedPackage::require_conversion_pin(&conn, id)?;
         converted.scriptlet_summary()?;
         let artifact = converted.repository_artifact()?;
-        let profile = conary_core::repository::supported_profiles::profile_by_public_id(
-            artifact.source_profile,
-        )
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "converted artifact carries unsupported source profile '{}'",
-                artifact.source_profile
-            )
-        })?;
         repositories.push(format!(
             "conary/{}/{}",
             profile.remi_route_slug(),
@@ -685,6 +741,58 @@ fn build_catalog(db_path: &std::path::Path) -> Result<OciCatalog, anyhow::Error>
     repositories.dedup();
 
     Ok(OciCatalog { repositories })
+}
+
+/// Check converted CAS reachability against the active immutable profile
+/// revision and its durable conversion pins. Native publications remain
+/// directly authoritative and do not need a profile revision.
+fn local_chunk_servable_for_active_revision(
+    catalog_authority: &CatalogAuthority,
+    db_path: &std::path::Path,
+    hash: &str,
+) -> Result<bool, anyhow::Error> {
+    let conn = crate::server::open_runtime_db(db_path)?;
+    if conary_core::db::models::NativePackagePublication::active_referencing_object(&conn, hash)?
+        .is_some()
+    {
+        return Ok(true);
+    }
+
+    let mut active_revisions: HashMap<String, String> = HashMap::new();
+    for converted in ConvertedPackage::list_repository_conversions(&conn)? {
+        let source_profile = converted.source_profile.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("repository converted package is missing source profile")
+        })?;
+        let profile_revision_sha256 = match active_revisions.get(source_profile) {
+            Some(revision) => revision.clone(),
+            None => {
+                let revision = catalog_authority
+                    .open_active_profile(source_profile)?
+                    .profile_revision_sha256()
+                    .to_string();
+                active_revisions.insert(source_profile.to_string(), revision.clone());
+                revision
+            }
+        };
+        if !converted.repository_conversion_is_current_for_revision(&profile_revision_sha256)? {
+            continue;
+        }
+        if !converted
+            .object_hashes()?
+            .into_iter()
+            .any(|object_hash| object_hash == hash || object_hash == format!("sha256:{hash}"))
+        {
+            continue;
+        }
+        let id = converted.id.ok_or_else(|| {
+            anyhow::anyhow!("repository converted package has no database identity")
+        })?;
+        ConvertedPackage::require_conversion_pin(&conn, id)?;
+        converted.scriptlet_summary()?;
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 /// Strip the "sha256:" prefix from an OCI digest, returning the bare hex hash.

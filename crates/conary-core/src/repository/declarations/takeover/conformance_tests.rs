@@ -471,7 +471,7 @@ fn debian_derivatives_share_one_apt_takeover_contract() {
 }
 
 #[test]
-fn tumbleweed_preserves_zypper_authority_and_advances_rolling_snapshots() {
+fn tumbleweed_preserves_zypper_authority_without_mutable_snapshot_state() {
     let (root, conn, manifest) = tumbleweed_fixture();
     let declaration_path = root.path().join("etc/zypp/repos.d/tumbleweed.repo");
     let declaration_before = fs::read(&declaration_path).unwrap();
@@ -480,7 +480,7 @@ fn tumbleweed_preserves_zypper_authority_and_advances_rolling_snapshots() {
 
     apply_native_repository_takeover(&conn, root.path(), &manifest, &preview.sha256().unwrap())
         .unwrap();
-    let mut stored = Repository::find_by_name(&conn, "tumbleweed-oss")
+    let stored = Repository::find_by_name(&conn, "tumbleweed-oss")
         .unwrap()
         .expect("Tumbleweed repository");
     assert_eq!(stored.priority, 47);
@@ -490,17 +490,10 @@ fn tumbleweed_preserves_zypper_authority_and_advances_rolling_snapshots() {
     );
     let first = AuthenticatedSnapshotIdentity::for_bytes(b"tumbleweed-snapshot-one");
     let second = AuthenticatedSnapshotIdentity::for_bytes(b"tumbleweed-snapshot-two");
-    stored.admit_authenticated_snapshot(first).unwrap();
-    stored.admit_authenticated_snapshot(second.clone()).unwrap();
+    stored.validate_authenticated_snapshot(&first).unwrap();
+    stored.validate_authenticated_snapshot(&second).unwrap();
     stored.update(&conn).unwrap();
 
-    assert_eq!(
-        Repository::find_by_name(&conn, "tumbleweed-oss")
-            .unwrap()
-            .unwrap()
-            .authenticated_snapshot,
-        Some(second)
-    );
     assert_eq!(fs::read(declaration_path).unwrap(), declaration_before);
 }
 
@@ -521,28 +514,17 @@ fn tumbleweed_global_trust_binding_rejects_unmodeled_zypp_overrides() {
 }
 
 #[test]
-fn cachyos_follow_advances_and_pin_requires_explicit_reenrollment() {
+fn cachyos_follow_validates_and_pin_requires_explicit_reenrollment() {
     let (root, conn, mut manifest) = alpm_fixture("Required DatabaseOptional");
     let preview = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();
     apply_native_repository_takeover(&conn, root.path(), &manifest, &preview.sha256().unwrap())
         .unwrap();
     let first = AuthenticatedSnapshotIdentity::for_bytes(b"cachyos-snapshot-one");
     let second = AuthenticatedSnapshotIdentity::for_bytes(b"cachyos-snapshot-two");
-    let mut following = Repository::find_by_name(&conn, "cachyos").unwrap().unwrap();
-    following
-        .admit_authenticated_snapshot(first.clone())
-        .unwrap();
-    following
-        .admit_authenticated_snapshot(second.clone())
-        .unwrap();
+    let following = Repository::find_by_name(&conn, "cachyos").unwrap().unwrap();
+    following.validate_authenticated_snapshot(&first).unwrap();
+    following.validate_authenticated_snapshot(&second).unwrap();
     following.update(&conn).unwrap();
-    assert_eq!(
-        Repository::find_by_name(&conn, "cachyos")
-            .unwrap()
-            .unwrap()
-            .authenticated_snapshot,
-        Some(second.clone())
-    );
 
     rollback_native_repository_takeover(&conn, root.path()).unwrap();
     manifest.repositories[0].update = TakeoverUpdatePolicy::Pin {
@@ -551,17 +533,10 @@ fn cachyos_follow_advances_and_pin_requires_explicit_reenrollment() {
     let preview = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();
     apply_native_repository_takeover(&conn, root.path(), &manifest, &preview.sha256().unwrap())
         .unwrap();
-    let mut pinned = Repository::find_by_name(&conn, "cachyos").unwrap().unwrap();
-    pinned.admit_authenticated_snapshot(first.clone()).unwrap();
+    let pinned = Repository::find_by_name(&conn, "cachyos").unwrap().unwrap();
+    pinned.validate_authenticated_snapshot(&first).unwrap();
     pinned.update(&conn).unwrap();
-    assert!(pinned.admit_authenticated_snapshot(second.clone()).is_err());
-    assert_eq!(
-        Repository::find_by_name(&conn, "cachyos")
-            .unwrap()
-            .unwrap()
-            .authenticated_snapshot,
-        Some(first)
-    );
+    assert!(pinned.validate_authenticated_snapshot(&second).is_err());
 
     rollback_native_repository_takeover(&conn, root.path()).unwrap();
     manifest.repositories[0].update = TakeoverUpdatePolicy::Pin {
@@ -570,12 +545,9 @@ fn cachyos_follow_advances_and_pin_requires_explicit_reenrollment() {
     let preview = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();
     apply_native_repository_takeover(&conn, root.path(), &manifest, &preview.sha256().unwrap())
         .unwrap();
-    let mut advanced = Repository::find_by_name(&conn, "cachyos").unwrap().unwrap();
-    advanced
-        .admit_authenticated_snapshot(second.clone())
-        .unwrap();
+    let advanced = Repository::find_by_name(&conn, "cachyos").unwrap().unwrap();
+    advanced.validate_authenticated_snapshot(&second).unwrap();
     advanced.update(&conn).unwrap();
-    assert_eq!(advanced.authenticated_snapshot, Some(second));
 }
 
 #[test]

@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/remi/run/recovery.rs
+// crates/conary-core/src/repository/sync/remi/run/recovery.rs
 
 //! Exclusive-restart fencing and exact private-candidate cleanup state.
 

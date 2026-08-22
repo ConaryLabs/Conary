@@ -42,7 +42,6 @@ pub mod mcp;
 pub mod metrics;
 pub mod native_publish;
 mod negative_cache;
-mod package_metadata;
 pub mod popularity;
 mod prewarm;
 pub mod profile_catalog;
@@ -287,6 +286,7 @@ impl ServerState {
             config.db_path.clone(),
             None, // R2 store set later after state initialization
         )
+        .with_catalog_authority(catalog_authority.clone())
         .with_database_writer(database_writer.clone())
         .with_publication_coordinator(Arc::clone(&publication_coordinator))
         .with_bounded_cache(bounded_cache.clone())
@@ -593,11 +593,22 @@ async fn run_server_on_runtime(
         match SearchEngine::new(&index_dir) {
             Ok(engine) => {
                 let engine = Arc::new(engine);
-                // Rebuild index from DB in background
+                // Rebuild from exact immutable profile readers in background.
                 let rebuild_engine = Arc::clone(&engine);
                 let rebuild_db = server_config.db_path.clone();
+                let (rebuild_catalog_authority, rebuild_source_profiles) = {
+                    let state_guard = state.read().await;
+                    (
+                        state_guard.catalog_authority.clone(),
+                        state_guard.required_source_profiles.clone(),
+                    )
+                };
                 tokio::task::spawn_blocking(move || {
-                    if let Err(e) = rebuild_engine.rebuild_from_db(&rebuild_db) {
+                    if let Err(e) = rebuild_engine.rebuild_from_catalogs(
+                        &rebuild_db,
+                        &rebuild_catalog_authority,
+                        &rebuild_source_profiles,
+                    ) {
                         tracing::error!("Failed to rebuild search index: {}", e);
                     }
                 });

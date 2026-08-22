@@ -16,7 +16,8 @@ use conary_core::db::models::{
     RemiProfileRevisionPin, RemiRevisionPinKind, RemiRuntimeSession,
 };
 use conary_core::repository::catalog::{
-    CatalogReader, ProfileRevisionV1, verify_profile_catalog_bundle,
+    CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogReader, ProfileRevisionV1,
+    SourceSnapshotV1, verify_profile_catalog_bundle, verify_source_catalog_bundle,
 };
 use rusqlite::Connection;
 use rusqlite::{Transaction, TransactionBehavior};
@@ -65,28 +66,49 @@ impl CatalogAuthority {
             let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
                 .context("acquire immutable catalog reader-pin transaction")?;
             let resolved = resolve_active_profile(&tx, &self.catalog_dir, source_profile)?;
-            let runtime_session = RemiRuntimeSession::current(&tx)
-                .context("resolve current Remi runtime session for reader pin")?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "cannot pin immutable profile reader without a current Remi runtime session"
-                    )
-                })?;
-            RemiProfileRevisionPin {
-                pin_id: pin_id.clone(),
-                source_profile: resolved.pointer.source_profile.clone(),
-                profile_revision_sha256: resolved.pointer.profile_revision_sha256.clone(),
-                owner_kind: RemiRevisionPinKind::Reader,
-                owner_identity: pin_id.clone(),
-                runtime_session_id: Some(runtime_session.session_id),
-                pinned_at: unix_seconds()?,
-            }
-            .insert(&tx)
-            .context("pin exact immutable profile revision for reader lifetime")?;
+            insert_reader_pin(&tx, &pin_id, &resolved.pointer)?;
             tx.commit().context("commit immutable catalog reader pin")?;
             Ok::<_, anyhow::Error>(resolved)
         })?;
 
+        self.open_pinned_resolution(pin_id, resolved)
+    }
+
+    /// Reopen an exact activation selection even when a newer revision is active.
+    ///
+    /// Long-running work captures the typed active pointer during selection,
+    /// then uses this method for each later read. The current pointer is not
+    /// consulted, so refresh cannot silently substitute a different package
+    /// universe between selection and conversion.
+    pub(crate) fn open_selected_profile(
+        &self,
+        selection: &RemiActiveProfileRevision,
+    ) -> Result<PinnedProfileCatalog> {
+        let pin_id = uuid::Uuid::new_v4().to_string();
+        let selection = selection.clone();
+        let resolved = self.database_writer.execute(|| {
+            let conn = open_runtime_db(&self.db_path).with_context(|| {
+                format!(
+                    "open Remi operational database for selected profile '{}' revision {}",
+                    selection.source_profile, selection.profile_revision_sha256
+                )
+            })?;
+            let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
+                .context("acquire exact catalog reader-pin transaction")?;
+            let resolved = resolve_profile_selection(&tx, &self.catalog_dir, selection.clone())?;
+            insert_reader_pin(&tx, &pin_id, &resolved.pointer)?;
+            tx.commit().context("commit exact catalog reader pin")?;
+            Ok::<_, anyhow::Error>(resolved)
+        })?;
+
+        self.open_pinned_resolution(pin_id, resolved)
+    }
+
+    fn open_pinned_resolution(
+        &self,
+        pin_id: String,
+        resolved: ResolvedProfileCatalog,
+    ) -> Result<PinnedProfileCatalog> {
         match open_resolved_profile(resolved) {
             Ok(mut pinned) => {
                 pinned.pin = Some(ReaderPin {
@@ -144,6 +166,20 @@ impl fmt::Debug for PinnedProfileCatalog {
 }
 
 impl PinnedProfileCatalog {
+    #[cfg(test)]
+    pub(crate) fn from_verified_test_parts(
+        pointer: RemiActiveProfileRevision,
+        manifest: ProfileRevisionV1,
+        reader: CatalogReader,
+    ) -> Self {
+        Self {
+            pointer,
+            manifest,
+            reader: Some(reader),
+            pin: None,
+        }
+    }
+
     /// The exact source profile selected by the activation pointer.
     #[must_use]
     pub fn source_profile(&self) -> &str {
@@ -192,6 +228,180 @@ impl PinnedProfileCatalog {
     #[must_use]
     pub fn catalog_path(&self) -> &Path {
         self.reader().path()
+    }
+}
+
+impl CatalogAuthority {
+    /// Resolve the exact source snapshot that authenticated a package in one
+    /// pinned profile revision.
+    ///
+    /// The profile catalog carries only the source-member identity and the
+    /// content address of the source snapshot.  This method resolves that
+    /// address through durable operational resource metadata, then verifies
+    /// the immutable source bundle before returning its owned manifest.  No
+    /// operational package, provide, or requirement rows participate in the
+    /// lookup.
+    pub fn source_snapshot_for_package(
+        &self,
+        pinned: &PinnedProfileCatalog,
+        package: &CatalogPackageRecordV1,
+    ) -> Result<SourceSnapshotV1> {
+        if package.source_profile != pinned.source_profile() {
+            bail!(
+                "profile '{}' package '{}' carries source profile '{}'",
+                pinned.source_profile(),
+                package.name,
+                package.source_profile
+            );
+        }
+        let (member_ordinal, source_identity, repository_identity, source_snapshot_sha256) =
+            match &package.origin {
+                CatalogPackageOriginV1::Profile {
+                    member_ordinal,
+                    source_identity,
+                    repository_identity,
+                    source_snapshot_sha256,
+                } => (
+                    *member_ordinal,
+                    source_identity.as_str(),
+                    repository_identity.as_str(),
+                    source_snapshot_sha256.as_str(),
+                ),
+                CatalogPackageOriginV1::Source { .. } => {
+                    bail!(
+                        "profile catalog package '{}' has source origin without a profile member",
+                        package.name
+                    );
+                }
+            };
+
+        let member = pinned
+            .manifest()
+            .members
+            .iter()
+            .find(|member| member.ordinal == member_ordinal)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "profile '{}' package '{}' names missing source member ordinal {}",
+                    pinned.source_profile(),
+                    package.name,
+                    member_ordinal
+                )
+            })?;
+        if member.source_identity != source_identity
+            || member.repository_identity != repository_identity
+            || member.source_snapshot_sha256 != source_snapshot_sha256
+        {
+            bail!(
+                "profile '{}' package '{}' origin disagrees with pinned member ordinal {}",
+                pinned.source_profile(),
+                package.name,
+                member_ordinal
+            );
+        }
+
+        let db_path = self.db_path.clone();
+        let source_snapshot_sha256 = source_snapshot_sha256.to_string();
+        let resource = self.database_writer.execute(|| {
+            let conn = open_runtime_db(&db_path).with_context(|| {
+                format!(
+                    "open Remi operational database for source snapshot {}",
+                    source_snapshot_sha256
+                )
+            })?;
+            RemiCatalogResource::find_by_sha256(&conn, &source_snapshot_sha256)
+                .context("resolve durable source snapshot resource")?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "source snapshot resource {} is not registered",
+                        source_snapshot_sha256
+                    )
+                })
+        })?;
+
+        if resource.kind != RemiCatalogResourceKind::SourceSnapshot {
+            bail!(
+                "resource {} is {:?}, expected source snapshot",
+                resource.resource_sha256,
+                resource.kind
+            );
+        }
+        if !resource.durable {
+            bail!(
+                "source snapshot resource {} is not durable",
+                resource.resource_sha256
+            );
+        }
+        if resource.source_profile != pinned.source_profile() {
+            bail!(
+                "source snapshot {} belongs to '{}' instead of '{}'",
+                resource.resource_sha256,
+                resource.source_profile,
+                pinned.source_profile()
+            );
+        }
+
+        let manifest = deserialize_source_snapshot(&resource)
+            .context("deserialize durable source snapshot manifest")?;
+        let manifest_digest = manifest
+            .manifest_sha256()
+            .context("compute durable source snapshot digest")?;
+        if manifest_digest != source_snapshot_sha256
+            || manifest.source_profile != pinned.source_profile()
+            || manifest.source_identity != source_identity
+            || manifest.repository_identity != repository_identity
+        {
+            bail!(
+                "source snapshot {} identity disagrees with profile package origin",
+                source_snapshot_sha256
+            );
+        }
+        if member.stream != manifest.stream {
+            bail!(
+                "source snapshot {} stream disagrees with pinned profile member",
+                source_snapshot_sha256
+            );
+        }
+        let artifact_size = i64::try_from(manifest.catalog.size)
+            .context("source snapshot catalog size exceeds SQLite integer range")?;
+        if resource.artifact_sha256 != manifest.catalog.sha256
+            || resource.artifact_size != artifact_size
+            || resource.logical_digest_sha256 != manifest.logical_digest_sha256
+        {
+            bail!(
+                "source snapshot {} resource metadata disagrees with its manifest",
+                source_snapshot_sha256
+            );
+        }
+
+        let bundle_path = self
+            .catalog_dir
+            .join("sources")
+            .join(&source_snapshot_sha256);
+        let source_reader =
+            verify_source_catalog_bundle(&bundle_path, &manifest).with_context(|| {
+                format!(
+                    "verify durable source snapshot bundle {}",
+                    bundle_path.display()
+                )
+            })?;
+        let matching_source_packages = source_reader
+            .find_packages_by_name(&package.name)
+            .map_err(anyhow::Error::from)?
+            .into_iter()
+            .filter(|source_package| source_package_matches_profile(package, source_package))
+            .count();
+        if matching_source_packages != 1 {
+            bail!(
+                "source snapshot {} has {} records matching profile package '{}' version '{}'",
+                source_snapshot_sha256,
+                matching_source_packages,
+                package.name,
+                package.version
+            );
+        }
+
+        Ok(manifest)
     }
 }
 
@@ -279,6 +489,14 @@ fn resolve_active_profile(
         );
     }
 
+    resolve_profile_selection(conn, catalog_dir, pointer)
+}
+
+fn resolve_profile_selection(
+    conn: &Connection,
+    catalog_dir: &Path,
+    pointer: RemiActiveProfileRevision,
+) -> Result<ResolvedProfileCatalog> {
     let resource = RemiCatalogResource::find_profile_revision(
         conn,
         &pointer.source_profile,
@@ -380,6 +598,32 @@ fn resolve_active_profile(
     })
 }
 
+fn insert_reader_pin(
+    conn: &Connection,
+    pin_id: &str,
+    selection: &RemiActiveProfileRevision,
+) -> Result<()> {
+    let runtime_session = RemiRuntimeSession::current(conn)
+        .context("resolve current Remi runtime session for reader pin")?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot pin immutable profile reader without a current Remi runtime session"
+            )
+        })?;
+    RemiProfileRevisionPin {
+        pin_id: pin_id.to_string(),
+        source_profile: selection.source_profile.clone(),
+        profile_revision_sha256: selection.profile_revision_sha256.clone(),
+        owner_kind: RemiRevisionPinKind::Reader,
+        owner_identity: pin_id.to_string(),
+        runtime_session_id: Some(runtime_session.session_id),
+        pinned_at: unix_seconds()?,
+    }
+    .insert(conn)
+    .context("pin exact immutable profile revision for reader lifetime")?;
+    Ok(())
+}
+
 fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfileCatalog> {
     let ResolvedProfileCatalog {
         pointer,
@@ -430,6 +674,54 @@ fn deserialize_profile_revision(resource: &RemiCatalogResource) -> Result<Profil
         );
     }
     Ok(manifest)
+}
+
+fn deserialize_source_snapshot(resource: &RemiCatalogResource) -> Result<SourceSnapshotV1> {
+    let manifest: SourceSnapshotV1 = serde_json::from_str(&resource.manifest_json)
+        .context("parse SourceSnapshotV1 manifest JSON")?;
+    manifest
+        .validate()
+        .context("validate SourceSnapshotV1 manifest")?;
+    let canonical = conary_core::json::canonical_json(&manifest)
+        .map_err(anyhow::Error::msg)
+        .context("canonicalize SourceSnapshotV1 manifest")?;
+    if canonical != resource.manifest_json.as_bytes() {
+        bail!("source snapshot manifest JSON is not canonical");
+    }
+    let raw_digest = conary_core::hash::sha256(resource.manifest_json.as_bytes());
+    if raw_digest != resource.resource_sha256 {
+        bail!(
+            "source snapshot manifest digest mismatch: expected {}, got {}",
+            resource.resource_sha256,
+            raw_digest
+        );
+    }
+    Ok(manifest)
+}
+
+fn source_package_matches_profile(
+    profile_package: &CatalogPackageRecordV1,
+    source_package: &CatalogPackageRecordV1,
+) -> bool {
+    profile_package.source_profile == source_package.source_profile
+        && profile_package.name == source_package.name
+        && profile_package.version == source_package.version
+        && profile_package.package_release == source_package.package_release
+        && profile_package.architecture == source_package.architecture
+        && profile_package.debian_multi_arch == source_package.debian_multi_arch
+        && profile_package.description == source_package.description
+        && profile_package.checksum == source_package.checksum
+        && profile_package.size == source_package.size
+        && profile_package.download_url == source_package.download_url
+        && profile_package.metadata == source_package.metadata
+        && profile_package.is_security_update == source_package.is_security_update
+        && profile_package.severity == source_package.severity
+        && profile_package.cve_ids == source_package.cve_ids
+        && profile_package.advisory_id == source_package.advisory_id
+        && profile_package.advisory_url == source_package.advisory_url
+        && profile_package.version_scheme == source_package.version_scheme
+        && profile_package.provides == source_package.provides
+        && profile_package.requirement_groups == source_package.requirement_groups
 }
 
 #[cfg(test)]

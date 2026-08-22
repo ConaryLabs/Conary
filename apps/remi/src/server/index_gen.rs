@@ -9,12 +9,17 @@ use crate::server::conversion::ScriptletPackageMetadata;
 use crate::server::handlers::human_bytes;
 use anyhow::{Context, Result};
 use chrono::Utc;
-use conary_core::db::models::ConvertedPackage;
+use conary_core::db::models::{ConvertedPackage, RemiActiveProfileRevision};
+use conary_core::repository::catalog::CatalogPackageRecordV1;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
+
+use super::catalog_authority::{CatalogAuthority, PinnedProfileCatalog};
+use super::database_writer::DatabaseWriter;
+use super::profile_catalog::ProfileCatalog;
 
 /// Repository index containing all converted packages
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +75,8 @@ pub struct IndexGenConfig {
     pub db_path: String,
     /// Path to the chunk store
     pub chunk_dir: String,
+    /// Root containing immutable activated source and profile catalogs.
+    pub catalog_dir: String,
     /// Output directory for index files
     pub output_dir: String,
     /// Exact public source profile to generate (None = all)
@@ -106,16 +113,24 @@ pub fn generate_indices(config: &IndexGenConfig) -> Result<Vec<IndexGenResult>> 
                 })?;
             vec![profile.id().to_string()]
         }
-        None => conary_core::repository::supported_profiles::public_profiles()
-            .iter()
-            .map(|profile| profile.id().to_string())
-            .collect(),
+        None => {
+            let conn = conary_core::db::open(&config.db_path)?;
+            RemiActiveProfileRevision::list(&conn)?
+                .into_iter()
+                .map(|active| active.source_profile)
+                .collect()
+        }
     };
+    let catalog_authority = CatalogAuthority::from_paths(
+        &config.db_path,
+        &config.catalog_dir,
+        DatabaseWriter::default(),
+    );
 
     let mut results = Vec::new();
     for source_profile in source_profiles {
         results.push(
-            generate_index_for_profile(config, &source_profile)
+            generate_index_for_profile(config, &catalog_authority, &source_profile)
                 .with_context(|| format!("generate repository index for {source_profile}"))?,
         );
     }
@@ -126,6 +141,7 @@ pub fn generate_indices(config: &IndexGenConfig) -> Result<Vec<IndexGenResult>> 
 /// Generate an index for one exact source profile.
 fn generate_index_for_profile(
     config: &IndexGenConfig,
+    catalog_authority: &CatalogAuthority,
     source_profile: &str,
 ) -> Result<IndexGenResult> {
     info!("Generating index for source profile: {}", source_profile);
@@ -133,19 +149,25 @@ fn generate_index_for_profile(
     // Open database
     let conn = conary_core::db::open(&config.db_path)?;
 
-    // Get all converted packages
-    let mut converted = Vec::new();
-    for candidate in ConvertedPackage::list_repository_conversions(&conn)? {
-        if candidate.repository_metadata_is_current(&conn)? {
-            candidate.repository_artifact()?;
-            candidate.scriptlet_summary()?;
-            converted.push(candidate);
-        }
+    let pinned = catalog_authority
+        .open_active_profile(source_profile)
+        .with_context(|| format!("open active immutable catalog for '{source_profile}'"))?;
+
+    // Conversion state is exact-revision state and is valid only with its
+    // durable conversion pin.
+    let converted =
+        ConvertedPackage::find_current_conversions(&conn, pinned.profile_revision_sha256(), None)?;
+    for candidate in &converted {
+        let converted_id = candidate
+            .id
+            .context("persisted repository conversion has no row identity")?;
+        ConvertedPackage::require_conversion_pin(&conn, converted_id)?;
+        candidate.repository_artifact()?;
+        candidate.scriptlet_summary()?;
     }
     debug!("Found {} converted packages total", converted.len());
 
-    // Get package metadata from repository_packages table
-    let packages = get_packages_for_profile(&conn, source_profile, &converted)?;
+    let packages = get_packages_for_profile(&pinned, source_profile, &converted)?;
     let package_count = packages.len();
     let version_count: usize = packages.values().map(|p| p.versions.len()).sum();
 
@@ -195,54 +217,38 @@ fn generate_index_for_profile(
 
 /// Get packages for one exact source profile, matching converted artifacts.
 fn get_packages_for_profile(
-    conn: &rusqlite::Connection,
+    pinned: &PinnedProfileCatalog,
     source_profile: &str,
     converted: &[ConvertedPackage],
 ) -> Result<HashMap<String, PackageIndexEntry>> {
-    let current_conversions = converted
-        .iter()
-        .filter(|conversion| !conversion.needs_reconversion())
-        .collect::<Vec<_>>();
-
-    // Query repository_packages for this distribution
-    let mut stmt = conn.prepare(
-        "SELECT rp.name, rp.version, r.package_format, rp.checksum
-         FROM repository_packages rp
-         JOIN repositories r ON rp.repository_id = r.id
-         WHERE r.source_profile = ?1
-           AND rp.size > 0
-         ORDER BY rp.name, rp.version DESC",
-    )?;
-
-    let rows = stmt.query_map([source_profile], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-        ))
-    })?;
-
     let mut packages: HashMap<String, PackageIndexEntry> = HashMap::new();
+    let package_format =
+        conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
+            .with_context(|| format!("unsupported exact source profile '{source_profile}'"))?
+            .package_format()
+            .as_str()
+            .to_string();
 
-    for row_result in rows {
-        let (name, version, package_format, _checksum) = row_result?;
-
-        // For now, include all packages from the source_profile
-        // In a full implementation, we'd match by checksum
+    for package in ProfileCatalog::new(pinned).downloadable_package_records(1)? {
+        require_catalog_profile(&package, source_profile)?;
         let entry = packages
-            .entry(name.clone())
+            .entry(package.name.clone())
             .or_insert_with(|| PackageIndexEntry {
-                name: name.clone(),
+                name: package.name.clone(),
                 versions: Vec::new(),
             });
 
         let mut converted_info = None;
-        for candidate in &current_conversions {
+        for candidate in converted
+            .iter()
+            .filter(|candidate| !candidate.needs_reconversion())
+        {
             let artifact = candidate.repository_artifact()?;
-            if artifact.package_name == name
-                && artifact.package_version == version
+            if artifact.package_name == package.name
+                && artifact.package_version == package.version
                 && artifact.source_profile == source_profile
+                && Some(artifact.package_architecture) == package.architecture.as_deref()
+                && candidate.original_checksum == package.checksum
             {
                 converted_info = Some(candidate);
                 break;
@@ -252,7 +258,7 @@ fn get_packages_for_profile(
         let version_entry = if let Some(conv) = converted_info {
             let scriptlet_summary = conv.scriptlet_summary()?;
             VersionEntry {
-                version: version.clone(),
+                version: package.version.clone(),
                 original_format: conv.original_format.clone(),
                 scriptlet_fidelity: conv.scriptlet_fidelity.clone(),
                 converted_at: conv.converted_at.clone(),
@@ -260,13 +266,12 @@ fn get_packages_for_profile(
                 scriptlets: Some(ScriptletPackageMetadata::from(&scriptlet_summary)),
             }
         } else {
-            // Not yet converted - still include in index as "pending"
             VersionEntry {
-                version,
-                original_format: package_format,
+                version: package.version,
+                original_format: package_format.clone(),
                 scriptlet_fidelity: "pending".to_string(),
                 converted_at: None,
-                original_checksum: String::new(),
+                original_checksum: package.checksum,
                 scriptlets: None,
             }
         };
@@ -274,36 +279,25 @@ fn get_packages_for_profile(
         entry.versions.push(version_entry);
     }
 
-    // Converted rows are authoritative only when they carry exact package and
-    // public-profile identity.
-    for conv in current_conversions {
-        let artifact = conv.repository_artifact()?;
-        if artifact.source_profile == source_profile {
-            let name = artifact.package_name;
-            let version = artifact.package_version;
-            let entry = packages
-                .entry(name.to_string())
-                .or_insert_with(|| PackageIndexEntry {
-                    name: name.to_string(),
-                    versions: Vec::new(),
-                });
-
-            // Only add if not already present
-            if !entry.versions.iter().any(|v| v.version == version) {
-                let scriptlet_summary = conv.scriptlet_summary()?;
-                entry.versions.push(VersionEntry {
-                    version: version.to_string(),
-                    original_format: conv.original_format.clone(),
-                    scriptlet_fidelity: conv.scriptlet_fidelity.clone(),
-                    converted_at: conv.converted_at.clone(),
-                    original_checksum: conv.original_checksum.clone(),
-                    scriptlets: Some(ScriptletPackageMetadata::from(&scriptlet_summary)),
-                });
-            }
-        }
+    for entry in packages.values_mut() {
+        entry
+            .versions
+            .sort_by(|left, right| right.version.cmp(&left.version));
     }
 
     Ok(packages)
+}
+
+fn require_catalog_profile(package: &CatalogPackageRecordV1, source_profile: &str) -> Result<()> {
+    if package.source_profile != source_profile {
+        anyhow::bail!(
+            "immutable catalog for '{}' contains package '{}' from profile '{}'",
+            source_profile,
+            package.name,
+            package.source_profile
+        );
+    }
+    Ok(())
 }
 
 /// Scan chunk store directory for statistics
@@ -386,12 +380,14 @@ fn sign_index(index_path: &Path, key_path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
     use conary_core::ccs::convert::ScriptletBundleSummary;
 
     fn test_config(root: &Path, db_path: &Path) -> IndexGenConfig {
         IndexGenConfig {
             db_path: db_path.display().to_string(),
             chunk_dir: root.join("chunks").display().to_string(),
+            catalog_dir: root.join("catalogs").display().to_string(),
             output_dir: root.join("index").display().to_string(),
             source_profile: Some("fedora-44".to_string()),
             sign_key: None,
@@ -436,18 +432,33 @@ mod tests {
 
     #[test]
     fn generated_index_includes_typed_lifecycle_summary() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
+        let fixture = ActiveCatalogFixture::new();
+        let catalog_package = package(
+            "fedora-44",
+            "pkg",
+            "1.0",
+            "1",
+            Some("x86_64"),
+            3,
+            "pkg-source",
+        );
+        let checksum = catalog_package.checksum.clone();
+        let revision = fixture.activate("fedora-44", 1, vec![catalog_package]);
+        let pinned = fixture
+            .authority()
+            .open_active_profile("fedora-44")
+            .unwrap();
 
         let transport =
             crate::server::conversion::test_support::test_transport(&["sha256:chunk".to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
+            revision,
             "pkg".to_string(),
             "1.0".to_string(),
             "x86_64".to_string(),
             "rpm".to_string(),
-            "sha256:source".to_string(),
+            checksum,
             &transport,
             3,
             "sha256:content".to_string(),
@@ -462,7 +473,7 @@ mod tests {
             .unwrap();
         let converted = vec![converted];
 
-        let packages = get_packages_for_profile(&conn, "fedora-44", &converted).unwrap();
+        let packages = get_packages_for_profile(&pinned, "fedora-44", &converted).unwrap();
         let version = packages.get("pkg").unwrap().versions.first().unwrap();
         let scriptlets = version.scriptlets.as_ref().unwrap();
 
@@ -485,14 +496,19 @@ mod tests {
 
     #[test]
     fn generated_index_omits_converted_only_stale_rows() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
+        let fixture = ActiveCatalogFixture::new();
+        let revision = fixture.activate("fedora-44", 1, Vec::new());
+        let pinned = fixture
+            .authority()
+            .open_active_profile("fedora-44")
+            .unwrap();
 
         let transport = crate::server::conversion::test_support::test_transport(&[
             "sha256:stale-only-chunk".to_string(),
         ]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
+            revision,
             "stale-only".to_string(),
             "1.0".to_string(),
             "x86_64".to_string(),
@@ -506,7 +522,7 @@ mod tests {
         );
         converted.conversion_version = conary_core::db::models::CONVERSION_VERSION - 1;
 
-        let packages = get_packages_for_profile(&conn, "fedora-44", &[converted]).unwrap();
+        let packages = get_packages_for_profile(&pinned, "fedora-44", &[converted]).unwrap();
 
         assert!(
             packages
@@ -549,11 +565,17 @@ mod tests {
     #[test]
     fn configured_index_signing_failure_is_not_downgraded_to_unsigned() {
         let temp = tempfile::tempdir().unwrap();
-        let db_path = temp.path().join("remi.sqlite");
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
-        drop(conn);
-        let mut config = test_config(temp.path(), &db_path);
+        let fixture = ActiveCatalogFixture::new();
+        fixture.activate("fedora-44", 1, Vec::new());
+        let mut config = test_config(temp.path(), fixture.db_path());
+        config.catalog_dir = fixture
+            .db_path()
+            .parent()
+            .and_then(Path::parent)
+            .unwrap()
+            .join("catalogs")
+            .display()
+            .to_string();
         config.sign_key = Some(temp.path().join("missing.private").display().to_string());
 
         let error = format!(

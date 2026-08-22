@@ -207,11 +207,7 @@ pub(crate) fn build_sparse_entry_with_revision(
     let revision_sha256 = catalog.profile_revision_sha256().to_string();
     let minimum_size = u64::try_from(REMI_SPARSE_MIN_PACKAGE_SIZE)
         .map_err(|_| anyhow::anyhow!("sparse minimum package size is negative"))?;
-    let packages = catalog
-        .find_package_records_by_name(name)?
-        .into_iter()
-        .filter(|package| package.size >= minimum_size)
-        .collect::<Vec<_>>();
+    let packages = catalog.find_downloadable_package_records_by_name(name, minimum_size)?;
     let mut publications =
         NativePackagePublication::find_active(&conn, source_profile.id(), name, None, None, None)?;
     validate_unique_publications(&publications)?;

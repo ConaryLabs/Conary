@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-21
-revision: 42
-summary: Document coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+last_updated: 2026-08-22
+revision: 44
+summary: Document immutable Remi source/profile catalog authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -250,7 +250,8 @@ identity, a typed release/channel/rolling stream, and one closed update mode.
 `RepositorySourcePolicy` is normalized in `repository_source_policies` and may
 be scoped to one repository or shared by an exact repository group. Each
 repository retains its own enabled state, priority, parser selectors, content
-URL, ownership, authenticated snapshot, and optional member pin.
+URL, ownership, and optional member pin. Authenticated roots are transient
+refresh inputs; immutable source catalogs own their revision identity.
 
 `crates/conary-core/src/db/models/repository/source.rs` owns repository
 validation and persistence;
@@ -267,13 +268,41 @@ verified cleartext Release payload, or RPM's authenticated `repomd.xml`.
 `follow` admits a new authenticated identity only within the unchanged stream
 binding. `pin` additionally requires equality with the repository member's
 persisted digest. Admission and package-row replacement share one SQLite
-transaction, so refusal preserves the prior rows, snapshot, and `last_sync`.
+transaction, so refusal preserves the prior rows and `last_sync`; no mutable
+latest-snapshot field is updated.
 
 Public feed profiles remain presets and conformance fixtures, not native
 source identity. Native enrollment therefore works for uncatalogued
 third-party repositories without adding a profile. The complete persisted,
 CLI, hard-cut, and recovery contract is
 [`docs/specs/native-source-identity-policy.md`](../specs/native-source-identity-policy.md).
+
+### Remi Native Catalog Projection
+
+Remi applies the same enrolled source, stream, parser, and trust decisions but
+does not publish activated package metadata into its operational SQLite
+database. Each accepted authenticated source becomes a strict immutable
+`SourceSnapshotV1` plus standalone catalog. One deterministic
+`ProfileRevisionV1` binds the exact ordered members and composed package
+catalog for the public profile. Candidate construction is private; durable
+content-addressed publication precedes one fenced active-pointer transaction.
+
+Serving selection is therefore a two-step typed decision: the public route maps
+to one exact profile ID, then `CatalogAuthority` opens the verified revision
+named by that profile's active pointer. Sparse, detail, search, index, prewarm,
+and conversion lookup retain that exact reader for their work. Repository
+names, insertion or fetch completion order, route slugs, and operational
+package rows cannot select a source member or silently fill an absent catalog.
+The profile package record carries exact source-member provenance; conversion
+also verifies the corresponding source snapshot and holds the profile revision
+through outcome persistence.
+
+Refresh may advance a profile pointer while old readers and conversions finish.
+Reader pins, work pins, active pointers, and durable conversion pins form the
+complete catalog-retention graph. A conversion cache key includes the exact
+profile revision rather than a mutable profile label. Missing resources,
+invalid pointers, or missing/mismatched pins are corruption and fail closed;
+there is no fallback to the previous operational package-row projection.
 
 ## Native Repository Authenticity
 
@@ -537,6 +566,13 @@ scheme. Equal-priority candidates from different schemes, or candidates whose
 exact native identity remains tied, produce a typed ambiguity. Repository
 names, cache iteration order, and external discovery metadata never break that
 tie.
+
+Remi applies this same ordering to each activated immutable profile revision.
+Package records resolve their member ordinal through the exact pinned manifest;
+request constraints filter eligibility first, higher numeric member priority
+wins next, and native version comparison is confined to that priority tier.
+Catalog order and member ordinal are evidence locators, not selection
+authority.
 
 Explicit version constraints remain strict and scheme-aware. Cross-distro
 identity mapping helps find equivalent packages; it does not replace native

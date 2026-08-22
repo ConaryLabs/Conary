@@ -6,6 +6,8 @@
 //! All database queries run via `spawn_blocking` for async compatibility.
 
 use crate::server::ServerState;
+use crate::server::catalog_authority::CatalogAuthority;
+use crate::server::profile_catalog::ProfileCatalog;
 use anyhow::Context;
 use axum::{
     Json,
@@ -13,15 +15,22 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use conary_core::db::models::{ConvertedPackage, DownloadCount};
+use conary_core::db::models::{ConvertedPackage, DownloadCount, RemiActiveProfileRevision};
 use conary_core::repository::remi_metadata::RemiRequirementGroup;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::{HandlerResult, open_handler_db, run_blocking};
+
+mod catalog;
+
+use catalog::{
+    extract_catalog_metadata, latest_catalog_package, pin_response_catalog,
+    route_for_source_profile, source_profile_for_route,
+};
 
 /// Full package detail response
 #[derive(Debug, Serialize)]
@@ -88,9 +97,12 @@ pub async fn get_package_detail(
 ) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
-    let db_path = state.read().await.config.db_path.clone();
+    let state = state.read().await;
+    let db_path = state.config.db_path.clone();
+    let catalog_authority = state.catalog_authority.clone();
+    drop(state);
     let detail = run_blocking("package detail", move || {
-        query_package_detail(&db_path, &distro, &name)
+        query_package_detail(&catalog_authority, &db_path, &distro, &name)
     })
     .await?;
 
@@ -114,9 +126,14 @@ pub async fn get_versions(
 ) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
-    let db_path = state.read().await.config.db_path.clone();
-    let versions =
-        run_blocking("versions", move || query_versions(&db_path, &distro, &name)).await?;
+    let state = state.read().await;
+    let db_path = state.config.db_path.clone();
+    let catalog_authority = state.catalog_authority.clone();
+    drop(state);
+    let versions = run_blocking("versions", move || {
+        query_versions(&catalog_authority, &db_path, &distro, &name)
+    })
+    .await?;
 
     Ok((
         StatusCode::OK,
@@ -135,9 +152,12 @@ pub async fn get_dependencies(
 ) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
-    let db_path = state.read().await.config.db_path.clone();
+    let state = state.read().await;
+    let db_path = state.config.db_path.clone();
+    let catalog_authority = state.catalog_authority.clone();
+    drop(state);
     let deps = run_blocking("dependencies", move || {
-        query_dependencies(&db_path, &distro, &name)
+        query_dependencies(&catalog_authority, &db_path, &distro, &name)
     })
     .await?;
 
@@ -158,9 +178,12 @@ pub async fn get_reverse_dependencies(
 ) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
-    let db_path = state.read().await.config.db_path.clone();
+    let state = state.read().await;
+    let db_path = state.config.db_path.clone();
+    let catalog_authority = state.catalog_authority.clone();
+    drop(state);
     let rdeps = run_blocking("reverse dependencies", move || {
-        query_reverse_dependencies(&db_path, &distro, &name)
+        query_reverse_dependencies(&catalog_authority, &db_path, &distro, &name)
     })
     .await?;
 
@@ -179,12 +202,15 @@ pub async fn get_popular(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
 ) -> HandlerResult<Response> {
-    let db_path = state.read().await.config.db_path.clone();
+    let state = state.read().await;
+    let db_path = state.config.db_path.clone();
+    let catalog_authority = state.catalog_authority.clone();
+    drop(state);
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
 
     let packages = run_blocking("popular", move || {
-        query_popular(&db_path, distro.as_deref(), limit)
+        query_popular(&catalog_authority, &db_path, distro.as_deref(), limit)
     })
     .await?;
 
@@ -198,17 +224,20 @@ pub async fn get_popular(
 
 /// GET /v1/stats/recent?distro=fedora&limit=50
 ///
-/// Recently updated packages (by sync time).
+/// Recently downloaded packages, enriched from the active immutable catalog.
 pub async fn get_recent(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
 ) -> HandlerResult<Response> {
-    let db_path = state.read().await.config.db_path.clone();
+    let state = state.read().await;
+    let db_path = state.config.db_path.clone();
+    let catalog_authority = state.catalog_authority.clone();
+    drop(state);
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
 
     let packages = run_blocking("recent", move || {
-        query_recent(&db_path, distro.as_deref(), limit)
+        query_recent(&catalog_authority, &db_path, distro.as_deref(), limit)
     })
     .await?;
 
@@ -226,9 +255,15 @@ pub async fn get_recent(
 pub async fn get_overview(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> HandlerResult<Response> {
-    let db_path = state.read().await.config.db_path.clone();
+    let state = state.read().await;
+    let db_path = state.config.db_path.clone();
+    let catalog_authority = state.catalog_authority.clone();
+    drop(state);
 
-    let stats = run_blocking("overview", move || query_overview(&db_path)).await?;
+    let stats = run_blocking("overview", move || {
+        query_overview(&catalog_authority, &db_path)
+    })
+    .await?;
 
     Ok((
         StatusCode::OK,
@@ -240,13 +275,8 @@ pub async fn get_overview(
 
 // --- Database query functions (run on blocking threads) ---
 
-fn source_profile_for_route(route_slug: &str) -> anyhow::Result<&'static str> {
-    conary_core::repository::supported_profiles::profile_for_remi_route(route_slug)
-        .map(conary_core::repository::supported_profiles::SupportedProfile::id)
-        .ok_or_else(|| anyhow::anyhow!("unsupported public route '{route_slug}'"))
-}
-
 fn query_package_detail(
+    catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
@@ -254,49 +284,19 @@ fn query_package_detail(
     let conn = open_handler_db(db_path)?;
     let source_profile = source_profile_for_route(distro)?;
 
-    let repo_ids = resolve_all_repo_ids(&conn, source_profile)?;
-    if repo_ids.is_empty() {
+    // Package identity, version ordering, payload metadata, and dependency
+    // groups all come from this one immutable reader. Operational SQLite is
+    // used below only for analytics and conversion rows.
+    let pinned = catalog_authority.open_active_profile(source_profile)?;
+    let catalog = ProfileCatalog::new(&pinned);
+    let packages = catalog.find_package_records_by_name(name)?;
+    let latest = latest_catalog_package(&packages)?;
+    let Some(latest) = latest else {
         return Ok(None);
-    }
-
-    // Get the latest version and basic info across all repos for this distro
-    let placeholders = repo_ids_placeholders(repo_ids.len());
-    let sql = format!(
-        "SELECT rp.id, rp.name, rp.version, rp.description, rp.size,
-                rp.architecture
-         FROM repository_packages rp
-         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{}
-         ORDER BY rp.synced_at DESC
-         LIMIT 1",
-        repo_ids.len() + 1
-    );
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
-    params.push(Box::new(name.to_string()));
-
-    let latest = conn.query_row(&sql, rusqlite::params_from_iter(&params), |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, Option<String>>(3)?,
-            row.get::<_, i64>(4)?,
-            row.get::<_, Option<String>>(5)?,
-        ))
-    });
-
-    let (package_id, pkg_name, latest_version, description, size, _arch) = match latest {
-        Ok(row) => row,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-        Err(e) => return Err(e.into()),
     };
 
-    let requirement_groups =
-        crate::server::package_metadata::load_exact_package_metadata(&conn, package_id)?
-            .requirement_groups;
-
-    // Get all versions
-    let versions = query_versions_internal(&conn, source_profile, name)?;
+    let projected = catalog.project_package(latest)?;
+    let versions = version_summaries(&conn, &catalog, name)?;
 
     let converted = versions.iter().any(|version| version.converted);
 
@@ -308,15 +308,21 @@ fn query_package_detail(
         };
 
     // Extract license and homepage from metadata JSON if available
-    let (license, homepage) = extract_metadata(&conn, source_profile, name)?;
+    let (license, homepage) = extract_catalog_metadata(latest)?;
+    let size = i64::try_from(latest.size).with_context(|| {
+        format!(
+            "immutable catalog package '{}' version '{}' size {} exceeds Remi wire range",
+            latest.name, latest.version, latest.size
+        )
+    })?;
 
     Ok(Some(PackageDetail {
-        name: pkg_name,
+        name: latest.name.clone(),
         distro: distro.to_string(),
-        latest_version,
-        description,
+        latest_version: latest.version.clone(),
+        description: latest.description.clone(),
         versions,
-        requirement_groups,
+        requirement_groups: projected.requirement_groups,
         download_count,
         download_count_30d,
         size_bytes: size,
@@ -327,134 +333,96 @@ fn query_package_detail(
 }
 
 fn query_versions(
+    catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
 ) -> anyhow::Result<Vec<VersionSummary>> {
     let conn = open_handler_db(db_path)?;
-    query_versions_internal(&conn, source_profile_for_route(distro)?, name)
+    let source_profile = source_profile_for_route(distro)?;
+    let pinned = catalog_authority.open_active_profile(source_profile)?;
+    let catalog = ProfileCatalog::new(&pinned);
+    version_summaries(&conn, &catalog, name)
 }
 
-fn query_versions_internal(
+fn version_summaries(
     conn: &Connection,
-    distro: &str,
+    catalog: &ProfileCatalog<'_>,
     name: &str,
 ) -> anyhow::Result<Vec<VersionSummary>> {
-    let repo_ids = resolve_all_repo_ids(conn, distro)?;
-    if repo_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let placeholders = repo_ids_placeholders(repo_ids.len());
-    let name_idx = repo_ids.len() + 1;
-    let converted_keys = current_converted_keys(conn, distro, name)?;
-    let sql = format!(
-        "SELECT rp.version, rp.architecture, rp.size
-         FROM repository_packages rp
-         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
-         ORDER BY rp.synced_at DESC"
-    );
-
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
-    params.push(Box::new(name.to_string()));
-
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(&params), |row| {
-        let version: String = row.get(0)?;
-        let architecture: Option<String> = row.get(1)?;
-        let converted = converted_keys.contains(&(version.clone(), architecture.clone()));
-        Ok(VersionSummary {
-            version,
-            architecture,
-            size: row.get(2)?,
-            converted,
+    let packages = catalog.find_package_records_by_name(name)?;
+    let converted_keys = current_converted_keys(
+        conn,
+        catalog.source_profile(),
+        catalog.profile_revision_sha256(),
+        name,
+    )?;
+    packages
+        .into_iter()
+        .map(|package| {
+            let size = i64::try_from(package.size).with_context(|| {
+                format!(
+                    "immutable catalog package '{}' version '{}' size {} exceeds Remi wire range",
+                    package.name, package.version, package.size
+                )
+            })?;
+            Ok(VersionSummary {
+                converted: converted_keys
+                    .contains(&(package.version.clone(), package.architecture.clone())),
+                version: package.version,
+                architecture: package.architecture,
+                size,
+            })
         })
-    })?;
-
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        .collect()
 }
 
 fn query_dependencies(
-    db_path: &std::path::Path,
+    catalog_authority: &CatalogAuthority,
+    _db_path: &std::path::Path,
     distro: &str,
     name: &str,
 ) -> anyhow::Result<Vec<RemiRequirementGroup>> {
-    let conn = open_handler_db(db_path)?;
     let source_profile = source_profile_for_route(distro)?;
-
-    let repo_ids = resolve_all_repo_ids(&conn, source_profile)?;
-    if repo_ids.is_empty() {
+    let pinned = catalog_authority.open_active_profile(source_profile)?;
+    let catalog = ProfileCatalog::new(&pinned);
+    let packages = catalog.find_package_records_by_name(name)?;
+    let Some(latest) = latest_catalog_package(&packages)? else {
         return Ok(Vec::new());
-    }
-
-    let placeholders = repo_ids_placeholders(repo_ids.len());
-    let name_idx = repo_ids.len() + 1;
-    let sql = format!(
-        "SELECT rp.id
-         FROM repository_packages rp
-         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
-         ORDER BY rp.synced_at DESC
-         LIMIT 1"
-    );
-
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
-    params.push(Box::new(name.to_string()));
-
-    let package_id = match conn.query_row(&sql, rusqlite::params_from_iter(&params), |row| {
-        row.get::<_, i64>(0)
-    }) {
-        Ok(package_id) => package_id,
-        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(Vec::new()),
-        Err(error) => return Err(error.into()),
     };
-    Ok(
-        crate::server::package_metadata::load_exact_package_metadata(&conn, package_id)?
-            .requirement_groups,
-    )
+    Ok(catalog.project_package(latest)?.requirement_groups)
 }
 
 fn query_reverse_dependencies(
-    db_path: &std::path::Path,
+    catalog_authority: &CatalogAuthority,
+    _db_path: &std::path::Path,
     distro: &str,
     name: &str,
 ) -> anyhow::Result<Vec<String>> {
-    let conn = open_handler_db(db_path)?;
     let source_profile = source_profile_for_route(distro)?;
-
-    let repo_ids = resolve_all_repo_ids(&conn, source_profile)?;
-    if repo_ids.is_empty() {
-        return Ok(Vec::new());
+    let pinned = catalog_authority.open_active_profile(source_profile)?;
+    let packages = ProfileCatalog::new(&pinned).package_records()?;
+    let mut names = HashSet::new();
+    for package in packages {
+        if package.name == name {
+            continue;
+        }
+        if package
+            .requirement_groups
+            .iter()
+            .flat_map(|group| group.atoms.iter())
+            .any(|atom| atom.capability == name)
+        {
+            names.insert(package.name);
+        }
     }
-
-    let placeholders = repo_ids_placeholders(repo_ids.len());
-    let cap_idx = repo_ids.len() + 1;
-    let name_idx = repo_ids.len() + 2;
-    let sql = format!(
-        "SELECT DISTINCT rp.name
-         FROM repository_packages rp
-         JOIN repository_requirements rr ON rr.repository_package_id = rp.id
-         WHERE rr.capability = ?{cap_idx}
-           AND rp.repository_id IN ({placeholders})
-           AND rp.name != ?{name_idx}
-         ORDER BY rp.name"
-    );
-
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
-    params.push(Box::new(name.to_string()));
-    params.push(Box::new(name.to_string()));
-
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(&params), |row| {
-        row.get::<_, String>(0)
-    })?;
-
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut names = names.into_iter().collect::<Vec<_>>();
+    names.sort();
+    Ok(names)
 }
 
 fn query_popular(
+    catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
     distro: Option<&str>,
     limit: usize,
@@ -464,14 +432,18 @@ fn query_popular(
     if let Some(distro) = distro {
         let source_profile = source_profile_for_route(distro)?;
         let counts = DownloadCount::popular(&conn, source_profile, limit)?;
+        let mut pinned_profiles = HashMap::new();
         let mut results = Vec::with_capacity(counts.len());
         for count in counts {
-            let summary = enrich_package_summary(
-                &conn,
-                &count.source_profile,
-                &count.package_name,
-                count.total_count,
-            )?;
+            let summary = {
+                let pinned = pin_response_catalog(
+                    catalog_authority,
+                    &mut pinned_profiles,
+                    &count.source_profile,
+                )?;
+                let catalog = ProfileCatalog::new(pinned);
+                enrich_package_summary(&catalog, &count.package_name, count.total_count)?
+            };
             if let Some(s) = summary {
                 results.push(s);
             }
@@ -486,18 +458,26 @@ fn query_popular(
              LIMIT ?1",
         )?;
 
-        let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })?;
+        let rows = stmt
+            .query_map(rusqlite::params![limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut results = Vec::new();
-        for row in rows {
-            let (distro, name, count) = row?;
-            if let Some(s) = enrich_package_summary(&conn, &distro, &name, count)? {
+        let mut pinned_profiles = HashMap::new();
+        for (source_profile, name, count) in rows {
+            let summary = {
+                let pinned =
+                    pin_response_catalog(catalog_authority, &mut pinned_profiles, &source_profile)?;
+                let catalog = ProfileCatalog::new(pinned);
+                enrich_package_summary(&catalog, &name, count)?
+            };
+            if let Some(s) = summary {
                 results.push(s);
             }
         }
@@ -506,6 +486,7 @@ fn query_popular(
 }
 
 fn query_recent(
+    catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
     distro: Option<&str>,
     limit: usize,
@@ -514,132 +495,133 @@ fn query_recent(
 
     if let Some(distro) = distro {
         let source_profile = source_profile_for_route(distro)?;
-        let repo_ids = resolve_all_repo_ids(&conn, source_profile)?;
-        if repo_ids.is_empty() {
-            return Ok(Vec::new());
+        let mut stmt = conn.prepare(
+            "SELECT package_name
+             FROM download_stats
+             WHERE source_profile = ?1
+             GROUP BY package_name
+             ORDER BY MAX(downloaded_at) DESC, package_name
+             LIMIT ?2",
+        )?;
+        let names = stmt
+            .query_map(rusqlite::params![source_profile, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut summaries = Vec::with_capacity(names.len());
+        let mut pinned_profiles = HashMap::new();
+        for name in names {
+            let download_count = DownloadCount::find_by_package(&conn, source_profile, &name)?
+                .map_or(0, |count| count.total_count);
+            let summary = {
+                let pinned =
+                    pin_response_catalog(catalog_authority, &mut pinned_profiles, source_profile)?;
+                let catalog = ProfileCatalog::new(pinned);
+                enrich_package_summary(&catalog, &name, download_count)?
+            };
+            if let Some(summary) = summary {
+                summaries.push(summary);
+            }
         }
-
-        let n = repo_ids.len();
-        let ph = repo_ids_placeholders(n);
-        let distro_idx = n + 1;
-        let limit_idx = n + 2;
-
-        // Pick one row per package name: the one with the newest synced_at
-        // (highest id as tiebreaker for same-second syncs). The correlated
-        // subquery reuses the same ?1..?n placeholders for repo filtering.
-        let sql = format!(
-            "SELECT rp.name, rp.version, rp.description, rp.size,
-                    COALESCE(dc.total_count, 0) as downloads
-             FROM repository_packages rp
-             LEFT JOIN download_counts dc ON dc.source_profile = ?{distro_idx} AND dc.package_name = rp.name
-             WHERE rp.repository_id IN ({ph})
-               AND rp.id = (
-                   SELECT rp2.id FROM repository_packages rp2
-                   WHERE rp2.name = rp.name
-                     AND rp2.repository_id IN ({ph})
-                   ORDER BY rp2.synced_at DESC, rp2.id DESC
-                   LIMIT 1
-               )
-             ORDER BY rp.synced_at DESC
-             LIMIT ?{limit_idx}",
-        );
-        let mut stmt = conn.prepare(&sql)?;
-
-        // Params: repo_ids + distro + limit
-        // SQLite reuses the same positional params for both IN clauses
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        for id in &repo_ids {
-            params_vec.push(Box::new(*id));
-        }
-        params_vec.push(Box::new(source_profile.to_string()));
-        params_vec.push(Box::new(limit as i64));
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
-
-        let rows = stmt.query_map(param_refs.as_slice(), |row| {
-            Ok(PackageSummary {
-                name: row.get(0)?,
-                distro: distro.to_string(),
-                version: row.get(1)?,
-                description: row.get(2)?,
-                download_count: row.get(4)?,
-                size: row.get(3)?,
-            })
-        })?;
-
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(summaries)
     } else {
         let mut stmt = conn.prepare(
-            "SELECT rp.name, r.source_profile, rp.version, rp.description, rp.size,
-                    COALESCE(dc.total_count, 0) as downloads
-             FROM repository_packages rp
-             JOIN repositories r ON rp.repository_id = r.id
-             LEFT JOIN download_counts dc
-               ON dc.source_profile = r.source_profile AND dc.package_name = rp.name
-             WHERE r.enabled = 1 AND r.source_profile IS NOT NULL
-             ORDER BY rp.synced_at DESC
+            "SELECT package_name, source_profile
+             FROM download_stats
+             GROUP BY package_name, source_profile
+             ORDER BY MAX(downloaded_at) DESC, source_profile, package_name
              LIMIT ?1",
         )?;
 
-        let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-            ))
-        })?;
+        let rows = stmt
+            .query_map(rusqlite::params![limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         let mut summaries = Vec::new();
-        for row in rows {
-            let (name, source_profile, version, description, size, download_count) = row?;
-            summaries.push(PackageSummary {
-                name,
-                distro: route_for_source_profile(&source_profile)?.to_string(),
-                version,
-                description,
-                download_count,
-                size,
-            });
+        let mut pinned_profiles = HashMap::new();
+        for (name, source_profile) in rows {
+            let download_count = DownloadCount::find_by_package(&conn, &source_profile, &name)?
+                .map_or(0, |count| count.total_count);
+            let summary = {
+                let pinned =
+                    pin_response_catalog(catalog_authority, &mut pinned_profiles, &source_profile)?;
+                let catalog = ProfileCatalog::new(pinned);
+                enrich_package_summary(&catalog, &name, download_count)?
+            };
+            if let Some(summary) = summary {
+                summaries.push(summary);
+            }
         }
         Ok(summaries)
     }
 }
 
-fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
+fn query_overview(
+    catalog_authority: &CatalogAuthority,
+    db_path: &std::path::Path,
+) -> anyhow::Result<OverviewStats> {
     let conn = open_handler_db(db_path)?;
 
-    // Total packages across all repos
-    let total_packages: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT rp.name)
-         FROM repository_packages rp
-         JOIN repositories r ON rp.repository_id = r.id
-         WHERE r.enabled = 1",
-        [],
-        |row| row.get(0),
-    )?;
-
-    // Total current converted packages.
+    // The active pointer set is operational control-plane state; all package
+    // counts and conversion identities below come from each pointer's exact
+    // immutable catalog revision.
+    let active_profiles = RemiActiveProfileRevision::list(&conn)?;
+    let mut total_packages = 0_i64;
     let mut total_converted = 0_i64;
-    for converted in ConvertedPackage::list_repository_conversions(&conn)? {
-        if converted.repository_metadata_is_current(&conn)? {
-            converted.repository_artifact()?;
+    for pointer in &active_profiles {
+        let pinned = catalog_authority.open_active_profile(&pointer.source_profile)?;
+        if pinned.profile_revision_sha256() != pointer.profile_revision_sha256 {
+            anyhow::bail!(
+                "active profile '{}' changed while building overview",
+                pointer.source_profile
+            );
+        }
+        let packages = ProfileCatalog::new(&pinned).package_records()?;
+        let package_keys = packages
+            .iter()
+            .map(|package| {
+                (
+                    package.name.clone(),
+                    package.version.clone(),
+                    package.architecture.clone(),
+                )
+            })
+            .collect::<HashSet<_>>();
+        total_packages += i64::try_from(
+            packages
+                .iter()
+                .map(|package| package.name.as_str())
+                .collect::<HashSet<_>>()
+                .len(),
+        )?;
+        for converted in ConvertedPackage::find_current_conversions(
+            &conn,
+            pinned.profile_revision_sha256(),
+            None,
+        )? {
+            let converted_id = converted.id.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "current repository conversion for profile '{}' has no database id",
+                    pointer.source_profile
+                )
+            })?;
+            ConvertedPackage::require_conversion_pin(&conn, converted_id)?;
             converted.scriptlet_summary()?;
-            total_converted += 1;
+            let artifact = converted.repository_artifact()?;
+            if artifact.source_profile == pointer.source_profile
+                && package_keys.contains(&(
+                    artifact.package_name.to_string(),
+                    artifact.package_version.to_string(),
+                    Some(artifact.package_architecture.to_string()),
+                ))
+            {
+                total_converted += 1;
+            }
         }
     }
-
-    // Count exact declared source profiles. Repository names never establish
-    // distro family authority.
-    let total_distros: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT source_profile)
-         FROM repositories
-         WHERE enabled = 1 AND source_profile IS NOT NULL",
-        [],
-        |row| row.get(0),
-    )?;
+    let total_distros = i64::try_from(active_profiles.len())?;
 
     // Download stats from aggregated table
     let download_stats = DownloadCount::global_stats(&conn)?;
@@ -655,137 +637,54 @@ fn query_overview(db_path: &std::path::Path) -> anyhow::Result<OverviewStats> {
 
 /// Enrich a download count entry with package metadata
 fn enrich_package_summary(
-    conn: &Connection,
-    source_profile: &str,
+    catalog: &ProfileCatalog<'_>,
     name: &str,
     download_count: i64,
 ) -> anyhow::Result<Option<PackageSummary>> {
-    let repo_ids = resolve_all_repo_ids(conn, source_profile)?;
-    if repo_ids.is_empty() {
+    let route = route_for_source_profile(catalog.source_profile())?.to_string();
+    let packages = catalog.find_package_records_by_name(name)?;
+    let Some(package) = latest_catalog_package(&packages)? else {
         return Ok(None);
-    }
-    let route = route_for_source_profile(source_profile)?.to_string();
-
-    let placeholders = repo_ids_placeholders(repo_ids.len());
-    let sql = format!(
-        "SELECT rp.version, rp.description, rp.size
-         FROM repository_packages rp
-         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{}
-         ORDER BY rp.synced_at DESC
-         LIMIT 1",
-        repo_ids.len() + 1,
-    );
-    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = repo_ids
-        .iter()
-        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
-        .collect();
-    params_vec.push(Box::new(name.to_string()));
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        params_vec.iter().map(|p| p.as_ref()).collect();
-
-    let result = conn.query_row(&sql, param_refs.as_slice(), |row| {
-        Ok(PackageSummary {
-            name: name.to_string(),
-            distro: route.clone(),
-            version: row.get(0)?,
-            description: row.get(1)?,
-            download_count,
-            size: row.get(2)?,
-        })
-    });
-
-    match result {
-        Ok(summary) => Ok(Some(summary)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
-}
-
-fn route_for_source_profile(source_profile: &str) -> anyhow::Result<&'static str> {
-    conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
-        .map(conary_core::repository::supported_profiles::SupportedProfile::remi_route_slug)
-        .with_context(|| format!("unsupported persisted source profile '{source_profile}'"))
-}
-
-/// Extract license and homepage from the JSON metadata column
-fn extract_metadata(
-    conn: &Connection,
-    distro: &str,
-    name: &str,
-) -> anyhow::Result<(Option<String>, Option<String>)> {
-    let repo_ids = resolve_all_repo_ids(conn, distro)?;
-    if repo_ids.is_empty() {
-        return Ok((None, None));
-    }
-
-    let placeholders = repo_ids_placeholders(repo_ids.len());
-    let name_idx = repo_ids.len() + 1;
-    let sql = format!(
-        "SELECT rp.metadata
-         FROM repository_packages rp
-         WHERE rp.repository_id IN ({placeholders}) AND rp.name = ?{name_idx}
-         ORDER BY rp.synced_at DESC
-         LIMIT 1"
-    );
-
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        repo_ids.iter().map(|id| Box::new(*id) as _).collect();
-    params.push(Box::new(name.to_string()));
-
-    let metadata_json: Option<String> = conn
-        .query_row(&sql, rusqlite::params_from_iter(&params), |row| {
-            row.get::<_, Option<String>>(0)
-        })
-        .optional()?
-        .flatten();
-
-    if let Some(json_str) = metadata_json {
-        let meta = serde_json::from_str::<serde_json::Value>(&json_str).with_context(|| {
-            format!("package '{name}' in '{distro}' has malformed persisted metadata JSON")
-        })?;
-        let license = meta
-            .get("license")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let homepage = meta
-            .get("homepage")
-            .or_else(|| meta.get("url"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        return Ok((license, homepage));
-    }
-
-    Ok((None, None))
-}
-
-/// Resolve all repository IDs for a distro (e.g. arch-core + arch-extra).
-fn resolve_all_repo_ids(conn: &Connection, distro: &str) -> anyhow::Result<Vec<i64>> {
-    let repos = super::find_repositories_for_profile(conn, distro)?;
-    repos
-        .iter()
-        .map(super::require_persisted_repository_id)
-        .collect()
-}
-
-/// Build a comma-separated `?1, ?2, ...` placeholder string for N parameters.
-fn repo_ids_placeholders(count: usize) -> String {
-    (1..=count)
-        .map(|i| format!("?{i}"))
-        .collect::<Vec<_>>()
-        .join(", ")
+    };
+    let size = i64::try_from(package.size).with_context(|| {
+        format!(
+            "immutable catalog package '{}' version '{}' size {} exceeds Remi wire range",
+            package.name, package.version, package.size
+        )
+    })?;
+    Ok(Some(PackageSummary {
+        name: package.name.clone(),
+        distro: route,
+        version: package.version.clone(),
+        description: package.description.clone(),
+        download_count,
+        size,
+    }))
 }
 
 type ConvertedVersionKey = (String, Option<String>);
 
 fn current_converted_keys(
     conn: &Connection,
-    distro: &str,
+    source_profile: &str,
+    profile_revision_sha256: &str,
     name: &str,
 ) -> anyhow::Result<HashSet<ConvertedVersionKey>> {
     let mut keys = HashSet::new();
-    for converted in ConvertedPackage::find_current_conversions(conn, distro, Some(name))? {
+    for converted in
+        ConvertedPackage::find_current_conversions(conn, profile_revision_sha256, Some(name))?
+    {
+        let converted_id = converted.id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "current repository conversion for profile '{source_profile}' has no database id"
+            )
+        })?;
+        ConvertedPackage::require_conversion_pin(conn, converted_id)?;
         converted.scriptlet_summary()?;
         let artifact = converted.repository_artifact()?;
+        if artifact.source_profile != source_profile {
+            continue;
+        }
         keys.insert((
             artifact.package_version.to_string(),
             Some(artifact.package_architecture.to_string()),
@@ -797,72 +696,50 @@ fn current_converted_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::catalog_authority::test_support::{
+        ActiveCatalogFixture, package as catalog_package,
+    };
     use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
-    use conary_core::db::schema;
-    use tempfile::NamedTempFile;
+    use conary_core::repository::catalog::CatalogPackageRecordV1;
 
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::ensure_current(&conn).unwrap();
-        (temp_file, conn)
-    }
-
-    fn seed_repository_package(
-        conn: &Connection,
-        distro: &str,
+    fn package(
         name: &str,
         version: &str,
-        architecture: Option<&str>,
-    ) {
-        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-            .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
-        conn.execute(
-            "INSERT OR IGNORE INTO repositories
-             (name, url, enabled, source_profile)
-             VALUES (?1, ?2, 1, ?3)",
-            rusqlite::params![
-                distro,
-                format!("https://example.invalid/{distro}"),
-                profile.id()
-            ],
-        )
-        .unwrap();
-        let repository_id: i64 = conn
-            .query_row(
-                "SELECT id FROM repositories WHERE name = ?1",
-                [distro],
-                |row| row.get(0),
-            )
-            .unwrap();
-        conn.execute(
-            "INSERT INTO repository_packages
-             (repository_id, name, version, architecture, description, checksum, size, download_url, version_scheme)
-             VALUES (?1, ?2, ?3, ?4, 'test package', ?5, 3, 'https://example.invalid/pkg.rpm', 'rpm')",
-            rusqlite::params![
-                repository_id,
-                name,
-                version,
-                architecture,
-                format!("sha256:source-{name}-{version}")
-            ],
-        )
-        .unwrap();
+        architecture: &str,
+        marker: &str,
+    ) -> CatalogPackageRecordV1 {
+        let mut package = catalog_package(
+            "fedora-44",
+            name,
+            version,
+            "",
+            Some(architecture),
+            3,
+            marker,
+        );
+        package.description = Some(format!("catalog description {marker}"));
+        package.metadata = Some(
+            serde_json::json!({
+                "license": "MIT",
+                "homepage": format!("https://example.invalid/{marker}")
+            })
+            .to_string(),
+        );
+        package
     }
 
     fn insert_converted(
         conn: &Connection,
-        distro: &str,
+        profile_revision_sha256: &str,
         name: &str,
         version: &str,
         architecture: &str,
         conversion_version: i32,
     ) {
-        let source_profile = source_profile_for_route(distro).expect("supported test route");
         let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut converted = ConvertedPackage::new_repository(
-            source_profile.to_string(),
+            "fedora-44".to_string(),
+            profile_revision_sha256.to_string(),
             name.to_string(),
             version.to_string(),
             architecture.to_string(),
@@ -875,20 +752,20 @@ mod tests {
             conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.conversion_version = conversion_version;
-        converted.insert(conn).unwrap();
+        converted.insert_with_conversion_pin(conn, 1).unwrap();
     }
 
     fn insert_stale_conversion(
         conn: &Connection,
-        distro: &str,
+        profile_revision_sha256: &str,
         name: &str,
         version: &str,
         architecture: &str,
     ) {
-        let source_profile = source_profile_for_route(distro).expect("supported test route");
         let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut converted = ConvertedPackage::new_repository(
-            source_profile.to_string(),
+            "fedora-44".to_string(),
+            profile_revision_sha256.to_string(),
             name.to_string(),
             version.to_string(),
             architecture.to_string(),
@@ -901,23 +778,28 @@ mod tests {
             conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         converted.conversion_version = CONVERSION_VERSION - 1;
-        converted.insert(conn).unwrap();
+        converted.insert_with_conversion_pin(conn, 1).unwrap();
     }
 
     #[test]
     fn package_detail_ignores_stale_converted_rows() {
-        let (temp_file, conn) = create_test_db();
-        seed_repository_package(&conn, "fedora", "pkg", "1.0", Some("x86_64"));
+        let fixture = ActiveCatalogFixture::new();
+        let revision = fixture.activate(
+            "fedora-44",
+            1,
+            vec![package("pkg", "1.0", "x86_64", "stale")],
+        );
+        let conn = fixture.connection();
         insert_converted(
             &conn,
-            "fedora",
+            &revision,
             "pkg",
             "1.0",
             "x86_64",
             CONVERSION_VERSION - 1,
         );
 
-        let detail = query_package_detail(temp_file.path(), "fedora", "pkg")
+        let detail = query_package_detail(fixture.authority(), fixture.db_path(), "fedora", "pkg")
             .unwrap()
             .unwrap();
 
@@ -927,11 +809,17 @@ mod tests {
 
     #[test]
     fn package_versions_require_matching_architecture_for_converted_status() {
-        let (temp_file, conn) = create_test_db();
-        seed_repository_package(&conn, "fedora", "pkg", "1.0", Some("aarch64"));
-        insert_converted(&conn, "fedora", "pkg", "1.0", "x86_64", CONVERSION_VERSION);
+        let fixture = ActiveCatalogFixture::new();
+        let revision = fixture.activate(
+            "fedora-44",
+            1,
+            vec![package("pkg", "1.0", "aarch64", "catalog")],
+        );
+        let conn = fixture.connection();
+        insert_converted(&conn, &revision, "pkg", "1.0", "x86_64", CONVERSION_VERSION);
 
-        let versions = query_versions(temp_file.path(), "fedora", "pkg").unwrap();
+        let versions =
+            query_versions(fixture.authority(), fixture.db_path(), "fedora", "pkg").unwrap();
 
         assert_eq!(versions.len(), 1);
         assert_eq!(versions[0].architecture.as_deref(), Some("aarch64"));
@@ -940,10 +828,19 @@ mod tests {
 
     #[test]
     fn overview_ignores_stale_converted_rows() {
-        let (temp_file, conn) = create_test_db();
+        let fixture = ActiveCatalogFixture::new();
+        let revision = fixture.activate(
+            "fedora-44",
+            1,
+            vec![
+                package("stale", "1.0", "x86_64", "stale"),
+                package("current", "1.0", "x86_64", "current"),
+            ],
+        );
+        let conn = fixture.connection();
         insert_converted(
             &conn,
-            "fedora",
+            &revision,
             "stale",
             "1.0",
             "x86_64",
@@ -951,33 +848,125 @@ mod tests {
         );
         insert_converted(
             &conn,
-            "fedora",
+            &revision,
             "current",
             "1.0",
             "x86_64",
             CONVERSION_VERSION,
         );
-        seed_repository_package(&conn, "fedora", "current", "1.0", Some("x86_64"));
-
-        let overview = query_overview(temp_file.path()).unwrap();
+        let overview = query_overview(fixture.authority(), fixture.db_path()).unwrap();
 
         assert_eq!(overview.total_converted, 1);
     }
 
     #[test]
+    fn recent_packages_use_analytics_order_and_catalog_payload_without_package_rows() {
+        let fixture = ActiveCatalogFixture::new();
+        fixture.activate(
+            "fedora-44",
+            1,
+            vec![
+                package("recent-new", "1.0", "x86_64", "new-catalog"),
+                package("recent-old", "1.0", "x86_64", "old-catalog"),
+            ],
+        );
+        let conn = fixture.connection();
+        conn.execute(
+            "INSERT INTO download_stats (
+                 source_profile, package_name, package_version, downloaded_at
+             ) VALUES ('fedora-44', 'recent-new', '1.0', '2026-08-22 02:00:00')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO download_stats (
+                 source_profile, package_name, package_version, downloaded_at
+             ) VALUES ('fedora-44', 'recent-old', '1.0', '2026-08-22 01:00:00')",
+            [],
+        )
+        .unwrap();
+
+        let recent =
+            query_recent(fixture.authority(), fixture.db_path(), Some("fedora"), 10).unwrap();
+
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].name, "recent-new");
+        assert_eq!(
+            recent[0].description.as_deref(),
+            Some("catalog description new-catalog")
+        );
+        assert_eq!(recent[1].name, "recent-old");
+        assert_eq!(
+            recent[1].description.as_deref(),
+            Some("catalog description old-catalog")
+        );
+    }
+
+    #[test]
+    fn popular_packages_use_analytics_order_and_catalog_payload_without_package_rows() {
+        let fixture = ActiveCatalogFixture::new();
+        fixture.activate(
+            "fedora-44",
+            1,
+            vec![
+                package("popular-high", "1.0", "x86_64", "high-catalog"),
+                package("popular-low", "1.0", "x86_64", "low-catalog"),
+            ],
+        );
+        let conn = fixture.connection();
+        conn.execute(
+            "INSERT INTO download_counts (source_profile, package_name, total_count)
+             VALUES ('fedora-44', 'popular-high', 20)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO download_counts (source_profile, package_name, total_count)
+             VALUES ('fedora-44', 'popular-low', 5)",
+            [],
+        )
+        .unwrap();
+
+        let popular =
+            query_popular(fixture.authority(), fixture.db_path(), Some("fedora"), 10).unwrap();
+
+        assert_eq!(popular.len(), 2);
+        assert_eq!(popular[0].name, "popular-high");
+        assert_eq!(popular[0].download_count, 20);
+        assert_eq!(
+            popular[0].description.as_deref(),
+            Some("catalog description high-catalog")
+        );
+        assert_eq!(popular[1].name, "popular-low");
+        assert_eq!(popular[1].download_count, 5);
+        assert_eq!(
+            popular[1].description.as_deref(),
+            Some("catalog description low-catalog")
+        );
+    }
+
+    #[test]
     fn package_detail_counts_only_current_conversions() {
-        let (temp_file, conn) = create_test_db();
-        seed_repository_package(&conn, "fedora", "pkg", "1.0", Some("x86_64"));
-        seed_repository_package(&conn, "fedora", "pkg", "2.0", Some("x86_64"));
+        let fixture = ActiveCatalogFixture::new();
+        let revision = fixture.activate(
+            "fedora-44",
+            1,
+            vec![
+                package("pkg", "1.0", "x86_64", "one"),
+                package("pkg", "2.0", "x86_64", "two"),
+            ],
+        );
+        let conn = fixture.connection();
 
-        insert_converted(&conn, "fedora", "pkg", "1.0", "x86_64", CONVERSION_VERSION);
-        insert_stale_conversion(&conn, "fedora", "pkg", "2.0", "x86_64");
+        insert_converted(&conn, &revision, "pkg", "1.0", "x86_64", CONVERSION_VERSION);
+        insert_stale_conversion(&conn, &revision, "pkg", "2.0", "x86_64");
 
-        let detail = query_package_detail(temp_file.path(), "fedora", "pkg")
+        let detail = query_package_detail(fixture.authority(), fixture.db_path(), "fedora", "pkg")
             .unwrap()
             .unwrap();
-        let versions = query_versions(temp_file.path(), "fedora", "pkg").unwrap();
-        let overview = query_overview(temp_file.path()).unwrap();
+        let versions =
+            query_versions(fixture.authority(), fixture.db_path(), "fedora", "pkg").unwrap();
+        let overview = query_overview(fixture.authority(), fixture.db_path()).unwrap();
 
         assert!(detail.converted);
         assert_eq!(overview.total_converted, 1);

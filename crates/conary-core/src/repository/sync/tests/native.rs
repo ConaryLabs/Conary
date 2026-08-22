@@ -72,7 +72,6 @@ fn pin_refusal_leaves_native_rows_and_sync_state_untouched() {
     assert_eq!(stored[0].checksum, "sha256:old");
     let after = Repository::find_by_id(&conn, repo_id).unwrap().unwrap();
     assert_eq!(after.last_sync, before.last_sync);
-    assert_eq!(after.authenticated_snapshot, before.authenticated_snapshot);
 }
 
 #[test]
@@ -260,7 +259,7 @@ fn native_sync_persists_generator_selected_rpm_file_providers_without_reclassifi
 }
 
 #[test]
-fn native_sync_invalidates_conversion_when_exact_provides_change() {
+fn native_sync_does_not_rewrite_exact_conversion_revision_identity() {
     let conn = Connection::open_in_memory().unwrap();
     ensure_current(&conn).unwrap();
 
@@ -331,6 +330,7 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
     let transport = crate::ccs::transport::test_transport(&[]);
     let mut converted = ConvertedPackage::new_repository(
         "fedora-44".to_string(),
+        "a".repeat(64),
         "systemd-udev".to_string(),
         "259.5-1.fc44".to_string(),
         "x86_64".to_string(),
@@ -355,12 +355,12 @@ fn native_sync_invalidates_conversion_when_exact_provides_change() {
     assert!(
         ConvertedPackage::find_repository_by_checksum(
             &conn,
-            "fedora-44",
+            &"a".repeat(64),
             "sha256:systemd-udev"
         )
         .unwrap()
-        .is_none(),
-        "a conversion signed before the new exact file provider must not remain current"
+        .is_some(),
+        "native metadata rows do not rewrite exact conversion revision identity"
     );
 }
 

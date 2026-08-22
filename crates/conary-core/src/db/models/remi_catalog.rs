@@ -1,4 +1,4 @@
-// conary-core/src/db/models/remi_catalog.rs
+// crates/conary-core/src/db/models/remi_catalog.rs
 
 //! Operational metadata for immutable Remi source and profile catalogs.
 //!

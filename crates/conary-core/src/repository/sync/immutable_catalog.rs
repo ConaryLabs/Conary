@@ -49,6 +49,7 @@ fn source_catalog_candidate(
             repo.name
         ))
     })?;
+    repo.validate_authenticated_snapshot(&snapshot)?;
     let policy = repo.require_source_policy()?;
     let repository_identity = repo.repository_identity.clone().ok_or_else(|| {
         Error::ConfigError(format!(

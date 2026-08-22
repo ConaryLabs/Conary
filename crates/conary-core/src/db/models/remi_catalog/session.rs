@@ -1,4 +1,4 @@
-// conary-core/src/db/models/remi_catalog/session.rs
+// crates/conary-core/src/db/models/remi_catalog/session.rs
 
 //! Durable ownership of the one Remi runtime session for this database.
 

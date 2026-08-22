@@ -1,4 +1,4 @@
-// conary-core/src/db/models/remi_catalog/activation.rs
+// crates/conary-core/src/db/models/remi_catalog/activation.rs
 
 //! Exact fenced-run proof and atomic activation for one Remi profile.
 

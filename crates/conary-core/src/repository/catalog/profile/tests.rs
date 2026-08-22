@@ -1,3 +1,5 @@
+// crates/conary-core/src/repository/catalog/profile/tests.rs
+
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogPackageRecordV1, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,

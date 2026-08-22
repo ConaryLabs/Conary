@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/remi/client.rs
+// crates/conary-core/src/repository/sync/remi/client.rs
 
 //! Bounded client-side Remi sparse candidates and monotonic publication fencing.
 
