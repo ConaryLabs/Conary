@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 38
+revision: 39
 summary: Document Remi immutable source and profile catalogs, exact revision activation and pinning, source identity and update policy, process-wide runtime ownership, signing, repository trust, publication coordination and readiness, conversion profiling, R2 durability inventory, and serving authority
 ---
 
@@ -78,8 +78,10 @@ and eopkg Package XML are authenticated into private files and decoded one
 record at a time. The sink inserts directly into the source-catalog candidate;
 Fedora pkgid joins and ALPM desc/depends pairing use private indexed SQLite
 state. Candidate logical hashing, count validation, reopen verification, and
-profile composition iterate in canonical database order with one complete
-package projection retained at a time.
+profile composition iterate in canonical database order. They retain one
+scalar package record, one normalized provide row, or one complete requirement
+group at a time; a source package's relation cardinality cannot become the
+publication memory bound.
 
 Normalized source projections may be reused from
 `<storage.root>/cache/native-projections/<key-sha256>/`. Cache schema 1 binds

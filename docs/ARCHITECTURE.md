@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 57
+revision: 58
 summary: Describe workspace and release boundaries, immutable Remi catalogs, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
@@ -749,10 +749,12 @@ children into private catalog candidates; exact normalized cache reuse binds
 the source stream, root, child roles and digests, parser version, and catalog
 schema. Private candidates are reopened and verified, synchronized, and
 atomically renamed into content-addressed storage before a fenced operational
-transaction may activate them. Sparse, readiness, conversion, prewarm, detail,
-search, index, OCI, delta, and package-serving readers open the exact immutable
-revision and never fall back to operational package rows. Earlier pre-alpha
-databases must be rebuilt.
+transaction may activate them. Logical hashing, verified-cache replay, and
+profile composition stream normalized relation rows, so one source package
+cannot turn its relation cardinality into repository-sized publication memory.
+Sparse, readiness, conversion, prewarm, detail, search, index, OCI, delta, and
+package-serving readers open the exact immutable revision and never fall back
+to operational package rows. Earlier pre-alpha databases must be rebuilt.
 
 Schema revision 42 retained revision 41's boot-runtime mutation authority and
 adds durable repository synchronization runs, per-repository fencing epochs,

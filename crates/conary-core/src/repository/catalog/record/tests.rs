@@ -228,3 +228,36 @@ fn source_native_file_capabilities_preserve_significant_trailing_space() {
 
     assert_eq!(content.packages[0].provides[0].capability, capability);
 }
+
+#[test]
+fn streamed_relations_preserve_exact_v1_logical_identity() {
+    let snapshot = digest('b');
+    let content = CatalogContentV1::new(
+        CatalogScopeV1::Profile {
+            profile: "arch".to_string(),
+        },
+        evidence(&snapshot),
+        vec![package(&snapshot)],
+    )
+    .unwrap();
+    let expected_digest = content.logical_digest_sha256().unwrap();
+    let expected_counts = content.counts().unwrap();
+    let mut base = content.packages[0].clone();
+    let provides = std::mem::take(&mut base.provides);
+    let requirement_groups = std::mem::take(&mut base.requirement_groups);
+
+    let mut streamed =
+        CatalogLogicalDigestV1::new(&content.scope, &content.source_evidence).unwrap();
+    let mut package = streamed.begin_package(&base).unwrap();
+    for provide in &provides {
+        package.provide(provide).unwrap();
+    }
+    for group in &requirement_groups {
+        package.requirement_group(group).unwrap();
+    }
+    package.finish().unwrap();
+    let (actual_digest, actual_counts) = streamed.finish().unwrap();
+
+    assert_eq!(actual_digest, expected_digest);
+    assert_eq!(actual_counts, expected_counts);
+}

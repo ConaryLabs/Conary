@@ -1,6 +1,6 @@
 // crates/conary-core/src/repository/catalog/store/tests.rs
 
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use super::*;
 use crate::repository::catalog::SourceMetadataObjectRoleV1;
@@ -277,4 +277,98 @@ fn reader_name_page_order_is_deterministic_for_repeated_reads() {
         assert_eq!(page.total, expected.len());
         assert_eq!(page.names, vec![expected[offset].clone()]);
     }
+}
+
+#[test]
+fn logical_digest_streams_high_cardinality_package_relations() {
+    const CHILD_ENV: &str = "CONARY_CATALOG_HIGH_CARDINALITY_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "repository::catalog::store::tests::logical_digest_streams_high_cardinality_package_relations",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        std::io::stderr().write_all(&output.stderr).unwrap();
+        assert!(
+            output.status.success(),
+            "high-cardinality digest child failed"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("CATALOG_RELATION_VM_HWM_KIB="),
+            "high-cardinality digest child did not report VmHWM"
+        );
+        return;
+    }
+
+    const PROVIDES: usize = 175_000;
+    const RSS_LIMIT_KIB: u64 = 192 * 1024;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("high-cardinality.sqlite");
+    create_private_file(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(&format!(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA cache_size = -8192;
+             PRAGMA application_id = {CATALOG_APPLICATION_ID};
+             PRAGMA user_version = {CATALOG_CONTENT_SCHEMA_V1};"
+        ))
+        .unwrap();
+    connection.execute_batch(CATALOG_SCHEMA).unwrap();
+    connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    let scope = source_scope();
+    let mut base = package("relation-bomb", &"b".repeat(64));
+    base.provides.clear();
+    base.requirement_groups.clear();
+    base.canonicalize_for_scope(&scope).unwrap();
+    insert_package_base(&connection, &base).unwrap();
+    for ordinal in 0..PROVIDES {
+        insert_provide(
+            &connection,
+            &base.package_key_sha256,
+            checked_ordinal(ordinal, "provide").unwrap(),
+            &CatalogProvideRecordV1 {
+                capability: format!("generated-capability-{ordinal:06}"),
+                version: None,
+                version_relation: None,
+                kind: "package".to_string(),
+                raw: None,
+                version_scheme: VersionScheme::Rpm,
+                architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+                provenance: CapabilityProvenance::AuthorDeclared,
+            },
+        )
+        .unwrap();
+    }
+    connection.execute_batch("COMMIT").unwrap();
+
+    let (_, counts) = digest_catalog_connection(&connection, &scope, &evidence()).unwrap();
+    assert_eq!(counts.packages, 1);
+    assert_eq!(counts.provides, PROVIDES as u64);
+
+    let high_water_kib = vm_hwm_kib().unwrap();
+    println!("CATALOG_RELATION_VM_HWM_KIB={high_water_kib}");
+    assert!(
+        high_water_kib < RSS_LIMIT_KIB,
+        "VmHWM {high_water_kib} KiB exceeded fixed {RSS_LIMIT_KIB} KiB bound"
+    );
+}
+
+fn vm_hwm_kib() -> Option<u64> {
+    let mut status = String::new();
+    std::fs::File::open("/proc/self/status")
+        .ok()?
+        .read_to_string(&mut status)
+        .ok()?;
+    status.lines().find_map(|line| {
+        line.strip_prefix("VmHWM:")
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse().ok())
+    })
 }

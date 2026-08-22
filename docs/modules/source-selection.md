@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 47
+revision: 48
 summary: Document immutable Remi source/profile catalog authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
@@ -292,7 +292,8 @@ content-addressed publication precedes one fenced active-pointer transaction.
 An exact normalized projection cache can bypass native parsing only when the
 stream binding, authenticated root, every child role and digest, parser
 projection version, and catalog schema all match. Its verified catalog is
-replayed through the same bounded candidate writer; cache contents never
+replayed as normalized package and relation rows through the same bounded
+candidate writer; cache contents never
 replace the immutable source manifest or active profile pointer as authority.
 Catalog source/profile/repository IDs remain bounded printable ASCII. Typed
 native capability names preserve exact upstream UTF-8, including non-ASCII

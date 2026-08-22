@@ -7,15 +7,15 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
-use super::record::CatalogLogicalDigestV1;
 use super::store::{
     CATALOG_APPLICATION_ID, CATALOG_SCHEMA, canonical_json_string, checked_i64, checked_ordinal,
-    create_private_file, for_each_package_connection, hash_file, insert_package, package_by_key,
+    create_private_file, digest_catalog_connection, hash_file, insert_package, package_by_key,
     replace_package_provides, sidecar_path, sync_parent, validate_candidate_path,
 };
 use super::{
-    CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogBindingV1, CatalogPackageRecordV1,
-    CatalogProvideRecordV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1,
+    CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogBindingV1, CatalogPackageOriginV1,
+    CatalogPackageRecordV1, CatalogProvideRecordV1, CatalogReader, CatalogScopeV1,
+    CatalogSourceEvidenceV1,
 };
 use crate::error::{Error, Result};
 
@@ -81,6 +81,36 @@ impl CatalogCandidateWriter {
     pub fn package(&mut self, mut package: CatalogPackageRecordV1) -> Result<()> {
         package.canonicalize_for_scope(&self.scope)?;
         insert_package(self.connection()?, &package)
+    }
+
+    /// Replay one exact normalized source catalog without native parsing or a
+    /// package-sized relation vector.
+    pub(in crate::repository) fn copy_source_catalog(
+        &mut self,
+        reader: &CatalogReader,
+    ) -> Result<()> {
+        let scope = self.scope.clone();
+        reader.copy_packages_to(self.connection()?, &scope, None)
+    }
+
+    /// Project one verified source member into a profile catalog while
+    /// streaming its normalized relation rows.
+    pub(in crate::repository) fn copy_profile_member(
+        &mut self,
+        reader: &CatalogReader,
+        member_ordinal: u32,
+        source_identity: String,
+        repository_identity: String,
+        source_snapshot_sha256: String,
+    ) -> Result<()> {
+        let scope = self.scope.clone();
+        let origin = CatalogPackageOriginV1::Profile {
+            member_ordinal,
+            source_identity,
+            repository_identity,
+            source_snapshot_sha256,
+        };
+        reader.copy_packages_to(self.connection()?, &scope, Some(&origin))
     }
 
     pub(in crate::repository) fn extend_package_provides(
@@ -233,11 +263,8 @@ impl CatalogCandidateWriter {
         }
         self.connection()?.execute_batch("COMMIT")?;
 
-        let mut digest = CatalogLogicalDigestV1::new(&scope, &source_evidence)?;
-        for_each_package_connection(self.connection()?, &scope, |package| {
-            digest.package(&package)
-        })?;
-        let (logical_digest_sha256, counts) = digest.finish()?;
+        let (logical_digest_sha256, counts) =
+            digest_catalog_connection(self.connection()?, &scope, &source_evidence)?;
 
         let connection = self.connection()?;
         connection.execute_batch("BEGIN IMMEDIATE")?;

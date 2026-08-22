@@ -202,7 +202,7 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         let Some(reader) = cache.lookup(snapshot, objects)? else {
             return Ok(false);
         };
-        reader.for_each_package(|package| self.writer.package(package))?;
+        self.writer.copy_source_catalog(&reader)?;
         for object in objects.iter().cloned() {
             self.authenticated_object(object)?;
         }

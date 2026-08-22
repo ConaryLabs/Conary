@@ -97,10 +97,20 @@ pub fn write_profile_catalog_candidate(
             profile: profile.clone(),
         },
     )?;
-    let (members, evidence) =
-        visit_profile_packages(&profile, projection_version, inputs, |package| {
-            writer.package(package)
-        })?;
+    let (members, evidence) = visit_profile_members(
+        &profile,
+        projection_version,
+        inputs,
+        |input, source_snapshot_sha256| {
+            writer.copy_profile_member(
+                input.reader,
+                input.ordinal,
+                input.manifest.source_identity.clone(),
+                input.manifest.repository_identity.clone(),
+                source_snapshot_sha256.to_string(),
+            )
+        },
+    )?;
     let binding = writer.finish(evidence)?;
     bind_profile_revision(profile, projection_version, members, &binding)
 }
@@ -108,8 +118,32 @@ pub fn write_profile_catalog_candidate(
 fn visit_profile_packages(
     profile: &str,
     projection_version: u32,
-    mut inputs: Vec<ProfileCatalogMemberInputV1<'_>>,
+    inputs: Vec<ProfileCatalogMemberInputV1<'_>>,
     mut visitor: impl FnMut(CatalogPackageRecordV1) -> Result<()>,
+) -> Result<(Vec<ProfileSourceMemberV1>, Vec<CatalogSourceEvidenceV1>)> {
+    visit_profile_members(
+        profile,
+        projection_version,
+        inputs,
+        |input, source_snapshot_sha256| {
+            input.reader.for_each_package(|mut package| {
+                package.origin = CatalogPackageOriginV1::Profile {
+                    member_ordinal: input.ordinal,
+                    source_identity: input.manifest.source_identity.clone(),
+                    repository_identity: input.manifest.repository_identity.clone(),
+                    source_snapshot_sha256: source_snapshot_sha256.to_string(),
+                };
+                visitor(package)
+            })
+        },
+    )
+}
+
+fn visit_profile_members(
+    profile: &str,
+    projection_version: u32,
+    mut inputs: Vec<ProfileCatalogMemberInputV1<'_>>,
+    mut visitor: impl FnMut(&ProfileCatalogMemberInputV1<'_>, &str) -> Result<()>,
 ) -> Result<(Vec<ProfileSourceMemberV1>, Vec<CatalogSourceEvidenceV1>)> {
     if projection_version == 0 {
         return Err(Error::ConfigError(
@@ -158,15 +192,7 @@ fn visit_profile_packages(
             repository_identity: input.manifest.repository_identity.clone(),
             source_snapshot_sha256: source_snapshot_sha256.clone(),
         });
-        input.reader.for_each_package(|mut package| {
-            package.origin = CatalogPackageOriginV1::Profile {
-                member_ordinal: input.ordinal,
-                source_identity: input.manifest.source_identity.clone(),
-                repository_identity: input.manifest.repository_identity.clone(),
-                source_snapshot_sha256: source_snapshot_sha256.clone(),
-            };
-            visitor(package)
-        })?;
+        visitor(&input, &source_snapshot_sha256)?;
     }
     Ok((members, evidence))
 }
