@@ -11,12 +11,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::canonical::CanonicalMapEntry;
 use crate::error::{Error, Result};
-use crate::repository::catalog::{
-    CatalogBindingV1, CatalogPackageRecordV1, CatalogReader, CatalogScopeV1,
-};
-use crate::repository::dependency_model::ProvideArchitectureQualifier;
+use crate::repository::catalog::{CatalogBindingV1, CatalogReader, CatalogScopeV1};
 
 use super::RemiUniverseManifestV1;
+
+#[path = "index/replay.rs"]
+mod replay;
 
 const CLIENT_INDEX_SCHEMA: &str = r#"
 PRAGMA page_size = 4096;
@@ -147,10 +147,6 @@ pub(crate) struct ClientUniverseIndex {
 
 #[derive(Default)]
 struct NegativeIds {
-    package: i64,
-    provide: i64,
-    group: i64,
-    requirement: i64,
     canonical: i64,
     implementation: i64,
 }
@@ -191,24 +187,9 @@ pub(crate) fn build_client_universe_index(
         "application_id",
         crate::db::remi_universe::client_index_application_id(),
     )?;
-    let tx = index.transaction()?;
-    let mut ids = NegativeIds::default();
-    crate::canonical::stream::for_each_entry(
-        canonical_map_path,
-        manifest.canonical_map.revision,
-        manifest.canonical_map.entry_count,
-        &mut |entry| insert_canonical_entry(operational, &tx, entry, &mut ids),
-    )?;
     let repositories = remi_profile_repositories(operational, manifest)?;
-    let mut package_count = 0_u64;
-    let mut provide_count = 0_u64;
-    let mut group_count = 0_u64;
-    let mut requirement_count = 0_u64;
-
-    for profile in &manifest.profiles {
-        let Some(repository_id) = repositories.get(&profile.revision.profile).copied() else {
-            continue;
-        };
+    let mut catalogs = Vec::with_capacity(manifest.profiles.len());
+    for (ordinal, profile) in manifest.profiles.iter().enumerate() {
         let object = catalog_objects
             .get(&profile.catalog.sha256)
             .ok_or_else(|| {
@@ -225,20 +206,39 @@ pub(crate) fn build_client_universe_index(
             logical_digest_sha256: profile.revision.logical_digest_sha256.clone(),
             counts: profile.revision.counts,
         };
-        let reader = CatalogReader::open_verified(object, &binding)?;
-        reader.for_each_package(|package| {
-            insert_package(
-                &tx,
-                repository_id,
-                &manifest.generated_at.to_rfc3339(),
-                package,
-                &mut ids,
-                &mut package_count,
-                &mut provide_count,
-                &mut group_count,
-                &mut requirement_count,
-            )
-        })?;
+        let reader = CatalogReader::open_verified_signed_artifact(object, &binding)?;
+        let alias = format!("universe_catalog_{ordinal}");
+        replay::attach_catalog(&index, &alias, reader.path())?;
+        catalogs.push((
+            alias,
+            repositories.get(&profile.revision.profile).copied(),
+            reader,
+        ));
+    }
+
+    let tx = index.transaction()?;
+    let mut ids = NegativeIds::default();
+    crate::canonical::stream::for_each_entry(
+        canonical_map_path,
+        manifest.canonical_map.revision,
+        manifest.canonical_map.entry_count,
+        &mut |entry| insert_canonical_entry(operational, &tx, entry, &mut ids),
+    )?;
+    replay::prepare(&tx)?;
+    let mut offsets = replay::RowOffsets::default();
+    let mut counts = replay::ReplayCounts::default();
+    for (alias, repository_id, reader) in &catalogs {
+        let Some(repository_id) = repository_id else {
+            continue;
+        };
+        counts.add(replay::copy_catalog(
+            &tx,
+            alias,
+            *repository_id,
+            &manifest.generated_at.to_rfc3339(),
+            reader.binding().counts,
+            &mut offsets,
+        )?)?;
     }
     tx.execute(
         "INSERT INTO universe_metadata (
@@ -250,13 +250,16 @@ pub(crate) fn build_client_universe_index(
             &manifest_sha256,
             checked_i64(manifest.sequence, "universe sequence")?,
             &manifest.canonical_map.sha256,
-            checked_i64(package_count, "package count")?,
-            checked_i64(provide_count, "provide count")?,
-            checked_i64(group_count, "requirement-group count")?,
-            checked_i64(requirement_count, "requirement count")?,
+            checked_i64(counts.packages, "package count")?,
+            checked_i64(counts.provides, "provide count")?,
+            checked_i64(counts.requirement_groups, "requirement-group count")?,
+            checked_i64(counts.requirements, "requirement count")?,
         ],
     )?;
     tx.commit()?;
+    for (alias, _, _) in &catalogs {
+        replay::detach_catalog(&index, alias)?;
+    }
     index.execute_batch("PRAGMA optimize; VACUUM;")?;
     let integrity: String = index.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if integrity != "ok" {
@@ -438,139 +441,6 @@ fn insert_canonical_entry(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn insert_package(
-    index: &Connection,
-    repository_id: i64,
-    synced_at: &str,
-    package: CatalogPackageRecordV1,
-    ids: &mut NegativeIds,
-    package_count: &mut u64,
-    provide_count: &mut u64,
-    group_count: &mut u64,
-    requirement_count: &mut u64,
-) -> Result<()> {
-    let package_id = NegativeIds::next(&mut ids.package, "package")?;
-    let canonical_id = index
-        .query_row(
-            "SELECT canonical_id FROM canonical_resolution
-             WHERE distro = ?1 AND distro_name = ?2",
-            params![&package.source_profile, &package.name],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-    index.execute(
-        "INSERT INTO repository_packages (
-             id, repository_id, name, version, package_release, architecture,
-             debian_multi_arch, description, checksum, size, download_url,
-             metadata, synced_at, is_security_update, severity, cve_ids,
-             advisory_id, advisory_url, source_profile, version_scheme, canonical_id
-         ) VALUES (
-             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
-             ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
-         )",
-        params![
-            package_id,
-            repository_id,
-            &package.name,
-            &package.version,
-            &package.package_release,
-            &package.architecture,
-            package.debian_multi_arch.map(|value| value.as_str()),
-            &package.description,
-            &package.checksum,
-            checked_i64(package.size, "package size")?,
-            &package.download_url,
-            &package.metadata,
-            synced_at,
-            i64::from(package.is_security_update),
-            &package.severity,
-            &package.cve_ids,
-            &package.advisory_id,
-            &package.advisory_url,
-            &package.source_profile,
-            package.version_scheme.as_str(),
-            canonical_id,
-        ],
-    )?;
-    *package_count = package_count.checked_add(1).ok_or_else(count_overflow)?;
-    for provide in package.provides {
-        let provide_id = NegativeIds::next(&mut ids.provide, "provide")?;
-        let (qualifier_kind, architecture) = match provide.architecture_qualifier {
-            ProvideArchitectureQualifier::Implicit => ("implicit", None),
-            ProvideArchitectureQualifier::Any => ("any", None),
-            ProvideArchitectureQualifier::Exact(architecture) => ("exact", Some(architecture)),
-        };
-        index.execute(
-            "INSERT INTO repository_provides (
-                 id, repository_package_id, capability, version, version_relation,
-                 kind, raw, version_scheme, architecture_qualifier_kind,
-                 architecture, provenance
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                provide_id,
-                package_id,
-                &provide.capability,
-                &provide.version,
-                provide.version_relation.map(|value| value.as_str()),
-                &provide.kind,
-                &provide.raw,
-                provide.version_scheme.as_str(),
-                qualifier_kind,
-                architecture,
-                serde_json::to_string(&provide.provenance)?,
-            ],
-        )?;
-        *provide_count = provide_count.checked_add(1).ok_or_else(count_overflow)?;
-    }
-    for group in package.requirement_groups {
-        let group_id = NegativeIds::next(&mut ids.group, "requirement group")?;
-        index.execute(
-            "INSERT INTO repository_requirement_groups (
-                 id, repository_package_id, kind, behavior, description,
-                 native_text, expression_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                group_id,
-                package_id,
-                &group.kind,
-                &group.behavior,
-                &group.description,
-                &group.native_text,
-                &group.expression_json,
-            ],
-        )?;
-        *group_count = group_count.checked_add(1).ok_or_else(count_overflow)?;
-        for atom in group.atoms {
-            let requirement_id = NegativeIds::next(&mut ids.requirement, "requirement")?;
-            index.execute(
-                "INSERT INTO repository_requirements (
-                     id, repository_package_id, group_id, capability,
-                     version_constraint, kind, dependency_type, raw
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    requirement_id,
-                    package_id,
-                    group_id,
-                    &atom.capability,
-                    &atom.version_constraint,
-                    &atom.kind,
-                    &atom.dependency_type,
-                    &atom.raw,
-                ],
-            )?;
-            *requirement_count = requirement_count
-                .checked_add(1)
-                .ok_or_else(count_overflow)?;
-        }
-    }
-    Ok(())
-}
-
-fn count_overflow() -> Error {
-    Error::InternalError("client universe index count overflow".to_string())
-}
-
 fn checked_i64(value: u64, label: &str) -> Result<i64> {
     i64::try_from(value).map_err(|_| {
         Error::ConfigError(format!(
@@ -630,12 +500,14 @@ mod tests {
     use crate::db::models::{Repository, RepositoryPackage, RepositoryProvide};
     use crate::repository::catalog::{
         CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1,
-        CatalogProvideRecordV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1,
+        CatalogPackageRecordV1, CatalogProvideRecordV1, CatalogRequirementAtomV1,
+        CatalogRequirementGroupV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1,
         ProfileRevisionV1, ProfileSourceMemberV1, SourceStreamKindV1, SourceStreamV1,
         write_catalog_candidate,
     };
     use crate::repository::dependency_model::{
         CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation,
+        RepositoryRequirementClause, RepositoryRequirementExpression,
     };
     use crate::repository::universe::{
         REMI_UNIVERSE_SCHEMA_V1, RemiUniverseCanonicalMapObjectV1, RemiUniverseCatalogObjectV1,
@@ -897,5 +769,229 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(canonical.id.unwrap() < 0);
+    }
+
+    #[test]
+    fn private_index_replay_has_fixed_peak_rss_across_independent_cardinality() {
+        const CHILD_ENV: &str = "CONARY_SLICE4_INDEX_RSS_ROOT";
+        const MARKER: &str = "SLICE4_INDEX_VM_HWM_KIB=";
+        if let Some(root) = std::env::var_os(CHILD_ENV) {
+            let root = PathBuf::from(root);
+            let db_path = root.join("conary.db");
+            let manifest: RemiUniverseManifestV1 =
+                serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+            let catalog_path = root.join("cardinality.sqlite");
+            let canonical_path = root.join("canonical.json");
+            let catalog_sha256 = manifest.profiles[0].catalog.sha256.clone();
+            let operational = crate::db::open_fast(&db_path).unwrap();
+            let index = build_client_universe_index(
+                &operational,
+                &manifest,
+                &canonical_path,
+                &BTreeMap::from([(catalog_sha256, catalog_path)]),
+                &root.join("indices"),
+            )
+            .unwrap();
+            let private = Connection::open_with_flags(
+                &index.path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            for (table, expected) in [
+                ("repository_packages", 512_i64),
+                ("repository_provides", 10_000_i64),
+                ("repository_requirement_groups", 1_i64),
+                ("repository_requirements", 10_000_i64),
+            ] {
+                let actual = private
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap();
+                assert_eq!(actual, expected, "{table}");
+            }
+            let high_water_kib = vm_hwm_kib().unwrap();
+            println!("{MARKER}{high_water_kib}");
+            assert!(
+                high_water_kib < 256 * 1024,
+                "VmHWM {high_water_kib} KiB exceeded fixed 262144 KiB bound"
+            );
+            return;
+        }
+
+        let target_root = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap().join("target"));
+        fs::create_dir_all(&target_root).unwrap();
+        let directory = tempfile::Builder::new()
+            .prefix("slice4-index-rss-")
+            .tempdir_in(target_root)
+            .unwrap();
+        let root = directory.path();
+        let db_path = root.join("conary.db");
+        crate::db::init(&db_path).unwrap();
+        let conn = crate::db::open_fast(&db_path).unwrap();
+        let mut repository = Repository::new("remi-fedora".to_string(), ENDPOINT.to_string());
+        repository.default_strategy = Some("remi".to_string());
+        repository.default_strategy_endpoint = Some(ENDPOINT.to_string());
+        repository.source_profile = Some(PROFILE.to_string());
+        repository.insert(&conn).unwrap();
+        drop(conn);
+
+        let catalog_path = root.join("cardinality.sqlite");
+        let scope = CatalogScopeV1::Profile {
+            profile: PROFILE.to_string(),
+        };
+        let mut writer =
+            crate::repository::catalog::CatalogCandidateWriter::create(&catalog_path, scope)
+                .unwrap();
+        for version in 0..512 {
+            let mut package = package(&format!("{version:05}"));
+            package.name = "cardinality".to_string();
+            package.version = format!("{version:05}");
+            package.checksum = crate::hash::sha256(package.version.as_bytes());
+            package.download_url = format!("https://example.test/{version:05}.rpm");
+            package.provides.clear();
+            package.requirement_groups.clear();
+            if version == 0 {
+                package.metadata = Some(
+                    serde_json::to_string(&serde_json::json!({
+                        "presentation": "m".repeat(4 * 1024 * 1024)
+                    }))
+                    .unwrap(),
+                );
+                package.provides = (0..10_000)
+                    .map(|ordinal| CatalogProvideRecordV1 {
+                        capability: format!("generated-provide-{ordinal:05}"),
+                        version: None,
+                        version_relation: None,
+                        kind: "package".to_string(),
+                        raw: None,
+                        version_scheme: VersionScheme::Rpm,
+                        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+                        provenance: CapabilityProvenance::AuthorDeclared,
+                    })
+                    .collect();
+                let expression =
+                    RepositoryRequirementExpression::Atom(RepositoryRequirementClause::versioned(
+                        "expression-owner".to_string(),
+                        format!("= {}", "7".repeat(4 * 1024 * 1024)),
+                    ));
+                package.requirement_groups = vec![CatalogRequirementGroupV1 {
+                    kind: "depends".to_string(),
+                    behavior: "hard".to_string(),
+                    description: None,
+                    native_text: None,
+                    expression_json: serde_json::to_string(&expression).unwrap(),
+                    atoms: (0..10_000)
+                        .map(|ordinal| CatalogRequirementAtomV1 {
+                            capability: format!("generated-requirement-{ordinal:05}"),
+                            version_constraint: None,
+                            kind: "package".to_string(),
+                            dependency_type: "runtime".to_string(),
+                            raw: None,
+                        })
+                        .collect(),
+                }];
+            }
+            writer.package(package).unwrap();
+        }
+        let evidence = vec![CatalogSourceEvidenceV1::SourceSnapshot {
+            member_ordinal: 0,
+            source_identity: "fedora-project".to_string(),
+            repository_identity: "everything".to_string(),
+            source_snapshot_sha256: digest('1'),
+        }];
+        let binding = writer.finish(evidence).unwrap();
+        let revision = ProfileRevisionV1 {
+            schema_version: PROFILE_REVISION_SCHEMA_V1,
+            profile: PROFILE.to_string(),
+            projection_version: 1,
+            members: vec![ProfileSourceMemberV1 {
+                ordinal: 0,
+                source_identity: "fedora-project".to_string(),
+                repository_identity: "everything".to_string(),
+                stream: SourceStreamV1 {
+                    kind: SourceStreamKindV1::Release,
+                    identity: "44".to_string(),
+                },
+                priority: 100,
+                required: true,
+                source_snapshot_sha256: digest('1'),
+            }],
+            catalog: binding.artifact.clone(),
+            logical_digest_sha256: binding.logical_digest_sha256.clone(),
+            counts: binding.counts,
+        };
+        let canonical = CanonicalMapSnapshot {
+            schema_version: crate::canonical::CANONICAL_MAP_SCHEMA_VERSION,
+            revision: 0,
+            generated_at: None,
+            entries: Vec::new(),
+        };
+        let canonical_bytes = crate::json::canonical_json(&canonical).unwrap();
+        fs::write(root.join("canonical.json"), &canonical_bytes).unwrap();
+        let generated_at = chrono::Utc::now();
+        let manifest = RemiUniverseManifestV1 {
+            schema_version: REMI_UNIVERSE_SCHEMA_V1,
+            sequence: 1,
+            metadata_root_sha256: digest('3'),
+            generated_at,
+            expires_at: generated_at + chrono::Duration::days(7),
+            profiles: vec![RemiUniverseProfileV1 {
+                ordinal: 0,
+                profile_revision_sha256: revision.manifest_sha256().unwrap(),
+                catalog: RemiUniverseCatalogObjectV1 {
+                    schema_version: CATALOG_CONTENT_SCHEMA_V1,
+                    sha256: binding.artifact.sha256,
+                    size: binding.artifact.size,
+                    logical_digest_sha256: binding.logical_digest_sha256,
+                },
+                revision,
+            }],
+            canonical_map: RemiUniverseCanonicalMapObjectV1 {
+                schema_version: canonical.schema_version,
+                sha256: crate::hash::sha256(&canonical_bytes),
+                size: canonical_bytes.len() as u64,
+                revision: canonical.revision,
+                entry_count: 0,
+            },
+        };
+        fs::write(
+            root.join("manifest.json"),
+            crate::json::canonical_json(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "repository::universe::index::tests::private_index_replay_has_fixed_peak_rss_across_independent_cardinality",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, root)
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        std::io::Write::write_all(&mut std::io::stderr(), &output.stderr).unwrap();
+        assert!(output.status.success(), "private-index RSS child failed");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(MARKER),
+            "private-index RSS child did not report VmHWM"
+        );
+    }
+
+    fn vm_hwm_kib() -> Option<u64> {
+        let mut status = String::new();
+        std::io::Read::read_to_string(
+            &mut std::fs::File::open("/proc/self/status").ok()?,
+            &mut status,
+        )
+        .ok()?;
+        status.lines().find_map(|line| {
+            line.strip_prefix("VmHWM:")
+                .and_then(|value| value.split_whitespace().next())
+                .and_then(|value| value.parse().ok())
+        })
     }
 }

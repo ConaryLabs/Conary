@@ -460,6 +460,20 @@ impl CatalogRequirementGroupV1 {
     }
 
     fn validate(&self) -> Result<()> {
+        self.validate_base()?;
+        if self.atoms.is_empty() {
+            return Err(Error::ConfigError(
+                "catalog requirement group must contain at least one atom".to_string(),
+            ));
+        }
+        require_canonical_order(&self.atoms, "catalog requirement atoms")?;
+        for atom in &self.atoms {
+            atom.validate()?;
+        }
+        Ok(())
+    }
+
+    fn validate_base(&self) -> Result<()> {
         validate_identity(&self.kind, "catalog requirement group kind")?;
         validate_identity(&self.behavior, "catalog requirement group behavior")?;
         if RepositoryRequirementKind::from_str_exact(&self.kind).is_none() {
@@ -474,11 +488,6 @@ impl CatalogRequirementGroupV1 {
                 self.behavior
             )));
         }
-        if self.atoms.is_empty() {
-            return Err(Error::ConfigError(
-                "catalog requirement group must contain at least one atom".to_string(),
-            ));
-        }
         require_canonical_json_text(
             &self.expression_json,
             "catalog requirement group expression",
@@ -490,19 +499,22 @@ impl CatalogRequirementGroupV1 {
                 ))
             },
         )?;
-        require_canonical_order(&self.atoms, "catalog requirement atoms")?;
-        for atom in &self.atoms {
-            let kind = parse_capability_kind(&atom.kind)?;
-            validate_native_capability(&atom.capability, "catalog requirement capability", kind)?;
-            if !matches!(
-                atom.dependency_type.as_str(),
-                "runtime" | "optional" | "build"
-            ) {
-                return Err(Error::ConfigError(format!(
-                    "catalog requirement atom has unknown dependency type '{}'",
-                    atom.dependency_type
-                )));
-            }
+        Ok(())
+    }
+}
+
+impl CatalogRequirementAtomV1 {
+    fn validate(&self) -> Result<()> {
+        let kind = parse_capability_kind(&self.kind)?;
+        validate_native_capability(&self.capability, "catalog requirement capability", kind)?;
+        if !matches!(
+            self.dependency_type.as_str(),
+            "runtime" | "optional" | "build"
+        ) {
+            return Err(Error::ConfigError(format!(
+                "catalog requirement atom has unknown dependency type '{}'",
+                self.dependency_type
+            )));
         }
         Ok(())
     }

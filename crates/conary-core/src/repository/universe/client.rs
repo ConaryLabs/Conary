@@ -876,3 +876,7 @@ fn checked_i64(value: u64, label: &str) -> Result<i64> {
     i64::try_from(value)
         .map_err(|_| Error::ConfigError(format!("universe {label} exceeds SQLite integer range")))
 }
+
+#[cfg(test)]
+#[path = "client/tests.rs"]
+mod tests;
