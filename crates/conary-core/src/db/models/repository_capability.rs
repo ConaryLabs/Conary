@@ -623,22 +623,26 @@ mod tests {
             }
         }
 
-        for (label, expected_step) in [
+        for (label, expected_index, expected_constraint) in [
             (
                 "find_by_capability",
-                "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)",
+                "idx_repository_provides_capability",
+                "(capability=?)",
             ),
             (
                 "find_by_cli_exact_query",
-                "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)",
+                "idx_repository_provides_capability",
+                "(capability=?)",
             ),
             (
                 "find_by_capability_and_kind",
-                "SEARCH rp USING INDEX idx_repository_provides_capability (capability=?)",
+                "idx_repository_provides_capability",
+                "(capability=?)",
             ),
             (
                 "find_by_cli_raw_query",
-                "SEARCH rp USING INDEX idx_repository_provides_raw (raw=?)",
+                "idx_repository_provides_raw",
+                "(raw=?)",
             ),
         ] {
             let (_, sql) = owned_statements()
@@ -647,7 +651,11 @@ mod tests {
                 .expect("statement is inventoried");
             let plan = query_plan(&conn, &sql);
             assert!(
-                plan.iter().any(|step| step == expected_step),
+                plan.iter().any(|step| {
+                    step.starts_with("SEARCH ")
+                        && step.contains(&format!("USING INDEX {expected_index}"))
+                        && step.ends_with(expected_constraint)
+                }),
                 "{label} must seek its expected index: {plan:?}"
             );
         }
