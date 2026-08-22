@@ -323,32 +323,36 @@ pub(crate) async fn download_static_or_http_file_with_expected_size(
 /// Always streams data in chunks, never buffering the entire response in memory.
 /// This is safe for files of any size.
 ///
-/// The `offset` parameter indicates how many bytes were already written (for resumed
-/// downloads). The progress bar position starts from `offset` so the user sees
-/// correct overall progress.
+/// The options carry how many bytes were already written for a resumed
+/// download. Progress starts from that offset so the user sees the complete
+/// transfer position.
+struct ResponseStreamOptions<'a> {
+    total_size: u64,
+    offset: u64,
+    progress_bar: Option<&'a ProgressBar>,
+    display_name: &'a str,
+    max_size: Option<u64>,
+}
+
 async fn stream_response_to_file(
     mut response: reqwest::Response,
     file: &mut File,
-    total_size: u64,
-    offset: u64,
-    progress_bar: Option<&ProgressBar>,
-    display_name: &str,
     hasher: &mut crate::hash::Hasher,
-    max_size: Option<u64>,
+    options: ResponseStreamOptions<'_>,
 ) -> Result<u64> {
     // Set up progress bar if provided
-    if let Some(pb) = progress_bar {
-        if total_size > 0 {
-            pb.set_length(total_size);
-            pb.set_position(offset);
-            pb.set_message(display_name.to_string());
+    if let Some(pb) = options.progress_bar {
+        if options.total_size > 0 {
+            pb.set_length(options.total_size);
+            pb.set_position(options.offset);
+            pb.set_message(options.display_name.to_string());
         } else {
             // Unknown size - show bytes downloaded without percentage
-            pb.set_message(format!("{} (unknown size)", display_name));
+            pb.set_message(format!("{} (unknown size)", options.display_name));
         }
     }
 
-    let mut downloaded: u64 = offset;
+    let mut downloaded: u64 = options.offset;
 
     while let Some(chunk) = response
         .chunk()
@@ -362,17 +366,17 @@ async fn stream_response_to_file(
             .ok_or_else(|| {
                 Error::DownloadError("downloaded response size exceeds u64".to_string())
             })?;
-        if max_size.is_some_and(|maximum| next_size > maximum) {
+        if options.max_size.is_some_and(|maximum| next_size > maximum) {
             return Err(Error::DownloadError(format!(
                 "response exceeded declared size limit of {} bytes",
-                max_size.expect("checked maximum")
+                options.max_size.expect("checked maximum")
             )));
         }
         file.write_all(&chunk).io_context("write download data")?;
         hasher.update(&chunk);
         downloaded = next_size;
 
-        if let Some(pb) = progress_bar {
+        if let Some(pb) = options.progress_bar {
             pb.set_position(downloaded);
         }
     }
@@ -858,12 +862,14 @@ impl RepositoryClient {
                     let downloaded = stream_response_to_file(
                         response,
                         &mut file,
-                        total_size,
-                        offset,
-                        progress_bar,
-                        display_name,
                         &mut hasher,
-                        max_size,
+                        ResponseStreamOptions {
+                            total_size,
+                            offset,
+                            progress_bar,
+                            display_name,
+                            max_size,
+                        },
                     )
                     .await?;
 

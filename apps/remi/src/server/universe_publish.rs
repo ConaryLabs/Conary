@@ -19,7 +19,6 @@ use conary_core::repository::universe::{
     REMI_UNIVERSE_SCHEMA_V1, RemiUniverseCanonicalMapObjectV1, RemiUniverseCatalogObjectV1,
     RemiUniverseManifestV1, RemiUniverseProfileV1, verify_remi_universe_manifest_target,
 };
-use conary_core::trust::ceremony::create_initial_root;
 use conary_core::trust::verify::{
     extract_role_keys, verify_metadata_hash, verify_not_expired, verify_root, verify_signatures,
     verify_static_snapshot_consistency,
@@ -34,7 +33,9 @@ use tokio::sync::RwLock;
 use super::ServerState;
 use super::database_writer::DatabaseWriter;
 use super::handlers::canonical::load_canonical_map_snapshot;
-use super::signing_authority::{UniverseSigningRole, load_universe_role_key};
+use super::signing_authority::{
+    UniverseSigningRole, load_universe_role_key, load_universe_root_metadata,
+};
 
 pub(crate) const UNIVERSE_MANIFEST_FILE: &str = "manifest.json";
 pub(crate) const UNIVERSE_CANONICAL_MAP_FILE: &str = "canonical-map.json";
@@ -149,7 +150,7 @@ pub(crate) fn publish_current_universe(
         }
     }
 
-    let root = load_or_create_root(catalog_dir, keys_root, &inputs)?;
+    let root = load_universe_root_metadata(keys_root)?;
     let candidate = build_candidate(
         inputs.base_sequence,
         inputs.profiles.clone(),
@@ -274,29 +275,6 @@ fn requires_renewal(
 ) -> bool {
     manifest_expires <= now + UNIVERSE_RENEWAL_WINDOW
         || timestamp_expires <= now + UNIVERSE_RENEWAL_WINDOW
-}
-
-fn load_or_create_root(
-    catalog_dir: &Path,
-    keys_root: &Path,
-    inputs: &UniverseInputs,
-) -> Result<Signed<conary_core::trust::RootMetadata>> {
-    let root = if let Some(active) = &inputs.base_manifest_sha256 {
-        let bytes = fs::read(universe_bundle_path(catalog_dir, active).join(UNIVERSE_ROOT_FILE))
-            .with_context(|| format!("read active universe root for {active}"))?;
-        serde_json::from_slice(&bytes).context("parse active universe root")?
-    } else {
-        let root_key = load_universe_role_key(keys_root, UniverseSigningRole::Root)?;
-        let targets_key = load_universe_role_key(keys_root, UniverseSigningRole::Targets)?;
-        let snapshot_key = load_universe_role_key(keys_root, UniverseSigningRole::Snapshot)?;
-        let timestamp_key = load_universe_role_key(keys_root, UniverseSigningRole::Timestamp)?;
-        create_initial_root(&root_key, &targets_key, &snapshot_key, &timestamp_key, 3650)
-            .map_err(anyhow::Error::from)?
-    };
-    let (root_keys, root_threshold) = extract_role_keys(&root.signed, Role::Root)?;
-    verify_root(&root, &root_keys, root_threshold)?;
-    verify_not_expired(Role::Root, &root.signed.expires)?;
-    Ok(root)
 }
 
 fn build_candidate(

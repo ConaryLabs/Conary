@@ -769,6 +769,40 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(canonical.id.unwrap() < 0);
+
+        let mut native = Repository::new(
+            "native-fedora".to_string(),
+            "https://mirror.example.test/fedora".to_string(),
+        );
+        native.source_profile = Some(PROFILE.to_string());
+        let native_id = native.insert(&current).unwrap();
+        let mut native_package = RepositoryPackage::new(
+            native_id,
+            "demo".to_string(),
+            "2.0".to_string(),
+            VersionScheme::Rpm,
+            digest('4'),
+            4096,
+            "https://mirror.example.test/demo.rpm".to_string(),
+        );
+        let native_package_id = native_package.insert(&current).unwrap();
+        assert_eq!(
+            current
+                .query_row(
+                    "SELECT canonical_id FROM repository_packages WHERE id = ?1",
+                    [native_package_id],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            RepositoryPackage::find_by_id(&current, native_package_id)
+                .unwrap()
+                .unwrap()
+                .canonical_id,
+            canonical.id
+        );
     }
 
     #[test]

@@ -17,8 +17,15 @@ CREATE TEMP VIEW resolved_repository_packages AS
 SELECT id, repository_id, name, version, package_release, architecture,
        debian_multi_arch, description, checksum, size, download_url, metadata,
        synced_at, is_security_update, severity, cve_ids, advisory_id,
-       advisory_url, source_profile, version_scheme, canonical_id
-FROM main.repository_packages
+       advisory_url, source_profile, version_scheme,
+       COALESCE(package.canonical_id, (
+           SELECT implementation.canonical_id
+           FROM remi_universe_index.package_implementations implementation
+           JOIN main.repositories repository ON repository.id = package.repository_id
+           WHERE implementation.distro = COALESCE(package.source_profile, repository.source_profile)
+             AND implementation.distro_name = package.name
+       )) AS canonical_id
+FROM main.repository_packages package
 UNION ALL
 SELECT id, repository_id, name, version, package_release, architecture,
        debian_multi_arch, description, checksum, size, download_url, metadata,

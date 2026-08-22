@@ -270,12 +270,21 @@ struct TrustRotateKeyArgs {
 
 #[derive(Subcommand)]
 enum DeploymentCommand {
+    /// Initialize the dedicated universe keys and durable public metadata root.
+    InitializeUniverseAuthority(DeploymentUniverseAuthorityArgs),
     /// Back up current state and prepare current config/schema authority.
     Prepare(DeploymentPrepareArgs),
     /// Restore a prepared deployment transition.
     Rollback(DeploymentRollbackArgs),
     /// Verify current schema, source authority, and repopulation state.
     Inspect(DeploymentInspectArgs),
+}
+
+#[derive(Args)]
+struct DeploymentUniverseAuthorityArgs {
+    /// Durable exact-profile and universe signing authority root.
+    #[arg(long, default_value = "/conary/repository-keys")]
+    repository_keys_dir: PathBuf,
 }
 
 #[derive(Args)]
@@ -345,6 +354,10 @@ fn main() {
 
 fn run_deployment_command(command: DeploymentCommand) -> Result<()> {
     match command {
+        DeploymentCommand::InitializeUniverseAuthority(args) => {
+            let root = remi::deployment::initialize_universe_authority(&args.repository_keys_dir)?;
+            println!("{}", root.display());
+        }
         DeploymentCommand::Prepare(args) => {
             let manifest = remi::deployment::prepare(&remi::deployment::PrepareOptions {
                 config_path: args.config,

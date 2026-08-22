@@ -5,18 +5,23 @@ use crate::server::repository_manifest::RepositoryManifest;
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::signing::{SigningKeyPair, load_signing_public_key};
 use conary_core::repository::supported_profiles::{SupportedProfile, profile_by_public_id};
+use conary_core::trust::ceremony::create_initial_root;
+use conary_core::trust::verify::{extract_role_keys, verify_not_expired, verify_root};
+use conary_core::trust::{Role, RootMetadata, Signed, signing_keypair_to_tuf_key};
 use nix::errno::Errno;
 use nix::fcntl::{RenameFlags, renameat2};
 use nix::unistd::{Gid, Uid, chown};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
+use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 const AUTHORITY_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_KEY_MODE: u32 = 0o600;
 const PUBLIC_KEY_MODE: u32 = 0o644;
 const UNIVERSE_AUTHORITY_DIRECTORY: &str = "universe";
+const UNIVERSE_ROOT_METADATA_FILE: &str = "root.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RepositorySigningRole {
@@ -106,22 +111,43 @@ pub(crate) fn ensure_universe_authority(keys_root: &Path) -> Result<()> {
     let owner = require_authority_root(keys_root)?;
     let directory = keys_root.join(UNIVERSE_AUTHORITY_DIRECTORY);
     match fs::symlink_metadata(&directory) {
-        Ok(_) => validate_universe_authority(&directory, owner),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_named_authority(
-            keys_root,
-            UNIVERSE_AUTHORITY_DIRECTORY,
-            "signed Remi universe",
-            &UniverseSigningRole::ALL.map(UniverseSigningRole::as_str),
-            owner,
-        ),
-        Err(error) => Err(error)
-            .with_context(|| format!("inspect signed-universe authority {}", directory.display())),
+        Ok(_) => validate_universe_key_authority(&directory, owner)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            create_named_authority(
+                keys_root,
+                UNIVERSE_AUTHORITY_DIRECTORY,
+                "signed Remi universe",
+                &UniverseSigningRole::ALL.map(UniverseSigningRole::as_str),
+                owner,
+            )?;
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("inspect signed-universe authority {}", directory.display())
+            });
+        }
     }
+    ensure_universe_root_metadata(keys_root, owner)?;
+    validate_universe_authority(&directory, owner)
 }
 
 pub(crate) fn inspect_universe_authority(keys_root: &Path) -> Result<()> {
     let owner = require_authority_root(keys_root)?;
     validate_universe_authority(&keys_root.join(UNIVERSE_AUTHORITY_DIRECTORY), owner)
+}
+
+pub(crate) fn universe_root_metadata_path(keys_root: &Path) -> PathBuf {
+    keys_root
+        .join(UNIVERSE_AUTHORITY_DIRECTORY)
+        .join(UNIVERSE_ROOT_METADATA_FILE)
+}
+
+pub(crate) fn load_universe_root_metadata(keys_root: &Path) -> Result<Signed<RootMetadata>> {
+    let owner = require_authority_root(keys_root)?;
+    let directory = keys_root.join(UNIVERSE_AUTHORITY_DIRECTORY);
+    validate_universe_authority(&directory, owner)?;
+    let bytes = fs::read(universe_root_metadata_path(keys_root))?;
+    serde_json::from_slice(&bytes).context("parse signed Remi universe root metadata")
 }
 
 pub(crate) fn load_role_key(
@@ -320,7 +346,7 @@ fn create_named_authority(
         let private = staging.path().join(format!("{role}.private"));
         let public = staging.path().join(format!("{role}.public"));
         SigningKeyPair::generate()
-            .with_key_id(*role)
+            .with_key_id(role)
             .save_to_files(&private, &public)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("generate Remi {role} authority for {description}"))?;
@@ -373,12 +399,22 @@ fn validate_profile_authority(
 }
 
 fn validate_universe_authority(directory: &Path, owner: AuthorityOwner) -> Result<()> {
-    validate_named_authority(
+    validate_universe_key_authority(directory, owner)?;
+    validate_universe_root_metadata(directory, owner)
+}
+
+fn validate_universe_key_authority(directory: &Path, owner: AuthorityOwner) -> Result<()> {
+    validate_profile_directory(directory, "signed Remi universe", owner)?;
+    reject_unexpected_profile_entries(
         directory,
         "signed Remi universe",
         &UniverseSigningRole::ALL.map(UniverseSigningRole::as_str),
-        owner,
-    )
+        &[UNIVERSE_ROOT_METADATA_FILE],
+    )?;
+    for role in UniverseSigningRole::ALL {
+        validate_role_pair(directory, "signed Remi universe", role.as_str(), owner)?;
+    }
+    Ok(())
 }
 
 fn validate_named_authority(
@@ -388,7 +424,7 @@ fn validate_named_authority(
     owner: AuthorityOwner,
 ) -> Result<()> {
     validate_profile_directory(directory, description, owner)?;
-    reject_unexpected_profile_entries(directory, description, roles)?;
+    reject_unexpected_profile_entries(directory, description, roles, &[])?;
     for role in roles {
         validate_role_pair(directory, description, role, owner)?;
     }
@@ -399,11 +435,13 @@ fn reject_unexpected_profile_entries(
     profile_dir: &Path,
     profile_id: &str,
     roles: &[&str],
+    extra_files: &[&str],
 ) -> Result<()> {
-    let expected = roles
+    let mut expected = roles
         .iter()
         .flat_map(|role| [format!("{role}.private"), format!("{role}.public")])
         .collect::<BTreeSet<_>>();
+    expected.extend(extra_files.iter().map(|name| (*name).to_string()));
     for entry in fs::read_dir(profile_dir)
         .with_context(|| format!("read signing authority for exact profile {profile_id}"))?
     {
@@ -418,6 +456,86 @@ fn reject_unexpected_profile_entries(
             bail!(
                 "repository signing authority for exact profile {profile_id} contains unexpected entry {:?}",
                 name
+            );
+        }
+    }
+    Ok(())
+}
+
+fn ensure_universe_root_metadata(keys_root: &Path, owner: AuthorityOwner) -> Result<()> {
+    let directory = keys_root.join(UNIVERSE_AUTHORITY_DIRECTORY);
+    let path = universe_root_metadata_path(keys_root);
+    match fs::symlink_metadata(&path) {
+        Ok(_) => return validate_universe_root_metadata(&directory, owner),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("inspect signed Remi universe root metadata"),
+    }
+    let root = load_universe_role_key(keys_root, UniverseSigningRole::Root)?;
+    let targets = load_universe_role_key(keys_root, UniverseSigningRole::Targets)?;
+    let snapshot = load_universe_role_key(keys_root, UniverseSigningRole::Snapshot)?;
+    let timestamp = load_universe_role_key(keys_root, UniverseSigningRole::Timestamp)?;
+    let signed = create_initial_root(&root, &targets, &snapshot, &timestamp, 3650)?;
+    let bytes = conary_core::json::canonical_json(&signed).map_err(anyhow::Error::msg)?;
+    let mut candidate = tempfile::Builder::new()
+        .prefix(".root-")
+        .tempfile_in(&directory)?;
+    candidate.write_all(&bytes)?;
+    candidate.flush()?;
+    candidate.as_file().sync_all()?;
+    fs::set_permissions(
+        candidate.path(),
+        fs::Permissions::from_mode(PUBLIC_KEY_MODE),
+    )?;
+    align_owner(candidate.path(), owner)?;
+    match candidate.persist_noclobber(&path) {
+        Ok(_) => File::open(&directory)?.sync_all()?,
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(error.error).context("publish signed Remi universe root metadata");
+        }
+    }
+    validate_universe_root_metadata(&directory, owner)
+}
+
+fn validate_universe_root_metadata(directory: &Path, owner: AuthorityOwner) -> Result<()> {
+    let path = directory.join(UNIVERSE_ROOT_METADATA_FILE);
+    let metadata = require_plain_file(&path, "signed Remi universe root metadata")?;
+    require_mode(&path, &metadata, PUBLIC_KEY_MODE)?;
+    require_owner(&path, &metadata, owner)?;
+    let bytes = fs::read(&path)?;
+    let root: Signed<RootMetadata> =
+        serde_json::from_slice(&bytes).context("parse signed Remi universe root metadata")?;
+    let canonical = conary_core::json::canonical_json(&root).map_err(anyhow::Error::msg)?;
+    if canonical != bytes {
+        bail!("signed Remi universe root metadata must use canonical JSON bytes");
+    }
+    let (keys, threshold) = extract_role_keys(&root.signed, Role::Root)?;
+    verify_root(&root, &keys, threshold)?;
+    verify_not_expired(Role::Root, &root.signed.expires)?;
+    if root.signed.keys.len() != UniverseSigningRole::ALL.len()
+        || root.signed.roles.len() != UniverseSigningRole::ALL.len()
+    {
+        bail!("signed Remi universe root must authorize exactly four dedicated roles");
+    }
+    for role in UniverseSigningRole::ALL {
+        let key =
+            SigningKeyPair::load_from_file(&directory.join(format!("{}.private", role.as_str())))?;
+        let (key_id, tuf_key) = signing_keypair_to_tuf_key(&key)?;
+        if root.signed.keys.get(&key_id) != Some(&tuf_key) {
+            bail!(
+                "signed Remi universe root does not bind the provisioned {} key",
+                role.as_str()
+            );
+        }
+        let definition = root
+            .signed
+            .roles
+            .get(role.as_str())
+            .with_context(|| format!("signed Remi universe root omits {}", role.as_str()))?;
+        if definition.threshold != 1 || definition.keyids != [key_id] {
+            bail!(
+                "signed Remi universe root has unexpected {} threshold or key set",
+                role.as_str()
             );
         }
     }
@@ -650,6 +768,8 @@ fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 })
             })
             .collect::<BTreeMap<_, _>>();
+        let root_path = universe_root_metadata_path(&root);
+        let root_before = fs::read(&root_path).unwrap();
 
         ensure_universe_authority(&root).unwrap();
         inspect_universe_authority(&root).unwrap();
@@ -659,6 +779,7 @@ fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             .map(|path| (path.clone(), fs::read(path).unwrap()))
             .collect::<BTreeMap<_, _>>();
         assert_eq!(after, before);
+        assert_eq!(fs::read(&root_path).unwrap(), root_before);
 
         let universe_targets = load_universe_role_key(&root, UniverseSigningRole::Targets)
             .unwrap()
@@ -667,6 +788,25 @@ fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             .unwrap()
             .public_key_base64();
         assert_ne!(universe_targets, package_targets);
+    }
+
+    #[test]
+    fn universe_root_tamper_fails_without_replacement() {
+        let (_temp, root) = authority_root();
+        ensure_universe_authority(&root).unwrap();
+        let root_path = universe_root_metadata_path(&root);
+        let original = fs::read(&root_path).unwrap();
+        let mut tampered: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        tampered["signed"]["expires"] = serde_json::Value::String("2099-01-01T00:00:00Z".into());
+        fs::write(
+            &root_path,
+            conary_core::json::canonical_json(&tampered).unwrap(),
+        )
+        .unwrap();
+
+        let error = ensure_universe_authority(&root).unwrap_err();
+        assert!(error.to_string().contains("signature"), "{error:#}");
+        assert_ne!(fs::read(&root_path).unwrap(), original);
     }
 
     #[test]
