@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-14
-revision: 55
-summary: Describe workspace and release boundaries, coherent native inventory adoption, exact native source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
+last_updated: 2026-08-22
+revision: 56
+summary: Describe workspace and release boundaries, immutable Remi catalogs, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -664,21 +664,24 @@ Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 
 ## Database Schema
 
-All runtime state lives in SQLite. The pre-alpha database contract has one
-current schema epoch initialized by `crates/conary-core/src/db/schema.rs`.
-The schema itself is split by ownership under
+Operational runtime state lives in SQLite. The pre-alpha database contract has
+one current schema epoch initialized by `crates/conary-core/src/db/schema.rs`.
+The operational schema is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 36 retains signed package-repository enrollment, fail-closed
-native source/takeover state, exact installed-artifact architecture authority,
-and the distinct captured-OpenRC generation-activation source kind. It removes
-the retired global distro pin and records diagnostic affinity by opaque source identity.
-Native repositories do not use the fixed public-profile catalog as repository
-identity, eligibility, or refresh authority. This is a current-schema hard cut: revision 35
-state must be rebuilt and native repositories re-enrolled
-from authoritative declarations, trust roots, source/repository identities,
-stream decisions, and pins.
+Schema revision 48 is a rebuild-only hard cut. Remi's operational database
+stores immutable-catalog resource metadata, ordered profile members, fenced
+active pointers, refresh runs, runtime sessions, and exact work/reader/
+conversion pins. Activated native package, provide, and requirement authority
+lives in verified standalone SQLite catalogs beneath the configured storage
+root, never in operational package rows. Repository conversion identity
+requires the complete input profile-revision SHA-256; its row and durable pin
+are created and deleted atomically. The previous latest-profile key and
+source-profile-only retention decision have no compatibility reader. Native
+authenticated roots are validated as transient refresh inputs and recorded in
+immutable source manifests; repositories no longer retain a mutable latest-root
+observation.
 
 Databases from retired schema revisions are rejected with an exact recovery
 command. `conary system rebuild-db --discard-state --yes` consolidates the
@@ -692,11 +695,11 @@ not carry a compatibility chain or silently reset an existing database.
 The stable table families are:
 
 - Installed state: troves, changesets, lifecycle events, files, components, dependencies, and provides
-- Repository and resolution state: repositories, synced package metadata, capability inputs, labels, and canonical mapping data
+- Repository and resolution state: enrollment, local/client-synced package metadata, capability inputs, labels, and canonical mapping data
 - System state and configuration: state snapshots, config tracking, triggers, redirects, and settings
 - Try state: active/kept/rolled-back package try sessions and selected generation metadata
 - Security and provenance: TUF metadata, provenance records, admin tokens, and audit data
-- Service and federation state: conversion/cache/download analytics, federation peers, and test-run persistence
+- Service and federation state: immutable-catalog pointers/resources/pins, conversion/cache/download analytics, federation peers, and test-run persistence
 
 When exact table names or counts matter, inspect `crates/conary-core/src/db/models/`
 and the current ownership SQL instead of relying on this overview.
@@ -719,9 +722,12 @@ the owning package directly:
 
 ## Key Design Decisions
 
-**Database-first with SQLite-native recovery backups**: Every piece of state
-lives in SQLite. No TOML/YAML/JSON config files drive runtime state. The live
-database is the single source of truth, queryable with standard SQL tools.
+**Typed SQLite authorities with immutable Remi catalogs**: Operational state
+lives in the current SQLite schema; no loose TOML/YAML/JSON state file becomes
+runtime authority. Remi package catalogs are the deliberate exception to the
+single-file layout: versioned manifests bind content-addressed standalone
+SQLite artifacts, while the operational database owns only their durable
+resource facts, fenced active pointer, and exact reachability pins.
 Conary writes SQLite-native checkpoint backups around first-wave
 adoption/unadoption mutations and writes generation-bound v3 recovery authority
 under `/conary/generations/<n>/state/`. A new base does not compact the database
@@ -730,7 +736,17 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 42 retains revision 41's boot-runtime mutation authority and
+Schema revision 48 includes revision 47's immutable Remi source/profile
+resource graph and exact input-revision conversion pins, then removes the
+repository table's mutable latest-authenticated-snapshot observation. Private
+candidates are reopened and verified, synchronized, and
+atomically renamed into content-addressed storage before a fenced operational
+transaction may activate them. Sparse, readiness, conversion, prewarm, detail,
+search, index, OCI, delta, and package-serving readers open the exact immutable
+revision and never fall back to operational package rows. Earlier pre-alpha
+databases must be rebuilt.
+
+Schema revision 42 retained revision 41's boot-runtime mutation authority and
 adds durable repository synchronization runs, per-repository fencing epochs,
 and exact-profile sparse projection revisions. A current run records its
 process owner, candidate, input/output revision, heartbeat, lease, typed state,

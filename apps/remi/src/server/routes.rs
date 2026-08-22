@@ -854,18 +854,37 @@ mod tests {
 
     #[tokio::test]
     async fn package_downloads_are_not_content_encoded() {
+        use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
         use crate::server::conversion::test_support::seed_repository_conversion_source;
 
-        let temp = tempfile::TempDir::new().unwrap();
-        let storage_root = temp.path().join("storage");
-        let db_path = storage_root.join("metadata/conary.db");
+        let catalog_fixture = ActiveCatalogFixture::new();
+        let db_path = catalog_fixture.db_path().to_path_buf();
+        let storage_root = db_path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("fixture storage root")
+            .to_path_buf();
         let chunk_dir = storage_root.join("chunks");
         let cache_dir = storage_root.join("cache");
         let ccs_path = cache_dir.join("packages/qemu-img-210.1.0-7.fc44-x86_64.ccs");
 
         std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
         std::fs::create_dir_all(&chunk_dir).unwrap();
-        conary_core::db::init(&db_path).unwrap();
+
+        let source_checksum = conary_core::hash::sha256(b"route-download-source");
+        let profile_revision_sha256 = catalog_fixture.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "qemu-img",
+                "2:10.1.0-7.fc44",
+                "",
+                Some("x86_64"),
+                132,
+                "route-download-source",
+            )],
+        );
 
         let ccs_bytes = [0x1f, 0x8b, 0x08, 0x00]
             .into_iter()
@@ -877,11 +896,12 @@ mod tests {
         let transport = crate::server::conversion::test_support::test_transport(&[]);
         let mut converted = conary_core::db::models::ConvertedPackage::new_repository(
             "fedora-44".to_string(),
+            profile_revision_sha256,
             "qemu-img".to_string(),
             "2:10.1.0-7.fc44".to_string(),
             "x86_64".to_string(),
             "rpm".to_string(),
-            "sha256:native".to_string(),
+            source_checksum,
             &transport,
             ccs_bytes.len() as i64,
             "sha256:ccs".to_string(),
@@ -889,7 +909,41 @@ mod tests {
             conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         seed_repository_conversion_source(&conn, &mut converted);
-        converted.insert(&conn).unwrap();
+        converted.insert_with_conversion_pin(&conn, 1).unwrap();
+        drop(conn);
+
+        let conn = conary_core::db::open_fast(&db_path).expect("reopen route fixture database");
+        let active_revision = catalog_fixture
+            .authority()
+            .open_active_profile("fedora-44")
+            .expect("open active route fixture")
+            .profile_revision_sha256()
+            .to_string();
+        let stored = conary_core::db::models::ConvertedPackage::find_by_package_identity_with_arch(
+            &conn,
+            &active_revision,
+            "qemu-img",
+            Some("2:10.1.0-7.fc44"),
+            Some("x86_64"),
+        )
+        .expect("query exact route fixture")
+        .expect("exact route fixture exists");
+        assert!(
+            stored
+                .repository_conversion_is_current_for_revision(&active_revision)
+                .expect("validate exact route fixture")
+        );
+        conary_core::db::models::ConvertedPackage::require_conversion_pin(
+            &conn,
+            stored.id.expect("persisted route fixture"),
+        )
+        .expect("route fixture has exact conversion pin");
+        stored
+            .scriptlet_summary()
+            .expect("route fixture has valid lifecycle summary");
+        stored
+            .repository_artifact()
+            .expect("route fixture has complete serving state");
         drop(conn);
 
         let state = Arc::new(RwLock::new(
@@ -897,6 +951,7 @@ mod tests {
                 db_path,
                 chunk_dir,
                 cache_dir,
+                catalog_dir: catalog_fixture.catalog_dir().to_path_buf(),
                 enable_rate_limit: false,
                 enable_bloom_filter: false,
                 ..ServerConfig::default()

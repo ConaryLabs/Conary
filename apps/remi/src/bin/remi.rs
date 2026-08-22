@@ -110,6 +110,10 @@ struct IndexGenArgs {
     #[arg(long, default_value = "/var/lib/conary/data/chunks")]
     chunk_dir: String,
 
+    /// Root containing immutable activated source and profile catalogs
+    #[arg(long, default_value = "/var/lib/conary/data/catalogs")]
+    catalog_dir: String,
+
     /// Output directory for generated index files
     #[arg(short, long, default_value = "/var/lib/conary/data/repo")]
     output_dir: String,
@@ -463,6 +467,7 @@ fn run_index_gen_command(args: IndexGenArgs) -> Result<()> {
     let config = IndexGenConfig {
         db_path: args.db,
         chunk_dir: args.chunk_dir,
+        catalog_dir: args.catalog_dir,
         output_dir: args.output_dir,
         source_profile: args.source_profile,
         sign_key: args.sign_key,

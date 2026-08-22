@@ -48,7 +48,6 @@ CREATE TABLE repositories (
             source_policy_id INTEGER REFERENCES repository_source_policies(id) ON DELETE RESTRICT,
             repository_identity TEXT,
             stream_binding_sha256 TEXT,
-            authenticated_snapshot_sha256 TEXT,
             CHECK(
                 (package_format = 'unspecified' AND parser_config_json IS NULL)
                 OR (package_format != 'unspecified' AND parser_config_json IS NOT NULL)
@@ -61,12 +60,10 @@ CREATE TABLE repositories (
                 OR (package_format NOT IN ('arch', 'deb', 'rpm', 'eopkg')
                     AND source_policy_id IS NULL
                     AND repository_identity IS NULL
-                    AND stream_binding_sha256 IS NULL
-                    AND authenticated_snapshot_sha256 IS NULL)
+                    AND stream_binding_sha256 IS NULL)
             ),
             CHECK(repository_identity IS NULL OR (length(repository_identity) BETWEEN 1 AND 255 AND trim(repository_identity) = repository_identity)),
             CHECK(stream_binding_sha256 IS NULL OR (length(stream_binding_sha256) = 64 AND stream_binding_sha256 NOT GLOB '*[^0-9a-f]*')),
-            CHECK(authenticated_snapshot_sha256 IS NULL OR (length(authenticated_snapshot_sha256) = 64 AND authenticated_snapshot_sha256 NOT GLOB '*[^0-9a-f]*')),
             UNIQUE(source_policy_id, repository_identity)
         );
 CREATE INDEX idx_repositories_name ON repositories(name);
@@ -96,14 +93,20 @@ BEGIN
 END;
 CREATE TABLE repository_sync_runs (
             run_id TEXT PRIMARY KEY,
-            repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-            scope_kind TEXT NOT NULL CHECK(scope_kind = 'repository'),
-            scope_identity TEXT NOT NULL,
+            source_profile TEXT NOT NULL CHECK(
+                length(source_profile) BETWEEN 1 AND 255
+                AND trim(source_profile) = source_profile
+            ),
             owner_instance_uuid TEXT NOT NULL,
             fencing_epoch INTEGER NOT NULL CHECK(fencing_epoch > 0),
-            staging_repository_id INTEGER NOT NULL,
-            input_revision TEXT CHECK(input_revision IS NULL OR json_valid(input_revision)),
-            candidate_revision TEXT CHECK(candidate_revision IS NULL OR json_valid(candidate_revision)),
+            input_profile_digest TEXT CHECK(input_profile_digest IS NULL OR (
+                length(input_profile_digest) = 64
+                AND input_profile_digest NOT GLOB '*[^0-9a-f]*'
+            )),
+            candidate_profile_digest TEXT CHECK(candidate_profile_digest IS NULL OR (
+                length(candidate_profile_digest) = 64
+                AND candidate_profile_digest NOT GLOB '*[^0-9a-f]*'
+            )),
             state TEXT NOT NULL CHECK(state IN (
                 'created',
                 'fetching_roots',
@@ -120,6 +123,7 @@ CREATE TABLE repository_sync_runs (
             heartbeat_at INTEGER NOT NULL,
             lease_expires_at INTEGER NOT NULL,
             finished_at INTEGER,
+            candidate_cleaned_at INTEGER,
             failure_stage TEXT CHECK(failure_stage IS NULL OR failure_stage IN (
                 'created',
                 'fetching_roots',
@@ -140,9 +144,12 @@ CREATE TABLE repository_sync_runs (
             failure_evidence TEXT,
             CHECK(length(run_id) = 36),
             CHECK(length(owner_instance_uuid) = 36),
-            CHECK(scope_identity = CAST(repository_id AS TEXT)),
             CHECK(heartbeat_at >= started_at),
             CHECK(lease_expires_at >= heartbeat_at),
+            CHECK(candidate_cleaned_at IS NULL OR (
+                finished_at IS NOT NULL
+                AND candidate_cleaned_at >= finished_at
+            )),
             CHECK(
                 (state = 'published'
                     AND finished_at IS NOT NULL
@@ -160,30 +167,113 @@ CREATE TABLE repository_sync_runs (
                     AND failure_category IS NULL
                     AND failure_evidence IS NULL)
             ),
-            UNIQUE(repository_id, fencing_epoch)
+            UNIQUE(source_profile, fencing_epoch)
         );
-CREATE INDEX idx_repository_sync_runs_repository
-            ON repository_sync_runs(repository_id, fencing_epoch DESC);
+CREATE INDEX idx_repository_sync_runs_profile
+            ON repository_sync_runs(source_profile, fencing_epoch DESC);
 CREATE INDEX idx_repository_sync_runs_state
             ON repository_sync_runs(state);
 CREATE TABLE repository_sync_scopes (
-            repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+            source_profile TEXT PRIMARY KEY CHECK(
+                length(source_profile) BETWEEN 1 AND 255
+                AND trim(source_profile) = source_profile
+            ),
             fencing_epoch INTEGER NOT NULL CHECK(fencing_epoch > 0),
             current_run_id TEXT NOT NULL,
-            active_revision TEXT CHECK(active_revision IS NULL OR json_valid(active_revision)),
             UNIQUE(current_run_id),
             FOREIGN KEY(current_run_id) REFERENCES repository_sync_runs(run_id) ON DELETE RESTRICT
         );
-CREATE TRIGGER repositories_delete_live_sync_candidates
-BEFORE DELETE ON repositories
+CREATE TRIGGER repository_sync_scopes_require_exact_run
+BEFORE INSERT ON repository_sync_scopes
 BEGIN
-    DELETE FROM repositories
-    WHERE id IN (
-        SELECT staging_repository_id
-        FROM repository_sync_runs
-        WHERE repository_id = OLD.id
-    );
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repository_sync_runs run
+        WHERE run.run_id = NEW.current_run_id
+          AND run.source_profile = NEW.source_profile
+          AND run.fencing_epoch = NEW.fencing_epoch
+    ) THEN RAISE(ABORT, 'sync scope must bind the exact profile run and fencing epoch') END;
 END;
+CREATE TRIGGER repository_sync_scopes_require_exact_run_update
+BEFORE UPDATE ON repository_sync_scopes
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM repository_sync_runs run
+        WHERE run.run_id = NEW.current_run_id
+          AND run.source_profile = NEW.source_profile
+          AND run.fencing_epoch = NEW.fencing_epoch
+    ) THEN RAISE(ABORT, 'sync scope must bind the exact profile run and fencing epoch') END;
+END;
+CREATE TABLE repository_sync_run_members (
+            run_id TEXT NOT NULL REFERENCES repository_sync_runs(run_id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+            -- Historical audit identity, deliberately not a foreign key. Native
+            -- source replacement deletes and recreates repository rows; a live
+            -- run is fenced at activation by resolving this exact ID again.
+            repository_id INTEGER NOT NULL,
+            source_identity TEXT NOT NULL,
+            repository_identity TEXT NOT NULL,
+            stream_kind TEXT NOT NULL CHECK(stream_kind IN ('release', 'channel', 'rolling')),
+            stream_identity TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            required INTEGER NOT NULL CHECK(required IN (0, 1)),
+            input_source_snapshot_sha256 TEXT CHECK(
+                input_source_snapshot_sha256 IS NULL
+                OR (
+                    length(input_source_snapshot_sha256) = 64
+                    AND input_source_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'
+                )
+            ),
+            candidate_source_snapshot_sha256 TEXT CHECK(
+                candidate_source_snapshot_sha256 IS NULL
+                OR (
+                    length(candidate_source_snapshot_sha256) = 64
+                    AND candidate_source_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'
+                )
+            ),
+            CHECK(length(source_identity) BETWEEN 1 AND 255
+                AND trim(source_identity) = source_identity),
+            CHECK(length(repository_identity) BETWEEN 1 AND 255
+                AND trim(repository_identity) = repository_identity),
+            CHECK(length(stream_identity) BETWEEN 1 AND 255
+                AND trim(stream_identity) = stream_identity),
+            PRIMARY KEY(run_id, ordinal),
+            UNIQUE(run_id, repository_id),
+            UNIQUE(run_id, repository_identity)
+        );
+CREATE INDEX idx_repository_sync_run_members_repository
+            ON repository_sync_run_members(repository_id, run_id);
+CREATE TRIGGER repository_sync_run_members_require_profile_repository
+BEFORE INSERT ON repository_sync_run_members
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM repository_sync_runs run
+        JOIN repositories repository ON repository.id = NEW.repository_id
+        WHERE run.run_id = NEW.run_id
+          AND repository.source_profile = run.source_profile
+    ) THEN RAISE(ABORT, 'sync run member repository must belong to the run source profile') END;
+END;
+CREATE TRIGGER repository_sync_run_members_require_profile_repository_update
+BEFORE UPDATE ON repository_sync_run_members
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM repository_sync_runs run
+        JOIN repositories repository ON repository.id = NEW.repository_id
+        WHERE run.run_id = NEW.run_id
+          AND repository.source_profile = run.source_profile
+    ) THEN RAISE(ABORT, 'sync run member repository must belong to the run source profile') END;
+END;
+-- Client-side Remi sparse consumption retains only a monotonic publication
+-- fence and the exact active wire revision. Bounded candidates live in private
+-- temporary files, never disabled repository rows in operational SQLite.
+CREATE TABLE remi_client_sync_state (
+            repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+            fencing_epoch INTEGER NOT NULL CHECK(fencing_epoch > 0),
+            active_revision_json TEXT CHECK(
+                active_revision_json IS NULL OR json_valid(active_revision_json)
+            )
+        );
 CREATE TABLE repository_source_pins (
             repository_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
             snapshot_sha256 TEXT NOT NULL,
@@ -1063,6 +1153,291 @@ BEGIN
       AND repository.enabled = 1
       AND repository.source_profile IS NOT NULL
     ON CONFLICT(source_profile) DO UPDATE SET sequence = sequence + 1;
+END;
+
+-- Immutable Remi catalog metadata lives in the operational database only as
+-- exact, durable reachability metadata. Package, provide, and requirement
+-- rows belong to the standalone catalog SQLite files, never these tables.
+CREATE TABLE remi_catalog_resources (
+            resource_sha256 TEXT PRIMARY KEY,
+            resource_kind TEXT NOT NULL
+                CHECK(resource_kind IN ('source_snapshot', 'profile_revision')),
+            source_profile TEXT NOT NULL,
+            artifact_sha256 TEXT NOT NULL,
+            artifact_size INTEGER NOT NULL CHECK(artifact_size >= 0),
+            logical_digest_sha256 TEXT NOT NULL,
+            manifest_json TEXT NOT NULL
+                CHECK(json_valid(manifest_json) AND json_type(manifest_json) = 'object'),
+            durable INTEGER NOT NULL CHECK(durable IN (0, 1)),
+            created_at INTEGER NOT NULL,
+            CHECK(length(resource_sha256) = 64 AND resource_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(artifact_sha256) = 64 AND artifact_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(logical_digest_sha256) = 64
+                AND logical_digest_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(source_profile) BETWEEN 1 AND 255
+                AND trim(source_profile) = source_profile
+                AND source_profile NOT IN ('.', '..')
+                AND source_profile NOT GLOB '*[^A-Za-z0-9._-]*'),
+            UNIQUE(resource_kind, source_profile, resource_sha256),
+            UNIQUE(resource_kind, artifact_sha256)
+        );
+CREATE INDEX idx_remi_catalog_resources_profile
+            ON remi_catalog_resources(source_profile, resource_kind, created_at DESC);
+CREATE INDEX idx_remi_catalog_resources_artifact
+            ON remi_catalog_resources(artifact_sha256);
+
+-- Exact durable filesystem deletion journal. Metadata collection records the
+-- content-addressed path identity here before deleting its resource row; the
+-- application removes only that exact bundle and acknowledges the intent.
+CREATE TABLE remi_catalog_gc_deletions (
+            resource_sha256 TEXT PRIMARY KEY,
+            resource_kind TEXT NOT NULL
+                CHECK(resource_kind IN ('source_snapshot', 'profile_revision')),
+            source_profile TEXT NOT NULL,
+            queued_at INTEGER NOT NULL,
+            CHECK(length(resource_sha256) = 64
+                AND resource_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(source_profile) BETWEEN 1 AND 255
+                AND trim(source_profile) = source_profile
+                AND source_profile NOT IN ('.', '..')
+                AND source_profile NOT GLOB '*[^A-Za-z0-9._-]*')
+        );
+CREATE TRIGGER remi_catalog_gc_deletions_immutable
+BEFORE UPDATE ON remi_catalog_gc_deletions
+BEGIN
+    SELECT RAISE(ABORT, 'catalog deletion intents cannot be repointed');
+END;
+CREATE TRIGGER remi_catalog_resources_reject_pending_deletion
+BEFORE INSERT ON remi_catalog_resources
+WHEN EXISTS (
+    SELECT 1 FROM remi_catalog_gc_deletions deletion
+    WHERE deletion.resource_sha256 = NEW.resource_sha256
+)
+BEGIN
+    SELECT RAISE(ABORT, 'catalog resource has an incomplete deletion intent');
+END;
+
+-- A resource is content-addressed and its durability metadata is immutable.
+-- Promotion registers a post-fsync resource as durable; it never edits a
+-- candidate row in place.
+CREATE TRIGGER remi_catalog_resources_immutable
+BEFORE UPDATE ON remi_catalog_resources
+BEGIN
+    SELECT RAISE(ABORT, 'immutable Remi catalog resource metadata cannot be updated');
+END;
+
+CREATE TABLE remi_profile_revision_members (
+            profile_revision_sha256 TEXT NOT NULL
+                REFERENCES remi_catalog_resources(resource_sha256) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+            source_snapshot_sha256 TEXT NOT NULL
+                REFERENCES remi_catalog_resources(resource_sha256) ON DELETE RESTRICT,
+            source_identity TEXT NOT NULL,
+            repository_identity TEXT NOT NULL,
+            stream_kind TEXT NOT NULL CHECK(stream_kind IN ('release', 'channel', 'rolling')),
+            stream_identity TEXT NOT NULL,
+            priority INTEGER NOT NULL,
+            required INTEGER NOT NULL CHECK(required IN (0, 1)),
+            CHECK(length(source_identity) BETWEEN 1 AND 255
+                AND trim(source_identity) = source_identity),
+            CHECK(length(repository_identity) BETWEEN 1 AND 255
+                AND trim(repository_identity) = repository_identity),
+            CHECK(length(stream_identity) BETWEEN 1 AND 255
+                AND trim(stream_identity) = stream_identity),
+            CHECK(length(profile_revision_sha256) = 64
+                AND profile_revision_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(source_snapshot_sha256) = 64
+                AND source_snapshot_sha256 NOT GLOB '*[^0-9a-f]*'),
+            PRIMARY KEY(profile_revision_sha256, ordinal),
+            UNIQUE(profile_revision_sha256, source_snapshot_sha256),
+            UNIQUE(profile_revision_sha256, repository_identity)
+        );
+CREATE INDEX idx_remi_profile_revision_members_snapshot
+            ON remi_profile_revision_members(source_snapshot_sha256);
+
+CREATE TRIGGER remi_profile_revision_members_require_exact_resources
+BEFORE INSERT ON remi_profile_revision_members
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM remi_catalog_resources profile
+        WHERE profile.resource_sha256 = NEW.profile_revision_sha256
+          AND profile.resource_kind = 'profile_revision'
+          AND profile.source_profile = (
+              SELECT source_profile
+              FROM remi_catalog_resources source
+              WHERE source.resource_sha256 = NEW.source_snapshot_sha256
+                AND source.resource_kind = 'source_snapshot'
+          )
+    ) THEN RAISE(ABORT, 'profile revision member requires exact profile and source resources') END;
+END;
+CREATE TRIGGER remi_profile_revision_members_immutable_update
+BEFORE UPDATE ON remi_profile_revision_members
+BEGIN
+    SELECT RAISE(ABORT, 'immutable profile revision members cannot be updated');
+END;
+CREATE TRIGGER remi_profile_revision_members_immutable_delete
+BEFORE DELETE ON remi_profile_revision_members
+WHEN EXISTS (
+    SELECT 1 FROM remi_catalog_resources profile
+    WHERE profile.resource_sha256 = OLD.profile_revision_sha256
+)
+BEGIN
+    SELECT RAISE(ABORT, 'immutable profile revision members cannot be deleted directly');
+END;
+
+CREATE TABLE remi_active_profile_revisions (
+            source_profile TEXT PRIMARY KEY,
+            profile_revision_sha256 TEXT NOT NULL
+                REFERENCES remi_catalog_resources(resource_sha256) ON DELETE RESTRICT,
+            fencing_epoch INTEGER NOT NULL CHECK(fencing_epoch > 0),
+            activation_run_id TEXT NOT NULL
+                REFERENCES repository_sync_runs(run_id) ON DELETE RESTRICT,
+            owner_instance_uuid TEXT NOT NULL,
+            activated_at INTEGER NOT NULL,
+            CHECK(length(source_profile) BETWEEN 1 AND 255
+                AND trim(source_profile) = source_profile),
+            CHECK(length(profile_revision_sha256) = 64
+                AND profile_revision_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(activation_run_id) = 36),
+            CHECK(length(owner_instance_uuid) = 36),
+            UNIQUE(profile_revision_sha256, fencing_epoch)
+        );
+
+CREATE TRIGGER remi_active_profile_revisions_require_profile_resource
+BEFORE INSERT ON remi_active_profile_revisions
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM remi_catalog_resources resource
+        WHERE resource.resource_sha256 = NEW.profile_revision_sha256
+          AND resource.resource_kind = 'profile_revision'
+          AND resource.source_profile = NEW.source_profile
+          AND resource.durable = 1
+    ) THEN RAISE(ABORT, 'active profile revision requires one durable exact profile resource') END;
+END;
+CREATE TRIGGER remi_active_profile_revisions_require_profile_resource_update
+BEFORE UPDATE ON remi_active_profile_revisions
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM remi_catalog_resources resource
+        WHERE resource.resource_sha256 = NEW.profile_revision_sha256
+          AND resource.resource_kind = 'profile_revision'
+          AND resource.source_profile = NEW.source_profile
+          AND resource.durable = 1
+    ) THEN RAISE(ABORT, 'active profile revision requires one durable exact profile resource') END;
+END;
+CREATE TRIGGER remi_active_profile_revisions_require_durable_members
+BEFORE INSERT ON remi_active_profile_revisions
+BEGIN
+    SELECT CASE WHEN
+        (SELECT COUNT(*)
+         FROM remi_profile_revision_members
+         WHERE profile_revision_sha256 = NEW.profile_revision_sha256) = 0
+        OR (SELECT COALESCE(MAX(ordinal), -1) + 1
+            FROM remi_profile_revision_members
+            WHERE profile_revision_sha256 = NEW.profile_revision_sha256)
+           != (SELECT COUNT(*)
+               FROM remi_profile_revision_members
+               WHERE profile_revision_sha256 = NEW.profile_revision_sha256)
+        OR EXISTS (
+            SELECT 1
+            FROM remi_profile_revision_members member
+            LEFT JOIN remi_catalog_resources source
+              ON source.resource_sha256 = member.source_snapshot_sha256
+            WHERE member.profile_revision_sha256 = NEW.profile_revision_sha256
+              AND (source.resource_kind != 'source_snapshot'
+                   OR source.source_profile != NEW.source_profile
+                   OR source.durable != 1)
+        )
+        THEN RAISE(ABORT, 'active profile revision requires canonical durable source members') END;
+END;
+CREATE TRIGGER remi_active_profile_revisions_require_durable_members_update
+BEFORE UPDATE ON remi_active_profile_revisions
+BEGIN
+    SELECT CASE WHEN
+        (SELECT COUNT(*)
+         FROM remi_profile_revision_members
+         WHERE profile_revision_sha256 = NEW.profile_revision_sha256) = 0
+        OR (SELECT COALESCE(MAX(ordinal), -1) + 1
+            FROM remi_profile_revision_members
+            WHERE profile_revision_sha256 = NEW.profile_revision_sha256)
+           != (SELECT COUNT(*)
+               FROM remi_profile_revision_members
+               WHERE profile_revision_sha256 = NEW.profile_revision_sha256)
+        OR EXISTS (
+            SELECT 1
+            FROM remi_profile_revision_members member
+            LEFT JOIN remi_catalog_resources source
+              ON source.resource_sha256 = member.source_snapshot_sha256
+            WHERE member.profile_revision_sha256 = NEW.profile_revision_sha256
+              AND (source.resource_kind != 'source_snapshot'
+                   OR source.source_profile != NEW.source_profile
+                   OR source.durable != 1)
+        )
+        THEN RAISE(ABORT, 'active profile revision requires canonical durable source members') END;
+END;
+CREATE TRIGGER remi_active_profile_revisions_require_monotonic_fence
+BEFORE UPDATE OF fencing_epoch ON remi_active_profile_revisions
+WHEN NEW.fencing_epoch <= OLD.fencing_epoch
+BEGIN
+    SELECT RAISE(ABORT, 'active profile revision fencing epoch must increase monotonically');
+END;
+
+-- One durable server session owns the reader pins created by the current
+-- Remi runtime. A new exclusive runtime owner replaces this row only after
+-- deleting the prior session's reader pins in the same transaction.
+CREATE TABLE remi_runtime_sessions (
+            session_slot INTEGER PRIMARY KEY CHECK(session_slot = 1),
+            session_id TEXT NOT NULL UNIQUE,
+            started_at INTEGER NOT NULL,
+            CHECK(length(session_id) = 36),
+            CHECK(started_at >= 0)
+        );
+
+-- Pins are explicit durable roots. There is no timeout, age heuristic, or
+-- source-profile-only retention rule: the exact owner releases its exact
+-- profile revision when the work is complete.
+CREATE TABLE remi_profile_revision_pins (
+            pin_id TEXT PRIMARY KEY,
+            source_profile TEXT NOT NULL,
+            profile_revision_sha256 TEXT NOT NULL
+                REFERENCES remi_catalog_resources(resource_sha256) ON DELETE RESTRICT,
+            owner_kind TEXT NOT NULL CHECK(owner_kind IN ('conversion', 'work', 'reader')),
+            owner_identity TEXT NOT NULL,
+            runtime_session_id TEXT
+                REFERENCES remi_runtime_sessions(session_id) ON DELETE RESTRICT,
+            pinned_at INTEGER NOT NULL,
+            CHECK(length(pin_id) BETWEEN 1 AND 255 AND trim(pin_id) = pin_id),
+            CHECK(length(source_profile) BETWEEN 1 AND 255
+                AND trim(source_profile) = source_profile),
+            CHECK(length(profile_revision_sha256) = 64
+                AND profile_revision_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(owner_identity) BETWEEN 1 AND 255
+                AND trim(owner_identity) = owner_identity),
+            CHECK((owner_kind = 'reader' AND runtime_session_id IS NOT NULL)
+                  OR (owner_kind IN ('conversion', 'work') AND runtime_session_id IS NULL)),
+            UNIQUE(owner_kind, owner_identity, source_profile)
+        );
+CREATE INDEX idx_remi_profile_revision_pins_revision
+            ON remi_profile_revision_pins(source_profile, profile_revision_sha256);
+CREATE INDEX idx_remi_profile_revision_pins_runtime_session
+            ON remi_profile_revision_pins(runtime_session_id);
+
+CREATE TRIGGER remi_profile_revision_pins_require_durable_profile
+BEFORE INSERT ON remi_profile_revision_pins
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM remi_catalog_resources resource
+        WHERE resource.resource_sha256 = NEW.profile_revision_sha256
+          AND resource.resource_kind = 'profile_revision'
+          AND resource.source_profile = NEW.source_profile
+          AND resource.durable = 1
+    ) THEN RAISE(ABORT, 'profile revision pin requires one durable exact profile resource') END;
+END;
+CREATE TRIGGER remi_profile_revision_pins_immutable
+BEFORE UPDATE ON remi_profile_revision_pins
+BEGIN
+    SELECT RAISE(ABORT, 'profile revision pins cannot be repointed');
 END;
 CREATE TABLE repology_cache (
             project_name TEXT NOT NULL,

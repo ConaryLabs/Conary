@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
+use conary_core::db::models::ConvertedPackage;
 use futures::{StreamExt, stream};
 use rusqlite::Connection;
 use schemars::JsonSchema;
@@ -359,12 +360,32 @@ fn scan_local(objects_dir: &Path) -> Result<BTreeMap<String, u64>> {
 fn required_objects(db_path: &Path) -> Result<BTreeMap<String, u64>> {
     let conn = crate::server::open_runtime_db(db_path)?;
     let mut required = BTreeMap::new();
-    collect_transport_objects(
-        &conn,
-        "SELECT id, transport_json FROM converted_packages WHERE transport_json IS NOT NULL",
-        "converted package",
-        &mut required,
-    )?;
+    for converted in ConvertedPackage::list_repository_conversions(&conn)? {
+        if !converted.repository_conversion_is_current()? {
+            continue;
+        }
+        let id = converted
+            .id
+            .ok_or_else(|| anyhow::anyhow!("current converted repository row has no ID"))?;
+        ConvertedPackage::require_conversion_pin(&conn, id)
+            .with_context(|| format!("validate conversion pin for repository row {id}"))?;
+        converted
+            .scriptlet_summary()
+            .with_context(|| format!("validate lifecycle summary for repository row {id}"))?;
+        let transport = converted
+            .repository_artifact()
+            .with_context(|| format!("validate transport authority for repository row {id}"))?
+            .transport;
+        for object in transport.objects {
+            add_required_object(
+                &mut required,
+                object.sha256,
+                object.size,
+                "converted package",
+                id,
+            )?;
+        }
+    }
     collect_transport_objects(
         &conn,
         "SELECT id, transport_json FROM native_package_publications \
@@ -373,6 +394,22 @@ fn required_objects(db_path: &Path) -> Result<BTreeMap<String, u64>> {
         &mut required,
     )?;
     Ok(required)
+}
+
+fn add_required_object(
+    required: &mut BTreeMap<String, u64>,
+    hash: String,
+    size: u64,
+    owner: &str,
+    id: i64,
+) -> Result<()> {
+    validate_hash(&hash).with_context(|| format!("{owner} {id} has invalid object identity"))?;
+    if let Some(previous) = required.insert(hash.clone(), size)
+        && previous != size
+    {
+        bail!("{owner} {id} gives chunk {hash} size {size}, contradicting prior size {previous}");
+    }
+    Ok(())
 }
 
 fn collect_transport_objects(
@@ -391,17 +428,7 @@ fn collect_transport_objects(
             serde_json::from_str::<conary_core::ccs::CcsTransportEnvelopeV1>(&transport_json)
                 .with_context(|| format!("{owner} {id} has malformed transport authority"))?;
         for object in transport.objects {
-            validate_hash(&object.sha256)
-                .with_context(|| format!("{owner} {id} has invalid object identity"))?;
-            if let Some(previous) = required.insert(object.sha256.clone(), object.size)
-                && previous != object.size
-            {
-                bail!(
-                    "{owner} {id} gives chunk {} size {}, contradicting prior size {previous}",
-                    object.sha256,
-                    object.size
-                );
-            }
+            add_required_object(required, object.sha256, object.size, owner, id)?;
         }
     }
     Ok(())
@@ -427,7 +454,10 @@ fn chunk_path(objects_dir: &Path, hash: &str) -> PathBuf {
 mod tests {
     use super::*;
     use conary_core::ccs::{CcsTransportEnvelopeV1, CcsTransportObjectV1};
-    use conary_core::db::models::{ConvertedPackage, EMPTY_REPOSITORY_PROVIDES_DIGEST};
+    use conary_core::db::models::{
+        ConvertedPackage, EMPTY_REPOSITORY_PROVIDES_DIGEST, RemiCatalogResource,
+        RemiCatalogResourceKind,
+    };
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -464,6 +494,27 @@ mod tests {
         }
     }
 
+    fn seed_profile_resource(conn: &Connection, source_profile: &str) -> String {
+        let manifest_json = format!(r#"{{"profile":"{source_profile}"}}"#);
+        let revision = conary_core::hash::sha256(manifest_json.as_bytes());
+        RemiCatalogResource {
+            resource_sha256: revision.clone(),
+            kind: RemiCatalogResourceKind::ProfileRevision,
+            source_profile: source_profile.to_string(),
+            artifact_sha256: conary_core::hash::sha256(format!("artifact-{revision}").as_bytes()),
+            artifact_size: 1,
+            logical_digest_sha256: conary_core::hash::sha256(
+                format!("logical-{revision}").as_bytes(),
+            ),
+            manifest_json,
+            durable: true,
+            created_at: 1,
+        }
+        .insert(conn)
+        .unwrap();
+        revision
+    }
+
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, String, Vec<u8>) {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("remi.db");
@@ -485,6 +536,7 @@ mod tests {
         };
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
+            seed_profile_resource(&conn, "fedora-44"),
             "durability-fixture".to_string(),
             "1-1".to_string(),
             "x86_64".to_string(),
@@ -496,7 +548,7 @@ mod tests {
             "/tmp/fixture.ccs".to_string(),
             EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
-        converted.insert(&conn).unwrap();
+        converted.insert_with_conversion_pin(&conn, 1).unwrap();
 
         let objects_dir = temp.path().join("chunks/objects");
         let path = chunk_path(&objects_dir, &hash);
@@ -529,6 +581,42 @@ mod tests {
         assert_eq!(report.r2.required_missing, 1);
         assert_eq!(report.missing_from_both_samples, Vec::<String>::new());
         assert_eq!(hash.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn plan_rejects_current_conversion_without_exact_pin() {
+        let (_temp, db_path, objects_dir, _hash, _data) = fixture();
+        let conn = crate::server::open_runtime_db(&db_path).unwrap();
+        let id: i64 = conn
+            .query_row(
+                "SELECT id FROM converted_packages WHERE package_name = 'durability-fixture'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "DELETE FROM remi_profile_revision_pins WHERE pin_id = ?1",
+            [ConvertedPackage::conversion_pin_id(id)],
+        )
+        .unwrap();
+        drop(conn);
+
+        let error = format!(
+            "{:#}",
+            run_r2_durability(
+                &db_path,
+                &objects_dir,
+                Arc::new(FakeStore::default()),
+                R2DurabilityMode::Plan,
+                2,
+            )
+            .await
+            .unwrap_err()
+        );
+        assert!(
+            error.contains("has no exact profile-revision pin"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

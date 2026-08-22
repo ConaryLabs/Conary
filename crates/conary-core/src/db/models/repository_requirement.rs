@@ -7,7 +7,7 @@ use rusqlite::{Connection, Row, params};
 use std::collections::BTreeSet;
 
 /// A searchable clause index belonging to an authoritative requirement group.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RepositoryRequirement {
     pub id: Option<i64>,
     pub repository_package_id: i64,
@@ -25,7 +25,7 @@ pub struct RepositoryRequirement {
 /// Each group represents a single dependency entry that may contain one or more
 /// alternative clauses (OR semantics).  The clauses themselves live in
 /// `repository_requirements` linked by `group_id`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RepositoryRequirementGroup {
     pub id: Option<i64>,
     pub repository_package_id: i64,

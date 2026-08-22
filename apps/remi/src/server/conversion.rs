@@ -15,6 +15,7 @@ pub(crate) mod test_support;
 mod types;
 mod workflow;
 
+use crate::server::catalog_authority::CatalogAuthority;
 use crate::server::database_writer::DatabaseWriter;
 use crate::server::{BoundedCache, R2Store};
 use std::path::PathBuf;
@@ -35,6 +36,10 @@ pub struct ConversionService {
     cache_dir: PathBuf,
     /// Database path
     db_path: PathBuf,
+    /// Immutable profile-catalog authority used for every repository source.
+    /// Standalone parsing/benchmark helpers may omit this, but production
+    /// conversion is rejected until the authority is installed.
+    pub(crate) catalog_authority: Option<CatalogAuthority>,
     /// Optional R2 durable authority (absent for local-only deployments).
     r2_store: Option<Arc<R2Store>>,
     /// Serialized owner for the R2-verified local cache bound.
@@ -58,6 +63,7 @@ impl ConversionService {
             chunk_dir,
             cache_dir,
             db_path,
+            catalog_authority: None,
             r2_store,
             bounded_cache: None,
             repository_keys_dir: None,
@@ -68,6 +74,13 @@ impl ConversionService {
 
     pub(crate) fn with_database_writer(mut self, database_writer: DatabaseWriter) -> Self {
         self.database_writer = database_writer;
+        self
+    }
+
+    /// Attach the immutable profile-catalog authority used by production
+    /// conversion requests.
+    pub(crate) fn with_catalog_authority(mut self, catalog_authority: CatalogAuthority) -> Self {
+        self.catalog_authority = Some(catalog_authority);
         self
     }
 
@@ -112,6 +125,7 @@ mod tests {
         assert_eq!(service.chunk_dir, PathBuf::from("/chunks"));
         assert_eq!(service.cache_dir, PathBuf::from("/cache"));
         assert_eq!(service.db_path, PathBuf::from("/db.sqlite"));
+        assert!(service.catalog_authority.is_none());
         assert!(service.r2_store.is_none());
         assert!(service.repository_keys_dir.is_none());
     }

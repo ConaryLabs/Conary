@@ -87,7 +87,6 @@ pub struct NativeSourcePolicyResponse {
     pub stream_identity: String,
     pub update_mode: &'static str,
     pub stream_binding_sha256: String,
-    pub authenticated_snapshot_sha256: Option<String>,
     pub pinned_snapshot_sha256: Option<String>,
 }
 
@@ -138,10 +137,6 @@ impl TryFrom<conary_core::db::models::Repository> for RepoResponse {
                     stream_identity: policy.stream.identity().to_string(),
                     update_mode: policy.update_mode.as_str(),
                     stream_binding_sha256: stream_binding_sha256.clone(),
-                    authenticated_snapshot_sha256: r
-                        .authenticated_snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.sha256().to_string()),
                     pinned_snapshot_sha256: r
                         .pinned_snapshot
                         .as_ref()

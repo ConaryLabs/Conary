@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-21
-revision: 33
-summary: Document Remi source identity and update policy, process-wide runtime ownership, revision-pinned durable sparse sync, signing, canonical-map, repository trust, publication coordination and readiness, database-writer ownership, reproducible conversion profiling, R2 durability inventory, and serving authority
+last_updated: 2026-08-22
+revision: 36
+summary: Document Remi immutable source and profile catalogs, exact revision activation and pinning, source identity and update policy, process-wide runtime ownership, signing, repository trust, publication coordination and readiness, conversion profiling, R2 durability inventory, and serving authority
 ---
 
 # Remi
@@ -30,10 +30,11 @@ serves Conary JSON metadata.
 Repository manifest schema 3 also requires each native source's exact source
 identity, distinct repository identity, release/channel/rolling stream, and
 closed follow-or-pin policy. An optional policy group shares one normalized
-source policy while each repository retains its own authenticated snapshot and
-pin. Reconciliation replaces a repository transactionally when those source
-inputs change; ordinary enabled, priority, and expiry changes preserve the
-enrollment. The same contract is persisted by the core repository source model
+source policy while each repository retains its own member pin. Authenticated
+roots are transient refresh inputs and become immutable source-catalog evidence;
+they are not mutable repository revision state. Reconciliation replaces a
+repository transactionally when those source inputs change; ordinary enabled,
+priority, and expiry changes preserve the enrollment. The same contract is persisted by the core repository source model
 and is not inferred from the profile, URL, or display name.
 
 Every native source also carries the matching `RepositoryTrustPolicy`. Fedora
@@ -55,14 +56,52 @@ expressions are not source, parser, or trust authority. A configured native
 parser or trust failure is an error for that source; it does not silently retry
 the URL as another metadata format or continue unsigned.
 
+Native refresh publishes package authority outside the operational database.
+Each authenticated source is projected into a strict standalone SQLite catalog
+and a canonical `SourceSnapshotV1` manifest under
+`<storage.root>/catalogs/sources/<manifest-sha256>/`. The manifest binds exact
+source, repository, stream, parser-projection, authenticated root and child
+objects, catalog bytes, logical digest, and row counts. A strict
+`ProfileRevisionV1` then binds the ordered source members and one composed
+profile catalog under `catalogs/profiles/<manifest-sha256>/`. Core contract and
+bundle verification live in `crates/conary-core/src/repository/catalog/`.
+Every serving projection resolves a package origin back to that manifest.
+After request constraints establish eligibility, only the highest numeric
+repository-priority tier remains; native version ordering applies only within
+that tier. Equal-priority candidates remain visible for exact native comparison
+or typed ambiguity. Member order, repository names, and catalog insertion order
+never select a package.
+
+Construction is private beneath `catalog-candidates/<run-id>/`. Candidate
+SQLite integrity, schema, ordering, counts, logical digest, and source
+membership are reopened and checked before publication. Catalog and manifest
+files and their directories are synchronized before an atomic rename makes the
+content-addressed bundle durable. Only then may one short operational-database
+transaction prove the current run owner and fencing epoch and replace the
+profile's active revision pointer. A failed required member, stale fence,
+replayed activation, malformed bundle, publication fault, or activation fault
+leaves the previous pointer readable.
+
+Operational SQLite owns refresh runs and leases, resource metadata, ordered
+profile members, the active pointer, and exact revision pins. It does not own
+package, provide, or requirement rows for the activated native Remi catalog.
+`CatalogAuthority` resolves the pointer and verified bundle, opens SQLite in
+immutable read-only mode, and records a reader pin for the handle lifetime.
+Readers opened before activation therefore finish on the old revision; later
+readers see the complete new revision. Conversion outcomes own durable exact
+revision pins. Catalog garbage collection computes reachability from active,
+reader, work, and conversion pins and removes only resources absent from that
+exact graph; age, repository names, process liveness, and guessed retention
+windows are not collection authority.
+
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
 `/health/ready` is the evidence-bearing one. It opens the database read-only,
 requires the expected schema revision, and requires usable typed repository and
 canonical publication outcomes from the initial scheduler cycle. The validated
-manifest supplies the required exact-profile policy; persisted enabled
-repositories and packages must populate every required profile, and a server
-without an exact configured profile is not ready. It also checks the serving
+manifest supplies the required exact-profile policy; every required profile
+must have a valid durable active pointer whose immutable catalog reopens and
+verifies, and a server without an exact configured profile is not ready. It also checks the serving
 directories and configured free-space floor. A probe that cannot run reports
 `unavailable` rather than success, so an unmeasurable resource never reads as
 ready. A public package cache miss before that profile is populated returns the
@@ -98,9 +137,10 @@ serializes background cycles, repository-admin mutations, MCP canonical cycles,
 and package cache-miss readiness/reservation decisions. Their network, parsing,
 and mutation phases therefore cannot invalidate one another's publication
 decision. The narrower database writer serializes only their SQLite mutation
-phases, including canonical cache and exact-map commits. The process-wide root
-lock excludes a second Remi runtime; the durable per-repository sync lease then
-fences individual sparse-sync candidates and publication inside that owner.
+phases, including catalog-pointer, canonical-cache, and exact-map commits. The process-wide root
+lock excludes a second Remi runtime; durable refresh-run leases and monotonic
+fencing epochs authorize private source/profile candidates and activation
+inside that owner.
 There is no warm-up timer or blind retry; a later cycle occurs at the configured
 interval, an overdue canonical deadline is serviced immediately after the
 current refresh, and each deadline resets only after its owning attempt
@@ -169,18 +209,20 @@ primary filter solvable, and it is the dominant row population: Fedora 44
 sparse pages, their wire payload, and the replace transaction all scale with
 it.
 
-Remi builds each `include=versions` page inside one SQLite read transaction,
-selects all visible package/version rows for the page together, and batch-loads
-their normalized provides and requirement groups. The page carries a typed
-revision scoped to the exact public profile: a projection-schema version, a
-monotonic sequence, and a strict 128-bit state identity that cannot collide
-with the same sequence after a database rebuild or replacement. Persisted
-triggers advance that revision whenever visible repository membership, exact
-package identity, size, package metadata, provides, or grouped requirements
-change; disabled candidate writes do not advance public authority. Historical
-zero-sized discovery placeholders are excluded by one shared wire threshold
-used by the name count, name page, bulk page, and per-name lookup; every listed
-name is therefore fetchable and `total` counts that exact set.
+Remi opens one pinned immutable profile catalog for each sparse request. The
+name page, exact package batch, normalized provides, grouped requirements, and
+trusted advisory metadata all come from that verified read-only handle. The
+per-name batch contains only the highest-priority eligible source-member tier,
+so the sparse wire cannot advertise a lower-priority package universe that the
+conversion path would refuse. The
+wire revision uses the activation fence as its monotonic sequence and the first
+128 bits of the complete profile-revision SHA-256 as its bounded state ID; the
+full 256-bit identity remains the server's reader and retention authority.
+Historical zero-sized discovery placeholders are excluded by one shared wire
+threshold used by the name count, name page, bulk page, and per-name lookup;
+every listed name is therefore fetchable and `total` counts that exact set.
+Missing, invalid, or unregistered active catalog state fails closed and never
+falls back to operational `repository_packages` rows.
 
 `crates/conary-core/src/repository/sync/remi/path.rs` owns the path-based sparse
 sync writer-authority handoff;
@@ -245,8 +287,8 @@ endpoint/exact-profile sets in
 `crates/conary-core/src/repository/remi_authority/catalog.toml`; private keys
 never enter that catalog or a client response. `conary system init` and an
 exact canonical `repo add` persist those pins with the repository before it is
-visible. Remi sparse sync changes only the package snapshot and preserves the
-pins. Installation then verifies a downloaded CCS against the active keys for
+visible. Remi refresh changes only immutable source/profile catalog revisions
+and preserves the pins. Installation then verifies a downloaded CCS against the active keys for
 its exact repository provenance, so a key for one profile cannot authorize
 another. The self-hosted key option cannot replace canonical catalog authority.
 
@@ -342,17 +384,17 @@ entry-decision count. There is no scriptlet publication-status projection.
 The current schema separates installed conversions from repository-serving
 artifacts with a required discriminator. Installed rows require an exact trove
 identity and cannot carry serving fields. Repository rows require their exact
-distro/name/version/architecture identity, authenticated CCS transport
-envelope, total size, content hash, CCS path, and SHA-256 digest of the
-normalized repository-provide cache
-projection. That digest invalidates cached conversions when repository metadata
-changes, but repository rows never mutate identity or capabilities parsed from
-the authenticated source artifact. Public, OCI, index, search, chunk, and
-garbage-collection paths validate that typed artifact instead of filling
-missing fields with guesses or empty values. Architecture and the repository
-provide digest are required constructor and API-view fields, and the current
-schema rejects missing, empty, or malformed values. Schema revision 40 replaces
-the retired chunk-list columns with the signed transport envelope. It is a
+distro/name/version/architecture identity, exact 256-bit input profile
+revision, authenticated CCS transport envelope, total size, content hash, and
+CCS path. The repository-provide digest is retained only as diagnostic evidence;
+the immutable catalog record and exact input revision own package metadata and
+cache identity. Row persistence atomically creates a durable conversion pin to
+that revision, and deletion removes the row and pin in the same transaction.
+Public, OCI, index, search, chunk, and garbage-collection paths validate the
+typed artifact and its exact pin instead of filling missing fields with guesses
+or consulting mutable operational package rows. Schema revision 48 makes this
+identity required, replaces the previous latest-profile conversion key, and
+removes the mutable latest-authenticated-snapshot repository field. It is a
 pre-alpha hard cut: prior databases are rebuilt and
 re-ingested from configured repository authority rather than migrated. Local
 conversion tracking is written only after the CCS install transaction commits.
@@ -381,15 +423,16 @@ local filesystem paths are not part of any public response.
 
 Server conversion has three terminal outcomes: ready, failed, or cancelled. A ready
 conversion is advertised and served when its conversion version and lifecycle
-summary are current, its stored repository-provide cache digest exactly matches
-the current normalized repository metadata, and its CCS/CAS objects exist. A native
-metadata refresh removes mismatched conversion rows in the same SQLite
-transaction. Cold conversion carries one immutable repository-metadata digest
-through cache lookup and persistence, then revalidates it under the database
-write transaction so a concurrent refresh cannot publish stale source input.
+summary are current, its exact profile revision has a valid durable conversion
+pin, and its CCS/CAS objects exist. Refresh never rewrites or reconciles a
+conversion against a later profile. Cold conversion owns one pinned profile
+reader from lookup through authenticated download, parsing, CCS emission, and
+the atomic outcome-and-pin transaction. Activation may advance concurrently,
+but it cannot change that conversion's source package or revision.
 Repository conversion cache identity is the exact algorithm-prefixed checksum
-from authenticated repository metadata. The downloader verifies bytes against
-that checksum before conversion. Remi separately computes SHA-256 over the
+from the verified immutable package record plus the complete profile-revision
+SHA-256. The downloader verifies bytes against that checksum before conversion.
+Remi separately computes SHA-256 over the
 downloaded artifact for CCS provenance and emission; that CCS digest never
 replaces the repository checksum used for cache and refresh authority.
 CCS identity and capabilities come solely from the downloaded artifact. CCS
@@ -407,9 +450,10 @@ validation, never by stale in-memory job state. Accepted responses publish the
 actual pending or converting state rather than flattening both to converting.
 
 Every route resolves the public route slug to one exact persisted source
-profile and uses the same current-row validation. A stale row is reconverted;
-malformed current state is surfaced as a server data error. Conversion has no
-operator promotion state or alternate serving lane.
+profile, opens its active immutable catalog, and validates conversions against
+that handle's exact revision and durable pin. A stale row is reconverted;
+malformed or unpinned current state is surfaced as a server data error.
+Conversion has no operator promotion state or alternate serving lane.
 
 Local object visibility in `server/publication.rs` is a reachability check:
 native and converted publication references come from their signed transport
@@ -471,18 +515,30 @@ The conversion service now keeps `apps/remi/src/server/conversion.rs` as the
 stable public hub for `ConversionService` and conversion result DTO re-exports.
 Implementation ownership lives in child modules:
 
+- `catalog_refresh.rs`: private source/profile candidate construction, durable
+  content-addressed publication, and fenced activation inputs.
+- `catalog_authority.rs` and `profile_catalog.rs`: active-pointer resolution,
+  verified immutable readers, reader-lifetime pins, and serving projections.
+- `catalog_gc.rs`: exact active/work/reader/conversion reachability and bundle
+  deletion after operational intent is durable.
+- `handlers/detail.rs` and `handlers/detail/catalog.rs`: detail and analytics
+  response assembly, with one exact profile pin per response and catalog-owned
+  package/version metadata.
+- `delta_manifests.rs` and `delta_manifests/tests.rs`: exact-revision delta
+  cache authority and its focused corruption/revision test corpus.
+- `chunk_gc.rs` and `chunk_gc/tests.rs`: signed transport/revision-pin object
+  reachability and focused local/R2 collection proofs.
 - `conversion/workflow.rs`: cold/hot package conversion orchestration and
   timing.
 - `conversion/types.rs`: public conversion result DTOs, scriptlet package
   metadata projection, and conversion benchmark evidence records.
 - `conversion/benchmark.rs`: benchmark sampling, scan-only scriptlet evidence,
   and benchmark conversion wrappers.
-- `conversion/lookup.rs`: repository package selection, profile-backed
-  repository hints and version scheme, upstream download, and one-shot metadata
-  refresh after upstream 404s.
+- `conversion/lookup.rs`: exact immutable-catalog package selection, verified
+  source-snapshot binding, prepared key-material lookup, and upstream download.
 - `conversion/metadata.rs`: safe CCS filenames, profile-backed parser dispatch,
-  metadata construction, repository identity application, and
-  repository-provide merging.
+  metadata construction, catalog package identity application, and typed
+  provide comparison.
 - `conversion/storage.rs`: signed CCS verification, exact local CAS object
   persistence, and missing-only optional R2 write-through.
 - `conversion/persistence.rs`: converted-package rows, cache-hit
@@ -501,11 +557,11 @@ listing or lifecycle-summary behavior changes, also run `cargo test -p remi`.
 
 Remi includes a local benchmark command for measuring exact cold and warm
 conversion work before making public latency claims. With no `--package`
-arguments, it selects three distinct, not-currently-converted repository rows:
-the smallest positive-size artifact, the median artifact by size, and the
-largest artifact. The emitted source checksum, version, architecture, and byte
-size pin the subjects selected from the current authenticated repository
-snapshot.
+arguments, it selects three distinct, not-currently-converted records from one
+pinned active profile catalog: the smallest positive-size artifact, the median
+artifact by size, and the largest artifact. The emitted source checksum,
+version, architecture, and byte size pin the subjects selected from that exact
+immutable profile revision.
 
 ```bash
 cargo run -p remi -- conversion-benchmark \

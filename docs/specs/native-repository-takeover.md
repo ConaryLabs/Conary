@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-12
-revision: 5
+last_updated: 2026-08-22
+revision: 6
 summary: Define deterministic native repository takeover, exact APT and Zypper global trust binding, owned projections, drift detection, and rollback
 ---
 
@@ -31,7 +31,7 @@ The takeover preview is versioned, serializable, and deterministic. It records:
 - every native repository's enabled state, trust disposition, source
   locations, priority, filters, and ownership transition;
 - the exact Conary repository rows, source policies, parser inputs, trust
-  roots, follow-or-pin policy, and authenticated snapshot input to persist;
+  roots, follow-or-pin policy, and authenticated root or pin input to validate;
 - every projected path with its exact SHA-256 and ownership transition; and
 - closed blockers, including ambiguous or unsupported enabled trust,
   dynamically generated libzypp service repositories, missing or duplicate
@@ -118,7 +118,7 @@ Takeover-created repository rows use the closed `native-projection` ownership
 value. Apply refuses to overwrite an operator- or Remi-owned row. While a row
 belongs to a takeover, schema authority rejects generic repository-definition
 updates (including enablement, priority, parser, trust, endpoints, and source
-policy); authenticated snapshot and last-sync observations may still advance.
+policy); only the derived `last_sync` observation may advance independently.
 Definition changes require a projection-enrollment transaction. A repeated apply
 with the same preview is an idempotent verification; it creates no new
 repository, policy, membership, or projection rows.

@@ -274,7 +274,6 @@ impl RepositoryDefinition {
     }
 
     fn apply_to(&self, repository: &mut Repository) -> Result<()> {
-        let authenticated_snapshot = repository.authenticated_snapshot.clone();
         repository.url.clone_from(&self.url);
         repository.content_url.clone_from(&self.content_url);
         repository.enabled = self.enabled;
@@ -297,7 +296,6 @@ impl RepositoryDefinition {
             self.repository_identity.clone(),
             pinned_snapshot,
         )?;
-        repository.authenticated_snapshot = authenticated_snapshot;
         Ok(())
     }
 

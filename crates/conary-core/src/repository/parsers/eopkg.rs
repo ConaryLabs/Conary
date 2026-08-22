@@ -3,8 +3,9 @@
 //! Authenticated Solus eopkg repository-index parser.
 
 use super::{
-    AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
-    RepositoryParser,
+    AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
+    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    authenticated_metadata_object,
 };
 use crate::error::{Error, Result};
 use crate::packages::eopkg::xml;
@@ -61,11 +62,19 @@ impl RepositoryParser for EopkgParser {
                 "eopkg compressed index SHA-256 mismatch: authenticated sidecar {enrolled_digest}, received {actual}"
             )));
         }
-        let snapshot = AuthenticatedSnapshotIdentity::from_sha256(actual)?;
+        let snapshot = AuthenticatedSnapshotIdentity::for_bytes(&compressed);
         let xml_bytes =
             crate::compression::decompress_metadata_auto(&compressed, "authenticated eopkg index")?;
         let packages = parse_index(&xml_bytes, origin, &self.architecture)?;
-        Ok(AuthenticatedRepositoryMetadata { packages, snapshot })
+        Ok(AuthenticatedRepositoryMetadata {
+            packages,
+            snapshot,
+            authenticated_objects: vec![authenticated_metadata_object(
+                AuthenticatedMetadataObjectRole::EopkgIndex,
+                "eopkg-index.xml.xz",
+                &compressed,
+            )],
+        })
     }
 }
 
@@ -271,7 +280,7 @@ fn project(metadata: xml::Metadata, origin: &str) -> Result<PackageMetadata> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_index, parse_sha256_sidecar};
+    use super::{AuthenticatedSnapshotIdentity, parse_index, parse_sha256_sidecar};
 
     const DIGEST: &str = "efa19936d28e2e84b462cf2e07efb9cf1b3afb983b0c7b5a5f813d2d52a8061f";
 
@@ -293,6 +302,13 @@ mod tests {
                 "{invalid:?}"
             );
         }
+    }
+
+    #[test]
+    fn compressed_index_identity_preserves_exact_served_size() {
+        let compressed = b"authenticated eopkg index bytes";
+        let identity = AuthenticatedSnapshotIdentity::for_bytes(compressed);
+        assert_eq!(identity.size(), Some(compressed.len() as u64));
     }
 
     fn index_record(package_hash: &str, package_uri: &str, architecture: &str) -> String {

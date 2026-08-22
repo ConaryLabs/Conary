@@ -34,7 +34,6 @@ pub(super) fn apply_native_source_contract(
         repository.source_policy = None;
         repository.repository_identity = None;
         repository.stream_binding_sha256 = None;
-        repository.authenticated_snapshot = None;
         repository.pinned_snapshot = None;
         return Ok(());
     }
@@ -83,18 +82,8 @@ pub(super) fn apply_native_source_contract(
                 )));
             }
         };
-    let prior_policy = repository.source_policy.clone();
-    let prior_binding = repository.stream_binding_sha256.clone();
-    let prior_pin = repository.pinned_snapshot.clone();
-    let prior_snapshot = repository.authenticated_snapshot.clone();
     let policy =
         RepositorySourcePolicy::new(input.source_identity, scope, ecosystem, stream, update_mode)?;
     repository.set_native_source_policy(policy, input.repository_identity, pinned_snapshot)?;
-    if repository.source_policy == prior_policy
-        && repository.stream_binding_sha256 == prior_binding
-        && repository.pinned_snapshot == prior_pin
-    {
-        repository.authenticated_snapshot = prior_snapshot;
-    }
     Ok(())
 }

@@ -24,6 +24,9 @@ mod bounded_cache;
 mod cache;
 mod canonical_fetch;
 mod canonical_job;
+pub mod catalog_authority;
+pub mod catalog_gc;
+pub mod catalog_refresh;
 pub mod chunk_gc;
 pub mod config;
 mod conversion;
@@ -39,9 +42,9 @@ pub mod mcp;
 pub mod metrics;
 pub mod native_publish;
 mod negative_cache;
-mod package_metadata;
 pub mod popularity;
 mod prewarm;
+pub mod profile_catalog;
 pub mod publication;
 mod publication_scheduler;
 pub mod r2;
@@ -52,6 +55,7 @@ pub mod release_publish;
 pub mod repository_manifest;
 mod routes;
 pub(crate) mod runtime_lock;
+mod runtime_session;
 pub mod search;
 pub mod security;
 pub(crate) mod signing_authority;
@@ -121,6 +125,10 @@ pub struct ServerConfig {
     pub chunk_dir: PathBuf,
     /// Path to the cache/scratch directory
     pub cache_dir: PathBuf,
+    /// Root containing immutable activated source and profile catalogs.
+    pub catalog_dir: PathBuf,
+    /// Private disposable catalog construction root.
+    pub catalog_candidate_dir: PathBuf,
     /// Maximum concurrent conversions
     pub max_concurrent_conversions: usize,
     /// LRU eviction threshold in bytes (default 700GB)
@@ -193,6 +201,7 @@ pub struct AdminEvent {
 pub struct ServerState {
     pub config: ServerConfig,
     pub(crate) database_writer: database_writer::DatabaseWriter,
+    pub(crate) catalog_authority: catalog_authority::CatalogAuthority,
     pub(crate) publication_coordinator: Arc<Mutex<()>>,
     pub(crate) publication_readiness: readiness::PublicationReadiness,
     pub(crate) required_source_profiles: Vec<String>,
@@ -259,6 +268,11 @@ impl ServerState {
     ) -> Result<Self> {
         let job_manager = JobManager::new(config.max_concurrent_conversions);
         let database_writer = database_writer::DatabaseWriter::default();
+        let catalog_authority = catalog_authority::CatalogAuthority::from_paths(
+            config.db_path.clone(),
+            config.catalog_dir.clone(),
+            database_writer.clone(),
+        );
         let publication_coordinator = Arc::new(Mutex::new(()));
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
@@ -272,6 +286,7 @@ impl ServerState {
             config.db_path.clone(),
             None, // R2 store set later after state initialization
         )
+        .with_catalog_authority(catalog_authority.clone())
         .with_database_writer(database_writer.clone())
         .with_publication_coordinator(Arc::clone(&publication_coordinator))
         .with_bounded_cache(bounded_cache.clone())
@@ -302,6 +317,7 @@ impl ServerState {
         Ok(Self {
             config,
             database_writer,
+            catalog_authority,
             publication_coordinator,
             publication_readiness: readiness::PublicationReadiness::default(),
             required_source_profiles: Vec::new(),
@@ -366,10 +382,20 @@ fn prepare_runtime_storage(
     remi_config: &RemiConfig,
     server_config: &ServerConfig,
 ) -> Result<runtime_lock::RuntimeRootLock> {
+    let locked_db_path = remi_config.storage_root().join("metadata/conary.db");
+    if server_config.db_path != locked_db_path {
+        anyhow::bail!(
+            "Remi runtime database {} is outside the locked storage-root authority {}",
+            server_config.db_path.display(),
+            locked_db_path.display()
+        );
+    }
     let runtime_lock = runtime_lock::RuntimeRootLock::acquire(remi_config.storage_root())?;
     tracing::info!("  Runtime root lock: {:?}", runtime_lock.lock_path());
     create_runtime_storage_directories(remi_config)?;
     ensure_database_ready(&server_config.db_path)?;
+    runtime_session::begin(&server_config.db_path)?;
+    tracing::info!("  Runtime reader session: installed with stale-reader recovery");
     Ok(runtime_lock)
 }
 
@@ -511,6 +537,24 @@ async fn run_server_on_runtime(
         state_w.required_source_profiles = required_source_profiles;
     }
 
+    let recovered_catalog_runs = catalog_gc::recover_catalog_refresh_runs(&state)
+        .await
+        .context("recover expired immutable catalog refresh runs during startup")?;
+    tracing::info!(
+        recovered_runs = recovered_catalog_runs,
+        "  Catalog recovery: exact terminal candidates removed"
+    );
+
+    let catalog_gc = catalog_gc::collect_catalog_garbage(&state)
+        .await
+        .context("collect unreachable immutable catalogs during startup")?;
+    tracing::info!(
+        deleted_profiles = catalog_gc.deleted_profile_resources,
+        deleted_sources = catalog_gc.deleted_source_resources,
+        removed_bundles = catalog_gc.removed_bundles,
+        "  Catalog GC: exact reachability collection complete"
+    );
+
     // Initialize R2 storage if enabled
     if remi_config.r2.enabled {
         let endpoint = remi_config
@@ -549,11 +593,22 @@ async fn run_server_on_runtime(
         match SearchEngine::new(&index_dir) {
             Ok(engine) => {
                 let engine = Arc::new(engine);
-                // Rebuild index from DB in background
+                // Rebuild from exact immutable profile readers in background.
                 let rebuild_engine = Arc::clone(&engine);
                 let rebuild_db = server_config.db_path.clone();
+                let (rebuild_catalog_authority, rebuild_source_profiles) = {
+                    let state_guard = state.read().await;
+                    (
+                        state_guard.catalog_authority.clone(),
+                        state_guard.required_source_profiles.clone(),
+                    )
+                };
                 tokio::task::spawn_blocking(move || {
-                    if let Err(e) = rebuild_engine.rebuild_from_db(&rebuild_db) {
+                    if let Err(e) = rebuild_engine.rebuild_from_catalogs(
+                        &rebuild_db,
+                        &rebuild_catalog_authority,
+                        &rebuild_source_profiles,
+                    ) {
                         tracing::error!("Failed to rebuild search index: {}", e);
                     }
                 });

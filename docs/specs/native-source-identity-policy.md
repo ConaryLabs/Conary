@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-12
-revision: 3
-summary: Define exact native source and repository identity, shared follow or pin policy, stream binding, and authenticated snapshot persistence
+last_updated: 2026-08-22
+revision: 4
+summary: Define exact native source and repository identity, shared follow or pin policy, stream binding, and transient authenticated-root validation
 ---
 
 # Native Source Identity And Update Policy
@@ -27,11 +27,11 @@ The current disposable schema owns three related records:
   version scheme, declared stream, and closed `follow` or `pin` update mode.
   A policy has an explicit repository or group scope. Multiple repository rows
   may reference only a group policy.
-- `repositories` owns one exact repository identity, the policy reference, an
-  immutable stream-binding SHA-256, and the last admitted authenticated
-  snapshot SHA-256. Existing enabled state, priority, architecture filters,
-  parser variables, content URL, trust, advisory support, and ownership remain
-  repository properties.
+- `repositories` owns one exact repository identity, the policy reference, and
+  an immutable stream-binding SHA-256. Existing enabled state, priority,
+  architecture filters, parser variables, content URL, trust, advisory support,
+  and ownership remain repository properties. It does not retain a mutable
+  latest authenticated-root observation.
 - `repository_source_pins` owns the required authenticated snapshot SHA-256 for
   each repository identity in a pinned policy. A group pin therefore names one
   exact digest per member rather than pretending different repository metadata
@@ -44,10 +44,9 @@ reinterpreted as that identity. The model validates identities both before
 write and after read, while SQLite constrains their length and surrounding
 whitespace.
 
-This contract applies only when the typed parser format is RPM, Debian, or
-ALPM. Remi sparse, static TUF, and Conary JSON repositories have no native
-source-policy reference, stream binding, or native authenticated snapshot in
-this slice; those nullable columns remain absent for those rows and their sync
+This contract applies to typed native parser formats. Remi sparse, static TUF,
+and Conary JSON repositories have no native source-policy reference or stream
+binding; those nullable fields remain absent for those rows and their sync
 contracts are unchanged.
 
 Repository and source identities are 1 to 255 printable ASCII characters with
@@ -105,19 +104,19 @@ Parser or package data without this identity is not a native sync snapshot.
 
 ## Follow And Pin Decisions
 
-The policy decision runs inside the same SQLite transaction that replaces
-repository packages:
+The policy decision validates each authenticated root before publication:
 
 - `follow` admits any newly authenticated snapshot only when the recalculated
-  stream binding equals the persisted binding, then records the new snapshot.
+  stream binding equals the persisted binding.
 - `pin` additionally requires the candidate snapshot to equal the exact pin for
   that repository identity. A missing member pin is corruption and a different
   digest refuses the entire refresh.
 
 Neither refusal changes package rows, requirements, provides, canonical links,
-the previous observed snapshot, or `last_sync`. Equality with the previously
-observed digest is valid for both modes and still permits deterministic
-reconstruction of package rows.
+immutable catalog state, or `last_sync`. The authenticated root is retained in
+the immutable `SourceSnapshotV1` evidence for Remi catalog refresh; legacy
+native sync treats it as a transient verified input rather than repository
+revision state.
 
 Repository-scope policy insertion refuses a second repository member. Group
 policy reuse succeeds only when source identity, ecosystem, version scheme,

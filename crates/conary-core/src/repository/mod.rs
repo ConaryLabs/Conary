@@ -10,6 +10,7 @@
 //! - Ecosystem-native repository and package signature verification
 //! - Native metadata format parsing (Arch, Debian, Fedora)
 
+pub mod catalog;
 mod client;
 mod dependencies;
 pub mod distro;
@@ -80,8 +81,13 @@ pub use static_repo::{
 };
 pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
-    RepositoryWriteAuthority, current_timestamp, needs_sync, parse_timestamp, sync_repository,
-    sync_repository_from_db_path,
+    ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
+    ProfileSyncRunRecovery, RepositoryWriteAuthority, abort_profile_sync_run,
+    acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run,
+    begin_profile_sync_run_with_input, begin_profile_sync_run_with_members, current_timestamp,
+    fetch_native_source_catalog, heartbeat_profile_sync_run, needs_sync, parse_timestamp,
+    ready_profile_sync_run, record_profile_sync_run_member, recover_expired_profile_sync_runs,
+    sync_repository, sync_repository_from_db_path,
 };
 pub use trust::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,

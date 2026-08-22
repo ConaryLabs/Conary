@@ -1,21 +1,15 @@
 // apps/remi/src/server/handlers/oci/tests.rs
 use super::*;
+use crate::server::catalog_authority::test_support::{
+    ActiveCatalogFixture, package as catalog_package,
+};
 use crate::server::conversion::test_support::seed_repository_conversion_source;
 use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
-use conary_core::db::schema;
-use tempfile::NamedTempFile;
-
-fn create_test_db() -> (NamedTempFile, Connection) {
-    let temp_file = NamedTempFile::new().unwrap();
-    let conn = Connection::open(temp_file.path()).unwrap();
-    conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-    schema::ensure_current(&conn).unwrap();
-    (temp_file, conn)
-}
 
 fn insert_converted_package(
     conn: &Connection,
     distro: &str,
+    profile_revision_sha256: &str,
     name: &str,
     version: &str,
     chunks: &[String],
@@ -25,6 +19,7 @@ fn insert_converted_package(
     let transport = crate::server::conversion::test_support::test_transport(chunks);
     let mut pkg = ConvertedPackage::new_repository(
         source_profile.id().to_string(),
+        profile_revision_sha256.to_string(),
         name.to_string(),
         version.to_string(),
         "x86_64".to_string(),
@@ -37,12 +32,13 @@ fn insert_converted_package(
         conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
     );
     seed_repository_conversion_source(conn, &mut pkg);
-    pkg.insert(conn).unwrap();
+    pkg.insert_with_conversion_pin(conn, 1).unwrap();
 }
 
 fn insert_stale_converted_package(
     conn: &Connection,
     distro: &str,
+    profile_revision_sha256: &str,
     name: &str,
     version: &str,
     chunks: &[String],
@@ -52,6 +48,7 @@ fn insert_stale_converted_package(
     let transport = crate::server::conversion::test_support::test_transport(chunks);
     let mut pkg = ConvertedPackage::new_repository(
         source_profile.id().to_string(),
+        profile_revision_sha256.to_string(),
         name.to_string(),
         version.to_string(),
         "x86_64".to_string(),
@@ -72,11 +69,34 @@ const OCI_TEST_HASH: &str = "ccccccccccccccccccccccccccccccccccccccccccccccccccc
 async fn oci_blob_state_with_db(
     hash: &str,
     stale_rows: Vec<bool>,
-) -> (Arc<RwLock<crate::server::ServerState>>, tempfile::TempDir) {
+) -> (
+    Arc<RwLock<crate::server::ServerState>>,
+    tempfile::TempDir,
+    ActiveCatalogFixture,
+) {
     let temp = tempfile::tempdir().unwrap();
-    let db_path = temp.path().join("test.db");
-    let conn = Connection::open(&db_path).unwrap();
-    schema::ensure_current(&conn).unwrap();
+    let catalogs = ActiveCatalogFixture::new();
+    let profile_revision_sha256 = catalogs.activate(
+        "fedora-44",
+        1,
+        stale_rows
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                catalog_package(
+                    "fedora-44",
+                    &format!("pkg-{index}"),
+                    "1.0",
+                    "1",
+                    Some("x86_64"),
+                    10,
+                    &format!("source-{index}"),
+                )
+            })
+            .collect(),
+    );
+    let db_path = catalogs.db_path().to_path_buf();
+    let conn = catalogs.connection();
 
     let chunk_dir = temp.path().join("chunks");
     let cache_dir = temp.path().join("cache");
@@ -89,6 +109,7 @@ async fn oci_blob_state_with_db(
             crate::server::conversion::test_support::test_transport(&[hash.to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
+            profile_revision_sha256.clone(),
             format!("pkg-{index}"),
             "1.0".to_string(),
             "x86_64".to_string(),
@@ -105,7 +126,11 @@ async fn oci_blob_state_with_db(
         } else {
             seed_repository_conversion_source(&conn, &mut converted);
         }
-        converted.insert(&conn).unwrap();
+        if stale {
+            converted.insert(&conn).unwrap();
+        } else {
+            converted.insert_with_conversion_pin(&conn, 1).unwrap();
+        }
     }
 
     let config = crate::server::ServerConfig {
@@ -118,7 +143,9 @@ async fn oci_blob_state_with_db(
     };
     std::fs::create_dir_all(&config.cache_dir).unwrap();
     let state = crate::server::ServerState::new(config).expect("test server state");
-    (Arc::new(RwLock::new(state)), temp)
+    let mut state = state;
+    state.catalog_authority = catalogs.authority().clone();
+    (Arc::new(RwLock::new(state)), temp, catalogs)
 }
 
 #[test]
@@ -208,11 +235,50 @@ fn test_strip_digest_prefix() {
 
 #[test]
 fn test_build_tags_list() {
-    let (temp_file, conn) = create_test_db();
+    let catalogs = ActiveCatalogFixture::new();
+    let fedora_revision = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![
+            catalog_package(
+                "fedora-44",
+                "nginx",
+                "1.24.0-1.fc44",
+                "1",
+                Some("x86_64"),
+                4096,
+                "nginx-1",
+            ),
+            catalog_package(
+                "fedora-44",
+                "nginx",
+                "1.25.0-1.fc44",
+                "1",
+                Some("x86_64"),
+                4096,
+                "nginx-2",
+            ),
+        ],
+    );
+    let arch_revision = catalogs.activate(
+        "arch",
+        2,
+        vec![catalog_package(
+            "arch",
+            "nginx",
+            "1.25.0-1",
+            "1",
+            Some("x86_64"),
+            4096,
+            "nginx-3",
+        )],
+    );
+    let conn = catalogs.connection();
 
     insert_converted_package(
         &conn,
         "fedora",
+        &fedora_revision,
         "nginx",
         "1.24.0-1.fc44",
         &["chunk1".to_string()],
@@ -220,29 +286,70 @@ fn test_build_tags_list() {
     insert_converted_package(
         &conn,
         "fedora",
+        &fedora_revision,
         "nginx",
         "1.25.0-1.fc44",
         &["chunk2".to_string()],
     );
-    insert_converted_package(&conn, "arch", "nginx", "1.25.0-1", &["chunk3".to_string()]);
+    insert_converted_package(
+        &conn,
+        "arch",
+        &arch_revision,
+        "nginx",
+        "1.25.0-1",
+        &["chunk3".to_string()],
+    );
 
-    let tags = build_tags_list(temp_file.path(), "fedora", "nginx").unwrap();
+    let tags =
+        build_tags_list(catalogs.authority(), catalogs.db_path(), "fedora", "nginx").unwrap();
     assert_eq!(tags, vec!["1.24.0-1.fc44", "1.25.0-1.fc44"]);
 
-    let tags = build_tags_list(temp_file.path(), "arch", "nginx").unwrap();
+    let tags = build_tags_list(catalogs.authority(), catalogs.db_path(), "arch", "nginx").unwrap();
     assert_eq!(tags, vec!["1.25.0-1"]);
 
-    let tags = build_tags_list(temp_file.path(), "fedora", "nonexistent").unwrap();
+    let tags = build_tags_list(
+        catalogs.authority(),
+        catalogs.db_path(),
+        "fedora",
+        "nonexistent",
+    )
+    .unwrap();
     assert!(tags.is_empty());
 }
 
 #[test]
 fn oci_tags_ignore_stale_converted_rows() {
-    let (temp_file, conn) = create_test_db();
+    let catalogs = ActiveCatalogFixture::new();
+    let revision = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![
+            catalog_package(
+                "fedora-44",
+                "nginx",
+                "1.24.0-1.fc44",
+                "1",
+                Some("x86_64"),
+                4096,
+                "stale",
+            ),
+            catalog_package(
+                "fedora-44",
+                "nginx",
+                "1.25.0-1.fc44",
+                "1",
+                Some("x86_64"),
+                4096,
+                "current",
+            ),
+        ],
+    );
+    let conn = catalogs.connection();
 
     insert_stale_converted_package(
         &conn,
         "fedora",
+        &revision,
         "nginx",
         "1.24.0-1.fc44",
         &["stale-chunk".to_string()],
@@ -250,24 +357,85 @@ fn oci_tags_ignore_stale_converted_rows() {
     insert_converted_package(
         &conn,
         "fedora",
+        &revision,
         "nginx",
         "1.25.0-1.fc44",
         &["current-chunk".to_string()],
     );
 
-    let tags = build_tags_list(temp_file.path(), "fedora", "nginx").unwrap();
+    let tags =
+        build_tags_list(catalogs.authority(), catalogs.db_path(), "fedora", "nginx").unwrap();
     assert_eq!(tags, vec!["1.25.0-1.fc44"]);
 }
 
 #[test]
 fn test_build_catalog() {
-    let (temp_file, conn) = create_test_db();
+    let catalogs = ActiveCatalogFixture::new();
+    let fedora_revision = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![
+            catalog_package(
+                "fedora-44",
+                "nginx",
+                "1.24.0",
+                "1",
+                Some("x86_64"),
+                4096,
+                "nginx",
+            ),
+            catalog_package(
+                "fedora-44",
+                "curl",
+                "8.5.0",
+                "1",
+                Some("x86_64"),
+                4096,
+                "curl",
+            ),
+        ],
+    );
+    let arch_revision = catalogs.activate(
+        "arch",
+        2,
+        vec![catalog_package(
+            "arch",
+            "nginx",
+            "1.25.0",
+            "1",
+            Some("x86_64"),
+            4096,
+            "arch-nginx",
+        )],
+    );
+    let conn = catalogs.connection();
 
-    insert_converted_package(&conn, "fedora", "nginx", "1.24.0", &["chunk1".to_string()]);
-    insert_converted_package(&conn, "fedora", "curl", "8.5.0", &["chunk2".to_string()]);
-    insert_converted_package(&conn, "arch", "nginx", "1.25.0", &["chunk3".to_string()]);
+    insert_converted_package(
+        &conn,
+        "fedora",
+        &fedora_revision,
+        "nginx",
+        "1.24.0",
+        &["chunk1".to_string()],
+    );
+    insert_converted_package(
+        &conn,
+        "fedora",
+        &fedora_revision,
+        "curl",
+        "8.5.0",
+        &["chunk2".to_string()],
+    );
+    insert_converted_package(
+        &conn,
+        "arch",
+        &arch_revision,
+        "nginx",
+        "1.25.0",
+        &["chunk3".to_string()],
+    );
 
-    let catalog = build_catalog(temp_file.path()).unwrap();
+    let catalog = build_catalog(catalogs.authority(), catalogs.db_path()).unwrap();
     assert_eq!(
         catalog.repositories,
         vec![
@@ -280,11 +448,37 @@ fn test_build_catalog() {
 
 #[test]
 fn oci_catalog_ignores_stale_converted_rows() {
-    let (temp_file, conn) = create_test_db();
+    let catalogs = ActiveCatalogFixture::new();
+    let revision = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![
+            catalog_package(
+                "fedora-44",
+                "stale-only",
+                "1.0.0",
+                "1",
+                Some("x86_64"),
+                4096,
+                "stale",
+            ),
+            catalog_package(
+                "fedora-44",
+                "current",
+                "1.0.0",
+                "1",
+                Some("x86_64"),
+                4096,
+                "current",
+            ),
+        ],
+    );
+    let conn = catalogs.connection();
 
     insert_stale_converted_package(
         &conn,
         "fedora",
+        &revision,
         "stale-only",
         "1.0.0",
         &["stale-chunk".to_string()],
@@ -292,35 +486,50 @@ fn oci_catalog_ignores_stale_converted_rows() {
     insert_converted_package(
         &conn,
         "fedora",
+        &revision,
         "current",
         "1.0.0",
         &["current-chunk".to_string()],
     );
 
-    let catalog = build_catalog(temp_file.path()).unwrap();
+    let catalog = build_catalog(catalogs.authority(), catalogs.db_path()).unwrap();
     assert_eq!(catalog.repositories, vec!["conary/fedora/current"]);
 }
 
 #[test]
 fn test_build_catalog_empty() {
-    let (temp_file, _conn) = create_test_db();
-    let catalog = build_catalog(temp_file.path()).unwrap();
+    let catalogs = ActiveCatalogFixture::new();
+    let catalog = build_catalog(catalogs.authority(), catalogs.db_path()).unwrap();
     assert!(catalog.repositories.is_empty());
 }
 
 #[test]
 fn test_build_manifest() {
-    let (temp_file, conn) = create_test_db();
+    let catalogs = ActiveCatalogFixture::new();
+    let revision = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![catalog_package(
+            "fedora-44",
+            "nginx",
+            "1.24.0",
+            "1",
+            Some("x86_64"),
+            4096,
+            "nginx",
+        )],
+    );
+    let conn = catalogs.connection();
 
     let chunks = vec!["aabbccdd".to_string(), "eeff0011".to_string()];
-    insert_converted_package(&conn, "fedora", "nginx", "1.24.0", &chunks);
+    insert_converted_package(&conn, "fedora", &revision, "nginx", "1.24.0", &chunks);
 
     // Create a temporary chunk cache directory
     let chunk_dir = tempfile::tempdir().unwrap();
     let chunk_cache = crate::server::ChunkCache::new(
         chunk_dir.path().to_path_buf(),
         1024 * 1024 * 1024,
-        temp_file.path().to_path_buf(),
+        catalogs.db_path().to_path_buf(),
     );
     for (hash, bytes) in [
         ("aabbccdd", b"first".as_slice()),
@@ -331,8 +540,15 @@ fn test_build_manifest() {
         std::fs::write(path, bytes).unwrap();
     }
 
-    let result =
-        build_manifest(temp_file.path(), "fedora", "nginx", "1.24.0", &chunk_cache).unwrap();
+    let result = build_manifest(
+        catalogs.authority(),
+        catalogs.db_path(),
+        "fedora",
+        "nginx",
+        "1.24.0",
+        &chunk_cache,
+    )
+    .unwrap();
 
     assert!(result.is_some());
     let (json, digest) = result.unwrap();
@@ -364,16 +580,18 @@ fn test_build_manifest() {
 
 #[test]
 fn test_build_manifest_not_found() {
-    let (temp_file, _conn) = create_test_db();
+    let catalogs = ActiveCatalogFixture::new();
+    catalogs.activate("fedora-44", 1, Vec::new());
     let chunk_dir = tempfile::tempdir().unwrap();
     let chunk_cache = crate::server::ChunkCache::new(
         chunk_dir.path().to_path_buf(),
         1024 * 1024 * 1024,
-        temp_file.path().to_path_buf(),
+        catalogs.db_path().to_path_buf(),
     );
 
     let result = build_manifest(
-        temp_file.path(),
+        catalogs.authority(),
+        catalogs.db_path(),
         "fedora",
         "nonexistent",
         "1.0.0",
@@ -385,10 +603,25 @@ fn test_build_manifest_not_found() {
 
 #[test]
 fn oci_manifest_ignores_stale_converted_rows() {
-    let (temp_file, conn) = create_test_db();
+    let catalogs = ActiveCatalogFixture::new();
+    let revision = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![catalog_package(
+            "fedora-44",
+            "nginx",
+            "1.24.0",
+            "1",
+            Some("x86_64"),
+            4096,
+            "nginx",
+        )],
+    );
+    let conn = catalogs.connection();
     insert_stale_converted_package(
         &conn,
         "fedora",
+        &revision,
         "nginx",
         "1.24.0",
         &["stale-chunk".to_string()],
@@ -398,20 +631,42 @@ fn oci_manifest_ignores_stale_converted_rows() {
     let chunk_cache = crate::server::ChunkCache::new(
         chunk_dir.path().to_path_buf(),
         1024 * 1024 * 1024,
-        temp_file.path().to_path_buf(),
+        catalogs.db_path().to_path_buf(),
     );
 
-    let result =
-        build_manifest(temp_file.path(), "fedora", "nginx", "1.24.0", &chunk_cache).unwrap();
+    let result = build_manifest(
+        catalogs.authority(),
+        catalogs.db_path(),
+        "fedora",
+        "nginx",
+        "1.24.0",
+        &chunk_cache,
+    )
+    .unwrap();
     assert!(result.is_none());
 }
 
 #[test]
 fn oci_tags_catalog_and_manifest_ignore_stale_rows() {
-    let (temp_file, conn) = create_test_db();
+    let catalogs = ActiveCatalogFixture::new();
+    let revision = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![catalog_package(
+            "fedora-44",
+            "stale-only",
+            "1.0",
+            "1",
+            Some("x86_64"),
+            4096,
+            "stale",
+        )],
+    );
+    let conn = catalogs.connection();
     insert_stale_converted_package(
         &conn,
         "fedora",
+        &revision,
         "stale-only",
         "1.0",
         &["stale-chunk".to_string()],
@@ -421,13 +676,20 @@ fn oci_tags_catalog_and_manifest_ignore_stale_rows() {
     let chunk_cache = crate::server::ChunkCache::new(
         chunk_dir.path().to_path_buf(),
         1024 * 1024 * 1024,
-        temp_file.path().to_path_buf(),
+        catalogs.db_path().to_path_buf(),
     );
 
-    let tags = build_tags_list(temp_file.path(), "fedora", "stale-only").unwrap();
-    let catalog = build_catalog(temp_file.path()).unwrap();
+    let tags = build_tags_list(
+        catalogs.authority(),
+        catalogs.db_path(),
+        "fedora",
+        "stale-only",
+    )
+    .unwrap();
+    let catalog = build_catalog(catalogs.authority(), catalogs.db_path()).unwrap();
     let manifest = build_manifest(
-        temp_file.path(),
+        catalogs.authority(),
+        catalogs.db_path(),
         "fedora",
         "stale-only",
         "1.0",
@@ -442,7 +704,7 @@ fn oci_tags_catalog_and_manifest_ignore_stale_rows() {
 
 #[tokio::test]
 async fn oci_blob_returns_not_found_for_stale_conversion_only_hash() {
-    let (state, _temp) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]).await;
+    let (state, _temp, _catalogs) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]).await;
     let digest = format!("sha256:{OCI_TEST_HASH}");
 
     let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;
@@ -452,7 +714,7 @@ async fn oci_blob_returns_not_found_for_stale_conversion_only_hash() {
 
 #[tokio::test]
 async fn oci_head_blob_returns_not_found_for_stale_conversion_only_hash() {
-    let (state, _temp) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]).await;
+    let (state, _temp, _catalogs) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]).await;
     let digest = format!("sha256:{OCI_TEST_HASH}");
 
     let response = head_blob_inner(state, "conary/fedora/pkg", &digest).await;
@@ -462,7 +724,7 @@ async fn oci_head_blob_returns_not_found_for_stale_conversion_only_hash() {
 
 #[tokio::test]
 async fn oci_blob_allows_hash_shared_with_current_conversion_row() {
-    let (state, _temp) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true, false]).await;
+    let (state, _temp, _catalogs) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true, false]).await;
     let digest = format!("sha256:{OCI_TEST_HASH}");
 
     let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;

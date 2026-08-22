@@ -82,12 +82,11 @@ impl<'de> Deserialize<'de> for RemiSparseStateId {
     }
 }
 
-/// Monotonic revision of one exact profile's visible sparse-resolution state.
+/// Exact activated profile revision for one sparse-resolution page set.
 ///
-/// The server advances this value whenever a package, provide, grouped
-/// requirement, persisted package metadata, or repository membership change
-/// can affect an `include=versions` response. A client pins the first value for
-/// the complete page set.
+/// The sequence is the activation fencing epoch and the state ID is derived
+/// from the verified immutable profile-revision digest. A client pins the
+/// first value for the complete page set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemiSparseRevision {

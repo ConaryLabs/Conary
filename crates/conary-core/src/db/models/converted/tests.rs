@@ -2,13 +2,39 @@
 
 use super::*;
 use crate::ccs::convert::ScriptletBundleSummary;
-use crate::db::models::{RepositoryProvide, Trove, TroveType};
+use crate::db::models::{
+    RemiCatalogResource, RemiCatalogResourceKind, RemiProfileRevisionPin, RemiRevisionPinKind,
+    Trove, TroveType,
+};
 use crate::db::testing::create_test_db;
+use rusqlite::Connection;
+
+const FEDORA_REVISION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const SOLUS_REVISION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+fn seed_profile_resource(conn: &Connection, profile: &str, manifest_json: &str) -> String {
+    let revision = crate::hash::sha256(manifest_json.as_bytes());
+    RemiCatalogResource {
+        resource_sha256: revision.clone(),
+        kind: RemiCatalogResourceKind::ProfileRevision,
+        source_profile: profile.to_string(),
+        artifact_sha256: crate::hash::sha256(format!("artifact-{revision}").as_bytes()),
+        artifact_size: 1,
+        logical_digest_sha256: crate::hash::sha256(format!("logical-{revision}").as_bytes()),
+        manifest_json: manifest_json.to_string(),
+        durable: true,
+        created_at: 1,
+    }
+    .insert(conn)
+    .unwrap();
+    revision
+}
 
 fn server_package(checksum: &str, chunk: &str) -> ConvertedPackage {
     let transport = crate::ccs::transport::test_transport(&[chunk.to_string()]);
     ConvertedPackage::new_repository(
         "fedora-44".to_string(),
+        FEDORA_REVISION.to_string(),
         "fixture".to_string(),
         "1.0-1".to_string(),
         "x86_64".to_string(),
@@ -82,9 +108,10 @@ fn converted_package_round_trips_lifecycle_summary() {
     converted.set_scriptlet_metadata(&summary).unwrap();
     converted.insert(&conn).unwrap();
 
-    let found = ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", "sha256:source")
-        .unwrap()
-        .unwrap();
+    let found =
+        ConvertedPackage::find_repository_by_checksum(&conn, FEDORA_REVISION, "sha256:source")
+            .unwrap()
+            .unwrap();
     assert_eq!(found.scriptlet_summary().unwrap(), summary);
 }
 
@@ -133,7 +160,7 @@ fn stale_rows_are_excluded_from_current_conversion_query() {
     converted.insert(&conn).unwrap();
 
     assert!(
-        ConvertedPackage::find_current_conversions(&conn, "fedora-44", Some("fixture"))
+        ConvertedPackage::find_current_conversions(&conn, FEDORA_REVISION, Some("fixture"))
             .unwrap()
             .is_empty()
     );
@@ -147,7 +174,7 @@ fn current_typed_summary_is_returned_by_current_conversion_query() {
     converted.insert(&conn).unwrap();
 
     assert_eq!(
-        ConvertedPackage::find_current_conversions(&conn, "fedora-44", Some("fixture"))
+        ConvertedPackage::find_current_conversions(&conn, FEDORA_REVISION, Some("fixture"))
             .unwrap()
             .len(),
         1
@@ -155,30 +182,27 @@ fn current_typed_summary_is_returned_by_current_conversion_query() {
 }
 
 #[test]
-fn repository_provide_change_invalidates_and_reconciles_conversion() {
+fn stale_conversion_revision_is_reconciled_without_operational_metadata() {
     let (_temp, conn) = create_test_db();
     seed_server_package_source(&conn, "sha256:source");
     let mut converted = server_package("sha256:source", "sha256:chunk");
     converted.insert(&conn).unwrap();
-    assert!(converted.repository_metadata_is_current(&conn).unwrap());
-
-    let mut provide = RepositoryProvide::new(
-        1,
-        "/usr/bin/kernel-install".to_string(),
-        None,
-        "file".to_string(),
-        Some("/usr/bin/kernel-install".to_string()),
-        crate::repository::versioning::VersionScheme::Rpm,
-    );
-    provide.insert(&conn).unwrap();
-
-    assert!(!converted.repository_metadata_is_current(&conn).unwrap());
+    assert!(converted.repository_conversion_is_current().unwrap());
+    converted.conversion_version = CONVERSION_VERSION - 1;
+    conn.execute(
+        "UPDATE converted_packages SET conversion_version = ?1 WHERE id = ?2",
+        rusqlite::params![converted.conversion_version, converted.id.unwrap()],
+    )
+    .unwrap();
+    // Mutable RepositoryProvide rows are deliberately not conversion
+    // authority; only the exact revision and conversion algorithm matter.
+    assert!(!converted.repository_conversion_is_current().unwrap());
     assert_eq!(
-        ConvertedPackage::reconcile_repository_metadata(&conn, "fedora-44").unwrap(),
+        ConvertedPackage::reconcile_repository_conversions(&conn, FEDORA_REVISION).unwrap(),
         1
     );
     assert!(
-        ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", "sha256:source")
+        ConvertedPackage::find_repository_by_checksum(&conn, FEDORA_REVISION, "sha256:source")
             .unwrap()
             .is_none()
     );
@@ -205,6 +229,7 @@ fn sha1_repository_checksum_is_current_and_algorithm_change_invalidates_it() {
     let transport = crate::ccs::transport::test_transport(&["sha256:chunk".to_string()]);
     let mut converted = ConvertedPackage::new_repository(
         "solus".to_string(),
+        SOLUS_REVISION.to_string(),
         "fixture".to_string(),
         "1.0-1".to_string(),
         "x86_64".to_string(),
@@ -218,9 +243,9 @@ fn sha1_repository_checksum_is_current_and_algorithm_change_invalidates_it() {
     );
     converted.insert(&conn).unwrap();
 
-    assert!(converted.repository_metadata_is_current(&conn).unwrap());
+    assert!(converted.repository_conversion_is_current().unwrap());
     assert_eq!(
-        ConvertedPackage::find_current_conversions(&conn, "solus", Some("fixture"))
+        ConvertedPackage::find_current_conversions(&conn, SOLUS_REVISION, Some("fixture"))
             .unwrap()
             .len(),
         1
@@ -231,7 +256,7 @@ fn sha1_repository_checksum_is_current_and_algorithm_change_invalidates_it() {
         ["sha256:1826421aded2a344b7864ffff2fae2430778b1f0"],
     )
     .unwrap();
-    assert!(!converted.repository_metadata_is_current(&conn).unwrap());
+    assert!(converted.repository_conversion_is_current().unwrap());
 }
 
 #[test]
@@ -242,6 +267,7 @@ fn repository_artifact_exposes_only_complete_serving_state() {
     assert_eq!(artifact.package_name, "fixture");
     assert_eq!(artifact.package_version, "1.0-1");
     assert_eq!(artifact.source_profile, "fedora-44");
+    assert_eq!(artifact.profile_revision_sha256, FEDORA_REVISION);
     assert_eq!(artifact.package_architecture, "x86_64");
     assert_eq!(
         artifact
@@ -282,6 +308,206 @@ fn installed_conversion_rejects_repository_serving_fields() {
 }
 
 #[test]
+fn installed_conversion_profile_revision_is_null() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = installed_package(&conn, "rpm", "sha256:installed-revision-null");
+    converted.insert(&conn).unwrap();
+
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT profile_revision_sha256 FROM converted_packages WHERE id = ?1",
+            [converted.id.unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, None);
+}
+
+#[test]
+fn repository_conversion_requires_exact_lowercase_profile_revision() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = server_package("sha256:revision-required", "sha256:chunk");
+    converted.profile_revision_sha256 = None;
+    let error = converted.insert(&conn).unwrap_err().to_string();
+    assert!(error.contains("missing profile_revision_sha256"), "{error}");
+
+    for invalid in [
+        "",
+        "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0",
+    ] {
+        let mut converted = server_package("sha256:revision-invalid", "sha256:chunk");
+        converted.profile_revision_sha256 = Some(invalid.to_string());
+        let error = converted.insert(&conn).unwrap_err().to_string();
+        assert!(
+            error.contains("exactly 64 lowercase hexadecimal characters")
+                || (invalid.is_empty() && error.contains("missing profile_revision_sha256")),
+            "invalid revision {invalid:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn repository_provides_digest_is_optional_diagnostic_state() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = server_package("sha256:diagnostic-optional", "sha256:chunk");
+    converted.repository_provides_digest = None;
+    converted.insert(&conn).unwrap();
+
+    let found = ConvertedPackage::find_repository_by_checksum(
+        &conn,
+        FEDORA_REVISION,
+        "sha256:diagnostic-optional",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(found.repository_provides_digest, None);
+    assert!(found.repository_artifact().is_ok());
+    assert!(found.repository_conversion_is_current().unwrap());
+}
+
+#[test]
+fn conversion_row_and_exact_revision_pin_share_atomic_lifecycle() {
+    let (_temp, conn) = create_test_db();
+    let manifest_json = "{}";
+    let profile_revision_sha256 = crate::hash::sha256(manifest_json.as_bytes());
+    RemiCatalogResource {
+        resource_sha256: profile_revision_sha256.clone(),
+        kind: RemiCatalogResourceKind::ProfileRevision,
+        source_profile: "fedora-44".to_string(),
+        artifact_sha256: "c".repeat(64),
+        artifact_size: 1,
+        logical_digest_sha256: "d".repeat(64),
+        manifest_json: manifest_json.to_string(),
+        durable: true,
+        created_at: 1,
+    }
+    .insert(&conn)
+    .unwrap();
+
+    let mut converted = server_package("sha256:pinned", "sha256:chunk");
+    converted.profile_revision_sha256 = Some(profile_revision_sha256.clone());
+    let id = converted.insert_with_conversion_pin(&conn, 2).unwrap();
+    let pin = ConvertedPackage::require_conversion_pin(&conn, id).unwrap();
+    assert_eq!(pin.owner_kind, RemiRevisionPinKind::Conversion);
+    assert_eq!(pin.owner_identity, id.to_string());
+    assert_eq!(pin.profile_revision_sha256, profile_revision_sha256);
+    assert_eq!(pin.source_profile, "fedora-44");
+
+    assert!(ConvertedPackage::delete_with_conversion_pin(&conn, id).unwrap());
+    assert!(ConvertedPackage::find_by_id(&conn, id).unwrap().is_none());
+    assert!(
+        crate::db::models::RemiProfileRevisionPin::find(
+            &conn,
+            &ConvertedPackage::conversion_pin_id(id),
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn conversion_pin_insert_rolls_back_row_when_exact_revision_is_not_durable() {
+    let (_temp, conn) = create_test_db();
+    let mut converted = server_package("sha256:pin-rollback", "sha256:chunk");
+    let id_result = converted.insert_with_conversion_pin(&conn, 2);
+    assert!(id_result.is_err());
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM converted_packages", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn repository_conversion_without_its_exact_pin_is_corruption() {
+    let (_temp, conn) = create_test_db();
+    let revision = seed_profile_resource(&conn, "fedora-44", r#"{"revision":"a"}"#);
+    let mut converted = server_package("sha256:missing-pin", "sha256:chunk");
+    converted.profile_revision_sha256 = Some(revision);
+    let id = converted.insert(&conn).unwrap();
+
+    let error = ConvertedPackage::require_conversion_pin(&conn, id)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("has no exact profile-revision pin"),
+        "{error}"
+    );
+}
+
+#[test]
+fn repository_conversion_rejects_a_pin_for_another_revision() {
+    let (_temp, conn) = create_test_db();
+    let row_revision = seed_profile_resource(&conn, "fedora-44", r#"{"revision":"a"}"#);
+    let other_revision = seed_profile_resource(&conn, "fedora-44", r#"{"revision":"b"}"#);
+    let mut converted = server_package("sha256:mismatched-pin", "sha256:chunk");
+    converted.profile_revision_sha256 = Some(row_revision);
+    let id = converted.insert(&conn).unwrap();
+    RemiProfileRevisionPin {
+        pin_id: ConvertedPackage::conversion_pin_id(id),
+        source_profile: "fedora-44".to_string(),
+        profile_revision_sha256: other_revision,
+        owner_kind: RemiRevisionPinKind::Conversion,
+        owner_identity: ConvertedPackage::conversion_pin_owner_identity(id),
+        runtime_session_id: None,
+        pinned_at: 2,
+    }
+    .insert(&conn)
+    .unwrap();
+
+    let error = ConvertedPackage::require_conversion_pin(&conn, id)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("mismatched profile-revision pin identity"),
+        "{error}"
+    );
+}
+
+#[test]
+fn reconciling_a_stale_conversion_removes_its_exact_pin() {
+    let (_temp, conn) = create_test_db();
+    let manifest_json = "{}";
+    let revision = crate::hash::sha256(manifest_json.as_bytes());
+    RemiCatalogResource {
+        resource_sha256: revision.clone(),
+        kind: RemiCatalogResourceKind::ProfileRevision,
+        source_profile: "fedora-44".to_string(),
+        artifact_sha256: "c".repeat(64),
+        artifact_size: 1,
+        logical_digest_sha256: "d".repeat(64),
+        manifest_json: manifest_json.to_string(),
+        durable: true,
+        created_at: 1,
+    }
+    .insert(&conn)
+    .unwrap();
+    let mut converted = server_package("sha256:stale-pinned", "sha256:chunk");
+    converted.profile_revision_sha256 = Some(revision.clone());
+    let id = converted.insert_with_conversion_pin(&conn, 2).unwrap();
+    conn.execute(
+        "UPDATE converted_packages SET conversion_version = ?1 WHERE id = ?2",
+        rusqlite::params![CONVERSION_VERSION - 1, id],
+    )
+    .unwrap();
+
+    assert_eq!(
+        ConvertedPackage::reconcile_repository_conversions(&conn, &revision).unwrap(),
+        1
+    );
+    assert!(ConvertedPackage::find_by_id(&conn, id).unwrap().is_none());
+    assert!(
+        RemiProfileRevisionPin::find(&conn, &ConvertedPackage::conversion_pin_id(id))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn installed_conversion_round_trips_a_durable_ccs_path() {
     let (_temp, conn) = create_test_db();
     let mut converted = installed_package(&conn, "rpm", "sha256:installed-path");
@@ -317,9 +543,10 @@ fn repository_artifact_rejects_corrupt_transport_json() {
     )
     .unwrap();
 
-    let found = ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", "sha256:source")
-        .unwrap()
-        .unwrap();
+    let found =
+        ConvertedPackage::find_repository_by_checksum(&conn, FEDORA_REVISION, "sha256:source")
+            .unwrap()
+            .unwrap();
     let error = found.repository_artifact().unwrap_err().to_string();
     assert!(error.contains("malformed transport_json"), "{error}");
 }
@@ -439,7 +666,7 @@ fn checksum_is_unique() {
 }
 
 #[test]
-fn checksum_identity_is_scoped_by_artifact_kind_and_source_profile() {
+fn checksum_identity_is_scoped_by_artifact_kind_and_profile_revision() {
     let (_temp, conn) = create_test_db();
     let checksum = "sha256:shared";
 
@@ -449,8 +676,15 @@ fn checksum_identity_is_scoped_by_artifact_kind_and_source_profile() {
     server_package(checksum, "sha256:fedora")
         .insert(&conn)
         .unwrap();
+    assert!(
+        server_package(checksum, "sha256:duplicate")
+            .insert(&conn)
+            .is_err()
+    );
     let mut arch = server_package(checksum, "sha256:arch");
     arch.source_profile = Some("arch".to_string());
+    arch.profile_revision_sha256 =
+        Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string());
     arch.insert(&conn).unwrap();
 
     assert!(
@@ -459,14 +693,18 @@ fn checksum_identity_is_scoped_by_artifact_kind_and_source_profile() {
             .is_some()
     );
     assert!(
-        ConvertedPackage::find_repository_by_checksum(&conn, "fedora-44", checksum)
+        ConvertedPackage::find_repository_by_checksum(&conn, FEDORA_REVISION, checksum)
             .unwrap()
             .is_some()
     );
     assert!(
-        ConvertedPackage::find_repository_by_checksum(&conn, "arch", checksum)
-            .unwrap()
-            .is_some()
+        ConvertedPackage::find_repository_by_checksum(
+            &conn,
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            checksum,
+        )
+        .unwrap()
+        .is_some()
     );
 }
 

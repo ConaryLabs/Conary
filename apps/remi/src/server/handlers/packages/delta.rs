@@ -26,6 +26,7 @@ pub(crate) async fn get_delta(
 
     let state_guard = state.read().await;
     let db_path = state_guard.config.db_path.clone();
+    let catalog_authority = state_guard.catalog_authority.clone();
     drop(state_guard);
 
     let from = query.from;
@@ -39,16 +40,31 @@ pub(crate) async fn get_delta(
 
     let result = tokio::task::spawn_blocking(move || {
         let conn = rusqlite::Connection::open(&db_path)?;
+        // Keep the authority pin alive for both the cache lookup and any
+        // on-demand computation. The delta API receives only this exact
+        // immutable revision; route/profile labels never select conversions.
+        let catalog = catalog_authority.open_active_profile(&source_profile)?;
+        let profile_revision_sha256 = catalog.profile_revision_sha256();
 
         // Try cached delta first
-        if let Some(cached) =
-            crate::server::delta_manifests::get_delta(&conn, &source_profile, &name_c, &from, &to)?
-        {
+        if let Some(cached) = crate::server::delta_manifests::get_delta(
+            &conn,
+            profile_revision_sha256,
+            &name_c,
+            &from,
+            &to,
+        )? {
             return Ok(cached);
         }
 
         // Compute on the fly
-        crate::server::delta_manifests::compute_delta(&conn, &source_profile, &name_c, &from, &to)
+        crate::server::delta_manifests::compute_delta(
+            &conn,
+            profile_revision_sha256,
+            &name_c,
+            &from,
+            &to,
+        )
     })
     .await;
 

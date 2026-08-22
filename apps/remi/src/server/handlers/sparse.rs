@@ -11,7 +11,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use conary_core::db::models::{ConvertedPackage, NativePackagePublication, RepositoryPackage};
+use conary_core::db::models::{NativePackagePublication, normalize_native_architecture};
 use conary_core::repository::remi_metadata::{
     REMI_SPARSE_MAX_PAGE_SIZE, REMI_SPARSE_MIN_PACKAGE_SIZE, RemiSparseListInclude,
     RemiSparsePackageList as PackageListResponse, RemiSparsePackagePage,
@@ -21,9 +21,11 @@ pub use conary_core::repository::remi_metadata::{
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+use crate::server::catalog_authority::CatalogAuthority;
+use crate::server::profile_catalog::ProfileCatalog;
 
 mod page;
 
@@ -61,6 +63,7 @@ pub async fn get_sparse_entry(
 
     let state_guard = state.read().await;
     let db_path = state_guard.config.db_path.clone();
+    let catalog_authority = state_guard.catalog_authority.clone();
     let fed_config = state_guard.federated_config.clone();
     let fed_cache = state_guard.federated_cache.clone();
     let http_client = state_guard.http_client.clone();
@@ -69,6 +72,7 @@ pub async fn get_sparse_entry(
     // Use federated builder if federation is enabled
     if let (Some(config), Some(cache)) = (fed_config, fed_cache) {
         let result = crate::server::federated_index::build_federated_sparse_entry(
+            catalog_authority,
             &db_path,
             &distro,
             &name,
@@ -95,8 +99,10 @@ pub async fn get_sparse_entry(
     }
 
     // Non-federated path: local only
-    let result =
-        tokio::task::spawn_blocking(move || build_sparse_entry(&db_path, &distro, &name)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        build_sparse_entry(&catalog_authority, &db_path, &distro, &name)
+    })
+    .await;
 
     match result {
         Ok(Ok(Some(entry))) => {
@@ -139,15 +145,18 @@ pub async fn list_packages(
     let include = query.include;
 
     let state_guard = state.read().await;
-    let db_path = state_guard.config.db_path.clone();
+    let catalog_authority = state_guard.catalog_authority.clone();
     drop(state_guard);
 
     let result = tokio::task::spawn_blocking(move || match include {
         RemiSparseListInclude::Names => {
-            build_package_list(&db_path, &distro, page, per_page).map(PackageListProjection::Names)
+            build_package_list(&catalog_authority, &distro, page, per_page)
+                .map(PackageListProjection::Names)
         }
-        RemiSparseListInclude::Versions => build_package_page(&db_path, &distro, page, per_page)
-            .map(PackageListProjection::Versions),
+        RemiSparseListInclude::Versions => {
+            build_package_page(&catalog_authority, &distro, page, per_page)
+                .map(PackageListProjection::Versions)
+        }
     })
     .await;
 
@@ -172,763 +181,149 @@ pub async fn list_packages(
 
 /// Build a sparse index entry for a specific package, aggregating across all
 /// repos for the distro (e.g. arch-core + arch-extra).
-fn build_sparse_entry(
+pub(super) fn build_sparse_entry(
+    catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
 ) -> Result<Option<SparseIndexEntry>, anyhow::Error> {
+    build_sparse_entry_with_revision(catalog_authority, db_path, distro, name)
+        .map(|(_, entry)| entry)
+}
+
+pub(crate) fn build_sparse_entry_with_revision(
+    catalog_authority: &CatalogAuthority,
+    db_path: &std::path::Path,
+    distro: &str,
+    name: &str,
+) -> Result<(String, Option<SparseIndexEntry>), anyhow::Error> {
     let conn = Connection::open(db_path)?;
     let source_profile =
         conary_core::repository::supported_profiles::profile_for_remi_route(distro)
             .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
 
-    // Find all repositories for this distro
-    let repositories = find_repositories_for_profile(&conn, source_profile.id())?;
-    let repo_ids = repositories
-        .iter()
-        .map(super::require_persisted_repository_id)
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    if repo_ids.is_empty() {
-        return Ok(None);
+    let pinned = catalog_authority.open_active_profile(source_profile.id())?;
+    let catalog = ProfileCatalog::new(&pinned);
+    let revision_sha256 = catalog.profile_revision_sha256().to_string();
+    let minimum_size = u64::try_from(REMI_SPARSE_MIN_PACKAGE_SIZE)
+        .map_err(|_| anyhow::anyhow!("sparse minimum package size is negative"))?;
+    let packages = catalog.find_downloadable_package_records_by_name(name, minimum_size)?;
+    let mut publications =
+        NativePackagePublication::find_active(&conn, source_profile.id(), name, None, None, None)?;
+    validate_unique_publications(&publications)?;
+    if packages.is_empty() && publications.is_empty() {
+        return Ok((revision_sha256, None));
     }
 
-    let packages = load_visible_repository_packages(&conn, &repo_ids, &[name.to_string()])?;
-
-    if packages.is_empty() {
-        return Ok(None);
-    }
-
-    let mut converted_map = std::collections::HashMap::new();
-    for converted in
-        ConvertedPackage::find_current_conversions(&conn, source_profile.id(), Some(name))?
-    {
-        converted.scriptlet_summary()?;
-        let artifact = converted.repository_artifact()?;
-        converted_map.insert(
-            (
-                artifact.package_version.to_string(),
-                None::<String>,
-                Some(artifact.package_architecture.to_string()),
-            ),
-            artifact.content_hash.to_string(),
-        );
-    }
-    let mut native_content_by_package_id = HashMap::new();
-    for publication in
-        NativePackagePublication::find_active(&conn, source_profile.id(), name, None, None, None)?
-    {
-        if native_content_by_package_id
-            .insert(
-                publication.repository_package_id,
-                publication.content_hash.clone(),
-            )
-            .is_some()
-        {
-            anyhow::bail!(
-                "multiple public native publications reference repository package {}",
-                publication.repository_package_id
-            );
-        }
-    }
-
-    // Build version entries
-    let versions = packages
-        .into_iter()
-        .map(|pkg| -> Result<SparseVersionEntry, anyhow::Error> {
-            let converted_info = converted_map.get(&(
-                pkg.version.clone(),
-                None::<String>,
-                pkg.architecture.clone(),
-            ));
-            let package_id = pkg
-                .id
-                .ok_or_else(|| anyhow::anyhow!("repository package has no persisted ID"))?;
-            let exact =
-                crate::server::package_metadata::load_exact_package_metadata(&conn, package_id)?;
-            let release = (!pkg.package_release.is_empty()).then_some(pkg.package_release);
-            let native_content_hash = native_content_by_package_id.get(&package_id);
-            if let Some(native_content_hash) = native_content_hash
-                && native_content_hash != &pkg.checksum
-            {
+    let mut versions = Vec::with_capacity(packages.len() + publications.len());
+    for package in packages {
+        let publication_index = publications.iter().position(|publication| {
+            publication.version == package.version
+                && publication.package_release == package.package_release
+                && normalize_native_architecture(Some(&publication.architecture))
+                    == normalize_native_architecture(package.architecture.as_deref())
+        });
+        let content_hash = if let Some(index) = publication_index {
+            let publication = publications.remove(index);
+            if publication.content_hash != package.checksum {
                 anyhow::bail!(
-                    "public native publication content hash '{}' disagrees with repository \
-                     package {} checksum '{}'",
-                    native_content_hash,
-                    package_id,
-                    pkg.checksum
+                    "public native publication content hash '{}' disagrees with immutable \
+                     catalog package '{}' checksum '{}'",
+                    publication.content_hash,
+                    package.package_key_sha256,
+                    package.checksum
                 );
             }
-            Ok(SparseVersionEntry {
-                version: pkg.version,
-                release,
-                provides: exact.provides,
-                requirement_groups: exact.requirement_groups,
-                architecture: pkg.architecture,
-                size: pkg.size,
-                converted: converted_info.is_some(),
-                content_hash: if let Some(native_content_hash) = native_content_hash {
-                    Some(native_content_hash.clone())
-                } else {
-                    converted_info.cloned()
-                },
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(Some(SparseIndexEntry {
-        name: name.to_string(),
-        distro: distro.to_string(),
-        versions,
-    }))
-}
-
-fn load_visible_repository_packages(
-    conn: &Connection,
-    repo_ids: &[i64],
-    names: &[String],
-) -> Result<Vec<RepositoryPackage>, anyhow::Error> {
-    if repo_ids.is_empty() || names.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let repository_placeholders = (1..=repo_ids.len())
-        .map(|index| format!("?{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let first_name_index = repo_ids.len() + 1;
-    let name_placeholders = (first_name_index..first_name_index + names.len())
-        .map(|index| format!("?{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let minimum_size_index = first_name_index + names.len();
-    let sql = format!(
-        "SELECT {}
-         FROM repository_packages
-         WHERE repository_id IN ({repository_placeholders})
-           AND name IN ({name_placeholders})
-           AND size >= ?{minimum_size_index}
-         ORDER BY name, version, package_release, architecture",
-        RepositoryPackage::COLUMNS
-    );
-
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = repo_ids
-        .iter()
-        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
-        .collect();
-    params.extend(
-        names
-            .iter()
-            .cloned()
-            .map(|name| Box::new(name) as Box<dyn rusqlite::types::ToSql>),
-    );
-    params.push(Box::new(REMI_SPARSE_MIN_PACKAGE_SIZE));
-
-    let mut stmt = conn.prepare(&sql)?;
-    stmt.query_map(
-        rusqlite::params_from_iter(&params),
-        RepositoryPackage::from_row,
-    )?
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(Into::into)
-}
-
-/// Alias to shared implementations in handlers/mod.rs
-use super::find_repositories_for_profile;
-#[cfg(test)]
-use super::find_repository_for_profile;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::server::native_publish::test_support::seed_native_publication;
-    use axum::extract::{Path, Query, State};
-    use conary_core::db::models::{
-        CONVERSION_VERSION, ConvertedPackage, Repository, RepositoryProvide, RepositoryRequirement,
-        RepositoryRequirementGroup as DbRequirementGroup,
-    };
-    use conary_core::db::schema;
-    use conary_core::repository::dependency_model::{
-        RepositoryRequirementClause, RepositoryRequirementExpression,
-    };
-    use std::path::PathBuf;
-    use tempfile::NamedTempFile;
-
-    fn create_test_db() -> (NamedTempFile, Connection) {
-        let temp_file = NamedTempFile::new().unwrap();
-        let conn = Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        schema::ensure_current(&conn).unwrap();
-        (temp_file, conn)
-    }
-
-    fn remi_empty_db_state() -> (tempfile::TempDir, PathBuf, Arc<RwLock<ServerState>>) {
-        let temp = tempfile::tempdir().unwrap();
-        let db_path = temp.path().join("remi-test.db");
-        {
-            let conn = Connection::open(&db_path).unwrap();
-            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-            schema::ensure_current(&conn).unwrap();
-        }
-
-        let config = crate::server::ServerConfig {
-            db_path,
-            chunk_dir: temp.path().join("chunks"),
-            cache_dir: temp.path().join("cache"),
-            ..Default::default()
+            Some(publication.content_hash)
+        } else {
+            None
         };
-        std::fs::create_dir_all(&config.chunk_dir).unwrap();
-        std::fs::create_dir_all(&config.cache_dir).unwrap();
-
-        let state = Arc::new(RwLock::new(
-            crate::server::ServerState::new(config).expect("test server state"),
-        ));
-        let cache_dir = temp.path().join("cache");
-        (temp, cache_dir, state)
+        let projected = catalog.project_package(&package)?;
+        versions.push(SparseVersionEntry {
+            version: projected.version,
+            release: projected.release,
+            provides: projected.provides,
+            requirement_groups: projected.requirement_groups,
+            architecture: projected.architecture,
+            size: projected.size,
+            converted: false,
+            content_hash,
+        });
     }
-
-    #[tokio::test]
-    async fn sparse_index_rejects_unsupported_distro_before_db_lookup() {
-        let (_temp, _cache_dir, state) = remi_empty_db_state();
-        let response = list_packages(
-            State(state),
-            Path("debian".to_string()),
-            Query(ListQuery {
-                page: None,
-                per_page: None,
-                include: RemiSparseListInclude::Names,
-            }),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn sparse_entry_rejects_unsupported_distro_before_db_lookup() {
-        let (_temp, _cache_dir, state) = remi_empty_db_state();
-        let response = get_sparse_entry(
-            State(state),
-            Path(("debian".to_string(), "bash".to_string())),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    fn insert_repo(conn: &Connection, name: &str, distro: &str) -> i64 {
-        let mut repo = Repository::new(name.to_string(), "https://example.com".to_string());
-        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-            .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
-        repo.source_profile = Some(profile.id().to_string());
-        repo.insert(conn).unwrap()
-    }
-
-    fn insert_package(
-        conn: &Connection,
-        repo_id: i64,
-        name: &str,
-        version: &str,
-        size: i64,
-    ) -> i64 {
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            name.to_string(),
-            version.to_string(),
-            conary_core::repository::versioning::VersionScheme::Rpm,
-            format!("sha256:{name}-{version}"),
-            size,
-            format!("https://example.com/{name}-{version}.rpm"),
-        );
-        pkg.architecture = Some("x86_64".to_string());
-        let package_id = pkg.insert(conn).unwrap();
-        for capability in ["glibc", "openssl"] {
-            let expression = RepositoryRequirementExpression::Atom(
-                RepositoryRequirementClause::name_only(capability.to_string()),
+    for publication in publications {
+        if publication.total_size < REMI_SPARSE_MIN_PACKAGE_SIZE {
+            anyhow::bail!(
+                "public native publication {}-{}.{} has invalid size {}",
+                publication.version,
+                publication.package_release,
+                publication.architecture,
+                publication.total_size
             );
-            let mut group = DbRequirementGroup::new(
-                package_id,
-                "depends".to_string(),
-                "hard".to_string(),
-                serde_json::to_string(&expression).unwrap(),
-            );
-            group.native_text = Some(capability.to_string());
-            let group_id = group.insert(conn).unwrap();
-            let mut atom = RepositoryRequirement::new(
-                package_id,
-                group_id,
-                capability.to_string(),
-                None,
-                "package".to_string(),
-                "runtime".to_string(),
-                Some(capability.to_string()),
-            );
-            atom.insert(conn).unwrap();
         }
-        package_id
+        versions.push(SparseVersionEntry {
+            version: publication.version,
+            release: (!publication.package_release.is_empty())
+                .then_some(publication.package_release),
+            provides: Vec::new(),
+            requirement_groups: Vec::new(),
+            architecture: Some(normalize_native_architecture(Some(
+                &publication.architecture,
+            ))),
+            size: publication.total_size,
+            converted: false,
+            content_hash: Some(publication.content_hash),
+        });
     }
+    sort_sparse_versions(&mut versions);
 
-    fn insert_stale_conversion(
-        conn: &Connection,
-        distro: &str,
-        package: &str,
-        version: &str,
-        content_hash: &str,
-    ) {
-        let source_profile =
-            conary_core::repository::supported_profiles::profile_for_remi_route(distro).unwrap();
-        let transport = crate::server::conversion::test_support::test_transport(&[format!(
-            "sha256:{package}-{version}-chunk"
-        )]);
-        let mut converted = ConvertedPackage::new_repository(
-            source_profile.id().to_string(),
-            package.to_string(),
-            version.to_string(),
-            "x86_64".to_string(),
-            "rpm".to_string(),
-            format!("sha256:{package}-{version}-source"),
-            &transport,
-            42,
-            content_hash.to_string(),
-            format!("/tmp/{package}-{version}.ccs"),
-            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
-        );
-        converted.conversion_version = CONVERSION_VERSION - 1;
-        converted.insert(conn).unwrap();
-    }
-
-    #[test]
-    fn test_sparse_entry_not_found_no_repo() {
-        let (temp_file, _conn) = create_test_db();
-        let result = build_sparse_entry(temp_file.path(), "fedora", "nginx").unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_sparse_entry_not_found_no_package() {
-        let (temp_file, conn) = create_test_db();
-        insert_repo(&conn, "fedora-base", "fedora");
-
-        let result = build_sparse_entry(temp_file.path(), "fedora", "nonexistent").unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn sparse_index_preserves_native_sibling_releases() {
-        let (temp_file, conn) = create_test_db();
-        seed_native_publication(
-            &conn,
-            "fedora",
-            "hello",
-            "1.0.0",
-            "1",
-            "noarch",
-            "/tmp/hello-1.ccs",
-        );
-        seed_native_publication(
-            &conn,
-            "fedora",
-            "hello",
-            "1.0.0",
-            "2",
-            "noarch",
-            "/tmp/hello-2.ccs",
-        );
-
-        let entry = build_sparse_entry(temp_file.path(), "fedora", "hello")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(entry.versions.len(), 2);
-        assert!(
-            entry
-                .versions
-                .iter()
-                .any(|version| version.release.as_deref() == Some("1"))
-        );
-        assert!(
-            entry
-                .versions
-                .iter()
-                .any(|version| version.release.as_deref() == Some("2"))
-        );
-    }
-
-    #[test]
-    fn test_sparse_entry_single_version() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
-
-        let entry = build_sparse_entry(temp_file.path(), "fedora", "nginx")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(entry.name, "nginx");
-        assert_eq!(entry.distro, "fedora");
-        assert_eq!(entry.versions.len(), 1);
-        assert_eq!(entry.versions[0].version, "1.24.0-1.fc44");
-        assert_eq!(entry.versions[0].size, 1024);
-        assert_eq!(entry.versions[0].architecture.as_deref(), Some("x86_64"));
-        assert!(!entry.versions[0].converted);
-        assert!(entry.versions[0].content_hash.is_none());
-        assert_eq!(entry.versions[0].requirement_groups.len(), 2);
-    }
-
-    #[test]
-    fn test_sparse_entry_ignores_zero_sized_repository_rows() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 0);
-
-        let result = build_sparse_entry(temp_file.path(), "fedora", "nginx").unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn sparse_list_bulk_page_and_lookup_share_one_visibility_contract() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        let fetchable_id = insert_package(&conn, repo_id, "fetchable", "1.0-1.fc44", 1024);
-        let mut file_provider = RepositoryProvide::new(
-            fetchable_id,
-            "/usr/bin/fetchable".to_string(),
-            None,
-            "file".to_string(),
-            None,
-            conary_core::repository::versioning::VersionScheme::Rpm,
-        );
-        file_provider.insert(&conn).unwrap();
-        conn.execute(
-            "UPDATE repository_packages SET metadata = ?1 WHERE id = ?2",
-            rusqlite::params![
-                serde_json::json!({
-                    "security_advisory": {
-                        "id": "FEDORA-2026-0001",
-                        "source": "remi",
-                        "source_trust": "trusted",
-                        "fixed_version": "1.0-1.fc44"
-                    }
-                })
-                .to_string(),
-                fetchable_id,
-            ],
-        )
-        .unwrap();
-        insert_package(&conn, repo_id, "mixed", "0.9-1.fc44", 0);
-        insert_package(&conn, repo_id, "mixed", "1.0-1.fc44", 2048);
-        insert_package(&conn, repo_id, "placeholder-only", "1.0-1.fc44", 0);
-
-        let all_names = ["fetchable", "mixed", "placeholder-only"];
-        let fetchable = all_names
-            .into_iter()
-            .filter(|name| {
-                build_sparse_entry(temp_file.path(), "fedora", name)
-                    .unwrap()
-                    .is_some()
-            })
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        let list = build_package_list(temp_file.path(), "fedora", 1, 100).unwrap();
-        let page = build_package_page(temp_file.path(), "fedora", 1, 100).unwrap();
-        let lookup = build_sparse_entry(temp_file.path(), "fedora", "fetchable")
-            .unwrap()
-            .unwrap();
-        let page_names = page
-            .packages
-            .iter()
-            .map(|entry| entry.name.clone())
-            .collect::<Vec<_>>();
-
-        assert_eq!(fetchable, vec!["fetchable", "mixed"]);
-        assert_eq!(list.source_profile, "fedora-44");
-        assert_eq!(page.source_profile, "fedora-44");
-        assert_eq!(list.packages, fetchable);
-        assert_eq!(page_names, fetchable);
-        assert_eq!(list.total, fetchable.len());
-        assert_eq!(page.total, fetchable.len());
-        assert_eq!(
-            page.packages[0].versions[0].metadata.as_ref().unwrap()["security_advisory"]["id"],
-            "FEDORA-2026-0001"
-        );
-        assert!(page.packages[0].versions[0].provides.iter().any(|provide| {
-            provide.capability == "/usr/bin/fetchable"
-                && provide.kind == "file"
-                && provide.version.is_none()
-        }));
-        assert!(lookup.versions[0].provides.iter().any(|provide| {
-            provide.capability == "/usr/bin/fetchable"
-                && provide.kind == "file"
-                && provide.version.is_none()
-        }));
-        assert_eq!(page.packages[1].versions.len(), 1);
-        assert_eq!(page.packages[1].versions[0].version, "1.0-1.fc44");
-        assert_eq!(page.packages[1].versions[0].requirement_groups.len(), 2);
-    }
-
-    #[test]
-    fn test_sparse_entry_multiple_versions() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.22.0-1.fc44", 900);
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
-        insert_package(&conn, repo_id, "nginx", "1.25.0-1.fc44", 1100);
-
-        let entry = build_sparse_entry(temp_file.path(), "fedora", "nginx")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(entry.versions.len(), 3);
-        // Versions should be sorted by version string
-        assert_eq!(entry.versions[0].version, "1.22.0-1.fc44");
-        assert_eq!(entry.versions[1].version, "1.24.0-1.fc44");
-        assert_eq!(entry.versions[2].version, "1.25.0-1.fc44");
-    }
-
-    #[test]
-    fn test_sparse_entry_with_conversion() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
-        insert_package(&conn, repo_id, "nginx", "1.25.0-1.fc44", 1100);
-
-        // Mark one version as converted
-        let transport = crate::server::conversion::test_support::test_transport(&[
-            "chunk1".to_string(),
-            "chunk2".to_string(),
-        ]);
-        let mut converted = ConvertedPackage::new_repository(
-            "fedora-44".to_string(),
-            "nginx".to_string(),
-            "1.24.0-1.fc44".to_string(),
-            "x86_64".to_string(),
-            "rpm".to_string(),
-            "sha256:nginx-1.24.0-1.fc44".to_string(),
-            &transport,
-            2048,
-            "sha256:content_abc".to_string(),
-            "/data/nginx.ccs".to_string(),
-            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
-        );
-        converted.insert(&conn).unwrap();
-
-        let entry = build_sparse_entry(temp_file.path(), "fedora", "nginx")
-            .unwrap()
-            .unwrap();
-
-        let v1240 = entry
-            .versions
-            .iter()
-            .find(|v| v.version == "1.24.0-1.fc44")
-            .unwrap();
-        assert!(v1240.converted);
-        assert_eq!(v1240.content_hash.as_deref(), Some("sha256:content_abc"));
-
-        let v1250 = entry
-            .versions
-            .iter()
-            .find(|v| v.version == "1.25.0-1.fc44")
-            .unwrap();
-        assert!(!v1250.converted);
-        assert!(v1250.content_hash.is_none());
-    }
-
-    #[test]
-    fn test_sparse_entry_ignores_stale_converted_version() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.24.0-1.fc44", 1024);
-
-        let transport =
-            crate::server::conversion::test_support::test_transport(&["chunk1".to_string()]);
-        let mut converted = ConvertedPackage::new_repository(
-            "fedora-44".to_string(),
-            "nginx".to_string(),
-            "1.24.0-1.fc44".to_string(),
-            "x86_64".to_string(),
-            "rpm".to_string(),
-            "sha256:nginx-1.24.0-1.fc44".to_string(),
-            &transport,
-            2048,
-            "sha256:content_abc".to_string(),
-            "/data/nginx.ccs".to_string(),
-            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
-        );
-        converted.conversion_version = CONVERSION_VERSION - 1;
-        converted.insert(&conn).unwrap();
-
-        let entry = build_sparse_entry(temp_file.path(), "fedora", "nginx")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(entry.versions.len(), 1);
-        assert!(!entry.versions[0].converted);
-        assert!(entry.versions[0].content_hash.is_none());
-    }
-
-    #[test]
-    fn test_sparse_entry_matches_converted_architecture() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "libffi", "3.5.1-2.fc44", 1024);
-
-        let transport =
-            crate::server::conversion::test_support::test_transport(&["chunk1".to_string()]);
-        let mut converted = ConvertedPackage::new_repository(
-            "fedora-44".to_string(),
-            "libffi".to_string(),
-            "3.5.1-2.fc44".to_string(),
-            "i686".to_string(),
-            "rpm".to_string(),
-            "sha256:libffi-i686".to_string(),
-            &transport,
-            2048,
-            "sha256:i686-content".to_string(),
-            "/data/libffi-i686.ccs".to_string(),
-            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
-        );
-        converted.insert(&conn).unwrap();
-
-        let entry = build_sparse_entry(temp_file.path(), "fedora", "libffi")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(entry.versions.len(), 1);
-        assert_eq!(entry.versions[0].architecture.as_deref(), Some("x86_64"));
-        assert!(!entry.versions[0].converted);
-        assert!(entry.versions[0].content_hash.is_none());
-    }
-
-    #[test]
-    fn sparse_entry_hides_stale_content_hash() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "gtk3", "3.24.0", 1024);
-        insert_stale_conversion(&conn, "fedora", "gtk3", "3.24.0", "sha256:private-content");
-
-        let entry = build_sparse_entry(temp_file.path(), "fedora", "gtk3")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(entry.versions.len(), 1);
-        assert!(!entry.versions[0].converted);
-        assert!(entry.versions[0].content_hash.is_none());
-    }
-
-    #[test]
-    fn test_package_list_empty() {
-        let (temp_file, _conn) = create_test_db();
-        let list = build_package_list(temp_file.path(), "fedora", 1, 100).unwrap();
-
-        assert_eq!(list.distro, "fedora");
-        assert!(list.packages.is_empty());
-        assert_eq!(list.total, 0);
-        assert_eq!(list.page, 1);
-        assert_eq!(list.per_page, 100);
-    }
-
-    #[test]
-    fn test_package_list_with_packages() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
-        insert_package(&conn, repo_id, "curl", "8.5.0", 512);
-        insert_package(&conn, repo_id, "zlib", "1.3.0", 256);
-        // Add a second version of nginx (should not duplicate in name list)
-        insert_package(&conn, repo_id, "nginx", "1.25.0", 1100);
-
-        let list = build_package_list(temp_file.path(), "fedora", 1, 100).unwrap();
-
-        assert_eq!(list.total, 3); // 3 distinct names
-        assert_eq!(list.packages.len(), 3);
-        assert_eq!(list.packages, vec!["curl", "nginx", "zlib"]);
-    }
-
-    #[test]
-    fn test_package_list_pagination() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-
-        // Insert 5 packages
-        for name in &["alpha", "bravo", "charlie", "delta", "echo"] {
-            insert_package(&conn, repo_id, name, "1.0.0", 100);
-        }
-
-        // Page 1 with per_page=2
-        let page1 = build_package_list(temp_file.path(), "fedora", 1, 2).unwrap();
-        assert_eq!(page1.total, 5);
-        assert_eq!(page1.packages.len(), 2);
-        assert_eq!(page1.packages, vec!["alpha", "bravo"]);
-        assert_eq!(page1.page, 1);
-        assert_eq!(page1.per_page, 2);
-
-        // Page 2
-        let page2 = build_package_list(temp_file.path(), "fedora", 2, 2).unwrap();
-        assert_eq!(page2.total, 5);
-        assert_eq!(page2.packages.len(), 2);
-        assert_eq!(page2.packages, vec!["charlie", "delta"]);
-
-        // Page 3 (partial)
-        let page3 = build_package_list(temp_file.path(), "fedora", 3, 2).unwrap();
-        assert_eq!(page3.total, 5);
-        assert_eq!(page3.packages.len(), 1);
-        assert_eq!(page3.packages, vec!["echo"]);
-
-        // Page 4 (empty)
-        let page4 = build_package_list(temp_file.path(), "fedora", 4, 2).unwrap();
-        assert_eq!(page4.total, 5);
-        assert!(page4.packages.is_empty());
-    }
-
-    #[test]
-    fn test_package_list_different_distros() {
-        let (temp_file, conn) = create_test_db();
-        let fedora_id = insert_repo(&conn, "fedora-base", "fedora");
-        let arch_id = insert_repo(&conn, "arch-base", "arch");
-
-        insert_package(&conn, fedora_id, "nginx", "1.24.0", 1024);
-        insert_package(&conn, fedora_id, "curl", "8.5.0", 512);
-        insert_package(&conn, arch_id, "nginx", "1.25.0", 1100);
-        insert_package(&conn, arch_id, "pacman", "6.0.0", 800);
-
-        let fedora_list = build_package_list(temp_file.path(), "fedora", 1, 100).unwrap();
-        assert_eq!(fedora_list.total, 2);
-        assert_eq!(fedora_list.packages, vec!["curl", "nginx"]);
-
-        let arch_list = build_package_list(temp_file.path(), "arch", 1, 100).unwrap();
-        assert_eq!(arch_list.total, 2);
-        assert_eq!(arch_list.packages, vec!["nginx", "pacman"]);
-    }
-
-    #[test]
-    fn test_find_repository_for_profile_by_strategy() {
-        let (_temp_file, conn) = create_test_db();
-        let mut repo = Repository::new("my-repo".to_string(), "https://example.com".to_string());
-        repo.source_profile = Some("fedora-44".to_string());
-        repo.insert(&conn).unwrap();
-
-        let found = find_repository_for_profile(&conn, "fedora-44").unwrap();
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().name, "my-repo");
-    }
-
-    #[test]
-    fn repository_name_does_not_create_profile_authority() {
-        let (_temp_file, conn) = create_test_db();
-        let mut repo = Repository::new("arch-linux".to_string(), "https://example.com".to_string());
-        repo.insert(&conn).unwrap();
-
-        let found = find_repository_for_profile(&conn, "arch").unwrap();
-        assert!(found.is_none());
-    }
-
-    #[test]
-    fn test_find_repository_for_profile_not_found() {
-        let (_temp_file, conn) = create_test_db();
-        let error = find_repository_for_profile(&conn, "gentoo").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("unsupported public source profile 'gentoo'")
-        );
-    }
+    Ok((
+        revision_sha256,
+        Some(SparseIndexEntry {
+            name: name.to_string(),
+            distro: distro.to_string(),
+            versions,
+        }),
+    ))
 }
+
+fn validate_unique_publications(
+    publications: &[NativePackagePublication],
+) -> Result<(), anyhow::Error> {
+    let mut identities = std::collections::BTreeSet::new();
+    for publication in publications {
+        let identity = (
+            &publication.version,
+            &publication.package_release,
+            normalize_native_architecture(Some(&publication.architecture)),
+        );
+        if !identities.insert(identity) {
+            anyhow::bail!(
+                "multiple public native publications share package identity {}-{}.{}",
+                publication.version,
+                publication.package_release,
+                publication.architecture
+            );
+        }
+    }
+    Ok(())
+}
+
+fn sort_sparse_versions(versions: &mut [SparseVersionEntry]) {
+    versions.sort_by(|left, right| {
+        (
+            &left.version,
+            &left.release,
+            &left.architecture,
+            &left.content_hash,
+        )
+            .cmp(&(
+                &right.version,
+                &right.release,
+                &right.architecture,
+                &right.content_hash,
+            ))
+    });
+}
+
+#[cfg(test)]
+mod tests;

@@ -6,8 +6,9 @@
 //! in a custom text format with %FIELD% markers.
 
 use super::{
-    AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
-    RepositoryParser,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
+    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    authenticated_metadata_object,
 };
 use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
@@ -55,7 +56,11 @@ impl ArchParser {
     async fn download_database(
         &self,
         repo_url: &str,
-    ) -> Result<(Vec<u8>, AuthenticatedSnapshotIdentity)> {
+    ) -> Result<(
+        Vec<u8>,
+        AuthenticatedSnapshotIdentity,
+        AuthenticatedMetadataObject,
+    )> {
         let db_url = format!("{}/{}.db", repo_url.trim_end_matches('/'), self.repo_name);
         debug!("Downloading Arch database from: {}", db_url);
 
@@ -84,9 +89,15 @@ impl ArchParser {
             Err(error) => return Err(error),
         }
         let snapshot = authenticated_database_snapshot(&raw_bytes);
+        let database_path = format!("{}.db", self.repo_name);
+        let database_object = authenticated_metadata_object(
+            AuthenticatedMetadataObjectRole::ArchDatabase,
+            &database_path,
+            &raw_bytes,
+        );
         let decompressed =
             decompress_metadata_auto(&raw_bytes, &format!("Arch repository database {db_url}"))?;
-        Ok((decompressed, snapshot))
+        Ok((decompressed, snapshot, database_object))
     }
 
     /// Parse a desc file from the tarball
@@ -394,7 +405,7 @@ impl RepositoryParser for ArchParser {
         info!("Syncing Arch Linux repository: {}", self.repo_name);
 
         // Download and decompress database (handled by RepositoryClient)
-        let (decompressed, snapshot) = self.download_database(repo_url).await?;
+        let (decompressed, snapshot, database_object) = self.download_database(repo_url).await?;
 
         // Single-pass: collect desc and depends data keyed by directory name.
         // Directory names in .db.tar.gz are "{name}-{version}-{pkgrel}/".
@@ -462,7 +473,11 @@ impl RepositoryParser for ArchParser {
         }
 
         info!("Parsed {} packages from Arch repository", packages.len());
-        Ok(AuthenticatedRepositoryMetadata { packages, snapshot })
+        Ok(AuthenticatedRepositoryMetadata {
+            packages,
+            snapshot,
+            authenticated_objects: vec![database_object],
+        })
     }
 }
 
@@ -918,6 +933,10 @@ x86_64
     #[test]
     fn snapshot_identity_owns_the_served_compressed_database_bytes() {
         let served = b"compressed alpm database bytes";
+        assert_eq!(
+            authenticated_database_snapshot(served).size(),
+            Some(served.len() as u64)
+        );
         assert_eq!(
             authenticated_database_snapshot(served),
             AuthenticatedSnapshotIdentity::for_bytes(served)

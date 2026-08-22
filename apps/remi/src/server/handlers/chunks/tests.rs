@@ -36,6 +36,7 @@ async fn chunk_state_with_db(
             crate::server::conversion::test_support::test_transport(&[hash.to_string()]);
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
+            "a".repeat(64),
             format!("pkg-{index}"),
             "1.0".to_string(),
             "x86_64".to_string(),

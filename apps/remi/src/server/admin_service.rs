@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 use conary_core::db::models::admin_token::AdminToken;
 use conary_core::db::models::audit_log::AuditEntry;
 use conary_core::db::models::federation_peer::FederationPeer;
-use conary_core::db::models::{Repository, RepositoryOwnership};
+use conary_core::db::models::{RemiActiveProfileRevision, Repository, RepositoryOwnership};
 use conary_core::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
@@ -30,16 +30,17 @@ use crate::server::r2_durability::{
     MAX_BACKFILL_CONCURRENCY, R2DurabilityMode, R2DurabilityReport, run_r2_durability,
 };
 
+mod profile_refresh;
 mod publication;
 mod refresh;
 mod repository_policy;
 mod test_data;
 
+pub(crate) use refresh::refresh_repositories_uncoordinated;
 pub use refresh::{
     RepoRefreshBatch, RepoRefreshBatchState, RepoRefreshFailure, RepoRefreshFailureKind,
-    RepoRefreshResult,
+    RepoRefreshResult, refresh_repositories, sync_repo,
 };
-use refresh::{RepoRefreshOutcome, collect_refresh_outcomes};
 pub use repository_policy::NativeSourcePolicyInput;
 use repository_policy::apply_native_source_contract;
 pub use test_data::{
@@ -658,6 +659,7 @@ pub async fn create_repo(
             repo.trust_policy = input.trust;
             apply_native_source_contract(&mut repo, input.native_source)?;
             repo.insert(&tx)?;
+            retire_native_profile_pointer(&tx, &repo)?;
             tx.commit()?;
             Ok(repo)
         })
@@ -675,12 +677,6 @@ pub struct UpdateRepoInput {
     pub parser: RepositoryParserConfig,
     pub trust: Option<RepositoryTrustPolicy>,
     pub native_source: Option<NativeSourcePolicyInput>,
-}
-
-enum RepoRefreshPlan {
-    Missing,
-    Skipped(RepoRefreshResult),
-    Sync(Box<Repository>),
 }
 
 /// Update an existing repository by name.  Returns `None` if not found.
@@ -742,6 +738,9 @@ pub async fn update_repo(
                 || repo.repository_identity != previous.repository_identity
                 || repo.stream_binding_sha256 != previous.stream_binding_sha256
                 || repo.pinned_snapshot != previous.pinned_snapshot;
+            let catalog_binding_changed = source_changed
+                || repo.enabled != previous.enabled
+                || repo.priority != previous.priority;
             if source_changed {
                 let repository_id = repo.id.ok_or_else(|| {
                     conary_core::Error::MissingId("Repository has no ID".to_string())
@@ -753,6 +752,10 @@ pub async fn update_repo(
                 repo.insert(&tx)?;
             } else {
                 repo.update(&tx)?;
+            }
+            if catalog_binding_changed {
+                retire_native_profile_pointer(&tx, &previous)?;
+                retire_native_profile_pointer(&tx, &repo)?;
             }
             tx.commit()?;
             Ok(Some(repo))
@@ -787,6 +790,7 @@ pub async fn delete_repo(
                         conary_core::Error::MissingId("Repository has no ID".to_string())
                     })?;
                     Repository::delete(&tx, id)?;
+                    retire_native_profile_pointer(&tx, &r)?;
                     true
                 }
                 None => false,
@@ -798,6 +802,19 @@ pub async fn delete_repo(
     .await
 }
 
+fn retire_native_profile_pointer(
+    conn: &rusqlite::Connection,
+    repository: &Repository,
+) -> conary_core::Result<()> {
+    if repository.enabled
+        && profile_refresh::is_native_profile_repository(repository)
+        && let Some(source_profile) = repository.source_profile.as_deref()
+    {
+        RemiActiveProfileRevision::retire(conn, source_profile)?;
+    }
+    Ok(())
+}
+
 /// Check whether a repository exists by name.
 pub async fn repo_exists(
     state: &Arc<RwLock<ServerState>>,
@@ -805,26 +822,6 @@ pub async fn repo_exists(
 ) -> Result<bool, ServiceError> {
     let repo = get_repo(state, name).await?;
     Ok(repo.is_some())
-}
-
-async fn refresh_loaded_repo(
-    db: PathBuf,
-    repo: Repository,
-    database_writer: crate::server::database_writer::DatabaseWriter,
-) -> Result<RepoRefreshResult, ServiceError> {
-    let name = repo.name.clone();
-    let source_profile = repo.source_profile.clone();
-    let packages_synced =
-        conary_core::repository::sync_repository_from_db_path(db, repo, database_writer)
-            .await
-            .map_err(ServiceError::from)?;
-
-    Ok(RepoRefreshResult {
-        name,
-        source_profile,
-        packages_synced,
-        skipped: false,
-    })
 }
 
 async fn validate_repository_trust(policy: &RepositoryTrustPolicy) -> Result<(), ServiceError> {
@@ -857,131 +854,4 @@ fn repository_trust_roots(policy: &RepositoryTrustPolicy) -> Vec<&OpenPgpTrustRo
         },
         RepositoryTrustPolicy::Arch { .. } | RepositoryTrustPolicy::Eopkg { .. } => Vec::new(),
     }
-}
-
-/// Synchronize a single repository by name.
-///
-/// Returns `Ok(None)` if the repository does not exist.
-pub async fn sync_repo(
-    state: &Arc<RwLock<ServerState>>,
-    name: &str,
-    force: bool,
-) -> Result<Option<RepoRefreshResult>, ServiceError> {
-    let _publication_guard = publication::guard(state).await;
-    let result = sync_repo_uncoordinated(state, name, force).await;
-    publication::record_single_repository_outcome(state, &result).await;
-    result
-}
-
-async fn sync_repo_uncoordinated(
-    state: &Arc<RwLock<ServerState>>,
-    name: &str,
-    force: bool,
-) -> Result<Option<RepoRefreshResult>, ServiceError> {
-    let db = db_path(state).await;
-    let database_writer = state.read().await.database_writer.clone();
-    let name_owned = name.to_string();
-    let db_for_lookup = db.clone();
-    let plan = blocking_anyhow(move || {
-        let conn = conary_core::db::open_fast(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
-        let repo = match Repository::find_by_name(&conn, &name_owned)
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-        {
-            Some(repo) => repo,
-            None => return Ok(RepoRefreshPlan::Missing),
-        };
-
-        if !force && !conary_core::repository::needs_sync(&repo) {
-            return Ok(RepoRefreshPlan::Skipped(RepoRefreshResult {
-                name: repo.name,
-                source_profile: repo.source_profile,
-                packages_synced: 0,
-                skipped: true,
-            }));
-        }
-
-        Ok(RepoRefreshPlan::Sync(Box::new(repo)))
-    })
-    .await?;
-
-    match plan {
-        RepoRefreshPlan::Missing => Ok(None),
-        RepoRefreshPlan::Skipped(result) => Ok(Some(result)),
-        RepoRefreshPlan::Sync(repo) => refresh_loaded_repo(db_for_lookup, *repo, database_writer)
-            .await
-            .map(Some),
-    }
-}
-
-/// Synchronize all enabled repositories.
-pub async fn refresh_repositories(
-    state: &Arc<RwLock<ServerState>>,
-    force: bool,
-) -> Result<RepoRefreshBatch, ServiceError> {
-    let _publication_guard = publication::guard(state).await;
-    let result = refresh_repositories_uncoordinated(state, force).await;
-    let outcome = match result.as_ref().map(RepoRefreshBatch::state) {
-        Ok(RepoRefreshBatchState::Complete) => {
-            crate::server::readiness::PublicationPhaseState::Complete
-        }
-        Ok(RepoRefreshBatchState::Partial) => {
-            crate::server::readiness::PublicationPhaseState::Partial
-        }
-        Ok(RepoRefreshBatchState::Failed) => {
-            crate::server::readiness::PublicationPhaseState::Failed
-        }
-        Err(_) => crate::server::readiness::PublicationPhaseState::Unavailable,
-    };
-    state
-        .write()
-        .await
-        .publication_readiness
-        .record_repository(outcome);
-    result
-}
-
-/// Synchronize enabled repositories while the caller owns the complete
-/// publication-cycle coordinator.
-pub(crate) async fn refresh_repositories_uncoordinated(
-    state: &Arc<RwLock<ServerState>>,
-    force: bool,
-) -> Result<RepoRefreshBatch, ServiceError> {
-    let db = db_path(state).await;
-    let database_writer = state.read().await.database_writer.clone();
-    let repos = blocking_anyhow({
-        let db = db.clone();
-        move || {
-            let conn = conary_core::db::open_fast(&db).map_err(|e| anyhow::anyhow!("{e}"))?;
-            Repository::list_enabled(&conn).map_err(|e| anyhow::anyhow!("{e}"))
-        }
-    })
-    .await?;
-
-    let jobs =
-        repos.into_iter().map(|repo| {
-            let db = db.clone();
-            let database_writer = database_writer.clone();
-            let name = repo.name.clone();
-            let source_profile = repo.source_profile.clone();
-            async move {
-                let result = if !force && !conary_core::repository::needs_sync(&repo) {
-                    Ok(RepoRefreshResult {
-                        name: name.clone(),
-                        source_profile: source_profile.clone(),
-                        packages_synced: 0,
-                        skipped: true,
-                    })
-                } else {
-                    refresh_loaded_repo(db, repo, database_writer).await
-                };
-                match result {
-                    Ok(result) => RepoRefreshOutcome::Success(result),
-                    Err(error) => RepoRefreshOutcome::Failure(
-                        RepoRefreshFailure::from_service_error(name, source_profile, error),
-                    ),
-                }
-            }
-        });
-    let batch = collect_refresh_outcomes(jobs).await;
-    Ok(batch)
 }
