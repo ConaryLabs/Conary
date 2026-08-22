@@ -189,6 +189,56 @@ async fn test_download_to_bytes_requests_identity_encoding() {
 }
 
 #[tokio::test]
+async fn test_download_to_bytes_retries_a_transient_transport_failure() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for attempt in 1..=2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            if attempt == 2 {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+
+    let client = RepositoryClient::new()
+        .unwrap()
+        .with_retry_policy(RetryConfig {
+            max_attempts: 2,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter_factor: 0.0,
+        });
+    let bytes = client
+        .download_to_bytes(&format!("http://{addr}/metadata"))
+        .await
+        .unwrap();
+
+    assert_eq!(bytes, b"ok");
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn test_download_file_requests_identity_encoding() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;

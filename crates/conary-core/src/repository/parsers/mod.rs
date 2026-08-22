@@ -21,8 +21,7 @@ pub use sink::{
     SnapshotPackageJoin, SnapshotProvideUpdate,
 };
 pub use snapshot::{
-    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
-    AuthenticatedSnapshotIdentity,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
 };
 
 use crate::error::Result;

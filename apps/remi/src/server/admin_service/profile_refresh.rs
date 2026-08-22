@@ -528,7 +528,7 @@ async fn finalize_profile(
                             ))
                         },
                     )?;
-                    let changed = input != candidate;
+                    let changed = source_snapshot_changed(input.as_deref(), candidate.as_deref())?;
                     conn.execute(
                         "UPDATE repositories
                      SET last_checked_at = ?1,
@@ -660,4 +660,32 @@ fn unix_seconds() -> conary_core::Result<i64> {
         .as_secs();
     i64::try_from(seconds)
         .map_err(|_| conary_core::Error::InternalError("system time exceeds i64".to_string()))
+}
+
+fn source_snapshot_changed(
+    input: Option<&str>,
+    candidate: Option<&str>,
+) -> conary_core::Result<bool> {
+    let candidate = candidate.ok_or_else(|| {
+        conary_core::Error::ConflictError(
+            "profile activation has no candidate source snapshot identity".to_string(),
+        )
+    })?;
+    Ok(input != Some(candidate))
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::source_snapshot_changed;
+
+    #[test]
+    fn timestamp_change_authority_distinguishes_noop_change_and_missing_candidate() {
+        let digest = "a".repeat(64);
+        let changed = "b".repeat(64);
+
+        assert!(!source_snapshot_changed(Some(&digest), Some(&digest)).unwrap());
+        assert!(source_snapshot_changed(Some(&digest), Some(&changed)).unwrap());
+        assert!(source_snapshot_changed(None, Some(&digest)).unwrap());
+        assert!(source_snapshot_changed(Some(&digest), None).is_err());
+    }
 }

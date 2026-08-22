@@ -361,10 +361,8 @@ pub(super) fn ingest_filelists<R: BufRead>(
         sink.package(package)?;
     }
     let ingest = ingest_filelists_into(&mut sink, document, source)?;
-    let metadata = sink.finish(
-        crate::repository::parsers::AuthenticatedSnapshotIdentity::for_bytes(b"filelists test"),
-    )?;
-    packages.clone_from_slice(&metadata.packages);
+    let (projected, _) = sink.finish();
+    packages.clone_from_slice(&projected);
     Ok(ingest)
 }
 
@@ -402,10 +400,8 @@ pub(super) fn ingest_verified_filelists(
             "signed repomd.xml authenticates filelists metadata as {open_size} decompressed bytes but {source} decoded to {decoded} bytes"
         )));
     }
-    let metadata = sink.finish(
-        crate::repository::parsers::AuthenticatedSnapshotIdentity::for_bytes(b"filelists test"),
-    )?;
-    packages.clone_from_slice(&metadata.packages);
+    let (projected, _) = sink.finish();
+    packages.clone_from_slice(&projected);
     Ok(ingest)
 }
 

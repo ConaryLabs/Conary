@@ -81,7 +81,9 @@ pub(super) async fn fetch_repository_native_snapshot(
     keyring_dir: &Path,
 ) -> Result<RepositorySyncSnapshot> {
     let parser = prepare_repository_native_parser(repo, keyring_dir).await?;
-    let metadata = parser.sync_metadata(&repo.url).await?;
+    let mut sink = crate::repository::parsers::CollectingRepositorySnapshotSink::create()?;
+    let snapshot = parser.ingest_snapshot(&repo.url, &mut sink).await?;
+    let (packages, authenticated_objects) = sink.finish();
 
     let repo_id = repo
         .id
@@ -95,8 +97,7 @@ pub(super) async fn fetch_repository_native_snapshot(
     }
 
     // Convert package metadata to repository rows plus normalized capability rows.
-    let synced_packages: Vec<SyncedPackageRow> = metadata
-        .packages
+    let synced_packages: Vec<SyncedPackageRow> = packages
         .into_iter()
         .map(|pkg_meta| {
             synced_package_row(
@@ -110,8 +111,8 @@ pub(super) async fn fetch_repository_native_snapshot(
         .collect();
     Ok(RepositorySyncSnapshot::NativeRows {
         packages: synced_packages,
-        snapshot: metadata.snapshot,
-        authenticated_objects: metadata.authenticated_objects,
+        snapshot,
+        authenticated_objects,
     })
 }
 

@@ -5,9 +5,7 @@
 //! Provides typed format identity and creation of repository parsers.
 
 use crate::error::{Error, Result};
-use crate::repository::parsers::{
-    self, AuthenticatedRepositoryMetadata, RepositoryParser, RepositorySnapshotSink,
-};
+use crate::repository::parsers::{self, RepositoryParser, RepositorySnapshotSink};
 use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
 use serde::{Deserialize, Serialize};
 
@@ -31,12 +29,6 @@ impl AnyParser {
             Self::Fedora(p) => p.ingest_snapshot(repo_url, sink).await,
             Self::Eopkg(p) => p.ingest_snapshot(repo_url, sink).await,
         }
-    }
-
-    pub async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
-        let mut sink = parsers::CollectingRepositorySnapshotSink::create()?;
-        let snapshot = self.ingest_snapshot(repo_url, &mut sink).await?;
-        sink.finish(snapshot)
     }
 }
 

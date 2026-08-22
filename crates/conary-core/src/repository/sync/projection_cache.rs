@@ -125,7 +125,12 @@ impl ProjectionCache {
                     File::open(&self.root)?.sync_all()?;
                     Ok(())
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
+                    ) =>
+                {
                     remove_exact_entry(&self.root, &stage)?;
                     self.lookup_exact(&entry, &key).map(|_| ())
                 }

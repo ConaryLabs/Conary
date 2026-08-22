@@ -8,8 +8,7 @@ use std::path::Path;
 use crate::error::{Error, Result};
 
 use super::{
-    AuthenticatedMetadataObject, AuthenticatedRepositoryMetadata, AuthenticatedSnapshotIdentity,
-    ChecksumType, PackageMetadata,
+    AuthenticatedMetadataObject, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
 };
 use crate::repository::dependency_model::RepositoryProvide;
 
@@ -218,19 +217,12 @@ impl RepositorySnapshotSink for CollectingRepositorySnapshotSink {
 }
 
 impl CollectingRepositorySnapshotSink {
-    pub(crate) fn finish(
-        mut self,
-        snapshot: AuthenticatedSnapshotIdentity,
-    ) -> Result<AuthenticatedRepositoryMetadata> {
+    pub(crate) fn finish(mut self) -> (Vec<PackageMetadata>, Vec<AuthenticatedMetadataObject>) {
         self.authenticated_objects.sort_by(|left, right| {
             format!("{:?}", left.role)
                 .cmp(&format!("{:?}", right.role))
                 .then_with(|| left.source_path.cmp(&right.source_path))
         });
-        Ok(AuthenticatedRepositoryMetadata {
-            packages: self.packages,
-            snapshot,
-            authenticated_objects: self.authenticated_objects,
-        })
+        (self.packages, self.authenticated_objects)
     }
 }

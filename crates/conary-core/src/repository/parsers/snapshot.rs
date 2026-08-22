@@ -2,7 +2,6 @@
 
 //! Authenticated native repository metadata-root identity.
 
-use super::PackageMetadata;
 use crate::error::{Error, Result};
 use crate::repository::catalog::SourceMetadataObjectV1;
 
@@ -84,16 +83,6 @@ impl AuthenticatedSnapshotIdentity {
     pub fn size(&self) -> Option<u64> {
         self.size
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct AuthenticatedRepositoryMetadata {
-    pub packages: Vec<PackageMetadata>,
-    pub snapshot: AuthenticatedSnapshotIdentity,
-    /// Exact child metadata objects covered by `snapshot` and consumed to
-    /// produce `packages`. The vector is strict and canonical: at most one
-    /// object per role, ordered by role then source path.
-    pub authenticated_objects: Vec<AuthenticatedMetadataObject>,
 }
 
 fn validate_sha256(value: &str) -> Result<()> {

@@ -74,7 +74,12 @@ fn append_limited_chunk(
     limit: u64,
     url: &str,
 ) -> Result<()> {
-    *total += chunk.len() as u64;
+    *total =
+        total
+            .checked_add(u64::try_from(chunk.len()).map_err(|_| {
+                Error::DownloadError("response chunk length exceeds u64".to_string())
+            })?)
+            .ok_or_else(|| Error::DownloadError("response body size exceeds u64".to_string()))?;
     if *total > limit {
         return Err(Error::DownloadError(format!(
             "Response body too large ({} bytes, max {}): {}",
@@ -352,7 +357,13 @@ async fn stream_response_to_file(
         file.write_all(&chunk).io_context("write download data")?;
         hasher.update(&chunk);
 
-        downloaded += chunk.len() as u64;
+        downloaded = downloaded
+            .checked_add(u64::try_from(chunk.len()).map_err(|_| {
+                Error::DownloadError("response chunk length exceeds u64".to_string())
+            })?)
+            .ok_or_else(|| {
+                Error::DownloadError("downloaded response size exceeds u64".to_string())
+            })?;
 
         if let Some(pb) = progress_bar {
             pb.set_position(downloaded);
@@ -500,7 +511,8 @@ impl RepositoryClient {
     /// Download a URL to bytes (for signature files, keys, etc.)
     ///
     /// Returns the response body as bytes, or an error if the download fails.
-    /// This method does NOT retry - if the URL returns 404, it returns an error immediately.
+    /// Transient transport and server failures use the configured bounded retry
+    /// policy. Permanent HTTP failures such as 404 return immediately.
     pub async fn download_to_bytes(&self, url: &str) -> Result<Vec<u8>> {
         self.download_to_bytes_with_headers(url)
             .await
@@ -517,22 +529,46 @@ impl RepositoryClient {
     ) -> Result<(header::HeaderMap, Vec<u8>)> {
         validate_url_scheme(url)?;
 
-        let response = self
-            .client
-            .get(url)
-            .header(header::ACCEPT_ENCODING, "identity")
-            .timeout(byte_download_timeout(&self.timeouts))
-            .send()
-            .await
-            .download_context(url)?;
-
-        if !response.status().is_success() {
-            return Err(http_status_error(response.status(), url));
+        let max_attempts = self.retry_policy.max_attempts.max(1);
+        for attempt in 1..=max_attempts {
+            let response = self
+                .client
+                .get(url)
+                .header(header::ACCEPT_ENCODING, "identity")
+                .timeout(byte_download_timeout(&self.timeouts))
+                .send()
+                .await;
+            match response {
+                Ok(response) if is_transient_error(response.status()) => {
+                    if attempt == max_attempts {
+                        return Err(http_status_error(response.status(), url));
+                    }
+                    warn!(
+                        "Byte download attempt {} got HTTP {}, retrying...",
+                        attempt,
+                        response.status()
+                    );
+                }
+                Ok(response) => {
+                    if !response.status().is_success() {
+                        return Err(http_status_error(response.status(), url));
+                    }
+                    let headers = response.headers().clone();
+                    let body =
+                        read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, url)
+                            .await?;
+                    return Ok((headers, body));
+                }
+                Err(error) => {
+                    if attempt == max_attempts {
+                        return Err(error).download_context(url);
+                    }
+                    warn!("Byte download attempt {attempt} failed: {error}, retrying...");
+                }
+            }
+            tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
         }
-
-        let headers = response.headers().clone();
-        let body = read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, url).await?;
-        Ok((headers, body))
+        unreachable!("byte download attempt count is clamped to at least one")
     }
 
     /// Fetch and decompress data from a URL

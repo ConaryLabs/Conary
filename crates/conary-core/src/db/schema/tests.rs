@@ -57,6 +57,34 @@ fn current_schema_has_no_mutable_authenticated_snapshot_authority() {
 }
 
 #[test]
+fn current_repository_schema_has_distinct_sync_timestamps_and_no_legacy_fallback() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+
+    let current_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('repositories')
+             WHERE name IN (
+                 'last_checked_at', 'last_changed_at',
+                 'last_validated_at', 'last_published_at'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let legacy_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('repositories') WHERE name = 'last_sync'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(current_count, 4);
+    assert_eq!(legacy_count, 0);
+}
+
+#[test]
 fn ensure_current_is_idempotent_for_current_epoch() {
     let conn = Connection::open_in_memory().unwrap();
     ensure_current(&conn).unwrap();
