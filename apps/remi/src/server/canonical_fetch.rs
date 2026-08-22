@@ -87,6 +87,18 @@ impl CanonicalCycleReport {
             rebuild,
         }
     }
+
+    pub(crate) fn with_publication_failure(self, error: &anyhow::Error) -> Self {
+        Self::new(
+            self.repology,
+            self.appstream,
+            CanonicalRebuildOutcome::Failed {
+                message: format!(
+                    "canonical map rebuilt but signed universe publication failed: {error:#}"
+                ),
+            },
+        )
+    }
 }
 
 /// Fetch both discovery sources, persist their exact outcomes, then rebuild.

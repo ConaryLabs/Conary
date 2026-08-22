@@ -7,7 +7,7 @@ use std::fmt;
 
 use rusqlite::Connection;
 use serde::de::{MapAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::db::models::{CanonicalMappingAuthority, CanonicalPackage, PackageImplementation};
 use crate::repository::supported_profiles::profile_by_public_id;
@@ -16,29 +16,29 @@ use crate::{Error, Result};
 pub(crate) const CANONICAL_MAP_SHA256_HEADER: &str = "x-conary-canonical-sha256";
 
 /// Owned canonical map response ready for validation and persistence.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct CanonicalMapSnapshot {
-    pub(crate) schema_version: u32,
-    pub(crate) revision: u64,
-    pub(crate) generated_at: Option<String>,
-    pub(crate) entries: Vec<CanonicalMapEntry>,
+pub struct CanonicalMapSnapshot {
+    pub schema_version: u32,
+    pub revision: u64,
+    pub generated_at: Option<String>,
+    pub entries: Vec<CanonicalMapEntry>,
 }
 
 /// A single canonical identity and its exact per-profile implementations.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct CanonicalMapEntry {
-    pub(crate) canonical: String,
-    pub(crate) kind: String,
+pub struct CanonicalMapEntry {
+    pub canonical: String,
+    pub kind: String,
     #[serde(default)]
-    pub(crate) category: Option<String>,
+    pub category: Option<String>,
     #[serde(deserialize_with = "deserialize_implementations")]
-    pub(crate) implementations: BTreeMap<String, String>,
+    pub implementations: BTreeMap<String, String>,
 }
 
 /// Parse and validate the complete canonical-map wire document.
-pub(crate) fn parse_snapshot(bytes: &[u8]) -> Result<CanonicalMapSnapshot> {
+pub fn parse_snapshot(bytes: &[u8]) -> Result<CanonicalMapSnapshot> {
     let snapshot = serde_json::from_slice::<CanonicalMapSnapshot>(bytes)
         .map_err(|error| Error::ParseError(format!("invalid canonical map JSON: {error}")))?;
     validate_snapshot(&snapshot)?;
@@ -61,7 +61,7 @@ pub(crate) fn expected_checksum(headers: &reqwest::header::HeaderMap) -> Result<
 }
 
 /// Validate a deserialized snapshot before it reaches persistence.
-pub(crate) fn validate_snapshot(snapshot: &CanonicalMapSnapshot) -> Result<()> {
+pub fn validate_snapshot(snapshot: &CanonicalMapSnapshot) -> Result<()> {
     if snapshot.schema_version != super::CANONICAL_MAP_SCHEMA_VERSION {
         return Err(Error::ParseError(format!(
             "unsupported canonical map schema version {}; expected {}",

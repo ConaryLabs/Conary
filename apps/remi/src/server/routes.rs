@@ -19,6 +19,7 @@
 use crate::server::handlers::{
     admin as admin_handlers, artifacts, canonical, chunks, derivations, detail, federation, jobs,
     models, oci, openapi, packages, profiles, recipes, search, seeds, self_update, sparse, tuf,
+    universe,
 };
 use crate::server::readiness::{self, ReadinessInputs};
 use crate::server::security::RateLimiter;

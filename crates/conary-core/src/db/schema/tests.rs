@@ -33,6 +33,9 @@ fn ensure_current_creates_schema_atomically() {
         "remi_catalog_gc_deletions",
         "remi_profile_revision_members",
         "remi_active_profile_revisions",
+        "remi_universe_revisions",
+        "remi_universe_profile_revisions",
+        "remi_active_universe_revision",
         "remi_runtime_sessions",
         "remi_profile_revision_pins",
     ] {

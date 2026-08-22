@@ -21,10 +21,11 @@ use crate::error::Error;
 
 /// The exact profile and source digests retained by current operational roots.
 ///
-/// Profile roots are the active pointers, every profile-revision pin, and the
-/// input/candidate profile digests of nonterminal refresh runs.  Source roots
-/// additionally include those run members' input/candidate snapshots and all
-/// source snapshots named by a reachable profile revision.
+/// Profile roots are the active pointers, every signed durable universe,
+/// every profile-revision pin, and the input/candidate profile digests of
+/// nonterminal refresh runs. Source roots additionally include those run
+/// members' input/candidate snapshots and all source snapshots named by a
+/// reachable profile revision.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RemiCatalogReachabilitySnapshot {
     /// Profile revision manifest digests retained by exact authority.
@@ -237,6 +238,13 @@ pub fn delete_catalog_collection(
                AND NOT EXISTS (
                    SELECT 1 FROM remi_profile_revision_pins pin
                    WHERE pin.profile_revision_sha256 = ?1
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM remi_universe_profile_revisions universe_member
+                   JOIN remi_universe_revisions universe
+                     ON universe.manifest_sha256 = universe_member.manifest_sha256
+                   WHERE universe_member.profile_revision_sha256 = ?1
+                     AND universe.durable = 1
                )
                AND NOT EXISTS (
                    SELECT 1 FROM repository_sync_runs run
@@ -483,6 +491,23 @@ fn load_profile_roots(
         let (source_profile, digest) = row?;
         validate_identity(&source_profile, "active catalog source profile")?;
         insert_profile_digest(reachability, &digest, "active profile revision")?;
+    }
+
+    let mut universes = conn.prepare(
+        "SELECT member.source_profile, member.profile_revision_sha256
+         FROM remi_universe_profile_revisions member
+         JOIN remi_universe_revisions universe
+           ON universe.manifest_sha256 = member.manifest_sha256
+         WHERE universe.durable = 1
+         ORDER BY universe.sequence, member.ordinal",
+    )?;
+    let universe_rows = universes.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in universe_rows {
+        let (source_profile, digest) = row?;
+        validate_identity(&source_profile, "signed-universe source profile")?;
+        insert_profile_digest(reachability, &digest, "signed-universe profile revision")?;
     }
 
     let mut pins = conn.prepare(

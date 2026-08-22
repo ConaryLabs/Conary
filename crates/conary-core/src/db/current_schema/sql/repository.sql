@@ -1386,6 +1386,140 @@ BEGIN
     SELECT RAISE(ABORT, 'active profile revision fencing epoch must increase monotonically');
 END;
 
+-- Signed endpoint-wide Remi universes bind all active profile catalogs and
+-- one canonical-map object. Large immutable bytes live in the filesystem;
+-- operational SQLite owns only exact durability metadata and the public
+-- pointer.
+CREATE TABLE remi_universe_revisions (
+            manifest_sha256 TEXT PRIMARY KEY,
+            sequence INTEGER NOT NULL UNIQUE CHECK(sequence > 0),
+            metadata_root_sha256 TEXT NOT NULL,
+            canonical_map_sha256 TEXT NOT NULL,
+            canonical_map_size INTEGER NOT NULL CHECK(canonical_map_size >= 0),
+            targets_version INTEGER NOT NULL CHECK(targets_version > 0),
+            snapshot_version INTEGER NOT NULL CHECK(snapshot_version > 0),
+            timestamp_version INTEGER NOT NULL CHECK(timestamp_version > 0),
+            manifest_json TEXT NOT NULL
+                CHECK(json_valid(manifest_json) AND json_type(manifest_json) = 'object'),
+            durable INTEGER NOT NULL CHECK(durable = 1),
+            created_at INTEGER NOT NULL CHECK(created_at >= 0),
+            CHECK(length(manifest_sha256) = 64
+                AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(metadata_root_sha256) = 64
+                AND metadata_root_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(canonical_map_sha256) = 64
+                AND canonical_map_sha256 NOT GLOB '*[^0-9a-f]*')
+        );
+
+CREATE TRIGGER remi_universe_revisions_immutable
+BEFORE UPDATE ON remi_universe_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'immutable Remi universe metadata cannot be updated');
+END;
+
+CREATE TABLE remi_universe_profile_revisions (
+            manifest_sha256 TEXT NOT NULL
+                REFERENCES remi_universe_revisions(manifest_sha256) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+            source_profile TEXT NOT NULL,
+            profile_revision_sha256 TEXT NOT NULL
+                REFERENCES remi_catalog_resources(resource_sha256) ON DELETE RESTRICT,
+            catalog_sha256 TEXT NOT NULL,
+            catalog_size INTEGER NOT NULL CHECK(catalog_size >= 0),
+            CHECK(length(source_profile) BETWEEN 1 AND 255
+                AND trim(source_profile) = source_profile),
+            CHECK(length(profile_revision_sha256) = 64
+                AND profile_revision_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(catalog_sha256) = 64
+                AND catalog_sha256 NOT GLOB '*[^0-9a-f]*'),
+            PRIMARY KEY(manifest_sha256, ordinal),
+            UNIQUE(manifest_sha256, source_profile),
+            UNIQUE(manifest_sha256, profile_revision_sha256),
+            UNIQUE(manifest_sha256, catalog_sha256)
+        );
+
+CREATE TRIGGER remi_universe_profile_revisions_require_exact_profile
+BEFORE INSERT ON remi_universe_profile_revisions
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM remi_catalog_resources resource
+        WHERE resource.resource_sha256 = NEW.profile_revision_sha256
+          AND resource.resource_kind = 'profile_revision'
+          AND resource.source_profile = NEW.source_profile
+          AND resource.artifact_sha256 = NEW.catalog_sha256
+          AND resource.artifact_size = NEW.catalog_size
+          AND resource.durable = 1
+    ) THEN RAISE(ABORT, 'universe member requires one exact durable profile catalog') END;
+END;
+
+CREATE TRIGGER remi_universe_profile_revisions_immutable_update
+BEFORE UPDATE ON remi_universe_profile_revisions
+BEGIN
+    SELECT RAISE(ABORT, 'immutable Remi universe members cannot be updated');
+END;
+
+CREATE TRIGGER remi_universe_profile_revisions_immutable_delete
+BEFORE DELETE ON remi_universe_profile_revisions
+WHEN EXISTS (
+    SELECT 1 FROM remi_universe_revisions universe
+    WHERE universe.manifest_sha256 = OLD.manifest_sha256
+)
+BEGIN
+    SELECT RAISE(ABORT, 'immutable Remi universe members cannot be deleted directly');
+END;
+
+CREATE TABLE remi_active_universe_revision (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            manifest_sha256 TEXT NOT NULL
+                REFERENCES remi_universe_revisions(manifest_sha256) ON DELETE RESTRICT,
+            sequence INTEGER NOT NULL CHECK(sequence > 0),
+            activated_at INTEGER NOT NULL CHECK(activated_at >= 0),
+            UNIQUE(manifest_sha256, sequence)
+        );
+
+CREATE TRIGGER remi_active_universe_revision_require_complete_durable_revision
+BEFORE INSERT ON remi_active_universe_revision
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM remi_universe_revisions universe
+        WHERE universe.manifest_sha256 = NEW.manifest_sha256
+          AND universe.sequence = NEW.sequence
+          AND universe.durable = 1
+          AND (SELECT COUNT(*) FROM remi_universe_profile_revisions member
+               WHERE member.manifest_sha256 = universe.manifest_sha256) > 0
+          AND (SELECT COALESCE(MAX(ordinal), -1) + 1
+               FROM remi_universe_profile_revisions member
+               WHERE member.manifest_sha256 = universe.manifest_sha256)
+              = (SELECT COUNT(*) FROM remi_universe_profile_revisions member
+                 WHERE member.manifest_sha256 = universe.manifest_sha256)
+    ) THEN RAISE(ABORT, 'active Remi universe requires one complete durable revision') END;
+END;
+
+CREATE TRIGGER remi_active_universe_revision_require_complete_durable_update
+BEFORE UPDATE ON remi_active_universe_revision
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM remi_universe_revisions universe
+        WHERE universe.manifest_sha256 = NEW.manifest_sha256
+          AND universe.sequence = NEW.sequence
+          AND universe.durable = 1
+          AND (SELECT COUNT(*) FROM remi_universe_profile_revisions member
+               WHERE member.manifest_sha256 = universe.manifest_sha256) > 0
+          AND (SELECT COALESCE(MAX(ordinal), -1) + 1
+               FROM remi_universe_profile_revisions member
+               WHERE member.manifest_sha256 = universe.manifest_sha256)
+              = (SELECT COUNT(*) FROM remi_universe_profile_revisions member
+                 WHERE member.manifest_sha256 = universe.manifest_sha256)
+    ) THEN RAISE(ABORT, 'active Remi universe requires one complete durable revision') END;
+END;
+
+CREATE TRIGGER remi_active_universe_revision_monotonic
+BEFORE UPDATE ON remi_active_universe_revision
+WHEN NEW.sequence <= OLD.sequence
+BEGIN
+    SELECT RAISE(ABORT, 'active Remi universe sequence must increase monotonically');
+END;
+
 -- One durable server session owns the reader pins created by the current
 -- Remi runtime. A new exclusive runtime owner replaces this row only after
 -- deleting the prior session's reader pins in the same transaction.

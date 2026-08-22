@@ -14,6 +14,11 @@
 /// Current canonical-map HTTP contract version.
 pub const CANONICAL_MAP_SCHEMA_VERSION: u32 = 1;
 
+pub use exchange::{
+    CanonicalMapEntry, CanonicalMapSnapshot, parse_snapshot,
+    validate_snapshot as validate_canonical_map_snapshot,
+};
+
 pub mod appstream;
 pub mod client;
 pub(crate) mod exchange;

@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use conary_core::canonical::{CanonicalMapEntry, CanonicalMapSnapshot};
 use conary_core::db::models::CanonicalMappingAuthority;
 
 use super::{HandlerResult, open_handler_db, run_blocking};
@@ -162,25 +163,6 @@ pub async fn groups_list(State(state): State<Arc<RwLock<ServerState>>>) -> Handl
     Ok(Json(items).into_response())
 }
 
-/// A single entry in the canonical map response.
-#[derive(Debug, Serialize)]
-pub struct CanonicalMapEntry {
-    pub canonical: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub category: Option<String>,
-    pub implementations: std::collections::BTreeMap<String, String>,
-}
-
-/// Full canonical map response returned by `GET /v1/canonical/map`.
-#[derive(Debug, Serialize)]
-pub struct CanonicalMapResponse {
-    pub schema_version: u32,
-    pub revision: u64,
-    pub generated_at: Option<String>,
-    pub entries: Vec<CanonicalMapEntry>,
-}
-
 /// GET /v1/canonical/map -- returns the full canonical package map as JSON.
 ///
 /// Groups all canonical packages with their distro implementations into a
@@ -196,88 +178,8 @@ pub async fn canonical_map(
     let response = run_blocking("canonical_map", move || {
         let conn = open_handler_db(&db_path)?;
 
-        let revision_value = conary_core::db::models::get_metadata(
-            &conn,
-            conary_core::db::models::MetadataTable::Server,
-            "canonical_map_revision",
-        )
-        .map_err(anyhow::Error::from)?
-        .ok_or_else(|| anyhow::anyhow!("canonical map revision metadata is missing"))?;
-        let revision = revision_value.parse::<u64>().map_err(|error| {
-            anyhow::anyhow!("canonical map revision '{revision_value}' is invalid: {error}")
-        })?;
-        let generated_at = conary_core::db::models::get_metadata(
-            &conn,
-            conary_core::db::models::MetadataTable::Server,
-            "last_canonical_rebuild",
-        )
-        .map_err(anyhow::Error::from)?;
-        match (revision, generated_at.as_deref()) {
-            (0, None) => {}
-            (0, Some(_)) => {
-                anyhow::bail!("canonical map revision is zero but a rebuild timestamp is present")
-            }
-            (_, None) => {
-                anyhow::bail!("canonical map revision {revision} has no rebuild timestamp")
-            }
-            (_, Some(timestamp)) => {
-                chrono::DateTime::parse_from_rfc3339(timestamp).map_err(|error| {
-                    anyhow::anyhow!("canonical map rebuild timestamp is invalid: {error}")
-                })?;
-            }
-        }
-
-        let mut stmt = conn.prepare(
-            "SELECT cp.name, cp.kind, cp.category, pi.distro, pi.distro_name
-             FROM canonical_packages cp
-             JOIN package_implementations pi ON pi.canonical_id = cp.id
-             ORDER BY cp.name, pi.distro",
-        )?;
-
-        let mut entries_map: BTreeMap<String, CanonicalMapAccumulator> = BTreeMap::new();
-
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-            ))
-        })?;
-
-        for row in rows {
-            let (canonical, kind, category, distro, distro_name) = row?;
-            let (_, _, implementations) = entries_map
-                .entry(canonical)
-                .or_insert_with(|| (kind, category, BTreeMap::new()));
-            implementations.insert(distro, distro_name);
-        }
-
-        let entries: Vec<CanonicalMapEntry> = entries_map
-            .into_iter()
-            .map(
-                |(canonical, (kind, category, implementations))| CanonicalMapEntry {
-                    canonical,
-                    kind,
-                    category,
-                    implementations,
-                },
-            )
-            .collect();
-        if revision == 0 && !entries.is_empty() {
-            anyhow::bail!("canonical map has entries but its persisted revision is zero");
-        }
-
-        Ok((
-            revision,
-            CanonicalMapResponse {
-                schema_version: conary_core::canonical::CANONICAL_MAP_SCHEMA_VERSION,
-                revision,
-                generated_at,
-                entries,
-            },
-        ))
+        let snapshot = load_canonical_map_snapshot(&conn)?;
+        Ok((snapshot.revision, snapshot))
     })
     .await?;
 
@@ -314,6 +216,76 @@ pub async fn canonical_map(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?,
     );
     Ok(response)
+}
+
+pub(crate) fn load_canonical_map_snapshot(
+    conn: &rusqlite::Connection,
+) -> anyhow::Result<CanonicalMapSnapshot> {
+    let revision_value = conary_core::db::models::get_metadata(
+        conn,
+        conary_core::db::models::MetadataTable::Server,
+        "canonical_map_revision",
+    )
+    .map_err(anyhow::Error::from)?
+    .ok_or_else(|| anyhow::anyhow!("canonical map revision metadata is missing"))?;
+    let revision = revision_value.parse::<u64>().map_err(|error| {
+        anyhow::anyhow!("canonical map revision '{revision_value}' is invalid: {error}")
+    })?;
+    let generated_at = conary_core::db::models::get_metadata(
+        conn,
+        conary_core::db::models::MetadataTable::Server,
+        "last_canonical_rebuild",
+    )
+    .map_err(anyhow::Error::from)?;
+
+    let mut stmt = conn.prepare(
+        "SELECT cp.name, cp.kind, cp.category, pi.distro, pi.distro_name
+         FROM canonical_packages cp
+         JOIN package_implementations pi ON pi.canonical_id = cp.id
+         ORDER BY cp.name, pi.distro",
+    )?;
+    let mut entries_map: BTreeMap<String, CanonicalMapAccumulator> = BTreeMap::new();
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    for row in rows {
+        let (canonical, kind, category, distro, distro_name) = row?;
+        let (_, _, implementations) = entries_map
+            .entry(canonical)
+            .or_insert_with(|| (kind, category, BTreeMap::new()));
+        if implementations
+            .insert(distro.clone(), distro_name)
+            .is_some()
+        {
+            anyhow::bail!("canonical map repeats implementation profile '{distro}'")
+        }
+    }
+    let entries = entries_map
+        .into_iter()
+        .map(
+            |(canonical, (kind, category, implementations))| CanonicalMapEntry {
+                canonical,
+                kind,
+                category,
+                implementations,
+            },
+        )
+        .collect();
+    let snapshot = CanonicalMapSnapshot {
+        schema_version: conary_core::canonical::CANONICAL_MAP_SCHEMA_VERSION,
+        revision,
+        generated_at,
+        entries,
+    };
+    conary_core::canonical::validate_canonical_map_snapshot(&snapshot)
+        .map_err(anyhow::Error::from)?;
+    Ok(snapshot)
 }
 
 #[cfg(test)]
@@ -380,7 +352,7 @@ mod tests {
         impls.insert("fedora-44".to_string(), "openssl".to_string());
         impls.insert("ubuntu-26.04".to_string(), "libssl3".to_string());
 
-        let response = CanonicalMapResponse {
+        let response = CanonicalMapSnapshot {
             schema_version: 1,
             revision: 7,
             generated_at: Some("2026-03-16T00:00:00Z".to_string()),
@@ -403,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_canonical_map_empty_entries() {
-        let response = CanonicalMapResponse {
+        let response = CanonicalMapSnapshot {
             schema_version: 1,
             revision: 7,
             generated_at: Some("2026-03-16T00:00:00Z".to_string()),

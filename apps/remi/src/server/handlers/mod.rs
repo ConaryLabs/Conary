@@ -33,6 +33,7 @@ pub mod seeds;
 pub mod self_update;
 pub mod sparse;
 pub mod tuf;
+pub mod universe;
 
 use crate::server::auth::{extract_bearer, hash_token};
 use axum::http::{HeaderMap, StatusCode, header};
