@@ -546,22 +546,15 @@ async fn static_repo_add_rejects_native_trust_flags_after_probe_without_fingerpr
     assert_no_repo(&db.conn(), "acme");
 }
 
-/// A host that answers every path with a 200 body — an SPA fallback, a captive
-/// portal, an error page — makes the identity probe see a `conary-repo.toml`
-/// that is not one. Declaring the package format settles the repository kind
-/// before any of that is fetched, so the probe's answer cannot decide the add.
+/// A host whose identity probe would fail must not decide a repository whose
+/// package format was already declared. The reserved `.invalid` origin also
+/// proves this path performs no discovery request.
 #[tokio::test]
 async fn declared_package_format_adds_a_native_repo_whatever_the_identity_probe_would_find() {
     let db = TestDb::new();
-    let served = tempfile::tempdir().unwrap();
-    std::fs::write(
-        served.path().join("conary-repo.toml"),
-        b"<!doctype html>\n<html lang=\"en\"><head><title>index</title></head></html>\n",
-    )
-    .unwrap();
-    let base_url = format!("file://{}", served.path().display());
+    let base_url = "http://identity-probe-must-not-run.invalid";
 
-    add_repo_with_declared_format(&db, &base_url, "fedora-44")
+    add_repo_with_declared_format(&db, base_url, "fedora-44")
         .await
         .unwrap();
 
