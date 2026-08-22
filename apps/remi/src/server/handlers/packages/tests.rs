@@ -1,5 +1,8 @@
 // apps/remi/src/server/handlers/packages/tests.rs
 use super::*;
+use crate::server::catalog_authority::test_support::{
+    ActiveCatalogFixture, package as catalog_package,
+};
 use crate::server::conversion::test_support::seed_repository_conversion_source;
 use crate::server::native_publish::test_support::seed_native_publication;
 use base64::Engine as _;
@@ -540,6 +543,9 @@ async fn existing_pending_job_response_reports_pending() {
 async fn failed_job_stays_pollable_while_unpopulated_repository_returns_typed_503() {
     let root = tempfile::tempdir().unwrap();
     let state = create_test_state(&root);
+    let catalogs = ActiveCatalogFixture::new();
+    catalogs.activate("fedora-44", 1, Vec::new());
+    state.write().await.catalog_authority = catalogs.authority().clone();
     let query = PackageQuery {
         version: None,
         release: None,
@@ -727,6 +733,9 @@ async fn collected_ready_mapping_revalidates_persisted_artifact_before_new_work(
 async fn package_route_waits_for_repository_population_without_creating_failed_job() {
     let root = tempfile::tempdir().unwrap();
     let state = create_test_state(&root);
+    let catalogs = ActiveCatalogFixture::new();
+    catalogs.activate("ubuntu-26.04", 1, Vec::new());
+    state.write().await.catalog_authority = catalogs.authority().clone();
     let query = || PackageQuery {
         version: Some("1.0".into()),
         release: None,
@@ -776,6 +785,19 @@ async fn package_route_waits_for_repository_population_without_creating_failed_j
     let package = std::fs::read(fixture).unwrap();
     let package_url = serve_package_once(package.clone()).await;
     populate_debian_repository(&db_path, package_url, &package).await;
+    catalogs.activate(
+        "ubuntu-26.04",
+        2,
+        vec![catalog_package(
+            "ubuntu-26.04",
+            "demo",
+            "1.0",
+            "1",
+            Some("amd64"),
+            u64::try_from(package.len()).unwrap(),
+            "ubuntu-demo",
+        )],
+    );
     let semaphore = state.read().await.job_manager.semaphore();
     let permit = semaphore.acquire_owned().await.unwrap();
 

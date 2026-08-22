@@ -11,9 +11,11 @@
 //! - Version deduplication with preference for converted packages
 //! - Graceful degradation when upstream peers are unavailable
 
-use crate::server::handlers::sparse::{SparseIndexEntry, SparseVersionEntry};
+use crate::server::catalog_authority::CatalogAuthority;
+use crate::server::handlers::sparse::{
+    SparseIndexEntry, SparseVersionEntry, build_sparse_entry_with_revision,
+};
 use anyhow::{Context, Result};
-use conary_core::db::models::ConvertedPackage;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -35,9 +37,10 @@ pub struct FederatedIndexConfig {
 /// In-memory cache for federated sparse index entries.
 ///
 /// Uses `RwLock` for concurrent access from multiple handler tasks.
-/// Each entry is keyed by `(distro, package_name)` and has a timestamp for TTL.
+/// Each entry is keyed by the exact active profile revision plus route and
+/// package name, so activation cannot leave an old merged result cache-valid.
 pub struct FederatedIndexCache {
-    entries: RwLock<HashMap<(String, String), CacheEntry>>,
+    entries: RwLock<HashMap<(String, String, String), CacheEntry>>,
 }
 
 /// A cached sparse index entry with its insertion time
@@ -55,9 +58,19 @@ impl FederatedIndexCache {
     }
 
     /// Get a cached entry if it exists and has not expired
-    pub async fn get(&self, distro: &str, name: &str, ttl: Duration) -> Option<SparseIndexEntry> {
+    pub async fn get(
+        &self,
+        profile_revision_sha256: &str,
+        distro: &str,
+        name: &str,
+        ttl: Duration,
+    ) -> Option<SparseIndexEntry> {
         let entries = self.entries.read().await;
-        let key = (distro.to_string(), name.to_string());
+        let key = (
+            profile_revision_sha256.to_string(),
+            distro.to_string(),
+            name.to_string(),
+        );
 
         entries.get(&key).and_then(|cached| {
             if cached.inserted_at.elapsed() < ttl {
@@ -69,9 +82,19 @@ impl FederatedIndexCache {
     }
 
     /// Store an entry in the cache
-    pub async fn put(&self, distro: &str, name: &str, entry: SparseIndexEntry) {
+    pub async fn put(
+        &self,
+        profile_revision_sha256: &str,
+        distro: &str,
+        name: &str,
+        entry: SparseIndexEntry,
+    ) {
         let mut entries = self.entries.write().await;
-        let key = (distro.to_string(), name.to_string());
+        let key = (
+            profile_revision_sha256.to_string(),
+            distro.to_string(),
+            name.to_string(),
+        );
         entries.insert(
             key,
             CacheEntry {
@@ -146,36 +169,75 @@ pub async fn fetch_remote_sparse_entry(
         .json()
         .await
         .with_context(|| format!("Failed to parse sparse entry from {}", fetch_url))?;
+    if entry.name != name || entry.distro != distro {
+        anyhow::bail!(
+            "upstream {url} returned sparse identity {}/{} for requested {distro}/{name}",
+            entry.distro,
+            entry.name
+        );
+    }
 
     Ok(Some(entry))
 }
 
 /// Merge multiple sparse index entries into a single unified entry.
 ///
-/// Deduplicates versions by version string. When the same version appears
-/// in multiple sources, prefers `converted=true` over `converted=false`.
-pub fn merge_sparse_entries(entries: Vec<SparseIndexEntry>) -> SparseIndexEntry {
-    if entries.is_empty() {
-        return SparseIndexEntry {
-            name: String::new(),
-            distro: String::new(),
-            versions: Vec::new(),
-        };
-    }
-
-    let name = entries[0].name.clone();
-    let distro = entries[0].distro.clone();
-
-    // Merge versions, keyed by version string
-    let mut version_map: HashMap<String, SparseVersionEntry> = HashMap::new();
+/// Deduplicates versions by the complete public package identity. Conflicting
+/// resolution metadata or serving state for one identity fails closed; a
+/// converted result may replace an otherwise identical unconverted result.
+pub fn merge_sparse_entries(
+    distro: &str,
+    name: &str,
+    entries: Vec<SparseIndexEntry>,
+) -> Result<SparseIndexEntry> {
+    let mut version_map: HashMap<(String, Option<String>, Option<String>), SparseVersionEntry> =
+        HashMap::new();
 
     for entry in entries {
+        if entry.name != name || entry.distro != distro {
+            anyhow::bail!(
+                "cannot merge sparse identity {}/{} into requested {distro}/{name}",
+                entry.distro,
+                entry.name
+            );
+        }
         for version in entry.versions {
-            let key = version.version.clone();
+            if version.converted && version.content_hash.is_none() {
+                anyhow::bail!(
+                    "converted sparse package {name} {} has no content hash",
+                    version.version
+                );
+            }
+            let key = (
+                version.version.clone(),
+                version.release.clone(),
+                version.architecture.clone(),
+            );
             match version_map.entry(key) {
                 Entry::Occupied(mut existing) => {
+                    let current = existing.get();
+                    if current.provides != version.provides
+                        || current.requirement_groups != version.requirement_groups
+                        || current.size != version.size
+                    {
+                        anyhow::bail!(
+                            "federated sparse sources disagree on resolution metadata for {name} {}-{}.{}",
+                            version.version,
+                            version.release.as_deref().unwrap_or(""),
+                            version.architecture.as_deref().unwrap_or("noarch")
+                        );
+                    }
                     if version.converted && !existing.get().converted {
                         existing.insert(version);
+                    } else if version.converted == existing.get().converted
+                        && version.content_hash != existing.get().content_hash
+                    {
+                        anyhow::bail!(
+                            "federated sparse sources disagree on content identity for {name} {}-{}.{}",
+                            version.version,
+                            version.release.as_deref().unwrap_or(""),
+                            version.architecture.as_deref().unwrap_or("noarch")
+                        );
                     }
                 }
                 Entry::Vacant(vacant) => {
@@ -185,24 +247,30 @@ pub fn merge_sparse_entries(entries: Vec<SparseIndexEntry>) -> SparseIndexEntry 
         }
     }
 
-    // Sort versions by version string
     let mut versions: Vec<SparseVersionEntry> = version_map.into_values().collect();
-    versions.sort_by(|a, b| a.version.cmp(&b.version));
+    versions.sort_by(|left, right| {
+        (&left.version, &left.release, &left.architecture).cmp(&(
+            &right.version,
+            &right.release,
+            &right.architecture,
+        ))
+    });
 
-    SparseIndexEntry {
-        name,
-        distro,
+    Ok(SparseIndexEntry {
+        name: name.to_string(),
+        distro: distro.to_string(),
         versions,
-    }
+    })
 }
 
 /// Build a federated sparse index entry by combining local data with upstream sources.
 ///
-/// 1. Builds the local entry from the database
+/// 1. Builds the local entry from one pinned active profile catalog
 /// 2. Fetches entries from all upstream peers in parallel
 /// 3. Merges everything together
 /// 4. Caches the result for the configured TTL
 pub async fn build_federated_sparse_entry(
+    catalog_authority: CatalogAuthority,
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
@@ -210,22 +278,27 @@ pub async fn build_federated_sparse_entry(
     cache: &Arc<FederatedIndexCache>,
     client: &reqwest::Client,
 ) -> Result<Option<SparseIndexEntry>> {
-    // Check cache first
-    if let Some(cached) = cache.get(distro, name, fed_config.cache_ttl).await {
-        debug!("Federated cache hit for {}/{}", distro, name);
-        return Ok(Some(cached));
-    }
-
-    // Build local entry
     let db_path_owned = db_path.to_path_buf();
     let distro_owned = distro.to_string();
     let name_owned = name.to_string();
 
-    let local_entry = tokio::task::spawn_blocking(move || {
-        let conn = rusqlite::Connection::open(&db_path_owned)?;
-        build_local_sparse_entry(&conn, &distro_owned, &name_owned)
+    let (profile_revision_sha256, local_entry) = tokio::task::spawn_blocking(move || {
+        build_sparse_entry_with_revision(
+            &catalog_authority,
+            &db_path_owned,
+            &distro_owned,
+            &name_owned,
+        )
     })
     .await??;
+
+    if let Some(cached) = cache
+        .get(&profile_revision_sha256, distro, name, fed_config.cache_ttl)
+        .await
+    {
+        debug!("Federated cache hit for {}/{}", distro, name);
+        return Ok(Some(cached));
+    }
 
     // Fetch from all upstream peers in parallel
     let mut fetch_futures = Vec::new();
@@ -277,122 +350,22 @@ pub async fn build_federated_sparse_entry(
     }
 
     // Merge all entries
-    let merged = merge_sparse_entries(all_entries);
+    let merged = merge_sparse_entries(distro, name, all_entries)?;
 
     // Cache the result
-    cache.put(distro, name, merged.clone()).await;
+    cache
+        .put(&profile_revision_sha256, distro, name, merged.clone())
+        .await;
 
     Ok(Some(merged))
-}
-
-/// Build a local sparse index entry from the database.
-///
-/// Mirrors the logic of `handlers::sparse::build_sparse_entry` but takes a
-/// `Connection` reference directly for use within `spawn_blocking`.
-fn build_local_sparse_entry(
-    conn: &rusqlite::Connection,
-    distro: &str,
-    name: &str,
-) -> Result<Option<SparseIndexEntry>> {
-    use crate::server::handlers::find_repositories_for_profile;
-    let source_profile =
-        conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-            .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
-
-    // Use plural lookup so multi-repo distros (e.g. arch-core + arch-extra)
-    // are all queried, matching the non-federated sparse path. (fix 10.7)
-    let repositories = find_repositories_for_profile(conn, source_profile.id())?;
-    let repo_ids = repositories
-        .iter()
-        .map(crate::server::handlers::require_persisted_repository_id)
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    if repo_ids.is_empty() {
-        return Ok(None);
-    }
-
-    let placeholders: String = (1..=repo_ids.len())
-        .map(|i| format!("?{i}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let name_idx = repo_ids.len() + 1;
-    let sql = format!(
-        "SELECT {}
-         FROM repository_packages
-         WHERE repository_id IN ({placeholders}) AND name = ?{name_idx}
-         AND size > 0
-         ORDER BY version",
-        conary_core::db::models::RepositoryPackage::COLUMNS
-    );
-
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = repo_ids
-        .iter()
-        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
-        .collect();
-    params.push(Box::new(name.to_string()));
-
-    let mut stmt = conn.prepare(&sql)?;
-
-    let packages: Vec<conary_core::db::models::RepositoryPackage> = stmt
-        .query_map(rusqlite::params_from_iter(&params), |row| {
-            conary_core::db::models::RepositoryPackage::from_row(row)
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    if packages.is_empty() {
-        return Ok(None);
-    }
-
-    let mut converted_map = HashMap::new();
-    for converted in
-        ConvertedPackage::find_current_conversions(conn, source_profile.id(), Some(name))?
-    {
-        converted.scriptlet_summary()?;
-        let artifact = converted.repository_artifact()?;
-        converted_map.insert(
-            (
-                artifact.package_version.to_string(),
-                Some(artifact.package_architecture.to_string()),
-            ),
-            artifact.content_hash.to_string(),
-        );
-    }
-
-    let versions = packages
-        .into_iter()
-        .map(|pkg| -> Result<SparseVersionEntry> {
-            let converted_info =
-                converted_map.get(&(pkg.version.clone(), pkg.architecture.clone()));
-            let package_id = pkg
-                .id
-                .ok_or_else(|| anyhow::anyhow!("repository package has no persisted ID"))?;
-            let exact =
-                crate::server::package_metadata::load_exact_package_metadata(conn, package_id)?;
-            Ok(SparseVersionEntry {
-                version: pkg.version,
-                release: None,
-                provides: exact.provides,
-                requirement_groups: exact.requirement_groups,
-                architecture: pkg.architecture,
-                size: pkg.size,
-                converted: converted_info.is_some(),
-                content_hash: converted_info.cloned(),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(Some(SparseIndexEntry {
-        name: name.to_string(),
-        distro: distro.to_string(),
-        versions,
-    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conary_core::db::models::{
-        CONVERSION_VERSION, ConvertedPackage, Repository, RepositoryPackage,
-    };
+
+    const REVISION_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const REVISION_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     fn make_version(ver: &str, converted: bool) -> SparseVersionEntry {
         SparseVersionEntry {
@@ -419,80 +392,11 @@ mod tests {
         }
     }
 
-    fn create_test_db() -> (tempfile::NamedTempFile, rusqlite::Connection) {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
-        (temp_file, conn)
-    }
-
-    fn insert_repo(conn: &rusqlite::Connection, name: &str, distro: &str) -> i64 {
-        let mut repo = Repository::new(name.to_string(), "https://example.com".to_string());
-        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-            .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
-        repo.source_profile = Some(profile.id().to_string());
-        repo.insert(conn).unwrap()
-    }
-
-    fn insert_package(conn: &rusqlite::Connection, repo_id: i64, name: &str, version: &str) {
-        let repository = Repository::find_by_id(conn, repo_id)
-            .unwrap()
-            .expect("test repository");
-        let profile = conary_core::repository::supported_profiles::profile_by_public_id(
-            repository
-                .source_profile
-                .as_deref()
-                .expect("test repository profile"),
-        )
-        .expect("exact test repository profile");
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            name.to_string(),
-            version.to_string(),
-            profile.version_scheme(),
-            format!("sha256:{name}-{version}"),
-            1024,
-            format!("https://example.com/{name}-{version}.rpm"),
-        );
-        pkg.architecture = Some("x86_64".to_string());
-        pkg.insert(conn).unwrap();
-    }
-
-    fn insert_stale_conversion(
-        conn: &rusqlite::Connection,
-        distro: &str,
-        package: &str,
-        version: &str,
-    ) {
-        let source_profile =
-            conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-                .unwrap_or_else(|| panic!("test route '{distro}' must be supported"))
-                .id();
-        let transport = crate::server::conversion::test_support::test_transport(&[format!(
-            "sha256:{package}-{version}-chunk"
-        )]);
-        let mut converted = ConvertedPackage::new_repository(
-            source_profile.to_string(),
-            package.to_string(),
-            version.to_string(),
-            "x86_64".to_string(),
-            "rpm".to_string(),
-            format!("sha256:{package}-{version}-source"),
-            &transport,
-            42,
-            format!("sha256:{package}-{version}-content"),
-            format!("/tmp/{package}-{version}.ccs"),
-            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
-        );
-        converted.conversion_version = CONVERSION_VERSION - 1;
-        converted.insert(conn).unwrap();
-    }
-
     #[test]
     fn test_merge_empty() {
-        let merged = merge_sparse_entries(vec![]);
-        assert!(merged.name.is_empty());
+        let merged = merge_sparse_entries("fedora", "nginx", vec![]).unwrap();
+        assert_eq!(merged.name, "nginx");
+        assert_eq!(merged.distro, "fedora");
         assert!(merged.versions.is_empty());
     }
 
@@ -504,7 +408,7 @@ mod tests {
             vec![make_version("1.0", true), make_version("2.0", false)],
         );
 
-        let merged = merge_sparse_entries(vec![entry]);
+        let merged = merge_sparse_entries("fedora", "nginx", vec![entry]).unwrap();
         assert_eq!(merged.name, "nginx");
         assert_eq!(merged.distro, "fedora");
         assert_eq!(merged.versions.len(), 2);
@@ -515,7 +419,7 @@ mod tests {
         let entry1 = make_entry("nginx", "fedora", vec![make_version("1.0", true)]);
         let entry2 = make_entry("nginx", "fedora", vec![make_version("2.0", true)]);
 
-        let merged = merge_sparse_entries(vec![entry1, entry2]);
+        let merged = merge_sparse_entries("fedora", "nginx", vec![entry1, entry2]).unwrap();
         assert_eq!(merged.versions.len(), 2);
         assert_eq!(merged.versions[0].version, "1.0");
         assert_eq!(merged.versions[1].version, "2.0");
@@ -537,7 +441,7 @@ mod tests {
             vec![make_version("2.0", true), make_version("3.0", false)],
         );
 
-        let merged = merge_sparse_entries(vec![entry1, entry2]);
+        let merged = merge_sparse_entries("fedora", "nginx", vec![entry1, entry2]).unwrap();
         assert_eq!(merged.versions.len(), 3);
 
         let v2 = merged.versions.iter().find(|v| v.version == "2.0").unwrap();
@@ -550,7 +454,7 @@ mod tests {
         let entry1 = make_entry("nginx", "fedora", vec![make_version("1.0", true)]);
         let entry2 = make_entry("nginx", "fedora", vec![make_version("1.0", true)]);
 
-        let merged = merge_sparse_entries(vec![entry1, entry2]);
+        let merged = merge_sparse_entries("fedora", "nginx", vec![entry1, entry2]).unwrap();
         assert_eq!(merged.versions.len(), 1);
         assert!(merged.versions[0].converted);
     }
@@ -560,7 +464,7 @@ mod tests {
         let entry1 = make_entry("nginx", "fedora", vec![make_version("1.0", false)]);
         let entry2 = make_entry("nginx", "fedora", vec![make_version("1.0", false)]);
 
-        let merged = merge_sparse_entries(vec![entry1, entry2]);
+        let merged = merge_sparse_entries("fedora", "nginx", vec![entry1, entry2]).unwrap();
         assert_eq!(merged.versions.len(), 1);
         assert!(!merged.versions[0].converted);
     }
@@ -571,7 +475,7 @@ mod tests {
         let entry2 = make_entry("nginx", "fedora", vec![make_version("1.0", true)]);
         let entry3 = make_entry("nginx", "fedora", vec![make_version("2.0", true)]);
 
-        let merged = merge_sparse_entries(vec![entry1, entry2, entry3]);
+        let merged = merge_sparse_entries("fedora", "nginx", vec![entry1, entry2, entry3]).unwrap();
         assert_eq!(merged.versions.len(), 3);
         assert_eq!(merged.versions[0].version, "1.0");
         assert_eq!(merged.versions[1].version, "2.0");
@@ -579,19 +483,103 @@ mod tests {
     }
 
     #[test]
-    fn federated_sparse_hides_stale_content_hash() {
-        let (_temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "gtk3", "3.24.0");
-        insert_stale_conversion(&conn, "fedora", "gtk3", "3.24.0");
+    fn merge_preserves_sibling_releases_and_architectures() {
+        let mut first = make_version("1.0", false);
+        first.release = Some("1".to_string());
+        let mut second = make_version("1.0", false);
+        second.release = Some("2".to_string());
+        let mut third = make_version("1.0", false);
+        third.release = Some("2".to_string());
+        third.architecture = Some("aarch64".to_string());
 
-        let entry = build_local_sparse_entry(&conn, "fedora", "gtk3")
-            .unwrap()
-            .unwrap();
+        let merged = merge_sparse_entries(
+            "fedora",
+            "demo",
+            vec![
+                make_entry("demo", "fedora", vec![first]),
+                make_entry("demo", "fedora", vec![second, third]),
+            ],
+        )
+        .unwrap();
 
-        assert_eq!(entry.versions.len(), 1);
-        assert!(!entry.versions[0].converted);
-        assert!(entry.versions[0].content_hash.is_none());
+        assert_eq!(merged.versions.len(), 3);
+        assert_eq!(merged.versions[0].release.as_deref(), Some("1"));
+        assert_eq!(merged.versions[1].architecture.as_deref(), Some("aarch64"));
+        assert_eq!(merged.versions[2].architecture.as_deref(), Some("x86_64"));
+    }
+
+    #[test]
+    fn merge_rejects_response_identity_mismatch() {
+        let error = merge_sparse_entries(
+            "fedora",
+            "nginx",
+            vec![make_entry(
+                "curl",
+                "fedora",
+                vec![make_version("1.0", false)],
+            )],
+        )
+        .expect_err("wrong package identity must fail closed");
+        assert!(error.to_string().contains("requested fedora/nginx"));
+    }
+
+    #[test]
+    fn merge_rejects_conflicting_resolution_or_content_identity() {
+        let first = make_version("1.0", true);
+        let mut conflicting_metadata = first.clone();
+        conflicting_metadata.size += 1;
+        let error = merge_sparse_entries(
+            "fedora",
+            "nginx",
+            vec![
+                make_entry("nginx", "fedora", vec![first.clone()]),
+                make_entry("nginx", "fedora", vec![conflicting_metadata]),
+            ],
+        )
+        .expect_err("resolution metadata conflict must fail closed");
+        assert!(error.to_string().contains("resolution metadata"));
+
+        let mut conflicting_content = first.clone();
+        conflicting_content.content_hash = Some("sha256:different".to_string());
+        let error = merge_sparse_entries(
+            "fedora",
+            "nginx",
+            vec![
+                make_entry("nginx", "fedora", vec![first]),
+                make_entry("nginx", "fedora", vec![conflicting_content]),
+            ],
+        )
+        .expect_err("content identity conflict must fail closed");
+        assert!(error.to_string().contains("content identity"));
+    }
+
+    #[tokio::test]
+    async fn remote_fetch_rejects_body_identity_that_disagrees_with_url() {
+        let app = axum::Router::new().route(
+            "/v1/index/fedora/nginx",
+            axum::routing::get(|| async {
+                axum::Json(make_entry(
+                    "curl",
+                    "fedora",
+                    vec![make_version("1.0", false)],
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let error = fetch_remote_sparse_entry(
+            &reqwest::Client::new(),
+            &format!("http://{address}"),
+            "fedora",
+            "nginx",
+        )
+        .await
+        .expect_err("upstream body identity must match its requested URL");
+        server.abort();
+
+        assert!(error.to_string().contains("requested fedora/nginx"));
     }
 
     #[tokio::test]
@@ -599,9 +587,13 @@ mod tests {
         let cache = FederatedIndexCache::new();
         let entry = make_entry("nginx", "fedora", vec![make_version("1.0", true)]);
 
-        cache.put("fedora", "nginx", entry.clone()).await;
+        cache
+            .put(REVISION_A, "fedora", "nginx", entry.clone())
+            .await;
 
-        let cached = cache.get("fedora", "nginx", Duration::from_secs(60)).await;
+        let cached = cache
+            .get(REVISION_A, "fedora", "nginx", Duration::from_secs(60))
+            .await;
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().versions.len(), 1);
     }
@@ -610,7 +602,9 @@ mod tests {
     async fn test_cache_miss_no_entry() {
         let cache = FederatedIndexCache::new();
 
-        let cached = cache.get("fedora", "nginx", Duration::from_secs(60)).await;
+        let cached = cache
+            .get(REVISION_A, "fedora", "nginx", Duration::from_secs(60))
+            .await;
         assert!(cached.is_none());
     }
 
@@ -619,10 +613,12 @@ mod tests {
         let cache = FederatedIndexCache::new();
         let entry = make_entry("nginx", "fedora", vec![make_version("1.0", true)]);
 
-        cache.put("fedora", "nginx", entry).await;
+        cache.put(REVISION_A, "fedora", "nginx", entry).await;
 
         // With a zero TTL, the entry should be considered expired immediately
-        let cached = cache.get("fedora", "nginx", Duration::from_secs(0)).await;
+        let cached = cache
+            .get(REVISION_A, "fedora", "nginx", Duration::from_secs(0))
+            .await;
         assert!(cached.is_none());
     }
 
@@ -632,6 +628,7 @@ mod tests {
 
         cache
             .put(
+                REVISION_A,
                 "fedora",
                 "nginx",
                 make_entry("nginx", "fedora", vec![make_version("1.0", true)]),
@@ -639,6 +636,7 @@ mod tests {
             .await;
         cache
             .put(
+                REVISION_A,
                 "fedora",
                 "curl",
                 make_entry("curl", "fedora", vec![make_version("8.0", true)]),
@@ -659,6 +657,7 @@ mod tests {
 
         cache
             .put(
+                REVISION_A,
                 "fedora",
                 "nginx",
                 make_entry("nginx", "fedora", vec![make_version("1.0", true)]),
@@ -677,6 +676,7 @@ mod tests {
 
         cache
             .put(
+                REVISION_A,
                 "fedora",
                 "nginx",
                 make_entry("nginx", "fedora", vec![make_version("1.0", true)]),
@@ -684,6 +684,7 @@ mod tests {
             .await;
         cache
             .put(
+                REVISION_A,
                 "arch",
                 "nginx",
                 make_entry("nginx", "arch", vec![make_version("2.0", true)]),
@@ -691,15 +692,35 @@ mod tests {
             .await;
 
         let fedora = cache
-            .get("fedora", "nginx", Duration::from_secs(60))
+            .get(REVISION_A, "fedora", "nginx", Duration::from_secs(60))
             .await
             .unwrap();
         assert_eq!(fedora.distro, "fedora");
 
         let arch = cache
-            .get("arch", "nginx", Duration::from_secs(60))
+            .get(REVISION_A, "arch", "nginx", Duration::from_secs(60))
             .await
             .unwrap();
         assert_eq!(arch.distro, "arch");
+    }
+
+    #[tokio::test]
+    async fn cache_never_reuses_an_entry_across_profile_revisions() {
+        let cache = FederatedIndexCache::new();
+        cache
+            .put(
+                REVISION_A,
+                "fedora",
+                "nginx",
+                make_entry("nginx", "fedora", vec![make_version("1.0", false)]),
+            )
+            .await;
+
+        assert!(
+            cache
+                .get(REVISION_B, "fedora", "nginx", Duration::from_secs(60))
+                .await
+                .is_none()
+        );
     }
 }

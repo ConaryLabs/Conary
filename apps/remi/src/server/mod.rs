@@ -45,6 +45,7 @@ mod negative_cache;
 mod package_metadata;
 pub mod popularity;
 mod prewarm;
+pub mod profile_catalog;
 pub mod publication;
 mod publication_scheduler;
 pub mod r2;

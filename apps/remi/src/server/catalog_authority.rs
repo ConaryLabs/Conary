@@ -24,6 +24,9 @@ use rusqlite::{Transaction, TransactionBehavior};
 use super::database_writer::DatabaseWriter;
 use super::open_runtime_db;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 /// The configured roots used to resolve one active immutable profile catalog.
 #[derive(Clone)]
 pub struct CatalogAuthority {
