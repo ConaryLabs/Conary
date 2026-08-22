@@ -18,6 +18,7 @@ pub const TUF_SPEC_VERSION: &str = "1.0.31";
 ///
 /// Contains the signed payload and its signatures, per TUF spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Signed<T> {
     /// The metadata payload
     pub signed: T,
@@ -27,6 +28,7 @@ pub struct Signed<T> {
 
 /// A single signature on TUF metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TufSignature {
     /// Key ID that produced this signature (SHA-256 of canonical key JSON)
     pub keyid: String,
@@ -39,6 +41,7 @@ pub struct TufSignature {
 /// Contains the keys and thresholds for all top-level roles.
 /// Root is self-signed and forms the basis of the trust chain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RootMetadata {
     /// Role type identifier
     #[serde(rename = "_type")]
@@ -61,6 +64,7 @@ pub struct RootMetadata {
 ///
 /// Maps target paths to their hashes and lengths for verification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TargetsMetadata {
     /// Role type identifier
     #[serde(rename = "_type")]
@@ -80,6 +84,7 @@ pub struct TargetsMetadata {
 ///
 /// Records the version of every metadata file for consistency checking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SnapshotMetadata {
     /// Role type identifier
     #[serde(rename = "_type")]
@@ -99,6 +104,7 @@ pub struct SnapshotMetadata {
 /// The most frequently updated metadata, pointing to the current snapshot.
 /// Short expiry ensures clients detect freeze attacks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimestampMetadata {
     /// Role type identifier
     #[serde(rename = "_type")]
@@ -115,6 +121,7 @@ pub struct TimestampMetadata {
 
 /// A TUF public key
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TufKey {
     /// Key type (e.g., "ed25519")
     pub keytype: String,
@@ -126,6 +133,7 @@ pub struct TufKey {
 
 /// Key value container holding the public key
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct KeyVal {
     /// Hex-encoded public key bytes
     pub public: String,
@@ -133,6 +141,7 @@ pub struct KeyVal {
 
 /// Role definition specifying which keys can sign and the threshold
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoleDefinition {
     /// Key IDs authorized to sign for this role
     pub keyids: Vec<String>,
@@ -141,7 +150,8 @@ pub struct RoleDefinition {
 }
 
 /// Description of a target file (package)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TargetDescription {
     /// File length in bytes
     pub length: u64,
@@ -151,6 +161,7 @@ pub struct TargetDescription {
 
 /// Metadata file reference in snapshot/timestamp
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetaFile {
     /// Version of the referenced metadata
     pub version: u64,
