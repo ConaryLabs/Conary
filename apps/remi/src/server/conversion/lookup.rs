@@ -1,43 +1,113 @@
 // apps/remi/src/server/conversion/lookup.rs
-//! Repository package lookup and one-shot upstream refresh for conversion.
+//! Immutable catalog package lookup and pinned upstream download for conversion.
 
 use super::ConversionService;
-use anyhow::{Result, anyhow};
-use conary_core::db::models::{Repository, RepositoryPackage};
+use crate::server::catalog_authority::PinnedProfileCatalog;
+use crate::server::profile_catalog::{ProfileCatalog, RankedProfilePackage};
+use anyhow::{Context, Result, anyhow, bail};
+use conary_core::db::models::{RemiActiveProfileRevision, Repository, RepositoryPackage};
+use conary_core::repository::catalog::{
+    CatalogPackageOriginV1, CatalogPackageRecordV1, SourceSnapshotV1,
+};
+use conary_core::repository::remi_metadata::REMI_SPARSE_MIN_PACKAGE_SIZE;
+use conary_core::repository::versioning::compare_repo_versions;
 use conary_core::repository::{DownloadOptions, download_package_verified};
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
-use tracing::info;
+use thiserror::Error;
 
-pub(super) struct PackageDownloadRefresh<'a> {
-    pub(super) profile: &'a str,
-    pub(super) package_name: &'a str,
-    pub(super) version: Option<&'a str>,
-    pub(super) architecture: Option<&'a str>,
+/// The complete immutable source identity used by one conversion.
+///
+/// The profile catalog reader is intentionally owned here.  Keeping this
+/// object alive keeps the reader pin alive, so a concurrent profile activation
+/// or catalog GC cannot change the source authority between download, parse,
+/// and conversion persistence.
+pub(super) struct PinnedConversionSource {
+    pub(super) catalog: PinnedProfileCatalog,
+    pub(super) package: CatalogPackageRecordV1,
+    pub(super) source_snapshot: SourceSnapshotV1,
     pub(super) repo_pkg: RepositoryPackage,
+    pub(super) repository_id: i64,
+    pub(super) repository_key_name: String,
+}
+
+impl PinnedConversionSource {
+    pub(super) fn source_profile(&self) -> &str {
+        self.catalog.source_profile()
+    }
+
+    pub(super) fn profile_revision_sha256(&self) -> &str {
+        self.catalog.profile_revision_sha256()
+    }
+
+    /// Digest the exact canonical provides projection carried by the pinned
+    /// catalog record.  This is diagnostic metadata on the conversion row;
+    /// it never consults the mutable operational provides projection.
+    pub(super) fn catalog_provides_digest(&self) -> Result<String> {
+        conary_core::ccs::attestation::canonical_json_hash(&self.package.provides)
+    }
+}
+
+pub(super) struct PackageDownloadRequest<'a> {
+    pub(super) source: PinnedConversionSource,
     pub(super) dest_dir: &'a Path,
 }
 
+#[derive(Debug, Error)]
+pub(super) enum CatalogPackageLookupError {
+    #[error(
+        "catalog package '{package_name}' was not found for profile '{profile}'{version}{architecture}"
+    )]
+    NotFound {
+        profile: String,
+        package_name: String,
+        version: String,
+        architecture: String,
+    },
+    #[error(
+        "catalog package '{package_name}' is ambiguous for profile '{profile}'{version}{architecture}: {candidate_count} exact candidates"
+    )]
+    Ambiguous {
+        profile: String,
+        package_name: String,
+        version: String,
+        architecture: String,
+        candidate_count: usize,
+    },
+}
+
 impl ConversionService {
+    fn download_options_for_source(
+        &self,
+        source: &PinnedConversionSource,
+    ) -> Result<(RepositoryPackage, DownloadOptions)> {
+        // The operational repository row was consulted once, while resolving
+        // this source, solely for its prepared key material name and numeric
+        // identity.  Its trust policy is deliberately replaced with the
+        // policy carried by the durable SourceSnapshotV1 manifest.
+        // Copy every download input before awaiting. `PinnedProfileCatalog`
+        // owns a rusqlite reader and is deliberately not `Sync`; borrowing the
+        // source across this await would make the request future impossible
+        // to send to the runtime worker.
+        let repository_key_name = source.repository_key_name.clone();
+        let metadata_url = source.source_snapshot.provenance.metadata_url.clone();
+        let package_format = source.source_snapshot.provenance.parser_config.format();
+        let trust_policy = source.source_snapshot.provenance.trust_policy.clone();
+        let mut repository = Repository::new(repository_key_name, metadata_url);
+        repository.package_format = package_format;
+        repository.trust_policy = Some(trust_policy);
+        let keyring = conary_core::db::paths::keyring_dir(&self.db_path.display().to_string());
+        let trust = DownloadOptions::for_repository(&repository, &keyring)?;
+        Ok((source.repo_pkg.clone(), trust))
+    }
+
     async fn download_trusted_repository_package(
         &self,
-        repo_pkg: &RepositoryPackage,
+        repo_pkg: RepositoryPackage,
         dest_dir: &Path,
+        trust: DownloadOptions,
     ) -> Result<PathBuf> {
-        let db_path = self.db_path.clone();
-        let repository_id = repo_pkg.repository_id;
-        let trust = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open_fast(&db_path)?;
-            let repository = Repository::find_by_id(&conn, repository_id)?.ok_or_else(|| {
-                conary_core::Error::NotFound(format!(
-                    "repository {repository_id} not found for package download"
-                ))
-            })?;
-            let keyring = conary_core::db::paths::keyring_dir(&db_path.display().to_string());
-            DownloadOptions::for_repository(&repository, &keyring)
-        })
-        .await
-        .map_err(|error| anyhow!("repository trust lookup task panicked: {error}"))??;
-        download_package_verified(repo_pkg, dest_dir, &trust)
+        download_package_verified(&repo_pkg, dest_dir, &trust)
             .await
             .map_err(anyhow::Error::from)
     }
@@ -48,7 +118,7 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
-    ) -> Result<RepositoryPackage> {
+    ) -> Result<PinnedConversionSource> {
         let service = self.clone();
         let distro = distro.to_string();
         let package_name = package_name.to_string();
@@ -56,487 +126,480 @@ impl ConversionService {
         let architecture = architecture.map(ToString::to_string);
 
         tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&service.db_path)?;
-            let repo_pkg = service.find_package(
-                &conn,
+            service.find_catalog_package(
                 &distro,
                 &package_name,
                 version.as_deref(),
                 architecture.as_deref(),
-            )?;
-            Ok(repo_pkg)
+                None,
+            )
         })
         .await
         .map_err(|e| anyhow!("package lookup task panicked: {e}"))?
     }
 
-    pub(super) fn find_package(
+    pub(super) async fn find_package_for_selected_revision_async(
         &self,
-        conn: &rusqlite::Connection,
+        selection: RemiActiveProfileRevision,
+        package_name: &str,
+        version: Option<&str>,
+        architecture: Option<&str>,
+    ) -> Result<PinnedConversionSource> {
+        let service = self.clone();
+        let package_name = package_name.to_string();
+        let version = version.map(ToString::to_string);
+        let architecture = architecture.map(ToString::to_string);
+
+        tokio::task::spawn_blocking(move || {
+            service.find_catalog_package(
+                &selection.source_profile.clone(),
+                &package_name,
+                version.as_deref(),
+                architecture.as_deref(),
+                Some(&selection),
+            )
+        })
+        .await
+        .map_err(|e| anyhow!("selected package lookup task panicked: {e}"))?
+    }
+
+    fn find_catalog_package(
+        &self,
         distro: &str,
         package_name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
-    ) -> Result<RepositoryPackage> {
-        use conary_core::repository::versioning::compare_repo_versions;
-
+        selection: Option<&RemiActiveProfileRevision>,
+    ) -> Result<PinnedConversionSource> {
         let profile = conary_core::repository::supported_profiles::profile_by_public_id(distro)
             .ok_or_else(|| anyhow!("unsupported public profile: {}", distro))?;
-        let scheme = profile.version_scheme();
-
-        // When a specific version is requested, use a simple exact-match query.
-        if let Some(ver) = version {
-            if let Some(arch) = architecture {
-                let sql = format!(
-                    "SELECT {}
-                     FROM repository_packages rp
-                     JOIN repositories r ON rp.repository_id = r.id
-                     WHERE rp.name = ?1
-                     AND r.enabled = 1
-                     AND r.source_profile = ?2
-                     AND rp.version = ?3
-                     AND rp.architecture = ?4
-                     AND rp.size > 0
-                     LIMIT 1",
-                    RepositoryPackage::COLUMNS_PREFIXED
-                );
-                let mut stmt = conn.prepare(&sql)?;
-
-                return stmt
-                    .query_row(
-                        rusqlite::params![package_name, distro, ver, arch],
-                        RepositoryPackage::from_row,
-                    )
-                    .map_err(|error| match error {
-                        rusqlite::Error::QueryReturnedNoRows => anyhow!(
-                            "Package '{}' version '{}' arch '{}' not found for profile {}. Run repository sync first.",
-                            package_name,
-                            ver,
-                            arch,
-                            distro
-                        ),
-                        other => anyhow!("Database error: {other}"),
-                    });
+        let catalog_authority = self.catalog_authority.as_ref().ok_or_else(|| {
+            anyhow!("repository conversion requires an immutable profile catalog authority")
+        })?;
+        let catalog = match selection {
+            Some(selection) => {
+                if selection.source_profile != profile.id() {
+                    bail!(
+                        "selected catalog profile '{}' does not match conversion profile '{}'",
+                        selection.source_profile,
+                        profile.id()
+                    );
+                }
+                catalog_authority
+                    .open_selected_profile(selection)
+                    .with_context(|| {
+                        format!(
+                            "open selected catalog for profile '{}' revision {}",
+                            profile.id(),
+                            selection.profile_revision_sha256
+                        )
+                    })?
             }
-
-            let sql = format!(
-                "SELECT {}
-                 FROM repository_packages rp
-                 JOIN repositories r ON rp.repository_id = r.id
-                 WHERE rp.name = ?1
-                 AND r.enabled = 1
-                 AND r.source_profile = ?2
-                 AND rp.version = ?3
-                 AND rp.size > 0
-                 LIMIT 1",
-                RepositoryPackage::COLUMNS_PREFIXED
-            );
-            let mut stmt = conn.prepare(&sql)?;
-
-            return stmt
-                .query_row(
-                    rusqlite::params![package_name, distro, ver],
-                    RepositoryPackage::from_row,
-                )
-                .map_err(|error| match error {
-                    rusqlite::Error::QueryReturnedNoRows => anyhow!(
-                        "Package '{}' version '{}' not found for profile {}. Run repository sync first.",
-                        package_name,
-                        ver,
-                        distro
-                    ),
-                    other => anyhow!("Database error: {other}"),
-                });
-        }
-
-        // No version specified: fetch all candidates and pick the latest using
-        // scheme-aware comparison instead of lexicographic ORDER BY.
-        let sql = format!(
-            "SELECT {}
-             FROM repository_packages rp
-             JOIN repositories r ON rp.repository_id = r.id
-             WHERE rp.name = ?1
-             AND r.enabled = 1
-             AND r.source_profile = ?2
-             AND (?3 IS NULL OR rp.architecture = ?3)
-             AND rp.size > 0",
-            RepositoryPackage::COLUMNS_PREFIXED
-        );
-        let mut stmt = conn.prepare(&sql)?;
-
-        let candidates = stmt
-            .query_map(
-                rusqlite::params![package_name, distro, architecture],
-                RepositoryPackage::from_row,
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|e| anyhow!("Database error: {}", e))?;
-
-        if candidates.is_empty() {
-            return Err(anyhow!(
-                "Package '{}' not found for profile {}. Run repository sync first.",
-                package_name,
-                distro
-            ));
-        }
-
-        // Pick the latest version while preserving parse failures as typed
-        // lookup errors rather than hiding them inside an infallible sort.
-        let mut candidates = candidates.into_iter();
-        let mut latest = candidates
-            .next()
-            .expect("candidate list was checked as non-empty");
-        for candidate in candidates {
-            if compare_repo_versions(scheme, &candidate.version, &latest.version)?
-                == std::cmp::Ordering::Greater
-            {
-                latest = candidate;
-            }
-        }
-
-        Ok(latest)
-    }
-
-    pub(super) async fn download_package_with_refresh_async(
-        &self,
-        request: PackageDownloadRefresh<'_>,
-    ) -> Result<(RepositoryPackage, PathBuf)> {
-        let PackageDownloadRefresh {
-            profile,
+            None => catalog_authority
+                .open_active_profile(profile.id())
+                .with_context(|| format!("open pinned catalog for profile '{}'", profile.id()))?,
+        };
+        let candidates =
+            ProfileCatalog::new(&catalog).ranked_package_records_by_name(package_name)?;
+        let package = select_catalog_package(
+            profile.id(),
             package_name,
             version,
             architecture,
+            candidates,
+        )?;
+        let source_snapshot = catalog_authority.source_snapshot_for_package(&catalog, &package)?;
+        let (repository_id, repository_key_name) =
+            lookup_repository_key_material(&self.db_path, profile.id(), &package.origin)?;
+        let repo_pkg = repository_package_from_catalog(&package, repository_id)?;
+
+        Ok(PinnedConversionSource {
+            catalog,
+            package,
+            source_snapshot,
             repo_pkg,
-            dest_dir,
-        } = request;
-        match self
-            .download_trusted_repository_package(&repo_pkg, dest_dir)
-            .await
-        {
-            Ok(path) => return Ok((repo_pkg, path)),
-            Err(err)
-                if !err
-                    .downcast_ref::<conary_core::Error>()
-                    .is_some_and(Self::is_upstream_not_found) =>
-            {
-                return Err(err);
-            }
-            Err(err) => {
-                info!(
-                    "Download for {}:{} hit upstream 404 ({}), refreshing repo {} once",
-                    profile, package_name, err, repo_pkg.repository_id
-                );
+            repository_id,
+            repository_key_name,
+        })
+    }
+
+    pub(super) async fn download_package_async(
+        &self,
+        request: PackageDownloadRequest<'_>,
+    ) -> Result<(PinnedConversionSource, PathBuf)> {
+        let PackageDownloadRequest { source, dest_dir } = request;
+        let (repo_pkg, trust) = self.download_options_for_source(&source)?;
+        let path = self
+            .download_trusted_repository_package(repo_pkg, dest_dir, trust)
+            .await?;
+        Ok((source, path))
+    }
+}
+
+fn select_catalog_package(
+    profile: &str,
+    package_name: &str,
+    version: Option<&str>,
+    architecture: Option<&str>,
+    candidates: Vec<RankedProfilePackage>,
+) -> Result<CatalogPackageRecordV1> {
+    let version_label = version
+        .map(|value| format!(" version '{value}'"))
+        .unwrap_or_default();
+    let architecture_label = architecture
+        .map(|value| format!(" architecture '{value}'"))
+        .unwrap_or_default();
+    let not_found = || {
+        anyhow::Error::new(CatalogPackageLookupError::NotFound {
+            profile: profile.to_string(),
+            package_name: package_name.to_string(),
+            version: version_label.clone(),
+            architecture: architecture_label.clone(),
+        })
+    };
+    let minimum_size = u64::try_from(REMI_SPARSE_MIN_PACKAGE_SIZE)
+        .context("Remi minimum downloadable package size is negative")?;
+
+    let mut candidates = candidates
+        .into_iter()
+        .filter(|candidate| {
+            candidate.package.name == package_name
+                && candidate.package.source_profile == profile
+                && candidate.package.size >= minimum_size
+                && version.is_none_or(|requested| candidate.package.version == requested)
+                && architecture.is_none_or(|requested| {
+                    candidate.package.architecture.as_deref() == Some(requested)
+                })
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err(not_found());
+    }
+
+    candidates = ProfileCatalog::retain_highest_priority(candidates);
+
+    if version.is_none() {
+        let scheme = candidates[0].package.version_scheme;
+        let mut latest_version = candidates[0].package.version.clone();
+        for candidate in candidates.iter().skip(1) {
+            match compare_repo_versions(scheme, &candidate.package.version, &latest_version)? {
+                Ordering::Greater => latest_version = candidate.package.version.clone(),
+                Ordering::Equal | Ordering::Less => {}
             }
         }
-
-        let publication_coordinator = self.publication_coordinator.clone();
-        let _publication_guard = publication_coordinator.lock_owned().await;
-        let db_path = self.db_path.clone();
-        let repo_id = repo_pkg.repository_id;
-        let repo = tokio::task::spawn_blocking(move || {
-            let conn = conary_core::db::open(&db_path)?;
-            conary_core::db::models::Repository::find_by_id(&conn, repo_id)?
-                .ok_or_else(|| anyhow!("Repository {} not found during refresh", repo_id))
-        })
-        .await
-        .map_err(|e| anyhow!("repository refresh lookup task panicked: {e}"))??;
-        let repo_name = repo.name.clone();
-        conary_core::repository::sync_repository_from_db_path(
-            self.db_path.clone(),
-            repo,
-            self.database_writer.clone(),
-        )
-        .await
-        .map_err(|e| anyhow!("Repository refresh failed for {}: {}", repo_name, e))?;
-
-        let refreshed_pkg = self
-            .find_package_for_conversion_async(profile, package_name, version, architecture)
-            .await?;
-        let path = self
-            .download_trusted_repository_package(&refreshed_pkg, dest_dir)
-            .await
-            .map_err(|e| anyhow!("Retry after refresh failed: {}", e))?;
-        Ok((refreshed_pkg, path))
+        candidates.retain(|candidate| candidate.package.version == latest_version);
     }
 
-    fn is_upstream_not_found(err: &conary_core::Error) -> bool {
-        matches!(err, conary_core::Error::HttpStatus { status: 404, .. })
+    // A request without an architecture is only unambiguous when the selected
+    // version has one exact catalog record.  Never let SQLite insertion order
+    // or a LIMIT clause choose a native artifact for us.
+    if candidates.len() != 1 {
+        return Err(anyhow::Error::new(CatalogPackageLookupError::Ambiguous {
+            profile: profile.to_string(),
+            package_name: package_name.to_string(),
+            version: version_label,
+            architecture: architecture_label,
+            candidate_count: candidates.len(),
+        }));
     }
+    Ok(candidates
+        .pop()
+        .expect("candidate count checked as one")
+        .package)
+}
+
+fn lookup_repository_key_material(
+    db_path: &Path,
+    profile: &str,
+    origin: &CatalogPackageOriginV1,
+) -> Result<(i64, String)> {
+    let CatalogPackageOriginV1::Profile {
+        source_identity: _,
+        repository_identity,
+        ..
+    } = origin
+    else {
+        bail!("conversion source package must carry a profile origin");
+    };
+    let conn = conary_core::db::open_fast(db_path)?;
+    let mut statement = conn.prepare(
+        "SELECT id, name FROM repositories
+         WHERE source_profile = ?1 AND repository_identity = ?2
+         ORDER BY id",
+    )?;
+    let ids = statement
+        .query_map(rusqlite::params![profile, repository_identity], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    match ids.as_slice() {
+        [] => bail!(
+            "no operational repository carries source profile '{}' and repository identity '{}' for prepared key material",
+            profile,
+            repository_identity
+        ),
+        [(repository_id, repository_name)] => Ok((*repository_id, repository_name.clone())),
+        ids => bail!(
+            "operational repository identity '{}' for profile '{}' is ambiguous ({} rows)",
+            repository_identity,
+            profile,
+            ids.len()
+        ),
+    }
+}
+
+fn repository_package_from_catalog(
+    package: &CatalogPackageRecordV1,
+    repository_id: i64,
+) -> Result<RepositoryPackage> {
+    let size = i64::try_from(package.size)
+        .context("catalog package size exceeds RepositoryPackage integer range")?;
+    Ok(RepositoryPackage {
+        id: None,
+        repository_id,
+        name: package.name.clone(),
+        version: package.version.clone(),
+        package_release: package.package_release.clone(),
+        architecture: package.architecture.clone(),
+        debian_multi_arch: package.debian_multi_arch,
+        description: package.description.clone(),
+        checksum: package.checksum.clone(),
+        size,
+        download_url: package.download_url.clone(),
+        metadata: package.metadata.clone(),
+        synced_at: None,
+        is_security_update: package.is_security_update,
+        severity: package.severity.clone(),
+        cve_ids: package.cve_ids.clone(),
+        advisory_id: package.advisory_id.clone(),
+        advisory_url: package.advisory_url.clone(),
+        source_profile: Some(package.source_profile.clone()),
+        version_scheme: package.version_scheme,
+        canonical_id: None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{create_test_db, insert_package, insert_repo};
     use super::*;
-    use conary_core::db::models::RepositoryPackage;
-    use std::path::PathBuf;
+    use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
 
-    #[test]
-    fn test_find_package_found() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora-44");
-        insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
+    fn package(version: &str, architecture: Option<&str>, marker: &str) -> CatalogPackageRecordV1 {
+        let mut package = crate::server::catalog_authority::test_support::package(
+            "fedora-44",
+            "demo",
+            version,
+            "",
+            architecture,
+            42,
+            marker,
         );
-
-        let pkg = service
-            .find_package(&conn, "fedora-44", "nginx", None, None)
-            .unwrap();
-        assert_eq!(pkg.name, "nginx");
-        assert_eq!(pkg.version, "1.24.0");
+        package.package_key_sha256 = String::new();
+        package
     }
 
-    #[test]
-    fn test_find_package_with_specific_version() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora-44");
-        insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
-        insert_package(&conn, repo_id, "nginx", "1.25.0", 1100);
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
-        );
-
-        let pkg = service
-            .find_package(&conn, "fedora-44", "nginx", Some("1.24.0"), None)
-            .unwrap();
-        assert_eq!(pkg.version, "1.24.0");
-    }
-
-    #[test]
-    fn test_find_package_with_specific_version_and_architecture() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora-44");
-
-        let mut i686 = RepositoryPackage::new(
-            repo_id,
-            "glib2".to_string(),
-            "2.86.0-2.fc44".to_string(),
-            conary_core::repository::versioning::VersionScheme::Rpm,
-            "sha256:glib2-i686".to_string(),
-            1024,
-            "https://example.com/glib2-2.86.0-2.fc44.i686.rpm".to_string(),
-        );
-        i686.architecture = Some("i686".to_string());
-        i686.insert(&conn).unwrap();
-
-        let mut x86_64 = RepositoryPackage::new(
-            repo_id,
-            "glib2".to_string(),
-            "2.86.0-2.fc44".to_string(),
-            conary_core::repository::versioning::VersionScheme::Rpm,
-            "sha256:glib2-x86_64".to_string(),
-            2048,
-            "https://example.com/glib2-2.86.0-2.fc44.x86_64.rpm".to_string(),
-        );
-        x86_64.architecture = Some("x86_64".to_string());
-        x86_64.insert(&conn).unwrap();
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
-        );
-
-        let pkg = service
-            .find_package(
-                &conn,
-                "fedora-44",
-                "glib2",
-                Some("2.86.0-2.fc44"),
-                Some("x86_64"),
-            )
-            .unwrap();
-        assert_eq!(pkg.architecture.as_deref(), Some("x86_64"));
-        assert!(pkg.download_url.ends_with(".x86_64.rpm"));
-    }
-
-    #[test]
-    fn test_find_package_not_found() {
-        let (temp_file, conn) = create_test_db();
-        insert_repo(&conn, "fedora-base", "fedora-44");
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
-        );
-
-        let result = service.find_package(&conn, "fedora-44", "nonexistent", None, None);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("not found"));
-        assert!(err_msg.contains("repository sync"));
-    }
-
-    #[test]
-    fn conversion_lookup_never_selects_a_disabled_repository() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora-44");
-        insert_package(&conn, repo_id, "nginx", "1.24.0", 1024);
-        conn.execute(
-            "UPDATE repositories SET enabled = 0 WHERE id = ?1",
-            [repo_id],
-        )
-        .unwrap();
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
-        );
-
-        for (version, architecture) in [
-            (None, None),
-            (Some("1.24.0"), None),
-            (Some("1.24.0"), Some("x86_64")),
-        ] {
-            assert!(
-                service
-                    .find_package(&conn, "fedora-44", "nginx", version, architecture)
-                    .is_err()
-            );
+    fn ranked(package: CatalogPackageRecordV1, member_priority: i32) -> RankedProfilePackage {
+        RankedProfilePackage {
+            package,
+            member_priority,
         }
     }
 
     #[test]
-    fn test_find_package_unknown_distro() {
-        let (temp_file, conn) = create_test_db();
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
+    fn catalog_lookup_picks_latest_unique_version() {
+        let selected = select_catalog_package(
+            "fedora-44",
+            "demo",
             None,
-        );
-
-        let result = service.find_package(&conn, "gentoo", "nginx", None, None);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("unsupported public profile"));
+            Some("x86_64"),
+            vec![
+                ranked(package("1.0-1.fc44", Some("x86_64"), "old"), 0),
+                ranked(package("1.1-1.fc44", Some("x86_64"), "new"), 0),
+            ],
+        )
+        .unwrap();
+        assert_eq!(selected.version, "1.1-1.fc44");
+        assert_eq!(selected.checksum, conary_core::hash::sha256(b"new"));
     }
 
     #[test]
-    fn test_find_package_arch_distro() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "arch-core", "arch");
-        insert_package(&conn, repo_id, "pacman", "6.0.0", 800);
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
+    fn catalog_lookup_rejects_exact_ambiguity() {
+        let error = select_catalog_package(
+            "fedora-44",
+            "demo",
+            Some("1.1-1.fc44"),
             None,
-        );
-
-        let pkg = service
-            .find_package(&conn, "arch", "pacman", None, None)
-            .unwrap();
-        assert_eq!(pkg.name, "pacman");
-    }
-
-    #[test]
-    fn test_find_package_ubuntu_distro() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "ubuntu-main", "ubuntu-26.04");
-        insert_package(&conn, repo_id, "libc6", "2.38-1", 2048);
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
-        );
-
-        let pkg = service
-            .find_package(&conn, "ubuntu-26.04", "libc6", None, None)
-            .unwrap();
-        assert_eq!(pkg.name, "libc6");
-    }
-
-    #[test]
-    fn test_find_package_debian_is_not_supported_distro() {
-        let (temp_file, conn) = create_test_db();
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
-        );
-
-        let err = service
-            .find_package(&conn, "debian", "apt", None, None)
-            .expect_err("debian is not a supported Remi distro")
-            .to_string();
-        assert!(err.contains("unsupported public profile"));
-    }
-
-    #[test]
-    fn test_find_package_uses_exact_persisted_profile() {
-        let (temp_file, conn) = create_test_db();
-
-        let arch_id = insert_repo(&conn, "arch-core", "arch");
-        insert_package(&conn, arch_id, "vim", "9.0", 500);
-
-        let fed_id = insert_repo(&conn, "fedora-base", "fedora-44");
-        insert_package(&conn, fed_id, "vim", "9.0", 500);
-
-        let ubuntu_id = insert_repo(&conn, "ubuntu-main", "ubuntu-26.04");
-        insert_package(&conn, ubuntu_id, "vim", "9.0", 500);
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
-        );
-
+            vec![
+                ranked(package("1.1-1.fc44", Some("x86_64"), "one"), 0),
+                ranked(package("1.1-1.fc44", Some("aarch64"), "two"), 0),
+            ],
+        )
+        .unwrap_err();
         assert!(
-            service
-                .find_package(&conn, "arch", "vim", None, None)
-                .is_ok()
-        );
-        assert!(
-            service
-                .find_package(&conn, "fedora-44", "vim", None, None)
-                .is_ok()
-        );
-        assert!(
-            service
-                .find_package(&conn, "ubuntu-26.04", "vim", None, None)
-                .is_ok()
-        );
-        assert!(
-            service
-                .find_package(&conn, "debian", "vim", None, None)
-                .is_err()
+            error
+                .downcast_ref::<CatalogPackageLookupError>()
+                .is_some_and(|error| matches!(error, CatalogPackageLookupError::Ambiguous { .. }))
         );
     }
 
     #[test]
-    fn test_detects_typed_upstream_not_found_error() {
-        let err = conary_core::Error::HttpStatus {
-            status: 404,
-            url: "https://example.com/pkg.rpm".to_string(),
-        };
-        assert!(ConversionService::is_upstream_not_found(&err));
+    fn catalog_lookup_reports_missing_without_operational_fallback() {
+        let error =
+            select_catalog_package("fedora-44", "missing", None, None, Vec::new()).unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<CatalogPackageLookupError>()
+                .is_some_and(|error| matches!(error, CatalogPackageLookupError::NotFound { .. }))
+        );
+    }
 
-        let other = conary_core::Error::HttpStatus {
-            status: 500,
-            url: "https://example.com/pkg.rpm".to_string(),
-        };
-        assert!(!ConversionService::is_upstream_not_found(&other));
+    #[test]
+    fn catalog_lookup_applies_priority_before_native_version_ordering() {
+        let selected = select_catalog_package(
+            "fedora-44",
+            "demo",
+            None,
+            Some("x86_64"),
+            vec![
+                ranked(package("2.0-1.fc44", Some("x86_64"), "lower"), 10),
+                ranked(package("1.0-1.fc44", Some("x86_64"), "higher"), 20),
+            ],
+        )
+        .expect("higher-priority eligible member wins");
+
+        assert_eq!(selected.version, "1.0-1.fc44");
+        assert_eq!(selected.checksum, conary_core::hash::sha256(b"higher"));
+    }
+
+    #[test]
+    fn catalog_lookup_filters_exact_version_before_priority() {
+        let selected = select_catalog_package(
+            "fedora-44",
+            "demo",
+            Some("1.0-1.fc44"),
+            Some("x86_64"),
+            vec![
+                ranked(package("2.0-1.fc44", Some("x86_64"), "higher"), 20),
+                ranked(package("1.0-1.fc44", Some("x86_64"), "eligible"), 10),
+            ],
+        )
+        .expect("priority applies only within the eligible exact version");
+
+        assert_eq!(selected.version, "1.0-1.fc44");
+        assert_eq!(selected.checksum, conary_core::hash::sha256(b"eligible"));
+    }
+
+    #[test]
+    fn catalog_lookup_filters_downloadability_before_priority() {
+        let mut higher_placeholder = package("2.0-1.fc44", Some("x86_64"), "placeholder");
+        higher_placeholder.size = 0;
+        let selected = select_catalog_package(
+            "fedora-44",
+            "demo",
+            None,
+            Some("x86_64"),
+            vec![
+                ranked(higher_placeholder, 20),
+                ranked(package("1.0-1.fc44", Some("x86_64"), "downloadable"), 10),
+            ],
+        )
+        .expect("downloadable lower-priority member remains eligible");
+
+        assert_eq!(selected.version, "1.0-1.fc44");
+        assert_eq!(
+            selected.checksum,
+            conary_core::hash::sha256(b"downloadable")
+        );
+    }
+
+    #[tokio::test]
+    async fn conversion_lookup_uses_only_the_pinned_profile_catalog() {
+        let fixture = ActiveCatalogFixture::new();
+        let revision = fixture.activate(
+            "fedora-44",
+            1,
+            vec![package("1.0-1.fc44", Some("x86_64"), "catalog-source")],
+        );
+        let service = ConversionService::new(
+            fixture.db_path().with_extension("chunks"),
+            fixture.db_path().with_extension("cache"),
+            fixture.db_path().to_path_buf(),
+            None,
+        )
+        .with_catalog_authority(fixture.authority().clone());
+
+        let source = service
+            .find_package_for_conversion_async(
+                "fedora-44",
+                "demo",
+                Some("1.0-1.fc44"),
+                Some("x86_64"),
+            )
+            .await
+            .expect("resolve exact catalog conversion source");
+
+        assert_eq!(source.profile_revision_sha256(), revision);
+        assert_eq!(
+            source.package.checksum,
+            conary_core::hash::sha256(b"catalog-source")
+        );
+        assert_eq!(source.repo_pkg.id, None);
+        assert_eq!(source.source_snapshot.source_profile, "fedora-44");
+        assert_eq!(
+            source.source_snapshot.repository_identity,
+            "repository-fedora-44"
+        );
+        let conn = fixture.connection();
+        let operational_packages = conn
+            .query_row("SELECT COUNT(*) FROM repository_packages", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("count operational package rows");
+        assert_eq!(operational_packages, 0);
+    }
+
+    #[tokio::test]
+    async fn conversion_lookup_reopens_the_exact_selection_after_activation() {
+        let fixture = ActiveCatalogFixture::new();
+        let old_revision = fixture.activate(
+            "fedora-44",
+            1,
+            vec![package("1.0-1.fc44", Some("x86_64"), "old-source")],
+        );
+        let selection_pin = fixture
+            .authority()
+            .open_active_profile("fedora-44")
+            .expect("pin old active selection");
+        let selection = selection_pin.activation().clone();
+        let new_revision = fixture.activate(
+            "fedora-44",
+            2,
+            vec![package("1.0-1.fc44", Some("x86_64"), "new-source")],
+        );
+        let service = ConversionService::new(
+            fixture.db_path().with_extension("chunks"),
+            fixture.db_path().with_extension("cache"),
+            fixture.db_path().to_path_buf(),
+            None,
+        )
+        .with_catalog_authority(fixture.authority().clone());
+
+        let source = service
+            .find_package_for_selected_revision_async(
+                selection,
+                "demo",
+                Some("1.0-1.fc44"),
+                Some("x86_64"),
+            )
+            .await
+            .expect("reopen exact old catalog selection");
+
+        assert_eq!(source.profile_revision_sha256(), old_revision);
+        assert_ne!(source.profile_revision_sha256(), new_revision);
+        assert_eq!(
+            source.package.checksum,
+            conary_core::hash::sha256(b"old-source")
+        );
+        drop(selection_pin);
     }
 }

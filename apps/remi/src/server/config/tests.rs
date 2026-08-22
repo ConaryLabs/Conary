@@ -79,6 +79,8 @@ fn test_storage_dirs() {
     assert!(dirs.contains(&PathBuf::from("/conary/chunks")));
     assert!(dirs.contains(&PathBuf::from("/conary/metadata")));
     assert!(dirs.contains(&PathBuf::from("/conary/bootstrap")));
+    assert!(dirs.contains(&PathBuf::from("/conary/catalogs")));
+    assert!(dirs.contains(&PathBuf::from("/conary/catalog-candidates")));
 }
 
 #[test]
@@ -89,6 +91,11 @@ fn test_default_remi_config_to_server_config_regression() {
     assert_eq!(runtime.db_path, PathBuf::from("/conary/metadata/conary.db"));
     assert_eq!(runtime.chunk_dir, PathBuf::from("/conary/chunks"));
     assert_eq!(runtime.cache_dir, PathBuf::from("/conary/cache"));
+    assert_eq!(runtime.catalog_dir, PathBuf::from("/conary/catalogs"));
+    assert_eq!(
+        runtime.catalog_candidate_dir,
+        PathBuf::from("/conary/catalog-candidates")
+    );
     assert_eq!(runtime.max_concurrent_conversions, 32);
     assert_eq!(runtime.cache_max_bytes, 700 * 1024 * 1024 * 1024);
     assert!(runtime.enable_bloom_filter);

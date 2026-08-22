@@ -35,6 +35,10 @@ fn valid_builder() -> PackageBuilder {
 fn snapshot_identity_owns_the_authenticated_repomd_bytes() {
     let repomd = b"<repomd revision='one'/>";
     assert_eq!(
+        authenticated_repomd_snapshot(repomd).size(),
+        Some(repomd.len() as u64)
+    );
+    assert_eq!(
         authenticated_repomd_snapshot(repomd),
         AuthenticatedSnapshotIdentity::for_bytes(repomd)
     );

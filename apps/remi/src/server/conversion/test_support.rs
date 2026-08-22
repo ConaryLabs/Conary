@@ -36,37 +36,6 @@ pub(super) fn create_test_db() -> (NamedTempFile, rusqlite::Connection) {
     (temp_file, conn)
 }
 
-pub(super) fn insert_repo(conn: &rusqlite::Connection, name: &str, distro: &str) -> i64 {
-    let mut repo = Repository::new(name.to_string(), "https://example.com".to_string());
-    let profile = conary_core::repository::supported_profiles::profile_by_public_id(distro)
-        .or_else(|| conary_core::repository::supported_profiles::profile_for_remi_route(distro))
-        .unwrap_or_else(|| {
-            panic!("test source '{distro}' must name an exact profile or supported Remi route")
-        });
-    repo.source_profile = Some(profile.id().to_string());
-    repo.insert(conn).unwrap()
-}
-
-pub(super) fn insert_package(
-    conn: &rusqlite::Connection,
-    repo_id: i64,
-    name: &str,
-    version: &str,
-    size: i64,
-) {
-    let mut pkg = RepositoryPackage::new(
-        repo_id,
-        name.to_string(),
-        version.to_string(),
-        conary_core::repository::versioning::VersionScheme::Rpm,
-        format!("sha256:{name}-{version}"),
-        size,
-        format!("https://example.com/{name}-{version}.rpm"),
-    );
-    pkg.architecture = Some("x86_64".to_string());
-    pkg.insert(conn).unwrap();
-}
-
 pub(super) fn eopkg_fixture() -> tempfile::NamedTempFile {
     let mut tar = tar::Builder::new(Vec::new());
     let mut header = tar::Header::new_gnu();

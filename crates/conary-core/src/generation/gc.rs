@@ -169,11 +169,16 @@ impl CasReachability {
         }
 
         for converted in crate::db::models::ConvertedPackage::list_repository_conversions(conn)? {
-            if !converted.repository_metadata_is_current(conn)? {
+            if !converted.repository_conversion_is_current()? {
                 continue;
             }
+            let id = converted.id.ok_or_else(|| {
+                crate::Error::InternalError(
+                    "current converted repository row has no ID".to_string(),
+                )
+            })?;
+            crate::db::models::ConvertedPackage::require_conversion_pin(conn, id)?;
             converted.scriptlet_summary()?;
-            let id = converted.id.unwrap_or_default();
             for hash in converted.object_hashes()? {
                 self.protect_hash(
                     &format!("current converted package transport row {id}"),
@@ -358,7 +363,8 @@ fn should_skip_recent_object(path: &Path, now: SystemTime, grace_period: Duratio
 mod tests {
     use super::*;
     use crate::db::models::{
-        ConvertedPackage, FileEntry, Repository, RepositoryPackage, RepositoryProvide,
+        ConvertedPackage, FileEntry, RemiCatalogResource, RemiCatalogResourceKind, Repository,
+        RepositoryPackage, RepositoryProvide,
     };
     use crate::db::schema;
     use crate::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
@@ -376,6 +382,25 @@ mod tests {
         let dir = objects_dir.join(prefix);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(suffix), content).unwrap();
+    }
+
+    fn seed_profile_resource(conn: &Connection, source_profile: &str) -> String {
+        let manifest_json = format!(r#"{{"profile":"{source_profile}"}}"#);
+        let revision = crate::hash::sha256(manifest_json.as_bytes());
+        RemiCatalogResource {
+            resource_sha256: revision.clone(),
+            kind: RemiCatalogResourceKind::ProfileRevision,
+            source_profile: source_profile.to_string(),
+            artifact_sha256: crate::hash::sha256(format!("artifact-{revision}").as_bytes()),
+            artifact_size: 1,
+            logical_digest_sha256: crate::hash::sha256(format!("logical-{revision}").as_bytes()),
+            manifest_json,
+            durable: true,
+            created_at: 1,
+        }
+        .insert(conn)
+        .unwrap();
+        revision
     }
 
     fn seed_repository_source(conn: &Connection, converted: &mut ConvertedPackage) -> i64 {
@@ -528,8 +553,10 @@ mod tests {
     fn malformed_explicit_chunk_authority_fails_closed() {
         let conn = create_test_db();
         let transport = crate::ccs::transport::test_transport(&["NOT-A-HASH".to_string()]);
+        let revision = seed_profile_resource(&conn, "fedora-44");
         let mut converted = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
+            revision,
             "pkg".to_string(),
             "1".to_string(),
             "x86_64".to_string(),
@@ -542,7 +569,7 @@ mod tests {
             crate::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         seed_repository_source(&conn, &mut converted);
-        converted.insert(&conn).unwrap();
+        converted.insert_with_conversion_pin(&conn, 1).unwrap();
         let error = CasReachability::new()
             .protect_current_database(&conn)
             .expect_err("malformed chunk authority must abort");
@@ -555,10 +582,12 @@ mod tests {
         let current = "5".repeat(64);
         let stale = "6".repeat(64);
         let public_native = "7".repeat(64);
+        let revision = seed_profile_resource(&conn, "fedora-44");
         let current_transport =
             crate::ccs::transport::test_transport(std::slice::from_ref(&current));
         let mut current_conversion = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
+            revision.clone(),
             "current".to_string(),
             "1".to_string(),
             "x86_64".to_string(),
@@ -571,10 +600,13 @@ mod tests {
             crate::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
         );
         seed_repository_source(&conn, &mut current_conversion);
-        current_conversion.insert(&conn).unwrap();
+        current_conversion
+            .insert_with_conversion_pin(&conn, 1)
+            .unwrap();
         let stale_transport = crate::ccs::transport::test_transport(std::slice::from_ref(&stale));
         let mut stale_conversion = ConvertedPackage::new_repository(
             "fedora-44".to_string(),
+            revision,
             "stale".to_string(),
             "1".to_string(),
             "x86_64".to_string(),
@@ -643,6 +675,43 @@ mod tests {
         assert!(roots.hashes().contains(&current));
         assert!(!roots.hashes().contains(&stale));
         assert!(roots.hashes().contains(&public_native));
+    }
+
+    #[test]
+    fn current_conversion_without_exact_pin_is_not_a_gc_root() {
+        let conn = create_test_db();
+        let revision = seed_profile_resource(&conn, "fedora-44");
+        let transport = crate::ccs::transport::test_transport(&["5".repeat(64)]);
+        let mut converted = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
+            revision,
+            "unpinned".to_string(),
+            "1".to_string(),
+            "x86_64".to_string(),
+            "rpm".to_string(),
+            "unpinned-checksum".to_string(),
+            &transport,
+            1,
+            "content".to_string(),
+            "/tmp/unpinned.ccs".to_string(),
+            crate::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
+        );
+        seed_repository_source(&conn, &mut converted);
+        let id = converted.insert_with_conversion_pin(&conn, 1).unwrap();
+        conn.execute(
+            "DELETE FROM remi_profile_revision_pins WHERE pin_id = ?1",
+            [ConvertedPackage::conversion_pin_id(id)],
+        )
+        .unwrap();
+
+        let error = CasReachability::new()
+            .protect_current_database(&conn)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("has no exact profile-revision pin"),
+            "{error}"
+        );
     }
 
     #[test]

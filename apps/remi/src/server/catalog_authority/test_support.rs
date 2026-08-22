@@ -1,0 +1,519 @@
+// apps/remi/src/server/catalog_authority/test_support.rs
+
+//! Current-schema immutable catalog fixtures shared by Remi reader tests.
+
+use std::path::{Path, PathBuf};
+
+use conary_core::db::models::{
+    RemiCatalogResource, RemiCatalogResourceKind, RemiProfileRevisionMember, RemiRuntimeSession,
+};
+use conary_core::repository::catalog::{
+    CATALOG_FILE_NAME, CatalogArtifactV1, CatalogContentV1, CatalogPackageOriginV1,
+    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1,
+    ProfileRevisionV1, ProfileSourceMemberV1, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
+    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
+    SourceStreamKindV1, SourceStreamV1, publish_profile_catalog_bundle,
+    publish_source_catalog_bundle, write_catalog_candidate, write_profile_catalog_manifest,
+    write_source_catalog_manifest,
+};
+use conary_core::repository::dependency_model::DebianMultiArch;
+use conary_core::repository::supported_profiles::ProfilePackageFormat;
+use conary_core::repository::versioning::VersionScheme;
+use conary_core::repository::{
+    ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, OpenPgpTrustRoot, RepositoryParserConfig,
+    RepositoryTrustPolicy, RpmMetadataAuthority,
+};
+
+use super::CatalogAuthority;
+use crate::server::database_writer::DatabaseWriter;
+
+pub(crate) struct ActiveCatalogFixture {
+    root: tempfile::TempDir,
+    db_path: PathBuf,
+    catalog_dir: PathBuf,
+    authority: CatalogAuthority,
+}
+
+impl ActiveCatalogFixture {
+    pub(crate) fn new() -> Self {
+        let root = tempfile::tempdir().expect("create active catalog fixture");
+        let db_path = root.path().join("metadata/conary.db");
+        let catalog_dir = root.path().join("catalogs");
+        std::fs::create_dir_all(db_path.parent().expect("metadata parent"))
+            .expect("create metadata directory");
+        std::fs::create_dir_all(&catalog_dir).expect("create catalog directory");
+        conary_core::db::init(&db_path).expect("initialize current schema");
+        let conn = conary_core::db::open_fast(&db_path).expect("open fixture database");
+        RemiRuntimeSession::begin(&conn, 1).expect("install fixture runtime session");
+        let database_writer = DatabaseWriter::default();
+        let authority =
+            CatalogAuthority::from_paths(db_path.clone(), catalog_dir.clone(), database_writer);
+        Self {
+            root,
+            db_path,
+            catalog_dir,
+            authority,
+        }
+    }
+
+    pub(crate) fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    pub(crate) fn authority(&self) -> &CatalogAuthority {
+        &self.authority
+    }
+
+    pub(crate) fn catalog_dir(&self) -> &Path {
+        &self.catalog_dir
+    }
+
+    pub(crate) fn connection(&self) -> rusqlite::Connection {
+        conary_core::db::open_fast(&self.db_path).expect("open fixture database")
+    }
+
+    pub(crate) fn activate(
+        &self,
+        profile: &str,
+        fencing_epoch: i64,
+        packages: Vec<CatalogPackageRecordV1>,
+    ) -> String {
+        let source_identity = format!("source-{profile}");
+        let repository_identity = format!("repository-{profile}");
+        let (parser_config, trust_policy, ecosystem, evidence_role) =
+            source_fixture_authority(profile);
+        let parser_config_sha256 = conary_core::hash::sha256(
+            &conary_core::json::canonical_json(&parser_config)
+                .expect("serialize source parser fixture"),
+        );
+        let trust_policy_sha256 = conary_core::hash::sha256(
+            &conary_core::json::canonical_json(&trust_policy)
+                .expect("serialize source trust fixture"),
+        );
+        let source_object = SourceMetadataObjectV1 {
+            role: evidence_role,
+            source_path: format!("metadata/{profile}"),
+            sha256: conary_core::hash::sha256(
+                format!("source-object-{profile}-{fencing_epoch}").as_bytes(),
+            ),
+            size: 1,
+        };
+        let source_stream = SourceStreamV1 {
+            kind: SourceStreamKindV1::Release,
+            identity: "stable".to_string(),
+        };
+        let source_packages = packages
+            .iter()
+            .cloned()
+            .map(|mut package| {
+                package.package_key_sha256.clear();
+                package.origin = CatalogPackageOriginV1::Source {
+                    source_identity: source_identity.clone(),
+                    repository_identity: repository_identity.clone(),
+                };
+                package
+            })
+            .collect();
+        let source_content = CatalogContentV1::new(
+            CatalogScopeV1::Source {
+                source_profile: profile.to_string(),
+                source_identity: source_identity.clone(),
+                repository_identity: repository_identity.clone(),
+            },
+            vec![CatalogSourceEvidenceV1::AuthenticatedObject {
+                role: source_object.role.clone(),
+                source_path: source_object.source_path.clone(),
+                sha256: source_object.sha256.clone(),
+                size: source_object.size,
+            }],
+            source_packages,
+        )
+        .expect("build active source catalog");
+        let source_candidate_dir = self
+            .root
+            .path()
+            .join(format!("source-candidate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&source_candidate_dir).expect("create source candidate directory");
+        let source_binding = write_catalog_candidate(
+            source_candidate_dir.join(CATALOG_FILE_NAME),
+            &source_content,
+        )
+        .expect("write source catalog candidate");
+        let source_manifest = SourceSnapshotV1 {
+            schema_version: SOURCE_SNAPSHOT_SCHEMA_V1,
+            source_profile: profile.to_string(),
+            source_identity: source_identity.clone(),
+            repository_identity: repository_identity.clone(),
+            stream: source_stream.clone(),
+            stream_binding_sha256: conary_core::hash::sha256(
+                format!("stream-binding-{profile}").as_bytes(),
+            ),
+            parser_projection_version: 1,
+            provenance: SourceProvenanceV1 {
+                ecosystem,
+                metadata_url: format!("https://example.invalid/{profile}/metadata"),
+                content_url: Some(format!("https://example.invalid/{profile}/content")),
+                parser_config,
+                parser_config_sha256,
+                trust_policy,
+                trust_policy_sha256,
+            },
+            authenticated_root: CatalogArtifactV1 {
+                sha256: conary_core::hash::sha256(
+                    format!("source-root-{profile}-{fencing_epoch}").as_bytes(),
+                ),
+                size: 1,
+            },
+            authenticated_objects: vec![source_object],
+            catalog: source_binding.artifact.clone(),
+            logical_digest_sha256: source_binding.logical_digest_sha256.clone(),
+            counts: source_binding.counts,
+        };
+        write_source_catalog_manifest(&source_candidate_dir, &source_manifest)
+            .expect("write source snapshot manifest");
+        publish_source_catalog_bundle(&source_candidate_dir, &self.catalog_dir, &source_manifest)
+            .expect("publish source catalog");
+        let source_snapshot_sha256 = source_manifest
+            .manifest_sha256()
+            .expect("hash source snapshot manifest");
+        let packages = packages
+            .into_iter()
+            .map(|mut package| {
+                package.package_key_sha256.clear();
+                package.origin = CatalogPackageOriginV1::Profile {
+                    member_ordinal: 0,
+                    source_identity: source_identity.clone(),
+                    repository_identity: repository_identity.clone(),
+                    source_snapshot_sha256: source_snapshot_sha256.clone(),
+                };
+                package
+            })
+            .collect();
+        let content = CatalogContentV1::new(
+            CatalogScopeV1::Profile {
+                profile: profile.to_string(),
+            },
+            vec![CatalogSourceEvidenceV1::SourceSnapshot {
+                member_ordinal: 0,
+                source_identity: source_identity.clone(),
+                repository_identity: repository_identity.clone(),
+                source_snapshot_sha256: source_snapshot_sha256.clone(),
+            }],
+            packages,
+        )
+        .expect("build active profile catalog");
+        let candidate_dir = self
+            .root
+            .path()
+            .join(format!("candidate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&candidate_dir).expect("create catalog candidate");
+        let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
+            .expect("write catalog candidate");
+        let manifest = ProfileRevisionV1 {
+            schema_version: PROFILE_REVISION_SCHEMA_V1,
+            profile: profile.to_string(),
+            projection_version: 1,
+            members: vec![ProfileSourceMemberV1 {
+                ordinal: 0,
+                source_identity: source_identity.clone(),
+                repository_identity: repository_identity.clone(),
+                stream: SourceStreamV1 {
+                    kind: SourceStreamKindV1::Release,
+                    identity: "stable".to_string(),
+                },
+                priority: 0,
+                required: true,
+                source_snapshot_sha256: source_snapshot_sha256.clone(),
+            }],
+            catalog: binding.artifact.clone(),
+            logical_digest_sha256: binding.logical_digest_sha256.clone(),
+            counts: binding.counts,
+        };
+        write_profile_catalog_manifest(&candidate_dir, &manifest).expect("write profile manifest");
+        publish_profile_catalog_bundle(&candidate_dir, &self.catalog_dir, &manifest)
+            .expect("publish profile catalog");
+
+        let profile_revision_sha256 = manifest.manifest_sha256().expect("hash profile revision");
+        let profile_manifest_json = String::from_utf8(
+            conary_core::json::canonical_json(&manifest).expect("serialize profile revision"),
+        )
+        .expect("profile fixture JSON is UTF-8");
+        let conn = self.connection();
+        // Conversion lookup is allowed to consult exactly one operational
+        // repository row for prepared key-material naming.  Keep that row
+        // deliberately package-free: package authority remains in the
+        // immutable source/profile catalog bundles above.
+        let (ecosystem, version_scheme, package_format) = match ecosystem {
+            SourceEcosystemV1::Rpm => ("rpm", "rpm", "rpm"),
+            SourceEcosystemV1::Deb => ("deb", "debian", "deb"),
+            SourceEcosystemV1::Alpm => ("alpm", "arch", "arch"),
+            SourceEcosystemV1::Eopkg => ("eopkg", "eopkg", "eopkg"),
+        };
+        conn.execute(
+            "INSERT OR IGNORE INTO repository_source_policies (
+                 source_identity, scope_kind, scope_identity, ecosystem,
+                 version_scheme, stream_kind, stream_identity, update_mode
+             ) VALUES (?1, 'repository', ?2, ?3, ?4, 'release', 'stable', 'follow')",
+            rusqlite::params![
+                source_identity,
+                repository_identity,
+                ecosystem,
+                version_scheme,
+            ],
+        )
+        .expect("insert fixture source policy");
+        let source_policy_id = conn
+            .query_row(
+                "SELECT id FROM repository_source_policies
+                 WHERE source_identity = ?1 AND scope_kind = 'repository'
+                   AND scope_identity = ?2",
+                rusqlite::params![source_identity, repository_identity],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("resolve fixture source policy");
+        let parser_config_json = serde_json::to_string(&source_manifest.provenance.parser_config)
+            .expect("serialize fixture parser configuration");
+        let trust_policy_json = serde_json::to_string(&source_manifest.provenance.trust_policy)
+            .expect("serialize fixture trust policy");
+        conn.execute(
+            "INSERT OR IGNORE INTO repositories (
+                 name, url, source_profile, trust_policy_json, package_format,
+                 parser_config_json, source_policy_id, repository_identity,
+                 stream_binding_sha256
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                format!("fixture-key-material-{profile}"),
+                format!("https://example.invalid/{profile}/metadata"),
+                profile,
+                trust_policy_json,
+                package_format,
+                parser_config_json,
+                source_policy_id,
+                repository_identity,
+                source_manifest.stream_binding_sha256,
+            ],
+        )
+        .expect("insert fixture key-material repository row");
+        let source_manifest_json = String::from_utf8(
+            conary_core::json::canonical_json(&source_manifest)
+                .expect("serialize source snapshot manifest"),
+        )
+        .expect("source snapshot manifest is UTF-8");
+        RemiCatalogResource {
+            resource_sha256: source_snapshot_sha256.clone(),
+            kind: RemiCatalogResourceKind::SourceSnapshot,
+            source_profile: profile.to_string(),
+            artifact_sha256: source_manifest.catalog.sha256.clone(),
+            artifact_size: i64::try_from(source_manifest.catalog.size)
+                .expect("source artifact size fits"),
+            logical_digest_sha256: source_manifest.logical_digest_sha256.clone(),
+            manifest_json: source_manifest_json,
+            durable: true,
+            created_at: fencing_epoch,
+        }
+        .insert(&conn)
+        .expect("insert source resource");
+        RemiCatalogResource {
+            resource_sha256: profile_revision_sha256.clone(),
+            kind: RemiCatalogResourceKind::ProfileRevision,
+            source_profile: profile.to_string(),
+            artifact_sha256: manifest.catalog.sha256.clone(),
+            artifact_size: i64::try_from(manifest.catalog.size).expect("artifact size fits"),
+            logical_digest_sha256: manifest.logical_digest_sha256.clone(),
+            manifest_json: profile_manifest_json,
+            durable: true,
+            created_at: fencing_epoch,
+        }
+        .insert(&conn)
+        .expect("insert profile resource");
+        RemiProfileRevisionMember {
+            profile_revision_sha256: profile_revision_sha256.clone(),
+            ordinal: 0,
+            source_snapshot_sha256,
+            source_identity,
+            repository_identity,
+            stream_kind: "release".to_string(),
+            stream_identity: "stable".to_string(),
+            priority: 0,
+            required: true,
+        }
+        .insert(&conn)
+        .expect("insert profile member");
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let owner_instance_uuid = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO repository_sync_runs (
+                 run_id, source_profile, owner_instance_uuid, fencing_epoch,
+                 input_profile_digest, candidate_profile_digest, state,
+                 started_at, heartbeat_at, lease_expires_at, finished_at
+             ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, 'published', ?4, ?4, ?4, ?4)",
+            rusqlite::params![
+                run_id,
+                profile,
+                owner_instance_uuid,
+                fencing_epoch,
+                profile_revision_sha256,
+            ],
+        )
+        .expect("insert activation run");
+        conn.execute(
+            "INSERT INTO remi_active_profile_revisions (
+                 source_profile, profile_revision_sha256, fencing_epoch,
+                 activation_run_id, owner_instance_uuid, activated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?3)
+             ON CONFLICT(source_profile) DO UPDATE SET
+                 profile_revision_sha256 = excluded.profile_revision_sha256,
+                 fencing_epoch = excluded.fencing_epoch,
+                 activation_run_id = excluded.activation_run_id,
+                 owner_instance_uuid = excluded.owner_instance_uuid,
+                 activated_at = excluded.activated_at",
+            rusqlite::params![
+                profile,
+                profile_revision_sha256,
+                fencing_epoch,
+                run_id,
+                owner_instance_uuid,
+            ],
+        )
+        .expect("activate profile revision");
+        profile_revision_sha256
+    }
+}
+
+fn source_fixture_authority(
+    profile: &str,
+) -> (
+    RepositoryParserConfig,
+    RepositoryTrustPolicy,
+    SourceEcosystemV1,
+    SourceMetadataObjectRoleV1,
+) {
+    let format = conary_core::repository::supported_profiles::profile_by_public_id(profile)
+        .map(|profile| profile.package_format())
+        .unwrap_or(ProfilePackageFormat::Rpm);
+    let fingerprint = "A".repeat(40);
+    match format {
+        ProfilePackageFormat::Rpm => {
+            let parser = RepositoryParserConfig::Rpm {
+                architecture: "x86_64".to_string(),
+            };
+            let trust = RepositoryTrustPolicy::Rpm {
+                metadata: RpmMetadataAuthority::Metalink {
+                    url: format!("https://example.invalid/{profile}/metalink"),
+                },
+                package_keys: vec![
+                    OpenPgpTrustRoot::new(
+                        format!("https://example.invalid/{profile}/keys"),
+                        fingerprint,
+                    )
+                    .expect("valid RPM fixture trust root"),
+                ],
+            };
+            (
+                parser,
+                trust,
+                SourceEcosystemV1::Rpm,
+                SourceMetadataObjectRoleV1::RpmPrimary,
+            )
+        }
+        ProfilePackageFormat::Deb => {
+            let parser = RepositoryParserConfig::Deb {
+                distribution: "stable".to_string(),
+                component: "main".to_string(),
+                architecture: "amd64".to_string(),
+            };
+            let trust = RepositoryTrustPolicy::Debian {
+                release_keys: vec![
+                    OpenPgpTrustRoot::new(
+                        format!("https://example.invalid/{profile}/keys"),
+                        fingerprint,
+                    )
+                    .expect("valid Debian fixture trust root"),
+                ],
+            };
+            (
+                parser,
+                trust,
+                SourceEcosystemV1::Deb,
+                SourceMetadataObjectRoleV1::DebianPackages,
+            )
+        }
+        ProfilePackageFormat::Arch => {
+            let parser = RepositoryParserConfig::Arch {
+                database: "core".to_string(),
+            };
+            let trust = RepositoryTrustPolicy::Arch {
+                keyring: ArchKeyringTrust {
+                    url: format!("https://example.invalid/{profile}/keyring"),
+                    format: ArchKeyringFormat::OpenPgp,
+                    master_fingerprints: vec![fingerprint],
+                    packager_key_threshold: 1,
+                },
+                sig_level: ArchSigLevel::distribution_default(),
+            };
+            (
+                parser,
+                trust,
+                SourceEcosystemV1::Alpm,
+                SourceMetadataObjectRoleV1::ArchDatabase,
+            )
+        }
+        ProfilePackageFormat::Eopkg => {
+            let parser = RepositoryParserConfig::Eopkg {
+                architecture: "x86_64".to_string(),
+            };
+            let trust = RepositoryTrustPolicy::Eopkg {
+                origin: format!("https://example.invalid/{profile}/"),
+            };
+            (
+                parser,
+                trust,
+                SourceEcosystemV1::Eopkg,
+                SourceMetadataObjectRoleV1::EopkgIndex,
+            )
+        }
+    }
+}
+
+pub(crate) fn package(
+    profile: &str,
+    name: &str,
+    version: &str,
+    release: &str,
+    architecture: Option<&str>,
+    size: u64,
+    checksum_marker: &str,
+) -> CatalogPackageRecordV1 {
+    let version_scheme = conary_core::repository::supported_profiles::profile_by_public_id(profile)
+        .map_or(VersionScheme::Rpm, |profile| profile.version_scheme());
+    CatalogPackageRecordV1 {
+        package_key_sha256: String::new(),
+        origin: CatalogPackageOriginV1::Profile {
+            member_ordinal: 0,
+            source_identity: format!("source-{profile}"),
+            repository_identity: format!("repository-{profile}"),
+            source_snapshot_sha256: conary_core::hash::sha256(
+                format!("package-snapshot-{profile}").as_bytes(),
+            ),
+        },
+        source_profile: profile.to_string(),
+        name: name.to_string(),
+        version: version.to_string(),
+        package_release: release.to_string(),
+        architecture: architecture.map(str::to_string),
+        debian_multi_arch: (version_scheme == VersionScheme::Debian).then_some(DebianMultiArch::No),
+        description: None,
+        checksum: conary_core::hash::sha256(checksum_marker.as_bytes()),
+        size,
+        download_url: format!("https://example.invalid/{name}-{version}-{release}.rpm"),
+        metadata: None,
+        is_security_update: false,
+        severity: None,
+        cve_ids: None,
+        advisory_id: None,
+        advisory_url: None,
+        version_scheme,
+        provides: Vec::new(),
+        requirement_groups: Vec::new(),
+    }
+}

@@ -120,8 +120,6 @@ pub struct Repository {
     pub repository_identity: Option<String>,
     /// Revision-31 drift binding over the declared stream inputs.
     pub stream_binding_sha256: Option<String>,
-    /// Last authenticated native metadata root admitted transactionally.
-    pub authenticated_snapshot: Option<AuthenticatedSnapshotIdentity>,
     /// Exact authenticated metadata root required by a pin policy.
     pub pinned_snapshot: Option<AuthenticatedSnapshotIdentity>,
 }
@@ -133,7 +131,7 @@ impl Repository {
          r.default_strategy, r.default_strategy_endpoint, r.source_profile, \
          r.tuf_enabled, r.tuf_root_version, r.tuf_root_url, r.security_advisory_support, \
          r.package_format, r.parser_config_json, r.managed_by, r.repository_identity, \
-         r.stream_binding_sha256, r.authenticated_snapshot_sha256, \
+         r.stream_binding_sha256, \
          sp.id, sp.source_identity, sp.scope_kind, sp.scope_identity, sp.ecosystem, \
          sp.version_scheme, sp.stream_kind, sp.stream_identity, sp.update_mode, pin.snapshot_sha256";
     const FROM: &'static str = "repositories r \
@@ -166,7 +164,6 @@ impl Repository {
             source_policy: None,
             repository_identity: None,
             stream_binding_sha256: None,
-            authenticated_snapshot: None,
             pinned_snapshot: None,
         }
     }
@@ -261,7 +258,6 @@ impl Repository {
         self.source_policy = Some(policy);
         self.repository_identity = Some(repository_identity);
         self.stream_binding_sha256 = Some(binding);
-        self.authenticated_snapshot = None;
         self.pinned_snapshot = pinned_snapshot;
         Ok(())
     }
@@ -309,9 +305,12 @@ impl Repository {
         Ok(())
     }
 
-    pub fn admit_authenticated_snapshot(
-        &mut self,
-        candidate: AuthenticatedSnapshotIdentity,
+    /// Validate a newly authenticated native metadata root without persisting
+    /// it as mutable repository state. Immutable Remi catalogs own revision
+    /// identity; native pin policy remains the only repository-level check.
+    pub fn validate_authenticated_snapshot(
+        &self,
+        candidate: &AuthenticatedSnapshotIdentity,
     ) -> Result<()> {
         self.validate_stream_binding()?;
         let policy = self.require_source_policy()?;
@@ -322,7 +321,7 @@ impl Repository {
                     self.name
                 ))
             })?;
-            if pinned != &candidate {
+            if pinned != candidate {
                 return Err(Error::TrustError(format!(
                     "repository '{}' authenticated snapshot {} does not match pinned snapshot {}",
                     self.name,
@@ -331,7 +330,6 @@ impl Repository {
                 )));
             }
         }
-        self.authenticated_snapshot = Some(candidate);
         Ok(())
     }
 
@@ -556,7 +554,6 @@ impl Repository {
         if self.source_policy.is_some()
             || self.repository_identity.is_some()
             || self.stream_binding_sha256.is_some()
-            || self.authenticated_snapshot.is_some()
             || self.pinned_snapshot.is_some()
         {
             return Err(Error::ConfigError(format!(
@@ -580,8 +577,8 @@ impl Repository {
         let trust_policy_json = self.trust_policy_json()?;
         let source_policy_id = self.ensure_source_policy(conn)?;
         let inserted = conn.execute(
-            "INSERT INTO repositories (name, url, content_url, enabled, priority, trust_policy_json, metadata_expire, default_strategy, default_strategy_endpoint, source_profile, tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support, package_format, parser_config_json, managed_by, source_policy_id, repository_identity, stream_binding_sha256, authenticated_snapshot_sha256)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+            "INSERT INTO repositories (name, url, content_url, enabled, priority, trust_policy_json, metadata_expire, default_strategy, default_strategy_endpoint, source_profile, tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support, package_format, parser_config_json, managed_by, source_policy_id, repository_identity, stream_binding_sha256)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
              ON CONFLICT(name) DO NOTHING",
             params![
                 &self.name,
@@ -604,9 +601,6 @@ impl Repository {
                 source_policy_id,
                 &self.repository_identity,
                 &self.stream_binding_sha256,
-                self.authenticated_snapshot
-                    .as_ref()
-                    .map(AuthenticatedSnapshotIdentity::sha256),
             ],
         )?;
         if inserted == 0 {
@@ -796,9 +790,8 @@ impl Repository {
              default_strategy = ?9, default_strategy_endpoint = ?10, source_profile = ?11,
              tuf_enabled = ?12, tuf_root_version = ?13, tuf_root_url = ?14,
              security_advisory_support = ?15, package_format = ?16, parser_config_json = ?17,
-             managed_by = ?18, repository_identity = ?19, stream_binding_sha256 = ?20,
-             authenticated_snapshot_sha256 = ?21
-             WHERE id = ?22",
+             managed_by = ?18, repository_identity = ?19, stream_binding_sha256 = ?20
+             WHERE id = ?21",
             params![
                 &self.name,
                 &self.url,
@@ -820,9 +813,6 @@ impl Repository {
                 self.managed_by.as_str(),
                 &self.repository_identity,
                 &self.stream_binding_sha256,
-                self.authenticated_snapshot
-                    .as_ref()
-                    .map(AuthenticatedSnapshotIdentity::sha256),
                 id,
             ],
         )?;
@@ -903,21 +893,16 @@ impl Repository {
                 Box::new(io::Error::new(io::ErrorKind::InvalidData, error)),
             )
         })?;
-        let source_policy = if row.get::<_, Option<i64>>(23)?.is_some() {
-            Some(source_policy_from_row(row, 23)?)
+        let source_policy = if row.get::<_, Option<i64>>(22)?.is_some() {
+            Some(source_policy_from_row(row, 22)?)
         } else {
             None
         };
-        let authenticated_snapshot = row
-            .get::<_, Option<String>>(22)?
-            .map(AuthenticatedSnapshotIdentity::from_sha256)
-            .transpose()
-            .map_err(|error| row_conversion_error(22, error.to_string()))?;
         let pinned_snapshot = row
-            .get::<_, Option<String>>(32)?
+            .get::<_, Option<String>>(31)?
             .map(AuthenticatedSnapshotIdentity::from_sha256)
             .transpose()
-            .map_err(|error| row_conversion_error(32, error.to_string()))?;
+            .map_err(|error| row_conversion_error(31, error.to_string()))?;
         let repository = Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -944,7 +929,6 @@ impl Repository {
             source_policy,
             repository_identity: row.get(20)?,
             stream_binding_sha256: row.get(21)?,
-            authenticated_snapshot,
             pinned_snapshot,
         };
         repository

@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use conary_core::db::models::ConvertedPackage;
+use conary_core::repository::catalog::CatalogPackageRecordV1;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::Path;
@@ -17,6 +18,9 @@ use tantivy::schema::{
     TextOptions, Value,
 };
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term, doc};
+
+use super::catalog_authority::CatalogAuthority;
+use super::profile_catalog::ProfileCatalog;
 
 /// Document to be indexed in the search engine
 #[derive(Debug, Clone)]
@@ -245,8 +249,17 @@ impl SearchEngine {
         Ok(())
     }
 
-    /// Rebuild the entire search index from the database
-    pub fn rebuild_from_db(&self, db_path: &Path) -> Result<usize> {
+    /// Rebuild the entire search index from exact immutable profile catalogs.
+    ///
+    /// Operational SQLite contributes native publication outcomes and exact
+    /// conversion pins only. It never supplies activated source-package
+    /// metadata for this projection.
+    pub fn rebuild_from_catalogs(
+        &self,
+        db_path: &Path,
+        catalog_authority: &CatalogAuthority,
+        source_profiles: &[String],
+    ) -> Result<usize> {
         let conn = crate::server::open_runtime_db(db_path)?;
 
         let mut writer = self
@@ -257,97 +270,44 @@ impl SearchEngine {
         // Clear existing index
         writer.delete_all_documents()?;
 
-        // Query the latest version of each package per distro. Conversion
-        // status comes only from current, structurally valid conversion rows.
-        // Uses a subquery to find the most recently synced row per (name, repo).
-        // Persisted repositories carry an exact public profile ID. The public
-        // search document uses that profile's declared Remi route; repository
-        // names never become serving identity.
-        let current_conversions = current_conversion_search_keys(&conn)?;
-        let mut stmt = conn.prepare(
-            "SELECT rp.name, rp.version, rp.package_release,
-                    r.source_profile as profile_id,
-                    rp.description,
-                    GROUP_CONCAT(
-                        rr.capability || ' ' || COALESCE(rr.version_constraint, ''),
-                        ' '
-                    ) AS requirement_terms,
-                    rp.size, rp.architecture,
-                    EXISTS(
-                        SELECT 1
-                        FROM native_package_publications npp
-                        WHERE npp.repository_package_id = rp.id
-                          AND npp.status = 'public'
-                    ) AS is_public_native
-             FROM repository_packages rp
-             JOIN repositories r ON rp.repository_id = r.id
-             LEFT JOIN repository_requirements rr ON rr.repository_package_id = rp.id
-             WHERE r.enabled = 1
-               AND rp.size > 0
-               AND rp.id = (
-                   SELECT rp2.id FROM repository_packages rp2
-                   WHERE rp2.repository_id = rp.repository_id AND rp2.name = rp.name
-                    AND rp2.size > 0
-                   ORDER BY rp2.synced_at DESC LIMIT 1
-               )
-             GROUP BY rp.id
-             ORDER BY rp.name",
-        )?;
-
         let mut count = 0;
-        let rows = stmt.query_map([], |row| {
-            let name: String = row.get(0)?;
-            let version: String = row.get(1)?;
-            let package_release: String = row.get(2)?;
-            let profile_id: String = row.get(3)?;
-            let profile = conary_core::repository::supported_profiles::profile_by_public_id(
-                &profile_id,
-            )
-            .ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    3,
-                    rusqlite::types::Type::Text,
-                    Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!(
-                            "repository package has unsupported persisted profile '{profile_id}'"
-                        ),
-                    )),
-                )
-            })?;
-            let distro = profile.remi_route_slug().to_string();
-            let is_public_native: bool = row.get(8)?;
-            if is_public_native {
-                return Ok(None);
-            }
-            let architecture: Option<String> = row.get(7)?;
-            let converted = current_conversions.contains(&SearchConversionKey {
-                source_profile: profile_id.clone(),
-                name: name.clone(),
-                version: version.clone(),
-                architecture: architecture.clone(),
-            }) || current_conversions.contains(&SearchConversionKey {
-                source_profile: profile_id,
-                name: name.clone(),
-                version: version.clone(),
-                architecture: None,
-            });
-            Ok(Some(PackageSearchDoc {
-                name,
-                version,
-                release: (!package_release.is_empty()).then_some(package_release),
-                distro,
-                architecture,
-                description: row.get(4)?,
-                requirement_terms: row.get(5)?,
-                size: row.get::<_, i64>(6).map(|s| s as u64)?,
-                converted,
-                source_kind: None,
-            }))
-        })?;
-
-        for row in rows {
-            if let Some(pkg) = row.context("Failed to read package row")? {
+        let native_keys = current_native_search_keys(&conn)?;
+        for source_profile in source_profiles {
+            let profile =
+                conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
+                    .with_context(|| {
+                    format!(
+                        "unsupported exact source profile '{source_profile}' for search rebuild"
+                    )
+                })?;
+            let pinned = catalog_authority
+                .open_active_profile(source_profile)
+                .with_context(|| {
+                    format!("open active immutable catalog for search profile '{source_profile}'")
+                })?;
+            let current_conversions =
+                current_conversion_search_keys(&conn, pinned.profile_revision_sha256())?;
+            for package in ProfileCatalog::new(&pinned).downloadable_package_records(1)? {
+                require_catalog_profile(&package, source_profile)?;
+                let native_key = NativeSearchKey::from_catalog(&package);
+                if native_keys.contains(&native_key) {
+                    continue;
+                }
+                let converted =
+                    current_conversions.contains(&SearchConversionKey::from_catalog(&package));
+                let pkg = PackageSearchDoc {
+                    name: package.name,
+                    version: package.version,
+                    release: (!package.package_release.is_empty())
+                        .then_some(package.package_release),
+                    distro: profile.remi_route_slug().to_string(),
+                    architecture: package.architecture,
+                    description: package.description,
+                    requirement_terms: catalog_requirement_terms(&package.requirement_groups),
+                    size: package.size,
+                    converted,
+                    source_kind: None,
+                };
                 self.write_package(&mut writer, &pkg)?;
                 count += 1;
             }
@@ -560,29 +520,110 @@ impl SearchEngine {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SearchConversionKey {
-    source_profile: String,
     name: String,
     version: String,
     architecture: Option<String>,
+    checksum: String,
 }
 
 fn current_conversion_search_keys(
     conn: &rusqlite::Connection,
+    profile_revision_sha256: &str,
 ) -> Result<HashSet<SearchConversionKey>> {
     let mut keys = HashSet::new();
-    for converted in ConvertedPackage::list_repository_conversions(conn)? {
-        if converted.repository_metadata_is_current(conn)? {
-            let artifact = converted.repository_artifact()?;
-            converted.scriptlet_summary()?;
-            keys.insert(SearchConversionKey {
-                source_profile: artifact.source_profile.to_string(),
-                name: artifact.package_name.to_string(),
-                version: artifact.package_version.to_string(),
-                architecture: Some(artifact.package_architecture.to_string()),
-            });
-        }
+    for converted in
+        ConvertedPackage::find_current_conversions(conn, profile_revision_sha256, None)?
+    {
+        let converted_id = converted
+            .id
+            .context("persisted repository conversion has no row identity")?;
+        ConvertedPackage::require_conversion_pin(conn, converted_id)?;
+        let artifact = converted.repository_artifact()?;
+        converted.scriptlet_summary()?;
+        keys.insert(SearchConversionKey {
+            name: artifact.package_name.to_string(),
+            version: artifact.package_version.to_string(),
+            architecture: Some(artifact.package_architecture.to_string()),
+            checksum: converted.original_checksum,
+        });
     }
     Ok(keys)
+}
+
+impl SearchConversionKey {
+    fn from_catalog(package: &CatalogPackageRecordV1) -> Self {
+        Self {
+            name: package.name.clone(),
+            version: package.version.clone(),
+            architecture: package.architecture.clone(),
+            checksum: package.checksum.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct NativeSearchKey {
+    source_profile: String,
+    name: String,
+    version: String,
+    package_release: String,
+    architecture: String,
+}
+
+impl NativeSearchKey {
+    fn from_catalog(package: &CatalogPackageRecordV1) -> Self {
+        Self {
+            source_profile: package.source_profile.clone(),
+            name: package.name.clone(),
+            version: package.version.clone(),
+            package_release: package.package_release.clone(),
+            architecture: package.architecture.clone().unwrap_or_default(),
+        }
+    }
+}
+
+fn current_native_search_keys(conn: &rusqlite::Connection) -> Result<HashSet<NativeSearchKey>> {
+    let mut stmt = conn.prepare(
+        "SELECT source_profile, name, version, package_release, architecture
+         FROM native_package_publications
+         WHERE status = 'public'",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(NativeSearchKey {
+            source_profile: row.get(0)?,
+            name: row.get(1)?,
+            version: row.get(2)?,
+            package_release: row.get(3)?,
+            architecture: row.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
+}
+
+fn require_catalog_profile(package: &CatalogPackageRecordV1, source_profile: &str) -> Result<()> {
+    if package.source_profile != source_profile {
+        anyhow::bail!(
+            "immutable catalog for '{}' contains package '{}' from profile '{}'",
+            source_profile,
+            package.name,
+            package.source_profile
+        );
+    }
+    Ok(())
+}
+
+fn catalog_requirement_terms(
+    groups: &[conary_core::repository::catalog::CatalogRequirementGroupV1],
+) -> Option<String> {
+    let terms = groups
+        .iter()
+        .flat_map(|group| &group.atoms)
+        .flat_map(|atom| {
+            std::iter::once(atom.capability.as_str()).chain(atom.version_constraint.as_deref())
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!terms.is_empty()).then_some(terms)
 }
 
 fn search_document_key(
@@ -620,10 +661,9 @@ fn regex_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
     use crate::server::native_publish::test_support::seed_native_publication;
-    use conary_core::db::models::{
-        CONVERSION_VERSION, ConvertedPackage, Repository, RepositoryPackage,
-    };
+    use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
     use tempfile::TempDir;
 
     fn create_test_engine() -> (TempDir, SearchEngine) {
@@ -632,50 +672,19 @@ mod tests {
         (dir, engine)
     }
 
-    fn create_test_db() -> (tempfile::NamedTempFile, rusqlite::Connection) {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let conn = rusqlite::Connection::open(temp_file.path()).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
-        (temp_file, conn)
-    }
-
-    fn insert_repo_package(conn: &rusqlite::Connection, distro: &str, name: &str, version: &str) {
-        let profile = conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-            .unwrap_or_else(|| panic!("test route '{distro}' must name a supported Remi profile"));
-        let mut repo = Repository::new(format!("{distro}-base"), "https://example.com".to_string());
-        repo.source_profile = Some(profile.id().to_string());
-        let repo_id = repo.insert(conn).unwrap();
-
-        let mut pkg = RepositoryPackage::new(
-            repo_id,
-            name.to_string(),
-            version.to_string(),
-            profile.version_scheme(),
-            format!("sha256:{name}-{version}"),
-            1024,
-            format!("https://example.com/{name}-{version}.rpm"),
-        );
-        pkg.architecture = Some("x86_64".to_string());
-        pkg.description = Some("test package".to_string());
-        pkg.insert(conn).unwrap();
-    }
-
     fn insert_stale_conversion(
         conn: &rusqlite::Connection,
-        distro: &str,
+        source_profile: &str,
+        profile_revision_sha256: &str,
         package: &str,
         version: &str,
     ) {
-        let source_profile =
-            conary_core::repository::supported_profiles::profile_for_remi_route(distro)
-                .unwrap_or_else(|| panic!("test route '{distro}' must be supported"))
-                .id();
         let transport = crate::server::conversion::test_support::test_transport(&[format!(
             "sha256:{package}-{version}-chunk"
         )]);
         let mut converted = ConvertedPackage::new_repository(
             source_profile.to_string(),
+            profile_revision_sha256.to_string(),
             package.to_string(),
             version.to_string(),
             "x86_64".to_string(),
@@ -746,7 +755,8 @@ mod tests {
     #[test]
     fn search_rebuild_preserves_native_release_identity_and_converted_false() {
         let (_dir, engine) = create_test_engine();
-        let (db, conn) = create_test_db();
+        let fixture = ActiveCatalogFixture::new();
+        let conn = fixture.connection();
         seed_native_publication(
             &conn,
             "fedora",
@@ -766,7 +776,9 @@ mod tests {
             "/tmp/hello-2.ccs",
         );
 
-        engine.rebuild_from_db(db.path()).unwrap();
+        engine
+            .rebuild_from_catalogs(fixture.db_path(), fixture.authority(), &[])
+            .unwrap();
         let results = engine.search("hello", Some("fedora"), 10).unwrap();
 
         assert_eq!(
@@ -854,14 +866,32 @@ mod tests {
 
     #[test]
     fn search_rebuild_marks_stale_rows_unconverted() {
-        let (db_file, _) = create_test_db();
-        let conn = crate::server::open_runtime_db(db_file.path()).unwrap();
-        insert_repo_package(&conn, "fedora", "gtk3", "3.24.0");
-        insert_stale_conversion(&conn, "fedora", "gtk3", "3.24.0");
+        let fixture = ActiveCatalogFixture::new();
+        let profile_revision = fixture.activate(
+            "fedora-44",
+            9,
+            vec![package(
+                "fedora-44",
+                "gtk3",
+                "3.24.0",
+                "1",
+                Some("x86_64"),
+                1024,
+                "gtk3-source",
+            )],
+        );
+        let conn = fixture.connection();
+        insert_stale_conversion(&conn, "fedora-44", &profile_revision, "gtk3", "3.24.0");
         drop(conn);
 
         let (_dir, engine) = create_test_engine();
-        engine.rebuild_from_db(db_file.path()).unwrap();
+        engine
+            .rebuild_from_catalogs(
+                fixture.db_path(),
+                fixture.authority(),
+                &["fedora-44".to_string()],
+            )
+            .unwrap();
 
         let results = engine.search("gtk3", Some("fedora"), 10).unwrap();
 

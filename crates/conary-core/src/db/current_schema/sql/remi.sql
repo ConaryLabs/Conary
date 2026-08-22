@@ -10,11 +10,15 @@ CREATE TABLE converted_packages (
             -- Original package format (rpm, deb, arch)
             original_format TEXT NOT NULL,
             -- Checksum of the original package file. Repository conversion
-            -- identity is scoped by exact source_profile.
+            -- identity is scoped by the exact immutable profile revision.
             original_checksum TEXT NOT NULL,
-            -- Exact normalized repository-provide cache projection. It
-            -- invalidates stale conversions but never mutates source artifact
-            -- authority. Installed conversions have no repository projection.
+            -- Exact immutable profile revision that supplied this repository
+            -- conversion. Installed conversions deliberately carry no
+            -- repository revision.
+            profile_revision_sha256 TEXT,
+            -- Optional diagnostic projection retained for indexed metadata. It
+            -- never decides conversion currentness. Installed conversions have
+            -- no repository projection.
             repository_provides_digest TEXT,
             -- Conversion algorithm version (re-convert if upgraded)
             conversion_version INTEGER NOT NULL DEFAULT 1,
@@ -27,6 +31,7 @@ CREATE TABLE converted_packages (
                     AND package_name IS NULL
                     AND package_version IS NULL
                     AND source_profile IS NULL
+                    AND profile_revision_sha256 IS NULL
                     AND package_architecture IS NULL
                     AND repository_provides_digest IS NULL
                     AND transport_json IS NULL
@@ -43,13 +48,20 @@ CREATE TABLE converted_packages (
                     AND length(package_version) > 0
                     AND source_profile IS NOT NULL
                     AND length(source_profile) > 0
+                    AND profile_revision_sha256 IS NOT NULL
+                    AND length(profile_revision_sha256) = 64
+                    AND profile_revision_sha256 NOT GLOB '*[^0-9a-f]*'
                     AND package_architecture IS NOT NULL
                     AND length(package_architecture) > 0
-                    AND repository_provides_digest IS NOT NULL
-                    AND length(repository_provides_digest) = 71
-                    AND substr(repository_provides_digest, 1, 7) = 'sha256:'
-                    AND substr(repository_provides_digest, 8)
-                        NOT GLOB '*[^0-9a-f]*'
+                    AND (
+                        repository_provides_digest IS NULL
+                        OR (
+                            length(repository_provides_digest) = 71
+                            AND substr(repository_provides_digest, 1, 7) = 'sha256:'
+                            AND substr(repository_provides_digest, 8)
+                                NOT GLOB '*[^0-9a-f]*'
+                        )
+                    )
                     AND transport_json IS NOT NULL
                     AND json_valid(transport_json)
                     AND json_type(transport_json) = 'object'
@@ -68,15 +80,15 @@ CREATE INDEX idx_converted_packages_checksum ON converted_packages(original_chec
 CREATE UNIQUE INDEX idx_converted_installed_checksum
             ON converted_packages(original_checksum)
             WHERE artifact_kind = 'installed';
-CREATE UNIQUE INDEX idx_converted_repository_checksum_profile
-            ON converted_packages(original_checksum, source_profile)
+CREATE UNIQUE INDEX idx_converted_repository_checksum_revision
+            ON converted_packages(original_checksum, profile_revision_sha256)
             WHERE artifact_kind = 'repository';
 CREATE INDEX idx_converted_enhancement_status ON converted_packages(enhancement_status);
 CREATE INDEX idx_converted_enhancement_version ON converted_packages(enhancement_version);
 CREATE INDEX idx_converted_enhancement_priority
             ON converted_packages(enhancement_status, enhancement_priority DESC);
 CREATE INDEX idx_converted_packages_identity
-            ON converted_packages(source_profile, package_name, package_version);
+            ON converted_packages(profile_revision_sha256, package_name, package_version);
 CREATE TABLE admin_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -142,6 +154,6 @@ CREATE INDEX idx_automation_history_category
 CREATE INDEX idx_automation_history_status
             ON automation_history(status);
 CREATE INDEX idx_converted_packages_identity_arch
-            ON converted_packages(source_profile, package_name, package_version, package_architecture);
+            ON converted_packages(profile_revision_sha256, package_name, package_version, package_architecture);
 CREATE INDEX idx_converted_packages_scriptlet_fidelity
             ON converted_packages(scriptlet_fidelity);

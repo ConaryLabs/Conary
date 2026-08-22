@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-12
-revision: 2
+last_updated: 2026-08-22
+revision: 3
 summary: Define signed package repository intents and their atomic install, update, remove, retention, and rollback semantics
 ---
 
@@ -103,9 +103,9 @@ package-created projection absent from takeover authority follows its package
 owners and is deleted only after the final remove-when-unowned owner leaves.
 
 Generic repository mutation remains forbidden for package-owned rows. A
-definition change must pass through a package enrollment transaction;
-authenticated snapshot and last-sync observations remain the only independent
-mutable repository fields.
+definition change must pass through a package enrollment transaction; the
+derived `last_sync` observation remains the only independent mutable repository
+field.
 
 ## Remove, Retention, And Rollback
 
@@ -124,10 +124,9 @@ and projection state in rollback system authority before mutation. System
 rollback restores that exact database state in the same transaction as package
 and lifecycle authority, while the captured selected-root manifest restores
 the exact files. A rollback never reparses a current projection or reconstructs
-an old intent from a newer package. Synced package rows, `last_sync`, and the
-last authenticated-snapshot observation are derived cache state rather than
-package rollback authority; restoring a package repository clears them and the
-next use performs a fresh authenticated sync.
+an old intent from a newer package. Synced package rows and `last_sync` are
+derived cache state rather than package rollback authority; restoring a package
+repository clears them and the next use performs a fresh authenticated sync.
 
 ## Later Update Proof
 

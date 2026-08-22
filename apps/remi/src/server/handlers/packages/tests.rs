@@ -1,13 +1,16 @@
 // apps/remi/src/server/handlers/packages/tests.rs
 use super::*;
+use crate::server::catalog_authority::test_support::{
+    ActiveCatalogFixture, package as catalog_package,
+};
 use crate::server::conversion::test_support::seed_repository_conversion_source;
 use crate::server::native_publish::test_support::seed_native_publication;
 use base64::Engine as _;
 use conary_core::ccs::convert::ScriptletBundleSummary;
 use conary_core::db::models::{
     CONVERSION_VERSION, ChunkAccess, ConvertedPackage, NativeSourceEcosystem, NativeSourceStream,
-    Repository, RepositoryPackage, RepositoryPolicyScope, RepositorySourcePolicy,
-    RepositoryUpdateMode,
+    RemiCatalogResource, Repository, RepositoryPackage, RepositoryPolicyScope,
+    RepositorySourcePolicy, RepositoryUpdateMode,
 };
 use conary_core::repository::trust::openpgp::PreparedOpenPgpTrust;
 use conary_core::repository::versioning::VersionScheme;
@@ -71,6 +74,18 @@ fn create_test_state(root: &tempfile::TempDir) -> Arc<RwLock<ServerState>> {
     Arc::new(RwLock::new(state))
 }
 
+async fn install_catalog_authority(
+    state: &Arc<RwLock<ServerState>>,
+    authority: &crate::server::catalog_authority::CatalogAuthority,
+) {
+    let mut state = state.write().await;
+    state.catalog_authority = authority.clone();
+    state.conversion_service = state
+        .conversion_service
+        .clone()
+        .with_catalog_authority(authority.clone());
+}
+
 async fn response_json(response: Response) -> serde_json::Value {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -83,8 +98,10 @@ fn seed_current_conversion(
     ccs_path: &std::path::Path,
     name: &str,
     version: &str,
+    profile_revision_sha256: &str,
 ) {
-    let converted = seed_repository_source(db_path, ccs_path, name, version);
+    let converted =
+        seed_repository_source(db_path, ccs_path, name, version, profile_revision_sha256);
     publish_current_conversion(db_path, ccs_path, converted);
 }
 
@@ -93,11 +110,13 @@ fn seed_repository_source(
     ccs_path: &std::path::Path,
     name: &str,
     version: &str,
+    profile_revision_sha256: &str,
 ) -> ConvertedPackage {
     let conn = conary_core::db::open(db_path).unwrap();
     let transport = crate::server::conversion::test_support::test_transport(&[]);
     let mut converted = ConvertedPackage::new_repository(
         "fedora-44".to_string(),
+        profile_revision_sha256.to_string(),
         name.to_string(),
         version.to_string(),
         "x86_64".to_string(),
@@ -121,7 +140,7 @@ fn publish_current_conversion(
     std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
     std::fs::write(ccs_path, b"ccs").unwrap();
     let conn = conary_core::db::open(db_path).unwrap();
-    converted.insert(&conn).unwrap();
+    converted.insert_with_conversion_pin(&conn, 1).unwrap();
 }
 
 async fn poll_job(state: &Arc<RwLock<ServerState>>, job_id: JobId) -> serde_json::Value {
@@ -258,9 +277,10 @@ async fn populate_debian_repository(db_path: &std::path::Path, package_url: Stri
             .unwrap(),
         ],
     };
-    let repository_name = "conversion-fixture-ubuntu-26.04";
+    let key_material_repository_name = "conversion-fixture-ubuntu-26.04";
+    let source_repository_name = "conversion-fixture-ubuntu-26.04-source";
     PreparedOpenPgpTrust::prepare(
-        repository_name,
+        key_material_repository_name,
         &conary_core::db::paths::keyring_dir(&db_path.display().to_string()),
         &policy,
     )
@@ -268,16 +288,15 @@ async fn populate_debian_repository(db_path: &std::path::Path, package_url: Stri
     .unwrap();
 
     let conn = conary_core::db::open(db_path).unwrap();
-    let mut repository = Repository::new(repository_name.to_string(), package_url.clone());
+    let parser_config = RepositoryParserConfig::Deb {
+        distribution: "noble".to_string(),
+        component: "main".to_string(),
+        architecture: "amd64".to_string(),
+    };
+    let mut repository = Repository::new(source_repository_name.to_string(), package_url.clone());
     repository.source_profile = Some("ubuntu-26.04".to_string());
-    repository
-        .set_parser_config(RepositoryParserConfig::Deb {
-            distribution: "noble".to_string(),
-            component: "main".to_string(),
-            architecture: "amd64".to_string(),
-        })
-        .unwrap();
-    repository.set_trust_policy(policy).unwrap();
+    repository.set_parser_config(parser_config.clone()).unwrap();
+    repository.set_trust_policy(policy.clone()).unwrap();
     let repository_identity = "noble:main:amd64";
     repository
         .set_native_source_policy(
@@ -302,11 +321,41 @@ async fn populate_debian_repository(db_path: &std::path::Path, package_url: Stri
         VersionScheme::Debian,
         checksum,
         body.len() as i64,
-        package_url,
+        package_url.clone(),
     );
     package.architecture = Some("amd64".to_string());
     package.source_profile = Some("ubuntu-26.04".to_string());
     package.insert(&conn).unwrap();
+
+    // Conversion lookup may consult exactly one operational repository row
+    // for prepared key-material naming.  This row deliberately has no
+    // package rows; package identity and payload inputs come from the
+    // immutable profile catalog above.
+    let key_material_identity = "repository-ubuntu-26.04";
+    let mut key_material_repository = Repository::new(
+        key_material_repository_name.to_string(),
+        package_url.clone(),
+    );
+    key_material_repository.source_profile = Some("ubuntu-26.04".to_string());
+    key_material_repository
+        .set_parser_config(parser_config)
+        .unwrap();
+    key_material_repository.set_trust_policy(policy).unwrap();
+    key_material_repository
+        .set_native_source_policy(
+            RepositorySourcePolicy::new(
+                "ubuntu-26.04-key-material",
+                RepositoryPolicyScope::repository(key_material_identity).unwrap(),
+                NativeSourceEcosystem::Deb,
+                NativeSourceStream::release("noble").unwrap(),
+                RepositoryUpdateMode::Follow,
+            )
+            .unwrap(),
+            key_material_identity,
+            None,
+        )
+        .unwrap();
+    key_material_repository.insert(&conn).unwrap();
 }
 
 #[test]
@@ -377,19 +426,32 @@ fn native_manifest_lookup_reports_ambiguous_releases() {
 
 #[test]
 fn converted_manifest_includes_typed_lifecycle_summary() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let db_path = temp.path().join("remi.db");
-    conary_core::db::init(&db_path).unwrap();
-    let ccs_path = temp.path().join("cache/packages/pkg-1.0-x86_64.ccs");
+    let catalogs = ActiveCatalogFixture::new();
+    let profile_revision_sha256 = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![catalog_package(
+            "fedora-44",
+            "pkg",
+            "1.0",
+            "1",
+            Some("x86_64"),
+            3,
+            "pkg-source",
+        )],
+    );
+    let db_path = catalogs.db_path().to_path_buf();
+    let ccs_path = db_path.with_file_name("pkg-1.0-x86_64.ccs");
     std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
     std::fs::write(&ccs_path, b"ccs").unwrap();
 
-    let conn = conary_core::db::open(&db_path).unwrap();
+    let conn = catalogs.connection();
     let mut transport =
         crate::server::conversion::test_support::test_transport(&["sha256:chunk".to_string()]);
     transport.objects[0].size = 3;
     let mut converted = ConvertedPackage::new_repository(
         "fedora-44".to_string(),
+        profile_revision_sha256.clone(),
         "pkg".to_string(),
         "1.0".to_string(),
         "x86_64".to_string(),
@@ -407,16 +469,24 @@ fn converted_manifest_includes_typed_lifecycle_summary() {
     };
     converted.set_scriptlet_metadata(&summary).unwrap();
     seed_repository_conversion_source(&conn, &mut converted);
-    converted.insert(&conn).unwrap();
+    converted.insert_with_conversion_pin(&conn, 1).unwrap();
     ChunkAccess::new("sha256:chunk".to_string(), 3)
         .upsert(&conn)
         .unwrap();
 
-    let manifest =
-        match check_converted(&db_path, "fedora", "pkg", Some("1.0"), Some("x86_64")).unwrap() {
-            ConvertedManifestLookup::Ready(manifest) => manifest,
-            _ => panic!("public converted row should return a manifest"),
-        };
+    let manifest = match check_converted(
+        &db_path,
+        &profile_revision_sha256,
+        "fedora",
+        "pkg",
+        Some("1.0"),
+        Some("x86_64"),
+    )
+    .unwrap()
+    {
+        ConvertedManifestLookup::Ready(manifest) => manifest,
+        _ => panic!("public converted row should return a manifest"),
+    };
     let json = serde_json::to_string(&manifest).unwrap();
 
     let scriptlets = manifest.scriptlets.as_ref().unwrap();
@@ -428,16 +498,29 @@ fn converted_manifest_includes_typed_lifecycle_summary() {
 
 #[test]
 fn malformed_current_conversion_metadata_is_an_internal_data_error() {
-    let temp = tempfile::tempdir().unwrap();
-    let db_path = temp.path().join("test.db");
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
-    conary_core::db::schema::ensure_current(&conn).unwrap();
-    let ccs_path = temp.path().join("pkg.ccs");
+    let catalogs = ActiveCatalogFixture::new();
+    let profile_revision_sha256 = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![catalog_package(
+            "fedora-44",
+            "pkg",
+            "1.0",
+            "1",
+            Some("x86_64"),
+            8,
+            "pkg-source",
+        )],
+    );
+    let db_path = catalogs.db_path().to_path_buf();
+    let conn = catalogs.connection();
+    let ccs_path = db_path.with_file_name("pkg.ccs");
     std::fs::write(&ccs_path, b"fake ccs").unwrap();
 
     let transport = crate::server::conversion::test_support::test_transport(&["abc".to_string()]);
     let mut converted = ConvertedPackage::new_repository(
         "fedora-44".to_string(),
+        profile_revision_sha256.clone(),
         "pkg".to_string(),
         "1.0".to_string(),
         "x86_64".to_string(),
@@ -453,33 +536,63 @@ fn malformed_current_conversion_metadata_is_an_internal_data_error() {
         .set_scriptlet_metadata(&ScriptletBundleSummary::default())
         .unwrap();
     seed_repository_conversion_source(&conn, &mut converted);
-    converted.insert(&conn).unwrap();
+    converted.insert_with_conversion_pin(&conn, 1).unwrap();
     conn.execute(
         "UPDATE converted_packages SET scriptlet_summary_json = '{broken' WHERE original_checksum = ?1",
         ["sha256:source"],
     )
     .unwrap();
 
-    assert!(check_converted(&db_path, "fedora", "pkg", Some("1.0"), None).is_err());
-    assert!(converted_ccs_path_for_download(&db_path, "fedora", "pkg", Some("1.0"), None).is_err());
+    assert!(
+        check_converted(
+            &db_path,
+            &profile_revision_sha256,
+            "fedora",
+            "pkg",
+            Some("1.0"),
+            None,
+        )
+        .is_err()
+    );
+    assert!(
+        converted_ccs_path_for_download(
+            &db_path,
+            &profile_revision_sha256,
+            "pkg",
+            Some("1.0"),
+            None,
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let db_path = temp.path().join("conary.db");
-    conary_core::db::init(&db_path).unwrap();
+    let catalogs = ActiveCatalogFixture::new();
+    let profile_revision_sha256 = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![catalog_package(
+            "fedora-44",
+            "p11-kit-trust",
+            "0.25.8-1.fc44",
+            "1",
+            Some("x86_64"),
+            17,
+            "stale-source",
+        )],
+    );
+    let db_path = catalogs.db_path().to_path_buf();
 
-    let ccs_path = temp
-        .path()
-        .join("cache/packages/p11-kit-trust-0.25.8-1.fc44-x86_64.ccs");
+    let ccs_path = db_path.with_file_name("p11-kit-trust-0.25.8-1.fc44-x86_64.ccs");
     std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
     std::fs::write(&ccs_path, b"stale ccs payload").unwrap();
 
-    let conn = conary_core::db::open(&db_path).unwrap();
+    let conn = catalogs.connection();
     let transport = crate::server::conversion::test_support::test_transport(&[]);
     let mut converted = ConvertedPackage::new_repository(
         "fedora-44".to_string(),
+        profile_revision_sha256.clone(),
         "p11-kit-trust".to_string(),
         "0.25.8-1.fc44".to_string(),
         "x86_64".to_string(),
@@ -496,7 +609,7 @@ fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
 
     let resolved = converted_ccs_path_for_download(
         &db_path,
-        "fedora",
+        &profile_revision_sha256,
         "p11-kit-trust",
         Some("0.25.8-1.fc44"),
         Some("x86_64"),
@@ -540,6 +653,9 @@ async fn existing_pending_job_response_reports_pending() {
 async fn failed_job_stays_pollable_while_unpopulated_repository_returns_typed_503() {
     let root = tempfile::tempdir().unwrap();
     let state = create_test_state(&root);
+    let catalogs = ActiveCatalogFixture::new();
+    catalogs.activate("fedora-44", 1, Vec::new());
+    install_catalog_authority(&state, catalogs.authority()).await;
     let query = PackageQuery {
         version: None,
         release: None,
@@ -585,6 +701,21 @@ async fn failed_job_stays_pollable_while_unpopulated_repository_returns_typed_50
 async fn ready_job_after_initial_cache_miss_is_revalidated_before_new_work() {
     let root = tempfile::tempdir().unwrap();
     let state = create_test_state(&root);
+    let catalogs = ActiveCatalogFixture::new();
+    let profile_revision_sha256 = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![catalog_package(
+            "fedora-44",
+            "curl",
+            "1.0",
+            "1",
+            Some("x86_64"),
+            3,
+            "curl-source",
+        )],
+    );
+    install_catalog_authority(&state, catalogs.authority()).await;
     let query = PackageQuery {
         version: Some("1.0".into()),
         release: None,
@@ -606,12 +737,13 @@ async fn ready_job_after_initial_cache_miss_is_revalidated_before_new_work() {
         state.job_manager.update_status(&id, JobStatus::Ready);
         id
     };
-    let db_path = state.read().await.config.db_path.clone();
+    let db_path = catalogs.db_path().to_path_buf();
     seed_current_conversion(
         &db_path,
-        &root.path().join("cache/packages/curl.ccs"),
+        &db_path.with_file_name("curl.ccs"),
         "curl",
         "1.0",
+        &profile_revision_sha256,
     );
 
     // Enter after the request's first cache lookup to reproduce a conversion
@@ -639,13 +771,16 @@ async fn ready_job_after_initial_cache_miss_is_revalidated_before_new_work() {
 async fn missing_ready_artifact_creates_one_replacement_and_deduplicates_it() {
     let root = tempfile::tempdir().unwrap();
     let state = create_test_state(&root);
+    let catalogs = ActiveCatalogFixture::new();
+    catalogs.activate("fedora-44", 1, Vec::new());
+    install_catalog_authority(&state, catalogs.authority()).await;
     let query = PackageQuery {
         version: Some("1.0".into()),
         release: None,
         arch: Some("x86_64".into()),
     };
     let job_key = conversion_job_key("fedora", "curl", &query);
-    let db_path = state.read().await.config.db_path.clone();
+    let db_path = catalogs.db_path().to_path_buf();
     let ready_id = {
         let mut state = state.write().await;
         let id = state
@@ -692,17 +827,33 @@ async fn missing_ready_artifact_creates_one_replacement_and_deduplicates_it() {
 async fn collected_ready_mapping_revalidates_persisted_artifact_before_new_work() {
     let root = tempfile::tempdir().unwrap();
     let state = create_test_state(&root);
+    let catalogs = ActiveCatalogFixture::new();
+    let profile_revision_sha256 = catalogs.activate(
+        "fedora-44",
+        1,
+        vec![catalog_package(
+            "fedora-44",
+            "curl",
+            "1.0",
+            "1",
+            Some("x86_64"),
+            3,
+            "curl-source",
+        )],
+    );
+    install_catalog_authority(&state, catalogs.authority()).await;
     let query = PackageQuery {
         version: Some("1.0".into()),
         release: None,
         arch: Some("x86_64".into()),
     };
-    let db_path = state.read().await.config.db_path.clone();
+    let db_path = catalogs.db_path().to_path_buf();
     seed_current_conversion(
         &db_path,
-        &root.path().join("cache/packages/curl.ccs"),
+        &db_path.with_file_name("curl.ccs"),
         "curl",
         "1.0",
+        &profile_revision_sha256,
     );
 
     // Enter after an earlier cache miss with no retained key mapping, as if a
@@ -727,6 +878,9 @@ async fn collected_ready_mapping_revalidates_persisted_artifact_before_new_work(
 async fn package_route_waits_for_repository_population_without_creating_failed_job() {
     let root = tempfile::tempdir().unwrap();
     let state = create_test_state(&root);
+    let catalogs = ActiveCatalogFixture::new();
+    catalogs.activate("ubuntu-26.04", 1, Vec::new());
+    install_catalog_authority(&state, catalogs.authority()).await;
     let query = || PackageQuery {
         version: Some("1.0".into()),
         release: None,
@@ -775,7 +929,20 @@ async fn package_route_waits_for_repository_population_without_creating_failed_j
     let fixture = debian_fixture(root.path());
     let package = std::fs::read(fixture).unwrap();
     let package_url = serve_package_once(package.clone()).await;
-    populate_debian_repository(&db_path, package_url, &package).await;
+    populate_debian_repository(&db_path, package_url.clone(), &package).await;
+    let mut catalog_entry = catalog_package(
+        "ubuntu-26.04",
+        "demo",
+        "1.0",
+        "1",
+        Some("amd64"),
+        u64::try_from(package.len()).unwrap(),
+        "ubuntu-demo",
+    );
+    catalog_entry.download_url = package_url.clone();
+    catalog_entry.checksum = format!("sha256:{}", hex::encode(Sha256::digest(&package)));
+    let package_checksum = catalog_entry.checksum.clone();
+    let profile_revision_sha256 = catalogs.activate("ubuntu-26.04", 2, vec![catalog_entry]);
     let semaphore = state.read().await.job_manager.semaphore();
     let permit = semaphore.acquire_owned().await.unwrap();
 
@@ -789,6 +956,41 @@ async fn package_route_waits_for_repository_population_without_creating_failed_j
     let retry_body = response_json(retry).await;
     assert_eq!(retry_body["status"], "pending");
     let retry_id: JobId = retry_body["job_id"].as_str().unwrap().parse().unwrap();
+
+    // Let the request reserve a job before installing a cache hit. The
+    // semaphore keeps the worker pending while this exact-revision evidence
+    // is prepared, so the test still exercises the post-admission job path.
+    let state_conn = conary_core::db::open(&db_path).unwrap();
+    let fixture_conn = catalogs.connection();
+    let profile_resource = RemiCatalogResource::find_profile_revision(
+        &fixture_conn,
+        "ubuntu-26.04",
+        &profile_revision_sha256,
+    )
+    .unwrap()
+    .expect("fixture profile resource");
+    profile_resource.insert(&state_conn).unwrap();
+    let ccs_path = root.path().join("cache/packages/demo.ccs");
+    std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
+    std::fs::write(&ccs_path, b"ccs").unwrap();
+    let transport = crate::server::conversion::test_support::test_transport(&[]);
+    let mut converted = ConvertedPackage::new_repository(
+        "ubuntu-26.04".to_string(),
+        profile_revision_sha256,
+        "demo".to_string(),
+        "1.0".to_string(),
+        "amd64".to_string(),
+        "deb".to_string(),
+        package_checksum,
+        &transport,
+        3,
+        "sha256:converted-content".to_string(),
+        ccs_path.to_string_lossy().to_string(),
+        conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
+    );
+    converted
+        .insert_with_conversion_pin(&state_conn, 2)
+        .unwrap();
 
     drop(permit);
 

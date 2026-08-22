@@ -6,9 +6,12 @@ use super::{
     ConversionBenchmarkSample, ConversionBenchmarkSampleClass, ConversionService,
 };
 use anyhow::{Context, Result, anyhow, ensure};
-use conary_core::db::models::{CONVERSION_VERSION, RepositoryPackage};
+use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
+use std::collections::HashSet;
 
-const SIZE_CLASS_COUNT: i64 = 3;
+use crate::server::profile_catalog::ProfileCatalog;
+
+const SIZE_CLASS_COUNT: usize = 3;
 
 impl ConversionService {
     pub async fn benchmark_size_class_samples(
@@ -16,6 +19,9 @@ impl ConversionService {
         distro: &str,
     ) -> Result<Vec<ConversionBenchmarkSample>> {
         let db_path = self.db_path.clone();
+        let catalog_authority = self.catalog_authority.clone().ok_or_else(|| {
+            anyhow!("conversion benchmark requires an immutable profile catalog authority")
+        })?;
         let distro = distro.to_string();
         tokio::task::spawn_blocking(move || {
             let conn = conary_core::db::open(&db_path)?;
@@ -26,72 +32,102 @@ impl ConversionService {
                             "benchmark route '{distro}' does not map to exactly one public profile"
                         )
                     })?;
-            let candidate_predicate =
-                "FROM repository_packages rp
-                 JOIN repositories r ON rp.repository_id = r.id
-                 WHERE r.source_profile = ?1
-                   AND rp.size > 0
-                   AND rp.architecture IS NOT NULL
-                   AND NOT EXISTS (
-                       SELECT 1
-                       FROM converted_packages cp
-                       WHERE cp.artifact_kind = 'repository'
-                         AND cp.source_profile = r.source_profile
-                         AND cp.original_checksum = rp.checksum
-                         AND cp.conversion_version = ?2
-                   )";
-            let count = conn.query_row(
-                &format!("SELECT COUNT(*) {candidate_predicate}"),
-                rusqlite::params![profile.id(), CONVERSION_VERSION],
-                |row| row.get::<_, i64>(0),
-            )?;
+            let pinned = catalog_authority
+                .open_active_profile(profile.id())
+                .with_context(|| {
+                    format!(
+                        "open active immutable catalog for benchmark profile '{}'",
+                        profile.id()
+                    )
+                })?;
+            let mut converted_inputs = HashSet::new();
+            for converted in ConvertedPackage::find_current_conversions(
+                &conn,
+                pinned.profile_revision_sha256(),
+                None,
+            )? {
+                let converted_id = converted
+                    .id
+                    .context("persisted repository conversion has no row identity")?;
+                ConvertedPackage::require_conversion_pin(&conn, converted_id)?;
+                let artifact = converted.repository_artifact()?;
+                converted.scriptlet_summary()?;
+                converted_inputs.insert((
+                    artifact.package_name.to_string(),
+                    artifact.package_version.to_string(),
+                    artifact.package_architecture.to_string(),
+                    converted.original_checksum,
+                ));
+            }
+            let catalog_packages =
+                ProfileCatalog::new(&pinned).downloadable_package_records(1)?;
+            for package in &catalog_packages {
+                ensure!(
+                    package.source_profile == profile.id(),
+                    "immutable catalog for '{}' contains package '{}' from profile '{}'",
+                    profile.id(),
+                    package.name,
+                    package.source_profile
+                );
+            }
+            let mut candidates = catalog_packages
+                .into_iter()
+                .filter(|package| {
+                    package.architecture.is_some()
+                        && !converted_inputs.contains(&(
+                            package.name.clone(),
+                            package.version.clone(),
+                            package.architecture.clone().unwrap_or_default(),
+                            package.checksum.clone(),
+                        ))
+                })
+                .map(|package| ConversionBenchmarkSample {
+                    class: ConversionBenchmarkSampleClass::Explicit,
+                    package: package.name,
+                    version: package.version,
+                    architecture: package.architecture,
+                    source_checksum: package.checksum,
+                    source_size_bytes: package.size,
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by(|left, right| {
+                (
+                    left.source_size_bytes,
+                    &left.package,
+                    &left.version,
+                    &left.architecture,
+                    &left.source_checksum,
+                )
+                    .cmp(&(
+                        right.source_size_bytes,
+                        &right.package,
+                        &right.version,
+                        &right.architecture,
+                        &right.source_checksum,
+                    ))
+            });
+            let count = candidates.len();
             ensure!(
                 count >= SIZE_CLASS_COUNT,
                 "benchmark route '{}' has only {count} unconverted positive-size package(s); three distinct size classes are required",
                 profile.id()
             );
 
-            let query = format!(
-                "SELECT rp.name, rp.version, rp.architecture, rp.checksum, rp.size
-                 {candidate_predicate}
-                 ORDER BY rp.size, rp.name, rp.version, rp.architecture
-                 LIMIT 1 OFFSET ?3"
-            );
-            let mut stmt = conn.prepare(&query)?;
-            let offsets = [0_i64, count / 2, count - 1];
+            let offsets = [0, count / 2, count - 1];
             let classes = [
                 ConversionBenchmarkSampleClass::Small,
                 ConversionBenchmarkSampleClass::Median,
                 ConversionBenchmarkSampleClass::Large,
             ];
-            offsets
+            Ok(offsets
                 .into_iter()
                 .zip(classes)
                 .map(|(offset, class)| {
-                    stmt.query_row(
-                        rusqlite::params![profile.id(), CONVERSION_VERSION, offset],
-                        |row| {
-                            let size = row.get::<_, i64>(4)?;
-                            let source_size_bytes = u64::try_from(size).map_err(|error| {
-                                rusqlite::Error::FromSqlConversionFailure(
-                                    4,
-                                    rusqlite::types::Type::Integer,
-                                    Box::new(error),
-                                )
-                            })?;
-                            Ok(ConversionBenchmarkSample {
-                                class,
-                                package: row.get(0)?,
-                                version: row.get(1)?,
-                                architecture: row.get(2)?,
-                                source_checksum: row.get(3)?,
-                                source_size_bytes,
-                            })
-                        },
-                    )
-                    .map_err(anyhow::Error::from)
+                    let mut sample = candidates[offset].clone();
+                    sample.class = class;
+                    sample
                 })
-                .collect()
+                .collect())
         })
         .await
         .map_err(|e| anyhow!("benchmark size-class sample task panicked: {e}"))?
@@ -109,7 +145,7 @@ impl ConversionService {
         let package = self
             .find_package_for_conversion_async(profile.id(), package_name, None, None)
             .await?;
-        benchmark_sample_from_package(package, ConversionBenchmarkSampleClass::Explicit)
+        benchmark_sample_from_package(package.repo_pkg, ConversionBenchmarkSampleClass::Explicit)
     }
 
     pub async fn benchmark_package_conversion(
@@ -192,24 +228,58 @@ fn benchmark_sample_from_package(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::{create_test_db, insert_package, insert_repo};
+    use super::super::test_support::create_test_db;
     use super::*;
+    use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
     use std::path::PathBuf;
+
+    fn catalog_service(fixture: &ActiveCatalogFixture) -> ConversionService {
+        ConversionService::new(
+            PathBuf::from("/tmp/chunks"),
+            PathBuf::from("/tmp/cache"),
+            fixture.db_path().to_path_buf(),
+            None,
+        )
+        .with_catalog_authority(fixture.authority().clone())
+    }
 
     #[tokio::test]
     async fn benchmark_size_class_samples_return_exact_unconverted_subjects() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "small", "1.0", 10);
-        insert_package(&conn, repo_id, "large", "1.0", 200);
-        insert_package(&conn, repo_id, "medium", "1.0", 100);
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
+        let fixture = ActiveCatalogFixture::new();
+        fixture.activate(
+            "fedora-44",
+            1,
+            vec![
+                package(
+                    "fedora-44",
+                    "small",
+                    "1.0",
+                    "1",
+                    Some("x86_64"),
+                    10,
+                    "small-source",
+                ),
+                package(
+                    "fedora-44",
+                    "large",
+                    "1.0",
+                    "1",
+                    Some("x86_64"),
+                    200,
+                    "large-source",
+                ),
+                package(
+                    "fedora-44",
+                    "medium",
+                    "1.0",
+                    "1",
+                    Some("x86_64"),
+                    100,
+                    "medium-source",
+                ),
+            ],
         );
+        let service = catalog_service(&fixture);
 
         let samples = service
             .benchmark_size_class_samples("fedora")
@@ -227,38 +297,69 @@ mod tests {
 
     #[tokio::test]
     async fn benchmark_size_classes_exclude_current_conversions() {
-        let (temp_file, conn) = create_test_db();
-        let repo_id = insert_repo(&conn, "fedora-base", "fedora");
-        insert_package(&conn, repo_id, "small", "1.0", 10);
-        insert_package(&conn, repo_id, "medium", "1.0", 100);
-        insert_package(&conn, repo_id, "large", "1.0", 200);
-        insert_package(&conn, repo_id, "already-converted", "1.0", 300);
-        conn.execute(
-            "INSERT INTO converted_packages (
-                 artifact_kind, original_format, original_checksum,
-                 repository_provides_digest, conversion_version,
-                 package_name, package_version, source_profile,
-                 transport_json, total_size, content_hash, ccs_path,
-                 package_architecture
-             ) VALUES (
-                 'repository', 'rpm', ?1, ?2, ?3, 'already-converted', '1.0',
-                 'fedora-44', '{\"schema_version\":1,\"manifest_base64\":\"\",\"signature_json\":\"{}\",\"objects\":[]}',
-                 1, 'sha256:converted', '/tmp/converted.ccs', 'x86_64'
-             )",
-            rusqlite::params![
-                "sha256:already-converted-1.0",
-                conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST,
-                CONVERSION_VERSION
-            ],
-        )
-        .unwrap();
-
-        let service = ConversionService::new(
-            PathBuf::from("/tmp/chunks"),
-            PathBuf::from("/tmp/cache"),
-            temp_file.path().to_path_buf(),
-            None,
+        let fixture = ActiveCatalogFixture::new();
+        let already_converted = package(
+            "fedora-44",
+            "already-converted",
+            "1.0",
+            "1",
+            Some("x86_64"),
+            300,
+            "already-converted-source",
         );
+        let already_converted_checksum = already_converted.checksum.clone();
+        let revision = fixture.activate(
+            "fedora-44",
+            1,
+            vec![
+                package(
+                    "fedora-44",
+                    "small",
+                    "1.0",
+                    "1",
+                    Some("x86_64"),
+                    10,
+                    "small-source",
+                ),
+                package(
+                    "fedora-44",
+                    "medium",
+                    "1.0",
+                    "1",
+                    Some("x86_64"),
+                    100,
+                    "medium-source",
+                ),
+                package(
+                    "fedora-44",
+                    "large",
+                    "1.0",
+                    "1",
+                    Some("x86_64"),
+                    200,
+                    "large-source",
+                ),
+                already_converted,
+            ],
+        );
+        let conn = fixture.connection();
+        let transport = super::super::test_support::test_transport(&[]);
+        let mut converted = ConvertedPackage::new_repository(
+            "fedora-44".to_string(),
+            revision,
+            "already-converted".to_string(),
+            "1.0".to_string(),
+            "x86_64".to_string(),
+            "rpm".to_string(),
+            already_converted_checksum,
+            &transport,
+            1,
+            "sha256:converted".to_string(),
+            "/tmp/converted.ccs".to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
+        );
+        converted.insert_with_conversion_pin(&conn, 1).unwrap();
+        let service = catalog_service(&fixture);
 
         let samples = service
             .benchmark_size_class_samples("fedora")
@@ -297,6 +398,11 @@ mod tests {
         assert_eq!(evidence.sample, sample);
         assert_eq!(evidence.iteration, 1);
         assert_eq!(evidence.cache_state, "error");
-        assert!(evidence.error.unwrap().contains("not found"));
+        assert!(
+            evidence
+                .error
+                .unwrap()
+                .contains("immutable profile catalog authority")
+        );
     }
 }

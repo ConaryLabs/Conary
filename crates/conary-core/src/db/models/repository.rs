@@ -17,7 +17,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::io;
 
 /// RepositoryPackage represents a package available from a repository
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RepositoryPackage {
     pub id: Option<i64>,
     pub repository_id: i64,

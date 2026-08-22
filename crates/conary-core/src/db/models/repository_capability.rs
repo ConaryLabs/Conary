@@ -13,7 +13,7 @@ use crate::repository::dependency_model::{
 use crate::repository::distro::version_scheme_from_db;
 use crate::repository::versioning::VersionScheme;
 use rusqlite::{Connection, Row, params};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io;
 
 /// Every statement this module issues against `repository_provides`.
@@ -35,22 +35,6 @@ const SELECT_BY_PACKAGE_SQL: &str =
              FROM repository_provides
              WHERE repository_package_id = ?1
              ORDER BY capability, version";
-
-const SELECT_CONVERSION_INPUTS_SQL: &str =
-    "SELECT p.id, p.repository_package_id, p.capability, p.version,
-                    p.version_relation, p.kind, p.raw, p.version_scheme,
-                    p.architecture_qualifier_kind, p.architecture, p.provenance,
-                    rp.id, rp.checksum
-             FROM repository_packages rp
-             JOIN repositories r ON r.id = rp.repository_id
-             LEFT JOIN repository_provides p ON p.repository_package_id = rp.id
-             WHERE r.enabled = 1
-               AND r.source_profile = ?1
-               AND rp.name = ?2
-               AND rp.version = ?3
-               AND rp.architecture = ?4
-               AND rp.size > 0
-             ORDER BY rp.id, p.id";
 
 /// `{placeholders}` is replaced with the bound package-id list for one batch.
 const SELECT_BY_PACKAGES_TEMPLATE: &str =
@@ -130,7 +114,7 @@ const DELETE_BY_REPOSITORY_SQL: &str = "DELETE FROM repository_provides
                  SELECT id FROM repository_packages WHERE repository_id = ?1
              )";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RepositoryProvide {
     pub id: Option<i64>,
     pub repository_package_id: i64,
@@ -255,8 +239,9 @@ impl RepositoryProvide {
         Ok(rows)
     }
 
-    /// Return one atomic repository-metadata projection and digest for
-    /// conversion-cache invalidation. These rows never mutate artifact authority.
+    /// Return one atomic repository-metadata projection and diagnostic digest.
+    /// These rows never establish conversion identity or mutate artifact
+    /// authority.
     pub fn conversion_capabilities_with_digest(
         conn: &Connection,
         repository_package_id: i64,
@@ -267,61 +252,8 @@ impl RepositoryProvide {
         )?)
     }
 
-    /// Load every exact source-package checksum and provider digest for one
-    /// repository conversion identity from a single SQLite read snapshot.
-    pub(crate) fn conversion_inputs_for_source_identity(
-        conn: &Connection,
-        source_profile: &str,
-        package_name: &str,
-        package_version: &str,
-        package_architecture: &str,
-    ) -> Result<Vec<(String, String)>> {
-        let mut stmt = conn.prepare(SELECT_CONVERSION_INPUTS_SQL)?;
-        let rows = stmt
-            .query_map(
-                params![
-                    source_profile,
-                    package_name,
-                    package_version,
-                    package_architecture,
-                ],
-                |row| {
-                    let provide = row
-                        .get::<_, Option<i64>>(0)?
-                        .map(|_| Self::from_row(row))
-                        .transpose()?;
-                    Ok((row.get::<_, i64>(11)?, row.get::<_, String>(12)?, provide))
-                },
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(stmt);
-
-        let mut package_inputs = BTreeMap::<i64, (String, Vec<Self>)>::new();
-        for (repository_package_id, checksum, provide) in rows {
-            let (persisted_checksum, provides) = package_inputs
-                .entry(repository_package_id)
-                .or_insert_with(|| (checksum.clone(), Vec::new()));
-            if persisted_checksum != &checksum {
-                return Err(crate::Error::InternalError(format!(
-                    "repository package {repository_package_id} yielded conflicting checksums"
-                )));
-            }
-            if let Some(provide) = provide {
-                provides.push(provide);
-            }
-        }
-
-        package_inputs
-            .into_values()
-            .map(|(checksum, provides)| {
-                let (_, digest) = projection::project(provides)?;
-                Ok((checksum, digest))
-            })
-            .collect()
-    }
-
-    /// Digest repository metadata that invalidates a cached native conversion
-    /// without becoming signed artifact identity or capability authority.
+    /// Digest repository metadata for diagnostics and indexed projections
+    /// without becoming conversion identity or capability authority.
     pub fn conversion_capabilities_digest(
         conn: &Connection,
         repository_package_id: i64,
@@ -602,10 +534,6 @@ mod tests {
             (
                 "find_by_repository_package",
                 SELECT_BY_PACKAGE_SQL.to_string(),
-            ),
-            (
-                "conversion_inputs_for_source_identity",
-                SELECT_CONVERSION_INPUTS_SQL.to_string(),
             ),
             (
                 "find_by_repository_packages",

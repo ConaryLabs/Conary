@@ -285,9 +285,9 @@ fn normalized_system_authority_restores_package_repository_owners() {
             .unwrap();
     conn.execute(
         "UPDATE repositories
-         SET last_sync = '2026-08-12T00:00:00Z', authenticated_snapshot_sha256 = ?1
-         WHERE id = ?2",
-        rusqlite::params!["b".repeat(64), repository_id],
+         SET last_sync = '2026-08-12T00:00:00Z'
+         WHERE id = ?1",
+        rusqlite::params![repository_id],
     )
     .unwrap();
     conn.execute(
@@ -319,7 +319,6 @@ fn normalized_system_authority_restores_package_repository_owners() {
         .unwrap()
         .unwrap();
     assert!(restored.last_sync.is_none());
-    assert!(restored.authenticated_snapshot.is_none());
     assert!(
         conary_core::db::models::RepositoryPackage::find_by_repository(&conn, repository_id)
             .unwrap()

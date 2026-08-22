@@ -655,6 +655,7 @@ fn capture_installed_conversions(
             trove_id: Some(trove_id),
             original_format: snapshot.original_format.clone(),
             original_checksum: snapshot.original_checksum.clone(),
+            profile_revision_sha256: None,
             repository_provides_digest: None,
             conversion_version: snapshot.conversion_version,
             converted_at: Some(snapshot.converted_at.clone()),

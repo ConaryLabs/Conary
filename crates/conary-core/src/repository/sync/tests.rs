@@ -541,7 +541,6 @@ mod tests {
         .unwrap();
         assert_eq!(selected.package.version, "2.0-1");
         assert_eq!(selected.repository.id, Some(repository_id));
-        assert!(selected.repository.authenticated_snapshot.is_some());
         assert_eq!(
             selected
                 .repository
