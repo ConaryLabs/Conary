@@ -11,9 +11,10 @@ use conary_core::db::models::{
 };
 use conary_core::repository::catalog::{ProfileSourceMemberV1, SourceStreamKindV1};
 use conary_core::repository::{
-    ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
-    RepositoryFormat, abort_profile_sync_run, acknowledge_profile_sync_candidate_cleanup,
-    begin_profile_sync_run_with_members, ready_profile_sync_run, record_profile_sync_run_member,
+    PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncFailureCategory, ProfileSyncFailureStage,
+    ProfileSyncRun, ProfileSyncRunMember, RepositoryFormat, abort_profile_sync_run,
+    acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run_with_members,
+    heartbeat_profile_sync_run, ready_profile_sync_run, record_profile_sync_run_member,
 };
 
 use super::refresh::RepoRefreshResult;
@@ -123,35 +124,29 @@ pub(super) async fn refresh_native_profile(
         return Err(error);
     }
 
-    let staged = match stage_profile_catalog(
-        &run.run_id,
-        &source_profile,
-        repositories,
-        &roots.keyring_dir,
-        &roots.catalog_candidate_dir,
-        &roots.projection_cache_dir,
-    )
-    .await
-    {
-        Ok(published) => published,
-        Err(error) => {
-            abort_run(
-                &roots,
-                &run,
-                ProfileSyncFailureStage::FetchingObjects,
-                &format!("{error:#}"),
-            )
-            .await;
-            log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
-            let primary = ServiceError::Internal(format!("{error:#}"));
-            return match collect_catalog_garbage(&roots).await {
-                Ok(_) => Err(primary),
-                Err(cleanup) => Err(ServiceError::Internal(format!(
-                    "{primary}; exact catalog recovery also failed: {cleanup}"
-                ))),
-            };
-        }
-    };
+    let staged =
+        match stage_profile_catalog_with_heartbeat(&roots, &run, &source_profile, repositories)
+            .await
+        {
+            Ok(published) => published,
+            Err(error) => {
+                abort_run(
+                    &roots,
+                    &run,
+                    ProfileSyncFailureStage::FetchingObjects,
+                    &format!("{error:#}"),
+                )
+                .await;
+                log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+                let primary = ServiceError::Internal(format!("{error:#}"));
+                return match collect_catalog_garbage(&roots).await {
+                    Ok(_) => Err(primary),
+                    Err(cleanup) => Err(ServiceError::Internal(format!(
+                        "{primary}; exact catalog recovery also failed: {cleanup}"
+                    ))),
+                };
+            }
+        };
 
     let results = match profile_refresh_results(&source_profile, &names, &staged) {
         Ok(results) => results,
@@ -222,6 +217,68 @@ pub(super) async fn refresh_native_profile(
     }
 
     Ok(results)
+}
+
+async fn stage_profile_catalog_with_heartbeat(
+    roots: &RefreshRoots,
+    run: &ProfileSyncRun,
+    source_profile: &str,
+    repositories: Vec<Repository>,
+) -> anyhow::Result<StagedProfileCatalog> {
+    let (stop, heartbeat) = spawn_profile_heartbeat(roots, run)?;
+    let staged = stage_profile_catalog(
+        &run.run_id,
+        source_profile,
+        repositories,
+        &roots.keyring_dir,
+        &roots.catalog_candidate_dir,
+        &roots.projection_cache_dir,
+    )
+    .await;
+    let _ = stop.send(());
+    let heartbeat = tokio::task::spawn_blocking(move || heartbeat.join())
+        .await
+        .map_err(|error| anyhow::anyhow!("profile heartbeat join task panicked: {error}"))?
+        .map_err(|_| anyhow::anyhow!("profile heartbeat thread panicked"))?;
+    match (staged, heartbeat) {
+        (Ok(staged), Ok(())) => Ok(staged),
+        (Ok(_), Err(error)) => Err(error.context("profile refresh heartbeat failed")),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(heartbeat)) => Err(error.context(format!(
+            "profile refresh heartbeat also failed: {heartbeat:#}"
+        ))),
+    }
+}
+
+fn spawn_profile_heartbeat(
+    roots: &RefreshRoots,
+    run: &ProfileSyncRun,
+) -> anyhow::Result<(
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<anyhow::Result<()>>,
+)> {
+    let (stop, stopped) = std::sync::mpsc::channel();
+    let db_path = roots.db_path.clone();
+    let database_writer = roots.database_writer.clone();
+    let run = run.clone();
+    let heartbeat = std::thread::Builder::new()
+        .name(format!("profile-heartbeat-{}", run.source_profile))
+        .spawn(move || {
+            loop {
+                match stopped.recv_timeout(PROFILE_SYNC_HEARTBEAT_INTERVAL) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        database_writer
+                            .execute(|| {
+                                let conn = conary_core::db::open_fast(&db_path)?;
+                                heartbeat_profile_sync_run(&conn, &run)
+                            })
+                            .map_err(anyhow::Error::from)?;
+                    }
+                }
+            }
+        })?;
+    Ok((stop, heartbeat))
 }
 
 fn profile_refresh_results(

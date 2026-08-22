@@ -425,8 +425,8 @@ impl CatalogPackageRecordV1 {
 
 impl CatalogProvideRecordV1 {
     fn validate(&self) -> Result<()> {
-        validate_native_capability(&self.capability, "catalog provided capability")?;
         let kind = parse_capability_kind(&self.kind)?;
+        validate_native_capability(&self.capability, "catalog provided capability", kind)?;
         ProvidedCapability {
             kind,
             name: self.capability.clone(),
@@ -488,8 +488,8 @@ impl CatalogRequirementGroupV1 {
         )?;
         require_canonical_order(&self.atoms, "catalog requirement atoms")?;
         for atom in &self.atoms {
-            validate_native_capability(&atom.capability, "catalog requirement capability")?;
-            parse_capability_kind(&atom.kind)?;
+            let kind = parse_capability_kind(&atom.kind)?;
+            validate_native_capability(&atom.capability, "catalog requirement capability", kind)?;
             if !matches!(
                 atom.dependency_type.as_str(),
                 "runtime" | "optional" | "build"
@@ -903,10 +903,23 @@ fn parse_capability_kind(value: &str) -> Result<RepositoryCapabilityKind> {
     }
 }
 
-fn validate_native_capability(value: &str, label: &str) -> Result<()> {
-    if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
+fn validate_native_capability(
+    value: &str,
+    label: &str,
+    kind: RepositoryCapabilityKind,
+) -> Result<()> {
+    if value.is_empty() {
         return Err(Error::ConfigError(format!(
-            "{label} must be non-empty source-native UTF-8 without surrounding whitespace or control characters"
+            "{label} must be non-empty source-native UTF-8"
+        )));
+    }
+    if !matches!(
+        kind,
+        RepositoryCapabilityKind::File | RepositoryCapabilityKind::Path
+    ) && (value.trim() != value || value.chars().any(char::is_control))
+    {
+        return Err(Error::ConfigError(format!(
+            "{label} must not contain surrounding whitespace or control characters"
         )));
     }
     Ok(())

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 37
+revision: 38
 summary: Document Remi immutable source and profile catalogs, exact revision activation and pinning, source identity and update policy, process-wide runtime ownership, signing, repository trust, publication coordination and readiness, conversion profiling, R2 durability inventory, and serving authority
 ---
 
@@ -100,6 +100,9 @@ transaction prove the current run owner and fencing epoch and replace the
 profile's active revision pointer. A failed required member, stale fence,
 replayed activation, malformed bundle, publication fault, or activation fault
 leaves the previous pointer readable.
+Long parser and profile-composition calls renew that fenced lease from an
+independent coordinator thread at the core-owned heartbeat cadence, so a
+CPU-bound metadata record stream cannot starve its own ownership proof.
 
 Operational SQLite owns refresh runs and leases, resource metadata, ordered
 profile members, the active pointer, and exact revision pins. It does not own

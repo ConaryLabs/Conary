@@ -9,7 +9,7 @@
 
 use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod recovery;
 
@@ -26,6 +26,10 @@ use recovery::{abandon_expired_run, pending_candidate_recovery};
 /// event renews it. Recovery is authorized by this lease, never by a path or
 /// name prefix.
 const REMI_SYNC_LEASE_SECONDS: i64 = 1_200;
+
+/// Coordinator heartbeat cadence for work that may spend the complete lease
+/// inside one parser or catalog-composition call.
+pub const PROFILE_SYNC_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSyncRun {
@@ -951,6 +955,14 @@ mod tests {
             )
             .unwrap();
         assert!(candidate.is_none());
+    }
+
+    #[test]
+    fn coordinator_heartbeat_cadence_precedes_lease_expiry() {
+        assert!(
+            PROFILE_SYNC_HEARTBEAT_INTERVAL.as_secs()
+                < u64::try_from(REMI_SYNC_LEASE_SECONDS).unwrap()
+        );
     }
 
     #[test]

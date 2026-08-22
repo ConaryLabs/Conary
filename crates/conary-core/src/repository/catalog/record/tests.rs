@@ -202,3 +202,29 @@ fn source_native_capabilities_reject_control_characters() {
 
     assert!(error.to_string().contains("control characters"));
 }
+
+#[test]
+fn source_native_file_capabilities_preserve_significant_trailing_space() {
+    let snapshot = digest('b');
+    let capability = "/usr/share/doc/giac/fr ";
+    let mut file = provide(capability);
+    file.kind = "file".to_string();
+    file.version_scheme = VersionScheme::Rpm;
+    file.raw = None;
+    file.provenance = CapabilityProvenance::SourceDerivedFile {
+        format: crate::repository::dependency_source::SourcePackageFormat::Rpm,
+    };
+    let mut record = package(&snapshot);
+    record.provides = vec![file];
+
+    let content = CatalogContentV1::new(
+        CatalogScopeV1::Profile {
+            profile: "arch".to_string(),
+        },
+        evidence(&snapshot),
+        vec![record],
+    )
+    .unwrap();
+
+    assert_eq!(content.packages[0].provides[0].capability, capability);
+}
