@@ -76,6 +76,21 @@ FROM remi_universe_index.package_implementations;
 "#;
 
 pub(super) fn attach_active_index(conn: &Connection, database_path: &Path) -> Result<()> {
+    // Remi's server-side operational database uses the shared connection
+    // helper but is not a Conary client-universe store. A current Conary
+    // database always has this table; narrowly scoped Remi authority stores do
+    // not, so there is no client authority to attach.
+    let has_client_authority = conn.query_row(
+        "SELECT EXISTS (
+             SELECT 1 FROM sqlite_schema
+             WHERE type = 'table' AND name = 'remi_active_client_universe'
+         )",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !has_client_authority {
+        return Ok(());
+    }
     let active = conn
         .query_row(
             "SELECT active.manifest_sha256, revision.index_path,
