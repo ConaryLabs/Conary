@@ -124,7 +124,7 @@ pub(super) async fn refresh_native_profile(
         return Err(error);
     }
 
-    let staged =
+    let (staged, heartbeat) =
         match stage_profile_catalog_with_heartbeat(&roots, &run, &source_profile, repositories)
             .await
         {
@@ -151,6 +151,7 @@ pub(super) async fn refresh_native_profile(
     let results = match profile_refresh_results(&source_profile, &names, &staged) {
         Ok(results) => results,
         Err(error) => {
+            stop_profile_heartbeat_after_error(heartbeat, &run.run_id).await;
             abort_run(
                 &roots,
                 &run,
@@ -163,6 +164,7 @@ pub(super) async fn refresh_native_profile(
         }
     };
     if let Err(error) = record_publication_intent(&roots, &run, &plans, &staged).await {
+        stop_profile_heartbeat_after_error(heartbeat, &run.run_id).await;
         abort_run(
             &roots,
             &run,
@@ -176,6 +178,7 @@ pub(super) async fn refresh_native_profile(
     let published = match publish_staged_profile_catalog(staged, &roots.catalog_dir).await {
         Ok(published) => published,
         Err(error) => {
+            stop_profile_heartbeat_after_error(heartbeat, &run.run_id).await;
             abort_run(
                 &roots,
                 &run,
@@ -193,6 +196,19 @@ pub(super) async fn refresh_native_profile(
             };
         }
     };
+    if let Err(error) = stop_profile_heartbeat(heartbeat).await {
+        abort_run(
+            &roots,
+            &run,
+            ProfileSyncFailureStage::Publishing,
+            &format!("profile refresh heartbeat failed: {error:#}"),
+        )
+        .await;
+        log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+        return Err(ServiceError::Internal(format!(
+            "profile refresh heartbeat failed: {error:#}"
+        )));
+    }
     let finalize = finalize_profile(&roots, &run, &plans, &published).await;
     if let Err(error) = finalize {
         abort_run(
@@ -224,8 +240,8 @@ async fn stage_profile_catalog_with_heartbeat(
     run: &ProfileSyncRun,
     source_profile: &str,
     repositories: Vec<Repository>,
-) -> anyhow::Result<StagedProfileCatalog> {
-    let (stop, heartbeat) = spawn_profile_heartbeat(roots, run)?;
+) -> anyhow::Result<(StagedProfileCatalog, ProfileHeartbeat)> {
+    let heartbeat = spawn_profile_heartbeat(roots, run)?;
     let staged = stage_profile_catalog(
         &run.run_id,
         source_profile,
@@ -235,28 +251,26 @@ async fn stage_profile_catalog_with_heartbeat(
         &roots.projection_cache_dir,
     )
     .await;
-    let _ = stop.send(());
-    let heartbeat = tokio::task::spawn_blocking(move || heartbeat.join())
-        .await
-        .map_err(|error| anyhow::anyhow!("profile heartbeat join task panicked: {error}"))?
-        .map_err(|_| anyhow::anyhow!("profile heartbeat thread panicked"))?;
-    match (staged, heartbeat) {
-        (Ok(staged), Ok(())) => Ok(staged),
-        (Ok(_), Err(error)) => Err(error.context("profile refresh heartbeat failed")),
-        (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(heartbeat)) => Err(error.context(format!(
-            "profile refresh heartbeat also failed: {heartbeat:#}"
-        ))),
+    match staged {
+        Ok(staged) => Ok((staged, heartbeat)),
+        Err(error) => match stop_profile_heartbeat(heartbeat).await {
+            Ok(()) => Err(error),
+            Err(heartbeat) => Err(error.context(format!(
+                "profile refresh heartbeat also failed: {heartbeat:#}"
+            ))),
+        },
     }
 }
+
+type ProfileHeartbeat = (
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<anyhow::Result<()>>,
+);
 
 fn spawn_profile_heartbeat(
     roots: &RefreshRoots,
     run: &ProfileSyncRun,
-) -> anyhow::Result<(
-    std::sync::mpsc::Sender<()>,
-    std::thread::JoinHandle<anyhow::Result<()>>,
-)> {
+) -> anyhow::Result<ProfileHeartbeat> {
     let (stop, stopped) = std::sync::mpsc::channel();
     let db_path = roots.db_path.clone();
     let database_writer = roots.database_writer.clone();
@@ -279,6 +293,20 @@ fn spawn_profile_heartbeat(
             }
         })?;
     Ok((stop, heartbeat))
+}
+
+async fn stop_profile_heartbeat((stop, heartbeat): ProfileHeartbeat) -> anyhow::Result<()> {
+    let _ = stop.send(());
+    tokio::task::spawn_blocking(move || heartbeat.join())
+        .await
+        .map_err(|error| anyhow::anyhow!("profile heartbeat join task panicked: {error}"))?
+        .map_err(|_| anyhow::anyhow!("profile heartbeat thread panicked"))?
+}
+
+async fn stop_profile_heartbeat_after_error(heartbeat: ProfileHeartbeat, run_id: &str) {
+    if let Err(error) = stop_profile_heartbeat(heartbeat).await {
+        tracing::error!(run_id, %error, "profile refresh heartbeat also failed");
+    }
 }
 
 fn profile_refresh_results(

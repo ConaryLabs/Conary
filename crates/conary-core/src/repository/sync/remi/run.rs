@@ -11,7 +11,12 @@ use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod contract;
 mod recovery;
+
+use contract::{
+    is_terminal_state, validate_digest, validate_member, validate_profile, validate_uuid,
+};
 
 #[cfg(test)]
 use recovery::recover_expired_profile_sync_runs_at;
@@ -332,7 +337,14 @@ pub fn begin_profile_sync_run_with_members(
 pub fn heartbeat_profile_sync_run(conn: &Connection, run: &RemiSyncRun) -> Result<()> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
-    require_owned_run(&tx, run, "created", "fetching_objects", now)?;
+    require_owned_run(
+        &tx,
+        run,
+        "created",
+        "fetching_objects",
+        "ready_to_publish",
+        now,
+    )?;
     touch_owned_run(&tx, run, now)?;
     tx.commit()?;
     Ok(())
@@ -347,7 +359,7 @@ pub fn record_profile_sync_run_member(
     validate_member(member)?;
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
-    require_owned_run(&tx, run, "created", "fetching_objects", now)?;
+    require_owned_run(&tx, run, "created", "fetching_objects", "", now)?;
     let existing = tx
         .query_row(
             "SELECT ordinal, repository_id, source_identity, repository_identity,
@@ -445,7 +457,7 @@ pub fn ready_profile_sync_run(
     )?;
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
-    require_owned_run(&tx, run, "created", "fetching_objects", now)?;
+    require_owned_run(&tx, run, "created", "fetching_objects", "", now)?;
     let (member_count, missing_required): (i64, i64) = tx.query_row(
         "SELECT COUNT(*),
                 COALESCE(SUM(CASE WHEN required = 1
@@ -527,7 +539,7 @@ pub fn abort_profile_sync_run(
         tx.commit()?;
         return Ok(());
     }
-    require_owned_run(&tx, run, &state, "", now)?;
+    require_owned_run(&tx, run, &state, "", "", now)?;
     let updated = tx.execute(
         "UPDATE repository_sync_runs
          SET state = 'abandoned', heartbeat_at = ?1, lease_expires_at = ?1,
@@ -562,6 +574,7 @@ fn require_owned_run(
     run: &RemiSyncRun,
     first_state: &str,
     second_state: &str,
+    third_state: &str,
     now: i64,
 ) -> Result<()> {
     let owned = tx.query_row(
@@ -574,8 +587,8 @@ fn require_owned_run(
                AND scope.fencing_epoch = ?3
                AND current.source_profile = ?1
                AND current.owner_instance_uuid = ?4
-               AND (?5 = '' OR current.state = ?5 OR current.state = ?6)
-               AND current.lease_expires_at > ?7
+               AND (?5 = '' OR current.state = ?5 OR current.state = ?6 OR current.state = ?7)
+               AND current.lease_expires_at > ?8
          )",
         params![
             &run.source_profile,
@@ -584,6 +597,7 @@ fn require_owned_run(
             &run.owner_instance_uuid,
             first_state,
             second_state,
+            third_state,
             now,
         ],
         |row| row.get::<_, bool>(0),
@@ -603,7 +617,7 @@ fn touch_owned_run(tx: &Transaction<'_>, run: &RemiSyncRun, now: i64) -> Result<
            AND source_profile = ?4
            AND owner_instance_uuid = ?5
            AND fencing_epoch = ?6
-           AND state IN ('created', 'fetching_objects')
+           AND state IN ('created', 'fetching_objects', 'ready_to_publish')
            AND lease_expires_at > ?1",
         params![
             now,
@@ -648,84 +662,6 @@ impl RemiSyncRunMember {
             self.required,
         )
     }
-}
-
-fn validate_member(member: &RemiSyncRunMember) -> Result<()> {
-    if member.ordinal < 0 {
-        return Err(Error::ConfigError(
-            "sync run member ordinal must not be negative".to_string(),
-        ));
-    }
-    if member.repository_id <= 0 {
-        return Err(Error::ConfigError(
-            "sync run member repository ID must be positive".to_string(),
-        ));
-    }
-    validate_identity(&member.source_identity, "sync run member source identity")?;
-    validate_identity(
-        &member.repository_identity,
-        "sync run member repository identity",
-    )?;
-    validate_identity(&member.stream_identity, "sync run member stream identity")?;
-    if !matches!(
-        member.stream_kind.as_str(),
-        "release" | "channel" | "rolling"
-    ) {
-        return Err(Error::ConfigError(format!(
-            "sync run member stream kind '{}' is unsupported",
-            member.stream_kind
-        )));
-    }
-    if let Some(digest) = member.candidate_source_snapshot_sha256.as_deref() {
-        validate_digest(digest, "sync run candidate source snapshot digest")?;
-    }
-    if let Some(digest) = member.input_source_snapshot_sha256.as_deref() {
-        validate_digest(digest, "sync run input source snapshot digest")?;
-    }
-    Ok(())
-}
-
-fn validate_profile(value: &str) -> Result<()> {
-    validate_identity(value, "sync run source profile")
-}
-
-fn validate_identity(value: &str, label: &str) -> Result<()> {
-    if value.is_empty()
-        || value.len() > 255
-        || value.trim() != value
-        || !value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
-    {
-        return Err(Error::ConfigError(format!(
-            "{label} must contain 1 to 255 printable ASCII characters without surrounding whitespace"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_digest(value: &str, label: &str) -> Result<()> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(Error::ConfigError(format!(
-            "{label} must be exactly 64 lowercase hexadecimal characters"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_uuid(value: &str, label: &str) -> Result<()> {
-    if value.len() != 36 || uuid::Uuid::parse_str(value).is_err() {
-        return Err(Error::ConfigError(format!(
-            "{label} must be a canonical 36-character UUID"
-        )));
-    }
-    Ok(())
-}
-
-fn is_terminal_state(state: &str) -> bool {
-    matches!(state, "published" | "failed" | "abandoned")
 }
 
 fn fenced_error(run: &RemiSyncRun, reason: &str) -> Error {
@@ -943,18 +879,45 @@ mod tests {
     fn heartbeat_does_not_fill_or_rewrite_candidate_digest() {
         let conn = Connection::open_in_memory().unwrap();
         ensure_current(&conn).unwrap();
+        let repo = test_repo(&conn, "source", "fedora-44");
         let run =
             begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, unix_seconds().unwrap())
                 .unwrap();
         heartbeat_profile_sync_run(&conn, &run).unwrap();
-        let candidate = conn
+        let candidate = digest('a');
+        record_profile_sync_run_member(&conn, &run, &member(repo.id.unwrap(), 0, Some(&candidate)))
+            .unwrap();
+        ready_profile_sync_run(&conn, &run, &candidate).unwrap();
+        let now = unix_seconds().unwrap();
+        let prior_expiry = now + 60;
+        conn.execute(
+            "UPDATE repository_sync_runs
+             SET heartbeat_at = ?1, lease_expires_at = ?2
+             WHERE run_id = ?3",
+            params![now, prior_expiry, &run.run_id],
+        )
+        .unwrap();
+
+        heartbeat_profile_sync_run(&conn, &run).unwrap();
+        let (state, stored_candidate, heartbeat_at, lease_expires_at) = conn
             .query_row(
-                "SELECT candidate_profile_digest FROM repository_sync_runs WHERE run_id = ?1",
+                "SELECT state, candidate_profile_digest, heartbeat_at, lease_expires_at
+                 FROM repository_sync_runs WHERE run_id = ?1",
                 [&run.run_id],
-                |row| row.get::<_, Option<String>>(0),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
             )
             .unwrap();
-        assert!(candidate.is_none());
+        assert_eq!(state, "ready_to_publish");
+        assert_eq!(stored_candidate.as_deref(), Some(candidate.as_str()));
+        assert!(heartbeat_at >= now);
+        assert!(lease_expires_at > prior_expiry);
     }
 
     #[test]

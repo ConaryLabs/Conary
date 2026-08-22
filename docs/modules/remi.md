@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 40
+revision: 41
 summary: Document Remi immutable source and profile catalogs, exact revision activation and pinning, source identity and update policy, process-wide runtime ownership, signing, repository trust, publication coordination and readiness, conversion profiling, R2 durability inventory, and serving authority
 ---
 
@@ -103,9 +103,10 @@ transaction prove the current run owner and fencing epoch and replace the
 profile's active revision pointer. A failed required member, stale fence,
 replayed activation, malformed bundle, publication fault, or activation fault
 leaves the previous pointer readable.
-Long parser and profile-composition calls renew that fenced lease from an
-independent coordinator thread at the core-owned heartbeat cadence, so a
-CPU-bound metadata record stream cannot starve its own ownership proof.
+Long parser, profile-composition, and immutable publication-verification calls
+renew that fenced lease from an independent coordinator thread at the
+core-owned heartbeat cadence, including while the run is `ready_to_publish`,
+so a CPU-bound metadata record stream cannot starve its own ownership proof.
 
 Operational SQLite owns refresh runs and leases, resource metadata, ordered
 profile members, the active pointer, and exact revision pins. It does not own
@@ -252,6 +253,8 @@ falls back to operational `repository_packages` rows.
 `crates/conary-core/src/repository/sync/remi/path.rs` owns the path-based sparse
 sync writer-authority handoff;
 `crates/conary-core/src/repository/sync/remi/run.rs` owns its durable lifecycle.
+`crates/conary-core/src/repository/sync/remi/run/contract.rs` owns the typed run
+identity, digest, state, and member validation boundary.
 Every run records the repository scope, process instance UUID, monotonically
 increasing fencing epoch, disabled candidate repository ID, input and candidate
 revisions, typed state and failure, and start/heartbeat/lease/finish facts.
