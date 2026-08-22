@@ -17,7 +17,7 @@ use conary_core::repository::catalog::{CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_
 use conary_core::repository::{
     acknowledge_profile_sync_candidate_cleanup, recover_expired_profile_sync_runs,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use super::ServerState;
 use super::catalog_refresh::cleanup_candidate_run;
@@ -230,6 +230,18 @@ pub(crate) async fn collect_catalog_garbage_uncoordinated(
         removed_bundles,
         acknowledged_deletions: acknowledged_count,
     })
+}
+
+/// Serialize an exact collection inside a publication cycle whose profile
+/// refresh jobs may otherwise run concurrently.
+pub(crate) async fn collect_catalog_garbage_serialized(
+    coordinator: Arc<Mutex<()>>,
+    db_path: PathBuf,
+    catalog_dir: PathBuf,
+    database_writer: DatabaseWriter,
+) -> Result<CatalogGcReport> {
+    let _collection_guard = coordinator.lock_owned().await;
+    collect_catalog_garbage_uncoordinated(db_path, catalog_dir, database_writer).await
 }
 
 fn deletion_key(intent: &RemiCatalogDeletionIntent) -> (RemiCatalogResourceKind, String, String) {
@@ -748,6 +760,75 @@ mod tests {
         assert_eq!(report.deleted_source_resources, 1);
         assert_eq!(report.removed_bundles, 2);
         assert_eq!(report.acknowledged_deletions, 2);
+
+        let conn = conary_core::db::open_fast(&db_path).unwrap();
+        assert!(
+            plan_catalog_collection(&conn)
+                .unwrap()
+                .pending_deletions
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_coordinator_serializes_concurrent_collectors() {
+        let root = tempfile::tempdir().unwrap();
+        let db_path = root.path().join("remi.db");
+        let catalog_root = root.path().join("catalogs");
+        fs::create_dir_all(catalog_root.join("sources")).unwrap();
+        fs::create_dir_all(catalog_root.join("profiles/fedora-44")).unwrap();
+        conary_core::db::init(&db_path).unwrap();
+        let conn = conary_core::db::open_fast(&db_path).unwrap();
+        let resource = RemiCatalogResource {
+            resource_sha256: resource_digest('a'),
+            kind: RemiCatalogResourceKind::SourceSnapshot,
+            source_profile: "fedora-44".to_string(),
+            artifact_sha256: digest('a'),
+            artifact_size: 7,
+            logical_digest_sha256: digest('d'),
+            manifest_json: "{\"resource\":\"a\"}".to_string(),
+            durable: true,
+            created_at: 1,
+        };
+        resource.insert(&conn).unwrap();
+        exact_bundle(&bundle_path(
+            &catalog_root,
+            resource.kind,
+            &resource.source_profile,
+            &resource.resource_sha256,
+        ));
+        drop(conn);
+
+        let coordinator = Arc::new(Mutex::new(()));
+        let database_writer = DatabaseWriter::default();
+        let first = collect_catalog_garbage_serialized(
+            Arc::clone(&coordinator),
+            db_path.clone(),
+            catalog_root.clone(),
+            database_writer.clone(),
+        );
+        let second = collect_catalog_garbage_serialized(
+            coordinator,
+            db_path.clone(),
+            catalog_root,
+            database_writer,
+        );
+        let (first, second) = tokio::join!(first, second);
+        let reports = [first.unwrap(), second.unwrap()];
+        assert_eq!(
+            reports
+                .iter()
+                .map(|report| report.acknowledged_deletions)
+                .sum::<usize>(),
+            1
+        );
+        assert_eq!(
+            reports
+                .iter()
+                .map(|report| report.removed_bundles)
+                .sum::<usize>(),
+            1
+        );
 
         let conn = conary_core::db::open_fast(&db_path).unwrap();
         assert!(

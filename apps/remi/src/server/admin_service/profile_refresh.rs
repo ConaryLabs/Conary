@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use conary_core::db::models::{
     RemiActiveProfileRevision, RemiProfileRevisionActivation, RemiProfileRevisionMember,
@@ -33,6 +34,7 @@ struct RefreshRoots {
     catalog_dir: PathBuf,
     projection_cache_dir: PathBuf,
     database_writer: DatabaseWriter,
+    catalog_gc_coordinator: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub(super) fn is_native_profile_repository(repository: &Repository) -> bool {
@@ -63,6 +65,7 @@ pub(super) async fn refresh_native_profile(
             catalog_dir: state.config.catalog_dir.clone(),
             projection_cache_dir: state.config.cache_dir.join("native-projections"),
             database_writer: state.database_writer.clone(),
+            catalog_gc_coordinator: Arc::clone(&state.catalog_gc_coordinator),
         }
     };
 
@@ -721,7 +724,8 @@ async fn cleanup_run(roots: &RefreshRoots, run_id: &str) -> Result<(), ServiceEr
 async fn collect_catalog_garbage(
     roots: &RefreshRoots,
 ) -> Result<crate::server::catalog_gc::CatalogGcReport, ServiceError> {
-    crate::server::catalog_gc::collect_catalog_garbage_uncoordinated(
+    crate::server::catalog_gc::collect_catalog_garbage_serialized(
+        Arc::clone(&roots.catalog_gc_coordinator),
         roots.db_path.clone(),
         roots.catalog_dir.clone(),
         roots.database_writer.clone(),

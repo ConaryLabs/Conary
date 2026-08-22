@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 43
+revision: 44
 summary: Document Remi immutable source and profile catalogs, exact revision activation and pinning, source identity and update policy, process-wide runtime ownership, signing, repository trust, publication coordination and readiness, conversion profiling, R2 durability inventory, and serving authority
 ---
 
@@ -121,6 +121,10 @@ exact graph; age, repository names, process liveness, and guessed retention
 windows are not collection authority. An absent exact bundle or
 never-published profile namespace is idempotent absence during collection; a
 symlink or non-directory at either boundary still fails closed.
+Concurrent profile refreshes share one narrow catalog-collection coordinator,
+so their plan, filesystem removal, and acknowledgement phases cannot consume
+the same deletion intent while source retrieval, parsing, and catalog
+construction remain parallel.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
