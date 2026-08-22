@@ -425,7 +425,7 @@ impl CatalogPackageRecordV1 {
 
 impl CatalogProvideRecordV1 {
     fn validate(&self) -> Result<()> {
-        validate_identity(&self.capability, "catalog provided capability")?;
+        validate_native_capability(&self.capability, "catalog provided capability")?;
         let kind = parse_capability_kind(&self.kind)?;
         ProvidedCapability {
             kind,
@@ -488,7 +488,7 @@ impl CatalogRequirementGroupV1 {
         )?;
         require_canonical_order(&self.atoms, "catalog requirement atoms")?;
         for atom in &self.atoms {
-            validate_identity(&atom.capability, "catalog requirement capability")?;
+            validate_native_capability(&atom.capability, "catalog requirement capability")?;
             parse_capability_kind(&atom.kind)?;
             if !matches!(
                 atom.dependency_type.as_str(),
@@ -901,6 +901,15 @@ fn parse_capability_kind(value: &str) -> Result<RepositoryCapabilityKind> {
             "catalog capability has unknown kind '{value}'"
         ))),
     }
+}
+
+fn validate_native_capability(value: &str, label: &str) -> Result<()> {
+    if value.is_empty() || value.trim() != value || value.chars().any(char::is_control) {
+        return Err(Error::ConfigError(format!(
+            "{label} must be non-empty source-native UTF-8 without surrounding whitespace or control characters"
+        )));
+    }
+    Ok(())
 }
 
 fn canonicalize_json_text(value: &mut String, label: &str) -> Result<()> {

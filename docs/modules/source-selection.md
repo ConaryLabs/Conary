@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 45
+revision: 46
 summary: Document immutable Remi source/profile catalog authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
@@ -294,6 +294,9 @@ stream binding, authenticated root, every child role and digest, parser
 projection version, and catalog schema all match. Its verified catalog is
 replayed through the same bounded candidate writer; cache contents never
 replace the immutable source manifest or active profile pointer as authority.
+Catalog source/profile/repository IDs remain bounded printable ASCII. Typed
+native capability names are preserved as exact trimmed UTF-8, including
+upstream non-ASCII RPM provides; control characters remain invalid.
 
 Serving selection is therefore a two-step typed decision: the public route maps
 to one exact profile ID, then `CatalogAuthority` opens the verified revision

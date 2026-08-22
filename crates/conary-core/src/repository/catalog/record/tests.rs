@@ -160,3 +160,45 @@ fn typed_provide_invariants_fail_closed() {
             .contains("may only carry an exact version relation")
     );
 }
+
+#[test]
+fn source_native_unicode_capabilities_round_trip_without_weakening_catalog_ids() {
+    let snapshot = digest('b');
+    let capability = "font(源ノ角ゴシックcodejp)";
+    let mut record = package(&snapshot);
+    record.provides = vec![provide(capability)];
+    record.requirement_groups = vec![group(capability)];
+
+    let content = CatalogContentV1::new(
+        CatalogScopeV1::Profile {
+            profile: "arch".to_string(),
+        },
+        evidence(&snapshot),
+        vec![record],
+    )
+    .unwrap();
+
+    assert_eq!(content.packages[0].provides[0].capability, capability);
+    assert_eq!(
+        content.packages[0].requirement_groups[0].atoms[0].capability,
+        capability
+    );
+}
+
+#[test]
+fn source_native_capabilities_reject_control_characters() {
+    let snapshot = digest('b');
+    let mut record = package(&snapshot);
+    record.provides = vec![provide("bad\ncapability")];
+
+    let error = CatalogContentV1::new(
+        CatalogScopeV1::Profile {
+            profile: "arch".to_string(),
+        },
+        evidence(&snapshot),
+        vec![record],
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("control characters"));
+}
