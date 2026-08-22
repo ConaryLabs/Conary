@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-21
-revision: 2
-summary: CLI UX audit of the daily-driver flows with exact captures, comparator notes against dnf5/apt/pacman, a design evaluation of the CLI's visual language, and the ranked beautification slice list for the UX pass
+last_updated: 2026-08-22
+revision: 3
+summary: Working CLI UX audit of daily-driver flows with annotated captures, comparator notes, design direction, and proposed implementation slices
 ---
 
 # CLI UX Audit: Daily-Driver Flows
@@ -13,21 +13,46 @@ conventions, and produces the ranked slice list. Each later slice lands
 separately under the existing `apps/conary/src/ui/` conventions and the
 vocabulary guard.
 
+This document owns baseline observations and design proposals while #132 is
+active. `docs/operations/daily-driver-ux-matrix.md` remains the durable owner
+for operator routes and wording. Later slices keep exact before/after evidence
+in their issue and pull request instead of turning this audit into a historical
+log; durable behavior moves to the owning module or operations document.
+
+## Scope
+
+Issue #132 supplies the tracking home, not frozen product authority. Its
+original checklist predates substantial CLI, generation, and repository work;
+this audit does not reassert those old assumptions. Claims here are limited to
+the current-head captures and source paths checked for this pull request.
+
+In scope: visual hierarchy, progress rendering, output vocabulary, typed error
+presentation, transaction-summary layout, and TTY versus piped degradation.
+Changes to mutation semantics, query behavior, publication, generation
+authority, download scheduling, or automation contracts require their own
+issue and owning-subsystem proof.
+
 ## Method
 
-- Host: Ubuntu 24.04 container, x86_64, `conary 0.16.1` debug build from
-  workspace source (rustc 1.98.0).
-- Every capture is the exact stdout+stderr of one command against a throwaway
-  root and database (`conary system init --db-path <sandbox>/conary.db`),
-  with `NO_COLOR=1` for the piped captures. Sandbox temp paths are shown as
-  `<sandbox>`.
+- Observation host: Ubuntu 24.04 container, x86_64, `conary 0.16.1` debug
+  build from workspace source (rustc 1.98.0). This names the capture
+  environment; it is not a client-support claim.
+- Captures are annotated stdout+stderr transcripts. Sandbox paths are replaced
+  with `<sandbox>`, terminal control sequences are transcribed, omitted spans
+  are marked, and `[exit: N]` is an annotation rather than command output.
+  Piped captures use `NO_COLOR=1` against a throwaway root and database
+  (`conary system init --db-path <sandbox>/conary.db`).
 - The local package used to drive install/remove is a two-file `hello-conary`
   1.0.0 CCS built with `conary ccs build --local-dev`.
-- TTY behavior was captured under a real pty (`script -qec`), with control
-  sequences transcribed.
-- Comparator: `apt-get` captured on the same host; dnf5 and pacman judged
-  from their documented, stable output conventions (transaction tables,
-  size totals, `:: Proceed with installation? [Y/n]`-style confirmation).
+- Selected TTY behavior was captured with `NO_COLOR` unset under a real pty
+  (`script -qec`), with control sequences transcribed. Piped captures do not
+  establish TTY color or redraw behavior for flows that were not separately
+  exercised under a pty.
+- Comparator: `apt-get` captured on the same host; dnf5 and pacman provide
+  visual reference points for transaction tables, size totals, and explicit
+  confirmation. They are not Conary behavior authority; any implementation
+  slice borrowing a convention must pin the exact comparator version or
+  upstream documentation it relies on.
 
 ## Captures
 
@@ -305,13 +330,14 @@ Error: Generation 1 does not exist
 [exit: 1]
 ```
 
-Unlike every daily package command, the generation family accepts no
-`--db-path`/`--root` (`system generation build --summary <S> --db-path <P>`
-accepts the db but `switch`/`rollback`/`list` accept neither), so the family
-cannot be exercised against a sandbox at all and its flag surface is
-inconsistent with the rest of the CLI. Build/switch/rollback captures on this
-host therefore stop at clap usage errors; a follow-up capture on a
-Conary-managed host belongs to the generation slice below.
+Generation commands currently split runtime-root ownership. `build`,
+`publish`, `pending`, `activate`, backup/recovery, `gc`, and `recover` accept
+`--db-path` and derive a runtime root from it. `list`, `info`, `export`,
+`switch`, and `rollback` use fixed-path or artifact-path authority and do not
+share that flag surface. This baseline captures only `list` and `info` on the
+observation host; it does not claim a successful build/switch/rollback UX
+capture. Separate generation-owner scoping must decide whether a supported-host
+capture or any flag/help change is worth doing.
 
 ### system history
 
@@ -330,7 +356,7 @@ The surface exists and carries the right facts, but the rendering leaks the
 same problems as the transaction paths: hand-rolled bracket tags
 (`[deferred]`, `[publication-failed]`) outside the guarded vocabulary,
 expected deferral framed as failure (the #534 problem in historical form),
-and the retry sentence repeated verbatim per row. Slice 7 owns the
+and the retry sentence repeated verbatim per row. UI slice 5 owns the
 rendering; #534 changes what the rows say about publication.
 
 ### Comparator capture (apt, same host)
@@ -362,9 +388,9 @@ yet: a grouped what-changes summary (new / upgraded / removed), size totals
 
 1. **TTY progress is visibly broken on the flagship flow.** Zero-length
    `0/0` bar frames flood single-package install under a pty
-   (`apps/conary/src/commands/progress.rs`). This alone fails the "cannot
-   look worse than what it replaces" bar.
-2. **Three warning voices, one fact.** tracing `WARN` (internal formatting)
+   (`apps/conary/src/commands/progress.rs`). The broken redraw dominates the
+   transaction and leaves garbage in terminal scrollback.
+2. **Two warning voices, one fact.** tracing `WARN` (internal formatting)
    and `WARNING:` (caps, hand-rolled) both print for generation-publication
    debt, and neither is `ui::warn`'s `warning:`. The happy path ends noisy.
 3. **Two error prefixes.** `Error:` from `apps/conary/src/app.rs` versus
@@ -380,20 +406,23 @@ yet: a grouped what-changes summary (new / upgraded / removed), size totals
    a non-ASCII `≤` in its chunking note).
 6. **Behavior defect:** `query whatprovides <bare file path>` misses a
    provide that the typed `file(...)` form finds, contradicting its help.
-7. **Generation family diverges from CLI conventions** (no common
-   `--db-path`/`--root` surface; empty-state guidance routes only to
-   takeover).
+7. **Generation commands expose split runtime-root conventions.** Some derive
+   the runtime root from `--db-path`; list/info/switch/rollback use fixed-root
+   authority. Empty-state guidance routes only to takeover. This is an
+   observation, not an instruction to weaken fixed-root boot operations.
 8. **Empty-state phrasing drifts** across adjacent states
    ("No packages to update" / "All packages are up to date";
    "No packages found." / "No packages found matching 'x'").
 
 ## Design evaluation
 
-Guiding feel (maintainer direction, 2026-08-21): the operator should feel in
-control, never nervous and never nagged. Every mutation is previewable
-(`--dry-run`), confirmable, and reversible (generation rollback), the
-reversal path is visible at the moment it matters, and no successful
-transaction ends by instructing the operator to retype another command.
+Design target for this pass: the operator should feel in control, never
+nervous and never nagged. Mutations should have an honest
+preview where that contract exists, capture explicit apply intent, and show a
+proven reversal route where one exists. Missing preview behavior such as
+`remove --dry-run` is work to add, not a current guarantee. No successful
+transaction should end in duplicated or contradictory output; #534 separately
+owns whether publication happens inside the apply operation.
 
 Judged as a visual system, from the color pty captures (the audit findings
 above are the mechanics; this section is the look). The diagnosis in one
@@ -435,18 +464,19 @@ today.
 
 ### Line-shape contract
 
-Every user-visible line becomes one of the five shapes `ui::` already
-implements, and nothing else prints:
+Persistent user-visible output targets five shapes rooted in the existing
+`ui::` vocabulary:
 
 - verb line — `Installed nginx 1.27.2-3 (42 files, 5.4 MB)` with bold green
   verb and dim metadata; completion moments only.
 - tag row — guarded tag at column nine, one item, one result.
 - prefix line — `error:` / `warning:` / `note:`, lowercase, bold, colored;
   one fact per line.
-- field line — two-space indent, bold label, shared colon column.
+- field line — two-space indent and bold label; shared colon alignment is a
+  target renderer behavior, not a property of today's `ui::field_line`.
 - heading — bold, ends with a colon, introduces tag rows or fields.
 
-Plus one transient shape that never lands in scrollback: a single in-place
+One additional transient shape never lands in scrollback: a single in-place
 progress line per phase —
 
 ```
@@ -460,33 +490,20 @@ phase; finished transactions read as history, never as leftover machinery.
 This is the in-flight contract slices 1 and 3 implement, replacing today's
 stacked spinners and zero-length bars.
 
-When downloads become parallel (#535), the download phase extends to one
-aggregate line plus one line per active worker, capped at the worker count,
-with queued items as a single dim count line:
+If parallel downloads land through #535, that issue owns scheduling,
+configuration, verification, ordering, and its bounded multi-line progress
+contract. This audit does not make parallel downloads part of the UX pass.
 
-```
-Downloading 3.4 MB / 18.2 MB  4.1 MB/s  ~4s
-  nginx-core     [============>-------]  864 kB / 1.2 MB
-  openssl-libs   [=====>--------------]  1.1 MB / 3.9 MB
-  zlib           [==================>-]  92 kB / 96 kB
-  2 more queued
-```
+## Ranked UI slices
 
-The whole block is transient under the same rule — replaced by the phase
-verb line on completion — and non-TTY output keeps phase lines only.
-
-Composed target frames for install, remove, refusal, untrusted-signer, and
-`list --info` (before/after against the real captures) accompany this audit
-as a rendered mockup page; the mockups add sizes and disk-delta lines and
-remove nothing, and slices 1–5, 7, and 9 implement them.
-
-## Ranked slice list
-
-Each slice lands separately. Proof for every slice: before/after capture of
-the named flow appended to this document, plus
+These slices change rendering and presentation, not package, publication,
+query, download, or boot authority. Each lands separately under #132 unless a
+focused issue is created first. Proof for every slice includes before/after
+evidence in its issue or pull request, plus
 `cargo test -p conary --test output_vocabulary_guard` and
 `cargo test -p conary --test cli_daily_ux` passing; slices touching snapshot
-surfaces also run `cargo test -p conary --test cli_output_snapshots`.
+surfaces also run `cargo test -p conary --test cli_output_snapshots`. Changes
+to public claims also run `bash scripts/check-doc-truth.sh`.
 
 1. **Fix TTY progress rendering** — flows: `install`, `update`, `remove`
    under a TTY. Stop rendering zero-length bars from
@@ -495,80 +512,59 @@ surfaces also run `cargo test -p conary --test cli_output_snapshots`.
    appear only with known non-zero totals. Proof adds a pty capture
    (`script -qec`) before/after.
 2. **One warning/error voice** — flows: every mutation and refusal path.
-   Route the generation-publication warning once through `ui::warn`; stop
-   duplicate tracing output on the default user path (tracing keeps it for
-   logs); render top-level failures through `ui::error_line` (`error:`),
-   making clap, `app.rs`, and `ui` agree; collapse duplicated context
-   segments so each error states the fact once and the remedy once.
-   `app.rs` unit tests update in the same slice.
+   Route deferred or stuck generation-publication warnings once through
+   `ui::warn`; stop duplicate tracing output on the default user path (tracing
+   keeps it for logs); render application failures through `ui::error_line`
+   (`error:`), give clap's parser-owned failures the same visible vocabulary,
+   and collapse duplicated context segments so each error states the fact once
+   and the remedy once. #534 owns publication behavior; this slice owns
+   rendering. Parser and `app.rs` tests update in the same slice.
 3. **Transaction summary block** — flows: `install --dry-run`,
    `install --yes`, `update`, `remove`. One shared summary renderer:
    what changes (install/upgrade/remove groups), version, arch, source
    format, file count, size, disk delta; identical between dry-run and
-   apply except the closing line; repeat-install becomes a calm no-op
-   sentence with exit 0. This is the dnf5/apt/pacman parity slice.
-4. **`remove --dry-run` and removal preview** — flow: `remove`. Add the
-   flag (aligning with install/update/autoremove and the refusal text) and
-   show the files/config summary before apply. Extends
-   `cli_daily_ux` with a focused test.
-5. **Typed preflight rendering** — flows: signature/authority/preflight
+   apply except the closing line. This is the dnf5/apt/pacman visual-parity
+   slice; changing repeat-install exit behavior is separate product work.
+4. **Typed preflight rendering** — flows: signature/authority/preflight
    refusals. Render typed errors from their fields (no `{:?}`, no
    `Some(...)`, no repeated paths): one `error:` line naming the typed
-   cause, indented fact lines, one `note:` remedy line. Typed identity
-   stays typed per the issue constraints.
-6. **Fix `whatprovides` bare-path lookup** — flow: `query whatprovides`.
-   Behavior defect: bare `/usr/bin/...` must resolve like
-   `file(/usr/bin/...)` or the help and matrix claims must change; the fix
-   direction is resolution, not documentation. Focused query test.
-7. **Field/heading unification and empty-state phrasing** — flows:
+   cause, indented fact lines, one `note:` remedy line. Typed identity remains
+   typed; rendering must not collapse it into vague prose.
+5. **Field/heading unification and empty-state phrasing** — flows:
    `list --info`, `ccs build`, `system history`, empty states across
    list/search/update. Route field and heading rendering through
-   `ui::field`/`ui::heading`, ASCII-only text, and one phrasing pattern
-   per empty state. `system history` additionally drops its hand-rolled
+   `ui::field`/`ui::heading`, preserve ASCII-only guarded tags, and use one
+   phrasing pattern per empty state. `ccs build` must return typed summary
+   data from `conary-core` for rendering at the `apps/conary` boundary rather
+   than importing application UI into core; run the CCS feature proof.
+   `system history` additionally drops its hand-rolled
    bracket tags for guarded vocabulary and stops repeating the retry
    sentence per row (its publication framing changes under #534).
    Snapshot tests updated in the same slice.
-8. **Generation family conventions** — flows: `system generation
-   list/build/switch/rollback`. Give the family the same `--db-path`
-   (and where meaningful `--root`) surface as the rest of the CLI or
-   document the fixed-path contract in help text; make empty-state guidance
-   route to generation build where takeover is not the next action; capture
-   the build/switch/rollback experience on a Conary-managed host as part of
-   the slice's proof.
-9. **Structured refusal layout** — flow: live-host mutation refusal.
+6. **Structured refusal layout** — flow: live-host mutation refusal.
    Keep the exact routes from the daily-driver UX matrix but lay them out
    as a short cause line plus `note:` next-step lines instead of one
    paragraph. `live_host_mutation_safety` expectations update in the same
    slice.
 
-## Candidate slices surfaced by the design pass
+## Separate product and interaction work
 
-Ranked below the audit slices; each needs its own scoping before it becomes
-committed work, and each is a place where the CLI's look does real
-persuasion work rather than decoration.
+The current captures expose behavior outside a visual pass. Those findings do
+not inherit priority or implementation authority from this audit:
 
-10. **Publication follows apply intent** — flows: every apply. Maintainer
-    direction (2026-08-21): a daily-driver apply must not end by telling
-    the operator to retype a second command. The `--yes` given to
-    install/update/remove already expresses "change my system"; clearing
-    the transaction's own publication debt is a consequence of that
-    intent, not a new decision — and the CLI can pass its exact changeset
-    assertion internally, which is stricter than the retype the warning
-    suggests today (that command line carries no assertion). Default
-    becomes publish-as-part-of-apply; deferring is the explicit choice via
-    a defer flag on apply commands, preserving the
-    batch-several-installs-then-publish-once workflow. `--dry-run` keeps
-    previewing with no mutation and no publication; rollback stays one
-    command, and the closing line names it so the escape hatch is visible
-    exactly when the change lands. The typed debt record, recovery paths,
-    and the pending-debt surface remain for deferred and interrupted
-    cases; `warning:` is reserved for genuinely stuck debt. Scope note:
-    this changes transaction behavior, not just rendering — it is tracked
-    as its own issue (#534) with generation-owner review (including the
-    publication-cost question for large transactions), and the
-    closing-line reframe shown in the target frames is the floor if that
-    slice stalls.
-11. **TTY confirmation prompt** — flows: `install`, `update`, `remove`,
+- `remove --dry-run` needs a focused behavior issue before implementation.
+- The bare-path `whatprovides` miss is a query defect; fix it under a focused
+  issue or correct the CLI help and UX matrix.
+- Generation fixed-root and derived-root commands need generation-owner
+  scoping if their help or routing changes. This audit does not require flag
+  uniformity.
+- #534 owns publication semantics and exact changeset intent.
+- #535 owns parallel download scheduling and its eventual progress contract.
+
+Future interaction proposals also require their own issue and intent-boundary
+review before implementation:
+
+- **TTY confirmation prompt** — flows: `install`, `update`, `remove`,
     `autoremove` on an interactive terminal. dnf5, apt, and pacman all put
     their transaction table behind `Proceed? [y/N]`; Conary instead refuses
     and makes the operator retype with `--yes`. After slice 3 exists, an
@@ -578,54 +574,31 @@ persuasion work rather than decoration.
     the summary actually gets read. Must not weaken the live-mutation
     intent boundary: the prompt is an explicit intent capture, not a
     bypass.
-12. **At-a-glance status screen** — flow: the bare `conary` invocation
+- **At-a-glance status screen** — flow: the bare `conary` invocation
     (or a new status subcommand named in its own slice). The bare
     invocation prints a version banner today.
-13. **Interactive variant picker** — flows: the ambiguous-variant
+    A small status screen — current generation, pending publication debt,
+    enabled feeds and last sync age, owned vs adopted package counts — could
+    provide a useful daily entry point. It must remain read-only over existing
+    typed state and create no new authority.
+- **Interactive variant picker** — flows: the ambiguous-variant
     refusals in `list --info`, `pin`, `unpin`, `remove`, `update` (today:
     refuse and instruct `--version`/`--arch`, per the daily-driver UX
     matrix). On a TTY, list the installed variants as numbered tag rows
     and let the operator pick; the selection is an explicit intent
-    capture, exactly like candidate 11's confirm prompt. Non-interactive
+    capture, exactly like the confirmation proposal. Non-interactive
     behavior is unchanged: the typed refusal with selector guidance
     remains, honoring `CONARY_NON_INTERACTIVE`. Selection never widens
     what the command may do — it only fills the selector the operator
     would have typed.
-    A small status screen — current generation, pending publication debt,
-    enabled feeds and last sync age, owned vs adopted package counts —
-    gives the CLI an identity moment, gives operators a daily entry point,
-    and gives every README and demo a screen worth screenshotting. Tag
-    rows and field lines only; no new authority, read-only over existing
-    typed state.
 
-### Candidate target frames
+### Illustrative UI frame
 
-Composed from the same five shapes; content is illustrative, structure is the
-proposal.
-
-Candidate 10 — every successful mutation currently ends with the doubled
-publication warning; under publication-follows-intent the default ending
-names the landed generation and the escape hatch:
+This frame demonstrates layout only. It keeps today's deferred-publication
+behavior and leaves #534's product decision outside the UX pass:
 
 ```
-Installed 2 packages (49 files, 4.2 s)
-  Generation: 41 -> 42 published · roll back with 'conary system generation rollback'
-```
-
-Deferring stays available as the explicit choice (defer flag on the apply
-command), and only then does the transaction end with the publish route:
-
-```
-Installed 2 packages (49 files, 4.2 s)
-  Generation: changeset 41 staged, publication deferred
-note: publish with 'conary system generation publish --yes'
-```
-
-Candidate 11 — the transaction summary behind an interactive confirm
-(TTY only; `--yes` and non-interactive behavior unchanged):
-
-```
-$ sudo conary install nginx
+$ sudo conary install nginx --yes
 Resolved nginx 1.27.2-3 from remi-fedora-44 (rpm)
 
 Changes (2 install):
@@ -634,24 +607,9 @@ Changes (2 install):
 
   2.1 MB to download · 5.4 MB on disk after
 
-Proceed with install? [y/N] y
 Installed 2 packages (49 files, 4.2 s)
-  Generation: 41 -> 42 published · roll back with 'conary system generation rollback'
-```
-
-Candidate 12 — the bare invocation as an at-a-glance screen instead of a
-version banner:
-
-```
-$ conary
-conary 0.16.1 · fedora-44 host
-
-  Generation : 42 (current, published)
-  Packages   : 1,284 owned · 96 adopted · 3 pinned
-  Feeds      : 4 enabled · synced 2 h ago
-  Updates    : 6 available (1 security)
-
-note: preview updates with 'conary update --dry-run'
+warning: generation publication is pending for changeset 41
+note: publish with 'conary system generation publish --yes'
 ```
 
 ### Open question for maintainers
@@ -666,11 +624,11 @@ that should precede any issue.
 
 ### Deferred until after pre-alpha
 
-Localization of user-facing output: the fluent i18n machinery is already in
-the dependency tree, but wiring daily-driver output through it is deferred
-until the wording itself stabilizes — translating strings the UX pass is
-about to rewrite would double the churn. Revisit at the external-tester
-milestone.
+Localization of user-facing output: a Fluent dependency is present
+transitively, but Conary has no localization wiring. Adding that wiring is
+deferred until the wording itself stabilizes — translating strings the UX
+pass is about to rewrite would double the churn. Revisit at the
+external-tester milestone.
 
 ### Follow-up once slice 1 lands
 
@@ -683,8 +641,9 @@ anti-demo.
 
 ## Constraint compliance for later slices
 
-- Guarded vocabulary and ASCII-only tags stay; slices 2, 5, 7, and 9 must
+- Guarded vocabulary and ASCII-only tags stay; slices 2, 4, 5, and 6 must
   keep `output_vocabulary_guard` green.
-- No information regression: slice 2 keeps the tracing record; slice 3 only
-  adds fields; slice 5 keeps every typed field visible.
-- Typed errors remain typed: slice 5 changes rendering only.
+- No information regression: slice 2 keeps the tracing record; slice 3 keeps
+  every transaction fact while changing layout; slice 4 keeps every typed
+  error field visible.
+- Typed errors remain typed: slice 4 changes rendering only.
