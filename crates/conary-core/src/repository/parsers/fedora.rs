@@ -14,8 +14,8 @@
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
-    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
-    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
+    ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
     authenticated_metadata_object,
 };
 use crate::compression::decompress_metadata_auto;
@@ -799,7 +799,11 @@ fn append_package_text(package: &mut PackageBuilder, tag: &str, text: &str) {
 }
 
 impl RepositoryParser for FedoraParser {
-    async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
+    async fn ingest_snapshot<S: RepositorySnapshotSink + Send>(
+        &self,
+        repo_url: &str,
+        sink: &mut S,
+    ) -> Result<AuthenticatedSnapshotIdentity> {
         info!("Syncing Fedora repository for {}", self.architecture);
 
         // Admit the signed repomd.xml records Conary reads.
@@ -810,7 +814,7 @@ impl RepositoryParser for FedoraParser {
             self.download_primary_xml(repo_url, &repomd.primary).await?;
         let mut packages = self.parse_primary_xml(&primary_xml, repo_url)?;
         drop(primary_xml);
-        let mut authenticated_objects = vec![primary_object];
+        sink.authenticated_object(primary_object)?;
 
         // primary.xml carries only the generator-selected file set, so
         // complete package file ownership comes from filelists.xml.
@@ -818,11 +822,11 @@ impl RepositoryParser for FedoraParser {
             Some(record) => {
                 let (filelists_url, raw_bytes) =
                     self.download_verified_document(repo_url, &record).await?;
-                authenticated_objects.push(authenticated_metadata_object(
+                sink.authenticated_object(authenticated_metadata_object(
                     AuthenticatedMetadataObjectRole::RpmFilelists,
                     &record.href,
                     &raw_bytes,
-                ));
+                ))?;
                 let compressed =
                     crate::compression::CompressionFormat::from_magic_bytes(&raw_bytes)
                         != crate::compression::CompressionFormat::None;
@@ -845,11 +849,10 @@ impl RepositoryParser for FedoraParser {
         }
 
         info!("Parsed {} packages from Fedora repository", packages.len());
-        Ok(AuthenticatedRepositoryMetadata {
-            packages,
-            snapshot,
-            authenticated_objects,
-        })
+        for package in packages {
+            sink.package(package)?;
+        }
+        Ok(snapshot)
     }
 }
 

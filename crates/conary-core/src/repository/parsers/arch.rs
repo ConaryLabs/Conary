@@ -6,8 +6,8 @@
 //! in a custom text format with %FIELD% markers.
 
 use super::{
-    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
-    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
+    ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
     authenticated_metadata_object,
 };
 use crate::compression::decompress_metadata_auto;
@@ -401,7 +401,11 @@ impl ArchParser {
 }
 
 impl RepositoryParser for ArchParser {
-    async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
+    async fn ingest_snapshot<S: RepositorySnapshotSink + Send>(
+        &self,
+        repo_url: &str,
+        sink: &mut S,
+    ) -> Result<AuthenticatedSnapshotIdentity> {
         info!("Syncing Arch Linux repository: {}", self.repo_name);
 
         // Download and decompress database (handled by RepositoryClient)
@@ -462,22 +466,19 @@ impl RepositoryParser for ArchParser {
         }
 
         // Build packages from collected data
-        let mut packages = Vec::new();
+        let package_count = desc_data.len();
         for (dir_key, desc_content) in &desc_data {
             let desc_fields = self.parse_desc_file(desc_content)?;
-            packages.push(self.package_from_fields(
+            sink.package(self.package_from_fields(
                 repo_url,
                 &desc_fields,
                 depends_data.get(dir_key),
-            )?);
+            )?)?;
         }
 
-        info!("Parsed {} packages from Arch repository", packages.len());
-        Ok(AuthenticatedRepositoryMetadata {
-            packages,
-            snapshot,
-            authenticated_objects: vec![database_object],
-        })
+        sink.authenticated_object(database_object)?;
+        info!("Parsed {} packages from Arch repository", package_count);
+        Ok(snapshot)
     }
 }
 

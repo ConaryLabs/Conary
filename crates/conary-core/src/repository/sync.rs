@@ -43,7 +43,7 @@ mod remi;
 mod support;
 pub(in crate::repository) mod types;
 
-pub use immutable_catalog::fetch_native_source_catalog;
+pub use immutable_catalog::{fetch_native_source_catalog, stream_native_source_catalog};
 pub use remi::{
     ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
     ProfileSyncRunRecovery, abort_profile_sync_run, acknowledge_profile_sync_candidate_cleanup,
@@ -79,27 +79,7 @@ pub(super) async fn fetch_repository_native_snapshot(
     repo: &Repository,
     keyring_dir: &Path,
 ) -> Result<RepositorySyncSnapshot> {
-    let parser_config = repo.require_parser_config()?;
-    repo.validate_stream_binding()?;
-    let source_policy = repo.require_source_policy()?;
-    let repository_identity = repo.repository_identity.as_deref().ok_or_else(|| {
-        Error::ConfigError(format!(
-            "repository '{}' has no exact repository identity",
-            repo.name
-        ))
-    })?;
-    info!(
-        "Syncing repository {} as exact source {}/{} using exact {} parser configuration",
-        repo.name,
-        source_policy.source_identity,
-        repository_identity,
-        parser_config.format().as_str()
-    );
-
-    let trust =
-        PreparedOpenPgpTrust::prepare(&repo.name, keyring_dir, repo.require_trust_policy()?)
-            .await?;
-    let parser = registry::create_parser(parser_config, trust)?;
+    let parser = prepare_repository_native_parser(repo, keyring_dir).await?;
     let metadata = parser.sync_metadata(&repo.url).await?;
 
     let repo_id = repo
@@ -132,6 +112,33 @@ pub(super) async fn fetch_repository_native_snapshot(
         snapshot: metadata.snapshot,
         authenticated_objects: metadata.authenticated_objects,
     })
+}
+
+pub(super) async fn prepare_repository_native_parser(
+    repo: &Repository,
+    keyring_dir: &Path,
+) -> Result<registry::AnyParser> {
+    let parser_config = repo.require_parser_config()?;
+    repo.validate_stream_binding()?;
+    let source_policy = repo.require_source_policy()?;
+    let repository_identity = repo.repository_identity.as_deref().ok_or_else(|| {
+        Error::ConfigError(format!(
+            "repository '{}' has no exact repository identity",
+            repo.name
+        ))
+    })?;
+    info!(
+        "Syncing repository {} as exact source {}/{} using exact {} parser configuration",
+        repo.name,
+        source_policy.source_identity,
+        repository_identity,
+        parser_config.format().as_str()
+    );
+
+    let trust =
+        PreparedOpenPgpTrust::prepare(&repo.name, keyring_dir, repo.require_trust_policy()?)
+            .await?;
+    registry::create_parser(parser_config, trust)
 }
 
 /// Synchronize repository using native metadata format parsers

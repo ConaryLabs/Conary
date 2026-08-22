@@ -3,9 +3,8 @@
 //! Authenticated Solus eopkg repository-index parser.
 
 use super::{
-    AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
-    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
-    authenticated_metadata_object,
+    AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
+    RepositoryParser, RepositorySnapshotSink, authenticated_metadata_object,
 };
 use crate::error::{Error, Result};
 use crate::packages::eopkg::xml;
@@ -40,7 +39,11 @@ impl EopkgParser {
 }
 
 impl RepositoryParser for EopkgParser {
-    async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
+    async fn ingest_snapshot<S: RepositorySnapshotSink + Send>(
+        &self,
+        repo_url: &str,
+        sink: &mut S,
+    ) -> Result<AuthenticatedSnapshotIdentity> {
         let RepositoryTrustPolicy::Eopkg { origin } = self.trust.policy() else {
             unreachable!("constructor admitted eopkg policy")
         };
@@ -66,15 +69,15 @@ impl RepositoryParser for EopkgParser {
         let xml_bytes =
             crate::compression::decompress_metadata_auto(&compressed, "authenticated eopkg index")?;
         let packages = parse_index(&xml_bytes, origin, &self.architecture)?;
-        Ok(AuthenticatedRepositoryMetadata {
-            packages,
-            snapshot,
-            authenticated_objects: vec![authenticated_metadata_object(
-                AuthenticatedMetadataObjectRole::EopkgIndex,
-                "eopkg-index.xml.xz",
-                &compressed,
-            )],
-        })
+        for package in packages {
+            sink.package(package)?;
+        }
+        sink.authenticated_object(authenticated_metadata_object(
+            AuthenticatedMetadataObjectRole::EopkgIndex,
+            "eopkg-index.xml.xz",
+            &compressed,
+        ))?;
+        Ok(snapshot)
     }
 }
 

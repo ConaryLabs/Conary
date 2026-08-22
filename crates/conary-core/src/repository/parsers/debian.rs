@@ -7,8 +7,8 @@
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
-    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
-    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
+    ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
     authenticated_metadata_object,
 };
 use crate::compression::decompress_metadata_auto;
@@ -510,7 +510,11 @@ struct DebianPackageEntry {
 }
 
 impl RepositoryParser for DebianParser {
-    async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
+    async fn ingest_snapshot<S: RepositorySnapshotSink + Send>(
+        &self,
+        repo_url: &str,
+        sink: &mut S,
+    ) -> Result<AuthenticatedSnapshotIdentity> {
         info!(
             "Syncing Debian repository: {}/{}/{}",
             self.distribution, self.component, self.architecture
@@ -526,17 +530,14 @@ impl RepositoryParser for DebianParser {
 
         debug!("Parsed {} package entries", entries.len());
 
-        let mut packages = Vec::new();
+        let package_count = entries.len();
         for entry in entries {
-            packages.push(self.package_from_entry(repo_url, entry)?);
+            sink.package(self.package_from_entry(repo_url, entry)?)?;
         }
 
-        info!("Parsed {} packages from Debian repository", packages.len());
-        Ok(AuthenticatedRepositoryMetadata {
-            packages,
-            snapshot,
-            authenticated_objects: vec![packages_object],
-        })
+        sink.authenticated_object(packages_object)?;
+        info!("Parsed {} packages from Debian repository", package_count);
+        Ok(snapshot)
     }
 }
 

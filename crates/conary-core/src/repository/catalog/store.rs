@@ -20,9 +20,9 @@ use crate::error::{Error, Result};
 use crate::repository::dependency_model::{DebianMultiArch, ProvideVersionRelation};
 use crate::repository::versioning::VersionScheme;
 
-const CATALOG_APPLICATION_ID: i64 = 0x434e_5259;
+pub(super) const CATALOG_APPLICATION_ID: i64 = 0x434e_5259;
 
-const CATALOG_SCHEMA: &str = r#"
+pub(super) const CATALOG_SCHEMA: &str = r#"
 CREATE TABLE catalog_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_version INTEGER NOT NULL CHECK (schema_version = 1),
@@ -274,10 +274,21 @@ impl CatalogReader {
     }
 
     pub fn packages(&self) -> Result<Vec<CatalogPackageRecordV1>> {
-        self.load_packages(
-            &format!("{SELECT_PACKAGES} ORDER BY package_key_sha256"),
-            [],
-        )
+        let mut packages = Vec::new();
+        self.for_each_package(|package| {
+            packages.push(package);
+            Ok(())
+        })?;
+        Ok(packages)
+    }
+
+    /// Visit catalog packages in canonical key order with one complete package
+    /// projection retained at a time.
+    pub fn for_each_package(
+        &self,
+        visitor: impl FnMut(CatalogPackageRecordV1) -> Result<()>,
+    ) -> Result<()> {
+        for_each_package_connection(&self.connection, &self.binding.scope, visitor)
     }
 
     pub fn find_packages_by_name(&self, name: &str) -> Result<Vec<CatalogPackageRecordV1>> {
@@ -340,20 +351,18 @@ impl CatalogReader {
     }
 
     fn verify_logical_content(&self) -> Result<()> {
-        let content = CatalogContentV1 {
-            schema_version: CATALOG_CONTENT_SCHEMA_V1,
-            scope: self.binding.scope.clone(),
-            source_evidence: self.source_evidence()?,
-            packages: self.packages()?,
-        };
-        let actual = content.logical_digest_sha256()?;
+        let evidence = self.source_evidence()?;
+        let mut digest =
+            super::record::CatalogLogicalDigestV1::new(&self.binding.scope, &evidence)?;
+        self.for_each_package(|package| digest.package(&package))?;
+        let (actual, counts) = digest.finish()?;
         if actual != self.binding.logical_digest_sha256 {
             return Err(Error::ChecksumMismatch {
                 expected: self.binding.logical_digest_sha256.clone(),
                 actual,
             });
         }
-        if content.counts()? != self.binding.counts {
+        if counts != self.binding.counts {
             return Err(Error::ConflictError(format!(
                 "catalog {} logical counts disagree with its manifest binding",
                 self.path.display()
@@ -480,7 +489,10 @@ fn write_catalog_candidate_inner(
     Ok(binding)
 }
 
-fn insert_package(connection: &Connection, package: &CatalogPackageRecordV1) -> Result<()> {
+pub(super) fn insert_package(
+    connection: &Connection,
+    package: &CatalogPackageRecordV1,
+) -> Result<()> {
     let (origin_kind, member_ordinal, source_identity, repository_identity, snapshot) =
         match &package.origin {
             CatalogPackageOriginV1::Source {
@@ -773,6 +785,25 @@ fn load_source_evidence(connection: &Connection) -> Result<Vec<CatalogSourceEvid
         .map_err(Error::from)
 }
 
+pub(super) fn for_each_package_connection(
+    connection: &Connection,
+    scope: &CatalogScopeV1,
+    mut visitor: impl FnMut(CatalogPackageRecordV1) -> Result<()>,
+) -> Result<()> {
+    let mut statement =
+        connection.prepare(&format!("{SELECT_PACKAGES} ORDER BY package_key_sha256"))?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let mut package = package_from_row(row)?;
+        package.provides = load_provides(connection, &package.package_key_sha256)?;
+        package.requirement_groups =
+            load_requirement_groups(connection, &package.package_key_sha256)?;
+        package.validate(scope)?;
+        visitor(package)?;
+    }
+    Ok(())
+}
+
 fn read_binding(connection: &Connection, artifact: CatalogArtifactV1) -> Result<CatalogBindingV1> {
     connection
         .query_row(
@@ -846,7 +877,7 @@ fn verify_relational_counts(connection: &Connection, expected: CatalogCountsV1) 
     Ok(())
 }
 
-fn validate_candidate_path(path: &Path) -> Result<()> {
+pub(super) fn validate_candidate_path(path: &Path) -> Result<()> {
     if path.file_name().is_none() {
         return Err(Error::InvalidPath(
             "catalog candidate path must name a file".to_string(),
@@ -874,7 +905,7 @@ fn validate_candidate_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn create_private_file(path: &Path) -> Result<()> {
+pub(super) fn create_private_file(path: &Path) -> Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -900,12 +931,12 @@ fn reject_nonempty_sidecars(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn hash_file(path: &Path) -> Result<String> {
+pub(super) fn hash_file(path: &Path) -> Result<String> {
     let mut reader = BufReader::new(File::open(path)?);
     Ok(crate::hash::sha256_reader_hex(&mut reader)?)
 }
 
-fn sync_parent(path: &Path) -> Result<()> {
+pub(super) fn sync_parent(path: &Path) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::InvalidPath(format!("{} has no parent directory", path.display())))?;
@@ -913,13 +944,13 @@ fn sync_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+pub(super) fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(suffix);
     PathBuf::from(value)
 }
 
-fn canonical_json_string(value: &impl Serialize) -> Result<String> {
+pub(super) fn canonical_json_string(value: &impl Serialize) -> Result<String> {
     let bytes = crate::json::canonical_json(value)
         .map_err(|error| Error::ParseError(format!("serialize catalog SQLite value: {error}")))?;
     String::from_utf8(bytes).map_err(|error| {
@@ -927,7 +958,7 @@ fn canonical_json_string(value: &impl Serialize) -> Result<String> {
     })
 }
 
-fn checked_i64(value: u64, label: &str) -> Result<i64> {
+pub(super) fn checked_i64(value: u64, label: &str) -> Result<i64> {
     i64::try_from(value).map_err(|_| {
         Error::ConfigError(format!(
             "catalog {label} {value} exceeds SQLite integer range"
@@ -935,7 +966,7 @@ fn checked_i64(value: u64, label: &str) -> Result<i64> {
     })
 }
 
-fn checked_ordinal(value: usize, label: &str) -> Result<i64> {
+pub(super) fn checked_ordinal(value: usize, label: &str) -> Result<i64> {
     i64::try_from(value).map_err(|_| {
         Error::ConfigError(format!(
             "catalog {label} ordinal exceeds SQLite integer range"
