@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use conary_core::db::models::{
     RemiActiveProfileRevision, RemiProfileRevisionActivation, RemiProfileRevisionMember,
@@ -11,9 +12,10 @@ use conary_core::db::models::{
 };
 use conary_core::repository::catalog::{ProfileSourceMemberV1, SourceStreamKindV1};
 use conary_core::repository::{
-    ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
-    RepositoryFormat, abort_profile_sync_run, acknowledge_profile_sync_candidate_cleanup,
-    begin_profile_sync_run_with_members, ready_profile_sync_run, record_profile_sync_run_member,
+    PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncFailureCategory, ProfileSyncFailureStage,
+    ProfileSyncRun, ProfileSyncRunMember, RepositoryFormat, abort_profile_sync_run,
+    acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run_with_members,
+    heartbeat_profile_sync_run, ready_profile_sync_run, record_profile_sync_run_member,
 };
 
 use super::refresh::RepoRefreshResult;
@@ -30,7 +32,9 @@ struct RefreshRoots {
     keyring_dir: PathBuf,
     catalog_candidate_dir: PathBuf,
     catalog_dir: PathBuf,
+    projection_cache_dir: PathBuf,
     database_writer: DatabaseWriter,
+    catalog_gc_coordinator: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub(super) fn is_native_profile_repository(repository: &Repository) -> bool {
@@ -59,7 +63,9 @@ pub(super) async fn refresh_native_profile(
             ),
             catalog_candidate_dir: state.config.catalog_candidate_dir.clone(),
             catalog_dir: state.config.catalog_dir.clone(),
+            projection_cache_dir: state.config.cache_dir.join("native-projections"),
             database_writer: state.database_writer.clone(),
+            catalog_gc_coordinator: Arc::clone(&state.catalog_gc_coordinator),
         }
     };
 
@@ -121,38 +127,34 @@ pub(super) async fn refresh_native_profile(
         return Err(error);
     }
 
-    let staged = match stage_profile_catalog(
-        &run.run_id,
-        &source_profile,
-        repositories,
-        &roots.keyring_dir,
-        &roots.catalog_candidate_dir,
-    )
-    .await
-    {
-        Ok(published) => published,
-        Err(error) => {
-            abort_run(
-                &roots,
-                &run,
-                ProfileSyncFailureStage::FetchingObjects,
-                &format!("{error:#}"),
-            )
-            .await;
-            log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
-            let primary = ServiceError::Internal(format!("{error:#}"));
-            return match collect_catalog_garbage(&roots).await {
-                Ok(_) => Err(primary),
-                Err(cleanup) => Err(ServiceError::Internal(format!(
-                    "{primary}; exact catalog recovery also failed: {cleanup}"
-                ))),
-            };
-        }
-    };
+    let (staged, heartbeat) =
+        match stage_profile_catalog_with_heartbeat(&roots, &run, &source_profile, repositories)
+            .await
+        {
+            Ok(published) => published,
+            Err(error) => {
+                abort_run(
+                    &roots,
+                    &run,
+                    ProfileSyncFailureStage::FetchingObjects,
+                    &format!("{error:#}"),
+                )
+                .await;
+                log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+                let primary = ServiceError::Internal(format!("{error:#}"));
+                return match collect_catalog_garbage(&roots).await {
+                    Ok(_) => Err(primary),
+                    Err(cleanup) => Err(ServiceError::Internal(format!(
+                        "{primary}; exact catalog recovery also failed: {cleanup}"
+                    ))),
+                };
+            }
+        };
 
     let results = match profile_refresh_results(&source_profile, &names, &staged) {
         Ok(results) => results,
         Err(error) => {
+            stop_profile_heartbeat_after_error(heartbeat, &run.run_id).await;
             abort_run(
                 &roots,
                 &run,
@@ -165,6 +167,7 @@ pub(super) async fn refresh_native_profile(
         }
     };
     if let Err(error) = record_publication_intent(&roots, &run, &plans, &staged).await {
+        stop_profile_heartbeat_after_error(heartbeat, &run.run_id).await;
         abort_run(
             &roots,
             &run,
@@ -178,6 +181,7 @@ pub(super) async fn refresh_native_profile(
     let published = match publish_staged_profile_catalog(staged, &roots.catalog_dir).await {
         Ok(published) => published,
         Err(error) => {
+            stop_profile_heartbeat_after_error(heartbeat, &run.run_id).await;
             abort_run(
                 &roots,
                 &run,
@@ -195,6 +199,19 @@ pub(super) async fn refresh_native_profile(
             };
         }
     };
+    if let Err(error) = stop_profile_heartbeat(heartbeat).await {
+        abort_run(
+            &roots,
+            &run,
+            ProfileSyncFailureStage::Publishing,
+            &format!("profile refresh heartbeat failed: {error:#}"),
+        )
+        .await;
+        log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+        return Err(ServiceError::Internal(format!(
+            "profile refresh heartbeat failed: {error:#}"
+        )));
+    }
     let finalize = finalize_profile(&roots, &run, &plans, &published).await;
     if let Err(error) = finalize {
         abort_run(
@@ -219,6 +236,80 @@ pub(super) async fn refresh_native_profile(
     }
 
     Ok(results)
+}
+
+async fn stage_profile_catalog_with_heartbeat(
+    roots: &RefreshRoots,
+    run: &ProfileSyncRun,
+    source_profile: &str,
+    repositories: Vec<Repository>,
+) -> anyhow::Result<(StagedProfileCatalog, ProfileHeartbeat)> {
+    let heartbeat = spawn_profile_heartbeat(roots, run)?;
+    let staged = stage_profile_catalog(
+        &run.run_id,
+        source_profile,
+        repositories,
+        &roots.keyring_dir,
+        &roots.catalog_candidate_dir,
+        &roots.projection_cache_dir,
+    )
+    .await;
+    match staged {
+        Ok(staged) => Ok((staged, heartbeat)),
+        Err(error) => match stop_profile_heartbeat(heartbeat).await {
+            Ok(()) => Err(error),
+            Err(heartbeat) => Err(error.context(format!(
+                "profile refresh heartbeat also failed: {heartbeat:#}"
+            ))),
+        },
+    }
+}
+
+type ProfileHeartbeat = (
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<anyhow::Result<()>>,
+);
+
+fn spawn_profile_heartbeat(
+    roots: &RefreshRoots,
+    run: &ProfileSyncRun,
+) -> anyhow::Result<ProfileHeartbeat> {
+    let (stop, stopped) = std::sync::mpsc::channel();
+    let db_path = roots.db_path.clone();
+    let database_writer = roots.database_writer.clone();
+    let run = run.clone();
+    let heartbeat = std::thread::Builder::new()
+        .name(format!("profile-heartbeat-{}", run.source_profile))
+        .spawn(move || {
+            loop {
+                match stopped.recv_timeout(PROFILE_SYNC_HEARTBEAT_INTERVAL) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        database_writer
+                            .execute(|| {
+                                let conn = conary_core::db::open_fast(&db_path)?;
+                                heartbeat_profile_sync_run(&conn, &run)
+                            })
+                            .map_err(anyhow::Error::from)?;
+                    }
+                }
+            }
+        })?;
+    Ok((stop, heartbeat))
+}
+
+async fn stop_profile_heartbeat((stop, heartbeat): ProfileHeartbeat) -> anyhow::Result<()> {
+    let _ = stop.send(());
+    tokio::task::spawn_blocking(move || heartbeat.join())
+        .await
+        .map_err(|error| anyhow::anyhow!("profile heartbeat join task panicked: {error}"))?
+        .map_err(|_| anyhow::anyhow!("profile heartbeat thread panicked"))?
+}
+
+async fn stop_profile_heartbeat_after_error(heartbeat: ProfileHeartbeat, run_id: &str) {
+    if let Err(error) = stop_profile_heartbeat(heartbeat).await {
+        tracing::error!(run_id, %error, "profile refresh heartbeat also failed");
+    }
 }
 
 fn profile_refresh_results(
@@ -501,27 +592,44 @@ async fn finalize_profile(
         })
         .collect::<Result<Vec<_>, _>>()?;
     blocking_anyhow(move || {
-        database_writer.execute(|| {
-            let conn = conary_core::db::open_fast(&db_path)?;
-            conary_core::db::models::register_profile_catalog_revision(
-                &conn,
-                &source_manifests,
-                &profile_manifest,
-                unix_seconds()?,
-            )?;
-            activate_profile_revision(&conn, &activation)?;
-            let last_sync = conary_core::repository::current_timestamp();
-            for repository_id in repository_ids {
-                if let Err(error) = conn.execute(
-                    "UPDATE repositories SET last_sync = ?1 WHERE id = ?2",
-                    rusqlite::params![&last_sync, repository_id],
-                ) {
-                    tracing::warn!(repository_id, %error, "activated profile but failed to update source refresh timestamp");
+        database_writer
+            .execute(|| {
+                let conn = conary_core::db::open_fast(&db_path)?;
+                conary_core::db::models::register_profile_catalog_revision(
+                    &conn,
+                    &source_manifests,
+                    &profile_manifest,
+                    unix_seconds()?,
+                )?;
+                activate_profile_revision(&conn, &activation)?;
+                let completed_at = conary_core::repository::current_timestamp();
+                for repository_id in repository_ids {
+                    let (input, candidate) = conn.query_row(
+                        "SELECT input_source_snapshot_sha256, candidate_source_snapshot_sha256
+                     FROM repository_sync_run_members
+                     WHERE run_id = ?1 AND repository_id = ?2",
+                        rusqlite::params![&run.run_id, repository_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, Option<String>>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                            ))
+                        },
+                    )?;
+                    let changed = source_snapshot_changed(input.as_deref(), candidate.as_deref())?;
+                    conn.execute(
+                        "UPDATE repositories
+                     SET last_checked_at = ?1,
+                         last_changed_at = CASE WHEN ?2 THEN ?1 ELSE last_changed_at END,
+                         last_validated_at = ?1,
+                         last_published_at = CASE WHEN ?2 THEN ?1 ELSE last_published_at END
+                     WHERE id = ?3",
+                        rusqlite::params![&completed_at, changed, repository_id],
+                    )?;
                 }
-            }
-            Ok::<(), conary_core::Error>(())
-        })
-        .map_err(anyhow::Error::from)
+                Ok::<(), conary_core::Error>(())
+            })
+            .map_err(anyhow::Error::from)
     })
     .await
 }
@@ -616,7 +724,8 @@ async fn cleanup_run(roots: &RefreshRoots, run_id: &str) -> Result<(), ServiceEr
 async fn collect_catalog_garbage(
     roots: &RefreshRoots,
 ) -> Result<crate::server::catalog_gc::CatalogGcReport, ServiceError> {
-    crate::server::catalog_gc::collect_catalog_garbage_uncoordinated(
+    crate::server::catalog_gc::collect_catalog_garbage_serialized(
+        Arc::clone(&roots.catalog_gc_coordinator),
         roots.db_path.clone(),
         roots.catalog_dir.clone(),
         roots.database_writer.clone(),
@@ -640,4 +749,32 @@ fn unix_seconds() -> conary_core::Result<i64> {
         .as_secs();
     i64::try_from(seconds)
         .map_err(|_| conary_core::Error::InternalError("system time exceeds i64".to_string()))
+}
+
+fn source_snapshot_changed(
+    input: Option<&str>,
+    candidate: Option<&str>,
+) -> conary_core::Result<bool> {
+    let candidate = candidate.ok_or_else(|| {
+        conary_core::Error::ConflictError(
+            "profile activation has no candidate source snapshot identity".to_string(),
+        )
+    })?;
+    Ok(input != Some(candidate))
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::source_snapshot_changed;
+
+    #[test]
+    fn timestamp_change_authority_distinguishes_noop_change_and_missing_candidate() {
+        let digest = "a".repeat(64);
+        let changed = "b".repeat(64);
+
+        assert!(!source_snapshot_changed(Some(&digest), Some(&digest)).unwrap());
+        assert!(source_snapshot_changed(Some(&digest), Some(&changed)).unwrap());
+        assert!(source_snapshot_changed(None, Some(&digest)).unwrap());
+        assert!(source_snapshot_changed(Some(&digest), None).is_err());
+    }
 }

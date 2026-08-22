@@ -174,7 +174,7 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
         let mut ubuntu = Repository::find_by_name(&conn, "remi-ubuntu-26.04")
             .unwrap()
             .unwrap();
-        ubuntu.last_sync = Some("2026-07-18T00:00:00Z".to_string());
+        ubuntu.last_checked_at = Some("2026-07-18T00:00:00Z".to_string());
         ubuntu.update(&conn).unwrap();
         let ubuntu_id = ubuntu.id.unwrap();
         conn.execute(
@@ -205,7 +205,7 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
         let mut remi = Repository::find_by_name(&conn, "remi-fedora-44")
             .unwrap()
             .unwrap();
-        remi.last_sync = Some("2026-07-17T00:00:00Z".to_string());
+        remi.last_checked_at = Some("2026-07-17T00:00:00Z".to_string());
         remi.update(&conn).unwrap();
         let mut package = RepositoryPackage::new(
             remi.id.unwrap(),
@@ -246,7 +246,10 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
         .unwrap()
         .unwrap();
     assert_eq!(remi.source_profile.as_deref(), Some("fedora-44"));
-    assert_eq!(remi.last_sync.as_deref(), Some("2026-07-17T00:00:00Z"));
+    assert_eq!(
+        remi.last_checked_at.as_deref(),
+        Some("2026-07-17T00:00:00Z")
+    );
     assert_eq!(
         RepositoryPackage::find_by_repository(&conn, remi.id.unwrap())
             .unwrap()
@@ -275,7 +278,7 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
         .unwrap()
         .unwrap();
     assert_eq!(ubuntu.source_profile.as_deref(), Some("ubuntu-26.04"));
-    assert!(ubuntu.last_sync.is_none());
+    assert!(ubuntu.last_checked_at.is_none());
     assert!(
         RepositoryPackage::find_by_repository(&conn, ubuntu.id.unwrap())
             .unwrap()

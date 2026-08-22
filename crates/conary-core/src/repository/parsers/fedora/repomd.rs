@@ -80,6 +80,7 @@ impl RepoMdRecord {
     ///
     /// Size is checked first so a truncated or padded document is named as
     /// such instead of surfacing as a digest mismatch.
+    #[cfg(test)]
     pub(super) fn verify_served_bytes(&self, bytes: &[u8]) -> Result<()> {
         let label = self.document.label();
         if bytes.len() as u64 != self.size {
@@ -96,6 +97,26 @@ impl RepoMdRecord {
                 "RPM {label} metadata identity mismatch: signed repomd.xml SHA256 is {}, \
                  downloaded SHA256 is {}",
                 self.sha256, actual
+            )));
+        }
+        Ok(())
+    }
+
+    pub(super) fn verify_served_download(
+        &self,
+        identity: &crate::repository::client::DownloadedFileIdentity,
+    ) -> Result<()> {
+        let label = self.document.label();
+        if identity.size != self.size {
+            return Err(Error::GpgVerificationFailed(format!(
+                "signed repomd.xml authenticates {label} metadata as {} bytes but the repository served {} bytes",
+                self.size, identity.size
+            )));
+        }
+        if identity.sha256 != self.sha256 {
+            return Err(Error::GpgVerificationFailed(format!(
+                "RPM {label} metadata identity mismatch: signed repomd.xml SHA256 is {}, downloaded SHA256 is {}",
+                self.sha256, identity.sha256
             )));
         }
         Ok(())

@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use super::contract::validate_storage_component;
 use super::{
-    CatalogBindingV1, CatalogPackageOriginV1, CatalogReader, CatalogScopeV1,
-    CatalogSourceEvidenceV1, ProfileRevisionV1, SourceSnapshotV1,
+    CatalogBindingV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, ProfileRevisionV1,
+    SourceSnapshotV1,
 };
 use crate::error::{Error, Result};
 
@@ -159,14 +159,6 @@ fn verify_source_catalog_binding(
             "source catalog {} evidence does not match its authenticated object manifest",
             directory.display()
         )));
-    }
-    for package in reader.packages()? {
-        if !matches!(package.origin, CatalogPackageOriginV1::Source { .. }) {
-            return Err(Error::ConflictError(format!(
-                "source catalog {} contains a profile-origin package",
-                directory.display()
-            )));
-        }
     }
     Ok(reader)
 }

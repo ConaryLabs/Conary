@@ -18,6 +18,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+/// Exact identity accumulated while response chunks are written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadedFileIdentity {
+    pub sha256: String,
+    pub size: u64,
+}
+
 use super::metadata::RepositoryMetadata;
 use super::retry::RetryConfig;
 
@@ -67,7 +74,12 @@ fn append_limited_chunk(
     limit: u64,
     url: &str,
 ) -> Result<()> {
-    *total += chunk.len() as u64;
+    *total =
+        total
+            .checked_add(u64::try_from(chunk.len()).map_err(|_| {
+                Error::DownloadError("response chunk length exceeds u64".to_string())
+            })?)
+            .ok_or_else(|| Error::DownloadError("response body size exceeds u64".to_string()))?;
     if *total > limit {
         return Err(Error::DownloadError(format!(
             "Response body too large ({} bytes, max {}): {}",
@@ -321,6 +333,7 @@ async fn stream_response_to_file(
     offset: u64,
     progress_bar: Option<&ProgressBar>,
     display_name: &str,
+    hasher: &mut crate::hash::Hasher,
 ) -> Result<u64> {
     // Set up progress bar if provided
     if let Some(pb) = progress_bar {
@@ -342,8 +355,15 @@ async fn stream_response_to_file(
         .map_err(|e| Error::DownloadError(format!("read response stream: {e}")))?
     {
         file.write_all(&chunk).io_context("write download data")?;
+        hasher.update(&chunk);
 
-        downloaded += chunk.len() as u64;
+        downloaded = downloaded
+            .checked_add(u64::try_from(chunk.len()).map_err(|_| {
+                Error::DownloadError("response chunk length exceeds u64".to_string())
+            })?)
+            .ok_or_else(|| {
+                Error::DownloadError("downloaded response size exceeds u64".to_string())
+            })?;
 
         if let Some(pb) = progress_bar {
             pb.set_position(downloaded);
@@ -491,7 +511,8 @@ impl RepositoryClient {
     /// Download a URL to bytes (for signature files, keys, etc.)
     ///
     /// Returns the response body as bytes, or an error if the download fails.
-    /// This method does NOT retry - if the URL returns 404, it returns an error immediately.
+    /// Transient transport and server failures use the configured bounded retry
+    /// policy. Permanent HTTP failures such as 404 return immediately.
     pub async fn download_to_bytes(&self, url: &str) -> Result<Vec<u8>> {
         self.download_to_bytes_with_headers(url)
             .await
@@ -508,22 +529,46 @@ impl RepositoryClient {
     ) -> Result<(header::HeaderMap, Vec<u8>)> {
         validate_url_scheme(url)?;
 
-        let response = self
-            .client
-            .get(url)
-            .header(header::ACCEPT_ENCODING, "identity")
-            .timeout(byte_download_timeout(&self.timeouts))
-            .send()
-            .await
-            .download_context(url)?;
-
-        if !response.status().is_success() {
-            return Err(http_status_error(response.status(), url));
+        let max_attempts = self.retry_policy.max_attempts.max(1);
+        for attempt in 1..=max_attempts {
+            let response = self
+                .client
+                .get(url)
+                .header(header::ACCEPT_ENCODING, "identity")
+                .timeout(byte_download_timeout(&self.timeouts))
+                .send()
+                .await;
+            match response {
+                Ok(response) if is_transient_error(response.status()) => {
+                    if attempt == max_attempts {
+                        return Err(http_status_error(response.status(), url));
+                    }
+                    warn!(
+                        "Byte download attempt {} got HTTP {}, retrying...",
+                        attempt,
+                        response.status()
+                    );
+                }
+                Ok(response) => {
+                    if !response.status().is_success() {
+                        return Err(http_status_error(response.status(), url));
+                    }
+                    let headers = response.headers().clone();
+                    let body =
+                        read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, url)
+                            .await?;
+                    return Ok((headers, body));
+                }
+                Err(error) => {
+                    if attempt == max_attempts {
+                        return Err(error).download_context(url);
+                    }
+                    warn!("Byte download attempt {attempt} failed: {error}, retrying...");
+                }
+            }
+            tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
         }
-
-        let headers = response.headers().clone();
-        let body = read_response_bytes_with_limit(response, MAX_BYTES_RESPONSE_SIZE, url).await?;
-        Ok((headers, body))
+        unreachable!("byte download attempt count is clamped to at least one")
     }
 
     /// Fetch and decompress data from a URL
@@ -590,8 +635,18 @@ impl RepositoryClient {
 
     /// Download a file to the specified path with retry support
     pub async fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
-        self.download_file_with_progress(url, dest_path, "", None)
+        self.download_file_internal(url, dest_path, "", None)
             .await
+            .map(|_| ())
+    }
+
+    /// Download a file while hashing and sizing the served stream.
+    pub async fn download_file_with_identity(
+        &self,
+        url: &str,
+        dest_path: &Path,
+    ) -> Result<DownloadedFileIdentity> {
+        self.download_file_internal(url, dest_path, "", None).await
     }
 
     /// Download a file with optional progress bar display
@@ -608,6 +663,18 @@ impl RepositoryClient {
         display_name: &str,
         progress_bar: Option<&ProgressBar>,
     ) -> Result<()> {
+        self.download_file_internal(url, dest_path, display_name, progress_bar)
+            .await
+            .map(|_| ())
+    }
+
+    async fn download_file_internal(
+        &self,
+        url: &str,
+        dest_path: &Path,
+        display_name: &str,
+        progress_bar: Option<&ProgressBar>,
+    ) -> Result<DownloadedFileIdentity> {
         validate_url_scheme(url)?;
         info!("Downloading {} to {}", url, dest_path.display());
 
@@ -674,8 +741,14 @@ impl RepositoryClient {
                                     dest_path.display()
                                 )));
                             }
+                            let metadata = fs::metadata(dest_path)?;
+                            let mut reader = std::io::BufReader::new(File::open(dest_path)?);
+                            let sha256 = crate::hash::sha256_reader_hex(&mut reader)?;
                             info!("Successfully downloaded to {}", dest_path.display());
-                            return Ok(());
+                            return Ok(DownloadedFileIdentity {
+                                sha256,
+                                size: metadata.len(),
+                            });
                         }
                         return Err(http_status_error(status, url));
                     }
@@ -725,7 +798,20 @@ impl RepositoryClient {
                             (file, 0, total)
                         };
 
-                    // Stream response to file, optionally updating progress bar
+                    let mut hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
+                    if offset > 0 {
+                        let mut existing = std::io::BufReader::new(File::open(&temp_path)?);
+                        let mut buffer = [0_u8; 64 * 1024];
+                        loop {
+                            let read = existing.read(&mut buffer)?;
+                            if read == 0 {
+                                break;
+                            }
+                            hasher.update(&buffer[..read]);
+                        }
+                    }
+
+                    // Stream response to file, hashing exact served bytes while writing.
                     let downloaded = stream_response_to_file(
                         response,
                         &mut file,
@@ -733,6 +819,7 @@ impl RepositoryClient {
                         offset,
                         progress_bar,
                         display_name,
+                        &mut hasher,
                     )
                     .await?;
 
@@ -741,6 +828,9 @@ impl RepositoryClient {
                     }
 
                     info!("Downloaded {} bytes", downloaded);
+                    file.sync_all()?;
+                    drop(file);
+                    let sha256 = hasher.finalize().value;
 
                     // Atomic rename from temp to final destination
                     if let Err(e) = fs::rename(&temp_path, dest_path) {
@@ -753,7 +843,10 @@ impl RepositoryClient {
                     }
 
                     info!("Successfully downloaded to {}", dest_path.display());
-                    return Ok(());
+                    return Ok(DownloadedFileIdentity {
+                        sha256,
+                        size: downloaded,
+                    });
                 }
                 Err(e) => {
                     if attempt >= self.retry_policy.max_attempts {

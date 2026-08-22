@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 56
+revision: 58
 summary: Describe workspace and release boundaries, immutable Remi catalogs, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
@@ -670,7 +670,7 @@ The operational schema is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 48 is a rebuild-only hard cut. Remi's operational database
+Schema revision 49 is a rebuild-only hard cut. Remi's operational database
 stores immutable-catalog resource metadata, ordered profile members, fenced
 active pointers, refresh runs, runtime sessions, and exact work/reader/
 conversion pins. Activated native package, provide, and requirement authority
@@ -682,6 +682,11 @@ source-profile-only retention decision have no compatibility reader. Native
 authenticated roots are validated as transient refresh inputs and recorded in
 immutable source manifests; repositories no longer retain a mutable latest-root
 observation.
+Repository freshness is four explicit facts: `last_checked_at` records a
+successful authenticated check, `last_changed_at` a different source revision,
+`last_validated_at` completed parser/catalog validation, and
+`last_published_at` activation of that changed revision. A successful no-op
+advances checked and validated only; failed private work advances none.
 
 Databases from retired schema revisions are rejected with an exact recovery
 command. `conary system rebuild-db --discard-state --yes` consolidates the
@@ -736,15 +741,20 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 48 includes revision 47's immutable Remi source/profile
-resource graph and exact input-revision conversion pins, then removes the
-repository table's mutable latest-authenticated-snapshot observation. Private
-candidates are reopened and verified, synchronized, and
+Schema revision 49 retains revision 48's immutable Remi source/profile
+resource graph and exact input-revision conversion pins, removes the overloaded
+repository `last_sync` field, and records check/change/validation/publication
+facts separately. Native parser schema 1 streams authenticated file-backed
+children into private catalog candidates; exact normalized cache reuse binds
+the source stream, root, child roles and digests, parser version, and catalog
+schema. Private candidates are reopened and verified, synchronized, and
 atomically renamed into content-addressed storage before a fenced operational
-transaction may activate them. Sparse, readiness, conversion, prewarm, detail,
-search, index, OCI, delta, and package-serving readers open the exact immutable
-revision and never fall back to operational package rows. Earlier pre-alpha
-databases must be rebuilt.
+transaction may activate them. Logical hashing, verified-cache replay, and
+profile composition stream normalized relation rows, so one source package
+cannot turn its relation cardinality into repository-sized publication memory.
+Sparse, readiness, conversion, prewarm, detail, search, index, OCI, delta, and
+package-serving readers open the exact immutable revision and never fall back
+to operational package rows. Earlier pre-alpha databases must be rebuilt.
 
 Schema revision 42 retained revision 41's boot-runtime mutation authority and
 adds durable repository synchronization runs, per-repository fencing epochs,

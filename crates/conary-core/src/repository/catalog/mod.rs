@@ -3,6 +3,7 @@
 //! Immutable authenticated source and profile catalog contracts.
 
 mod bundle;
+mod candidate;
 mod contract;
 mod profile;
 mod record;
@@ -16,13 +17,16 @@ pub use bundle::{
     verify_profile_catalog_bundle, verify_source_catalog_bundle, write_profile_catalog_manifest,
     write_source_catalog_manifest,
 };
+pub use candidate::CatalogCandidateWriter;
 pub use contract::{
     CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V1, ProfileRevisionV1,
     ProfileSourceMemberV1, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
     SourceStreamKindV1, SourceStreamV1,
 };
-pub use profile::{ProfileCatalogCandidateV1, ProfileCatalogMemberInputV1};
+pub use profile::{
+    ProfileCatalogCandidateV1, ProfileCatalogMemberInputV1, write_profile_catalog_candidate,
+};
 pub use record::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, CatalogScopeV1,

@@ -30,7 +30,10 @@ CREATE TABLE repositories (
             priority INTEGER NOT NULL DEFAULT 0,
             trust_policy_json TEXT,
             metadata_expire INTEGER NOT NULL DEFAULT 3600,
-            last_sync TEXT,
+            last_checked_at TEXT,
+            last_changed_at TEXT,
+            last_validated_at TEXT,
+            last_published_at TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         , content_url TEXT,
             default_strategy TEXT

@@ -3,9 +3,8 @@
 //! Authenticated Solus eopkg repository-index parser.
 
 use super::{
-    AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
-    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
-    authenticated_metadata_object,
+    AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
+    RepositoryParser, RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
 use crate::packages::eopkg::xml;
@@ -40,7 +39,11 @@ impl EopkgParser {
 }
 
 impl RepositoryParser for EopkgParser {
-    async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
+    async fn ingest_snapshot<S: RepositorySnapshotSink + Send>(
+        &self,
+        repo_url: &str,
+        sink: &mut S,
+    ) -> Result<AuthenticatedSnapshotIdentity> {
         let RepositoryTrustPolicy::Eopkg { origin } = self.trust.policy() else {
             unreachable!("constructor admitted eopkg policy")
         };
@@ -55,26 +58,36 @@ impl RepositoryParser for EopkgParser {
         let client = RepositoryClient::new()?;
         let digest_bytes = client.download_to_bytes(&digest_url).await?;
         let enrolled_digest = parse_sha256_sidecar(&digest_bytes)?;
-        let compressed = client.download_to_bytes(&index_url).await?;
-        let actual = crate::hash::sha256(&compressed);
-        if actual != enrolled_digest {
+        let index_path = sink.work_directory().join("eopkg-index.xml.xz");
+        let download = client
+            .download_file_with_identity(&index_url, &index_path)
+            .await?;
+        let index_object = super::AuthenticatedMetadataObject {
+            role: AuthenticatedMetadataObjectRole::EopkgIndex,
+            source_path: "eopkg-index.xml.xz".to_string(),
+            sha256: download.sha256.clone(),
+            size: download.size,
+        };
+        if index_object.sha256 != enrolled_digest {
             return Err(Error::TrustError(format!(
-                "eopkg compressed index SHA-256 mismatch: authenticated sidecar {enrolled_digest}, received {actual}"
+                "eopkg compressed index SHA-256 mismatch: authenticated sidecar {enrolled_digest}, received {}",
+                index_object.sha256
             )));
         }
-        let snapshot = AuthenticatedSnapshotIdentity::for_bytes(&compressed);
-        let xml_bytes =
-            crate::compression::decompress_metadata_auto(&compressed, "authenticated eopkg index")?;
-        let packages = parse_index(&xml_bytes, origin, &self.architecture)?;
-        Ok(AuthenticatedRepositoryMetadata {
-            packages,
-            snapshot,
-            authenticated_objects: vec![authenticated_metadata_object(
-                AuthenticatedMetadataObjectRole::EopkgIndex,
-                "eopkg-index.xml.xz",
-                &compressed,
-            )],
-        })
+        let snapshot = AuthenticatedSnapshotIdentity::from_download(&download)?;
+        if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&index_object))? {
+            return Ok(snapshot);
+        }
+        let decoder =
+            super::common::open_metadata_decoder(&index_path, "authenticated eopkg index")?;
+        parse_index_reader(
+            std::io::BufReader::new(decoder),
+            origin,
+            &self.architecture,
+            |package| sink.package(package),
+        )?;
+        sink.authenticated_object(index_object)?;
+        Ok(snapshot)
     }
 }
 
@@ -93,15 +106,30 @@ fn parse_sha256_sidecar(bytes: &[u8]) -> Result<String> {
         .map_err(|error| Error::TrustError(format!("invalid eopkg SHA-256 sidecar: {error}")))
 }
 
+#[cfg(test)]
 fn parse_index(bytes: &[u8], origin: &str, architecture: &str) -> Result<Vec<PackageMetadata>> {
-    let mut reader = Reader::from_reader(bytes);
+    let mut packages = Vec::new();
+    parse_index_reader(bytes, origin, architecture, |package| {
+        packages.push(package);
+        Ok(())
+    })?;
+    Ok(packages)
+}
+
+fn parse_index_reader<R: std::io::BufRead>(
+    input: R,
+    origin: &str,
+    architecture: &str,
+    mut visitor: impl FnMut(PackageMetadata) -> Result<()>,
+) -> Result<u64> {
+    let mut reader = Reader::from_reader(input);
     let mut depth = 0_u64;
     let mut capture: Option<(Writer<Vec<u8>>, u64)> = None;
-    let mut packages = Vec::new();
     let mut package_records = 0_u64;
+    let mut event_buffer = Vec::new();
     loop {
         let event = reader
-            .read_event()
+            .read_event_into(&mut event_buffer)
             .map_err(|error| Error::ParseError(format!("invalid eopkg index XML: {error}")))?;
         if let Some((writer, capture_depth)) = capture.as_mut() {
             writer
@@ -123,9 +151,14 @@ fn parse_index(bytes: &[u8], origin: &str, architecture: &str) -> Result<Vec<Pac
                             ))
                         })?;
                         if metadata.architecture == architecture {
-                            packages.push(project(metadata, origin)?);
+                            visitor(project(metadata, origin)?)?;
                         }
                     }
+                }
+                Event::Eof => {
+                    return Err(Error::ParseError(
+                        "eopkg index ended inside an unterminated Package record".to_string(),
+                    ));
                 }
                 _ => {}
             }
@@ -147,8 +180,9 @@ fn parse_index(bytes: &[u8], origin: &str, architecture: &str) -> Result<Vec<Pac
                 _ => {}
             }
         }
+        event_buffer.clear();
     }
-    Ok(packages)
+    Ok(package_records)
 }
 
 fn project(metadata: xml::Metadata, origin: &str) -> Result<PackageMetadata> {
@@ -280,7 +314,10 @@ fn project(metadata: xml::Metadata, origin: &str) -> Result<PackageMetadata> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthenticatedSnapshotIdentity, parse_index, parse_sha256_sidecar};
+    use super::{
+        AuthenticatedSnapshotIdentity, parse_index, parse_index_reader, parse_sha256_sidecar,
+    };
+    use std::io::{self, Read};
 
     const DIGEST: &str = "efa19936d28e2e84b462cf2e07efb9cf1b3afb983b0c7b5a5f813d2d52a8061f";
 
@@ -315,6 +352,66 @@ mod tests {
         format!(
             r#"<PISI><Package><Name>jq</Name><Summary>jq</Summary><RuntimeDependencies><Dependency releaseFrom="5">oniguruma</Dependency><Dependency releaseFrom="141">glibc</Dependency></RuntimeDependencies><History><Update release="13"><Version>1.8.2</Version></Update></History><Distribution>Solus</Distribution><DistributionRelease>1</DistributionRelease><Architecture>{architecture}</Architecture><InstalledSize>505000</InstalledSize><PackageSize>212175</PackageSize><PackageHash>{package_hash}</PackageHash><PackageURI>{package_uri}</PackageURI><PackageFormat>1.2</PackageFormat></Package></PISI>"#
         )
+    }
+
+    struct TinyChunks<'a> {
+        bytes: &'a [u8],
+        offset: usize,
+    }
+
+    impl Read for TinyChunks<'_> {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if self.offset == self.bytes.len() {
+                return Ok(0);
+            }
+            output[0] = self.bytes[self.offset];
+            self.offset += 1;
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn package_xml_survives_single_byte_chunks_and_truncation_fails() {
+        let xml = index_record(
+            "98591d2acce52d110a1ae62b775079d79193ad01",
+            "j/jq/jq-1.8.2-13-1-x86_64.eopkg",
+            "x86_64",
+        );
+        let mut names = Vec::new();
+        let reader = std::io::BufReader::with_capacity(
+            2,
+            TinyChunks {
+                bytes: xml.as_bytes(),
+                offset: 0,
+            },
+        );
+        assert_eq!(
+            parse_index_reader(
+                reader,
+                "https://cdn.getsol.us/repo/polaris/",
+                "x86_64",
+                |package| {
+                    names.push(package.name);
+                    Ok(())
+                },
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(names, ["jq"]);
+
+        let truncated = xml
+            .trim_end_matches("</PISI>")
+            .trim_end_matches("</Package>");
+        assert!(
+            parse_index_reader(
+                truncated.as_bytes(),
+                "https://cdn.getsol.us/repo/polaris/",
+                "x86_64",
+                |_| Ok(()),
+            )
+            .is_err()
+        );
     }
 
     #[test]

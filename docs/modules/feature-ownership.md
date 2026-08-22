@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-15
-revision: 77
+last_updated: 2026-08-22
+revision: 78
 summary: Route feature ownership through focused typed corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
@@ -467,12 +467,15 @@ native repository declarations as drift-detected selected-root projections.
 `crates/conary-core/src/repository/trust/openpgp.rs`;
 `crates/conary-core/src/repository/trust/openpgp/arch/`;
 `crates/conary-core/src/repository/parsers/`;
+`crates/conary-core/src/repository/parsers/sink.rs`;
 `crates/conary-core/src/repository/parsers/fedora/metalink.rs`;
 `crates/conary-core/src/repository/parsers/fedora/repomd.rs`;
 `crates/conary-core/src/repository/parsers/fedora/files.rs`;
 `crates/conary-core/src/repository/parsers/fedora/filelists.rs`;
 `crates/conary-core/src/repository/parsers/fedora/provides.rs`;
 `crates/conary-core/src/repository/sync.rs`;
+`crates/conary-core/src/repository/sync/immutable_catalog.rs`;
+`crates/conary-core/src/repository/sync/projection_cache.rs`;
 `crates/conary-core/src/repository/download.rs`;
 `crates/conary-core/src/repository/rpm_dependency.rs`;
 `crates/conary-core/src/repository/requirement.rs`;

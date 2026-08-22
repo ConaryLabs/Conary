@@ -2,6 +2,10 @@
 
 //! Canonical package records stored in immutable repository catalogs.
 
+mod digest;
+
+pub(in crate::repository) use digest::CatalogLogicalDigestV1;
+
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
@@ -263,6 +267,15 @@ impl CatalogPackageRecordV1 {
         canonical_sort(&mut self.requirement_groups)
     }
 
+    pub(in crate::repository) fn canonicalize_for_scope(
+        &mut self,
+        scope: &CatalogScopeV1,
+    ) -> Result<()> {
+        self.canonicalize()?;
+        self.package_key_sha256 = self.calculate_package_key()?;
+        self.validate(scope)
+    }
+
     pub(super) fn validate(&self, scope: &CatalogScopeV1) -> Result<()> {
         validate_sha256(&self.package_key_sha256, "catalog package key")?;
         validate_identity(&self.source_profile, "catalog package source profile")?;
@@ -416,8 +429,8 @@ impl CatalogPackageRecordV1 {
 
 impl CatalogProvideRecordV1 {
     fn validate(&self) -> Result<()> {
-        validate_identity(&self.capability, "catalog provided capability")?;
         let kind = parse_capability_kind(&self.kind)?;
+        validate_native_capability(&self.capability, "catalog provided capability", kind)?;
         ProvidedCapability {
             kind,
             name: self.capability.clone(),
@@ -479,8 +492,8 @@ impl CatalogRequirementGroupV1 {
         )?;
         require_canonical_order(&self.atoms, "catalog requirement atoms")?;
         for atom in &self.atoms {
-            validate_identity(&atom.capability, "catalog requirement capability")?;
-            parse_capability_kind(&atom.kind)?;
+            let kind = parse_capability_kind(&atom.kind)?;
+            validate_native_capability(&atom.capability, "catalog requirement capability", kind)?;
             if !matches!(
                 atom.dependency_type.as_str(),
                 "runtime" | "optional" | "build"
@@ -656,7 +669,11 @@ impl CatalogContentV1 {
 
     pub fn logical_digest_sha256(&self) -> Result<String> {
         self.validate()?;
-        canonical_sha256(self)
+        let mut digest = CatalogLogicalDigestV1::new(&self.scope, &self.source_evidence)?;
+        for package in &self.packages {
+            digest.package(package)?;
+        }
+        Ok(digest.finish()?.0)
     }
 
     pub fn counts(&self) -> Result<CatalogCountsV1> {
@@ -760,6 +777,28 @@ fn parse_capability_kind(value: &str) -> Result<RepositoryCapabilityKind> {
             "catalog capability has unknown kind '{value}'"
         ))),
     }
+}
+
+fn validate_native_capability(
+    value: &str,
+    label: &str,
+    kind: RepositoryCapabilityKind,
+) -> Result<()> {
+    if value.is_empty() {
+        return Err(Error::ConfigError(format!(
+            "{label} must be non-empty source-native UTF-8"
+        )));
+    }
+    if !matches!(
+        kind,
+        RepositoryCapabilityKind::File | RepositoryCapabilityKind::Path
+    ) && (value.trim() != value || value.chars().any(char::is_control))
+    {
+        return Err(Error::ConfigError(format!(
+            "{label} must not contain surrounding whitespace or control characters"
+        )));
+    }
+    Ok(())
 }
 
 fn canonicalize_json_text(value: &mut String, label: &str) -> Result<()> {

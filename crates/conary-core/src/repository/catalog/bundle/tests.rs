@@ -2,16 +2,17 @@
 
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogContentV1, CatalogPackageRecordV1, CatalogScopeV1,
-    CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1, ProfileSourceMemberV1,
-    SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1, SourceMetadataObjectRoleV1,
-    SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
-    write_catalog_candidate,
+    CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
+    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1,
+    ProfileSourceMemberV1, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
+    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
+    SourceStreamV1, write_catalog_candidate,
 };
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
+use std::io::{Read, Write};
 
 fn digest(byte: char) -> String {
     byte.to_string().repeat(64)
@@ -162,6 +163,92 @@ fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
     assert_eq!(published.file_name().unwrap(), expected_identity.as_str());
     assert!(!candidate.exists());
     verify_source_catalog_bundle(&published, &manifest).unwrap();
+}
+
+#[test]
+fn source_bundle_verification_streams_high_presentation_cardinality() {
+    const CHILD_ENV: &str = "CONARY_SOURCE_BUNDLE_RSS_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "repository::catalog::bundle::tests::source_bundle_verification_streams_high_presentation_cardinality",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        std::io::stderr().write_all(&output.stderr).unwrap();
+        assert!(output.status.success(), "source bundle RSS child failed");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("SOURCE_BUNDLE_VM_HWM_KIB="),
+            "source bundle RSS child did not report VmHWM"
+        );
+        return;
+    }
+
+    const PACKAGES: usize = 4_096;
+    const PRESENTATION_BYTES: usize = 64 * 1024;
+    const RSS_LIMIT_KIB: u64 = 192 * 1024;
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("source");
+    fs::create_dir(&candidate).unwrap();
+    let scope = CatalogScopeV1::Source {
+        source_profile: "fedora-44".to_string(),
+        source_identity: "fedora-project".to_string(),
+        repository_identity: "fedora-everything-x86_64".to_string(),
+    };
+    let mut writer =
+        CatalogCandidateWriter::create(candidate.join(CATALOG_FILE_NAME), scope).unwrap();
+    for index in 0..PACKAGES {
+        let name = format!("presentation-{index:04}");
+        let mut record = package(CatalogPackageOriginV1::Source {
+            source_identity: "fedora-project".to_string(),
+            repository_identity: "fedora-everything-x86_64".to_string(),
+        });
+        record.name = name.clone();
+        record.checksum = crate::hash::sha256(name.as_bytes());
+        record.download_url = format!("https://example.test/{name}.rpm");
+        record.metadata = Some(format!(
+            "{{\"presentation\":\"{}\"}}",
+            "x".repeat(PRESENTATION_BYTES)
+        ));
+        writer.package(record).unwrap();
+    }
+    let object = source_object();
+    let binding = writer
+        .finish(vec![CatalogSourceEvidenceV1::AuthenticatedObject {
+            role: object.role,
+            source_path: object.source_path,
+            sha256: object.sha256,
+            size: object.size,
+        }])
+        .unwrap();
+    let manifest = source_manifest(&binding);
+    write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    let reader = verify_source_catalog_bundle(&candidate, &manifest).unwrap();
+    assert_eq!(reader.binding().counts.packages, PACKAGES as u64);
+
+    let high_water_kib = vm_hwm_kib().unwrap();
+    println!("SOURCE_BUNDLE_VM_HWM_KIB={high_water_kib}");
+    assert!(
+        high_water_kib < RSS_LIMIT_KIB,
+        "VmHWM {high_water_kib} KiB exceeded fixed {RSS_LIMIT_KIB} KiB bound"
+    );
+}
+
+fn vm_hwm_kib() -> Option<u64> {
+    let mut status = String::new();
+    std::fs::File::open("/proc/self/status")
+        .ok()?
+        .read_to_string(&mut status)
+        .ok()?;
+    status.lines().find_map(|line| {
+        line.strip_prefix("VmHWM:")
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse().ok())
+    })
 }
 
 #[test]

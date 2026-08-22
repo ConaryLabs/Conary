@@ -5,10 +5,74 @@
 //! Eliminates duplication across the Arch, Debian, and Fedora parsers for
 //! common operations like download URL construction and path validation.
 
+use std::io::{Read, Seek};
+use std::path::Path;
+
+use crate::error::{Error, Result as ConaryResult};
+
 /// Maximum allowed package size (5 GB).
 ///
 /// Shared across all parsers to reject unreasonably large packages.
 pub const MAX_PACKAGE_SIZE: u64 = 5 * 1024 * 1024 * 1024;
+
+/// A decoder guard whose ceiling comes from authenticated metadata.
+pub(super) struct AuthenticatedLengthReader<R> {
+    inner: R,
+    read: u64,
+    ceiling: u64,
+    label: String,
+}
+
+impl<R: Read> AuthenticatedLengthReader<R> {
+    pub(super) fn new(inner: R, ceiling: u64, label: impl Into<String>) -> Self {
+        Self {
+            inner,
+            read: 0,
+            ceiling,
+            label: label.into(),
+        }
+    }
+
+    pub(super) const fn read_bytes(&self) -> u64 {
+        self.read
+    }
+}
+
+impl<R: Read> Read for AuthenticatedLengthReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.read = self.read.saturating_add(read as u64);
+        if self.read > self.ceiling {
+            return Err(std::io::Error::other(format!(
+                "{} decodes to more than the {} bytes its authenticated metadata declares",
+                self.label, self.ceiling
+            )));
+        }
+        Ok(read)
+    }
+}
+
+/// Open a metadata file through a magic-byte-selected streaming decoder.
+pub(super) fn open_metadata_decoder(path: &Path, label: &str) -> ConaryResult<Box<dyn Read>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut magic = [0_u8; 6];
+    let read = file.read(&mut magic)?;
+    file.rewind()?;
+    let format = crate::compression::CompressionFormat::from_magic_bytes(&magic[..read]);
+    crate::compression::create_decoder(file, format)
+        .map_err(|error| Error::ParseError(format!("failed to decode {label}: {error}")))
+}
+
+/// Whether a file's magic names a compression format Conary decodes.
+pub(super) fn metadata_file_is_compressed(path: &Path) -> ConaryResult<bool> {
+    let mut file = std::fs::File::open(path)?;
+    let mut magic = [0_u8; 6];
+    let read = file.read(&mut magic)?;
+    Ok(
+        crate::compression::CompressionFormat::from_magic_bytes(&magic[..read])
+            != crate::compression::CompressionFormat::None,
+    )
+}
 
 /// Construct a metadata URL by joining a base URL with a relative path.
 ///

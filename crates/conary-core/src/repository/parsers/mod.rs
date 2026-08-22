@@ -12,12 +12,16 @@ pub mod common;
 pub mod debian;
 pub mod eopkg;
 pub mod fedora;
+mod sink;
 mod snapshot;
 
-pub(crate) use snapshot::authenticated_metadata_object;
+pub(crate) use sink::CollectingRepositorySnapshotSink;
+pub use sink::{
+    REPOSITORY_SNAPSHOT_PROJECTION_VERSION, RepositorySnapshotSink, SnapshotPackageIdentity,
+    SnapshotPackageJoin, SnapshotProvideUpdate,
+};
 pub use snapshot::{
-    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
-    AuthenticatedSnapshotIdentity,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
 };
 
 use crate::error::Result;
@@ -29,14 +33,12 @@ use serde::{Deserialize, Serialize};
 
 /// Repository metadata parser trait
 pub trait RepositoryParser {
-    /// Parse repository metadata from a base URL
-    ///
-    /// Downloads and parses the repository's metadata files, returning
-    /// a list of all packages available in the repository.
-    fn sync_metadata(
+    /// Authenticate and stream one repository snapshot into `sink`.
+    fn ingest_snapshot<S: RepositorySnapshotSink + Send>(
         &self,
         repo_url: &str,
-    ) -> impl std::future::Future<Output = Result<AuthenticatedRepositoryMetadata>> + Send;
+        sink: &mut S,
+    ) -> impl std::future::Future<Output = Result<AuthenticatedSnapshotIdentity>> + Send;
 }
 
 /// Package metadata extracted from repository

@@ -2,8 +2,9 @@
 
 //! Deterministic standalone SQLite storage for immutable repository catalogs.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::BufReader;
+#[cfg(test)]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -20,9 +21,20 @@ use crate::error::{Error, Result};
 use crate::repository::dependency_model::{DebianMultiArch, ProvideVersionRelation};
 use crate::repository::versioning::VersionScheme;
 
-const CATALOG_APPLICATION_ID: i64 = 0x434e_5259;
+mod stream;
+mod util;
+pub(super) use stream::digest_catalog_connection;
+pub(super) use util::{
+    canonical_json_string, checked_i64, checked_ordinal, create_private_file, hash_file,
+    sidecar_path, sync_parent, validate_candidate_path,
+};
+use util::{
+    checked_sqlite_usize, conversion_error, parse_json_column, read_u64, reject_nonempty_sidecars,
+};
 
-const CATALOG_SCHEMA: &str = r#"
+pub(super) const CATALOG_APPLICATION_ID: i64 = 0x434e_5259;
+
+pub(super) const CATALOG_SCHEMA: &str = r#"
 CREATE TABLE catalog_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_version INTEGER NOT NULL CHECK (schema_version = 1),
@@ -274,10 +286,21 @@ impl CatalogReader {
     }
 
     pub fn packages(&self) -> Result<Vec<CatalogPackageRecordV1>> {
-        self.load_packages(
-            &format!("{SELECT_PACKAGES} ORDER BY package_key_sha256"),
-            [],
-        )
+        let mut packages = Vec::new();
+        self.for_each_package(|package| {
+            packages.push(package);
+            Ok(())
+        })?;
+        Ok(packages)
+    }
+
+    /// Visit catalog packages in canonical key order with one complete package
+    /// projection retained at a time.
+    pub fn for_each_package(
+        &self,
+        visitor: impl FnMut(CatalogPackageRecordV1) -> Result<()>,
+    ) -> Result<()> {
+        for_each_package_connection(&self.connection, &self.binding.scope, visitor)
     }
 
     pub fn find_packages_by_name(&self, name: &str) -> Result<Vec<CatalogPackageRecordV1>> {
@@ -340,20 +363,16 @@ impl CatalogReader {
     }
 
     fn verify_logical_content(&self) -> Result<()> {
-        let content = CatalogContentV1 {
-            schema_version: CATALOG_CONTENT_SCHEMA_V1,
-            scope: self.binding.scope.clone(),
-            source_evidence: self.source_evidence()?,
-            packages: self.packages()?,
-        };
-        let actual = content.logical_digest_sha256()?;
+        let evidence = self.source_evidence()?;
+        let (actual, counts) =
+            digest_catalog_connection(&self.connection, &self.binding.scope, &evidence)?;
         if actual != self.binding.logical_digest_sha256 {
             return Err(Error::ChecksumMismatch {
                 expected: self.binding.logical_digest_sha256.clone(),
                 actual,
             });
         }
-        if content.counts()? != self.binding.counts {
+        if counts != self.binding.counts {
             return Err(Error::ConflictError(format!(
                 "catalog {} logical counts disagree with its manifest binding",
                 self.path.display()
@@ -480,7 +499,31 @@ fn write_catalog_candidate_inner(
     Ok(binding)
 }
 
-fn insert_package(connection: &Connection, package: &CatalogPackageRecordV1) -> Result<()> {
+pub(super) fn insert_package(
+    connection: &Connection,
+    package: &CatalogPackageRecordV1,
+) -> Result<()> {
+    insert_package_base(connection, package)?;
+    for (ordinal, provide) in package.provides.iter().enumerate() {
+        insert_provide(
+            connection,
+            &package.package_key_sha256,
+            checked_ordinal(ordinal, "provide")?,
+            provide,
+        )?;
+    }
+    for (group_ordinal, group) in package.requirement_groups.iter().enumerate() {
+        insert_requirement_group(
+            connection,
+            &package.package_key_sha256,
+            checked_ordinal(group_ordinal, "requirement group")?,
+            group,
+        )?;
+    }
+    Ok(())
+}
+
+fn insert_package_base(connection: &Connection, package: &CatalogPackageRecordV1) -> Result<()> {
     let (origin_kind, member_ordinal, source_identity, repository_identity, snapshot) =
         match &package.origin {
             CatalogPackageOriginV1::Source {
@@ -538,63 +581,122 @@ fn insert_package(connection: &Connection, package: &CatalogPackageRecordV1) -> 
             package.version_scheme.as_str(),
         ],
     )?;
-    for (ordinal, provide) in package.provides.iter().enumerate() {
-        connection.execute(
-            "INSERT INTO catalog_provides (
-                 package_key_sha256, ordinal, capability, version, version_relation,
-                 kind, raw, version_scheme, architecture_qualifier_json, provenance_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                &package.package_key_sha256,
-                checked_ordinal(ordinal, "provide")?,
-                &provide.capability,
-                &provide.version,
-                provide.version_relation.map(ProvideVersionRelation::as_str),
-                &provide.kind,
-                &provide.raw,
-                provide.version_scheme.as_str(),
-                canonical_json_string(&provide.architecture_qualifier)?,
-                canonical_json_string(&provide.provenance)?,
-            ],
-        )?;
-    }
-    for (group_ordinal, group) in package.requirement_groups.iter().enumerate() {
-        let group_ordinal = checked_ordinal(group_ordinal, "requirement group")?;
-        connection.execute(
-            "INSERT INTO catalog_requirement_groups (
+    Ok(())
+}
+
+fn insert_provide(
+    connection: &Connection,
+    package_key_sha256: &str,
+    ordinal: i64,
+    provide: &CatalogProvideRecordV1,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO catalog_provides (
+             package_key_sha256, ordinal, capability, version, version_relation,
+             kind, raw, version_scheme, architecture_qualifier_json, provenance_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            package_key_sha256,
+            ordinal,
+            &provide.capability,
+            &provide.version,
+            provide.version_relation.map(ProvideVersionRelation::as_str),
+            &provide.kind,
+            &provide.raw,
+            provide.version_scheme.as_str(),
+            canonical_json_string(&provide.architecture_qualifier)?,
+            canonical_json_string(&provide.provenance)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_requirement_group(
+    connection: &Connection,
+    package_key_sha256: &str,
+    group_ordinal: i64,
+    group: &CatalogRequirementGroupV1,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO catalog_requirement_groups (
                  package_key_sha256, ordinal, kind, behavior, description,
                  native_text, expression_json
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                &package.package_key_sha256,
-                group_ordinal,
-                &group.kind,
-                &group.behavior,
-                &group.description,
-                &group.native_text,
-                &group.expression_json,
-            ],
-        )?;
-        for (ordinal, atom) in group.atoms.iter().enumerate() {
-            connection.execute(
-                "INSERT INTO catalog_requirement_atoms (
+        params![
+            package_key_sha256,
+            group_ordinal,
+            &group.kind,
+            &group.behavior,
+            &group.description,
+            &group.native_text,
+            &group.expression_json,
+        ],
+    )?;
+    for (ordinal, atom) in group.atoms.iter().enumerate() {
+        connection.execute(
+            "INSERT INTO catalog_requirement_atoms (
                      package_key_sha256, group_ordinal, ordinal, capability,
                      version_constraint, kind, dependency_type, raw
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    &package.package_key_sha256,
-                    group_ordinal,
-                    checked_ordinal(ordinal, "requirement atom")?,
-                    &atom.capability,
-                    &atom.version_constraint,
-                    &atom.kind,
-                    &atom.dependency_type,
-                    &atom.raw,
-                ],
-            )?;
-        }
+            params![
+                package_key_sha256,
+                group_ordinal,
+                checked_ordinal(ordinal, "requirement atom")?,
+                &atom.capability,
+                &atom.version_constraint,
+                &atom.kind,
+                &atom.dependency_type,
+                &atom.raw,
+            ],
+        )?;
     }
     Ok(())
+}
+
+fn insert_provides(
+    connection: &Connection,
+    package_key_sha256: &str,
+    provides: &[CatalogProvideRecordV1],
+) -> Result<()> {
+    for (ordinal, provide) in provides.iter().enumerate() {
+        insert_provide(
+            connection,
+            package_key_sha256,
+            checked_ordinal(ordinal, "provide")?,
+            provide,
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn package_by_key(
+    connection: &Connection,
+    scope: &CatalogScopeV1,
+    package_key_sha256: &str,
+) -> Result<CatalogPackageRecordV1> {
+    let mut package = connection
+        .query_row(
+            &format!("{SELECT_PACKAGES} WHERE package_key_sha256 = ?1"),
+            [package_key_sha256],
+            package_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| Error::NotFound(format!("catalog package key {package_key_sha256}")))?;
+    package.provides = load_provides(connection, package_key_sha256)?;
+    package.requirement_groups = load_requirement_groups(connection, package_key_sha256)?;
+    package.validate(scope)?;
+    Ok(package)
+}
+
+pub(super) fn replace_package_provides(
+    connection: &Connection,
+    package: &CatalogPackageRecordV1,
+) -> Result<()> {
+    connection.execute(
+        "DELETE FROM catalog_provides WHERE package_key_sha256 = ?1",
+        [&package.package_key_sha256],
+    )?;
+    insert_provides(connection, &package.package_key_sha256, &package.provides)
 }
 
 fn package_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CatalogPackageRecordV1> {
@@ -673,36 +775,37 @@ fn load_provides(connection: &Connection, key: &str) -> Result<Vec<CatalogProvid
          ORDER BY ordinal",
     )?;
     statement
-        .query_map([key], |row| {
-            let version: Option<String> = row.get(1)?;
-            let relation = row
-                .get::<_, Option<String>>(2)?
-                .map(|value| {
-                    ProvideVersionRelation::parse_exact(&value)
-                        .map_err(|error| conversion_error(2, error))
-                })
-                .transpose()?;
-            if version.is_some() != relation.is_some() {
-                return Err(conversion_error(
-                    2,
-                    "catalog provide version and relation disagree".to_string(),
-                ));
-            }
-            let scheme: String = row.get(5)?;
-            Ok(CatalogProvideRecordV1 {
-                capability: row.get(0)?,
-                version,
-                version_relation: relation,
-                kind: row.get(3)?,
-                raw: row.get(4)?,
-                version_scheme: VersionScheme::from_str(&scheme)
-                    .map_err(|error| conversion_error(5, error))?,
-                architecture_qualifier: parse_json_column(row, 6)?,
-                provenance: parse_json_column(row, 7)?,
-            })
-        })?
+        .query_map([key], provide_from_row)?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::from)
+}
+
+fn provide_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CatalogProvideRecordV1> {
+    let version: Option<String> = row.get(1)?;
+    let relation = row
+        .get::<_, Option<String>>(2)?
+        .map(|value| {
+            ProvideVersionRelation::parse_exact(&value).map_err(|error| conversion_error(2, error))
+        })
+        .transpose()?;
+    if version.is_some() != relation.is_some() {
+        return Err(conversion_error(
+            2,
+            "catalog provide version and relation disagree".to_string(),
+        ));
+    }
+    let scheme: String = row.get(5)?;
+    Ok(CatalogProvideRecordV1 {
+        capability: row.get(0)?,
+        version,
+        version_relation: relation,
+        kind: row.get(3)?,
+        raw: row.get(4)?,
+        version_scheme: VersionScheme::from_str(&scheme)
+            .map_err(|error| conversion_error(5, error))?,
+        architecture_qualifier: parse_json_column(row, 6)?,
+        provenance: parse_json_column(row, 7)?,
+    })
 }
 
 fn load_requirement_groups(
@@ -771,6 +874,25 @@ fn load_source_evidence(connection: &Connection) -> Result<Vec<CatalogSourceEvid
         .query_map([], |row| parse_json_column(row, 0))?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::from)
+}
+
+pub(super) fn for_each_package_connection(
+    connection: &Connection,
+    scope: &CatalogScopeV1,
+    mut visitor: impl FnMut(CatalogPackageRecordV1) -> Result<()>,
+) -> Result<()> {
+    let mut statement =
+        connection.prepare(&format!("{SELECT_PACKAGES} ORDER BY package_key_sha256"))?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let mut package = package_from_row(row)?;
+        package.provides = load_provides(connection, &package.package_key_sha256)?;
+        package.requirement_groups =
+            load_requirement_groups(connection, &package.package_key_sha256)?;
+        package.validate(scope)?;
+        visitor(package)?;
+    }
+    Ok(())
 }
 
 fn read_binding(connection: &Connection, artifact: CatalogArtifactV1) -> Result<CatalogBindingV1> {
@@ -844,135 +966,6 @@ fn verify_relational_counts(connection: &Connection, expected: CatalogCountsV1) 
         ));
     }
     Ok(())
-}
-
-fn validate_candidate_path(path: &Path) -> Result<()> {
-    if path.file_name().is_none() {
-        return Err(Error::InvalidPath(
-            "catalog candidate path must name a file".to_string(),
-        ));
-    }
-    if fs::symlink_metadata(path).is_ok() {
-        return Err(Error::AlreadyExists(format!(
-            "catalog candidate {}",
-            path.display()
-        )));
-    }
-    let parent = path.parent().ok_or_else(|| {
-        Error::InvalidPath(format!(
-            "catalog candidate {} has no parent directory",
-            path.display()
-        ))
-    })?;
-    let metadata = fs::symlink_metadata(parent)?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        return Err(Error::InvalidPath(format!(
-            "catalog candidate parent {} must be a real directory",
-            parent.display()
-        )));
-    }
-    Ok(())
-}
-
-fn create_private_file(path: &Path) -> Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path)?;
-    Ok(())
-}
-
-fn reject_nonempty_sidecars(path: &Path) -> Result<()> {
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let sidecar = sidecar_path(path, suffix);
-        if sidecar.metadata().is_ok_and(|metadata| metadata.len() > 0) {
-            return Err(Error::ConflictError(format!(
-                "immutable catalog {} has non-empty SQLite sidecar {}",
-                path.display(),
-                sidecar.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn hash_file(path: &Path) -> Result<String> {
-    let mut reader = BufReader::new(File::open(path)?);
-    Ok(crate::hash::sha256_reader_hex(&mut reader)?)
-}
-
-fn sync_parent(path: &Path) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::InvalidPath(format!("{} has no parent directory", path.display())))?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
-    let mut value = path.as_os_str().to_os_string();
-    value.push(suffix);
-    PathBuf::from(value)
-}
-
-fn canonical_json_string(value: &impl Serialize) -> Result<String> {
-    let bytes = crate::json::canonical_json(value)
-        .map_err(|error| Error::ParseError(format!("serialize catalog SQLite value: {error}")))?;
-    String::from_utf8(bytes).map_err(|error| {
-        Error::InternalError(format!("canonical catalog JSON was not UTF-8: {error}"))
-    })
-}
-
-fn checked_i64(value: u64, label: &str) -> Result<i64> {
-    i64::try_from(value).map_err(|_| {
-        Error::ConfigError(format!(
-            "catalog {label} {value} exceeds SQLite integer range"
-        ))
-    })
-}
-
-fn checked_ordinal(value: usize, label: &str) -> Result<i64> {
-    i64::try_from(value).map_err(|_| {
-        Error::ConfigError(format!(
-            "catalog {label} ordinal exceeds SQLite integer range"
-        ))
-    })
-}
-
-fn checked_sqlite_usize(value: usize, label: &str) -> Result<i64> {
-    i64::try_from(value).map_err(|_| {
-        Error::ConfigError(format!(
-            "catalog package-name page {label} exceeds SQLite integer range"
-        ))
-    })
-}
-
-fn read_u64(row: &rusqlite::Row<'_>, column: usize, label: &str) -> rusqlite::Result<u64> {
-    let value: i64 = row.get(column)?;
-    u64::try_from(value).map_err(|_| conversion_error(column, format!("negative {label}")))
-}
-
-fn parse_json_column<T: for<'de> Deserialize<'de>>(
-    row: &rusqlite::Row<'_>,
-    column: usize,
-) -> rusqlite::Result<T> {
-    let raw: String = row.get(column)?;
-    serde_json::from_str(&raw).map_err(|error| conversion_error(column, error.to_string()))
-}
-
-fn conversion_error(column: usize, message: String) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        column,
-        rusqlite::types::Type::Text,
-        Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            message,
-        )),
-    )
 }
 
 #[cfg(test)]

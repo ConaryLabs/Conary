@@ -295,7 +295,10 @@ mod tests {
         let count = persist_repository_sync_snapshot(&conn, &mut fixture.repo, snapshot).unwrap();
 
         assert_eq!(count, 1);
-        assert!(fixture.repo.last_sync.is_some());
+        assert!(fixture.repo.last_checked_at.is_some());
+        assert_eq!(fixture.repo.last_changed_at, fixture.repo.last_checked_at);
+        assert_eq!(fixture.repo.last_validated_at, fixture.repo.last_checked_at);
+        assert_eq!(fixture.repo.last_published_at, fixture.repo.last_checked_at);
 
         let packages = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
         assert_eq!(packages.len(), 1);

@@ -160,3 +160,104 @@ fn typed_provide_invariants_fail_closed() {
             .contains("may only carry an exact version relation")
     );
 }
+
+#[test]
+fn source_native_unicode_capabilities_round_trip_without_weakening_catalog_ids() {
+    let snapshot = digest('b');
+    let capability = "font(源ノ角ゴシックcodejp)";
+    let mut record = package(&snapshot);
+    record.provides = vec![provide(capability)];
+    record.requirement_groups = vec![group(capability)];
+
+    let content = CatalogContentV1::new(
+        CatalogScopeV1::Profile {
+            profile: "arch".to_string(),
+        },
+        evidence(&snapshot),
+        vec![record],
+    )
+    .unwrap();
+
+    assert_eq!(content.packages[0].provides[0].capability, capability);
+    assert_eq!(
+        content.packages[0].requirement_groups[0].atoms[0].capability,
+        capability
+    );
+}
+
+#[test]
+fn source_native_capabilities_reject_control_characters() {
+    let snapshot = digest('b');
+    let mut record = package(&snapshot);
+    record.provides = vec![provide("bad\ncapability")];
+
+    let error = CatalogContentV1::new(
+        CatalogScopeV1::Profile {
+            profile: "arch".to_string(),
+        },
+        evidence(&snapshot),
+        vec![record],
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("control characters"));
+}
+
+#[test]
+fn source_native_file_capabilities_preserve_significant_trailing_space() {
+    let snapshot = digest('b');
+    let capability = "/usr/share/doc/giac/fr ";
+    let mut file = provide(capability);
+    file.kind = "file".to_string();
+    file.version_scheme = VersionScheme::Rpm;
+    file.raw = None;
+    file.provenance = CapabilityProvenance::SourceDerivedFile {
+        format: crate::repository::dependency_source::SourcePackageFormat::Rpm,
+    };
+    let mut record = package(&snapshot);
+    record.provides = vec![file];
+
+    let content = CatalogContentV1::new(
+        CatalogScopeV1::Profile {
+            profile: "arch".to_string(),
+        },
+        evidence(&snapshot),
+        vec![record],
+    )
+    .unwrap();
+
+    assert_eq!(content.packages[0].provides[0].capability, capability);
+}
+
+#[test]
+fn streamed_relations_preserve_exact_v1_logical_identity() {
+    let snapshot = digest('b');
+    let content = CatalogContentV1::new(
+        CatalogScopeV1::Profile {
+            profile: "arch".to_string(),
+        },
+        evidence(&snapshot),
+        vec![package(&snapshot)],
+    )
+    .unwrap();
+    let expected_digest = content.logical_digest_sha256().unwrap();
+    let expected_counts = content.counts().unwrap();
+    let mut base = content.packages[0].clone();
+    let provides = std::mem::take(&mut base.provides);
+    let requirement_groups = std::mem::take(&mut base.requirement_groups);
+
+    let mut streamed =
+        CatalogLogicalDigestV1::new(&content.scope, &content.source_evidence).unwrap();
+    let mut package = streamed.begin_package(&base).unwrap();
+    for provide in &provides {
+        package.provide(provide).unwrap();
+    }
+    for group in &requirement_groups {
+        package.requirement_group(group).unwrap();
+    }
+    package.finish().unwrap();
+    let (actual_digest, actual_counts) = streamed.finish().unwrap();
+
+    assert_eq!(actual_digest, expected_digest);
+    assert_eq!(actual_counts, expected_counts);
+}

@@ -9,10 +9,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::Repository;
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, ProfileCatalogCandidateV1, ProfileCatalogMemberInputV1, ProfileRevisionV1,
-    SourceCatalogCandidateV1, SourceSnapshotV1, publish_profile_catalog_bundle,
-    publish_source_catalog_bundle, verify_source_catalog_bundle, write_catalog_candidate,
-    write_profile_catalog_manifest, write_source_catalog_manifest,
+    CATALOG_FILE_NAME, ProfileCatalogMemberInputV1, ProfileRevisionV1, SourceSnapshotV1,
+    publish_profile_catalog_bundle, publish_source_catalog_bundle, verify_source_catalog_bundle,
+    write_profile_catalog_candidate, write_profile_catalog_manifest, write_source_catalog_manifest,
 };
 use futures::StreamExt;
 
@@ -134,81 +133,68 @@ pub async fn stage_profile_catalog(
     repositories: Vec<Repository>,
     keyring_dir: &Path,
     catalog_candidate_root: &Path,
+    projection_cache_root: &Path,
 ) -> Result<StagedProfileCatalog> {
     let plans = plan_profile_sources(profile, repositories)?;
-    let mut fetches = futures::stream::iter(plans.into_iter().map(|plan| {
-        let keyring_dir = keyring_dir.to_path_buf();
-        async move {
-            let candidate = conary_core::repository::fetch_native_source_catalog(
-                &plan.repository,
-                &keyring_dir,
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "fetch authenticated catalog source '{}'",
-                    plan.repository.name
+    let candidate_run_dir = create_candidate_run_dir(catalog_candidate_root, run_id)?;
+    let planned_sources = plans
+        .into_iter()
+        .map(|plan| {
+            let candidate_directory = candidate_run_dir.join(format!("source-{:08}", plan.ordinal));
+            create_private_directory(&candidate_directory, &candidate_run_dir)?;
+            Ok((plan, candidate_directory))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut fetches = futures::stream::iter(planned_sources.into_iter().map(
+        |(plan, candidate_directory)| {
+            let keyring_dir = keyring_dir.to_path_buf();
+            let projection_cache_root = projection_cache_root.to_path_buf();
+            async move {
+                let manifest = conary_core::repository::stream_native_source_catalog(
+                    &plan.repository,
+                    &keyring_dir,
+                    &candidate_directory.join(CATALOG_FILE_NAME),
+                    Some(&projection_cache_root),
                 )
-            })?;
-            Ok::<_, anyhow::Error>((plan, candidate))
-        }
-    }))
+                .await
+                .with_context(|| {
+                    format!(
+                        "fetch authenticated catalog source '{}'",
+                        plan.repository.name
+                    )
+                })?;
+                write_source_catalog_manifest(&candidate_directory, &manifest)?;
+                verify_source_catalog_bundle(&candidate_directory, &manifest)?;
+                Ok::<_, anyhow::Error>(StagedSourceCatalog {
+                    ordinal: plan.ordinal,
+                    priority: plan.priority,
+                    required: plan.required,
+                    manifest,
+                    path: candidate_directory,
+                })
+            }
+        },
+    ))
     .buffer_unordered(MAX_CONCURRENT_SOURCE_FETCHES);
     let mut fetched = Vec::new();
     while let Some(result) = fetches.next().await {
         fetched.push(result?);
     }
-    fetched.sort_by_key(|(plan, _)| plan.ordinal);
+    fetched.sort_by_key(|source| source.ordinal);
 
-    let run_id = run_id.to_string();
     let profile = profile.to_string();
-    let catalog_candidate_root = catalog_candidate_root.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        stage_profile_candidates(&run_id, &profile, fetched, &catalog_candidate_root)
+        stage_profile_candidate(&profile, fetched, candidate_run_dir)
     })
     .await
     .context("profile catalog staging task panicked")?
 }
 
-fn stage_profile_candidates(
-    run_id: &str,
+fn stage_profile_candidate(
     profile: &str,
-    fetched: Vec<(ProfileSourcePlan, SourceCatalogCandidateV1)>,
-    catalog_candidate_root: &Path,
+    staged_sources: Vec<StagedSourceCatalog>,
+    candidate_run_dir: PathBuf,
 ) -> Result<StagedProfileCatalog> {
-    let candidate_run_dir = create_candidate_run_dir(catalog_candidate_root, run_id)?;
-    let mut staged_sources = Vec::with_capacity(fetched.len());
-
-    for (plan, candidate) in fetched {
-        let candidate_directory = candidate_run_dir.join(format!("source-{:08}", plan.ordinal));
-        create_private_directory(&candidate_directory, &candidate_run_dir)?;
-        let binding = write_catalog_candidate(
-            candidate_directory.join(CATALOG_FILE_NAME),
-            candidate.content(),
-        )
-        .with_context(|| {
-            format!(
-                "write source catalog candidate for '{}'",
-                plan.repository.name
-            )
-        })?;
-        let manifest = candidate.bind(&binding).with_context(|| {
-            format!(
-                "bind source catalog candidate for '{}'",
-                plan.repository.name
-            )
-        })?;
-        write_source_catalog_manifest(&candidate_directory, &manifest)?;
-        verify_source_catalog_bundle(&candidate_directory, &manifest)?;
-        staged_sources.push(StagedSourceCatalog {
-            ordinal: plan.ordinal,
-            priority: plan.priority,
-            required: plan.required,
-            manifest,
-            path: candidate_directory,
-        });
-    }
-
     let readers = staged_sources
         .iter()
         .map(|source| verify_source_catalog_bundle(&source.path, &source.manifest))
@@ -224,15 +210,14 @@ fn stage_profile_candidates(
             reader,
         })
         .collect();
-    let candidate =
-        ProfileCatalogCandidateV1::compose(profile, PROFILE_CATALOG_PROJECTION_VERSION, inputs)?;
     let profile_candidate_directory = candidate_run_dir.join("profile");
     create_private_directory(&profile_candidate_directory, &candidate_run_dir)?;
-    let binding = write_catalog_candidate(
+    let manifest = write_profile_catalog_candidate(
         profile_candidate_directory.join(CATALOG_FILE_NAME),
-        candidate.content(),
+        profile,
+        PROFILE_CATALOG_PROJECTION_VERSION,
+        inputs,
     )?;
-    let manifest = candidate.bind(&binding)?;
     write_profile_catalog_manifest(&profile_candidate_directory, &manifest)?;
     conary_core::repository::catalog::verify_profile_catalog_bundle(
         &profile_candidate_directory,

@@ -224,7 +224,10 @@ fn reconcile_remi_seeds(
             PackageResolution::delete_by_repository(conn, repo_id)?;
             repo.source_profile = Some(feed.id().to_string());
             repo.set_parser_config(parser_config)?;
-            repo.last_sync = None;
+            repo.last_checked_at = None;
+            repo.last_changed_at = None;
+            repo.last_validated_at = None;
+            repo.last_published_at = None;
             repo.update(conn)?;
             messages.push((false, format!("  Updated: {name} source contract")));
         }

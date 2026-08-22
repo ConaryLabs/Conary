@@ -285,7 +285,7 @@ fn normalized_system_authority_restores_package_repository_owners() {
             .unwrap();
     conn.execute(
         "UPDATE repositories
-         SET last_sync = '2026-08-12T00:00:00Z'
+         SET last_checked_at = '2026-08-12T00:00:00Z'
          WHERE id = ?1",
         rusqlite::params![repository_id],
     )
@@ -318,7 +318,7 @@ fn normalized_system_authority_restores_package_repository_owners() {
     let restored = conary_core::db::models::Repository::find_by_name(&conn, "rollback-browser")
         .unwrap()
         .unwrap();
-    assert!(restored.last_sync.is_none());
+    assert!(restored.last_checked_at.is_none());
     assert!(
         conary_core::db::models::RepositoryPackage::find_by_repository(&conn, repository_id)
             .unwrap()

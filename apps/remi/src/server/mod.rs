@@ -203,6 +203,7 @@ pub struct ServerState {
     pub(crate) database_writer: database_writer::DatabaseWriter,
     pub(crate) catalog_authority: catalog_authority::CatalogAuthority,
     pub(crate) publication_coordinator: Arc<Mutex<()>>,
+    pub(crate) catalog_gc_coordinator: Arc<Mutex<()>>,
     pub(crate) publication_readiness: readiness::PublicationReadiness,
     pub(crate) required_source_profiles: Vec<String>,
     pub job_manager: JobManager,
@@ -274,6 +275,7 @@ impl ServerState {
             database_writer.clone(),
         );
         let publication_coordinator = Arc::new(Mutex::new(()));
+        let catalog_gc_coordinator = Arc::new(Mutex::new(()));
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
             config.cache_max_bytes,
@@ -319,6 +321,7 @@ impl ServerState {
             database_writer,
             catalog_authority,
             publication_coordinator,
+            catalog_gc_coordinator,
             publication_readiness: readiness::PublicationReadiness::default(),
             required_source_profiles: Vec::new(),
             job_manager,

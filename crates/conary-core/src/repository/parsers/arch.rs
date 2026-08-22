@@ -5,12 +5,12 @@
 //! Parses Arch Linux .db.tar.gz files which contain package metadata
 //! in a custom text format with %FIELD% markers.
 
+mod spool;
+
 use super::{
-    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedRepositoryMetadata,
-    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
-    authenticated_metadata_object,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
+    ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
 };
-use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
@@ -28,6 +28,7 @@ use tracing::{debug, info};
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 
+#[cfg(test)]
 fn authenticated_database_snapshot(bytes: &[u8]) -> AuthenticatedSnapshotIdentity {
     AuthenticatedSnapshotIdentity::for_bytes(bytes)
 }
@@ -50,14 +51,13 @@ impl ArchParser {
         Ok(Self { repo_name, trust })
     }
 
-    /// Download and decompress the repository database
-    ///
-    /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
+    /// Download and authenticate the repository database into run-local disk.
     async fn download_database(
         &self,
         repo_url: &str,
+        work_directory: &std::path::Path,
     ) -> Result<(
-        Vec<u8>,
+        std::path::PathBuf,
         AuthenticatedSnapshotIdentity,
         AuthenticatedMetadataObject,
     )> {
@@ -65,7 +65,10 @@ impl ArchParser {
         debug!("Downloading Arch database from: {}", db_url);
 
         let client = RepositoryClient::new()?;
-        let raw_bytes = client.download_to_bytes(&db_url).await?;
+        let database_file = work_directory.join("arch-database");
+        let download = client
+            .download_file_with_identity(&db_url, &database_file)
+            .await?;
         let signature_url = format!("{db_url}.sig");
         let requirement = match self.trust.policy() {
             RepositoryTrustPolicy::Arch { sig_level, .. } => sig_level.database,
@@ -73,8 +76,11 @@ impl ArchParser {
         };
         match client.download_to_bytes(&signature_url).await {
             Ok(signature) => {
-                self.trust
-                    .verify_detached(TrustRole::ArchDatabase, &raw_bytes, &signature)?;
+                self.trust.verify_detached_file(
+                    TrustRole::ArchDatabase,
+                    &database_file,
+                    &signature,
+                )?;
             }
             Err(Error::HttpStatus {
                 status: 403 | 404, ..
@@ -88,16 +94,15 @@ impl ArchParser {
             }
             Err(error) => return Err(error),
         }
-        let snapshot = authenticated_database_snapshot(&raw_bytes);
+        let snapshot = AuthenticatedSnapshotIdentity::from_download(&download)?;
         let database_path = format!("{}.db", self.repo_name);
-        let database_object = authenticated_metadata_object(
-            AuthenticatedMetadataObjectRole::ArchDatabase,
-            &database_path,
-            &raw_bytes,
-        );
-        let decompressed =
-            decompress_metadata_auto(&raw_bytes, &format!("Arch repository database {db_url}"))?;
-        Ok((decompressed, snapshot, database_object))
+        let database_object = AuthenticatedMetadataObject {
+            role: AuthenticatedMetadataObjectRole::ArchDatabase,
+            source_path: database_path,
+            sha256: download.sha256,
+            size: download.size,
+        };
+        Ok((database_file, snapshot, database_object))
     }
 
     /// Parse a desc file from the tarball
@@ -277,7 +282,7 @@ impl ArchParser {
         &self,
         repo_url: &str,
         desc_fields: &HashMap<String, Vec<String>>,
-        depends_content: Option<&String>,
+        depends_content: Option<&str>,
     ) -> Result<PackageMetadata> {
         let name = desc_fields
             .get("NAME")
@@ -401,17 +406,26 @@ impl ArchParser {
 }
 
 impl RepositoryParser for ArchParser {
-    async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
+    async fn ingest_snapshot<S: RepositorySnapshotSink + Send>(
+        &self,
+        repo_url: &str,
+        sink: &mut S,
+    ) -> Result<AuthenticatedSnapshotIdentity> {
         info!("Syncing Arch Linux repository: {}", self.repo_name);
 
-        // Download and decompress database (handled by RepositoryClient)
-        let (decompressed, snapshot, database_object) = self.download_database(repo_url).await?;
-
-        // Single-pass: collect desc and depends data keyed by directory name.
-        // Directory names in .db.tar.gz are "{name}-{version}-{pkgrel}/".
-        let mut archive = Archive::new(decompressed.as_slice());
-        let mut desc_data: HashMap<String, String> = HashMap::new();
-        let mut depends_data: HashMap<String, String> = HashMap::new();
+        let work_directory = sink.work_directory().to_path_buf();
+        let (database_file, snapshot, database_object) =
+            self.download_database(repo_url, &work_directory).await?;
+        if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&database_object))? {
+            info!("Reused cached Arch repository projection");
+            return Ok(snapshot);
+        }
+        let decoder = super::common::open_metadata_decoder(
+            &database_file,
+            &format!("Arch repository database {}", database_file.display()),
+        )?;
+        let mut archive = Archive::new(decoder);
+        let spool = spool::ArchPackageSpool::create(&work_directory.join("arch-records.sqlite"))?;
 
         for entry in archive.entries()? {
             let mut entry = entry
@@ -433,51 +447,25 @@ impl RepositoryParser for ArchParser {
                     entry.read_to_string(&mut content).map_err(|e| {
                         Error::ParseError(format!("Failed to read desc file: {}", e))
                     })?;
-                    if desc_data.insert(dir_key.clone(), content).is_some() {
-                        return Err(Error::ParseError(format!(
-                            "Arch repository repeats desc metadata for {dir_key}"
-                        )));
-                    }
+                    spool.desc(&dir_key, content)?;
                 } else if path_str.ends_with("/depends") {
                     let mut content = String::new();
                     entry.read_to_string(&mut content).map_err(|e| {
                         Error::ParseError(format!("Failed to read depends file: {}", e))
                     })?;
-                    if depends_data.insert(dir_key.clone(), content).is_some() {
-                        return Err(Error::ParseError(format!(
-                            "Arch repository repeats depends metadata for {dir_key}"
-                        )));
-                    }
+                    spool.depends(&dir_key, content)?;
                 }
             }
         }
 
-        if let Some(orphan) = depends_data
-            .keys()
-            .find(|directory| !desc_data.contains_key(*directory))
-        {
-            return Err(Error::ParseError(format!(
-                "Arch repository has depends metadata without desc metadata for {orphan}"
-            )));
-        }
-
-        // Build packages from collected data
-        let mut packages = Vec::new();
-        for (dir_key, desc_content) in &desc_data {
+        let package_count = spool.finish(|_directory, desc_content, depends_content| {
             let desc_fields = self.parse_desc_file(desc_content)?;
-            packages.push(self.package_from_fields(
-                repo_url,
-                &desc_fields,
-                depends_data.get(dir_key),
-            )?);
-        }
+            sink.package(self.package_from_fields(repo_url, &desc_fields, depends_content)?)
+        })?;
 
-        info!("Parsed {} packages from Arch repository", packages.len());
-        Ok(AuthenticatedRepositoryMetadata {
-            packages,
-            snapshot,
-            authenticated_objects: vec![database_object],
-        })
+        sink.authenticated_object(database_object)?;
+        info!("Parsed {} packages from Arch repository", package_count);
+        Ok(snapshot)
     }
 }
 
@@ -660,7 +648,7 @@ ncurses
 ";
         let fields = parser.parse_desc_file(desc).unwrap();
         let pkg = parser
-            .package_from_fields("https://example.test", &fields, Some(&depends.to_string()))
+            .package_from_fields("https://example.test", &fields, Some(depends))
             .unwrap();
 
         assert_eq!(pkg.requirements.len(), 3);

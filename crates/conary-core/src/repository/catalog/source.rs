@@ -83,13 +83,7 @@ impl SourceCatalogCandidateV1 {
     }
 
     pub fn bind(self, binding: &CatalogBindingV1) -> Result<SourceSnapshotV1> {
-        let expected_scope = CatalogScopeV1::Source {
-            source_profile: self.source_profile.clone(),
-            source_identity: self.source_identity.clone(),
-            repository_identity: self.repository_identity.clone(),
-        };
-        if binding.scope != expected_scope
-            || binding.logical_digest_sha256 != self.content.logical_digest_sha256()?
+        if binding.logical_digest_sha256 != self.content.logical_digest_sha256()?
             || binding.counts != self.content.counts()?
         {
             return Err(Error::ConflictError(
@@ -97,23 +91,20 @@ impl SourceCatalogCandidateV1 {
                     .to_string(),
             ));
         }
-        let manifest = SourceSnapshotV1 {
-            schema_version: SOURCE_SNAPSHOT_SCHEMA_V1,
+        bind_source_snapshot(self.into_authority(), binding)
+    }
+
+    fn into_authority(self) -> SourceCatalogAuthorityV1 {
+        SourceCatalogAuthorityV1 {
             source_profile: self.source_profile,
             source_identity: self.source_identity,
             repository_identity: self.repository_identity,
             stream: self.stream,
             stream_binding_sha256: self.stream_binding_sha256,
-            parser_projection_version: SOURCE_CATALOG_PROJECTION_VERSION_V1,
             provenance: self.provenance,
             authenticated_root: self.authenticated_root,
             authenticated_objects: self.authenticated_objects,
-            catalog: binding.artifact.clone(),
-            logical_digest_sha256: binding.logical_digest_sha256.clone(),
-            counts: binding.counts,
-        };
-        manifest.validate()?;
-        Ok(manifest)
+        }
     }
 
     fn validate_logical_authority(&self) -> Result<()> {
@@ -154,4 +145,40 @@ impl SourceCatalogCandidateV1 {
         }
         self.content.validate()
     }
+}
+
+pub(in crate::repository) fn bind_source_snapshot(
+    authority: SourceCatalogAuthorityV1,
+    binding: &CatalogBindingV1,
+) -> Result<SourceSnapshotV1> {
+    let expected_scope = CatalogScopeV1::Source {
+        source_profile: authority.source_profile.clone(),
+        source_identity: authority.source_identity.clone(),
+        repository_identity: authority.repository_identity.clone(),
+    };
+    if binding.scope != expected_scope
+        || binding.counts.source_evidence != authority.authenticated_objects.len() as u64
+    {
+        return Err(Error::ConflictError(
+            "source catalog artifact binding does not match its authenticated authority"
+                .to_string(),
+        ));
+    }
+    let manifest = SourceSnapshotV1 {
+        schema_version: SOURCE_SNAPSHOT_SCHEMA_V1,
+        source_profile: authority.source_profile,
+        source_identity: authority.source_identity,
+        repository_identity: authority.repository_identity,
+        stream: authority.stream,
+        stream_binding_sha256: authority.stream_binding_sha256,
+        parser_projection_version: SOURCE_CATALOG_PROJECTION_VERSION_V1,
+        provenance: authority.provenance,
+        authenticated_root: authority.authenticated_root,
+        authenticated_objects: authority.authenticated_objects,
+        catalog: binding.artifact.clone(),
+        logical_digest_sha256: binding.logical_digest_sha256.clone(),
+        counts: binding.counts,
+    };
+    manifest.validate()?;
+    Ok(manifest)
 }

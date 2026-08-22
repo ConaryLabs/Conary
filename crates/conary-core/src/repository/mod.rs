@@ -81,13 +81,13 @@ pub use static_repo::{
 };
 pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
-    ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
-    ProfileSyncRunRecovery, RepositoryWriteAuthority, abort_profile_sync_run,
-    acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run,
+    PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncFailureCategory, ProfileSyncFailureStage,
+    ProfileSyncRun, ProfileSyncRunMember, ProfileSyncRunRecovery, RepositoryWriteAuthority,
+    abort_profile_sync_run, acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run,
     begin_profile_sync_run_with_input, begin_profile_sync_run_with_members, current_timestamp,
     fetch_native_source_catalog, heartbeat_profile_sync_run, needs_sync, parse_timestamp,
     ready_profile_sync_run, record_profile_sync_run_member, recover_expired_profile_sync_runs,
-    sync_repository, sync_repository_from_db_path,
+    stream_native_source_catalog, sync_repository, sync_repository_from_db_path,
 };
 pub use trust::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,
@@ -244,7 +244,7 @@ mod tests {
         assert!(needs_sync(&repo_never_synced));
 
         let mut repo_recently_synced = Repository::new("test".to_string(), "url".to_string());
-        repo_recently_synced.last_sync = Some(current_timestamp());
+        repo_recently_synced.last_checked_at = Some(current_timestamp());
         repo_recently_synced.metadata_expire = 3600; // 1 hour
         assert!(!needs_sync(&repo_recently_synced));
     }

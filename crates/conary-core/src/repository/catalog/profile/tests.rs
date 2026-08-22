@@ -2,14 +2,15 @@
 
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogPackageRecordV1, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
-    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
-    SourceStreamV1, write_catalog_candidate,
+    CatalogArtifactV1, CatalogPackageRecordV1, CatalogProvideRecordV1, SOURCE_SNAPSHOT_SCHEMA_V1,
+    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
+    SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
 };
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
+use std::io::{Read, Write};
 
 fn digest(byte: char) -> String {
     byte.to_string().repeat(64)
@@ -191,4 +192,135 @@ fn profile_composition_uses_explicit_member_order_and_binds_exact_content() {
         profile_binding.logical_digest_sha256
     );
     CatalogReader::open_verified(&profile_path, &profile_binding).unwrap();
+}
+
+#[test]
+fn bounded_source_and_profile_catalog_peak_rss() {
+    const CHILD_ENV: &str = "CONARY_SLICE3_CATALOG_RSS_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "repository::catalog::profile::tests::bounded_source_and_profile_catalog_peak_rss",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        print!("{}", String::from_utf8_lossy(&output.stdout));
+        std::io::stderr().write_all(&output.stderr).unwrap();
+        assert!(output.status.success(), "catalog RSS child failed");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("SLICE3_VM_HWM_KIB="),
+            "catalog RSS child did not report VmHWM"
+        );
+        return;
+    }
+
+    const PACKAGES_PER_SOURCE: usize = 5_000;
+    const RSS_LIMIT_KIB: u64 = 384 * 1024;
+    let target_root = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap().join("target"));
+    std::fs::create_dir_all(&target_root).unwrap();
+    let directory = tempfile::Builder::new()
+        .prefix("slice3-catalog-rss-")
+        .tempdir_in(target_root)
+        .unwrap();
+
+    let build_source = |repository_identity: &str, marker: char, path: &std::path::Path| {
+        let scope = CatalogScopeV1::Source {
+            source_profile: "fedora-44".to_string(),
+            source_identity: "fedora-project".to_string(),
+            repository_identity: repository_identity.to_string(),
+        };
+        let mut writer = CatalogCandidateWriter::create(path, scope).unwrap();
+        for index in 0..PACKAGES_PER_SOURCE {
+            let name = format!("generated-{marker}-{index:05}");
+            let mut record = source_content(repository_identity, &name, marker)
+                .packages
+                .pop()
+                .unwrap();
+            record.checksum = crate::hash::sha256(name.as_bytes());
+            record.metadata = Some(format!("{{\"presentation\":\"{}\"}}", "x".repeat(8 * 1024)));
+            for provide in 0..16 {
+                record.provides.push(CatalogProvideRecordV1 {
+                    capability: format!("{name}-capability-{provide}"),
+                    version: None,
+                    version_relation: None,
+                    kind: "package".to_string(),
+                    raw: None,
+                    version_scheme: VersionScheme::Rpm,
+                    architecture_qualifier:
+                        crate::repository::dependency_model::ProvideArchitectureQualifier::Implicit,
+                    provenance:
+                        crate::repository::dependency_source::CapabilityProvenance::SourceDeclared {
+                            format: crate::repository::dependency_model::SourcePackageFormat::Rpm,
+                            record_index: provide,
+                        },
+                });
+            }
+            writer.package(record).unwrap();
+        }
+        writer
+            .finish(vec![CatalogSourceEvidenceV1::AuthenticatedObject {
+                role: SourceMetadataObjectRoleV1::RpmPrimary,
+                source_path: "repodata/primary.xml.zst".to_string(),
+                sha256: digest(marker),
+                size: 1024,
+            }])
+            .unwrap()
+    };
+
+    let first_path = directory.path().join("first.sqlite");
+    let second_path = directory.path().join("second.sqlite");
+    let first_binding = build_source("fedora-everything-x86_64", 'a', &first_path);
+    let second_binding = build_source("fedora-updates-x86_64", 'b', &second_path);
+    let first_manifest = source_manifest("fedora-everything-x86_64", 'a', &first_binding);
+    let second_manifest = source_manifest("fedora-updates-x86_64", 'b', &second_binding);
+    let first_reader = CatalogReader::open_verified(&first_path, &first_binding).unwrap();
+    let second_reader = CatalogReader::open_verified(&second_path, &second_binding).unwrap();
+    let profile = write_profile_catalog_candidate(
+        directory.path().join("profile.sqlite"),
+        "fedora-44",
+        1,
+        vec![
+            ProfileCatalogMemberInputV1 {
+                ordinal: 0,
+                priority: 10,
+                required: true,
+                manifest: &first_manifest,
+                reader: &first_reader,
+            },
+            ProfileCatalogMemberInputV1 {
+                ordinal: 1,
+                priority: 20,
+                required: true,
+                manifest: &second_manifest,
+                reader: &second_reader,
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(profile.counts.packages, 2 * PACKAGES_PER_SOURCE as u64);
+
+    let high_water_kib = vm_hwm_kib().unwrap();
+    println!("SLICE3_VM_HWM_KIB={high_water_kib}");
+    assert!(
+        high_water_kib < RSS_LIMIT_KIB,
+        "VmHWM {high_water_kib} KiB exceeded fixed {RSS_LIMIT_KIB} KiB bound"
+    );
+}
+
+fn vm_hwm_kib() -> Option<u64> {
+    let mut status = String::new();
+    std::fs::File::open("/proc/self/status")
+        .ok()?
+        .read_to_string(&mut status)
+        .ok()?;
+    status.lines().find_map(|line| {
+        line.strip_prefix("VmHWM:")
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse().ok())
+    })
 }

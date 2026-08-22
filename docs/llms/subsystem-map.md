@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-20
-revision: 76
+last_updated: 2026-08-22
+revision: 77
 summary: Compact workspace orientation index that routes detailed ownership and proof through agent-context
 ---
 
@@ -65,8 +65,9 @@ and safety invariant for that task.
 
 - Repository resolution is SAT-only and consumes authenticated, source-aware
   typed relations.
-- Native parser output remains lossless in its source ontology; explicit
-  fallible projections serve resolution, CCS, and transaction consumers.
+- Native parser output streams through one versioned authenticated snapshot
+  sink while remaining lossless in its source ontology; explicit fallible
+  projections serve resolution, CCS, and transaction consumers.
 - Transaction and generation state stay coupled through one selected-root
   mutation lock, exact filesystem and SQLite authority, and publication debt.
 - Component, provide, payload, configuration, and trust authority comes from

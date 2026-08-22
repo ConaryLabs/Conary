@@ -71,7 +71,10 @@ fn pin_refusal_leaves_native_rows_and_sync_state_untouched() {
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].checksum, "sha256:old");
     let after = Repository::find_by_id(&conn, repo_id).unwrap().unwrap();
-    assert_eq!(after.last_sync, before.last_sync);
+    assert_eq!(after.last_checked_at, before.last_checked_at);
+    assert_eq!(after.last_changed_at, before.last_changed_at);
+    assert_eq!(after.last_validated_at, before.last_validated_at);
+    assert_eq!(after.last_published_at, before.last_published_at);
 }
 
 #[test]

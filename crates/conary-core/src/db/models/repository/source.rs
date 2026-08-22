@@ -90,7 +90,14 @@ pub struct Repository {
     /// package payloads. Native repositories require a matching policy.
     pub trust_policy: Option<RepositoryTrustPolicy>,
     pub metadata_expire: i32,
-    pub last_sync: Option<String>,
+    /// Last successful remote metadata check, including a no-op revision.
+    pub last_checked_at: Option<String>,
+    /// Last check that observed a different authenticated revision.
+    pub last_changed_at: Option<String>,
+    /// Last revision that completed parser and catalog validation.
+    pub last_validated_at: Option<String>,
+    /// Last revision made active for consumers.
+    pub last_published_at: Option<String>,
     pub created_at: Option<String>,
     /// Default resolution strategy for packages without explicit routing entries
     /// Values: "binary", "remi", or None
@@ -127,7 +134,8 @@ pub struct Repository {
 impl Repository {
     /// Column list for SELECT queries.
     const COLUMNS: &'static str = "r.id, r.name, r.url, r.content_url, r.enabled, r.priority, \
-         r.trust_policy_json, r.metadata_expire, r.last_sync, r.created_at, \
+         r.trust_policy_json, r.metadata_expire, r.last_checked_at, r.last_changed_at, \
+         r.last_validated_at, r.last_published_at, r.created_at, \
          r.default_strategy, r.default_strategy_endpoint, r.source_profile, \
          r.tuf_enabled, r.tuf_root_version, r.tuf_root_url, r.security_advisory_support, \
          r.package_format, r.parser_config_json, r.managed_by, r.repository_identity, \
@@ -149,7 +157,10 @@ impl Repository {
             priority: 0,
             trust_policy: None,
             metadata_expire: 3600, // Default: 1 hour
-            last_sync: None,
+            last_checked_at: None,
+            last_changed_at: None,
+            last_validated_at: None,
+            last_published_at: None,
             created_at: None,
             default_strategy: None,
             default_strategy_endpoint: None,
@@ -786,12 +797,14 @@ impl Repository {
 
         conn.execute(
             "UPDATE repositories SET name = ?1, url = ?2, content_url = ?3, enabled = ?4, priority = ?5,
-             trust_policy_json = ?6, metadata_expire = ?7, last_sync = ?8,
-             default_strategy = ?9, default_strategy_endpoint = ?10, source_profile = ?11,
-             tuf_enabled = ?12, tuf_root_version = ?13, tuf_root_url = ?14,
-             security_advisory_support = ?15, package_format = ?16, parser_config_json = ?17,
-             managed_by = ?18, repository_identity = ?19, stream_binding_sha256 = ?20
-             WHERE id = ?21",
+             trust_policy_json = ?6, metadata_expire = ?7,
+             last_checked_at = ?8, last_changed_at = ?9, last_validated_at = ?10,
+             last_published_at = ?11,
+             default_strategy = ?12, default_strategy_endpoint = ?13, source_profile = ?14,
+             tuf_enabled = ?15, tuf_root_version = ?16, tuf_root_url = ?17,
+             security_advisory_support = ?18, package_format = ?19, parser_config_json = ?20,
+             managed_by = ?21, repository_identity = ?22, stream_binding_sha256 = ?23
+             WHERE id = ?24",
             params![
                 &self.name,
                 &self.url,
@@ -800,7 +813,10 @@ impl Repository {
                 &self.priority,
                 trust_policy_json,
                 &self.metadata_expire,
-                &self.last_sync,
+                &self.last_checked_at,
+                &self.last_changed_at,
+                &self.last_validated_at,
+                &self.last_published_at,
                 &self.default_strategy,
                 &self.default_strategy_endpoint,
                 &self.source_profile,
@@ -846,10 +862,10 @@ impl Repository {
 
     /// Convert a database row to a Repository
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let package_format_value = row.get::<_, String>(17)?;
+        let package_format_value = row.get::<_, String>(20)?;
         let package_format = RepositoryFormat::from_db(&package_format_value).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                17,
+                20,
                 rusqlite::types::Type::Text,
                 Box::new(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -858,12 +874,12 @@ impl Repository {
             )
         })?;
         let parser_config = row
-            .get::<_, Option<String>>(18)?
+            .get::<_, Option<String>>(21)?
             .map(|value| RepositoryParserConfig::from_json(&value))
             .transpose()
             .map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    18,
+                    21,
                     rusqlite::types::Type::Text,
                     Box::new(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -885,24 +901,24 @@ impl Repository {
                     )),
                 )
             })?;
-        let ownership_value = row.get::<_, String>(19)?;
+        let ownership_value = row.get::<_, String>(22)?;
         let managed_by = RepositoryOwnership::from_db(&ownership_value).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                19,
+                22,
                 rusqlite::types::Type::Text,
                 Box::new(io::Error::new(io::ErrorKind::InvalidData, error)),
             )
         })?;
-        let source_policy = if row.get::<_, Option<i64>>(22)?.is_some() {
-            Some(source_policy_from_row(row, 22)?)
+        let source_policy = if row.get::<_, Option<i64>>(25)?.is_some() {
+            Some(source_policy_from_row(row, 25)?)
         } else {
             None
         };
         let pinned_snapshot = row
-            .get::<_, Option<String>>(31)?
+            .get::<_, Option<String>>(34)?
             .map(AuthenticatedSnapshotIdentity::from_sha256)
             .transpose()
-            .map_err(|error| row_conversion_error(31, error.to_string()))?;
+            .map_err(|error| row_conversion_error(34, error.to_string()))?;
         let repository = Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
@@ -912,28 +928,31 @@ impl Repository {
             priority: row.get(5)?,
             trust_policy,
             metadata_expire: row.get(7)?,
-            last_sync: row.get(8)?,
-            created_at: row.get(9)?,
-            default_strategy: row.get(10)?,
-            default_strategy_endpoint: row.get(11)?,
-            source_profile: row.get(12)?,
-            tuf_enabled: row.get::<_, i32>(13)? != 0,
-            tuf_root_version: row.get(14)?,
-            tuf_root_url: row.get(15)?,
+            last_checked_at: row.get(8)?,
+            last_changed_at: row.get(9)?,
+            last_validated_at: row.get(10)?,
+            last_published_at: row.get(11)?,
+            created_at: row.get(12)?,
+            default_strategy: row.get(13)?,
+            default_strategy_endpoint: row.get(14)?,
+            source_profile: row.get(15)?,
+            tuf_enabled: row.get::<_, i32>(16)? != 0,
+            tuf_root_version: row.get(17)?,
+            tuf_root_url: row.get(18)?,
             security_advisory_support: SecurityAdvisorySupport::from_db(
-                row.get::<_, String>(16)?.as_str(),
+                row.get::<_, String>(19)?.as_str(),
             ),
             package_format,
             parser_config,
             managed_by,
             source_policy,
-            repository_identity: row.get(20)?,
-            stream_binding_sha256: row.get(21)?,
+            repository_identity: row.get(23)?,
+            stream_binding_sha256: row.get(24)?,
             pinned_snapshot,
         };
         repository
             .validate_parser_contract()
-            .map_err(|error| row_conversion_error(20, error.to_string()))?;
+            .map_err(|error| row_conversion_error(23, error.to_string()))?;
         Ok(repository)
     }
 }

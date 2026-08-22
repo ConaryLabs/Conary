@@ -39,15 +39,17 @@ use types::{
 
 mod immutable_catalog;
 mod native;
+mod projection_cache;
 mod remi;
 mod support;
 pub(in crate::repository) mod types;
 
-pub use immutable_catalog::fetch_native_source_catalog;
+pub use immutable_catalog::{fetch_native_source_catalog, stream_native_source_catalog};
 pub use remi::{
-    ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
-    ProfileSyncRunRecovery, abort_profile_sync_run, acknowledge_profile_sync_candidate_cleanup,
-    begin_profile_sync_run, begin_profile_sync_run_with_input, begin_profile_sync_run_with_members,
+    PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncFailureCategory, ProfileSyncFailureStage,
+    ProfileSyncRun, ProfileSyncRunMember, ProfileSyncRunRecovery, abort_profile_sync_run,
+    acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run,
+    begin_profile_sync_run_with_input, begin_profile_sync_run_with_members,
     heartbeat_profile_sync_run, ready_profile_sync_run, record_profile_sync_run_member,
     recover_expired_profile_sync_runs,
 };
@@ -79,6 +81,46 @@ pub(super) async fn fetch_repository_native_snapshot(
     repo: &Repository,
     keyring_dir: &Path,
 ) -> Result<RepositorySyncSnapshot> {
+    let parser = prepare_repository_native_parser(repo, keyring_dir).await?;
+    let mut sink = crate::repository::parsers::CollectingRepositorySnapshotSink::create()?;
+    let snapshot = parser.ingest_snapshot(&repo.url, &mut sink).await?;
+    let (packages, authenticated_objects) = sink.finish();
+
+    let repo_id = repo
+        .id
+        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
+
+    if let Some(ref content_url) = repo.content_url {
+        info!(
+            "Repository {} uses reference mirror - rebasing download URLs to {}",
+            repo.name, content_url
+        );
+    }
+
+    // Convert package metadata to repository rows plus normalized capability rows.
+    let synced_packages: Vec<SyncedPackageRow> = packages
+        .into_iter()
+        .map(|pkg_meta| {
+            synced_package_row(
+                repo_id,
+                repo.source_profile.as_deref(),
+                &repo.url,
+                repo.content_url.as_deref(),
+                pkg_meta,
+            )
+        })
+        .collect();
+    Ok(RepositorySyncSnapshot::NativeRows {
+        packages: synced_packages,
+        snapshot,
+        authenticated_objects,
+    })
+}
+
+pub(super) async fn prepare_repository_native_parser(
+    repo: &Repository,
+    keyring_dir: &Path,
+) -> Result<registry::AnyParser> {
     let parser_config = repo.require_parser_config()?;
     repo.validate_stream_binding()?;
     let source_policy = repo.require_source_policy()?;
@@ -99,39 +141,7 @@ pub(super) async fn fetch_repository_native_snapshot(
     let trust =
         PreparedOpenPgpTrust::prepare(&repo.name, keyring_dir, repo.require_trust_policy()?)
             .await?;
-    let parser = registry::create_parser(parser_config, trust)?;
-    let metadata = parser.sync_metadata(&repo.url).await?;
-
-    let repo_id = repo
-        .id
-        .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-
-    if let Some(ref content_url) = repo.content_url {
-        info!(
-            "Repository {} uses reference mirror - rebasing download URLs to {}",
-            repo.name, content_url
-        );
-    }
-
-    // Convert package metadata to repository rows plus normalized capability rows.
-    let synced_packages: Vec<SyncedPackageRow> = metadata
-        .packages
-        .into_iter()
-        .map(|pkg_meta| {
-            synced_package_row(
-                repo_id,
-                repo.source_profile.as_deref(),
-                &repo.url,
-                repo.content_url.as_deref(),
-                pkg_meta,
-            )
-        })
-        .collect();
-    Ok(RepositorySyncSnapshot::NativeRows {
-        packages: synced_packages,
-        snapshot: metadata.snapshot,
-        authenticated_objects: metadata.authenticated_objects,
-    })
+    registry::create_parser(parser_config, trust)
 }
 
 /// Synchronize repository using native metadata format parsers
@@ -771,7 +781,7 @@ fn persist_repository_sync_snapshot(
 
             link_canonical_ids(&tx, repo_id)?;
 
-            repo.last_sync = Some(current_timestamp());
+            mark_repository_revision_published(repo);
             repo.update(&tx)?;
 
             tx.commit()?;
@@ -801,7 +811,7 @@ fn persist_static_sync_rows(
     RepositoryPackageKey::replace_for_repository_in_transaction(&tx, repo_id, &package_keys)?;
     link_canonical_ids(&tx, repo_id)?;
 
-    repo.last_sync = Some(current_timestamp());
+    mark_repository_revision_published(repo);
     repo.update(&tx)?;
 
     tx.commit()?;
@@ -817,11 +827,11 @@ async fn sync_repository_json(conn: &Connection, repo: &mut Repository) -> Resul
 
 /// Check if repository metadata needs refresh
 pub fn needs_sync(repo: &Repository) -> bool {
-    let Some(last_sync) = &repo.last_sync else {
+    let Some(last_checked_at) = &repo.last_checked_at else {
         return true;
     };
 
-    let Ok(last_sync_time) = parse_timestamp(last_sync) else {
+    let Ok(last_checked_at_time) = parse_timestamp(last_checked_at) else {
         return true;
     };
 
@@ -830,7 +840,15 @@ pub fn needs_sync(repo: &Repository) -> bool {
         .unwrap_or_default()
         .as_secs();
 
-    now.saturating_sub(last_sync_time) > repo.metadata_expire as u64
+    now.saturating_sub(last_checked_at_time) > repo.metadata_expire as u64
+}
+
+fn mark_repository_revision_published(repo: &mut Repository) {
+    let timestamp = current_timestamp();
+    repo.last_checked_at = Some(timestamp.clone());
+    repo.last_changed_at = Some(timestamp.clone());
+    repo.last_validated_at = Some(timestamp.clone());
+    repo.last_published_at = Some(timestamp);
 }
 
 /// Link repository_packages to their canonical identity.

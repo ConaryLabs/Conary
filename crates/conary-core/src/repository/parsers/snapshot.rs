@@ -5,8 +5,6 @@
 use crate::error::{Error, Result};
 use crate::repository::catalog::SourceMetadataObjectV1;
 
-use super::PackageMetadata;
-
 /// One exact authenticated child metadata object read by a native parser.
 ///
 /// This is an alias of the catalog contract's object type so parser output and
@@ -15,6 +13,7 @@ use super::PackageMetadata;
 pub type AuthenticatedMetadataObject = SourceMetadataObjectV1;
 pub use crate::repository::catalog::SourceMetadataObjectRoleV1 as AuthenticatedMetadataObjectRole;
 
+#[cfg(test)]
 pub(crate) fn authenticated_metadata_object(
     role: AuthenticatedMetadataObjectRole,
     source_path: &str,
@@ -55,6 +54,16 @@ impl AuthenticatedSnapshotIdentity {
         Ok(Self { sha256, size: None })
     }
 
+    pub(crate) fn from_download(
+        identity: &crate::repository::client::DownloadedFileIdentity,
+    ) -> Result<Self> {
+        validate_sha256(&identity.sha256)?;
+        Ok(Self {
+            sha256: identity.sha256.clone(),
+            size: Some(identity.size),
+        })
+    }
+
     pub fn for_bytes(bytes: &[u8]) -> Self {
         Self {
             sha256: crate::hash::sha256(bytes),
@@ -74,16 +83,6 @@ impl AuthenticatedSnapshotIdentity {
     pub fn size(&self) -> Option<u64> {
         self.size
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct AuthenticatedRepositoryMetadata {
-    pub packages: Vec<PackageMetadata>,
-    pub snapshot: AuthenticatedSnapshotIdentity,
-    /// Exact child metadata objects covered by `snapshot` and consumed to
-    /// produce `packages`. The vector is strict and canonical: at most one
-    /// object per role, ordered by role then source path.
-    pub authenticated_objects: Vec<AuthenticatedMetadataObject>,
 }
 
 fn validate_sha256(value: &str) -> Result<()> {
