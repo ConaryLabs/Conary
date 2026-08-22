@@ -244,7 +244,7 @@ mod tests {
         assert!(needs_sync(&repo_never_synced));
 
         let mut repo_recently_synced = Repository::new("test".to_string(), "url".to_string());
-        repo_recently_synced.last_sync = Some(current_timestamp());
+        repo_recently_synced.last_checked_at = Some(current_timestamp());
         repo_recently_synced.metadata_expire = 3600; // 1 hour
         assert!(!needs_sync(&repo_recently_synced));
     }

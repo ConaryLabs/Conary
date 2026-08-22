@@ -340,7 +340,7 @@ mod tests {
             current.metadata_expire = 21_600;
             current.insert(&conn).expect("insert current source");
             conn.execute(
-                "UPDATE repositories SET last_sync = ?1 WHERE name = ?2",
+                "UPDATE repositories SET last_checked_at = ?1 WHERE name = ?2",
                 rusqlite::params![
                     conary_core::repository::current_timestamp(),
                     "current-fedora"

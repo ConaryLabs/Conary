@@ -448,7 +448,7 @@ fn apply_repeat_drift_and_rollback_preserve_exact_authority() {
     );
     let mut sync_update = Repository::find_by_name(&conn, "vendor").unwrap().unwrap();
     assert!(sync_update.enabled);
-    sync_update.last_sync = Some("2026-08-11T00:00:00Z".to_string());
+    sync_update.last_checked_at = Some("2026-08-11T00:00:00Z".to_string());
     sync_update.update(&conn).unwrap();
 
     let repeated =

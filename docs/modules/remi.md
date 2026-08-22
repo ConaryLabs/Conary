@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 36
+revision: 37
 summary: Document Remi immutable source and profile catalogs, exact revision activation and pinning, source identity and update policy, process-wide runtime ownership, signing, repository trust, publication coordination and readiness, conversion profiling, R2 durability inventory, and serving authority
 ---
 
@@ -71,6 +71,25 @@ repository-priority tier remains; native version ordering applies only within
 that tier. Equal-priority candidates remain visible for exact native comparison
 or typed ambiguity. Member order, repository names, and catalog insertion order
 never select a package.
+
+`RepositorySnapshotSink` schema 1 is the only native parser output contract.
+Fedora primary/filelists XML, Debian Packages stanzas, ALPM archive records,
+and eopkg Package XML are authenticated into private files and decoded one
+record at a time. The sink inserts directly into the source-catalog candidate;
+Fedora pkgid joins and ALPM desc/depends pairing use private indexed SQLite
+state. Candidate logical hashing, count validation, reopen verification, and
+profile composition iterate in canonical database order with one complete
+package projection retained at a time.
+
+Normalized source projections may be reused from
+`<storage.root>/cache/native-projections/<key-sha256>/`. Cache schema 1 binds
+the exact stream-binding SHA-256, authenticated root digest and size, ordered
+child role/path/digest/size set, parser projection version, catalog schema,
+and verified catalog binding. A miss reparses. A tampered, mixed, or
+noncanonical entry is removed from this exact cache namespace and cannot become
+package authority. Cache candidates are private, synchronized, and atomically
+renamed; a cache fault fails the private refresh and leaves the active profile
+pointer unchanged.
 
 Construction is private beneath `catalog-candidates/<run-id>/`. Candidate
 SQLite integrity, schema, ordering, counts, logical digest, and source
@@ -238,7 +257,8 @@ The previously synced repository remains the only enabled snapshot while
 network, parsing, and validation work continues. Publication first commits a
 `ready_to_publish` state, then one SQLite transaction proves the run still owns
 the scope's current process identity and fencing epoch, replaces the old rows,
-moves the candidate rows, links canonical IDs, advances `last_sync`, records
+moves the candidate rows, links canonical IDs, advances the distinct checked,
+changed, validated, and published repository facts, records
 the active revision, and marks the run published. A stale worker can continue
 computation but cannot publish. Returned failures abandon and remove their
 exact candidate. After process termination, the next run recovers only the
@@ -392,7 +412,7 @@ cache identity. Row persistence atomically creates a durable conversion pin to
 that revision, and deletion removes the row and pin in the same transaction.
 Public, OCI, index, search, chunk, and garbage-collection paths validate the
 typed artifact and its exact pin instead of filling missing fields with guesses
-or consulting mutable operational package rows. Schema revision 48 makes this
+or consulting mutable operational package rows. Schema revision 49 makes this
 identity required, replaces the previous latest-profile conversion key, and
 removes the mutable latest-authenticated-snapshot repository field. It is a
 pre-alpha hard cut: prior databases are rebuilt and

@@ -220,11 +220,13 @@ async fn test_download_file_requests_identity_encoding() {
     let temp_dir = tempfile::tempdir().unwrap();
     let dest_path = temp_dir.path().join("package.ccs");
     let client = RepositoryClient::new().unwrap();
-    client
-        .download_file(&format!("http://{addr}/package.ccs"), &dest_path)
+    let identity = client
+        .download_file_with_identity(&format!("http://{addr}/package.ccs"), &dest_path)
         .await
         .unwrap();
     assert_eq!(std::fs::read(&dest_path).unwrap(), b"ok");
+    assert_eq!(identity.size, 2);
+    assert_eq!(identity.sha256, crate::hash::sha256(b"ok"));
 
     let request = server.await.unwrap().to_ascii_lowercase();
     assert!(

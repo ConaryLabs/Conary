@@ -114,7 +114,10 @@ pub async fn cmd_repo_reset_trust(name: &str, db_path: &str) -> Result<()> {
     repo.enabled = false;
     repo.tuf_enabled = false;
     repo.tuf_root_version = None;
-    repo.last_sync = None;
+    repo.last_checked_at = None;
+    repo.last_changed_at = None;
+    repo.last_validated_at = None;
+    repo.last_published_at = None;
     repo.update(&tx)?;
     tx.commit()?;
 
@@ -208,7 +211,10 @@ fn apply_static_repo_options(
     repo.tuf_root_version = None;
     repo.tuf_root_url = Some(metadata_url.to_string());
     repo.security_advisory_support = opts.security_advisory_support;
-    repo.last_sync = None;
+    repo.last_checked_at = None;
+    repo.last_changed_at = None;
+    repo.last_validated_at = None;
+    repo.last_published_at = None;
 }
 
 fn clear_static_repository_state(conn: &Connection, repo_id: i64) -> Result<()> {

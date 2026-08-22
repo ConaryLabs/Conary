@@ -65,7 +65,7 @@ fn ensure_current_is_idempotent_for_current_epoch() {
 }
 
 #[test]
-fn revision_45_requires_rebuild_for_revision_48() {
+fn revision_45_requires_rebuild_for_revision_49() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE schema_identity (
@@ -85,7 +85,7 @@ fn revision_45_requires_rebuild_for_revision_48() {
     let error = ensure_current(&conn).unwrap_err();
     assert_eq!(
         error.to_string(),
-        "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 45; this pre-alpha build supports only schema epoch conary-current-v1 revision 48"
+        "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 45; this pre-alpha build supports only schema epoch conary-current-v1 revision 49"
     );
 }
 

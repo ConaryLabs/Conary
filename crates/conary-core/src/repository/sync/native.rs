@@ -12,8 +12,8 @@ use crate::repository::dependency_model::{
 use crate::repository::parsers::PackageMetadata;
 use rusqlite::Connection;
 
+use super::link_canonical_ids;
 use super::types::SyncedPackageRow;
-use super::{current_timestamp, link_canonical_ids};
 
 pub(super) fn persist_native_sync_rows(
     conn: &Connection,
@@ -31,7 +31,7 @@ pub(super) fn persist_native_sync_rows(
     repo.validate_authenticated_snapshot(&snapshot)?;
     persist_synced_package_rows(&tx, repo_id, synced_packages)?;
     link_canonical_ids(&tx, repo_id)?;
-    repo.last_sync = Some(current_timestamp());
+    super::mark_repository_revision_published(repo);
     repo.update(&tx)?;
 
     tx.commit()?;
@@ -187,20 +187,7 @@ pub(super) fn normalized_repository_capabilities(
         pkg_meta
             .provides
             .iter()
-            .map(|provide| {
-                let kind = capability_kind_to_db(provide.kind);
-                RepositoryProvide::new(
-                    0,
-                    provide.name.clone(),
-                    provide.version.clone(),
-                    kind,
-                    provide.native_text.clone(),
-                    scheme,
-                )
-                .with_version_relation(provide.version_relation)
-                .with_architecture_qualifier(provide.architecture_qualifier.clone())
-                .with_provenance(provide.provenance.clone())
-            })
+            .map(|provide| normalized_repository_provide(provide, scheme))
             .collect()
     } else {
         vec![RepositoryProvide::new(
@@ -212,6 +199,24 @@ pub(super) fn normalized_repository_capabilities(
             scheme,
         )]
     }
+}
+
+pub(in crate::repository) fn normalized_repository_provide(
+    provide: &crate::repository::dependency_model::RepositoryProvide,
+    scheme: crate::repository::versioning::VersionScheme,
+) -> RepositoryProvide {
+    let kind = capability_kind_to_db(provide.kind);
+    RepositoryProvide::new(
+        0,
+        provide.name.clone(),
+        provide.version.clone(),
+        kind,
+        provide.native_text.clone(),
+        scheme,
+    )
+    .with_version_relation(provide.version_relation)
+    .with_architecture_qualifier(provide.architecture_qualifier.clone())
+    .with_provenance(provide.provenance.clone())
 }
 
 pub(in crate::repository) fn capability_kind_to_db(kind: RepositoryCapabilityKind) -> String {

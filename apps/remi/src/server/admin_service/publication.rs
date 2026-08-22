@@ -63,7 +63,11 @@ mod tests {
             "https://example.invalid/fedora".to_string(),
         );
         repository.source_profile = Some("fedora-44".to_string());
-        repository.last_sync = Some(conary_core::repository::current_timestamp());
+        let published_at = conary_core::repository::current_timestamp();
+        repository.last_checked_at = Some(published_at.clone());
+        repository.last_changed_at = Some(published_at.clone());
+        repository.last_validated_at = Some(published_at.clone());
+        repository.last_published_at = Some(published_at);
         repository
             .set_parser_config(RepositoryParserConfig::Json)
             .expect("set parser configuration");

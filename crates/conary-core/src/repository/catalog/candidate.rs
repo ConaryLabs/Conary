@@ -5,17 +5,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use super::record::CatalogLogicalDigestV1;
 use super::store::{
     CATALOG_APPLICATION_ID, CATALOG_SCHEMA, canonical_json_string, checked_i64, checked_ordinal,
-    create_private_file, for_each_package_connection, hash_file, insert_package, sidecar_path,
-    sync_parent, validate_candidate_path,
+    create_private_file, for_each_package_connection, hash_file, insert_package, package_by_key,
+    replace_package_provides, sidecar_path, sync_parent, validate_candidate_path,
 };
 use super::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogBindingV1, CatalogPackageRecordV1,
-    CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1,
+    CatalogProvideRecordV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1,
 };
 use crate::error::{Error, Result};
 
@@ -25,6 +25,13 @@ pub struct CatalogCandidateWriter {
     scope: CatalogScopeV1,
     connection: Option<Connection>,
     complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::repository) struct CatalogProvideMerge {
+    pub matched_packages: usize,
+    pub added: usize,
+    pub already_known: usize,
 }
 
 impl CatalogCandidateWriter {
@@ -76,6 +83,133 @@ impl CatalogCandidateWriter {
         insert_package(self.connection()?, &package)
     }
 
+    pub(in crate::repository) fn extend_package_provides(
+        &mut self,
+        join: &str,
+        checksum: &str,
+        name: &str,
+        version: &str,
+        architecture: Option<&str>,
+        provides: Vec<CatalogProvideRecordV1>,
+    ) -> Result<CatalogProvideMerge> {
+        self.connection()?.execute_batch(
+            "CREATE TABLE IF NOT EXISTS catalog_ingest_join_marks (
+                 join_kind TEXT NOT NULL,
+                 package_key_sha256 TEXT NOT NULL
+                     REFERENCES catalog_packages(package_key_sha256) ON DELETE CASCADE,
+                 PRIMARY KEY (join_kind, package_key_sha256)
+             ) STRICT, WITHOUT ROWID;",
+        )?;
+        let primary = self
+            .connection()?
+            .query_row(
+                "SELECT package_key_sha256, name, version, architecture
+                 FROM catalog_packages WHERE checksum = ?1
+                 ORDER BY package_key_sha256 LIMIT 1",
+                [checksum],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| {
+                Error::ParseError(format!(
+                    "signed filelists.xml publishes file records for pkgid {checksum}, which the signed primary.xml does not publish"
+                ))
+            })?;
+        let (package_key, primary_name, primary_version, primary_architecture) = primary;
+        let disagreement = if primary_name != name {
+            Some(("name", name, primary_name.as_str()))
+        } else if primary_architecture.as_deref() != architecture {
+            Some((
+                "architecture",
+                architecture.unwrap_or_default(),
+                primary_architecture.as_deref().unwrap_or_default(),
+            ))
+        } else if primary_version != version {
+            Some(("version", version, primary_version.as_str()))
+        } else {
+            None
+        };
+        if let Some((field, child, primary)) = disagreement {
+            return Err(Error::ParseError(format!(
+                "signed filelists.xml and primary.xml disagree on pkgid {checksum}: filelists {field} is '{child}' but primary {field} is '{primary}'"
+            )));
+        }
+        if let Err(error) = self.connection()?.execute(
+            "INSERT INTO catalog_ingest_join_marks (join_kind, package_key_sha256)
+             VALUES (?1, ?2)",
+            params![join, &package_key],
+        ) {
+            return Err(Error::ConflictError(format!(
+                "authenticated child metadata repeats package {name} {version} ({checksum}): {error}"
+            )));
+        }
+
+        let mut package = package_by_key(self.connection()?, &self.scope, &package_key)?;
+        let mut result = CatalogProvideMerge {
+            matched_packages: 1,
+            ..CatalogProvideMerge::default()
+        };
+        for provide in provides {
+            if package.provides.contains(&provide) {
+                result.already_known += 1;
+            } else {
+                package.provides.push(provide);
+                result.added += 1;
+            }
+        }
+        package.canonicalize_for_scope(&self.scope)?;
+        replace_package_provides(self.connection()?, &package)?;
+        Ok(result)
+    }
+
+    pub(in crate::repository) fn finish_package_join(&mut self, join: &str) -> Result<()> {
+        let marked: i64 = self.connection()?.query_row(
+            "SELECT count(*) FROM catalog_ingest_join_marks WHERE join_kind = ?1",
+            [join],
+            |row| row.get(0),
+        )?;
+        let packages: i64 =
+            self.connection()?
+                .query_row("SELECT count(*) FROM catalog_packages", [], |row| {
+                    row.get(0)
+                })?;
+        if marked != packages {
+            let missing = self.connection()?.query_row(
+                "SELECT name, version, checksum FROM catalog_packages AS package
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM catalog_ingest_join_marks AS mark
+                     WHERE mark.join_kind = ?1
+                       AND mark.package_key_sha256 = package.package_key_sha256
+                 )
+                 ORDER BY package.package_key_sha256 LIMIT 1",
+                [join],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )?;
+            return Err(Error::ParseError(format!(
+                "signed filelists.xml publishes no file record for package {} {} (pkgid {})",
+                missing.0, missing.1, missing.2
+            )));
+        }
+        self.connection()?.execute(
+            "DELETE FROM catalog_ingest_join_marks WHERE join_kind = ?1",
+            [join],
+        )?;
+        Ok(())
+    }
+
     /// Bind exact source evidence, calculate the canonical logical identity by
     /// ordered iteration, and reopen the resulting artifact before returning.
     pub fn finish(
@@ -83,6 +217,20 @@ impl CatalogCandidateWriter {
         source_evidence: Vec<CatalogSourceEvidenceV1>,
     ) -> Result<CatalogBindingV1> {
         let scope = self.scope.clone();
+        if table_exists(self.connection()?, "catalog_ingest_join_marks")? {
+            let unfinished: i64 = self.connection()?.query_row(
+                "SELECT count(*) FROM catalog_ingest_join_marks",
+                [],
+                |row| row.get(0),
+            )?;
+            if unfinished != 0 {
+                return Err(Error::ConflictError(format!(
+                    "catalog candidate has {unfinished} unfinished authenticated child join marks"
+                )));
+            }
+            self.connection()?
+                .execute_batch("DROP TABLE catalog_ingest_join_marks")?;
+        }
         self.connection()?.execute_batch("COMMIT")?;
 
         let mut digest = CatalogLogicalDigestV1::new(&scope, &source_evidence)?;
@@ -156,6 +304,17 @@ impl CatalogCandidateWriter {
             Error::InternalError("catalog candidate writer has no open connection".to_string())
         })
     }
+}
+
+fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1",
+            [table],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 impl Drop for CatalogCandidateWriter {

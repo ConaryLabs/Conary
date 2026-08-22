@@ -38,6 +38,8 @@ use openpgp::parse::Parse;
 use openpgp::policy::StandardPolicy;
 use openpgp::types::{RevocationStatus, SignatureType};
 use sequoia_openpgp as openpgp;
+use std::io::Read;
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use super::snapshot::{ArchSignatureValidity, ArchTrustSnapshot};
@@ -165,6 +167,36 @@ pub fn check_detached(
     Ok(results)
 }
 
+/// File-backed form of [`verify_detached`] for distribution-sized ALPM
+/// database and package objects.
+pub fn verify_detached_file(
+    snapshot: &ArchTrustSnapshot,
+    path: &Path,
+    signature: &[u8],
+) -> Result<Vec<ArchSignatureResult>> {
+    let signatures = parse_signatures(signature)?;
+    signatures
+        .iter()
+        .map(|signature| evaluate_file(snapshot, path, signature))
+        .collect()
+}
+
+/// File-backed form of [`check_detached`].
+pub fn check_detached_file(
+    snapshot: &ArchTrustSnapshot,
+    path: &Path,
+    signature: &[u8],
+) -> Result<Vec<ArchSignatureResult>> {
+    let results = verify_detached_file(snapshot, path, signature)?;
+    if let Some(rejected) = results
+        .iter()
+        .find(|result| !result.accepted_under_trusted_only())
+    {
+        return Err(Error::GpgVerificationFailed(rejected.describe()));
+    }
+    Ok(results)
+}
+
 /// Parses the detached signature object.
 ///
 /// `gpgme_op_verify` fails with `ALPM_ERR_SIG_MISSING` when the object
@@ -198,6 +230,32 @@ fn evaluate(
     snapshot: &ArchTrustSnapshot,
     data: &[u8],
     signature: &Signature,
+) -> Result<ArchSignatureResult> {
+    evaluate_document(snapshot, signature, |signature, key| {
+        verify_bytes(signature, key, data)
+    })
+}
+
+fn evaluate_file(
+    snapshot: &ArchTrustSnapshot,
+    path: &Path,
+    signature: &Signature,
+) -> Result<ArchSignatureResult> {
+    evaluate_document(snapshot, signature, |signature, key| {
+        verify_file(signature, key, path)
+    })
+}
+
+fn evaluate_document(
+    snapshot: &ArchTrustSnapshot,
+    signature: &Signature,
+    verify_document: impl FnOnce(
+        &Signature,
+        &openpgp::packet::Key<
+            openpgp::packet::key::PublicParts,
+            openpgp::packet::key::UnspecifiedRole,
+        >,
+    ) -> anyhow::Result<()>,
 ) -> Result<ArchSignatureResult> {
     let policy = StandardPolicy::new();
     let snapshot_time = snapshot.snapshot_time();
@@ -307,7 +365,7 @@ fn evaluate(
         return Ok(result);
     }
 
-    if verify_bytes(signature, &signing_key, data).is_err() {
+    if verify_document(signature, &signing_key).is_err() {
         result.status = ArchSignatureStatus::Invalid(ArchInvalidReason::BadSignature);
         return Ok(result);
     }
@@ -345,6 +403,30 @@ fn verify_bytes(
         .context()?
         .for_signature(signature.version());
     context.update(data);
+    signature.verify_hash(key, context)
+}
+
+fn verify_file(
+    signature: &Signature,
+    key: &openpgp::packet::Key<
+        openpgp::packet::key::PublicParts,
+        openpgp::packet::key::UnspecifiedRole,
+    >,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let mut context = signature
+        .hash_algo()
+        .context()?
+        .for_signature(signature.version());
+    let mut file = std::fs::File::open(path)?;
+    let mut buffer = [0_u8; 256 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        context.update(&buffer[..read]);
+    }
     signature.verify_hash(key, context)
 }
 

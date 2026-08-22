@@ -34,7 +34,7 @@ impl AnyParser {
     }
 
     pub async fn sync_metadata(&self, repo_url: &str) -> Result<AuthenticatedRepositoryMetadata> {
-        let mut sink = parsers::CollectingRepositorySnapshotSink::default();
+        let mut sink = parsers::CollectingRepositorySnapshotSink::create()?;
         let snapshot = self.ingest_snapshot(repo_url, &mut sink).await?;
         sink.finish(snapshot)
     }

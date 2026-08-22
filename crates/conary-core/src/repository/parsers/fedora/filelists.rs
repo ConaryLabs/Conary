@@ -43,14 +43,20 @@ use super::provides::extend_file_provides;
 use super::repomd::RepoMdDocument;
 use super::{local_tag_name, rpm_version_text};
 use crate::error::{Error, Result};
+#[cfg(test)]
 use crate::repository::dependency_model::{
     RepositoryCapabilityKind, RepositoryRequirementExpression, RepositoryRequirementKind,
 };
+#[cfg(test)]
 use crate::repository::parsers::PackageMetadata;
+use crate::repository::parsers::{
+    ChecksumType, RepositorySnapshotSink, SnapshotPackageIdentity, SnapshotPackageJoin,
+};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
-use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, Read};
+use std::collections::HashSet;
+use std::io::BufRead;
+use std::path::Path;
 
 const DOCUMENT: RepoMdDocument = RepoMdDocument::Filelists;
 
@@ -65,71 +71,30 @@ pub(super) struct FilelistsIngest {
     pub(super) files_already_known: usize,
 }
 
-/// A reader that admits exactly the signed decompressed length.
+/// Decode and ingest one verified, file-backed `filelists.xml` payload.
 ///
-/// The ceiling comes from the authenticated `repomd.xml` record, so a stream
-/// that decodes to more than the repository signed for is refused before the
-/// extra bytes are parsed, and a stream that stops early is caught by the
-/// final length comparison.
-struct AuthenticatedLengthReader<R> {
-    inner: R,
-    read: u64,
-    ceiling: u64,
-    label: &'static str,
-}
-
-impl<R: Read> AuthenticatedLengthReader<R> {
-    fn new(inner: R, ceiling: u64, label: &'static str) -> Self {
-        Self {
-            inner,
-            read: 0,
-            ceiling,
-            label,
-        }
-    }
-
-    const fn read_bytes(&self) -> u64 {
-        self.read
-    }
-}
-
-impl<R: Read> Read for AuthenticatedLengthReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read = self.inner.read(buf)?;
-        self.read = self.read.saturating_add(read as u64);
-        if self.read > self.ceiling {
-            return Err(std::io::Error::other(format!(
-                "RPM {} metadata decodes to more than the {} bytes the signed repomd.xml declares",
-                self.label, self.ceiling
-            )));
-        }
-        Ok(read)
-    }
-}
-
-/// Decode and ingest one verified `filelists.xml` payload.
-///
-/// `compressed_bytes` must already have been verified against its signed
+/// `path` must already have been verified against its signed
 /// `repomd.xml` record; this function owns only decoding and projection.
-pub(super) fn ingest_verified_filelists(
-    packages: &mut [PackageMetadata],
-    compressed_bytes: &[u8],
+pub(super) fn ingest_verified_filelists_into<S: RepositorySnapshotSink>(
+    sink: &mut S,
+    path: &Path,
     open_size: u64,
     source: &str,
 ) -> Result<FilelistsIngest> {
-    let format = crate::compression::CompressionFormat::from_magic_bytes(compressed_bytes);
-    let decoder =
-        crate::compression::create_decoder(compressed_bytes, format).map_err(|error| {
-            Error::ParseError(format!(
-                "failed to decode RPM filelists metadata {source}: {error}"
-            ))
-        })?;
+    let decoder = crate::repository::parsers::common::open_metadata_decoder(
+        path,
+        &format!("RPM filelists metadata {source}"),
+    )?;
     let mut reader = std::io::BufReader::with_capacity(
         256 * 1024,
-        AuthenticatedLengthReader::new(decoder, open_size, DOCUMENT.label()),
+        crate::repository::parsers::common::AuthenticatedLengthReader::new(
+            decoder,
+            open_size,
+            "RPM filelists metadata",
+        ),
     );
 
-    let ingest = ingest_filelists(packages, &mut reader, source)?;
+    let ingest = ingest_filelists_into(sink, &mut reader, source)?;
 
     let decoded = reader.get_ref().read_bytes();
     if decoded != open_size {
@@ -141,26 +106,13 @@ pub(super) fn ingest_verified_filelists(
     Ok(ingest)
 }
 
-/// Fold every `<package>` record of a filelists document into its package.
-pub(super) fn ingest_filelists<R: BufRead>(
-    packages: &mut [PackageMetadata],
+/// Fold every `<package>` record into its exact catalog package through the
+/// authenticated sink join.
+fn ingest_filelists_into<R: BufRead, S: RepositorySnapshotSink>(
+    sink: &mut S,
     document: R,
     source: &str,
 ) -> Result<FilelistsIngest> {
-    let mut by_pkgid: HashMap<&str, Vec<usize>> = HashMap::with_capacity(packages.len());
-    for (index, package) in packages.iter().enumerate() {
-        by_pkgid
-            .entry(package.checksum.as_str())
-            .or_default()
-            .push(index);
-    }
-    // `by_pkgid` borrows the corpus, so resolve every record's targets into
-    // owned indices before any package is mutated.
-    let by_pkgid: HashMap<String, Vec<usize>> = by_pkgid
-        .into_iter()
-        .map(|(pkgid, indices)| (pkgid.to_string(), indices))
-        .collect();
-
     let mut reader = Reader::from_reader(document);
     reader.config_mut().trim_text_end = true;
 
@@ -168,7 +120,6 @@ pub(super) fn ingest_filelists<R: BufRead>(
     let mut record = FileRecordReader::new(DOCUMENT);
     let mut cursor: Option<PackageCursor> = None;
     let mut declared_packages: Option<usize> = None;
-    let mut matched = vec![false; packages.len()];
     let mut ingest = FilelistsIngest::default();
 
     loop {
@@ -201,13 +152,7 @@ pub(super) fn ingest_filelists<R: BufRead>(
                                     .to_string(),
                             ));
                         }
-                        cursor = Some(PackageCursor::open(
-                            element,
-                            &reader,
-                            &by_pkgid,
-                            packages,
-                            &mut matched,
-                        )?);
+                        cursor = Some(PackageCursor::open(element, &reader)?);
                         ingest.records += 1;
                     }
                     "version" => {
@@ -217,7 +162,7 @@ pub(super) fn ingest_filelists<R: BufRead>(
                                     .to_string(),
                             )
                         })?;
-                        cursor.admit_version(element, &reader, packages)?;
+                        cursor.admit_version(element, &reader)?;
                     }
                     "file" => {
                         if cursor.is_none() {
@@ -297,7 +242,7 @@ pub(super) fn ingest_filelists<R: BufRead>(
                                 "RPM filelists file record appears outside a package".to_string(),
                             )
                         })?;
-                        cursor.admit_file(path, packages, &mut ingest);
+                        cursor.admit_file(path);
                     }
                     "package" => {
                         let cursor = cursor.take().ok_or_else(|| {
@@ -305,7 +250,9 @@ pub(super) fn ingest_filelists<R: BufRead>(
                                 "filelists.xml ended a package that was never started".to_string(),
                             )
                         })?;
-                        cursor.close()?;
+                        let update = cursor.close(sink)?;
+                        ingest.files_added += update.added;
+                        ingest.files_already_known += update.already_known;
                     }
                     _ => {}
                 }
@@ -329,138 +276,137 @@ pub(super) fn ingest_filelists<R: BufRead>(
             ingest.records
         )));
     }
-    if let Some(index) = matched.iter().position(|matched| !matched) {
-        let package = &packages[index];
-        return Err(Error::ParseError(format!(
-            "signed filelists.xml {source} publishes no file record for package {} {} (pkgid {}); \
-             the two signed documents describe different package sets",
-            package.name, package.version, package.checksum
-        )));
-    }
+    sink.finish_package_join(SnapshotPackageJoin::RpmFilelists)?;
 
     Ok(ingest)
 }
 
-/// One open `<package>` record and the corpus entries it feeds.
+/// One open `<package>` record. Memory is bounded by this record alone.
 struct PackageCursor {
-    pkgid: String,
-    targets: Vec<usize>,
-    /// Paths this package already provides, so a path both documents carry
-    /// becomes exactly one capability row.
+    identity: SnapshotPackageIdentity,
     known_paths: HashSet<String>,
+    provides: Vec<crate::repository::dependency_model::RepositoryProvide>,
     version_seen: bool,
 }
 
 impl PackageCursor {
-    fn open<R>(
-        element: &BytesStart<'_>,
-        reader: &Reader<R>,
-        by_pkgid: &HashMap<String, Vec<usize>>,
-        packages: &[PackageMetadata],
-        matched: &mut [bool],
-    ) -> Result<Self> {
+    fn open<R>(element: &BytesStart<'_>, reader: &Reader<R>) -> Result<Self> {
         let pkgid = required_attribute(element, reader, b"pkgid", "package pkgid")?;
         let name = required_attribute(element, reader, b"name", "package name")?;
         let arch = required_attribute(element, reader, b"arch", "package arch")?;
 
-        let targets = by_pkgid.get(&pkgid).cloned().ok_or_else(|| {
-            Error::ParseError(format!(
-                "signed filelists.xml publishes file records for pkgid {pkgid} ({name}.{arch}), \
-                 which the signed primary.xml does not publish; the two signed documents describe \
-                 different package sets"
-            ))
-        })?;
-
-        let mut known_paths = HashSet::new();
-        for &index in &targets {
-            let package = &packages[index];
-            if package.name != name {
-                return Err(Self::disagreement(&pkgid, "name", &name, &package.name));
-            }
-            let package_arch = package.architecture.as_deref().unwrap_or_default();
-            if package_arch != arch {
-                return Err(Self::disagreement(
-                    &pkgid,
-                    "architecture",
-                    &arch,
-                    package_arch,
-                ));
-            }
-            known_paths.extend(
-                package
-                    .provides
-                    .iter()
-                    .filter(|provide| provide.kind == RepositoryCapabilityKind::File)
-                    .map(|provide| provide.name.clone()),
-            );
-            matched[index] = true;
-        }
-
         Ok(Self {
-            pkgid,
-            targets,
-            known_paths,
+            identity: SnapshotPackageIdentity {
+                name,
+                version: String::new(),
+                architecture: Some(arch),
+                checksum: pkgid,
+                checksum_type: ChecksumType::Sha256,
+            },
+            known_paths: HashSet::new(),
+            provides: Vec::new(),
             version_seen: false,
         })
     }
 
-    fn disagreement(pkgid: &str, field: &str, filelists: &str, primary: &str) -> Error {
-        Error::ParseError(format!(
-            "signed filelists.xml and primary.xml disagree on pkgid {pkgid}: filelists {field} is \
-             '{filelists}' but primary {field} is '{primary}'"
-        ))
-    }
-
-    fn admit_version<R>(
-        &mut self,
-        element: &BytesStart<'_>,
-        reader: &Reader<R>,
-        packages: &[PackageMetadata],
-    ) -> Result<()> {
+    fn admit_version<R>(&mut self, element: &BytesStart<'_>, reader: &Reader<R>) -> Result<()> {
+        if self.version_seen {
+            return Err(Error::ParseError(format!(
+                "filelists.xml package record for pkgid {} repeats its version",
+                self.identity.checksum
+            )));
+        }
         let epoch = attribute(element, reader, b"epoch", "package epoch")?;
         let ver = required_attribute(element, reader, b"ver", "package version")?;
         let rel = required_attribute(element, reader, b"rel", "package release")?;
-        let version = rpm_version_text(epoch.as_deref(), &ver, &rel);
-        for &index in &self.targets {
-            let package = &packages[index];
-            if package.version != version {
-                return Err(Self::disagreement(
-                    &self.pkgid,
-                    "version",
-                    &version,
-                    &package.version,
-                ));
-            }
-        }
+        self.identity.version = rpm_version_text(epoch.as_deref(), &ver, &rel);
         self.version_seen = true;
         Ok(())
     }
 
-    fn admit_file(
-        &mut self,
-        path: String,
-        packages: &mut [PackageMetadata],
-        ingest: &mut FilelistsIngest,
-    ) {
-        if !self.known_paths.insert(path.clone()) {
-            ingest.files_already_known += 1;
-            return;
+    fn admit_file(&mut self, path: String) {
+        if self.known_paths.insert(path.clone()) {
+            extend_file_provides(&mut self.provides, &path);
         }
-        for &index in &self.targets {
-            extend_file_provides(&mut packages[index].provides, &path);
-        }
-        ingest.files_added += 1;
     }
 
-    fn close(self) -> Result<()> {
+    fn close<S: RepositorySnapshotSink>(
+        self,
+        sink: &mut S,
+    ) -> Result<crate::repository::parsers::SnapshotProvideUpdate> {
         if !self.version_seen {
             return Err(Error::ParseError(format!(
                 "filelists.xml package record for pkgid {} carries no version",
-                self.pkgid
+                self.identity.checksum
             )));
         }
-        Ok(())
+        sink.extend_package_provides(
+            SnapshotPackageJoin::RpmFilelists,
+            &self.identity,
+            self.provides,
+        )
     }
+}
+
+#[cfg(test)]
+pub(super) fn ingest_filelists<R: BufRead>(
+    packages: &mut [PackageMetadata],
+    document: R,
+    source: &str,
+) -> Result<FilelistsIngest> {
+    use crate::repository::parsers::CollectingRepositorySnapshotSink;
+
+    let mut sink = CollectingRepositorySnapshotSink::create()?;
+    for package in packages.iter().cloned() {
+        sink.package(package)?;
+    }
+    let ingest = ingest_filelists_into(&mut sink, document, source)?;
+    let metadata = sink.finish(
+        crate::repository::parsers::AuthenticatedSnapshotIdentity::for_bytes(b"filelists test"),
+    )?;
+    packages.clone_from_slice(&metadata.packages);
+    Ok(ingest)
+}
+
+#[cfg(test)]
+pub(super) fn ingest_verified_filelists(
+    packages: &mut [PackageMetadata],
+    compressed_bytes: &[u8],
+    open_size: u64,
+    source: &str,
+) -> Result<FilelistsIngest> {
+    use crate::repository::parsers::CollectingRepositorySnapshotSink;
+
+    let format = crate::compression::CompressionFormat::from_magic_bytes(compressed_bytes);
+    let decoder =
+        crate::compression::create_decoder(compressed_bytes, format).map_err(|error| {
+            Error::ParseError(format!(
+                "failed to decode RPM filelists metadata {source}: {error}"
+            ))
+        })?;
+    let mut reader = std::io::BufReader::new(
+        crate::repository::parsers::common::AuthenticatedLengthReader::new(
+            decoder,
+            open_size,
+            "RPM filelists metadata",
+        ),
+    );
+    let mut sink = CollectingRepositorySnapshotSink::create()?;
+    for package in packages.iter().cloned() {
+        sink.package(package)?;
+    }
+    let ingest = ingest_filelists_into(&mut sink, &mut reader, source)?;
+    let decoded = reader.get_ref().read_bytes();
+    if decoded != open_size {
+        return Err(Error::GpgVerificationFailed(format!(
+            "signed repomd.xml authenticates filelists metadata as {open_size} decompressed bytes but {source} decoded to {decoded} bytes"
+        )));
+    }
+    let metadata = sink.finish(
+        crate::repository::parsers::AuthenticatedSnapshotIdentity::for_bytes(b"filelists test"),
+    )?;
+    packages.clone_from_slice(&metadata.packages);
+    Ok(ingest)
 }
 
 fn attribute<R>(
@@ -521,6 +467,7 @@ fn required_attribute<R>(
 /// The decision is made on the group's typed boolean expression, never on its
 /// flattened alternatives: a flattened view cannot tell `(cap or /path)` from
 /// `(cap and /path)`, and the conjunction is exactly the unsolvable case.
+#[cfg(test)]
 pub(super) fn require_no_filelists_dependent_requirements(
     packages: &[PackageMetadata],
     repo_url: &str,
@@ -581,6 +528,7 @@ pub(super) fn require_no_filelists_dependent_requirements(
 /// Repeated occurrences of one atom are evaluated independently. That can only
 /// make an expression look more satisfiable, so it can cost a refusal that was
 /// warranted but can never invent one that was not.
+#[cfg(test)]
 fn may_hold_without_filelists(
     expression: &RepositoryRequirementExpression,
     provided_paths: &HashSet<&str>,
@@ -637,6 +585,7 @@ fn may_hold_without_filelists(
 
 /// The path atoms of one expression that the filtered primary set cannot
 /// provide, in the order the source wrote them.
+#[cfg(test)]
 fn unprovidable_paths<'a>(
     expression: &'a RepositoryRequirementExpression,
     provided_paths: &HashSet<&str>,
@@ -652,6 +601,7 @@ fn unprovidable_paths<'a>(
 /// An RPM dependency name that starts with `/` is a dependency on a path
 /// rather than on a capability name, and the filtered primary file set is the
 /// only file authority a repository without `filelists.xml` publishes.
+#[cfg(test)]
 fn is_unprovidable_path(name: &str, provided_paths: &HashSet<&str>) -> bool {
     name.starts_with('/') && !provided_paths.contains(name)
 }

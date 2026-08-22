@@ -2,10 +2,9 @@
 
 //! Authenticated native repository metadata-root identity.
 
+use super::PackageMetadata;
 use crate::error::{Error, Result};
 use crate::repository::catalog::SourceMetadataObjectV1;
-
-use super::PackageMetadata;
 
 /// One exact authenticated child metadata object read by a native parser.
 ///
@@ -15,6 +14,7 @@ use super::PackageMetadata;
 pub type AuthenticatedMetadataObject = SourceMetadataObjectV1;
 pub use crate::repository::catalog::SourceMetadataObjectRoleV1 as AuthenticatedMetadataObjectRole;
 
+#[cfg(test)]
 pub(crate) fn authenticated_metadata_object(
     role: AuthenticatedMetadataObjectRole,
     source_path: &str,
@@ -53,6 +53,16 @@ impl AuthenticatedSnapshotIdentity {
         let sha256 = sha256.into();
         validate_sha256(&sha256)?;
         Ok(Self { sha256, size: None })
+    }
+
+    pub(crate) fn from_download(
+        identity: &crate::repository::client::DownloadedFileIdentity,
+    ) -> Result<Self> {
+        validate_sha256(&identity.sha256)?;
+        Ok(Self {
+            sha256: identity.sha256.clone(),
+            size: Some(identity.size),
+        })
     }
 
     pub fn for_bytes(bytes: &[u8]) -> Self {

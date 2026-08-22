@@ -182,10 +182,17 @@ pub(super) fn publish_client_candidate(
     if updated != 1 {
         return Err(stale_fence_error(fence));
     }
-    persisted.last_sync = Some(current_timestamp());
+    let published_at = current_timestamp();
+    persisted.last_checked_at = Some(published_at.clone());
+    persisted.last_changed_at = Some(published_at.clone());
+    persisted.last_validated_at = Some(published_at.clone());
+    persisted.last_published_at = Some(published_at);
     persisted.update(&tx)?;
     tx.commit()?;
-    repository.last_sync = persisted.last_sync;
+    repository.last_checked_at = persisted.last_checked_at;
+    repository.last_changed_at = persisted.last_changed_at;
+    repository.last_validated_at = persisted.last_validated_at;
+    repository.last_published_at = persisted.last_published_at;
     Ok(persisted_count)
 }
 

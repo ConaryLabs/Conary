@@ -2,8 +2,9 @@
 
 //! Deterministic standalone SQLite storage for immutable repository catalogs.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::BufReader;
+#[cfg(test)]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -19,6 +20,15 @@ use super::{
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{DebianMultiArch, ProvideVersionRelation};
 use crate::repository::versioning::VersionScheme;
+
+mod util;
+pub(super) use util::{
+    canonical_json_string, checked_i64, checked_ordinal, create_private_file, hash_file,
+    sidecar_path, sync_parent, validate_candidate_path,
+};
+use util::{
+    checked_sqlite_usize, conversion_error, parse_json_column, read_u64, reject_nonempty_sidecars,
+};
 
 pub(super) const CATALOG_APPLICATION_ID: i64 = 0x434e_5259;
 
@@ -550,26 +560,7 @@ pub(super) fn insert_package(
             package.version_scheme.as_str(),
         ],
     )?;
-    for (ordinal, provide) in package.provides.iter().enumerate() {
-        connection.execute(
-            "INSERT INTO catalog_provides (
-                 package_key_sha256, ordinal, capability, version, version_relation,
-                 kind, raw, version_scheme, architecture_qualifier_json, provenance_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                &package.package_key_sha256,
-                checked_ordinal(ordinal, "provide")?,
-                &provide.capability,
-                &provide.version,
-                provide.version_relation.map(ProvideVersionRelation::as_str),
-                &provide.kind,
-                &provide.raw,
-                provide.version_scheme.as_str(),
-                canonical_json_string(&provide.architecture_qualifier)?,
-                canonical_json_string(&provide.provenance)?,
-            ],
-        )?;
-    }
+    insert_provides(connection, &package.package_key_sha256, &package.provides)?;
     for (group_ordinal, group) in package.requirement_groups.iter().enumerate() {
         let group_ordinal = checked_ordinal(group_ordinal, "requirement group")?;
         connection.execute(
@@ -607,6 +598,64 @@ pub(super) fn insert_package(
         }
     }
     Ok(())
+}
+
+fn insert_provides(
+    connection: &Connection,
+    package_key_sha256: &str,
+    provides: &[CatalogProvideRecordV1],
+) -> Result<()> {
+    for (ordinal, provide) in provides.iter().enumerate() {
+        connection.execute(
+            "INSERT INTO catalog_provides (
+                 package_key_sha256, ordinal, capability, version, version_relation,
+                 kind, raw, version_scheme, architecture_qualifier_json, provenance_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                package_key_sha256,
+                checked_ordinal(ordinal, "provide")?,
+                &provide.capability,
+                &provide.version,
+                provide.version_relation.map(ProvideVersionRelation::as_str),
+                &provide.kind,
+                &provide.raw,
+                provide.version_scheme.as_str(),
+                canonical_json_string(&provide.architecture_qualifier)?,
+                canonical_json_string(&provide.provenance)?,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn package_by_key(
+    connection: &Connection,
+    scope: &CatalogScopeV1,
+    package_key_sha256: &str,
+) -> Result<CatalogPackageRecordV1> {
+    let mut package = connection
+        .query_row(
+            &format!("{SELECT_PACKAGES} WHERE package_key_sha256 = ?1"),
+            [package_key_sha256],
+            package_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| Error::NotFound(format!("catalog package key {package_key_sha256}")))?;
+    package.provides = load_provides(connection, package_key_sha256)?;
+    package.requirement_groups = load_requirement_groups(connection, package_key_sha256)?;
+    package.validate(scope)?;
+    Ok(package)
+}
+
+pub(super) fn replace_package_provides(
+    connection: &Connection,
+    package: &CatalogPackageRecordV1,
+) -> Result<()> {
+    connection.execute(
+        "DELETE FROM catalog_provides WHERE package_key_sha256 = ?1",
+        [&package.package_key_sha256],
+    )?;
+    insert_provides(connection, &package.package_key_sha256, &package.provides)
 }
 
 fn package_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CatalogPackageRecordV1> {
@@ -875,135 +924,6 @@ fn verify_relational_counts(connection: &Connection, expected: CatalogCountsV1) 
         ));
     }
     Ok(())
-}
-
-pub(super) fn validate_candidate_path(path: &Path) -> Result<()> {
-    if path.file_name().is_none() {
-        return Err(Error::InvalidPath(
-            "catalog candidate path must name a file".to_string(),
-        ));
-    }
-    if fs::symlink_metadata(path).is_ok() {
-        return Err(Error::AlreadyExists(format!(
-            "catalog candidate {}",
-            path.display()
-        )));
-    }
-    let parent = path.parent().ok_or_else(|| {
-        Error::InvalidPath(format!(
-            "catalog candidate {} has no parent directory",
-            path.display()
-        ))
-    })?;
-    let metadata = fs::symlink_metadata(parent)?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        return Err(Error::InvalidPath(format!(
-            "catalog candidate parent {} must be a real directory",
-            parent.display()
-        )));
-    }
-    Ok(())
-}
-
-pub(super) fn create_private_file(path: &Path) -> Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path)?;
-    Ok(())
-}
-
-fn reject_nonempty_sidecars(path: &Path) -> Result<()> {
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let sidecar = sidecar_path(path, suffix);
-        if sidecar.metadata().is_ok_and(|metadata| metadata.len() > 0) {
-            return Err(Error::ConflictError(format!(
-                "immutable catalog {} has non-empty SQLite sidecar {}",
-                path.display(),
-                sidecar.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn hash_file(path: &Path) -> Result<String> {
-    let mut reader = BufReader::new(File::open(path)?);
-    Ok(crate::hash::sha256_reader_hex(&mut reader)?)
-}
-
-pub(super) fn sync_parent(path: &Path) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::InvalidPath(format!("{} has no parent directory", path.display())))?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-pub(super) fn sidecar_path(path: &Path, suffix: &str) -> PathBuf {
-    let mut value = path.as_os_str().to_os_string();
-    value.push(suffix);
-    PathBuf::from(value)
-}
-
-pub(super) fn canonical_json_string(value: &impl Serialize) -> Result<String> {
-    let bytes = crate::json::canonical_json(value)
-        .map_err(|error| Error::ParseError(format!("serialize catalog SQLite value: {error}")))?;
-    String::from_utf8(bytes).map_err(|error| {
-        Error::InternalError(format!("canonical catalog JSON was not UTF-8: {error}"))
-    })
-}
-
-pub(super) fn checked_i64(value: u64, label: &str) -> Result<i64> {
-    i64::try_from(value).map_err(|_| {
-        Error::ConfigError(format!(
-            "catalog {label} {value} exceeds SQLite integer range"
-        ))
-    })
-}
-
-pub(super) fn checked_ordinal(value: usize, label: &str) -> Result<i64> {
-    i64::try_from(value).map_err(|_| {
-        Error::ConfigError(format!(
-            "catalog {label} ordinal exceeds SQLite integer range"
-        ))
-    })
-}
-
-fn checked_sqlite_usize(value: usize, label: &str) -> Result<i64> {
-    i64::try_from(value).map_err(|_| {
-        Error::ConfigError(format!(
-            "catalog package-name page {label} exceeds SQLite integer range"
-        ))
-    })
-}
-
-fn read_u64(row: &rusqlite::Row<'_>, column: usize, label: &str) -> rusqlite::Result<u64> {
-    let value: i64 = row.get(column)?;
-    u64::try_from(value).map_err(|_| conversion_error(column, format!("negative {label}")))
-}
-
-fn parse_json_column<T: for<'de> Deserialize<'de>>(
-    row: &rusqlite::Row<'_>,
-    column: usize,
-) -> rusqlite::Result<T> {
-    let raw: String = row.get(column)?;
-    serde_json::from_str(&raw).map_err(|error| conversion_error(column, error.to_string()))
-}
-
-fn conversion_error(column: usize, message: String) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        column,
-        rusqlite::types::Type::Text,
-        Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            message,
-        )),
-    )
 }
 
 #[cfg(test)]

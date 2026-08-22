@@ -5,13 +5,13 @@
 //! Parses Debian-style Packages.gz files which use RFC 822-like format
 //! (similar to email headers with key: value pairs).
 
+mod stanza;
+
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
     AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
     ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
-    authenticated_metadata_object,
 };
-use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
@@ -22,7 +22,7 @@ use crate::repository::package_relation::parse_native_relation;
 use crate::repository::trust::TrustRole;
 use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
 use crate::repository::versioning::VersionScheme;
-use serde::Deserialize;
+use stanza::DebianPackageEntry;
 use tracing::{debug, info};
 
 fn authenticated_release_snapshot(bytes: &[u8]) -> AuthenticatedSnapshotIdentity {
@@ -61,14 +61,14 @@ impl DebianParser {
         })
     }
 
-    /// Download and decompress the Packages file
-    ///
-    /// Uses RepositoryClient for HTTP and the compression module for auto-decompression.
+    /// Download and authenticate the selected Packages object into private
+    /// run-local storage.
     async fn download_packages_file(
         &self,
         repo_url: &str,
+        work_directory: &std::path::Path,
     ) -> Result<(
-        String,
+        std::path::PathBuf,
         AuthenticatedSnapshotIdentity,
         AuthenticatedMetadataObject,
     )> {
@@ -89,41 +89,30 @@ impl DebianParser {
         debug!("Downloading Debian Packages file from: {}", packages_url);
 
         let client = RepositoryClient::new()?;
-        let raw_bytes = client.download_to_bytes(&packages_url).await?;
-        if raw_bytes.len() as u64 != authenticated.size {
+        let packages_path = work_directory.join("debian-packages");
+        let download = client
+            .download_file_with_identity(&packages_url, &packages_path)
+            .await?;
+        let packages_object = AuthenticatedMetadataObject {
+            role: AuthenticatedMetadataObjectRole::DebianPackages,
+            source_path: release_path.clone(),
+            sha256: download.sha256,
+            size: download.size,
+        };
+        if packages_object.size != authenticated.size {
             return Err(Error::GpgVerificationFailed(format!(
                 "Debian Release authenticates {} as {} bytes but the repository served {} bytes",
-                release_path,
-                authenticated.size,
-                raw_bytes.len()
+                release_path, authenticated.size, packages_object.size
             )));
         }
-        let actual = crate::hash::sha256(&raw_bytes);
-        if actual != authenticated.sha256 {
+        if packages_object.sha256 != authenticated.sha256 {
             return Err(Error::GpgVerificationFailed(format!(
                 "Debian Packages identity mismatch for {}: Release SHA256 is {}, downloaded \
                  SHA256 is {}",
-                release_path, authenticated.sha256, actual
+                release_path, authenticated.sha256, packages_object.sha256
             )));
         }
-        let decompressed = decompress_metadata_auto(
-            &raw_bytes,
-            &format!("Debian Packages metadata {packages_url}"),
-        )?;
-        let content = String::from_utf8(decompressed).map_err(|error| {
-            Error::ParseError(format!("Invalid UTF-8 in Packages.gz: {}", error))
-        })?;
-
-        debug!("Decompressed Packages file: {} bytes", content.len());
-        Ok((
-            content,
-            snapshot,
-            authenticated_metadata_object(
-                AuthenticatedMetadataObjectRole::DebianPackages,
-                &release_path,
-                &raw_bytes,
-            ),
-        ))
+        Ok((packages_path, snapshot, packages_object))
     }
 
     async fn download_authenticated_release(&self, repo_url: &str) -> Result<Vec<u8>> {
@@ -474,41 +463,6 @@ fn validate_sha256(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-/// Debian package entry structure for rfc822-like parsing
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct DebianPackageEntry {
-    package: String,
-    version: String,
-    architecture: String,
-    #[serde(rename = "Multi-Arch", default)]
-    multi_arch: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(rename = "SHA256")]
-    sha256: String,
-    size: String,
-    filename: String,
-    #[serde(default)]
-    depends: Option<String>,
-    #[serde(rename = "Pre-Depends", default)]
-    pre_depends: Option<String>,
-    #[serde(default)]
-    conflicts: Option<String>,
-    #[serde(default)]
-    breaks: Option<String>,
-    #[serde(default)]
-    replaces: Option<String>,
-    #[serde(default)]
-    provides: Option<String>,
-    #[serde(default)]
-    homepage: Option<String>,
-    #[serde(default)]
-    section: Option<String>,
-    #[serde(rename = "Installed-Size", default)]
-    installed_size: Option<String>,
-}
-
 impl RepositoryParser for DebianParser {
     async fn ingest_snapshot<S: RepositorySnapshotSink + Send>(
         &self,
@@ -520,20 +474,21 @@ impl RepositoryParser for DebianParser {
             self.distribution, self.component, self.architecture
         );
 
-        // Download and decompress Packages file
-        let (packages_content, snapshot, packages_object) =
-            self.download_packages_file(repo_url).await?;
-
-        // Parse RFC 822-like format
-        let entries: Vec<DebianPackageEntry> = rfc822_like::from_str(&packages_content)
-            .map_err(|e| Error::ParseError(format!("Failed to parse Packages file: {}", e)))?;
-
-        debug!("Parsed {} package entries", entries.len());
-
-        let package_count = entries.len();
-        for entry in entries {
-            sink.package(self.package_from_entry(repo_url, entry)?)?;
+        let work_directory = sink.work_directory().to_path_buf();
+        let (packages_path, snapshot, packages_object) = self
+            .download_packages_file(repo_url, &work_directory)
+            .await?;
+        if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&packages_object))? {
+            info!("Reused cached Debian repository projection");
+            return Ok(snapshot);
         }
+        let decoder = common::open_metadata_decoder(
+            &packages_path,
+            &format!("Debian Packages metadata {}", packages_path.display()),
+        )?;
+        let package_count = stanza::parse_packages(std::io::BufReader::new(decoder), |entry| {
+            sink.package(self.package_from_entry(repo_url, entry)?)
+        })?;
 
         sink.authenticated_object(packages_object)?;
         info!("Parsed {} packages from Debian repository", package_count);

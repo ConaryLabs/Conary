@@ -568,10 +568,10 @@ pub async fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
         for repo in repos {
             let enabled_mark = if repo.enabled { "[x]" } else { "[ ]" };
             let sync_status = repo
-                .last_sync
+                .last_checked_at
                 .as_ref()
-                .map(|ts| format!("synced {}", ts))
-                .unwrap_or_else(|| "never synced".to_string());
+                .map(|ts| format!("checked {}", ts))
+                .unwrap_or_else(|| "never checked".to_string());
             println!(
                 "  {} {} (priority: {}, {})",
                 enabled_mark, repo.name, repo.priority, sync_status

@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].name, "widget");
         let persisted_repo = Repository::find_by_id(&conn, repo_id).unwrap().unwrap();
-        assert!(persisted_repo.last_sync.is_some());
+        assert!(persisted_repo.last_checked_at.is_some());
         let count = DownloadCount::find_by_package(&conn, "fedora-44", "widget")
             .unwrap()
             .unwrap();

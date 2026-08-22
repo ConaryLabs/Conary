@@ -18,6 +18,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+/// Exact identity accumulated while response chunks are written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadedFileIdentity {
+    pub sha256: String,
+    pub size: u64,
+}
+
 use super::metadata::RepositoryMetadata;
 use super::retry::RetryConfig;
 
@@ -321,6 +328,7 @@ async fn stream_response_to_file(
     offset: u64,
     progress_bar: Option<&ProgressBar>,
     display_name: &str,
+    hasher: &mut crate::hash::Hasher,
 ) -> Result<u64> {
     // Set up progress bar if provided
     if let Some(pb) = progress_bar {
@@ -342,6 +350,7 @@ async fn stream_response_to_file(
         .map_err(|e| Error::DownloadError(format!("read response stream: {e}")))?
     {
         file.write_all(&chunk).io_context("write download data")?;
+        hasher.update(&chunk);
 
         downloaded += chunk.len() as u64;
 
@@ -590,8 +599,18 @@ impl RepositoryClient {
 
     /// Download a file to the specified path with retry support
     pub async fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
-        self.download_file_with_progress(url, dest_path, "", None)
+        self.download_file_internal(url, dest_path, "", None)
             .await
+            .map(|_| ())
+    }
+
+    /// Download a file while hashing and sizing the served stream.
+    pub async fn download_file_with_identity(
+        &self,
+        url: &str,
+        dest_path: &Path,
+    ) -> Result<DownloadedFileIdentity> {
+        self.download_file_internal(url, dest_path, "", None).await
     }
 
     /// Download a file with optional progress bar display
@@ -608,6 +627,18 @@ impl RepositoryClient {
         display_name: &str,
         progress_bar: Option<&ProgressBar>,
     ) -> Result<()> {
+        self.download_file_internal(url, dest_path, display_name, progress_bar)
+            .await
+            .map(|_| ())
+    }
+
+    async fn download_file_internal(
+        &self,
+        url: &str,
+        dest_path: &Path,
+        display_name: &str,
+        progress_bar: Option<&ProgressBar>,
+    ) -> Result<DownloadedFileIdentity> {
         validate_url_scheme(url)?;
         info!("Downloading {} to {}", url, dest_path.display());
 
@@ -674,8 +705,14 @@ impl RepositoryClient {
                                     dest_path.display()
                                 )));
                             }
+                            let metadata = fs::metadata(dest_path)?;
+                            let mut reader = std::io::BufReader::new(File::open(dest_path)?);
+                            let sha256 = crate::hash::sha256_reader_hex(&mut reader)?;
                             info!("Successfully downloaded to {}", dest_path.display());
-                            return Ok(());
+                            return Ok(DownloadedFileIdentity {
+                                sha256,
+                                size: metadata.len(),
+                            });
                         }
                         return Err(http_status_error(status, url));
                     }
@@ -725,7 +762,20 @@ impl RepositoryClient {
                             (file, 0, total)
                         };
 
-                    // Stream response to file, optionally updating progress bar
+                    let mut hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
+                    if offset > 0 {
+                        let mut existing = std::io::BufReader::new(File::open(&temp_path)?);
+                        let mut buffer = [0_u8; 64 * 1024];
+                        loop {
+                            let read = existing.read(&mut buffer)?;
+                            if read == 0 {
+                                break;
+                            }
+                            hasher.update(&buffer[..read]);
+                        }
+                    }
+
+                    // Stream response to file, hashing exact served bytes while writing.
                     let downloaded = stream_response_to_file(
                         response,
                         &mut file,
@@ -733,6 +783,7 @@ impl RepositoryClient {
                         offset,
                         progress_bar,
                         display_name,
+                        &mut hasher,
                     )
                     .await?;
 
@@ -741,6 +792,9 @@ impl RepositoryClient {
                     }
 
                     info!("Downloaded {} bytes", downloaded);
+                    file.sync_all()?;
+                    drop(file);
+                    let sha256 = hasher.finalize().value;
 
                     // Atomic rename from temp to final destination
                     if let Err(e) = fs::rename(&temp_path, dest_path) {
@@ -753,7 +807,10 @@ impl RepositoryClient {
                     }
 
                     info!("Successfully downloaded to {}", dest_path.display());
-                    return Ok(());
+                    return Ok(DownloadedFileIdentity {
+                        sha256,
+                        size: downloaded,
+                    });
                 }
                 Err(e) => {
                     if attempt >= self.retry_policy.max_attempts {

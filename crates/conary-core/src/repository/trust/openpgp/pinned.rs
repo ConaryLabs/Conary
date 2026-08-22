@@ -68,6 +68,19 @@ pub(super) fn verify_detached_with_certificates(
     Ok(())
 }
 
+pub(super) fn verify_detached_file_with_certificates(
+    path: &std::path::Path,
+    signature: &[u8],
+    certificates: Vec<openpgp::Cert>,
+) -> anyhow::Result<()> {
+    let policy = StandardPolicy::new();
+    let helper = PinnedCertificateHelper { certificates };
+    let mut verifier =
+        DetachedVerifierBuilder::from_bytes(signature)?.with_policy(&policy, None, helper)?;
+    verifier.verify_file(path)?;
+    Ok(())
+}
+
 pub(super) fn verify_inline_with_certificates(
     signed_data: &[u8],
     certificates: Vec<openpgp::Cert>,

@@ -39,6 +39,7 @@ use types::{
 
 mod immutable_catalog;
 mod native;
+mod projection_cache;
 mod remi;
 mod support;
 pub(in crate::repository) mod types;
@@ -778,7 +779,7 @@ fn persist_repository_sync_snapshot(
 
             link_canonical_ids(&tx, repo_id)?;
 
-            repo.last_sync = Some(current_timestamp());
+            mark_repository_revision_published(repo);
             repo.update(&tx)?;
 
             tx.commit()?;
@@ -808,7 +809,7 @@ fn persist_static_sync_rows(
     RepositoryPackageKey::replace_for_repository_in_transaction(&tx, repo_id, &package_keys)?;
     link_canonical_ids(&tx, repo_id)?;
 
-    repo.last_sync = Some(current_timestamp());
+    mark_repository_revision_published(repo);
     repo.update(&tx)?;
 
     tx.commit()?;
@@ -824,11 +825,11 @@ async fn sync_repository_json(conn: &Connection, repo: &mut Repository) -> Resul
 
 /// Check if repository metadata needs refresh
 pub fn needs_sync(repo: &Repository) -> bool {
-    let Some(last_sync) = &repo.last_sync else {
+    let Some(last_checked_at) = &repo.last_checked_at else {
         return true;
     };
 
-    let Ok(last_sync_time) = parse_timestamp(last_sync) else {
+    let Ok(last_checked_at_time) = parse_timestamp(last_checked_at) else {
         return true;
     };
 
@@ -837,7 +838,15 @@ pub fn needs_sync(repo: &Repository) -> bool {
         .unwrap_or_default()
         .as_secs();
 
-    now.saturating_sub(last_sync_time) > repo.metadata_expire as u64
+    now.saturating_sub(last_checked_at_time) > repo.metadata_expire as u64
+}
+
+fn mark_repository_revision_published(repo: &mut Repository) {
+    let timestamp = current_timestamp();
+    repo.last_checked_at = Some(timestamp.clone());
+    repo.last_changed_at = Some(timestamp.clone());
+    repo.last_validated_at = Some(timestamp.clone());
+    repo.last_published_at = Some(timestamp);
 }
 
 /// Link repository_packages to their canonical identity.

@@ -747,7 +747,10 @@ pub async fn update_repo(
                 })?;
                 Repository::delete(&tx, repository_id)?;
                 repo.id = None;
-                repo.last_sync = None;
+                repo.last_checked_at = None;
+                repo.last_changed_at = None;
+                repo.last_validated_at = None;
+                repo.last_published_at = None;
                 repo.created_at = None;
                 repo.insert(&tx)?;
             } else {

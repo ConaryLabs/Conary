@@ -30,6 +30,7 @@ struct RefreshRoots {
     keyring_dir: PathBuf,
     catalog_candidate_dir: PathBuf,
     catalog_dir: PathBuf,
+    projection_cache_dir: PathBuf,
     database_writer: DatabaseWriter,
 }
 
@@ -59,6 +60,7 @@ pub(super) async fn refresh_native_profile(
             ),
             catalog_candidate_dir: state.config.catalog_candidate_dir.clone(),
             catalog_dir: state.config.catalog_dir.clone(),
+            projection_cache_dir: state.config.cache_dir.join("native-projections"),
             database_writer: state.database_writer.clone(),
         }
     };
@@ -127,6 +129,7 @@ pub(super) async fn refresh_native_profile(
         repositories,
         &roots.keyring_dir,
         &roots.catalog_candidate_dir,
+        &roots.projection_cache_dir,
     )
     .await
     {
@@ -501,27 +504,44 @@ async fn finalize_profile(
         })
         .collect::<Result<Vec<_>, _>>()?;
     blocking_anyhow(move || {
-        database_writer.execute(|| {
-            let conn = conary_core::db::open_fast(&db_path)?;
-            conary_core::db::models::register_profile_catalog_revision(
-                &conn,
-                &source_manifests,
-                &profile_manifest,
-                unix_seconds()?,
-            )?;
-            activate_profile_revision(&conn, &activation)?;
-            let last_sync = conary_core::repository::current_timestamp();
-            for repository_id in repository_ids {
-                if let Err(error) = conn.execute(
-                    "UPDATE repositories SET last_sync = ?1 WHERE id = ?2",
-                    rusqlite::params![&last_sync, repository_id],
-                ) {
-                    tracing::warn!(repository_id, %error, "activated profile but failed to update source refresh timestamp");
+        database_writer
+            .execute(|| {
+                let conn = conary_core::db::open_fast(&db_path)?;
+                conary_core::db::models::register_profile_catalog_revision(
+                    &conn,
+                    &source_manifests,
+                    &profile_manifest,
+                    unix_seconds()?,
+                )?;
+                activate_profile_revision(&conn, &activation)?;
+                let completed_at = conary_core::repository::current_timestamp();
+                for repository_id in repository_ids {
+                    let (input, candidate) = conn.query_row(
+                        "SELECT input_source_snapshot_sha256, candidate_source_snapshot_sha256
+                     FROM repository_sync_run_members
+                     WHERE run_id = ?1 AND repository_id = ?2",
+                        rusqlite::params![&run.run_id, repository_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, Option<String>>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                            ))
+                        },
+                    )?;
+                    let changed = input != candidate;
+                    conn.execute(
+                        "UPDATE repositories
+                     SET last_checked_at = ?1,
+                         last_changed_at = CASE WHEN ?2 THEN ?1 ELSE last_changed_at END,
+                         last_validated_at = ?1,
+                         last_published_at = CASE WHEN ?2 THEN ?1 ELSE last_published_at END
+                     WHERE id = ?3",
+                        rusqlite::params![&completed_at, changed, repository_id],
+                    )?;
                 }
-            }
-            Ok::<(), conary_core::Error>(())
-        })
-        .map_err(anyhow::Error::from)
+                Ok::<(), conary_core::Error>(())
+            })
+            .map_err(anyhow::Error::from)
     })
     .await
 }

@@ -133,6 +133,7 @@ pub async fn stage_profile_catalog(
     repositories: Vec<Repository>,
     keyring_dir: &Path,
     catalog_candidate_root: &Path,
+    projection_cache_root: &Path,
 ) -> Result<StagedProfileCatalog> {
     let plans = plan_profile_sources(profile, repositories)?;
     let candidate_run_dir = create_candidate_run_dir(catalog_candidate_root, run_id)?;
@@ -147,11 +148,13 @@ pub async fn stage_profile_catalog(
     let mut fetches = futures::stream::iter(planned_sources.into_iter().map(
         |(plan, candidate_directory)| {
             let keyring_dir = keyring_dir.to_path_buf();
+            let projection_cache_root = projection_cache_root.to_path_buf();
             async move {
                 let manifest = conary_core::repository::stream_native_source_catalog(
                     &plan.repository,
                     &keyring_dir,
                     &candidate_directory.join(CATALOG_FILE_NAME),
+                    Some(&projection_cache_root),
                 )
                 .await
                 .with_context(|| {

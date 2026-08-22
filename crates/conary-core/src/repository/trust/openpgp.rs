@@ -121,6 +121,38 @@ impl PreparedOpenPgpTrust {
         }
     }
 
+    /// Verify a detached signature without retaining the signed object in
+    /// memory.
+    pub fn verify_detached_file(
+        &self,
+        role: TrustRole,
+        path: &std::path::Path,
+        signature: &[u8],
+    ) -> Result<()> {
+        match (&self.policy, role) {
+            (
+                RepositoryTrustPolicy::Arch { keyring, .. },
+                TrustRole::ArchDatabase | TrustRole::ArchPackage,
+            ) => {
+                let snapshot = self.arch_snapshot(keyring)?;
+                arch::verify::check_detached_file(&snapshot, path, signature)
+                    .map(|_| ())
+                    .map_err(|error| self.role_error(role, "signature", error))
+            }
+            _ => {
+                let certificates = self.pinned_certificates_for_role(role)?;
+                pinned::verify_detached_file_with_certificates(path, signature, certificates)
+                    .map_err(|error| {
+                        self.role_error(
+                            role,
+                            "signature",
+                            Error::GpgVerificationFailed(error.to_string()),
+                        )
+                    })
+            }
+        }
+    }
+
     /// Verifies an inline-signed object for one trust role.
     ///
     /// ALPM has no inline-signed object, so this is a pinned-certificate path

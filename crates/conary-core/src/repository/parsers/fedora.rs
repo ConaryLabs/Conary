@@ -16,9 +16,7 @@ use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
     AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
     ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
-    authenticated_metadata_object,
 };
-use crate::compression::decompress_metadata_auto;
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
@@ -31,8 +29,11 @@ use crate::repository::versioning::VersionScheme;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use serde_json::json;
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
+mod audit;
 mod filelists;
 mod files;
 mod metalink;
@@ -164,7 +165,13 @@ impl FedoraParser {
         &self,
         repo_url: &str,
         record: &RepoMdRecord,
-    ) -> Result<(String, Vec<u8>)> {
+        work_directory: &Path,
+        file_name: &str,
+    ) -> Result<(
+        String,
+        PathBuf,
+        crate::repository::client::DownloadedFileIdentity,
+    )> {
         let document_url = format!("{}/{}", repo_url.trim_end_matches('/'), record.href);
         debug!(
             "Downloading {} metadata from: {}",
@@ -173,39 +180,44 @@ impl FedoraParser {
         );
 
         let client = RepositoryClient::new()?;
-        let raw_bytes = client.download_to_bytes(&document_url).await?;
-        record.verify_served_bytes(&raw_bytes)?;
-        Ok((document_url, raw_bytes))
+        let path = work_directory.join(file_name);
+        let identity = client
+            .download_file_with_identity(&document_url, &path)
+            .await?;
+        record.verify_served_download(&identity)?;
+        Ok((document_url, path, identity))
     }
 
-    /// Download, verify, and decompress primary.xml.
+    /// Download and verify primary.xml without materializing its contents.
     async fn download_primary_xml(
         &self,
         repo_url: &str,
         record: &RepoMdRecord,
-    ) -> Result<(String, AuthenticatedMetadataObject)> {
-        let (primary_url, raw_bytes) = self.download_verified_document(repo_url, record).await?;
-        let authenticated_object = authenticated_metadata_object(
-            AuthenticatedMetadataObjectRole::RpmPrimary,
-            &record.href,
-            &raw_bytes,
-        );
-        let decompressed =
-            decompress_metadata_auto(&raw_bytes, &format!("RPM primary metadata {primary_url}"))?;
-        let content = String::from_utf8(decompressed).map_err(|error| {
-            Error::ParseError(format!("Invalid UTF-8 in primary.xml: {}", error))
-        })?;
-
-        debug!("Decompressed primary.xml: {} bytes", content.len());
-        Ok((content, authenticated_object))
+        work_directory: &Path,
+    ) -> Result<(String, PathBuf, AuthenticatedMetadataObject)> {
+        let (primary_url, path, identity) = self
+            .download_verified_document(repo_url, record, work_directory, "rpm-primary")
+            .await?;
+        let authenticated_object = AuthenticatedMetadataObject {
+            role: AuthenticatedMetadataObjectRole::RpmPrimary,
+            source_path: record.href.clone(),
+            sha256: identity.sha256,
+            size: identity.size,
+        };
+        Ok((primary_url, path, authenticated_object))
     }
 
-    /// Parse primary.xml and extract package metadata
-    fn parse_primary_xml(&self, xml_content: &str, base_url: &str) -> Result<Vec<PackageMetadata>> {
-        let mut reader = Reader::from_str(xml_content);
+    /// Parse primary.xml one complete package record at a time.
+    fn parse_primary_reader<R: BufRead>(
+        &self,
+        document: R,
+        base_url: &str,
+        mut admit: impl FnMut(PackageMetadata) -> Result<()>,
+    ) -> Result<usize> {
+        let mut reader = Reader::from_reader(document);
         reader.config_mut().trim_text_end = true;
 
-        let mut packages = Vec::new();
+        let mut packages = 0_usize;
         let mut buf = Vec::new();
 
         // Current package being built
@@ -598,7 +610,8 @@ impl FedoraParser {
                                 "RPM metadata ended a package that was never started".to_string(),
                             )
                         })?;
-                        packages.push(builder.build(base_url)?);
+                        admit(builder.build(base_url)?)?;
+                        packages += 1;
                     } else if local_tag == "format" {
                         in_format = false;
                         format_section = None;
@@ -621,6 +634,16 @@ impl FedoraParser {
             buf.clear();
         }
 
+        Ok(packages)
+    }
+
+    #[cfg(test)]
+    fn parse_primary_xml(&self, xml_content: &str, base_url: &str) -> Result<Vec<PackageMetadata>> {
+        let mut packages = Vec::new();
+        self.parse_primary_reader(xml_content.as_bytes(), base_url, |package| {
+            packages.push(package);
+            Ok(())
+        })?;
         Ok(packages)
     }
 }
@@ -809,34 +832,84 @@ impl RepositoryParser for FedoraParser {
         // Admit the signed repomd.xml records Conary reads.
         let (repomd, snapshot) = self.fetch_repomd_index(repo_url).await?;
 
-        // Download, verify, and parse primary.xml.
-        let (primary_xml, primary_object) =
-            self.download_primary_xml(repo_url, &repomd.primary).await?;
-        let mut packages = self.parse_primary_xml(&primary_xml, repo_url)?;
-        drop(primary_xml);
+        // Authenticate every distribution-sized child before cache lookup or parsing.
+        let (primary_url, primary_path, primary_object) = self
+            .download_primary_xml(repo_url, &repomd.primary, sink.work_directory())
+            .await?;
+        let filelists_download = if let Some(record) = repomd.filelists.as_ref() {
+            let (url, path, identity) = self
+                .download_verified_document(
+                    repo_url,
+                    record,
+                    sink.work_directory(),
+                    "rpm-filelists",
+                )
+                .await?;
+            let object = AuthenticatedMetadataObject {
+                role: AuthenticatedMetadataObjectRole::RpmFilelists,
+                source_path: record.href.clone(),
+                sha256: identity.sha256,
+                size: identity.size,
+            };
+            let compressed = common::metadata_file_is_compressed(&path)?;
+            let open_size = record.authenticated_open_size(compressed)?;
+            Some((url, path, object, open_size))
+        } else {
+            None
+        };
+        let mut objects = vec![primary_object.clone()];
+        if let Some((_, _, object, _)) = &filelists_download {
+            objects.push(object.clone());
+        }
+        if sink.reuse_cached_projection(&snapshot, &objects)? {
+            info!("Reused cached Fedora repository projection");
+            return Ok(snapshot);
+        }
+
+        // Parse primary.xml one package at a time.
+        let compressed = common::metadata_file_is_compressed(&primary_path)?;
+        let open_size = repomd.primary.authenticated_open_size(compressed)?;
+        let (package_count, audit) = {
+            let decoder = common::open_metadata_decoder(
+                &primary_path,
+                &format!("RPM primary metadata {primary_url}"),
+            )?;
+            let mut reader = std::io::BufReader::with_capacity(
+                256 * 1024,
+                common::AuthenticatedLengthReader::new(decoder, open_size, "RPM primary metadata"),
+            );
+            let mut audit = repomd
+                .filelists
+                .is_none()
+                .then(|| audit::PrimaryFileAudit::create(sink.work_directory()))
+                .transpose()?;
+            let package_count = self.parse_primary_reader(&mut reader, repo_url, |package| {
+                if let Some(audit) = audit.as_mut() {
+                    audit.package(&package)?;
+                }
+                sink.package(package)
+            })?;
+            let decoded = reader.get_ref().read_bytes();
+            if decoded != open_size {
+                return Err(Error::GpgVerificationFailed(format!(
+                    "signed repomd.xml authenticates primary metadata as {open_size} decompressed bytes but {primary_url} decoded to {decoded} bytes"
+                )));
+            }
+            (package_count, audit)
+        };
         sink.authenticated_object(primary_object)?;
 
         // primary.xml carries only the generator-selected file set, so
         // complete package file ownership comes from filelists.xml.
-        match repomd.filelists {
-            Some(record) => {
-                let (filelists_url, raw_bytes) =
-                    self.download_verified_document(repo_url, &record).await?;
-                sink.authenticated_object(authenticated_metadata_object(
-                    AuthenticatedMetadataObjectRole::RpmFilelists,
-                    &record.href,
-                    &raw_bytes,
-                ))?;
-                let compressed =
-                    crate::compression::CompressionFormat::from_magic_bytes(&raw_bytes)
-                        != crate::compression::CompressionFormat::None;
-                let open_size = record.authenticated_open_size(compressed)?;
-                let ingest = filelists::ingest_verified_filelists(
-                    &mut packages,
-                    &raw_bytes,
+        match filelists_download {
+            Some((filelists_url, filelists_path, filelists_object, open_size)) => {
+                let ingest = filelists::ingest_verified_filelists_into(
+                    sink,
+                    &filelists_path,
                     open_size,
                     &filelists_url,
                 )?;
+                sink.authenticated_object(filelists_object)?;
                 info!(
                     "Ingested {} filelists package records: {} file capabilities added, {} already \
                      published by primary.xml",
@@ -844,14 +917,13 @@ impl RepositoryParser for FedoraParser {
                 );
             }
             None => {
-                filelists::require_no_filelists_dependent_requirements(&packages, repo_url)?;
+                audit
+                    .expect("missing filelists creates a primary file audit")
+                    .finish(repo_url)?;
             }
         }
 
-        info!("Parsed {} packages from Fedora repository", packages.len());
-        for package in packages {
-            sink.package(package)?;
-        }
+        info!("Parsed {package_count} packages from Fedora repository");
         Ok(snapshot)
     }
 }

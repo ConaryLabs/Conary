@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-22
-revision: 44
+revision: 45
 summary: Document immutable Remi source/profile catalog authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
@@ -262,14 +262,17 @@ top-level metadata authority. Refresh recalculates it before network access,
 so an endpoint, parser selector, or metadata trust-root change requires
 explicit `repo add --replace` re-enrollment.
 
-Native parsers return package metadata together with the SHA-256 of the exact
-authenticated top-level bytes: ALPM's served compressed database, Debian's
-verified cleartext Release payload, or RPM's authenticated `repomd.xml`.
+Native parsers stream package projections through `RepositorySnapshotSink`
+together with the SHA-256 of the exact authenticated top-level bytes: ALPM's
+served compressed database, Debian's verified cleartext Release payload, or
+RPM's authenticated `repomd.xml`. Distribution-sized children are downloaded
+to private files, hashed and sized before parsing, then decoded one record at a
+time into private catalog SQLite state.
 `follow` admits a new authenticated identity only within the unchanged stream
 binding. `pin` additionally requires equality with the repository member's
 persisted digest. Admission and package-row replacement share one SQLite
-transaction, so refusal preserves the prior rows and `last_sync`; no mutable
-latest-snapshot field is updated.
+transaction, so refusal preserves prior rows and all four refresh timestamps;
+no mutable latest-snapshot field is updated.
 
 Public feed profiles remain presets and conformance fixtures, not native
 source identity. Native enrollment therefore works for uncatalogued
@@ -286,6 +289,11 @@ database. Each accepted authenticated source becomes a strict immutable
 `ProfileRevisionV1` binds the exact ordered members and composed package
 catalog for the public profile. Candidate construction is private; durable
 content-addressed publication precedes one fenced active-pointer transaction.
+An exact normalized projection cache can bypass native parsing only when the
+stream binding, authenticated root, every child role and digest, parser
+projection version, and catalog schema all match. Its verified catalog is
+replayed through the same bounded candidate writer; cache contents never
+replace the immutable source manifest or active profile pointer as authority.
 
 Serving selection is therefore a two-step typed decision: the public route maps
 to one exact profile ID, then `CatalogAuthority` opens the verified revision
@@ -470,8 +478,10 @@ Fedora 44 `Everything/x86_64` measures that cost exactly (repomd revision
 1776864872): 76,354 packages, 81,720 file providers from `primary.xml`, and
 9,416,909 more from `filelists.xml`, taking `repository_provides` from 657,873
 rows to 10,074,782 and the synced SQLite database from 0.61 GB to 3.90 GB. The
-829 MB decompressed document is never materialized: it is streamed from the
-verified compressed bytes under the ceiling the signed `<open-size>` declares.
+829 MB decompressed document and repository-sized join maps are never
+materialized: verified compressed files stream under the ceiling the signed
+`<open-size>` declares, and exact total pkgid membership is proven by indexed
+candidate state.
 
 Dropping the duplicated path from file provenance is measured on that same
 corpus and revision: the synced database falls from 4.78 GB to 3.90 GB

@@ -17,7 +17,8 @@ use crate::repository::catalog::{
     SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
 };
 use crate::repository::parsers::{
-    AuthenticatedMetadataObject, PackageMetadata, RepositorySnapshotSink,
+    AuthenticatedMetadataObject, ChecksumType, PackageMetadata, RepositorySnapshotSink,
+    SnapshotPackageIdentity, SnapshotPackageJoin, SnapshotProvideUpdate,
 };
 
 use super::types::{RepositorySyncSnapshot, SyncedPackageRow};
@@ -47,9 +48,10 @@ pub async fn stream_native_source_catalog(
     repo: &Repository,
     keyring_dir: &Path,
     candidate_path: &Path,
+    projection_cache_root: Option<&Path>,
 ) -> Result<SourceSnapshotV1> {
     let parser = prepare_repository_native_parser(repo, keyring_dir).await?;
-    let mut sink = NativeCatalogSnapshotSink::create(repo, candidate_path)?;
+    let mut sink = NativeCatalogSnapshotSink::create(repo, candidate_path, projection_cache_root)?;
     let snapshot = parser.ingest_snapshot(&repo.url, &mut sink).await?;
     sink.finish(repo, snapshot)
 }
@@ -62,10 +64,22 @@ struct NativeCatalogSnapshotSink {
     content_url: Option<String>,
     origin: CatalogPackageOriginV1,
     authenticated_objects: BTreeMap<SourceMetadataObjectRoleV1, SourceMetadataObjectV1>,
+    work_directory: tempfile::TempDir,
+    candidate_path: std::path::PathBuf,
+    projection_cache: Option<super::projection_cache::ProjectionCache>,
+    cache_inputs: Option<(
+        AuthenticatedSnapshotIdentity,
+        Vec<AuthenticatedMetadataObject>,
+    )>,
+    cache_hit: bool,
 }
 
 impl NativeCatalogSnapshotSink {
-    fn create(repo: &Repository, candidate_path: &Path) -> Result<Self> {
+    fn create(
+        repo: &Repository,
+        candidate_path: &Path,
+        projection_cache_root: Option<&Path>,
+    ) -> Result<Self> {
         repo.validate_stream_binding()?;
         let source_profile = repo.source_profile.clone().ok_or_else(|| {
             Error::ConfigError(format!(
@@ -85,6 +99,15 @@ impl NativeCatalogSnapshotSink {
             source_identity: source_identity.clone(),
             repository_identity: repository_identity.clone(),
         };
+        let candidate_parent = candidate_path.parent().ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "source catalog candidate {} has no parent",
+                candidate_path.display()
+            ))
+        })?;
+        let work_directory = tempfile::Builder::new()
+            .prefix("native-objects-")
+            .tempdir_in(candidate_parent)?;
         Ok(Self {
             writer: CatalogCandidateWriter::create(candidate_path, scope)?,
             repository_id: repo
@@ -98,6 +121,18 @@ impl NativeCatalogSnapshotSink {
                 repository_identity,
             },
             authenticated_objects: BTreeMap::new(),
+            work_directory,
+            candidate_path: candidate_path.to_path_buf(),
+            projection_cache: projection_cache_root
+                .map(|root| {
+                    super::projection_cache::ProjectionCache::open(
+                        root,
+                        repo.stream_binding_sha256.as_deref().expect("validated"),
+                    )
+                })
+                .transpose()?,
+            cache_inputs: None,
+            cache_hit: false,
         })
     }
 
@@ -109,6 +144,10 @@ impl NativeCatalogSnapshotSink {
         let NativeCatalogSnapshotSink {
             writer,
             authenticated_objects,
+            candidate_path,
+            projection_cache,
+            cache_inputs,
+            cache_hit,
             ..
         } = self;
         let authenticated_objects = authenticated_objects.into_values().collect::<Vec<_>>();
@@ -122,12 +161,22 @@ impl NativeCatalogSnapshotSink {
             })
             .collect();
         let binding = writer.finish(evidence)?;
+        if !cache_hit
+            && let (Some(cache), Some((cache_snapshot, cache_objects))) =
+                (projection_cache, cache_inputs)
+        {
+            cache.publish(&cache_snapshot, &cache_objects, &binding, &candidate_path)?;
+        }
         let authority = source_catalog_authority(repo, snapshot, authenticated_objects)?;
         crate::repository::catalog::source::bind_source_snapshot(authority, &binding)
     }
 }
 
 impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
+    fn work_directory(&self) -> &Path {
+        self.work_directory.path()
+    }
+
     fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()> {
         if self
             .authenticated_objects
@@ -139,6 +188,26 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             ));
         }
         Ok(())
+    }
+
+    fn reuse_cached_projection(
+        &mut self,
+        snapshot: &AuthenticatedSnapshotIdentity,
+        objects: &[AuthenticatedMetadataObject],
+    ) -> Result<bool> {
+        self.cache_inputs = Some((snapshot.clone(), objects.to_vec()));
+        let Some(cache) = &self.projection_cache else {
+            return Ok(false);
+        };
+        let Some(reader) = cache.lookup(snapshot, objects)? else {
+            return Ok(false);
+        };
+        reader.for_each_package(|package| self.writer.package(package))?;
+        for object in objects.iter().cloned() {
+            self.authenticated_object(object)?;
+        }
+        self.cache_hit = true;
+        Ok(true)
     }
 
     fn package(&mut self, package: PackageMetadata) -> Result<()> {
@@ -157,6 +226,48 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             self.origin.clone(),
         )?;
         self.writer.package(record)
+    }
+
+    fn extend_package_provides(
+        &mut self,
+        join: SnapshotPackageJoin,
+        identity: &SnapshotPackageIdentity,
+        provides: Vec<crate::repository::dependency_model::RepositoryProvide>,
+    ) -> Result<SnapshotProvideUpdate> {
+        let checksum = match identity.checksum_type {
+            ChecksumType::Sha1 => format!("sha1:{}", identity.checksum.trim_start_matches("sha1:")),
+            ChecksumType::Sha256 => {
+                format!("sha256:{}", identity.checksum.trim_start_matches("sha256:"))
+            }
+            ChecksumType::Sha512 | ChecksumType::Md5 => identity.checksum.clone(),
+        };
+        let provides = provides
+            .iter()
+            .map(|provide| {
+                super::native::normalized_repository_provide(
+                    provide,
+                    crate::repository::versioning::VersionScheme::Rpm,
+                )
+                .into()
+            })
+            .collect();
+        let result = self.writer.extend_package_provides(
+            join.as_str(),
+            &checksum,
+            &identity.name,
+            &identity.version,
+            identity.architecture.as_deref(),
+            provides,
+        )?;
+        Ok(SnapshotProvideUpdate {
+            matched_packages: result.matched_packages,
+            added: result.added,
+            already_known: result.already_known,
+        })
+    }
+
+    fn finish_package_join(&mut self, join: SnapshotPackageJoin) -> Result<()> {
+        self.writer.finish_package_join(join.as_str())
     }
 }
 

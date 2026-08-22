@@ -300,7 +300,7 @@ impl RemiMcpServer {
 
     /// List all configured repositories.
     #[tool(
-        description = "List all configured repositories with name, URL, enabled status, priority, last sync, parser, and ecosystem-native trust policy."
+        description = "List all configured repositories with name, URL, enabled status, priority, distinct refresh timestamps, parser, and ecosystem-native trust policy."
     )]
     async fn list_repos(&self) -> Result<CallToolResult, McpError> {
         let repos = admin_service::list_repos(&self.state)
@@ -316,7 +316,10 @@ impl RemiMcpServer {
                     "url": r.url,
                     "enabled": r.enabled,
                     "priority": r.priority,
-                    "last_sync": r.last_sync,
+                    "last_checked_at": r.last_checked_at,
+                    "last_changed_at": r.last_changed_at,
+                    "last_validated_at": r.last_validated_at,
+                    "last_published_at": r.last_published_at,
                     "package_format": r.package_format,
                     "parser": r.parser_config,
                     "trust": r.trust_policy,
@@ -351,7 +354,10 @@ impl RemiMcpServer {
                     "parser": r.parser_config,
                     "trust": r.trust_policy,
                     "metadata_expire": r.metadata_expire,
-                    "last_sync": r.last_sync,
+                    "last_checked_at": r.last_checked_at,
+                    "last_changed_at": r.last_changed_at,
+                    "last_validated_at": r.last_validated_at,
+                    "last_published_at": r.last_published_at,
                     "created_at": r.created_at,
                     "default_strategy": r.default_strategy,
                 });
