@@ -16,6 +16,7 @@ use std::path::{Component, Path};
 const AUTHORITY_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_KEY_MODE: u32 = 0o600;
 const PUBLIC_KEY_MODE: u32 = 0o644;
+const UNIVERSE_AUTHORITY_DIRECTORY: &str = "universe";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RepositorySigningRole {
@@ -29,6 +30,29 @@ impl RepositorySigningRole {
 
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Targets => "targets",
+            Self::Snapshot => "snapshot",
+            Self::Timestamp => "timestamp",
+        }
+    }
+}
+
+/// Dedicated signed-universe metadata roles. These keys never sign CCS
+/// packages and live in a namespace separate from every exact profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UniverseSigningRole {
+    Root,
+    Targets,
+    Snapshot,
+    Timestamp,
+}
+
+impl UniverseSigningRole {
+    const ALL: [Self; 4] = [Self::Root, Self::Targets, Self::Snapshot, Self::Timestamp];
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Root => "root",
             Self::Targets => "targets",
             Self::Snapshot => "snapshot",
             Self::Timestamp => "timestamp",
@@ -76,6 +100,30 @@ pub(crate) fn inspect_repository_authority(
         .collect())
 }
 
+/// Provision the endpoint-wide metadata authority in its own durable
+/// namespace beneath the configured authority root.
+pub(crate) fn ensure_universe_authority(keys_root: &Path) -> Result<()> {
+    let owner = require_authority_root(keys_root)?;
+    let directory = keys_root.join(UNIVERSE_AUTHORITY_DIRECTORY);
+    match fs::symlink_metadata(&directory) {
+        Ok(_) => validate_universe_authority(&directory, owner),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_named_authority(
+            keys_root,
+            UNIVERSE_AUTHORITY_DIRECTORY,
+            "signed Remi universe",
+            &UniverseSigningRole::ALL.map(UniverseSigningRole::as_str),
+            owner,
+        ),
+        Err(error) => Err(error)
+            .with_context(|| format!("inspect signed-universe authority {}", directory.display())),
+    }
+}
+
+pub(crate) fn inspect_universe_authority(keys_root: &Path) -> Result<()> {
+    let owner = require_authority_root(keys_root)?;
+    validate_universe_authority(&keys_root.join(UNIVERSE_AUTHORITY_DIRECTORY), owner)
+}
+
 pub(crate) fn load_role_key(
     keys_root: &Path,
     profile_id: &str,
@@ -86,7 +134,7 @@ pub(crate) fn load_role_key(
     let owner = require_authority_root(keys_root)?;
     let profile_dir = keys_root.join(profile.id());
     validate_profile_directory(&profile_dir, profile.id(), owner)?;
-    validate_role_pair(&profile_dir, profile.id(), role, owner)?;
+    validate_role_pair(&profile_dir, profile.id(), role.as_str(), owner)?;
     SigningKeyPair::load_from_file(&profile_dir.join(format!("{}.private", role.as_str())))
         .map_err(anyhow::Error::from)
         .with_context(|| {
@@ -96,6 +144,19 @@ pub(crate) fn load_role_key(
                 profile.id()
             )
         })
+}
+
+pub(crate) fn load_universe_role_key(
+    keys_root: &Path,
+    role: UniverseSigningRole,
+) -> Result<SigningKeyPair> {
+    let owner = require_authority_root(keys_root)?;
+    let directory = keys_root.join(UNIVERSE_AUTHORITY_DIRECTORY);
+    validate_profile_directory(&directory, "signed Remi universe", owner)?;
+    validate_role_pair(&directory, "signed Remi universe", role.as_str(), owner)?;
+    SigningKeyPair::load_from_file(&directory.join(format!("{}.private", role.as_str())))
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("load signed Remi universe {} key", role.as_str()))
 }
 
 fn exact_profiles(manifest: &RepositoryManifest) -> Result<Vec<&'static SupportedProfile>> {
@@ -171,10 +232,11 @@ fn reject_route_slug_authority(keys_root: &Path, profiles: &[&SupportedProfile])
 }
 
 fn reject_unexpected_root_entries(keys_root: &Path, profiles: &[&SupportedProfile]) -> Result<()> {
-    let expected = profiles
+    let mut expected = profiles
         .iter()
         .map(|profile| profile.id())
         .collect::<BTreeSet<_>>();
+    expected.insert(UNIVERSE_AUTHORITY_DIRECTORY);
     for entry in fs::read_dir(keys_root)
         .with_context(|| format!("read repository authority root {}", keys_root.display()))?
     {
@@ -224,6 +286,22 @@ fn create_profile_authority(
     profile: &SupportedProfile,
     owner: AuthorityOwner,
 ) -> Result<()> {
+    create_named_authority(
+        keys_root,
+        profile.id(),
+        &format!("exact profile {}", profile.id()),
+        &RepositorySigningRole::ALL.map(RepositorySigningRole::as_str),
+        owner,
+    )
+}
+
+fn create_named_authority(
+    keys_root: &Path,
+    directory_name: &str,
+    description: &str,
+    roles: &[&str],
+    owner: AuthorityOwner,
+) -> Result<()> {
     let staging = tempfile::Builder::new()
         .prefix(".authority-")
         .tempdir_in(keys_root)
@@ -238,20 +316,14 @@ fn create_profile_authority(
         fs::Permissions::from_mode(AUTHORITY_DIRECTORY_MODE),
     )?;
 
-    for role in RepositorySigningRole::ALL {
-        let private = staging.path().join(format!("{}.private", role.as_str()));
-        let public = staging.path().join(format!("{}.public", role.as_str()));
+    for role in roles {
+        let private = staging.path().join(format!("{role}.private"));
+        let public = staging.path().join(format!("{role}.public"));
         SigningKeyPair::generate()
-            .with_key_id(role.as_str())
+            .with_key_id(*role)
             .save_to_files(&private, &public)
             .map_err(anyhow::Error::from)
-            .with_context(|| {
-                format!(
-                    "generate Remi {} authority for exact profile {}",
-                    role.as_str(),
-                    profile.id()
-                )
-            })?;
+            .with_context(|| format!("generate Remi {role} authority for {description}"))?;
         fs::set_permissions(&private, fs::Permissions::from_mode(PRIVATE_KEY_MODE))?;
         fs::set_permissions(&public, fs::Permissions::from_mode(PUBLIC_KEY_MODE))?;
         align_owner(&private, owner)?;
@@ -260,7 +332,7 @@ fn create_profile_authority(
         File::open(&public)?.sync_all()?;
     }
     align_owner(staging.path(), owner)?;
-    validate_profile_authority(staging.path(), profile.id(), owner)?;
+    validate_named_authority(staging.path(), description, roles, owner)?;
     File::open(staging.path())?.sync_all()?;
 
     let root = File::open(keys_root)?;
@@ -272,22 +344,18 @@ fn create_profile_authority(
         &root,
         Path::new(staged_name),
         &root,
-        Path::new(profile.id()),
+        Path::new(directory_name),
         RenameFlags::RENAME_NOREPLACE,
     ) {
         Ok(()) => {
             root.sync_all()?;
-            validate_profile_authority(&keys_root.join(profile.id()), profile.id(), owner)
+            validate_named_authority(&keys_root.join(directory_name), description, roles, owner)
         }
         Err(Errno::EEXIST) => {
-            validate_profile_authority(&keys_root.join(profile.id()), profile.id(), owner)
+            validate_named_authority(&keys_root.join(directory_name), description, roles, owner)
         }
-        Err(error) => Err(anyhow::Error::from(error)).with_context(|| {
-            format!(
-                "publish staged signing authority for exact profile {}",
-                profile.id()
-            )
-        }),
+        Err(error) => Err(anyhow::Error::from(error))
+            .with_context(|| format!("publish staged signing authority for {description}")),
     }
 }
 
@@ -296,23 +364,45 @@ fn validate_profile_authority(
     profile_id: &str,
     owner: AuthorityOwner,
 ) -> Result<()> {
-    validate_profile_directory(profile_dir, profile_id, owner)?;
-    reject_unexpected_profile_entries(profile_dir, profile_id)?;
-    for role in RepositorySigningRole::ALL {
-        validate_role_pair(profile_dir, profile_id, role, owner)?;
+    validate_named_authority(
+        profile_dir,
+        profile_id,
+        &RepositorySigningRole::ALL.map(RepositorySigningRole::as_str),
+        owner,
+    )
+}
+
+fn validate_universe_authority(directory: &Path, owner: AuthorityOwner) -> Result<()> {
+    validate_named_authority(
+        directory,
+        "signed Remi universe",
+        &UniverseSigningRole::ALL.map(UniverseSigningRole::as_str),
+        owner,
+    )
+}
+
+fn validate_named_authority(
+    directory: &Path,
+    description: &str,
+    roles: &[&str],
+    owner: AuthorityOwner,
+) -> Result<()> {
+    validate_profile_directory(directory, description, owner)?;
+    reject_unexpected_profile_entries(directory, description, roles)?;
+    for role in roles {
+        validate_role_pair(directory, description, role, owner)?;
     }
     Ok(())
 }
 
-fn reject_unexpected_profile_entries(profile_dir: &Path, profile_id: &str) -> Result<()> {
-    let expected = RepositorySigningRole::ALL
-        .into_iter()
-        .flat_map(|role| {
-            [
-                format!("{}.private", role.as_str()),
-                format!("{}.public", role.as_str()),
-            ]
-        })
+fn reject_unexpected_profile_entries(
+    profile_dir: &Path,
+    profile_id: &str,
+    roles: &[&str],
+) -> Result<()> {
+    let expected = roles
+        .iter()
+        .flat_map(|role| [format!("{role}.private"), format!("{role}.public")])
         .collect::<BTreeSet<_>>();
     for entry in fs::read_dir(profile_dir)
         .with_context(|| format!("read signing authority for exact profile {profile_id}"))?
@@ -356,11 +446,11 @@ fn validate_profile_directory(
 fn validate_role_pair(
     profile_dir: &Path,
     profile_id: &str,
-    role: RepositorySigningRole,
+    role: &str,
     owner: AuthorityOwner,
 ) -> Result<()> {
-    let private = profile_dir.join(format!("{}.private", role.as_str()));
-    let public = profile_dir.join(format!("{}.public", role.as_str()));
+    let private = profile_dir.join(format!("{role}.private"));
+    let public = profile_dir.join(format!("{role}.public"));
     let private_metadata = require_plain_file(&private, "private signing key")?;
     let public_metadata = require_plain_file(&public, "public signing key")?;
     require_mode(&private, &private_metadata, PRIVATE_KEY_MODE)?;
@@ -373,15 +463,15 @@ fn validate_role_pair(
         .with_context(|| {
             format!(
                 "load private {} authority for exact profile {profile_id}",
-                role.as_str()
+                role
             )
         })?;
-    if private_key.key_id() != Some(role.as_str()) {
+    if private_key.key_id() != Some(role) {
         bail!(
             "private authority {} has key ID {:?}; expected '{}'",
             private.display(),
             private_key.key_id(),
-            role.as_str()
+            role
         );
     }
     let public_key = load_signing_public_key(&public)
@@ -389,21 +479,21 @@ fn validate_role_pair(
         .with_context(|| {
             format!(
                 "load public {} authority for exact profile {profile_id}",
-                role.as_str()
+                role
             )
         })?;
-    if public_key.key_id() != Some(role.as_str()) {
+    if public_key.key_id() != Some(role) {
         bail!(
             "public authority {} has key ID {:?}; expected '{}'",
             public.display(),
             public_key.key_id(),
-            role.as_str()
+            role
         );
     }
     if public_key.public_key_base64() != private_key.public_key_base64() {
         bail!(
             "public and private {} authority disagree for exact profile {profile_id}",
-            role.as_str()
+            role
         );
     }
     Ok(())
@@ -541,6 +631,42 @@ fingerprint = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             inspect_repository_authority(&manifest(), &root).unwrap(),
             vec!["fedora-44"]
         );
+    }
+
+    #[test]
+    fn universe_authority_is_complete_separate_and_stable() {
+        let (_temp, root) = authority_root();
+        ensure_repository_authority(&manifest(), &root).unwrap();
+        ensure_universe_authority(&root).unwrap();
+
+        let universe_dir = root.join(UNIVERSE_AUTHORITY_DIRECTORY);
+        let before = UniverseSigningRole::ALL
+            .into_iter()
+            .flat_map(|role| {
+                let universe_dir = universe_dir.clone();
+                ["private", "public"].map(move |kind| {
+                    let path = universe_dir.join(format!("{}.{}", role.as_str(), kind));
+                    (path.clone(), fs::read(path).unwrap())
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        ensure_universe_authority(&root).unwrap();
+        inspect_universe_authority(&root).unwrap();
+        inspect_repository_authority(&manifest(), &root).unwrap();
+        let after = before
+            .keys()
+            .map(|path| (path.clone(), fs::read(path).unwrap()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(after, before);
+
+        let universe_targets = load_universe_role_key(&root, UniverseSigningRole::Targets)
+            .unwrap()
+            .public_key_base64();
+        let package_targets = load_role_key(&root, "fedora-44", RepositorySigningRole::Targets)
+            .unwrap()
+            .public_key_base64();
+        assert_ne!(universe_targets, package_targets);
     }
 
     #[test]

@@ -151,6 +151,7 @@ pub fn prepare(options: &PrepareOptions) -> Result<PathBuf> {
         &repository_manifest,
         &options.repository_keys_dir,
     )?;
+    crate::server::signing_authority::ensure_universe_authority(&options.repository_keys_dir)?;
 
     let db_path = runtime_root.join("metadata/conary.db");
     let compatibility = conary_core::db::schema::inspect(&db_path)
@@ -244,6 +245,7 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         &repository_manifest,
         repository_keys_dir,
     )?;
+    crate::server::signing_authority::inspect_universe_authority(repository_keys_dir)?;
     let db_path = config.storage_root().join("metadata/conary.db");
     match conary_core::db::schema::inspect(&db_path)? {
         SchemaCompatibility::Current => {}

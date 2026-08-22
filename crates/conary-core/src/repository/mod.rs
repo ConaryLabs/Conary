@@ -31,6 +31,7 @@ pub mod substituter;
 pub mod supported_profiles;
 mod sync;
 pub mod trust;
+pub mod universe;
 
 pub mod declarations;
 pub mod dependency_model;
