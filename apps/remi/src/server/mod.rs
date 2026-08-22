@@ -201,6 +201,7 @@ pub struct AdminEvent {
 pub struct ServerState {
     pub config: ServerConfig,
     pub(crate) database_writer: database_writer::DatabaseWriter,
+    pub(crate) catalog_authority: catalog_authority::CatalogAuthority,
     pub(crate) publication_coordinator: Arc<Mutex<()>>,
     pub(crate) publication_readiness: readiness::PublicationReadiness,
     pub(crate) required_source_profiles: Vec<String>,
@@ -267,6 +268,11 @@ impl ServerState {
     ) -> Result<Self> {
         let job_manager = JobManager::new(config.max_concurrent_conversions);
         let database_writer = database_writer::DatabaseWriter::default();
+        let catalog_authority = catalog_authority::CatalogAuthority::from_paths(
+            config.db_path.clone(),
+            config.catalog_dir.clone(),
+            database_writer.clone(),
+        );
         let publication_coordinator = Arc::new(Mutex::new(()));
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
@@ -310,6 +316,7 @@ impl ServerState {
         Ok(Self {
             config,
             database_writer,
+            catalog_authority,
             publication_coordinator,
             publication_readiness: readiness::PublicationReadiness::default(),
             required_source_profiles: Vec::new(),

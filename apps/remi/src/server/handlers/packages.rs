@@ -108,11 +108,11 @@ async fn repository_not_ready_after_cache_miss(
     route: &str,
 ) -> Option<Response> {
     let profile = conary_core::repository::supported_profiles::profile_for_remi_route(route)?;
-    let (publication, db_path) = {
+    let (publication, catalog_authority) = {
         let state = state.read().await;
         (
             state.publication_readiness.clone(),
-            state.config.db_path.clone(),
+            state.catalog_authority.clone(),
         )
     };
     if !publication.is_ready() {
@@ -125,7 +125,7 @@ async fn repository_not_ready_after_cache_miss(
 
     let profile_id = profile.id().to_string();
     match tokio::task::spawn_blocking(move || {
-        crate::server::readiness::source_profile_is_populated(&db_path, &profile_id)
+        crate::server::readiness::source_profile_is_populated(&catalog_authority, &profile_id)
     })
     .await
     {

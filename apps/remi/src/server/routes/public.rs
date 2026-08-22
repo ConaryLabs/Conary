@@ -281,6 +281,7 @@ async fn readiness_check(
             min_free_bytes: config.readiness_min_free_bytes,
             required_source_profiles: state_guard.required_source_profiles.clone(),
             publication: state_guard.publication_readiness.clone(),
+            catalog_authority: state_guard.catalog_authority.clone(),
         }
     };
 

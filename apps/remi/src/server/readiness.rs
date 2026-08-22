@@ -17,6 +17,8 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use super::catalog_authority::CatalogAuthority;
+
 /// Free space a serving root must have before Remi reports ready.
 pub const DEFAULT_MIN_FREE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
@@ -100,7 +102,7 @@ impl ProbeOutcome {
 }
 
 /// Inputs the readiness evaluation needs, gathered from server configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ReadinessInputs {
     pub db_path: PathBuf,
     pub chunk_dir: PathBuf,
@@ -108,6 +110,7 @@ pub struct ReadinessInputs {
     pub min_free_bytes: u64,
     pub required_source_profiles: Vec<String>,
     pub publication: PublicationReadiness,
+    pub(crate) catalog_authority: CatalogAuthority,
 }
 
 /// Complete readiness report.
@@ -160,18 +163,27 @@ pub fn evaluate(inputs: &ReadinessInputs) -> ReadinessReport {
     ReadinessReport::from_probes(
         inputs.publication.clone(),
         probe_database(&inputs.db_path),
-        probe_source_profiles(&inputs.db_path, &inputs.required_source_profiles),
+        probe_source_profiles(
+            &inputs.db_path,
+            &inputs.catalog_authority,
+            &inputs.required_source_profiles,
+        ),
         probe_directory(&inputs.chunk_dir, "chunk directory"),
         probe_directory(&inputs.cache_dir, "cache directory"),
         probe_free_space(&inputs.chunk_dir, inputs.min_free_bytes),
     )
 }
 
-/// Require at least one persisted package for every enabled public profile.
+/// Require at least one package in every enabled profile's active catalog.
 ///
-/// Both the repository and package row must carry the same exact profile ID.
-/// Names, URLs, and distro-family aliases are deliberately irrelevant here.
-fn probe_source_profiles(db_path: &Path, required_profiles: &[String]) -> ProbeOutcome {
+/// Operational SQLite owns which exact profiles are enabled. The verified,
+/// pinned immutable catalog alone owns whether an activated profile contains
+/// packages; mutable package projections are deliberately irrelevant here.
+fn probe_source_profiles(
+    db_path: &Path,
+    catalog_authority: &CatalogAuthority,
+    required_profiles: &[String],
+) -> ProbeOutcome {
     let flags =
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = match rusqlite::Connection::open_with_flags(db_path, flags) {
@@ -238,13 +250,12 @@ fn probe_source_profiles(db_path: &Path, required_profiles: &[String]) -> ProbeO
 
     let mut missing = Vec::new();
     for profile in required {
-        match profile_is_populated(&conn, &profile) {
+        match active_profile_is_populated(catalog_authority, &profile) {
             Ok(true) => {}
             Ok(false) => missing.push(profile),
             Err(error) => {
                 return ProbeOutcome::unavailable(format!(
-                    "could not query source-profile population in {}: {error}",
-                    db_path.display()
+                    "could not verify active immutable catalog for source profile '{profile}': {error}"
                 ));
             }
         }
@@ -254,35 +265,26 @@ fn probe_source_profiles(db_path: &Path, required_profiles: &[String]) -> ProbeO
         ProbeOutcome::Ready
     } else {
         ProbeOutcome::not_ready(format!(
-            "enabled source profiles have no persisted packages: {}",
+            "enabled source profiles have no packages in their active immutable catalogs: {}",
             missing.join(", ")
         ))
     }
 }
 
-fn profile_is_populated(conn: &rusqlite::Connection, profile: &str) -> rusqlite::Result<bool> {
-    conn.query_row(
-        "SELECT EXISTS(
-             SELECT 1
-             FROM repositories r
-             JOIN repository_packages rp ON rp.repository_id = r.id
-             WHERE r.enabled = 1
-               AND r.source_profile = ?1
-               AND rp.source_profile = ?1
-         )",
-        [profile],
-        |row| row.get(0),
-    )
+fn active_profile_is_populated(
+    catalog_authority: &CatalogAuthority,
+    profile: &str,
+) -> anyhow::Result<bool> {
+    let catalog = catalog_authority.open_active_profile(profile)?;
+    Ok(catalog.reader().binding().counts.packages > 0)
 }
 
 /// Check one exact public profile without deriving authority from its route.
-pub(crate) fn source_profile_is_populated(db_path: &Path, profile: &str) -> Result<bool, String> {
-    let flags =
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let conn = rusqlite::Connection::open_with_flags(db_path, flags)
-        .map_err(|error| format!("could not open {}: {error}", db_path.display()))?;
-    profile_is_populated(&conn, profile)
-        .map_err(|error| format!("could not query {}: {error}", db_path.display()))
+pub(crate) fn source_profile_is_populated(
+    catalog_authority: &CatalogAuthority,
+    profile: &str,
+) -> Result<bool, String> {
+    active_profile_is_populated(catalog_authority, profile).map_err(|error| format!("{error:#}"))
 }
 
 /// Open the database read-only, run a query, and require the exact schema epoch.
@@ -374,8 +376,13 @@ mod tests {
         std::fs::create_dir_all(db_path.parent().expect("db parent")).expect("create metadata dir");
         let chunk_dir = dir.join("chunks");
         let cache_dir = dir.join("cache");
+        let catalog_dir = dir.join("catalogs");
         std::fs::create_dir_all(&chunk_dir).expect("create chunk dir");
         std::fs::create_dir_all(&cache_dir).expect("create cache dir");
+        std::fs::create_dir_all(&catalog_dir).expect("create catalog dir");
+        let database_writer = crate::server::database_writer::DatabaseWriter::default();
+        let catalog_authority =
+            CatalogAuthority::from_paths(db_path.clone(), catalog_dir, database_writer);
         ReadinessInputs {
             db_path,
             chunk_dir,
@@ -386,12 +393,15 @@ mod tests {
                 repository: PublicationPhaseState::Complete,
                 canonical: PublicationPhaseState::Complete,
             },
+            catalog_authority,
         }
     }
 
     fn initialize_database(db_path: &Path) {
         let conn = rusqlite::Connection::open(db_path).expect("open database");
         schema::ensure_current(&conn).expect("initialize current schema");
+        conary_core::db::models::RemiRuntimeSession::begin(&conn, 1)
+            .expect("install readiness runtime session");
     }
 
     fn configure_profile(db_path: &Path, profile: &str) -> i64 {
@@ -406,23 +416,196 @@ mod tests {
         repository.insert(&conn).expect("insert repository")
     }
 
-    fn mark_profile_populated(db_path: &Path, profile: &str) {
+    fn insert_operational_package(db_path: &Path, repository_id: i64, profile: &str) {
         use conary_core::db::models::RepositoryPackage;
         use conary_core::repository::versioning::VersionScheme;
 
-        let repository_id = configure_profile(db_path, profile);
         let conn = conary_core::db::open_fast(db_path).expect("open database");
         let mut package = RepositoryPackage::new(
             repository_id,
-            "readiness-probe".to_string(),
-            "1.0.0".to_string(),
-            VersionScheme::Conary,
-            format!("sha256:{profile}"),
+            "stale-operational-package".to_string(),
+            "9.9-1".to_string(),
+            VersionScheme::Rpm,
+            conary_core::hash::sha256(b"stale-operational-package"),
             1,
-            format!("https://example.invalid/{profile}/package.ccs"),
+            "https://example.invalid/stale.rpm".to_string(),
         );
         package.source_profile = Some(profile.to_string());
-        package.insert(&conn).expect("insert repository package");
+        package
+            .insert(&conn)
+            .expect("insert stale operational package");
+    }
+
+    fn activate_profile_catalog(inputs: &ReadinessInputs, profile: &str, populated: bool) {
+        use conary_core::db::models::{
+            RemiCatalogResource, RemiCatalogResourceKind, RemiProfileRevisionMember,
+        };
+        use conary_core::repository::catalog::{
+            CATALOG_FILE_NAME, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
+            CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1, ProfileRevisionV1,
+            ProfileSourceMemberV1, SourceStreamKindV1, SourceStreamV1,
+            publish_profile_catalog_bundle, write_catalog_candidate,
+            write_profile_catalog_manifest,
+        };
+        use conary_core::repository::versioning::VersionScheme;
+
+        let source_identity = format!("source-{profile}");
+        let repository_identity = format!("repository-{profile}");
+        let source_manifest_json = String::from_utf8(
+            conary_core::json::canonical_json(&serde_json::json!({
+                "fixture": "readiness-source-snapshot",
+                "profile": profile,
+            }))
+            .expect("serialize readiness source resource"),
+        )
+        .expect("source manifest JSON is UTF-8");
+        let source_snapshot_sha256 = conary_core::hash::sha256(source_manifest_json.as_bytes());
+        let origin = CatalogPackageOriginV1::Profile {
+            member_ordinal: 0,
+            source_identity: source_identity.clone(),
+            repository_identity: repository_identity.clone(),
+            source_snapshot_sha256: source_snapshot_sha256.clone(),
+        };
+        let packages = populated
+            .then(|| CatalogPackageRecordV1 {
+                package_key_sha256: String::new(),
+                origin,
+                source_profile: profile.to_string(),
+                name: "catalog-readiness-probe".to_string(),
+                version: "1.0-1".to_string(),
+                package_release: "1".to_string(),
+                architecture: Some("x86_64".to_string()),
+                debian_multi_arch: None,
+                description: None,
+                checksum: conary_core::hash::sha256(b"catalog-readiness-probe"),
+                size: 1,
+                download_url: format!("https://example.invalid/{profile}/package.rpm"),
+                metadata: None,
+                is_security_update: false,
+                severity: None,
+                cve_ids: None,
+                advisory_id: None,
+                advisory_url: None,
+                version_scheme: VersionScheme::Rpm,
+                provides: Vec::new(),
+                requirement_groups: Vec::new(),
+            })
+            .into_iter()
+            .collect();
+        let content = CatalogContentV1::new(
+            CatalogScopeV1::Profile {
+                profile: profile.to_string(),
+            },
+            vec![CatalogSourceEvidenceV1::SourceSnapshot {
+                member_ordinal: 0,
+                source_identity: source_identity.clone(),
+                repository_identity: repository_identity.clone(),
+                source_snapshot_sha256: source_snapshot_sha256.clone(),
+            }],
+            packages,
+        )
+        .expect("build readiness profile catalog");
+        let root = inputs
+            .db_path
+            .parent()
+            .and_then(Path::parent)
+            .expect("fixture storage root");
+        let candidate_dir = root.join(format!("candidate-{profile}"));
+        std::fs::create_dir_all(&candidate_dir).expect("create catalog candidate");
+        let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
+            .expect("write readiness catalog candidate");
+        let manifest = ProfileRevisionV1 {
+            schema_version: PROFILE_REVISION_SCHEMA_V1,
+            profile: profile.to_string(),
+            projection_version: 1,
+            members: vec![ProfileSourceMemberV1 {
+                ordinal: 0,
+                source_identity,
+                repository_identity,
+                stream: SourceStreamV1 {
+                    kind: SourceStreamKindV1::Release,
+                    identity: "stable".to_string(),
+                },
+                priority: 0,
+                required: true,
+                source_snapshot_sha256: source_snapshot_sha256.clone(),
+            }],
+            catalog: binding.artifact.clone(),
+            logical_digest_sha256: binding.logical_digest_sha256.clone(),
+            counts: binding.counts,
+        };
+        write_profile_catalog_manifest(&candidate_dir, &manifest)
+            .expect("write readiness profile manifest");
+        publish_profile_catalog_bundle(&candidate_dir, root.join("catalogs"), &manifest)
+            .expect("publish readiness profile catalog");
+        let digest = manifest.manifest_sha256().expect("hash readiness revision");
+        let manifest_json = String::from_utf8(
+            conary_core::json::canonical_json(&manifest).expect("serialize readiness revision"),
+        )
+        .expect("manifest JSON is UTF-8");
+        let conn = conary_core::db::open_fast(&inputs.db_path).expect("open readiness database");
+        RemiCatalogResource {
+            resource_sha256: source_snapshot_sha256.clone(),
+            kind: RemiCatalogResourceKind::SourceSnapshot,
+            source_profile: profile.to_string(),
+            artifact_sha256: conary_core::hash::sha256(
+                format!("readiness-source-artifact-{profile}").as_bytes(),
+            ),
+            artifact_size: 1,
+            logical_digest_sha256: conary_core::hash::sha256(
+                format!("readiness-source-logical-{profile}").as_bytes(),
+            ),
+            manifest_json: source_manifest_json,
+            durable: true,
+            created_at: 1,
+        }
+        .insert(&conn)
+        .expect("insert readiness source resource");
+        RemiCatalogResource {
+            resource_sha256: digest.clone(),
+            kind: RemiCatalogResourceKind::ProfileRevision,
+            source_profile: profile.to_string(),
+            artifact_sha256: manifest.catalog.sha256.clone(),
+            artifact_size: i64::try_from(manifest.catalog.size).expect("artifact size fits"),
+            logical_digest_sha256: manifest.logical_digest_sha256.clone(),
+            manifest_json,
+            durable: true,
+            created_at: 1,
+        }
+        .insert(&conn)
+        .expect("insert readiness profile resource");
+        RemiProfileRevisionMember {
+            profile_revision_sha256: digest.clone(),
+            ordinal: 0,
+            source_snapshot_sha256,
+            source_identity: manifest.members[0].source_identity.clone(),
+            repository_identity: manifest.members[0].repository_identity.clone(),
+            stream_kind: "release".to_string(),
+            stream_identity: "stable".to_string(),
+            priority: 0,
+            required: true,
+        }
+        .insert(&conn)
+        .expect("insert readiness profile member");
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let owner_instance_uuid = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO repository_sync_runs (
+                 run_id, source_profile, owner_instance_uuid, fencing_epoch,
+                 input_profile_digest, candidate_profile_digest, state,
+                 started_at, heartbeat_at, lease_expires_at, finished_at
+             ) VALUES (?1, ?2, ?3, 1, NULL, ?4, 'published', 1, 1, 1, 1)",
+            rusqlite::params![run_id, profile, owner_instance_uuid, digest],
+        )
+        .expect("insert readiness activation run");
+        conn.execute(
+            "INSERT INTO remi_active_profile_revisions (
+                 source_profile, profile_revision_sha256, fencing_epoch,
+                 activation_run_id, owner_instance_uuid, activated_at
+             ) VALUES (?1, ?2, 1, ?3, ?4, 1)",
+            rusqlite::params![profile, digest, run_id, owner_instance_uuid,],
+        )
+        .expect("activate readiness profile catalog");
     }
 
     #[test]
@@ -430,7 +613,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let inputs = inputs_for(dir.path());
         initialize_database(&inputs.db_path);
-        mark_profile_populated(&inputs.db_path, "fedora-44");
+        configure_profile(&inputs.db_path, "fedora-44");
+        activate_profile_catalog(&inputs, "fedora-44", true);
 
         let report = evaluate(&inputs);
 
@@ -459,7 +643,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut inputs = inputs_for(dir.path());
         initialize_database(&inputs.db_path);
-        mark_profile_populated(&inputs.db_path, "fedora-44");
+        configure_profile(&inputs.db_path, "fedora-44");
+        activate_profile_catalog(&inputs, "fedora-44", true);
         inputs.publication.canonical = PublicationPhaseState::Pending;
 
         let report = evaluate(&inputs);
@@ -488,7 +673,9 @@ mod tests {
         let mut inputs = inputs_for(dir.path());
         inputs.required_source_profiles = vec!["fedora-44".to_string()];
         initialize_database(&inputs.db_path);
-        configure_profile(&inputs.db_path, "fedora-44");
+        let repository_id = configure_profile(&inputs.db_path, "fedora-44");
+        insert_operational_package(&inputs.db_path, repository_id, "fedora-44");
+        activate_profile_catalog(&inputs, "fedora-44", false);
 
         let report = evaluate(&inputs);
 
@@ -500,13 +687,36 @@ mod tests {
     }
 
     #[test]
+    fn missing_active_catalog_is_unavailable_without_operational_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut inputs = inputs_for(dir.path());
+        inputs.required_source_profiles = vec!["fedora-44".to_string()];
+        initialize_database(&inputs.db_path);
+        let repository_id = configure_profile(&inputs.db_path, "fedora-44");
+        insert_operational_package(&inputs.db_path, repository_id, "fedora-44");
+
+        let report = evaluate(&inputs);
+
+        assert!(!report.ready);
+        match report.source_profiles {
+            ProbeOutcome::Unavailable { reason } => assert!(
+                reason.contains("has no active immutable catalog revision"),
+                "unexpected reason: {reason}"
+            ),
+            other => panic!("expected unavailable catalog authority, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn not_ready_when_only_some_required_profiles_are_populated() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut inputs = inputs_for(dir.path());
         inputs.required_source_profiles = vec!["fedora-44".to_string(), "ubuntu-26.04".to_string()];
         initialize_database(&inputs.db_path);
-        mark_profile_populated(&inputs.db_path, "fedora-44");
+        configure_profile(&inputs.db_path, "fedora-44");
+        activate_profile_catalog(&inputs, "fedora-44", true);
         configure_profile(&inputs.db_path, "ubuntu-26.04");
+        activate_profile_catalog(&inputs, "ubuntu-26.04", false);
 
         let report = evaluate(&inputs);
 
@@ -529,8 +739,10 @@ mod tests {
         let mut inputs = inputs_for(dir.path());
         inputs.required_source_profiles = vec!["fedora-44".to_string(), "ubuntu-26.04".to_string()];
         initialize_database(&inputs.db_path);
-        mark_profile_populated(&inputs.db_path, "fedora-44");
-        mark_profile_populated(&inputs.db_path, "ubuntu-26.04");
+        configure_profile(&inputs.db_path, "fedora-44");
+        activate_profile_catalog(&inputs, "fedora-44", true);
+        configure_profile(&inputs.db_path, "ubuntu-26.04");
+        activate_profile_catalog(&inputs, "ubuntu-26.04", true);
 
         let report = evaluate(&inputs);
 
