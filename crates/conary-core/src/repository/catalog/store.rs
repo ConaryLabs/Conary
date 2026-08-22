@@ -167,6 +167,14 @@ impl CatalogBindingV1 {
     }
 }
 
+/// One bounded page from the lexically ordered names of downloadable catalog
+/// packages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogPackageNamePageV1 {
+    pub total: usize,
+    pub names: Vec<String>,
+}
+
 /// A byte- and schema-verified immutable catalog connection.
 pub struct CatalogReader {
     path: PathBuf,
@@ -278,6 +286,53 @@ impl CatalogReader {
             &format!("{SELECT_PACKAGES} WHERE name = ?1 ORDER BY package_key_sha256"),
             [name],
         )
+    }
+
+    /// Return one exact page of distinct downloadable package names.
+    ///
+    /// `offset` is zero-based. Both the total and the page use the same
+    /// minimum-size predicate, and names are ordered with SQLite's binary
+    /// collation so repeated reads have one lexical order independent of
+    /// package insertion order.
+    pub fn find_downloadable_package_name_page(
+        &self,
+        offset: usize,
+        limit: usize,
+        minimum_size: u64,
+    ) -> Result<CatalogPackageNamePageV1> {
+        if limit == 0 {
+            return Err(Error::ConfigError(
+                "catalog package-name page limit must be positive".to_string(),
+            ));
+        }
+        let offset = checked_sqlite_usize(offset, "offset")?;
+        let limit = checked_sqlite_usize(limit, "limit")?;
+        let minimum_size = checked_i64(minimum_size, "minimum package size")?;
+
+        let total = self.connection.query_row(
+            "SELECT COUNT(DISTINCT name)
+             FROM catalog_packages
+             WHERE size >= ?1",
+            [minimum_size],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let total = usize::try_from(total).map_err(|_| {
+            Error::ConfigError(format!(
+                "catalog downloadable package-name count {total} exceeds platform usize range"
+            ))
+        })?;
+
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT name
+             FROM catalog_packages
+             WHERE size >= ?1
+             ORDER BY name COLLATE BINARY
+             LIMIT ?2 OFFSET ?3",
+        )?;
+        let names = statement
+            .query_map(params![minimum_size, limit, offset], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(CatalogPackageNamePageV1 { total, names })
     }
 
     pub fn source_evidence(&self) -> Result<Vec<CatalogSourceEvidenceV1>> {
@@ -884,6 +939,14 @@ fn checked_ordinal(value: usize, label: &str) -> Result<i64> {
     i64::try_from(value).map_err(|_| {
         Error::ConfigError(format!(
             "catalog {label} ordinal exceeds SQLite integer range"
+        ))
+    })
+}
+
+fn checked_sqlite_usize(value: usize, label: &str) -> Result<i64> {
+    i64::try_from(value).map_err(|_| {
+        Error::ConfigError(format!(
+            "catalog package-name page {label} exceeds SQLite integer range"
         ))
     })
 }

@@ -29,4 +29,6 @@ pub use record::{
     CatalogSourceEvidenceV1,
 };
 pub use source::{SOURCE_CATALOG_PROJECTION_VERSION_V1, SourceCatalogCandidateV1};
-pub use store::{CatalogBindingV1, CatalogReader, write_catalog_candidate};
+pub use store::{
+    CatalogBindingV1, CatalogPackageNamePageV1, CatalogReader, write_catalog_candidate,
+};

@@ -80,6 +80,18 @@ fn package(name: &str, checksum: &str) -> CatalogPackageRecordV1 {
     }
 }
 
+fn package_with_version_and_size(
+    name: &str,
+    version: &str,
+    size: u64,
+    checksum: &str,
+) -> CatalogPackageRecordV1 {
+    let mut package = package(name, checksum);
+    package.version = version.to_string();
+    package.size = size;
+    package
+}
+
 #[test]
 fn catalog_artifact_is_independent_of_input_order() {
     let directory = tempfile::tempdir().unwrap();
@@ -153,4 +165,116 @@ fn candidate_build_does_not_touch_adjacent_operational_database() {
         CatalogContentV1::new(source_scope(), evidence(), vec![package("bash", "a")]).unwrap();
     write_catalog_candidate(directory.path().join("catalog.sqlite"), &content).unwrap();
     assert_eq!(hash_file(&operational).unwrap(), before);
+}
+
+#[test]
+fn reader_pages_distinct_downloadable_names_by_total_and_lexical_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let content = CatalogContentV1::new(
+        source_scope(),
+        evidence(),
+        vec![
+            package_with_version_and_size("delta", "1.0-1", 512, "delta"),
+            package_with_version_and_size("alpha", "2.0-1", 256, "alpha-v2"),
+            package_with_version_and_size("bravo", "1.0-1", 128, "bravo"),
+            package_with_version_and_size("alpha", "1.0-1", 64, "alpha-v1"),
+            package_with_version_and_size("charlie", "1.0-1", 1, "charlie"),
+        ],
+    )
+    .unwrap();
+    let path = directory.path().join("catalog.sqlite");
+    let binding = write_catalog_candidate(&path, &content).unwrap();
+    let reader = CatalogReader::open_verified(&path, &binding).unwrap();
+
+    let first = reader
+        .find_downloadable_package_name_page(0, 2, 128)
+        .unwrap();
+    assert_eq!(
+        first,
+        CatalogPackageNamePageV1 {
+            total: 3,
+            names: vec!["alpha".to_string(), "bravo".to_string()],
+        }
+    );
+    let second = reader
+        .find_downloadable_package_name_page(2, 2, 128)
+        .unwrap();
+    assert_eq!(second.total, 3);
+    assert_eq!(second.names, vec!["delta"]);
+    let empty = reader
+        .find_downloadable_package_name_page(3, 2, 128)
+        .unwrap();
+    assert_eq!(empty.total, 3);
+    assert!(empty.names.is_empty());
+}
+
+#[test]
+fn reader_name_page_rejects_zero_limit_and_sqlite_range_overflow() {
+    let directory = tempfile::tempdir().unwrap();
+    let content =
+        CatalogContentV1::new(source_scope(), evidence(), vec![package("bash", "a")]).unwrap();
+    let path = directory.path().join("catalog.sqlite");
+    let binding = write_catalog_candidate(&path, &content).unwrap();
+    let reader = CatalogReader::open_verified(&path, &binding).unwrap();
+
+    let error = reader
+        .find_downloadable_package_name_page(0, 0, 1)
+        .unwrap_err();
+    assert!(error.to_string().contains("limit must be positive"));
+
+    if let Some(overflow) = usize::try_from(i64::MAX)
+        .ok()
+        .and_then(|maximum| maximum.checked_add(1))
+    {
+        let error = reader
+            .find_downloadable_package_name_page(overflow, 1, 1)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("offset exceeds SQLite integer range")
+        );
+
+        let error = reader
+            .find_downloadable_package_name_page(0, overflow, 1)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("limit exceeds SQLite integer range")
+        );
+    }
+}
+
+#[test]
+fn reader_name_page_order_is_deterministic_for_repeated_reads() {
+    let directory = tempfile::tempdir().unwrap();
+    let content = CatalogContentV1::new(
+        source_scope(),
+        evidence(),
+        vec![
+            package_with_version_and_size("zulu", "1.0-1", 100, "zulu"),
+            package_with_version_and_size("alpha", "1.0-1", 100, "alpha"),
+            package_with_version_and_size("echo", "1.0-1", 100, "echo"),
+            package_with_version_and_size("bravo", "1.0-1", 100, "bravo"),
+        ],
+    )
+    .unwrap();
+    let path = directory.path().join("catalog.sqlite");
+    let binding = write_catalog_candidate(&path, &content).unwrap();
+    let reader = CatalogReader::open_verified(&path, &binding).unwrap();
+
+    let expected = [
+        "alpha".to_string(),
+        "bravo".to_string(),
+        "echo".to_string(),
+        "zulu".to_string(),
+    ];
+    for offset in 0..expected.len() {
+        let page = reader
+            .find_downloadable_package_name_page(offset, 1, 100)
+            .unwrap();
+        assert_eq!(page.total, expected.len());
+        assert_eq!(page.names, vec![expected[offset].clone()]);
+    }
 }
