@@ -1,6 +1,6 @@
 // crates/conary-core/src/repository/remi_authority.rs
 
-//! Release-tracked CCS package authority for Conary's canonical Remi service.
+//! Release-tracked package and universe authority for canonical Remi.
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -13,7 +13,8 @@ use super::static_repo::{PackageKeyEntry, PackageKeyStatus};
 use super::supported_profiles::{profile_by_public_id, public_profiles};
 
 const CATALOG_TOML: &str = include_str!("remi_authority/catalog.toml");
-const CATALOG_SCHEMA_VERSION: u64 = 1;
+const UNIVERSE_ROOT_JSON: &str = include_str!("remi_authority/universe-root.json");
+const CATALOG_SCHEMA_VERSION: u64 = 2;
 
 static CATALOG: LazyLock<CanonicalRemiAuthorityCatalog> = LazyLock::new(|| {
     let catalog: CanonicalRemiAuthorityCatalog =
@@ -29,6 +30,7 @@ static CATALOG: LazyLock<CanonicalRemiAuthorityCatalog> = LazyLock::new(|| {
 struct CanonicalRemiAuthorityCatalog {
     schema_version: u64,
     endpoint: String,
+    universe_root_sha256: String,
     profiles: Vec<ProfileAuthority>,
 }
 
@@ -49,6 +51,18 @@ impl CanonicalRemiAuthorityCatalog {
             );
         }
         require_https_root_endpoint(&self.endpoint)?;
+        let root_bytes = embedded_universe_root_bytes();
+        let root = super::universe::validate_remi_universe_root(root_bytes)?;
+        if root.canonical_bytes != root_bytes {
+            bail!("canonical Remi universe root must use canonical JSON bytes");
+        }
+        let actual_root_sha256 = crate::hash::sha256(root_bytes);
+        if actual_root_sha256 != self.universe_root_sha256 {
+            bail!(
+                "canonical Remi universe root digest {actual_root_sha256} does not match release catalog {}",
+                self.universe_root_sha256
+            );
+        }
 
         let expected_profiles = public_profiles()
             .iter()
@@ -115,6 +129,21 @@ impl CanonicalRemiAuthorityCatalog {
 #[must_use]
 pub fn canonical_remi_endpoint() -> &'static str {
     &CATALOG.endpoint
+}
+
+/// Return the release-tracked universe root only for the exact canonical
+/// endpoint origin.
+#[must_use]
+pub fn canonical_remi_universe_root(endpoint: &str) -> Option<&'static [u8]> {
+    same_root_endpoint(endpoint, canonical_remi_endpoint())
+        .then_some(embedded_universe_root_bytes())
+}
+
+fn embedded_universe_root_bytes() -> &'static [u8] {
+    UNIVERSE_ROOT_JSON
+        .strip_suffix('\n')
+        .expect("embedded canonical Remi universe root must end with one newline")
+        .as_bytes()
 }
 
 /// Return release-tracked package keys only for an exact canonical
@@ -200,6 +229,17 @@ mod tests {
     }
 
     #[test]
+    fn canonical_universe_root_is_exact_verified_production_ceremony() {
+        let root = canonical_remi_universe_root(canonical_remi_endpoint()).unwrap();
+        assert_eq!(root.len(), 1_578);
+        assert_eq!(
+            crate::hash::sha256(root),
+            "558c112acc4fa71aa537f4027d9430399035a953af7f8acd18c8d198d4454c2c"
+        );
+        crate::repository::universe::validate_remi_universe_root(root).unwrap();
+    }
+
+    #[test]
     fn canonical_match_is_exact_to_endpoint_origin_and_profile() {
         assert!(canonical_remi_package_keys("https://remi.conary.io/", "fedora-44").is_some());
         for endpoint in [
@@ -212,6 +252,10 @@ mod tests {
             assert!(
                 canonical_remi_package_keys(endpoint, "fedora-44").is_none(),
                 "{endpoint} must not inherit canonical package authority"
+            );
+            assert!(
+                canonical_remi_universe_root(endpoint).is_none(),
+                "{endpoint} must not inherit canonical universe authority"
             );
         }
         assert!(canonical_remi_package_keys(canonical_remi_endpoint(), "fedora").is_none());

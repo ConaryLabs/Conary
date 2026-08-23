@@ -2,11 +2,18 @@
 
 //! Independent metadata-root enrollment for one Remi universe endpoint.
 
+use std::collections::BTreeSet;
+
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
 use crate::trust::verify::{extract_role_keys, verify_not_expired, verify_root};
-use crate::trust::{Role, RootMetadata, Signed};
+use crate::trust::{Role, RootMetadata, Signed, TUF_SPEC_VERSION};
+
+pub(crate) struct ValidatedRemiUniverseRoot {
+    pub(crate) root: Signed<RootMetadata>,
+    pub(crate) canonical_bytes: Vec<u8>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemiUniverseEnrollmentOutcome {
@@ -45,20 +52,9 @@ pub fn enroll_remi_universe_root(
     root_bytes: &[u8],
 ) -> Result<RemiUniverseEnrollmentOutcome> {
     let endpoint = normalize_remi_endpoint(endpoint)?;
-    let root: Signed<RootMetadata> = serde_json::from_slice(root_bytes)?;
-    if root.signed.type_field != "root" {
-        return Err(Error::TrustError(format!(
-            "universe metadata root has type '{}' instead of 'root'",
-            root.signed.type_field
-        )));
-    }
-    let (root_keys, root_threshold) = extract_role_keys(&root.signed, Role::Root)
-        .map_err(|error| Error::TrustError(error.to_string()))?;
-    verify_root(&root, &root_keys, root_threshold)
-        .map_err(|error| Error::TrustError(error.to_string()))?;
-    verify_not_expired(Role::Root, &root.signed.expires)
-        .map_err(|error| Error::TrustError(error.to_string()))?;
-    let canonical = crate::json::canonical_json(&root).map_err(Error::ParseError)?;
+    let validated = validate_remi_universe_root(root_bytes)?;
+    let root = validated.root;
+    let canonical = validated.canonical_bytes;
     let root_sha256 = crate::hash::sha256(&canonical);
     let root_json = String::from_utf8(canonical)
         .map_err(|error| Error::ParseError(format!("metadata root is not UTF-8: {error}")))?;
@@ -98,6 +94,65 @@ pub fn enroll_remi_universe_root(
         params![endpoint, root_sha256, root_json, root_version],
     )?;
     Ok(RemiUniverseEnrollmentOutcome::Enrolled)
+}
+
+pub(crate) fn validate_remi_universe_root(root_bytes: &[u8]) -> Result<ValidatedRemiUniverseRoot> {
+    let root: Signed<RootMetadata> = serde_json::from_slice(root_bytes)?;
+    if root.signed.type_field != "root" {
+        return Err(Error::TrustError(format!(
+            "universe metadata root has type '{}' instead of 'root'",
+            root.signed.type_field
+        )));
+    }
+    if root.signed.spec_version != TUF_SPEC_VERSION {
+        return Err(Error::TrustError(format!(
+            "universe metadata root uses TUF spec version '{}' instead of '{}'",
+            root.signed.spec_version, TUF_SPEC_VERSION
+        )));
+    }
+    if root.signed.consistent_snapshot {
+        return Err(Error::TrustError(
+            "Remi universe metadata root must disable TUF consistent snapshots".to_string(),
+        ));
+    }
+    let expected_roles = [Role::Root, Role::Targets, Role::Snapshot, Role::Timestamp]
+        .into_iter()
+        .map(|role| role.to_string())
+        .collect::<BTreeSet<_>>();
+    let actual_roles = root.signed.roles.keys().cloned().collect::<BTreeSet<_>>();
+    if actual_roles != expected_roles || root.signed.keys.len() != expected_roles.len() {
+        return Err(Error::TrustError(
+            "Remi universe metadata root must authorize exactly four dedicated roles and keys"
+                .to_string(),
+        ));
+    }
+    let mut referenced_keys = BTreeSet::new();
+    for role in [Role::Root, Role::Targets, Role::Snapshot, Role::Timestamp] {
+        let (keys, threshold) = extract_role_keys(&root.signed, role)
+            .map_err(|error| Error::TrustError(error.to_string()))?;
+        if threshold != 1 || keys.len() != 1 {
+            return Err(Error::TrustError(format!(
+                "Remi universe {role} role must authorize exactly one key at threshold 1"
+            )));
+        }
+        referenced_keys.extend(keys.into_keys());
+    }
+    if referenced_keys != root.signed.keys.keys().cloned().collect() {
+        return Err(Error::TrustError(
+            "Remi universe metadata root contains an unreferenced key".to_string(),
+        ));
+    }
+    let (root_keys, root_threshold) = extract_role_keys(&root.signed, Role::Root)
+        .map_err(|error| Error::TrustError(error.to_string()))?;
+    verify_root(&root, &root_keys, root_threshold)
+        .map_err(|error| Error::TrustError(error.to_string()))?;
+    verify_not_expired(Role::Root, &root.signed.expires)
+        .map_err(|error| Error::TrustError(error.to_string()))?;
+    let canonical = crate::json::canonical_json(&root).map_err(Error::ParseError)?;
+    Ok(ValidatedRemiUniverseRoot {
+        root,
+        canonical_bytes: canonical,
+    })
 }
 
 #[cfg(test)]

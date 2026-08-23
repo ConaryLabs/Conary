@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-22
-revision: 49
+last_updated: 2026-08-23
+revision: 50
 summary: Document signed Remi universe and canonical-map authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
@@ -118,20 +118,23 @@ future client rebuilds on that same authority instead of restating it. Bounded
 transport and 5xx retries stay separate from that decision: exhausting them is
 a transport failure, not a conversion failure.
 
-## Remi CCS Package Authority
+## Canonical Remi Trust Authorities
 
 Authenticated source metadata and authenticated converted CCS output are
-separate boundaries. `crates/conary-core/src/repository/remi_authority.rs` and
-its embedded `remi_authority/catalog.toml` own the release-tracked Ed25519
-package-authority pins for Conary's canonical Remi service. A catalog entry is
-selected only by the exact `https://remi.conary.io` origin and one exact public
-profile ID. A route slug, package format, repository name, deceptive hostname,
-or non-root URL cannot select those keys.
+separate boundaries. `crates/conary-core/src/repository/remi_authority.rs`, its
+embedded `remi_authority/catalog.toml`, and `universe-root.json` own the
+release-tracked Ed25519 package keys and independent universe metadata root for
+Conary's canonical Remi service. Package keys are selected only by the exact
+`https://remi.conary.io` origin and one exact public profile ID. The universe
+root is selected by that exact origin alone. A route slug, package format,
+repository name, deceptive hostname, or non-root URL cannot select either
+authority.
 
-`conary system init` creates or reconciles each Conary-owned Remi repository
-and its `repository_package_keys` rows in the same transaction. An explicit
-`conary repo add` for the exact canonical origin/profile pair does the same.
-The self-hosted key option cannot override that release-tracked canonical
+`conary system init` enrolls the release-tracked universe root and creates or
+reconciles each Conary-owned Remi repository and its `repository_package_keys`
+rows in the same transaction. An explicit `conary repo add` for the exact
+canonical origin/profile pair enrolls both authorities transactionally. Neither
+the package-key nor metadata-root option can override release-tracked canonical
 authority.
 Repeated initialization compares the semantic key set without rewriting its
 sync timestamps. Signed-universe activation leaves the repository's CCS
@@ -139,13 +142,14 @@ package authority intact and stores Remi resolution rows only in the selected
 private immutable client index. A same-name repository whose endpoint or
 strategy is operator-managed is left unchanged.
 
-Universe metadata trust is a second independent authority. A noncanonical
-endpoint requires an independently supplied `--remi-metadata-root`, and
-replacement uses only a future root signed through the already-enrolled TUF
-root chain. The canonical endpoint currently requires the same explicit root;
-its first durable server ceremony must supply the public `root.json` before a
-release can track and enroll that exact origin automatically. The root is never
-derived from a CCS package key.
+Universe metadata trust remains independent of package authority. A
+noncanonical endpoint requires an independently supplied
+`--remi-metadata-root`, and replacement uses only a future root signed through
+the already-enrolled TUF root chain. The canonical production ceremony root is
+release-tracked at SHA-256
+`558c112acc4fa71aa537f4027d9430399035a953af7f8acd18c8d198d4454c2c`;
+canonical initialization and repository addition enroll it automatically and
+idempotently. It is never derived from a CCS package key.
 
 For a noncanonical Remi endpoint, `repo add` requires one or more authenticated
 `targets.public` files through the repeatable `--ccs-package-key` option and

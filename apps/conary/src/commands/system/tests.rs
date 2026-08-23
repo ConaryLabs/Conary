@@ -148,6 +148,29 @@ async fn init_seeds_every_builtin_remi_feed_without_incomplete_native_enrollment
         );
     }
 
+    let canonical_trust = conn
+        .query_row(
+            "SELECT trusted_root_sha256, root_version, fencing_epoch
+             FROM remi_client_universe_trust WHERE endpoint = 'https://remi.conary.io'",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        canonical_trust,
+        (
+            "558c112acc4fa71aa537f4027d9430399035a953af7f8acd18c8d198d4454c2c".to_string(),
+            1,
+            0,
+        )
+    );
+
     assert!(
         Repository::list_all(&conn)
             .unwrap()
