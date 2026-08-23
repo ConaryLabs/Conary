@@ -284,3 +284,122 @@ async fn test_download_file_requests_identity_encoding() {
         "file download request did not force identity encoding:\n{request}"
     );
 }
+
+#[tokio::test]
+async fn test_download_file_timeout_is_per_progress_not_total_transfer() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            let read = stream.read(&mut buf).await.unwrap();
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        for byte in b"signed" {
+            stream.write_all(&[*byte]).await.unwrap();
+            stream.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    });
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dest_path = temp_dir.path().join("universe-object");
+    let client = RepositoryClient::with_timeouts(TimeoutConfig {
+        metadata: Duration::from_secs(1),
+        download: Duration::from_millis(100),
+        connect: Duration::from_secs(1),
+    })
+    .unwrap();
+    let identity = client
+        .download_file_with_identity(&format!("http://{addr}/universe-object"), &dest_path)
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read(&dest_path).unwrap(), b"signed");
+    assert_eq!(identity.size, 6);
+    assert_eq!(identity.sha256, crate::hash::sha256(b"signed"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_download_file_retries_and_resumes_after_body_failure() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for attempt in 1..=2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                let read = stream.read(&mut buf).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            requests.push(String::from_utf8(request).unwrap());
+
+            if attempt == 1 {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsig",
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\nned",
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        requests
+    });
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dest_path = temp_dir.path().join("universe-object");
+    let client = RepositoryClient::new()
+        .unwrap()
+        .with_retry_policy(RetryConfig {
+            max_attempts: 2,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter_factor: 0.0,
+        });
+    let identity = client
+        .download_file_with_identity(&format!("http://{addr}/universe-object"), &dest_path)
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read(&dest_path).unwrap(), b"signed");
+    assert_eq!(identity.size, 6);
+    assert_eq!(identity.sha256, crate::hash::sha256(b"signed"));
+    let requests = server.await.unwrap();
+    assert!(!requests[0].to_ascii_lowercase().contains("range:"));
+    assert!(requests[1].to_ascii_lowercase().contains("range: bytes=3-"));
+}

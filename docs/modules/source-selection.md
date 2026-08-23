@@ -96,6 +96,15 @@ route slug. Remi sync verifies the endpoint-wide signed universe, downloads
 only missing digest-addressed catalogs, and replays each configured exact
 profile directly into one private immutable resolution index. One final fenced
 transaction activates the complete index and its universe-bound canonical map.
+Object transfer bounds each request and interval without body progress; it does
+not impose a fixed wall-clock ceiling on a healthy multi-gigabyte stream.
+Interrupted bodies use bounded retries and resume from exact retained bytes
+when the server supports ranges. A complete-operation deadline belongs to the
+caller. Private replay creates resolution indexes only after bulk row transfer;
+the append-only candidate must retain a zero-page freelist and remains
+unpublished through index construction, integrity verification, and durable
+rename. Finalization does not rewrite the new multi-gigabyte database with a
+no-op compaction pass.
 The client rejects mixed revisions, rollback, forks, expiry, altered objects,
 and a manifest that does not authorize the exact object set. Sync neither
 fetches whole-distribution JSON nor retains distribution-sized package or

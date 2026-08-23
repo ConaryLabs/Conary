@@ -278,13 +278,16 @@ artifact, physical schema, integrity, manifest binding, and relational counts.
 The Remi publisher already performed the canonical logical/schema replay before
 the dedicated universe role signed those exact bytes. Configured profiles are
 copied SQLite-to-SQLite into one private immutable resolution index; the
-canonical map streams one entry at a time into the same candidate. One fenced
-operational transaction records the immutable object/index identities, selects
-the complete universe, advances repository timestamps, and removes retired
-mutable Remi package and canonical rows. Operational SQLite retains repository
-configuration, independent trust enrollment, verified TUF state, object
-identities, and the active pointer; it is not Remi package, provide,
-requirement, or canonical-map authority.
+canonical map streams one entry at a time into the same candidate. Secondary
+indexes are built after bulk replay, and the append-only candidate must have no
+free pages before integrity verification and durable publication; finalization
+does not perform a redundant whole-file compaction. One fenced operational
+transaction records the immutable object/index identities, selects the complete
+universe, advances repository timestamps, and removes retired mutable Remi
+package and canonical rows. Operational SQLite retains repository configuration,
+independent trust enrollment, verified TUF state, object identities, and the
+active pointer; it is not Remi package, provide, requirement, or canonical-map
+authority.
 
 Each database connection attaches the index selected when that connection
 opens and shadows the `resolved_*` views locally. Existing readers therefore
