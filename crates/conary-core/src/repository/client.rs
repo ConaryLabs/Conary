@@ -37,7 +37,8 @@ use super::retry::RetryConfig;
 pub struct TimeoutConfig {
     /// Timeout for metadata requests (default 30s)
     pub metadata: Duration,
-    /// Timeout for file/package downloads (default 300s)
+    /// Timeout for one file-download request or interval without body progress
+    /// (default 300s). This is not a wall-clock limit for the complete file.
     pub download: Duration,
     /// Connection establishment timeout (default 30s)
     pub connect: Duration,
@@ -332,6 +333,7 @@ struct ResponseStreamOptions<'a> {
     progress_bar: Option<&'a ProgressBar>,
     display_name: &'a str,
     max_size: Option<u64>,
+    inactivity_timeout: Duration,
 }
 
 async fn stream_response_to_file(
@@ -354,11 +356,19 @@ async fn stream_response_to_file(
 
     let mut downloaded: u64 = options.offset;
 
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| Error::DownloadError(format!("read response stream: {e}")))?
-    {
+    loop {
+        let chunk = tokio::time::timeout(options.inactivity_timeout, response.chunk())
+            .await
+            .map_err(|_| {
+                Error::DownloadError(format!(
+                    "response stream made no progress for {:?}",
+                    options.inactivity_timeout
+                ))
+            })?
+            .map_err(|e| Error::DownloadError(format!("read response stream: {e}")))?;
+        let Some(chunk) = chunk else {
+            break;
+        };
         let next_size = downloaded
             .checked_add(u64::try_from(chunk.len()).map_err(|_| {
                 Error::DownloadError("response chunk length exceeds u64".to_string())
@@ -747,8 +757,7 @@ impl RepositoryClient {
             let mut request = self
                 .client
                 .get(url)
-                .header(header::ACCEPT_ENCODING, "identity")
-                .timeout(self.timeouts.download);
+                .header(header::ACCEPT_ENCODING, "identity");
             if existing_len > 0 {
                 debug!(
                     "Found partial download ({} bytes), requesting resume",
@@ -757,8 +766,23 @@ impl RepositoryClient {
                 request = request.header(header::RANGE, format!("bytes={}-", existing_len));
             }
 
-            match request.send().await {
-                Ok(response) => {
+            let response = tokio::time::timeout(self.timeouts.download, request.send()).await;
+            match response {
+                Err(_) => {
+                    if attempt >= self.retry_policy.max_attempts {
+                        return Err(Error::DownloadError(format!(
+                            "download request made no progress for {:?}",
+                            self.timeouts.download
+                        )));
+                    }
+                    warn!(
+                        "Download attempt {} made no request progress for {:?}, retrying...",
+                        attempt, self.timeouts.download
+                    );
+                    tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
+                    continue;
+                }
+                Ok(Ok(response)) => {
                     let status = response.status();
 
                     if is_transient_error(status) {
@@ -869,9 +893,20 @@ impl RepositoryClient {
                             progress_bar,
                             display_name,
                             max_size,
+                            inactivity_timeout: self.timeouts.download,
                         },
                     )
-                    .await?;
+                    .await;
+                    let downloaded = match downloaded {
+                        Ok(downloaded) => downloaded,
+                        Err(error) if attempt < self.retry_policy.max_attempts => {
+                            drop(file);
+                            warn!("Download attempt {attempt} failed: {error}, retrying...");
+                            tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
 
                     if let Some(pb) = progress_bar {
                         pb.finish_with_message(format!("{} [done]", display_name));
@@ -898,7 +933,7 @@ impl RepositoryClient {
                         size: downloaded,
                     });
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     if attempt >= self.retry_policy.max_attempts {
                         return Err(Error::DownloadError(format!(
                             "Failed to download after {attempt} attempts: {e}"
