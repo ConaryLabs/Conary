@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(source.source_snapshot.source_profile, "fedora-44");
         assert_eq!(
             source.source_snapshot.repository_identity,
-            "repository-fedora-44"
+            "fedora-44-updates-x86_64"
         );
         let conn = fixture.connection();
         let operational_packages = conn

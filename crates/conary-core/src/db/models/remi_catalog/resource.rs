@@ -363,7 +363,10 @@ mod tests {
                 size: 8192,
             },
             logical_digest_sha256: digest('0'),
-            counts: CatalogCountsV1::default(),
+            counts: CatalogCountsV1 {
+                source_evidence: 1,
+                ..CatalogCountsV1::default()
+            },
         }
     }
 

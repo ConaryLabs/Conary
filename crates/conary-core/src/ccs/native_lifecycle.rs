@@ -402,9 +402,7 @@ impl NativeLifecycleBundle {
             );
         }
         if let Some(source_profile_id) = self.source_profile.as_deref() {
-            let profile = crate::repository::supported_profiles::profile_by_public_id(
-                source_profile_id,
-            )
+            let profile = crate::repository::supported_profiles::profile_by_id(source_profile_id)
             .ok_or_else(|| {
                 anyhow!(
                     "native lifecycle bundle names unsupported exact source profile '{source_profile_id}'"

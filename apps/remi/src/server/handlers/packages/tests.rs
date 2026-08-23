@@ -331,7 +331,7 @@ async fn populate_debian_repository(db_path: &std::path::Path, package_url: Stri
     // for prepared key-material naming.  This row deliberately has no
     // package rows; package identity and payload inputs come from the
     // immutable profile catalog above.
-    let key_material_identity = "repository-ubuntu-26.04";
+    let key_material_identity = "ubuntu-resolute-security-main-amd64";
     let mut key_material_repository = Repository::new(
         key_material_repository_name.to_string(),
         package_url.clone(),

@@ -78,8 +78,6 @@ impl ActiveCatalogFixture {
         fencing_epoch: i64,
         packages: Vec<CatalogPackageRecordV1>,
     ) -> String {
-        let source_identity = format!("source-{profile}");
-        let repository_identity = format!("repository-{profile}");
         let (parser_config, trust_policy, ecosystem, evidence_role) =
             source_fixture_authority(profile);
         let parser_config_sha256 = conary_core::hash::sha256(
@@ -90,101 +88,167 @@ impl ActiveCatalogFixture {
             &conary_core::json::canonical_json(&trust_policy)
                 .expect("serialize source trust fixture"),
         );
-        let source_object = SourceMetadataObjectV1 {
-            role: evidence_role,
-            source_path: format!("metadata/{profile}"),
-            sha256: conary_core::hash::sha256(
-                format!("source-object-{profile}-{fencing_epoch}").as_bytes(),
-            ),
-            size: 1,
-        };
         let source_stream = SourceStreamV1 {
             kind: SourceStreamKindV1::Release,
             identity: "stable".to_string(),
         };
-        let source_packages = packages
-            .iter()
-            .cloned()
-            .map(|mut package| {
-                package.package_key_sha256.clear();
-                package.origin = CatalogPackageOriginV1::Source {
+        let mut member_contracts =
+            conary_core::repository::supported_profiles::profile_by_id(profile)
+                .map(|profile| {
+                    profile
+                        .members()
+                        .iter()
+                        .map(|member| {
+                            (
+                                member.repository_identity.clone(),
+                                member.role,
+                                member.precedence,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| {
+                    vec![(
+                        format!("repository-{profile}"),
+                        conary_core::repository::supported_profiles::ProfileSourceRole::Base,
+                        0,
+                    )]
+                });
+        member_contracts.sort_by(|left, right| right.2.cmp(&left.2));
+
+        let mut source_manifests = Vec::with_capacity(member_contracts.len());
+        let mut members = Vec::with_capacity(member_contracts.len());
+        let mut evidence = Vec::with_capacity(member_contracts.len());
+        for (index, (repository_identity, role, precedence)) in
+            member_contracts.into_iter().enumerate()
+        {
+            let ordinal = u32::try_from(index).expect("fixture member ordinal fits u32");
+            let source_identity = format!("source-{repository_identity}");
+            let source_object = SourceMetadataObjectV1 {
+                role: evidence_role.clone(),
+                source_path: format!("metadata/{repository_identity}"),
+                sha256: conary_core::hash::sha256(
+                    format!("source-object-{profile}-{repository_identity}-{fencing_epoch}")
+                        .as_bytes(),
+                ),
+                size: 1,
+            };
+            let source_packages = if ordinal == 0 {
+                packages
+                    .iter()
+                    .cloned()
+                    .map(|mut package| {
+                        package.package_key_sha256.clear();
+                        package.origin = CatalogPackageOriginV1::Source {
+                            source_identity: source_identity.clone(),
+                            repository_identity: repository_identity.clone(),
+                        };
+                        package
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let source_content = CatalogContentV1::new(
+                CatalogScopeV1::Source {
+                    source_profile: profile.to_string(),
                     source_identity: source_identity.clone(),
                     repository_identity: repository_identity.clone(),
-                };
-                package
-            })
-            .collect();
-        let source_content = CatalogContentV1::new(
-            CatalogScopeV1::Source {
+                },
+                vec![CatalogSourceEvidenceV1::AuthenticatedObject {
+                    role: source_object.role.clone(),
+                    source_path: source_object.source_path.clone(),
+                    sha256: source_object.sha256.clone(),
+                    size: source_object.size,
+                }],
+                source_packages,
+            )
+            .expect("build active source catalog");
+            let source_candidate_dir = self
+                .root
+                .path()
+                .join(format!("source-candidate-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&source_candidate_dir)
+                .expect("create source candidate directory");
+            let source_binding = write_catalog_candidate(
+                source_candidate_dir.join(CATALOG_FILE_NAME),
+                &source_content,
+            )
+            .expect("write source catalog candidate");
+            let source_manifest = SourceSnapshotV1 {
+                schema_version: SOURCE_SNAPSHOT_SCHEMA_V1,
                 source_profile: profile.to_string(),
                 source_identity: source_identity.clone(),
                 repository_identity: repository_identity.clone(),
-            },
-            vec![CatalogSourceEvidenceV1::AuthenticatedObject {
-                role: source_object.role.clone(),
-                source_path: source_object.source_path.clone(),
-                sha256: source_object.sha256.clone(),
-                size: source_object.size,
-            }],
-            source_packages,
-        )
-        .expect("build active source catalog");
-        let source_candidate_dir = self
-            .root
-            .path()
-            .join(format!("source-candidate-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&source_candidate_dir).expect("create source candidate directory");
-        let source_binding = write_catalog_candidate(
-            source_candidate_dir.join(CATALOG_FILE_NAME),
-            &source_content,
-        )
-        .expect("write source catalog candidate");
-        let source_manifest = SourceSnapshotV1 {
-            schema_version: SOURCE_SNAPSHOT_SCHEMA_V1,
-            source_profile: profile.to_string(),
-            source_identity: source_identity.clone(),
-            repository_identity: repository_identity.clone(),
-            stream: source_stream.clone(),
-            stream_binding_sha256: conary_core::hash::sha256(
-                format!("stream-binding-{profile}").as_bytes(),
-            ),
-            parser_projection_version: 1,
-            provenance: SourceProvenanceV1 {
-                ecosystem,
-                metadata_url: format!("https://example.invalid/{profile}/metadata"),
-                content_url: Some(format!("https://example.invalid/{profile}/content")),
-                parser_config,
-                parser_config_sha256,
-                trust_policy,
-                trust_policy_sha256,
-            },
-            authenticated_root: CatalogArtifactV1 {
-                sha256: conary_core::hash::sha256(
-                    format!("source-root-{profile}-{fencing_epoch}").as_bytes(),
+                stream: source_stream.clone(),
+                stream_binding_sha256: conary_core::hash::sha256(
+                    format!("stream-binding-{profile}-{repository_identity}").as_bytes(),
                 ),
-                size: 1,
-            },
-            authenticated_objects: vec![source_object],
-            catalog: source_binding.artifact.clone(),
-            logical_digest_sha256: source_binding.logical_digest_sha256.clone(),
-            counts: source_binding.counts,
-        };
-        write_source_catalog_manifest(&source_candidate_dir, &source_manifest)
-            .expect("write source snapshot manifest");
-        publish_source_catalog_bundle(&source_candidate_dir, &self.catalog_dir, &source_manifest)
+                parser_projection_version: 1,
+                provenance: SourceProvenanceV1 {
+                    ecosystem,
+                    metadata_url: format!(
+                        "https://example.invalid/{profile}/{repository_identity}/metadata"
+                    ),
+                    content_url: Some(format!(
+                        "https://example.invalid/{profile}/{repository_identity}/content"
+                    )),
+                    parser_config: parser_config.clone(),
+                    parser_config_sha256: parser_config_sha256.clone(),
+                    trust_policy: trust_policy.clone(),
+                    trust_policy_sha256: trust_policy_sha256.clone(),
+                },
+                authenticated_root: CatalogArtifactV1 {
+                    sha256: conary_core::hash::sha256(
+                        format!("source-root-{profile}-{repository_identity}-{fencing_epoch}")
+                            .as_bytes(),
+                    ),
+                    size: 1,
+                },
+                authenticated_objects: vec![source_object],
+                catalog: source_binding.artifact.clone(),
+                logical_digest_sha256: source_binding.logical_digest_sha256.clone(),
+                counts: source_binding.counts,
+            };
+            write_source_catalog_manifest(&source_candidate_dir, &source_manifest)
+                .expect("write source snapshot manifest");
+            publish_source_catalog_bundle(
+                &source_candidate_dir,
+                &self.catalog_dir,
+                &source_manifest,
+            )
             .expect("publish source catalog");
-        let source_snapshot_sha256 = source_manifest
-            .manifest_sha256()
-            .expect("hash source snapshot manifest");
+            let source_snapshot_sha256 = source_manifest
+                .manifest_sha256()
+                .expect("hash source snapshot manifest");
+            members.push(ProfileSourceMemberV2 {
+                ordinal,
+                role,
+                source_identity: source_identity.clone(),
+                repository_identity: repository_identity.clone(),
+                stream: source_stream.clone(),
+                precedence,
+                required: true,
+                source_snapshot_sha256: source_snapshot_sha256.clone(),
+            });
+            evidence.push(CatalogSourceEvidenceV1::SourceSnapshot {
+                member_ordinal: ordinal,
+                source_identity,
+                repository_identity,
+                source_snapshot_sha256: source_snapshot_sha256.clone(),
+            });
+            source_manifests.push((source_snapshot_sha256, source_manifest));
+        }
+        let primary_member = members.first().expect("fixture profile has a member");
         let packages = packages
             .into_iter()
             .map(|mut package| {
                 package.package_key_sha256.clear();
                 package.origin = CatalogPackageOriginV1::Profile {
                     member_ordinal: 0,
-                    source_identity: source_identity.clone(),
-                    repository_identity: repository_identity.clone(),
-                    source_snapshot_sha256: source_snapshot_sha256.clone(),
+                    source_identity: primary_member.source_identity.clone(),
+                    repository_identity: primary_member.repository_identity.clone(),
+                    source_snapshot_sha256: primary_member.source_snapshot_sha256.clone(),
                 };
                 package
             })
@@ -193,12 +257,7 @@ impl ActiveCatalogFixture {
             CatalogScopeV1::Profile {
                 profile: profile.to_string(),
             },
-            vec![CatalogSourceEvidenceV1::SourceSnapshot {
-                member_ordinal: 0,
-                source_identity: source_identity.clone(),
-                repository_identity: repository_identity.clone(),
-                source_snapshot_sha256: source_snapshot_sha256.clone(),
-            }],
+            evidence,
             packages,
         )
         .expect("build active profile catalog");
@@ -212,20 +271,8 @@ impl ActiveCatalogFixture {
         let manifest = ProfileRevisionV2 {
             schema_version: PROFILE_REVISION_SCHEMA_V2,
             profile: profile.to_string(),
-            projection_version: 1,
-            members: vec![ProfileSourceMemberV2 {
-                ordinal: 0,
-                role: conary_core::repository::supported_profiles::ProfileSourceRole::Base,
-                source_identity: source_identity.clone(),
-                repository_identity: repository_identity.clone(),
-                stream: SourceStreamV1 {
-                    kind: SourceStreamKindV1::Release,
-                    identity: "stable".to_string(),
-                },
-                precedence: 0,
-                required: true,
-                source_snapshot_sha256: source_snapshot_sha256.clone(),
-            }],
+            projection_version: crate::server::catalog_refresh::PROFILE_CATALOG_PROJECTION_VERSION,
+            members,
             catalog: binding.artifact.clone(),
             logical_digest_sha256: binding.logical_digest_sha256.clone(),
             counts: binding.counts,
@@ -250,14 +297,22 @@ impl ActiveCatalogFixture {
             SourceEcosystemV1::Alpm => ("alpm", "arch", "arch"),
             SourceEcosystemV1::Eopkg => ("eopkg", "eopkg", "eopkg"),
         };
+        let primary_member = manifest
+            .members
+            .first()
+            .expect("fixture profile has a member");
+        let primary_source_manifest = &source_manifests
+            .first()
+            .expect("fixture profile has a source manifest")
+            .1;
         conn.execute(
             "INSERT OR IGNORE INTO repository_source_policies (
                  source_identity, scope_kind, scope_identity, ecosystem,
                  version_scheme, stream_kind, stream_identity, update_mode
              ) VALUES (?1, 'repository', ?2, ?3, ?4, 'release', 'stable', 'follow')",
             rusqlite::params![
-                source_identity,
-                repository_identity,
+                primary_member.source_identity,
+                primary_member.repository_identity,
                 ecosystem,
                 version_scheme,
             ],
@@ -268,14 +323,19 @@ impl ActiveCatalogFixture {
                 "SELECT id FROM repository_source_policies
                  WHERE source_identity = ?1 AND scope_kind = 'repository'
                    AND scope_identity = ?2",
-                rusqlite::params![source_identity, repository_identity],
+                rusqlite::params![
+                    primary_member.source_identity,
+                    primary_member.repository_identity
+                ],
                 |row| row.get::<_, i64>(0),
             )
             .expect("resolve fixture source policy");
-        let parser_config_json = serde_json::to_string(&source_manifest.provenance.parser_config)
-            .expect("serialize fixture parser configuration");
-        let trust_policy_json = serde_json::to_string(&source_manifest.provenance.trust_policy)
-            .expect("serialize fixture trust policy");
+        let parser_config_json =
+            serde_json::to_string(&primary_source_manifest.provenance.parser_config)
+                .expect("serialize fixture parser configuration");
+        let trust_policy_json =
+            serde_json::to_string(&primary_source_manifest.provenance.trust_policy)
+                .expect("serialize fixture trust policy");
         conn.execute(
             "INSERT OR IGNORE INTO repositories (
                  name, url, source_profile, trust_policy_json, package_format,
@@ -290,30 +350,32 @@ impl ActiveCatalogFixture {
                 package_format,
                 parser_config_json,
                 source_policy_id,
-                repository_identity,
-                source_manifest.stream_binding_sha256,
+                primary_member.repository_identity,
+                primary_source_manifest.stream_binding_sha256,
             ],
         )
         .expect("insert fixture key-material repository row");
-        let source_manifest_json = String::from_utf8(
-            conary_core::json::canonical_json(&source_manifest)
-                .expect("serialize source snapshot manifest"),
-        )
-        .expect("source snapshot manifest is UTF-8");
-        RemiCatalogResource {
-            resource_sha256: source_snapshot_sha256.clone(),
-            kind: RemiCatalogResourceKind::SourceSnapshot,
-            source_profile: profile.to_string(),
-            artifact_sha256: source_manifest.catalog.sha256.clone(),
-            artifact_size: i64::try_from(source_manifest.catalog.size)
-                .expect("source artifact size fits"),
-            logical_digest_sha256: source_manifest.logical_digest_sha256.clone(),
-            manifest_json: source_manifest_json,
-            durable: true,
-            created_at: fencing_epoch,
+        for (source_snapshot_sha256, source_manifest) in &source_manifests {
+            let source_manifest_json = String::from_utf8(
+                conary_core::json::canonical_json(source_manifest)
+                    .expect("serialize source snapshot manifest"),
+            )
+            .expect("source snapshot manifest is UTF-8");
+            RemiCatalogResource {
+                resource_sha256: source_snapshot_sha256.clone(),
+                kind: RemiCatalogResourceKind::SourceSnapshot,
+                source_profile: profile.to_string(),
+                artifact_sha256: source_manifest.catalog.sha256.clone(),
+                artifact_size: i64::try_from(source_manifest.catalog.size)
+                    .expect("source artifact size fits"),
+                logical_digest_sha256: source_manifest.logical_digest_sha256.clone(),
+                manifest_json: source_manifest_json,
+                durable: true,
+                created_at: fencing_epoch,
+            }
+            .insert(&conn)
+            .expect("insert source resource");
         }
-        .insert(&conn)
-        .expect("insert source resource");
         RemiCatalogResource {
             resource_sha256: profile_revision_sha256.clone(),
             kind: RemiCatalogResourceKind::ProfileRevision,
@@ -327,20 +389,22 @@ impl ActiveCatalogFixture {
         }
         .insert(&conn)
         .expect("insert profile resource");
-        RemiProfileRevisionMember {
-            profile_revision_sha256: profile_revision_sha256.clone(),
-            ordinal: 0,
-            source_snapshot_sha256,
-            source_identity,
-            repository_identity,
-            stream_kind: "release".to_string(),
-            stream_identity: "stable".to_string(),
-            role: conary_core::repository::supported_profiles::ProfileSourceRole::Base,
-            precedence: 0,
-            required: true,
+        for member in &manifest.members {
+            RemiProfileRevisionMember {
+                profile_revision_sha256: profile_revision_sha256.clone(),
+                ordinal: i64::from(member.ordinal),
+                source_snapshot_sha256: member.source_snapshot_sha256.clone(),
+                source_identity: member.source_identity.clone(),
+                repository_identity: member.repository_identity.clone(),
+                stream_kind: "release".to_string(),
+                stream_identity: "stable".to_string(),
+                role: member.role,
+                precedence: i64::from(member.precedence),
+                required: member.required,
+            }
+            .insert(&conn)
+            .expect("insert profile member");
         }
-        .insert(&conn)
-        .expect("insert profile member");
         let run_id = uuid::Uuid::new_v4().to_string();
         let owner_instance_uuid = uuid::Uuid::new_v4().to_string();
         conn.execute(
@@ -390,7 +454,7 @@ fn source_fixture_authority(
     SourceEcosystemV1,
     SourceMetadataObjectRoleV1,
 ) {
-    let format = conary_core::repository::supported_profiles::profile_by_public_id(profile)
+    let format = conary_core::repository::supported_profiles::profile_by_id(profile)
         .map(|profile| profile.package_format())
         .unwrap_or(ProfilePackageFormat::Rpm);
     let fingerprint = "A".repeat(40);
@@ -486,7 +550,7 @@ pub(crate) fn package(
     size: u64,
     checksum_marker: &str,
 ) -> CatalogPackageRecordV1 {
-    let version_scheme = conary_core::repository::supported_profiles::profile_by_public_id(profile)
+    let version_scheme = conary_core::repository::supported_profiles::profile_by_id(profile)
         .map_or(VersionScheme::Rpm, |profile| profile.version_scheme());
     CatalogPackageRecordV1 {
         package_key_sha256: String::new(),

@@ -36,7 +36,15 @@ fn prepare_hard_switches_config_and_initializes_fresh_database() {
     assert!(config.contains("repository_manifest"));
     assert!(config.contains("repository_keys_dir"));
     assert!(config.contains("convert_top_n = 1000"));
-    assert!(config.contains("distros = [\"arch\", \"fedora\", \"ubuntu\"]"));
+    let parsed_config: toml::Value = toml::from_str(&config).unwrap();
+    assert_eq!(
+        parsed_config["prewarm"]["distros"],
+        toml::Value::Array(vec![
+            toml::Value::String("arch".to_string()),
+            toml::Value::String("fedora".to_string()),
+            toml::Value::String("ubuntu".to_string()),
+        ])
+    );
     assert!(config.contains("enabled = true"));
     assert!(config.contains("endpoint = \"https://r2.example.test\""));
     for retired in [
@@ -138,7 +146,7 @@ fn deployment_population_comes_from_active_immutable_catalogs() {
             row.get(0)
         })
         .unwrap();
-    let configured = BTreeMap::from([("fedora-44".to_string(), 1)]);
+    let configured = BTreeMap::from([("fedora-44".to_string(), 2)]);
 
     let profiles = inspect_deployment_profiles(&conn, fixture.authority(), &configured)
         .expect("inspect immutable deployment population");
