@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+out=
+previous=
+for argument in "$@"; do
+    out="$previous"
+    previous="$argument"
+done
+
+test -n "$out"
+printf '%s\n' "$@" > "${out}.args"
+printf fixture-initramfs > "$out"

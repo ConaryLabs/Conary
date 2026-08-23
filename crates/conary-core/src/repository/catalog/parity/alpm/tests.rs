@@ -8,9 +8,11 @@ use flate2::{Compression, GzBuilder};
 
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2,
+    CatalogArtifactV1, CatalogCountsV1, NATIVE_PARITY_PACKAGE_FILE_NAME, NativeParityOracleWriter,
+    NativeResolutionOutcomeV1, PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2,
     SOURCE_SNAPSHOT_SCHEMA_V1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
-    SourceStreamV1,
+    SourceStreamV1, native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
+    write_native_parity_oracle_manifest,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::{
@@ -407,4 +409,318 @@ fn producer_rejects_native_package_missing_payload_authority() {
     .unwrap_err();
 
     assert!(error.to_string().contains("missing SHA-256"));
+}
+
+fn resolution_fixture_databases(
+    directory: &Path,
+    conflicting_closure: bool,
+) -> (Vec<PathBuf>, Vec<SourceSnapshotV1>) {
+    let core = directory.join("core-resolution.db");
+    let extra = directory.join("extra-resolution.db");
+    let digests = ('0'..='9').map(digest).collect::<Vec<_>>();
+
+    let leaf = PackageFixture::new("leaf", &digests[0]);
+    let mut middle = PackageFixture::new("middle", &digests[1]);
+    middle.depends = &["leaf>=1"];
+    let mut provider_core = PackageFixture::new("provider-core", &digests[2]);
+    provider_core.provides = &["virtual-cap=1.0"];
+    let mut root = PackageFixture::new("root", &digests[3]);
+    root.depends = &["middle>=1", "virtual-cap>=1"];
+    let mut broken = PackageFixture::new("broken", &digests[4]);
+    broken.depends = &["missing>=1"];
+    let mut broken_child = PackageFixture::new("broken-child", &digests[5]);
+    broken_child.depends = &["transitive-missing>=2"];
+    let mut broken_root = PackageFixture::new("broken-root", &digests[6]);
+    broken_root.depends = &["broken-child"];
+    let mut multi_v1 = PackageFixture::new("multi", &digests[7]);
+    multi_v1.version = "1.0-1";
+    let shared_checksum = digest('a');
+    let shared_core = PackageFixture::new("shared-resolution", &shared_checksum);
+    if conflicting_closure {
+        middle.conflicts = &["leaf"];
+    }
+    write_database(
+        &core,
+        &[
+            leaf,
+            middle,
+            provider_core,
+            root,
+            broken,
+            broken_child,
+            broken_root,
+            multi_v1,
+            shared_core.clone(),
+        ],
+    );
+
+    let mut provider_extra = PackageFixture::new("provider-extra", &digests[8]);
+    provider_extra.provides = &["virtual-cap=1.0"];
+    let mut multi_v2 = PackageFixture::new("multi", &digests[9]);
+    multi_v2.version = "2.0-1";
+    write_database(&extra, &[provider_extra, multi_v2, shared_core]);
+
+    let snapshots = vec![
+        source_snapshot("arch-core-x86_64", &core),
+        source_snapshot("arch-extra-x86_64", &extra),
+    ];
+    (vec![core, extra], snapshots)
+}
+
+#[test]
+fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_groups() {
+    let directory = tempfile::tempdir().unwrap();
+    let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 11;
+    let package_output = directory.path().join("package-oracle");
+    produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
+
+    let resolution_output = directory.path().join("resolution-oracle");
+    let manifest = produce_alpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &databases),
+        &package_output,
+        "x86_64",
+        &resolution_output,
+    )
+    .unwrap();
+
+    assert_eq!(manifest.implementation.name, "libalpm");
+    assert_eq!(manifest.implementation.version, alpm::version());
+    assert_eq!(
+        manifest.implementation.projection_schema,
+        ALPM_RESOLUTION_PROJECTION_SCHEMA_V1
+    );
+    assert_eq!(manifest.policy.architecture, "x86_64");
+    assert_eq!(manifest.artifact.counts.roots, 11);
+    assert_eq!(manifest.artifact.counts.unresolved_roots, 3);
+
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut package_by_name = std::collections::BTreeMap::<String, Vec<_>>::new();
+    package_reader
+        .for_each_package(|package| {
+            package_by_name
+                .entry(package.name.clone())
+                .or_default()
+                .push(package);
+            Ok(())
+        })
+        .unwrap();
+    let resolution_reader =
+        verify_native_resolution_oracle_bundle(&resolution_output, &profile, &package_reader)
+            .unwrap();
+    let mut roots = std::collections::BTreeMap::new();
+    resolution_reader
+        .for_each_root(|root| {
+            roots.insert(root.root_package_key_sha256.clone(), root);
+            Ok(())
+        })
+        .unwrap();
+
+    let root = &package_by_name["root"][0];
+    let NativeResolutionOutcomeV1::Resolved {
+        closure_package_keys_sha256,
+    } = &roots[&root.package_key_sha256].outcome
+    else {
+        panic!("root must resolve");
+    };
+    for name in ["root", "middle", "leaf", "provider-core"] {
+        assert!(
+            closure_package_keys_sha256.contains(&package_by_name[name][0].package_key_sha256),
+            "root closure omitted {name}"
+        );
+    }
+    assert!(
+        !closure_package_keys_sha256
+            .contains(&package_by_name["provider-extra"][0].package_key_sha256),
+        "libalpm must preserve profile database precedence for virtual providers"
+    );
+    assert_eq!(package_by_name["shared-resolution"].len(), 1);
+    assert_eq!(package_by_name["shared-resolution"][0].member_ordinal, 0);
+
+    let broken = &package_by_name["broken"][0];
+    let NativeResolutionOutcomeV1::Unresolved { dependencies } =
+        &roots[&broken.package_key_sha256].outcome
+    else {
+        panic!("broken must remain typed unresolved");
+    };
+    assert_eq!(dependencies.len(), 1);
+    assert_eq!(
+        dependencies[0].requiring_package_key_sha256,
+        broken.package_key_sha256
+    );
+    let missing_group = broken
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("missing>=1"))
+        .unwrap();
+    assert_eq!(
+        dependencies[0].requirement_group_sha256,
+        native_requirement_group_sha256(missing_group).unwrap()
+    );
+
+    let broken_root = &package_by_name["broken-root"][0];
+    let broken_child = &package_by_name["broken-child"][0];
+    let NativeResolutionOutcomeV1::Unresolved { dependencies } =
+        &roots[&broken_root.package_key_sha256].outcome
+    else {
+        panic!("transitively broken root must remain typed unresolved");
+    };
+    assert_eq!(dependencies.len(), 2);
+    let transitive_group = broken_child
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("transitive-missing>=2"))
+        .unwrap();
+    let transitive_group_sha256 = native_requirement_group_sha256(transitive_group).unwrap();
+    assert!(dependencies.iter().any(|dependency| {
+        dependency.requiring_package_key_sha256 == broken_child.package_key_sha256
+            && dependency.requirement_group_sha256 == transitive_group_sha256
+    }));
+
+    let mut multi = package_by_name.remove("multi").unwrap();
+    multi.sort_by(|left, right| left.version.cmp(&right.version));
+    assert_eq!(multi.len(), 2);
+    for package in multi {
+        let NativeResolutionOutcomeV1::Resolved {
+            closure_package_keys_sha256,
+        } = &roots[&package.package_key_sha256].outcome
+        else {
+            panic!("each exact multi version must resolve independently");
+        };
+        assert!(closure_package_keys_sha256.contains(&package.package_key_sha256));
+    }
+}
+
+#[test]
+fn resolution_producer_rejects_invalid_architecture_and_conflicting_closure() {
+    let directory = tempfile::tempdir().unwrap();
+    let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
+    let mut wrong_profile = profile(&snapshots);
+    wrong_profile.counts.packages = 11;
+    let package_output = directory.path().join("package-oracle");
+    produce_alpm_parity_oracle(
+        &wrong_profile,
+        &inputs(&snapshots, &databases),
+        &package_output,
+    )
+    .unwrap();
+
+    let error = produce_alpm_resolution_oracle(
+        &wrong_profile,
+        &inputs(&snapshots, &databases),
+        &package_output,
+        "aarch64",
+        &directory.path().join("wrong-architecture"),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("rejected architecture"));
+
+    let conflict_directory = tempfile::tempdir().unwrap();
+    let (databases, snapshots) = resolution_fixture_databases(conflict_directory.path(), true);
+    let mut conflict_profile = profile(&snapshots);
+    conflict_profile.counts.packages = 11;
+    let package_output = conflict_directory.path().join("package-oracle");
+    produce_alpm_parity_oracle(
+        &conflict_profile,
+        &inputs(&snapshots, &databases),
+        &package_output,
+    )
+    .unwrap();
+    let error = produce_alpm_resolution_oracle(
+        &conflict_profile,
+        &inputs(&snapshots, &databases),
+        &package_output,
+        "x86_64",
+        &conflict_directory.path().join("resolution-oracle"),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("package conflict"));
+}
+
+#[test]
+fn resolution_producer_rejects_valid_but_non_native_package_oracle() {
+    let directory = tempfile::tempdir().unwrap();
+    let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 11;
+    let package_output = directory.path().join("package-oracle");
+    produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
+    let original = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+
+    let drifted_output = directory.path().join("drifted-package-oracle");
+    fs::create_dir(&drifted_output).unwrap();
+    let mut writer = NativeParityOracleWriter::create(
+        drifted_output.join(NATIVE_PARITY_PACKAGE_FILE_NAME),
+        &profile,
+        original.manifest().implementation.clone(),
+    )
+    .unwrap();
+    let mut changed = false;
+    original
+        .for_each_package(|mut package| {
+            if !changed {
+                package.checksum = format!("sha256:{}", digest('9'));
+                changed = true;
+            }
+            writer.package(&package)
+        })
+        .unwrap();
+    let drifted = writer.finish().unwrap();
+    write_native_parity_oracle_manifest(&drifted_output, &drifted).unwrap();
+    verify_native_parity_oracle_bundle(&drifted_output, &profile).unwrap();
+
+    let error = produce_alpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &databases),
+        &drifted_output,
+        "x86_64",
+        &directory.path().join("resolution-oracle"),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("fresh libalpm projection"));
+}
+
+#[test]
+fn resolution_producer_rejects_ambiguous_transitive_requiring_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let core = directory.path().join("core-ambiguous.db");
+    let extra = directory.path().join("extra-ambiguous.db");
+    let checksum_a = digest('a');
+    let checksum_b = digest('b');
+    let checksum_c = digest('c');
+    let mut multi_v1 = PackageFixture::new("multi", &checksum_a);
+    multi_v1.version = "1.0-1";
+    multi_v1.depends = &["missing>=1"];
+    let mut root = PackageFixture::new("ambiguous-root", &checksum_b);
+    root.depends = &["multi=1.0-1"];
+    write_database(&core, &[multi_v1, root]);
+    let mut multi_v2 = PackageFixture::new("multi", &checksum_c);
+    multi_v2.version = "2.0-1";
+    multi_v2.depends = &["missing>=1"];
+    write_database(&extra, &[multi_v2]);
+    let databases = vec![core, extra];
+    let snapshots = vec![
+        source_snapshot("arch-core-x86_64", &databases[0]),
+        source_snapshot("arch-extra-x86_64", &databases[1]),
+    ];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 3;
+    let package_output = directory.path().join("package-oracle");
+    produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
+
+    let error = produce_alpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &databases),
+        &package_output,
+        "x86_64",
+        &directory.path().join("resolution-oracle"),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("ambiguous across exact packages")
+    );
 }

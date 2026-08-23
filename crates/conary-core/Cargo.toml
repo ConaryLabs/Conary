@@ -167,6 +167,11 @@ name = "conary-alpm-oracle"
 path = "src/bin/conary-alpm-oracle.rs"
 required-features = ["native-alpm-oracle"]
 
+[[bin]]
+name = "conary-alpm-resolution-oracle"
+path = "src/bin/conary-alpm-resolution-oracle.rs"
+required-features = ["native-alpm-oracle"]
+
 [[bench]]
 name = "erofs_build"
 harness = false

@@ -290,7 +290,7 @@ namespace_before_tests_pattern='uses: \./\.github/actions/setup-exact-ownership-
 require_job_match "$pr_workflow" workspace-tests "$namespace_before_tests_pattern" 'PR workspace tests exact ownership setup order'
 require_job_match "$merge_workflow" workspace-tests "$namespace_before_tests_pattern" 'merge workspace tests exact ownership setup order'
 require_job_match "$release_build" workspace-validation "$namespace_before_tests_pattern" 'release workspace validation exact ownership setup order'
-alpm_parity_pattern="${arch_release_image}[\s\S]*${arch_archive_pattern}[\s\S]*rustup default 1\.98\.0[\s\S]*cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose[\s\S]*cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle -- -D warnings"
+alpm_parity_pattern="${arch_release_image}[\s\S]*${arch_archive_pattern}[\s\S]*rustup default 1\.98\.0[\s\S]*cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose[\s\S]*cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle --bin conary-alpm-resolution-oracle -- -D warnings"
 require_job_match "$pr_workflow" alpm-parity-producer "$alpm_parity_pattern" 'hosted PR ALPM parity producer proof'
 require_job_match "$merge_workflow" alpm-parity-producer "$alpm_parity_pattern" 'hosted merge ALPM parity producer proof'
 require_match "$release_build" 'build-ccs:[\s\S]*needs: \[prepare, workspace-validation\]' 'ccs build should need workspace validation'

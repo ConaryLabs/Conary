@@ -26,6 +26,10 @@ use crate::repository::dependency_model::{
 use crate::repository::dependency_source::{CapabilityProvenance, SourcePackageFormat};
 use crate::repository::versioning::VersionScheme;
 
+mod resolution;
+
+pub use resolution::{ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, produce_alpm_resolution_oracle};
+
 pub const ALPM_PARITY_PROJECTION_SCHEMA_V1: u32 = 1;
 
 const CREATE_SPOOL: &str = "
@@ -51,39 +55,7 @@ pub fn produce_alpm_parity_oracle(
     inputs: &[AlpmParityMemberInput<'_>],
     output: &Path,
 ) -> Result<NativeParityOracleV1> {
-    validate_inputs(profile, inputs)?;
-
-    let staging = tempfile::Builder::new()
-        .prefix("conary-alpm-parity-")
-        .tempdir()?;
-    let root = staging.path().join("root");
-    let database_root = staging.path().join("database");
-    let sync_root = database_root.join("sync");
-    fs::create_dir(&root)?;
-    fs::create_dir(&database_root)?;
-    fs::create_dir(&sync_root)?;
-
-    let staged_databases = stage_verified_databases(inputs, &sync_root)?;
-    let alpm = Alpm::new(path_text(&root)?, path_text(&database_root)?)
-        .map_err(|error| Error::InitError(format!("initialize libalpm: {error}")))?;
-    for (ordinal, _) in staged_databases.iter().enumerate() {
-        let name = database_name(ordinal)?;
-        let database = alpm
-            .register_syncdb(name, SigLevel::NONE)
-            .map_err(|error| Error::ParseError(format!("register ALPM database: {error}")))?;
-        database.is_valid().map_err(|error| {
-            Error::ParseError(format!(
-                "open ALPM database at member ordinal {ordinal}: {error}"
-            ))
-        })?;
-    }
-    if alpm.syncdbs().len() != inputs.len() {
-        return Err(Error::InternalError(format!(
-            "libalpm registered {} databases for {} profile members",
-            alpm.syncdbs().len(),
-            inputs.len()
-        )));
-    }
+    let (staging, alpm) = open_alpm(profile, inputs, &[])?;
 
     let spool = Connection::open(staging.path().join("oracle-rows.sqlite"))?;
     spool.execute_batch(CREATE_SPOOL)?;
@@ -186,6 +158,50 @@ pub fn produce_alpm_parity_oracle(
         ));
     }
     Ok(manifest)
+}
+
+fn open_alpm(
+    profile: &ProfileRevisionV2,
+    inputs: &[AlpmParityMemberInput<'_>],
+    architectures: &[&str],
+) -> Result<(tempfile::TempDir, Alpm)> {
+    validate_inputs(profile, inputs)?;
+    let staging = tempfile::Builder::new()
+        .prefix("conary-alpm-parity-")
+        .tempdir()?;
+    let root = staging.path().join("root");
+    let database_root = staging.path().join("database");
+    let sync_root = database_root.join("sync");
+    fs::create_dir(&root)?;
+    fs::create_dir(&database_root)?;
+    fs::create_dir(&sync_root)?;
+
+    let staged_databases = stage_verified_databases(inputs, &sync_root)?;
+    let mut alpm = Alpm::new(path_text(&root)?, path_text(&database_root)?)
+        .map_err(|error| Error::InitError(format!("initialize libalpm: {error}")))?;
+    if !architectures.is_empty() {
+        alpm.set_architectures(architectures.iter().copied())
+            .map_err(|error| Error::ConfigError(format!("set libalpm architectures: {error}")))?;
+    }
+    for (ordinal, _) in staged_databases.iter().enumerate() {
+        let name = database_name(ordinal)?;
+        let database = alpm
+            .register_syncdb(name, SigLevel::NONE)
+            .map_err(|error| Error::ParseError(format!("register ALPM database: {error}")))?;
+        database.is_valid().map_err(|error| {
+            Error::ParseError(format!(
+                "open ALPM database at member ordinal {ordinal}: {error}"
+            ))
+        })?;
+    }
+    if alpm.syncdbs().len() != inputs.len() {
+        return Err(Error::InternalError(format!(
+            "libalpm registered {} databases for {} profile members",
+            alpm.syncdbs().len(),
+            inputs.len()
+        )));
+    }
+    Ok((staging, alpm))
 }
 
 fn validate_inputs(

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-23
-revision: 51
+revision: 52
 summary: Document Remi native full-catalog and resolution parity artifacts, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -336,9 +336,15 @@ authority plus a bounded merge walk for complete root coverage. Comparison
 retains one native/candidate root pair and reports typed root, outcome, closure,
 or unresolved-set drift.
 
-The shared contract does not produce native solver evidence. Pinned ALPM, RPM,
-and Debian solver producers, the complete conversion crawl, and Remi promotion
-wiring remain later independent evidence paths.
+ALPM has the first native solver producer. It independently reopens and freshly
+reproduces the bound package oracle from the authenticated database objects,
+then prepares one exact-root libalpm transaction per package against empty
+installed state. It records exact prepared closures or typed missing required
+groups, rejects architecture/conflict/identity drift, writes the canonical
+resolution bundle, and fully reopens it against the exact package oracle before
+success. RPM and Debian solver producers, the complete conversion crawl, proof
+reuse and target preflight, and Remi promotion wiring remain later independent
+evidence paths.
 The canonical artifact format is
 `docs/specs/remi-native-parity-oracle.md`.
 
