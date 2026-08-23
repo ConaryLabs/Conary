@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-23
-revision: 48
-summary: Document Remi typed support tiers, complete source universes, immutable source and profile catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and client activation, exact revision pinning, signing, readiness, and serving authority
+revision: 49
+summary: Document Remi canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -275,6 +275,18 @@ active bundle leaves the previous universe selected. An unchanged authority is
 reused until either its manifest or timestamp enters the six-hour renewal
 window; renewal advances the sequence and refreshes signed freshness rather
 than serving authority near expiry.
+
+Canonical-map schema validity is insufficient publication evidence. Before a
+new universe is signed, Remi independently reopens every exact public profile
+catalog and requires each canonical implementation's literal package name to
+exist in that exact profile revision. It repeats the same cross-object proof
+after the durable universe bundle is reopened. Presence uses the indexed exact
+package name only; provides, aliases, descriptions, case folding, and discovery
+caches cannot satisfy it. A missing profile or package is a typed failure, does
+not create a replacement universe bundle, and preserves the prior active
+pointer. This gate is structurally bounded to one verified reader per public
+profile plus scalar implementation facts; it does not materialize a
+distribution-sized package-name set.
 
 Clients enroll the universe metadata root independently of CCS package keys.
 Self-hosted `repo add` requires `--remi-metadata-root` from an independently
