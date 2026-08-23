@@ -380,7 +380,7 @@ mod tests {
     use std::path::Path;
 
     #[cfg(unix)]
-    use super::super::test_support::write_executable;
+    use crate::test_support::{HostToolFixture, link_host_tool};
 
     fn exact_runtime_inputs(
         files: Vec<(String, String, u64)>,
@@ -574,12 +574,9 @@ mod tests {
                 b"modules-dep".len() as u64,
             ),
         ]);
-        write_executable(
-            &fake_dracut,
-            "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf generated-initramfs > \"$out\"\n",
-        );
-        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
-        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+        link_host_tool(&fake_dracut, HostToolFixture::Dracut);
+        link_host_tool(&fake_depmod, HostToolFixture::ExitFailure);
+        link_host_tool(&fake_cpio, HostToolFixture::ExitSuccess);
         let sources = resolve_generation_boot_asset_sources_with_tools(
             &mut runtime_inputs,
             &generations_root,
@@ -600,7 +597,7 @@ mod tests {
         assert_eq!(std::fs::read(sources.kernel).unwrap(), b"cas-kernel");
         assert_eq!(
             std::fs::read(sources.initramfs).unwrap(),
-            b"generated-initramfs"
+            b"fixture-initramfs"
         );
         assert_eq!(std::fs::read(sources.efi_bootloader).unwrap(), b"cas-efi");
     }
@@ -653,15 +650,9 @@ mod tests {
             .entries
             .sort_by(|left, right| left.path.cmp(&right.path));
         runtime_inputs.generation.validate().unwrap();
-        write_executable(
-            &fake_depmod,
-            "#!/bin/sh\nbasedir=/\nmoduledir=/lib/modules\nrelease=\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -b|--basedir) basedir=\"$2\"; shift 2 ;;\n    -m|--moduledir) moduledir=\"$2\"; shift 2 ;;\n    *) release=\"$1\"; shift ;;\n  esac\ndone\nprintf 'kernel/fs/fat/vfat.ko:\\n' > \"${basedir}${moduledir}/${release}/modules.dep\"\nprintf 'alias fs-vfat vfat\\n' > \"${basedir}${moduledir}/${release}/modules.alias\"\n",
-        );
-        write_executable(
-            &fake_dracut,
-            "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf generated-initramfs > \"$out\"\n",
-        );
-        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+        link_host_tool(&fake_depmod, HostToolFixture::Depmod);
+        link_host_tool(&fake_dracut, HostToolFixture::Dracut);
+        link_host_tool(&fake_cpio, HostToolFixture::ExitSuccess);
 
         let _sources = resolve_generation_boot_asset_sources_with_tools(
             &mut runtime_inputs,
@@ -703,7 +694,6 @@ mod tests {
         let fake_dracut = tmp.path().join("dracut");
         let fake_depmod = tmp.path().join("depmod");
         let fake_cpio = tmp.path().join("cpio");
-        let dracut_args = tmp.path().join("dracut.args");
         std::fs::create_dir_all(&generations_root).unwrap();
         let cas = CasStore::new(&objects_dir).unwrap();
 
@@ -734,15 +724,9 @@ mod tests {
                 b"modules-dep".len() as u64,
             ),
         ]);
-        write_executable(
-            &fake_dracut,
-            &format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf conary-initramfs > \"$out\"\n",
-                dracut_args.display()
-            ),
-        );
-        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
-        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+        link_host_tool(&fake_dracut, HostToolFixture::Dracut);
+        link_host_tool(&fake_depmod, HostToolFixture::ExitFailure);
+        link_host_tool(&fake_cpio, HostToolFixture::ExitSuccess);
         let sources = resolve_generation_boot_asset_sources_with_tools(
             &mut runtime_inputs,
             &generations_root,
@@ -756,9 +740,10 @@ mod tests {
         assert_eq!(sources.kernel_version, release);
         assert_eq!(
             std::fs::read(&sources.initramfs).unwrap(),
-            b"conary-initramfs"
+            b"fixture-initramfs"
         );
-        let args = std::fs::read_to_string(dracut_args).unwrap();
+        let args =
+            std::fs::read_to_string(format!("{}.args", sources.initramfs.display())).unwrap();
         assert!(args.lines().any(|line| line == "--add"));
         assert!(args.lines().any(|line| line == RUNTIME_DRACUT_ADD_MODULES));
         assert!(args.lines().any(|line| line == "--omit"));
@@ -799,12 +784,9 @@ mod tests {
                 b"systemd-boot-efi".len() as u64,
             ),
         ]);
-        write_executable(
-            &fake_dracut,
-            "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf generated-initramfs > \"$out\"\n",
-        );
-        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
-        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+        link_host_tool(&fake_dracut, HostToolFixture::Dracut);
+        link_host_tool(&fake_depmod, HostToolFixture::ExitFailure);
+        link_host_tool(&fake_cpio, HostToolFixture::ExitSuccess);
 
         let sources = resolve_generation_boot_asset_sources_with_tools(
             &mut runtime_inputs,
@@ -880,21 +862,14 @@ mod tests {
         let fake_dracut = tmp.path().join("dracut");
         let fake_depmod = tmp.path().join("depmod");
         let fake_cpio = tmp.path().join("cpio");
-        let dracut_args = tmp.path().join("dracut.args");
         std::fs::create_dir_all(&module_dir).unwrap();
         std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
         std::fs::write(module_dir.join("vmlinuz"), b"kernel").unwrap();
         std::fs::write(module_dir.join("modules.dep"), b"deps").unwrap();
         std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
-        write_executable(
-            &fake_dracut,
-            &format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf initramfs > \"$out\"\n",
-                dracut_args.display()
-            ),
-        );
-        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
-        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+        link_host_tool(&fake_dracut, HostToolFixture::Dracut);
+        link_host_tool(&fake_depmod, HostToolFixture::ExitFailure);
+        link_host_tool(&fake_cpio, HostToolFixture::ExitSuccess);
 
         let sources = resolve_runtime_boot_asset_sources_with_tools(
             &boot_root,
@@ -907,9 +882,10 @@ mod tests {
         assert_eq!(sources.kernel_version, release);
         assert_eq!(
             std::fs::read(boot_root.join(format!("initramfs-{release}.img"))).unwrap(),
-            b"initramfs"
+            b"fixture-initramfs"
         );
-        let args = std::fs::read_to_string(dracut_args).unwrap();
+        let args = std::fs::read_to_string(boot_root.join(format!("initramfs-{release}.img.args")))
+            .unwrap();
         assert!(
             args.lines().any(|line| line == "--omit") && args.lines().any(|line| line == "systemd"),
             "generation initramfs must omit dracut's partial systemd path so shell /init runs; got args:\n{args}"
@@ -934,15 +910,9 @@ mod tests {
         std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
         std::fs::write(module_dir.join("vmlinuz"), b"kernel").unwrap();
         std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
-        write_executable(
-            &fake_depmod,
-            "#!/bin/sh\nbasedir=/\nmoduledir=/lib/modules\nrelease=\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -b|--basedir) basedir=\"$2\"; shift 2 ;;\n    -m|--moduledir) moduledir=\"$2\"; shift 2 ;;\n    *) release=\"$1\"; shift ;;\n  esac\ndone\nprintf deps > \"${basedir}${moduledir}/${release}/modules.dep\"\n",
-        );
-        write_executable(
-            &fake_dracut,
-            "#!/bin/sh\nprev=\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nprintf initramfs > \"$out\"\n",
-        );
-        write_executable(&fake_cpio, "#!/bin/sh\nexit 0\n");
+        link_host_tool(&fake_depmod, HostToolFixture::Depmod);
+        link_host_tool(&fake_dracut, HostToolFixture::Dracut);
+        link_host_tool(&fake_cpio, HostToolFixture::ExitSuccess);
 
         resolve_runtime_boot_asset_sources_with_tools(
             &boot_root,
@@ -970,8 +940,8 @@ mod tests {
         std::fs::create_dir_all(boot_root.join("EFI/BOOT")).unwrap();
         std::fs::write(module_dir.join("vmlinuz"), b"kernel").unwrap();
         std::fs::write(boot_root.join("EFI/BOOT/BOOTX64.EFI"), b"efi").unwrap();
-        write_executable(&fake_dracut, "#!/bin/sh\nexit 99\n");
-        write_executable(&fake_depmod, "#!/bin/sh\nexit 99\n");
+        link_host_tool(&fake_dracut, HostToolFixture::ExitFailure);
+        link_host_tool(&fake_depmod, HostToolFixture::ExitFailure);
 
         let error = resolve_runtime_boot_asset_sources_with_tools(
             &boot_root,

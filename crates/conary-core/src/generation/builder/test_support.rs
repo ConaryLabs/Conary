@@ -1,6 +1,6 @@
 // conary-core/src/generation/builder/test_support.rs
 
-#[cfg(any(unix, feature = "composefs-rs"))]
+#[cfg(feature = "composefs-rs")]
 use std::path::Path;
 #[cfg(feature = "composefs-rs")]
 use std::path::PathBuf;
@@ -82,16 +82,6 @@ pub(crate) fn insert_regular_file_with_parents(
 
     let mut entry = regular_file_entry(path.to_str().unwrap(), sha256, size, mode, trove_id);
     entry.insert(conn).unwrap();
-}
-
-#[cfg(unix)]
-pub(super) fn write_executable(path: &Path, contents: &str) {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::write(path, contents).unwrap();
-    let mut permissions = std::fs::metadata(path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(path, permissions).unwrap();
 }
 
 #[cfg(feature = "composefs-rs")]

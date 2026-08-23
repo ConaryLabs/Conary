@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+basedir=/
+moduledir=/lib/modules
+release=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -b|--basedir) basedir="$2"; shift 2 ;;
+        -m|--moduledir) moduledir="$2"; shift 2 ;;
+        *) release="$1"; shift ;;
+    esac
+done
+
+printf 'kernel/fs/fat/vfat.ko:\n' > "${basedir}${moduledir}/${release}/modules.dep"
+printf 'alias fs-vfat vfat\n' > "${basedir}${moduledir}/${release}/modules.alias"

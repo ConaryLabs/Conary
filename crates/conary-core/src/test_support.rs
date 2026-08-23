@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum HostToolFixture {
+    Depmod,
+    Dracut,
+    ExitFailure,
     ExitSuccess,
     Ldconfig,
     OpenRc,
@@ -20,6 +23,9 @@ pub(crate) enum HostToolFixture {
 impl HostToolFixture {
     fn filename(self) -> &'static str {
         match self {
+            Self::Depmod => "depmod",
+            Self::Dracut => "dracut",
+            Self::ExitFailure => "exit-failure",
             Self::ExitSuccess => "exit-success",
             Self::Ldconfig => "ldconfig",
             Self::OpenRc => "openrc",
