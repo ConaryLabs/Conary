@@ -2,7 +2,90 @@
 
 //! Emit one independently produced ALPM full-catalog parity bundle.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use clap::Parser;
+use conary_core::repository::catalog::{
+    AlpmParityMemberInput, ProfileRevisionV2, SourceSnapshotV1, produce_alpm_parity_oracle,
+};
+use serde::de::DeserializeOwned;
+
+const MAX_INPUT_MANIFEST_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Parser)]
+#[command(about = "Produce a strict libalpm full-catalog parity bundle")]
+struct Arguments {
+    /// Exact ProfileRevisionV2 manifest.
+    #[arg(long)]
+    profile_manifest: PathBuf,
+
+    /// Ordered SourceSnapshotV1 manifest; repeat once per profile member.
+    #[arg(long, required = true)]
+    source_snapshot: Vec<PathBuf>,
+
+    /// Ordered authenticated ALPM database; repeat once per profile member.
+    #[arg(long, required = true)]
+    database: Vec<PathBuf>,
+
+    /// New directory that will receive manifest.json and packages.jsonl.
+    #[arg(long)]
+    output: PathBuf,
+}
+
 fn main() {
-    eprintln!("conary-alpm-oracle producer wiring is under construction");
-    std::process::exit(2);
+    if let Err(error) = run(Arguments::parse()) {
+        eprintln!("conary-alpm-oracle: {error:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run(arguments: Arguments) -> Result<()> {
+    if arguments.source_snapshot.len() != arguments.database.len() {
+        bail!(
+            "received {} source snapshots but {} ALPM databases",
+            arguments.source_snapshot.len(),
+            arguments.database.len()
+        );
+    }
+    let profile: ProfileRevisionV2 = load_manifest(&arguments.profile_manifest, "profile")?;
+    let snapshots = arguments
+        .source_snapshot
+        .iter()
+        .map(|path| load_manifest(path, "source snapshot"))
+        .collect::<Result<Vec<SourceSnapshotV1>>>()?;
+    let inputs = snapshots
+        .iter()
+        .zip(&arguments.database)
+        .map(|(source_snapshot, database)| AlpmParityMemberInput {
+            source_snapshot,
+            database,
+        })
+        .collect::<Vec<_>>();
+    produce_alpm_parity_oracle(&profile, &inputs, &arguments.output)
+        .context("produce ALPM parity oracle")?;
+    Ok(())
+}
+
+fn load_manifest<T: DeserializeOwned>(path: &Path, label: &str) -> Result<T> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("inspect {label} manifest {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        bail!(
+            "{label} manifest {} must be a regular file, never a symlink",
+            path.display()
+        );
+    }
+    if metadata.len() > MAX_INPUT_MANIFEST_BYTES {
+        bail!(
+            "{label} manifest {} exceeds {} bytes",
+            path.display(),
+            MAX_INPUT_MANIFEST_BYTES
+        );
+    }
+    let bytes =
+        fs::read(path).with_context(|| format!("read {label} manifest {}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("parse {label} manifest {}", path.display()))
 }

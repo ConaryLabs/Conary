@@ -10,7 +10,9 @@ mod io;
 mod alpm;
 
 #[cfg(feature = "native-alpm-oracle")]
-pub use alpm::{ALPM_PARITY_PROJECTION_SCHEMA_V1, produce_alpm_parity_oracle};
+pub use alpm::{
+    ALPM_PARITY_PROJECTION_SCHEMA_V1, AlpmParityMemberInput, produce_alpm_parity_oracle,
+};
 
 pub use compare::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NativeParityComparisonError, NativeParityComparisonV1,

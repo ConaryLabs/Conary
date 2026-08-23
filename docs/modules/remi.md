@@ -310,11 +310,22 @@ The native evidence producer must be the pinned implementation named by the
 manifest; constructing oracle rows from Conary's own catalog is test support,
 not release evidence.
 
+ALPM is the first implemented native producer. The explicit
+`native-alpm-oracle` feature links the exact pinned Rust bindings to libalpm;
+ordinary Conary and Remi builds remain free of that host-library requirement.
+For each ordered profile member, the producer separately verifies the bound
+`SourceSnapshotV1` manifest and its exact authenticated `ArchDatabase` object,
+then reads package and relation facts through libalpm. It uses a bounded private
+spool for profile precedence and exact-identity conflict handling, writes the
+canonical bundle, and reopens the complete result before success. It consumes
+neither the Conary catalog nor Conary's Arch repository parser.
+
 The hosted `phase4-native-pm-parity` jobs remain deterministic one-package
 lifecycle and CLI release tests. They do not satisfy this complete-candidate
 contract. Native solver dependency closure and the exact unresolved-dependency
-set are a separate resolver-owned Slice 6 proof. Native oracle production and
-Remi promotion wiring follow only after that independent evidence path exists.
+set are a separate resolver-owned Slice 6 proof. RPM and Debian native
+producers, the complete conversion crawl, and Remi promotion wiring remain
+later independent evidence paths.
 The canonical artifact format is
 `docs/specs/remi-native-parity-oracle.md`.
 
