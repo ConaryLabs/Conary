@@ -5,6 +5,7 @@
 mod bundle;
 mod candidate;
 mod contract;
+mod parity;
 mod profile;
 mod record;
 pub(in crate::repository) mod source;
@@ -23,6 +24,11 @@ pub use contract::{
     ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
     SourceStreamKindV1, SourceStreamV1,
+};
+pub use parity::{
+    NATIVE_PARITY_ORACLE_SCHEMA_V1, NativeParityArtifactV1, NativeParityCountsV1,
+    NativeParityEcosystemV1, NativeParityImplementationV1, NativeParityOracleV1,
+    NativeParityPackageV1,
 };
 pub use profile::{
     ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, write_profile_catalog_candidate,
