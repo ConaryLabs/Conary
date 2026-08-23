@@ -6,6 +6,12 @@ mod compare;
 mod contract;
 mod io;
 
+#[cfg(feature = "native-alpm-oracle")]
+mod alpm;
+
+#[cfg(feature = "native-alpm-oracle")]
+pub use alpm::{ALPM_PARITY_PROJECTION_SCHEMA_V1, produce_alpm_parity_oracle};
+
 pub use compare::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NativeParityComparisonError, NativeParityComparisonV1,
     NativeParityFactV1, NativeParityMismatchV1, NativeParityPackageIdentityV1,

@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define the strict content-addressed artifact that independently proves native package facts across one complete immutable profile candidate
 last_updated: 2026-08-23
-revision: 1
+revision: 2
 status: active
 ---
 
@@ -44,6 +44,14 @@ by the manifest. Conary catalog projection may serialize and verify the strict
 contract, but it cannot serve as the evidence producer for release parity. A
 catalog logical digest proves deterministic Conary output, not independent
 native agreement.
+
+The first producer boundary is ALPM. It is built only with the explicit
+`native-alpm-oracle` feature, reads exact profile-member database artifacts
+through pinned upstream Rust bindings to libalpm, and records the linked
+libalpm runtime version. Ordinary Conary and Remi builds do not acquire a
+libalpm dependency. The helper may share the strict oracle serializer and
+typed fact vocabulary; it may not read Conary catalogs, Conary Arch parser
+output, or operational repository SQLite as native evidence.
 
 ## Separate Slice 6 owners
 
