@@ -331,6 +331,49 @@ fn missing_and_extra_roots_are_typed_before_complete_coverage_rejection() {
 }
 
 #[test]
+fn comparison_rejects_policy_drift_before_accepting_equal_rows() {
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let (candidate, package_oracle, roots) = fixtures(ecosystem);
+    let native = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "libdnf5",
+        &roots,
+        true,
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join(NATIVE_RESOLUTION_ROOT_FILE_NAME);
+    let mut changed_policy = policy(ecosystem);
+    changed_policy.architecture = "aarch64".to_string();
+    let mut writer = NativeResolutionOracleWriter::create(
+        &path,
+        &candidate.profile,
+        package_oracle.reader.manifest(),
+        solver_implementation(ecosystem, "conary-resolvo"),
+        changed_policy,
+    )
+    .unwrap();
+    for root in &roots {
+        writer.root(root).unwrap();
+    }
+    let manifest = writer.finish().unwrap();
+    let changed = NativeResolutionOracleReader::open_verified(&path, &manifest).unwrap();
+    let error = compare_native_resolution_oracle(
+        &candidate.profile,
+        &package_oracle.reader,
+        &native.reader,
+        &changed,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        NativeResolutionComparisonError::Candidate(_)
+    ));
+}
+
+#[test]
 fn reopen_rejects_tamper_count_drift_unknown_references_and_package_oracle_drift() {
     let ecosystem = NativeParityEcosystemV1::Rpm;
     let (candidate, package_oracle, roots) = fixtures(ecosystem);
