@@ -14,7 +14,8 @@ mod alpm;
 
 #[cfg(feature = "native-alpm-oracle")]
 pub use alpm::{
-    ALPM_PARITY_PROJECTION_SCHEMA_V1, AlpmParityMemberInput, produce_alpm_parity_oracle,
+    ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, AlpmParityMemberInput,
+    produce_alpm_parity_oracle, produce_alpm_resolution_oracle,
 };
 
 pub use compare::{

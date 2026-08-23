@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-08-23
-revision: 3
+revision: 4
 status: active
 ---
 
@@ -117,11 +117,42 @@ time and reports typed oracle-only root, candidate-only root, outcome,
 dependency-closure, or unresolved-dependency drift. Diagnostic strings and
 native solver error prose never establish the result.
 
+ALPM resolution evidence is produced by the same explicit
+`native-alpm-oracle` feature and pinned libalpm runtime as the package-fact
+oracle. The resolver helper independently reopens the supplied package bundle,
+then reproduces that entire package oracle from the authenticated database
+objects and requires exact manifest equality before solving. For each exact
+package row, it prepares a database-only libalpm transaction against an empty
+local database with the target architecture and profile databases registered
+in precedence order. Prepared transaction packages become exact closure keys;
+typed libalpm missing-dependency records become exact requiring-package keys
+and canonical required-group digests. Invalid architecture, conflicting
+transactions, ambiguous identities, unbound requirements, and unexpected
+native error classes fail the complete crawl.
+
+Invoke the resolver helper with the exact package bundle produced above:
+
+```bash
+cargo run -p conary-core --features native-alpm-oracle \
+  --bin conary-alpm-resolution-oracle -- \
+  --profile-manifest profile.json \
+  --source-snapshot core-source.json --database core.db \
+  --source-snapshot extra-source.json --database extra.db \
+  --source-snapshot multilib-source.json --database multilib.db \
+  --package-oracle alpm-oracle \
+  --architecture x86_64 \
+  --output alpm-resolution-oracle
+```
+
+Success means every exact package-oracle row has one canonical outcome and the
+two-file resolution bundle has been durably written, reopened, and fully
+cross-checked against that exact package oracle.
+
 ## Separate Slice 6 owners
 
 The shared resolver artifact and comparator do not produce native evidence.
-Pinned ALPM, RPM, and Debian solver helpers remain separate owners and must
-derive their rows from the named native libraries over the exact package
-universe. Complete conversion crawling, conversion-proof reuse, independent
-CCS reopen and target preflight, and final Remi promotion after durable object
-reopen remain separate authority boundaries under #517.
+ALPM now has a pinned native solver helper. RPM and Debian solver helpers remain
+separate owners and must derive their rows from the named native libraries over
+the exact package universe. Complete conversion crawling, conversion-proof
+reuse, independent CCS reopen and target preflight, and final Remi promotion
+after durable object reopen remain separate authority boundaries under #517.

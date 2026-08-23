@@ -154,7 +154,7 @@ jobs:
       - name: Test the libalpm parity producer
         run: cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose
       - name: Lint the libalpm parity producer
-        run: cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle -- -D warnings
+        run: cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle --bin conary-alpm-resolution-oracle -- -D warnings
 
   generation-db-reflink:
     name: generation-db-reflink
