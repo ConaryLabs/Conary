@@ -434,6 +434,8 @@ fn resolution_fixture_databases(
     broken_root.depends = &["broken-child"];
     let mut multi_v1 = PackageFixture::new("multi", &digests[7]);
     multi_v1.version = "1.0-1";
+    let shared_checksum = digest('a');
+    let shared_core = PackageFixture::new("shared-resolution", &shared_checksum);
     if conflicting_closure {
         middle.conflicts = &["leaf"];
     }
@@ -448,6 +450,7 @@ fn resolution_fixture_databases(
             broken_child,
             broken_root,
             multi_v1,
+            shared_core.clone(),
         ],
     );
 
@@ -455,7 +458,7 @@ fn resolution_fixture_databases(
     provider_extra.provides = &["virtual-cap=1.0"];
     let mut multi_v2 = PackageFixture::new("multi", &digests[9]);
     multi_v2.version = "2.0-1";
-    write_database(&extra, &[provider_extra, multi_v2]);
+    write_database(&extra, &[provider_extra, multi_v2, shared_core]);
 
     let snapshots = vec![
         source_snapshot("arch-core-x86_64", &core),
@@ -469,7 +472,7 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
     let directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 10;
+    profile.counts.packages = 11;
     let package_output = directory.path().join("package-oracle");
     produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
 
@@ -490,7 +493,7 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
         ALPM_RESOLUTION_PROJECTION_SCHEMA_V1
     );
     assert_eq!(manifest.policy.architecture, "x86_64");
-    assert_eq!(manifest.artifact.counts.roots, 10);
+    assert_eq!(manifest.artifact.counts.roots, 11);
     assert_eq!(manifest.artifact.counts.unresolved_roots, 3);
 
     let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
@@ -533,6 +536,8 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
             .contains(&package_by_name["provider-extra"][0].package_key_sha256),
         "libalpm must preserve profile database precedence for virtual providers"
     );
+    assert_eq!(package_by_name["shared-resolution"].len(), 1);
+    assert_eq!(package_by_name["shared-resolution"][0].member_ordinal, 0);
 
     let broken = &package_by_name["broken"][0];
     let NativeResolutionOutcomeV1::Unresolved { dependencies } =
@@ -593,7 +598,7 @@ fn resolution_producer_rejects_invalid_architecture_and_conflicting_closure() {
     let directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
     let mut wrong_profile = profile(&snapshots);
-    wrong_profile.counts.packages = 10;
+    wrong_profile.counts.packages = 11;
     let package_output = directory.path().join("package-oracle");
     produce_alpm_parity_oracle(
         &wrong_profile,
@@ -615,7 +620,7 @@ fn resolution_producer_rejects_invalid_architecture_and_conflicting_closure() {
     let conflict_directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(conflict_directory.path(), true);
     let mut conflict_profile = profile(&snapshots);
-    conflict_profile.counts.packages = 10;
+    conflict_profile.counts.packages = 11;
     let package_output = conflict_directory.path().join("package-oracle");
     produce_alpm_parity_oracle(
         &conflict_profile,
@@ -639,7 +644,7 @@ fn resolution_producer_rejects_valid_but_non_native_package_oracle() {
     let directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 10;
+    profile.counts.packages = 11;
     let package_output = directory.path().join("package-oracle");
     produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
     let original = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
