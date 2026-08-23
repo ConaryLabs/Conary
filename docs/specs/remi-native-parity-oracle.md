@@ -1,8 +1,9 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define the strict content-addressed artifact that independently proves native package facts across one complete immutable profile candidate
+last_updated: 2026-08-23
 revision: 1
-status: draft
+status: active
 ---
 
 # Remi native full-catalog parity oracle

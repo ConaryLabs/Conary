@@ -26,9 +26,14 @@ pub use contract::{
     SourceStreamKindV1, SourceStreamV1,
 };
 pub use parity::{
-    NATIVE_PARITY_ORACLE_SCHEMA_V1, NativeParityArtifactV1, NativeParityCountsV1,
-    NativeParityEcosystemV1, NativeParityImplementationV1, NativeParityOracleV1,
-    NativeParityPackageV1,
+    NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_PARITY_MANIFEST_FILE_NAME,
+    NATIVE_PARITY_ORACLE_SCHEMA_V1, NATIVE_PARITY_PACKAGE_FILE_NAME, NativeParityArtifactV1,
+    NativeParityComparisonError, NativeParityComparisonV1, NativeParityCountsV1,
+    NativeParityEcosystemV1, NativeParityFactV1, NativeParityImplementationV1,
+    NativeParityMismatchV1, NativeParityOracleReader, NativeParityOracleV1,
+    NativeParityOracleWriter, NativeParityPackageIdentityV1, NativeParityPackageV1,
+    compare_native_parity_oracle, verify_native_parity_oracle_bundle,
+    write_native_parity_oracle_manifest,
 };
 pub use profile::{
     ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, write_profile_catalog_candidate,

@@ -123,7 +123,7 @@ impl NativeParityOracleV1 {
             implementation,
             artifact,
         };
-        manifest.validate()?;
+        manifest.validate_profile(profile)?;
         Ok(manifest)
     }
 
@@ -156,7 +156,6 @@ impl NativeParityOracleV1 {
             || self.profile_revision_sha256 != profile_sha256
             || self.profile_logical_digest_sha256 != profile.logical_digest_sha256
             || self.members != profile.members
-            || self.artifact.counts != NativeParityCountsV1::from(profile.counts)
         {
             return Err(Error::ConflictError(format!(
                 "native parity oracle does not bind exact profile revision '{}'",
@@ -200,7 +199,8 @@ pub struct NativeParityPackageV1 {
 }
 
 impl NativeParityPackageV1 {
-    pub fn from_catalog(package: &CatalogPackageRecordV1) -> Result<Self> {
+    #[cfg(test)]
+    pub(super) fn from_catalog(package: &CatalogPackageRecordV1) -> Result<Self> {
         let CatalogPackageOriginV1::Profile {
             member_ordinal,
             source_identity,
@@ -236,8 +236,20 @@ impl NativeParityPackageV1 {
 
     pub fn validate(&self, manifest: &NativeParityOracleV1) -> Result<()> {
         manifest.validate()?;
-        let member = manifest
-            .members
+        self.validate_authority(
+            &manifest.profile,
+            &manifest.members,
+            &manifest.implementation,
+        )
+    }
+
+    pub(super) fn validate_authority(
+        &self,
+        profile: &str,
+        members: &[ProfileSourceMemberV2],
+        implementation: &NativeParityImplementationV1,
+    ) -> Result<()> {
+        let member = members
             .get(usize::try_from(self.member_ordinal).map_err(|_| {
                 Error::ConfigError("native parity member ordinal exceeds usize".to_string())
             })?)
@@ -257,16 +269,16 @@ impl NativeParityPackageV1 {
                 self.name, self.member_ordinal
             )));
         }
-        if self.version_scheme != manifest.implementation.ecosystem.version_scheme() {
+        if self.version_scheme != implementation.ecosystem.version_scheme() {
             return Err(Error::ConfigError(format!(
                 "native parity package '{}' uses {} under a {:?} oracle",
                 self.name,
                 self.version_scheme.as_str(),
-                manifest.implementation.ecosystem
+                implementation.ecosystem
             )));
         }
         self.as_catalog_record().validate(&CatalogScopeV1::Profile {
-            profile: manifest.profile.clone(),
+            profile: profile.to_string(),
         })
     }
 
