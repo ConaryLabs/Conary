@@ -46,7 +46,7 @@ pub struct NativeParityImplementationV1 {
 }
 
 impl NativeParityImplementationV1 {
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         validate_identity(&self.name, "native parity implementation name")?;
         validate_identity(&self.version, "native parity implementation version")?;
         if self.projection_schema == 0 {
@@ -332,7 +332,7 @@ impl NativeParityPackageV1 {
     }
 }
 
-fn validate_members(members: &[ProfileSourceMemberV2]) -> Result<()> {
+pub(super) fn validate_members(members: &[ProfileSourceMemberV2]) -> Result<()> {
     if members.is_empty() {
         return Err(Error::ConfigError(
             "native parity oracle must bind at least one source member".to_string(),

@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define the strict content-addressed artifact that independently proves native package facts across one complete immutable profile candidate
+summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-08-23
-revision: 2
+revision: 3
 status: active
 ---
 
@@ -80,10 +80,48 @@ orders selected rows by package key without retaining the complete profile in
 Rust memory. Success means the two-file bundle has been durably written and
 independently reopened through the strict shared verifier.
 
+## Dependency resolution evidence
+
+`NativeResolutionOracleV1` is the separate resolver-owned authority for exact
+dependency closure and unresolved dependencies. Its manifest binds the exact
+`ProfileRevisionV2`, the exact `NativeParityOracleV1` manifest digest, the
+solver implementation and version, its projection schema, the target
+architecture, normalized counts, and the SHA-256 and size of `roots.jsonl`.
+
+Schema 1 fixes the resolution policy rather than accepting solver flags or
+free-form policy: the installed state is empty, every exact package variant is
+requested as its exact root, only required and pre-required groups enter the
+positive solve, optional and build groups are excluded, and provider choice
+uses native repository precedence. A different policy requires a schema
+change.
+
+There is exactly one canonical row for every package key in the bound package
+oracle. A row records exactly one outcome:
+
+- `resolved`, with a strictly ordered duplicate-free closure of exact package
+  keys that includes the root; or
+- `unresolved`, with a strictly ordered duplicate-free set of requiring
+  package keys and canonical required-group digests.
+
+The writer and reader retain one root outcome at a time. Complete reopen uses
+a private disk-backed membership index to prove that every closure reference,
+requiring package, and unresolved required group exists in the exact package
+oracle; root completeness is a separate bounded merge walk. Unknown fields,
+mixed or empty outcomes, reordered or duplicate roots/references, count drift,
+noncanonical bytes, tamper, extra bundle entries, symlinks, and package-oracle
+drift fail closed.
+
+Comparison applies the same exact profile, package oracle, architecture, and
+typed policy to native and Conary evidence. It merge-walks one root pair at a
+time and reports typed oracle-only root, candidate-only root, outcome,
+dependency-closure, or unresolved-dependency drift. Diagnostic strings and
+native solver error prose never establish the result.
+
 ## Separate Slice 6 owners
 
-This artifact covers catalog facts and member precedence. Dependency closure
-and the exact unresolved-dependency set require resolver-owned comparison
-against native solver output. Complete conversion crawling, conversion-proof
-reuse, independent CCS reopen and target preflight, and final Remi promotion
-after durable object reopen remain separate authority boundaries under #517.
+The shared resolver artifact and comparator do not produce native evidence.
+Pinned ALPM, RPM, and Debian solver helpers remain separate owners and must
+derive their rows from the named native libraries over the exact package
+universe. Complete conversion crawling, conversion-proof reuse, independent
+CCS reopen and target preflight, and final Remi promotion after durable object
+reopen remain separate authority boundaries under #517.

@@ -17,6 +17,8 @@ use crate::repository::dependency_source::CapabilityProvenance;
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::versioning::VersionScheme;
 
+mod resolution;
+
 struct CandidateFixture {
     _directory: tempfile::TempDir,
     profile: ProfileRevisionV2,

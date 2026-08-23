@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-23
-revision: 50
-summary: Document Remi native full-catalog parity artifacts, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 51
+summary: Document Remi native full-catalog and resolution parity artifacts, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -322,10 +322,23 @@ neither the Conary catalog nor Conary's Arch repository parser.
 
 The hosted `phase4-native-pm-parity` jobs remain deterministic one-package
 lifecycle and CLI release tests. They do not satisfy this complete-candidate
-contract. Native solver dependency closure and the exact unresolved-dependency
-set are a separate resolver-owned Slice 6 proof. RPM and Debian native
-producers, the complete conversion crawl, and Remi promotion wiring remain
-later independent evidence paths.
+contract.
+
+`NativeResolutionOracleV1` is the separate resolver-owned contract for native
+solver closure and unresolved-dependency evidence. It binds the exact profile
+and package-oracle manifest, pinned solver implementation/version, target
+architecture, and one fixed typed policy: empty installed state, every exact
+package as a root, required/pre-required groups only, and native
+provider/repository precedence. Every package root has exactly one canonical
+resolved closure or typed unresolved set. Independent reopen uses a private
+disk-backed membership index for referenced package and required-group
+authority plus a bounded merge walk for complete root coverage. Comparison
+retains one native/candidate root pair and reports typed root, outcome, closure,
+or unresolved-set drift.
+
+The shared contract does not produce native solver evidence. Pinned ALPM, RPM,
+and Debian solver producers, the complete conversion crawl, and Remi promotion
+wiring remain later independent evidence paths.
 The canonical artifact format is
 `docs/specs/remi-native-parity-oracle.md`.
 
