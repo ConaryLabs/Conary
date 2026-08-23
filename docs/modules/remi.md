@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-23
-revision: 49
-summary: Document Remi canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 50
+summary: Document Remi native full-catalog parity artifacts, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -287,6 +287,36 @@ not create a replacement universe bundle, and preserves the prior active
 pointer. This gate is structurally bounded to one verified reader per public
 profile plus scalar implementation facts; it does not materialize a
 distribution-sized package-name set.
+
+### Native Full-Catalog Parity Artifact
+
+`NativeParityOracleV1` is the sole accepted contract for independent native
+package-fact parity against one exact `ProfileRevisionV2`. Its strict manifest
+binds the profile revision and logical digests, ordered source members and
+precedence, pinned RPM, Debian, or ALPM implementation and version, projection
+schema, normalized counts, and the exact SHA-256 and size of a canonical JSONL
+package artifact. Each row carries the exact package variant, contributing
+member, source snapshot, payload checksum/size/download authority, providers,
+and grouped positive and negative relations. Conflict, break, replacement, and
+obsolescence declarations remain typed group authority.
+
+The writer and independent reopener reject unknown fields, unsupported schema,
+noncanonical bytes, duplicate or reordered keys, count drift, extra bundle
+entries, symlinks, and artifact tamper. Comparison merge-walks the verified
+oracle and immutable catalog by exact package key, retains one candidate/oracle
+package pair at a time, and reports typed candidate-only, oracle-only, identity,
+precedence, payload, provider, grouped-requirement, or negative-relation drift.
+The native evidence producer must be the pinned implementation named by the
+manifest; constructing oracle rows from Conary's own catalog is test support,
+not release evidence.
+
+The hosted `phase4-native-pm-parity` jobs remain deterministic one-package
+lifecycle and CLI release tests. They do not satisfy this complete-candidate
+contract. Native solver dependency closure and the exact unresolved-dependency
+set are a separate resolver-owned Slice 6 proof. Native oracle production and
+Remi promotion wiring follow only after that independent evidence path exists.
+The canonical artifact format is
+`docs/specs/remi-native-parity-oracle.md`.
 
 Clients enroll the universe metadata root independently of CCS package keys.
 Self-hosted `repo add` requires `--remi-metadata-root` from an independently
