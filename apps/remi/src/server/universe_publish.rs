@@ -13,11 +13,11 @@ use anyhow::{Context, Result, bail};
 use chrono::{Duration, Utc};
 use conary_core::canonical::{CanonicalMapSnapshot, validate_canonical_map_snapshot};
 use conary_core::repository::catalog::{
-    CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV1, verify_profile_catalog_bundle,
+    CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV2, verify_profile_catalog_bundle,
 };
 use conary_core::repository::universe::{
-    REMI_UNIVERSE_SCHEMA_V1, RemiUniverseCanonicalMapObjectV1, RemiUniverseCatalogObjectV1,
-    RemiUniverseManifestV1, RemiUniverseProfileV1, verify_remi_universe_manifest_target,
+    REMI_UNIVERSE_SCHEMA_V2, RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2,
+    RemiUniverseManifestV2, RemiUniverseProfileV2, verify_remi_universe_manifest_target,
 };
 use conary_core::trust::verify::{
     extract_role_keys, verify_metadata_hash, verify_not_expired, verify_root, verify_signatures,
@@ -101,13 +101,13 @@ pub(crate) async fn publish_current_universe_from_state(
 struct UniverseInputs {
     base_manifest_sha256: Option<String>,
     base_sequence: u64,
-    active_manifest: Option<RemiUniverseManifestV1>,
-    profiles: Vec<ProfileRevisionV1>,
+    active_manifest: Option<RemiUniverseManifestV2>,
+    profiles: Vec<ProfileRevisionV2>,
     canonical_map: CanonicalMapSnapshot,
 }
 
 struct SignedUniverseCandidate {
-    manifest: RemiUniverseManifestV1,
+    manifest: RemiUniverseManifestV2,
     manifest_sha256: String,
     manifest_bytes: Vec<u8>,
     canonical_map_bytes: Vec<u8>,
@@ -219,7 +219,7 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         Some((sha256, sequence, manifest_json)) => {
             let sequence =
                 u64::try_from(sequence).context("active universe sequence is negative")?;
-            let manifest = serde_json::from_str::<RemiUniverseManifestV1>(&manifest_json)
+            let manifest = serde_json::from_str::<RemiUniverseManifestV2>(&manifest_json)
                 .context("parse active Remi universe manifest")?;
             manifest.validate().map_err(anyhow::Error::from)?;
             if manifest.sequence != sequence || manifest.manifest_sha256()? != sha256 {
@@ -242,9 +242,21 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         .query_map([], |row| row.get::<_, String>(0))?
         .map(|row| {
             let manifest_json = row?;
-            let revision = serde_json::from_str::<ProfileRevisionV1>(&manifest_json)?;
+            let revision = serde_json::from_str::<ProfileRevisionV2>(&manifest_json)?;
             revision.validate()?;
             Ok::<_, anyhow::Error>(revision)
+        })
+        .filter_map(|revision| match revision {
+            Ok(revision)
+                if conary_core::repository::supported_profiles::profile_by_public_id(
+                    &revision.profile,
+                )
+                .is_some() =>
+            {
+                Some(Ok(revision))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
         })
         .collect::<Result<Vec<_>>>()?;
     let canonical_map = load_canonical_map_snapshot(&conn)?;
@@ -258,8 +270,8 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
 }
 
 fn same_authority(
-    active: &RemiUniverseManifestV1,
-    profiles: &[ProfileRevisionV1],
+    active: &RemiUniverseManifestV2,
+    profiles: &[ProfileRevisionV2],
     canonical_map_sha256: &str,
 ) -> bool {
     active.canonical_map.sha256 == canonical_map_sha256
@@ -273,7 +285,7 @@ fn same_authority(
 
 fn active_bundle_is_fresh(
     catalog_dir: &Path,
-    active: &RemiUniverseManifestV1,
+    active: &RemiUniverseManifestV2,
     manifest_sha256: &str,
     now: chrono::DateTime<Utc>,
 ) -> Result<bool> {
@@ -300,7 +312,7 @@ fn requires_renewal(
 
 fn build_candidate(
     base_sequence: u64,
-    profiles: Vec<ProfileRevisionV1>,
+    profiles: Vec<ProfileRevisionV2>,
     canonical_map_bytes: Vec<u8>,
     root: Signed<conary_core::trust::RootMetadata>,
     keys_root: &Path,
@@ -319,10 +331,10 @@ fn build_candidate(
         .map(|(index, revision)| {
             let ordinal = u32::try_from(index).context("too many universe profiles")?;
             let profile_revision_sha256 = revision.manifest_sha256()?;
-            Ok(RemiUniverseProfileV1 {
+            Ok(RemiUniverseProfileV2 {
                 ordinal,
                 profile_revision_sha256,
-                catalog: RemiUniverseCatalogObjectV1 {
+                catalog: RemiUniverseCatalogObjectV2 {
                     schema_version: CATALOG_CONTENT_SCHEMA_V1,
                     sha256: revision.catalog.sha256.clone(),
                     size: revision.catalog.size,
@@ -332,14 +344,14 @@ fn build_candidate(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let manifest = RemiUniverseManifestV1 {
-        schema_version: REMI_UNIVERSE_SCHEMA_V1,
+    let manifest = RemiUniverseManifestV2 {
+        schema_version: REMI_UNIVERSE_SCHEMA_V2,
         sequence,
         metadata_root_sha256,
         generated_at: now,
         expires_at: now + Duration::days(7),
         profiles: profile_descriptors,
-        canonical_map: RemiUniverseCanonicalMapObjectV1 {
+        canonical_map: RemiUniverseCanonicalMapObjectV2 {
             schema_version: canonical_map.schema_version,
             sha256: canonical_map_sha256,
             size: u64::try_from(canonical_map_bytes.len())
@@ -600,7 +612,7 @@ fn publish_candidate_files(
 
 fn verify_published_bundle(
     catalog_dir: &Path,
-    expected: &RemiUniverseManifestV1,
+    expected: &RemiUniverseManifestV2,
     expected_sha256: &str,
     catalog_authority: Option<&super::catalog_authority::CatalogAuthority>,
 ) -> Result<()> {
@@ -755,7 +767,7 @@ fn activate_candidate(
 
 fn require_profile_inputs_unchanged(
     tx: &Transaction<'_>,
-    manifest: &RemiUniverseManifestV1,
+    manifest: &RemiUniverseManifestV2,
 ) -> Result<()> {
     let mut statement = tx.prepare(
         "SELECT source_profile, profile_revision_sha256
@@ -974,7 +986,7 @@ mod tests {
                 |row| row.get::<_, String>(0),
             )
             .expect("load universe manifest");
-        let manifest: RemiUniverseManifestV1 =
+        let manifest: RemiUniverseManifestV2 =
             serde_json::from_str(&manifest_json).expect("parse universe manifest");
         assert_eq!(manifest.sequence, 1);
         assert_eq!(

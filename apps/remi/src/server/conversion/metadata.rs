@@ -74,9 +74,8 @@ impl ConversionService {
         source_profile: &str,
     ) -> Result<(ForeignConversionInput, PackagePayload, &'static str)> {
         let path_str = path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
-        let profile =
-            conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
-                .ok_or_else(|| anyhow!("unsupported exact source profile '{source_profile}'"))?;
+        let profile = conary_core::repository::supported_profiles::profile_by_id(source_profile)
+            .ok_or_else(|| anyhow!("unsupported exact source profile '{source_profile}'"))?;
 
         match profile.package_format() {
             ProfilePackageFormat::Arch => {

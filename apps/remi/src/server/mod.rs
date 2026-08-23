@@ -519,6 +519,12 @@ async fn run_server_on_runtime(
             .repositories
             .iter()
             .filter(|repository| repository.enabled)
+            .filter(|repository| {
+                conary_core::repository::supported_profiles::profile_by_public_id(
+                    &repository.profile,
+                )
+                .is_some()
+            })
             .map(|repository| repository.profile.clone())
             .collect::<Vec<_>>();
         profiles.sort();

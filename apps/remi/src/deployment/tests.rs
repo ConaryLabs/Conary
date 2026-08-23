@@ -36,7 +36,15 @@ fn prepare_hard_switches_config_and_initializes_fresh_database() {
     assert!(config.contains("repository_manifest"));
     assert!(config.contains("repository_keys_dir"));
     assert!(config.contains("convert_top_n = 1000"));
-    assert!(config.contains("distros = [\"fedora\"]"));
+    let parsed_config: toml::Value = toml::from_str(&config).unwrap();
+    assert_eq!(
+        parsed_config["prewarm"]["distros"],
+        toml::Value::Array(vec![
+            toml::Value::String("arch".to_string()),
+            toml::Value::String("fedora".to_string()),
+            toml::Value::String("ubuntu".to_string()),
+        ])
+    );
     assert!(config.contains("enabled = true"));
     assert!(config.contains("endpoint = \"https://r2.example.test\""));
     for retired in [
@@ -85,13 +93,27 @@ fn inspect_state_proves_exact_reconciled_source_authority() {
 
     let state = inspect_state(&options.config_path).unwrap();
     assert_eq!(state.schema_epoch, SCHEMA_EPOCH);
-    assert_eq!(state.configured_profiles, 1);
+    assert_eq!(state.configured_profiles, 3);
     assert_eq!(state.populated_profiles, 0);
     assert_eq!(state.catalog_packages, 0);
-    assert_eq!(state.signing_profiles, vec!["fedora-44"]);
-    assert_eq!(state.profiles[0].profile, "fedora-44");
-    assert_eq!(state.profiles[0].configured_sources, 1);
-    assert_eq!(state.profiles[0].profile_revision_sha256, None);
+    assert_eq!(
+        state.signing_profiles,
+        vec!["arch", "fedora-44", "solus", "ubuntu-26.04"]
+    );
+    assert_eq!(
+        state
+            .profiles
+            .iter()
+            .map(|profile| (profile.profile.as_str(), profile.configured_sources))
+            .collect::<Vec<_>>(),
+        vec![("arch", 3), ("fedora-44", 2), ("ubuntu-26.04", 16)]
+    );
+    assert!(
+        state
+            .profiles
+            .iter()
+            .all(|profile| profile.profile_revision_sha256.is_none())
+    );
     assert_eq!(state.universe, None);
     assert!(!state.repopulation_complete());
     let json = serde_json::to_value(&state).unwrap();
@@ -124,7 +146,7 @@ fn deployment_population_comes_from_active_immutable_catalogs() {
             row.get(0)
         })
         .unwrap();
-    let configured = BTreeMap::from([("fedora-44".to_string(), 1)]);
+    let configured = BTreeMap::from([("fedora-44".to_string(), 2)]);
 
     let profiles = inspect_deployment_profiles(&conn, fixture.authority(), &configured)
         .expect("inspect immutable deployment population");

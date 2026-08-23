@@ -2,8 +2,8 @@
 
 use super::{
     cmd_init, cmd_rebuild_database, cmd_rollback, cmd_rollback_with_forced_precommit_failure,
-    paths_refer_to_same_location, restore_snapshot, restore_snapshots_to_live_root,
-    validate_init_privileges,
+    configure_current_database, paths_refer_to_same_location, restore_snapshot,
+    restore_snapshots_to_live_root, validate_init_privileges,
 };
 use crate::commands::{
     FileSnapshot, NativeLifecycleSnapshot, RollbackSystemAuthority, TroveSnapshot,
@@ -118,6 +118,11 @@ async fn init_seeds_every_builtin_remi_feed_without_incomplete_native_enrollment
         host_capabilities.schema_version,
         conary_core::ccs::HOST_CAPABILITY_INVENTORY_SCHEMA_VERSION
     );
+    assert!(
+        Repository::find_by_name(&conn, "remi-solus")
+            .unwrap()
+            .is_none()
+    );
     for feed in conary_core::repository::supported_profiles::public_profiles() {
         let name = format!("remi-{}", feed.id());
         let remi = Repository::find_by_name(&conn, &name).unwrap().unwrap();
@@ -182,6 +187,66 @@ async fn init_seeds_every_builtin_remi_feed_without_incomplete_native_enrollment
                     | conary_core::repository::RepositoryFormat::Fedora
             )),
         "system init must not persist native repositories before exact trust and policy enrollment"
+    );
+}
+
+#[tokio::test]
+async fn init_removes_only_the_exact_retired_canonical_remi_seed() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    cmd_init(db_path_str).await.unwrap();
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    let parser_json = conary_core::repository::RepositoryParserConfig::Json
+        .to_json()
+        .unwrap();
+    conn.execute(
+        "INSERT INTO repositories (
+             name, url, default_strategy, default_strategy_endpoint,
+             source_profile, package_format, parser_config_json
+         ) VALUES (
+             'remi-solus', 'https://remi.conary.io', 'remi',
+             'https://remi.conary.io', 'solus', 'json', ?1
+         )",
+        [parser_json],
+    )
+    .unwrap();
+    drop(conn);
+
+    configure_current_database(db_path_str).await.unwrap();
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    assert!(
+        Repository::find_by_name(&conn, "remi-solus")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn init_preserves_a_user_managed_repository_with_a_candidate_profile_name() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("conary.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    cmd_init(db_path_str).await.unwrap();
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    conn.execute(
+        "INSERT INTO repositories (name, url)
+         VALUES ('remi-solus', 'https://operator.example.test/packages')",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+
+    configure_current_database(db_path_str).await.unwrap();
+    let conn = conary_core::db::open(db_path_str).unwrap();
+    assert_eq!(
+        Repository::find_by_name(&conn, "remi-solus")
+            .unwrap()
+            .unwrap()
+            .url,
+        "https://operator.example.test/packages"
     );
 }
 

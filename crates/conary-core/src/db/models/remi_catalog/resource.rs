@@ -12,7 +12,7 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::repository::catalog::{
-    ProfileRevisionV1, ProfileSourceMemberV1, SourceSnapshotV1, SourceStreamKindV1,
+    ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1, SourceStreamKindV1,
 };
 
 struct ManifestResourceIdentity {
@@ -41,7 +41,7 @@ impl RemiCatalogResource {
         )
     }
 
-    pub fn from_profile_revision(manifest: &ProfileRevisionV1, created_at: i64) -> Result<Self> {
+    pub fn from_profile_revision(manifest: &ProfileRevisionV2, created_at: i64) -> Result<Self> {
         manifest.validate()?;
         Self::from_manifest(
             ManifestResourceIdentity {
@@ -134,7 +134,7 @@ impl RemiCatalogResource {
 }
 
 impl RemiProfileRevisionMember {
-    fn from_contract(profile_revision_sha256: &str, member: &ProfileSourceMemberV1) -> Self {
+    fn from_contract(profile_revision_sha256: &str, member: &ProfileSourceMemberV2) -> Self {
         Self {
             profile_revision_sha256: profile_revision_sha256.to_string(),
             ordinal: i64::from(member.ordinal),
@@ -148,7 +148,8 @@ impl RemiProfileRevisionMember {
             }
             .to_string(),
             stream_identity: member.stream.identity.clone(),
-            priority: i64::from(member.priority),
+            role: member.role,
+            precedence: i64::from(member.precedence),
             required: member.required,
         }
     }
@@ -159,8 +160,8 @@ impl RemiProfileRevisionMember {
             "INSERT INTO remi_profile_revision_members (
                  profile_revision_sha256, ordinal, source_snapshot_sha256,
                  source_identity, repository_identity, stream_kind, stream_identity,
-                 priority, required
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 role, precedence, required
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(profile_revision_sha256, ordinal) DO NOTHING",
             params![
                 &self.profile_revision_sha256,
@@ -170,7 +171,8 @@ impl RemiProfileRevisionMember {
                 &self.repository_identity,
                 &self.stream_kind,
                 &self.stream_identity,
-                self.priority,
+                self.role.as_str(),
+                self.precedence,
                 self.required as i64,
             ],
         )?;
@@ -205,7 +207,7 @@ impl RemiProfileRevisionMember {
 pub fn register_profile_catalog_revision(
     conn: &Connection,
     source_manifests: &[SourceSnapshotV1],
-    profile_manifest: &ProfileRevisionV1,
+    profile_manifest: &ProfileRevisionV2,
     created_at: i64,
 ) -> Result<()> {
     profile_manifest.validate()?;
@@ -267,7 +269,7 @@ mod tests {
     use super::*;
     use crate::db::schema::ensure_current;
     use crate::repository::catalog::{
-        CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V1, SOURCE_SNAPSHOT_SCHEMA_V1,
+        CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, SOURCE_SNAPSHOT_SCHEMA_V1,
         SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
         SourceStreamV1,
     };
@@ -334,21 +336,25 @@ mod tests {
                 size: 4096,
             },
             logical_digest_sha256: digest('e'),
-            counts: CatalogCountsV1::default(),
+            counts: CatalogCountsV1 {
+                source_evidence: 1,
+                ..CatalogCountsV1::default()
+            },
         }
     }
 
-    fn profile_manifest(source: &SourceSnapshotV1) -> ProfileRevisionV1 {
-        ProfileRevisionV1 {
-            schema_version: PROFILE_REVISION_SCHEMA_V1,
+    fn profile_manifest(source: &SourceSnapshotV1) -> ProfileRevisionV2 {
+        ProfileRevisionV2 {
+            schema_version: PROFILE_REVISION_SCHEMA_V2,
             profile: "fedora-44".to_string(),
             projection_version: 1,
-            members: vec![ProfileSourceMemberV1 {
+            members: vec![ProfileSourceMemberV2 {
                 ordinal: 0,
                 source_identity: source.source_identity.clone(),
                 repository_identity: source.repository_identity.clone(),
                 stream: source.stream.clone(),
-                priority: 10,
+                role: crate::repository::supported_profiles::ProfileSourceRole::Base,
+                precedence: 10,
                 required: true,
                 source_snapshot_sha256: source.manifest_sha256().unwrap(),
             }],
@@ -357,7 +363,10 @@ mod tests {
                 size: 8192,
             },
             logical_digest_sha256: digest('0'),
-            counts: CatalogCountsV1::default(),
+            counts: CatalogCountsV1 {
+                source_evidence: 1,
+                ..CatalogCountsV1::default()
+            },
         }
     }
 

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-22
-revision: 77
-summary: Compact workspace orientation index that routes detailed ownership and proof through agent-context
+last_updated: 2026-08-23
+revision: 78
+summary: Compact workspace orientation index that routes typed profile tiers, exact membership, detailed ownership, and proof through agent-context
 ---
 
 # Assistant Subsystem Map
@@ -53,7 +53,7 @@ and safety invariant for that task.
 | `ccs` | CCS authoring, conversion, verification, install, and native lifecycle ABI | `docs/modules/ccs.md` |
 | `packaging` | Recipes, try sessions, static repositories, trust, and publish | `docs/modules/recipe.md` |
 | `canonical-map` | Versioned cross-profile equivalence and Remi map exchange | `docs/modules/source-selection.md` |
-| `profiles` | Upstream feed profiles, parser selection, and Remi route slugs | `docs/modules/source-selection.md` |
+| `profiles` | Typed support tiers, exact source membership, parser selection, and public Remi route slugs | `docs/modules/source-selection.md` |
 | `remi` | Ingest, conversion, signing, serving, admin, fixtures, R2, and federation | `docs/modules/remi.md` |
 | `conaryd` | Daemon authorization, package jobs, routes, and lifecycle events | `docs/modules/conaryd.md` |
 | `bootstrap` | Prerequisites, images, self-hosting seed/run, and local QEMU validation | `docs/modules/bootstrap.md` |

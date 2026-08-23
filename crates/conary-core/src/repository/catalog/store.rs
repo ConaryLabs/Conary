@@ -550,6 +550,22 @@ pub(super) fn insert_package(
 }
 
 fn insert_package_base(connection: &Connection, package: &CatalogPackageRecordV1) -> Result<()> {
+    insert_package_base_with_policy(connection, package, false)?;
+    Ok(())
+}
+
+pub(super) fn insert_profile_package_base_if_absent(
+    connection: &Connection,
+    package: &CatalogPackageRecordV1,
+) -> Result<bool> {
+    insert_package_base_with_policy(connection, package, true)
+}
+
+fn insert_package_base_with_policy(
+    connection: &Connection,
+    package: &CatalogPackageRecordV1,
+    ignore_exact_key_conflict: bool,
+) -> Result<bool> {
     let (origin_kind, member_ordinal, source_identity, repository_identity, snapshot) =
         match &package.origin {
             CatalogPackageOriginV1::Source {
@@ -575,8 +591,13 @@ fn insert_package_base(connection: &Connection, package: &CatalogPackageRecordV1
                 Some(source_snapshot_sha256.as_str()),
             ),
         };
-    connection.execute(
-        INSERT_PACKAGE,
+    let sql = if ignore_exact_key_conflict {
+        format!("{INSERT_PACKAGE} ON CONFLICT(package_key_sha256) DO NOTHING")
+    } else {
+        INSERT_PACKAGE.to_string()
+    };
+    let inserted = connection.execute(
+        &sql,
         params![
             &package.package_key_sha256,
             origin_kind,
@@ -607,7 +628,7 @@ fn insert_package_base(connection: &Connection, package: &CatalogPackageRecordV1
             package.version_scheme.as_str(),
         ],
     )?;
-    Ok(())
+    Ok(inserted == 1)
 }
 
 fn insert_provide(

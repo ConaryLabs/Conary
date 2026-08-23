@@ -1,7 +1,7 @@
 # deploy/remi-repositories.toml
 # Public package-source authority for the hosted Remi service.
 
-schema_version = 3
+schema_version = 4
 
 [[repositories]]
 name = "fedora-44"
@@ -13,7 +13,9 @@ stream_kind = "release"
 stream_identity = "44"
 update_mode = "follow"
 enabled = true
-priority = 100
+role = "base"
+precedence = 100
+required = true
 metadata_expire_seconds = 21600
 
 [repositories.parser]
@@ -32,7 +34,37 @@ url = "https://fedoraproject.org/fedora.gpg"
 fingerprint = "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6"
 
 [[repositories]]
-name = "ubuntu-26.04"
+name = "fedora-44-updates"
+url = "https://dl.fedoraproject.org/pub/fedora/linux/updates/44/Everything/x86_64"
+profile = "fedora-44"
+source_identity = "fedora-project"
+repository_identity = "fedora-44-updates-x86_64"
+stream_kind = "channel"
+stream_identity = "updates-released-f44"
+update_mode = "follow"
+enabled = true
+role = "updates"
+precedence = 110
+required = true
+metadata_expire_seconds = 21600
+
+[repositories.parser]
+package_format = "rpm"
+architecture = "x86_64"
+
+[repositories.trust]
+ecosystem = "rpm"
+
+[repositories.trust.metadata]
+kind = "metalink"
+url = "https://mirrors.fedoraproject.org/metalink?repo=updates-released-f44&arch=x86_64"
+
+[[repositories.trust.package_keys]]
+url = "https://fedoraproject.org/fedora.gpg"
+fingerprint = "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6"
+
+[[repositories]]
+name = "ubuntu-resolute-release-main"
 url = "https://archive.ubuntu.com/ubuntu"
 profile = "ubuntu-26.04"
 source_identity = "ubuntu-archive"
@@ -41,7 +73,9 @@ stream_kind = "release"
 stream_identity = "resolute"
 update_mode = "follow"
 enabled = true
-priority = 90
+role = "base"
+precedence = 100
+required = true
 metadata_expire_seconds = 21600
 
 [repositories.parser]
@@ -58,6 +92,261 @@ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg"
 fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C"
 
 [[repositories]]
+name = "ubuntu-resolute-release-restricted"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-restricted-amd64"
+stream_kind = "release"
+stream_identity = "resolute"
+update_mode = "follow"
+enabled = true
+role = "base"
+precedence = 99
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute", component = "restricted", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-release-universe"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-universe-amd64"
+stream_kind = "release"
+stream_identity = "resolute"
+update_mode = "follow"
+enabled = true
+role = "base"
+precedence = 98
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute", component = "universe", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-release-multiverse"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-multiverse-amd64"
+stream_kind = "release"
+stream_identity = "resolute"
+update_mode = "follow"
+enabled = true
+role = "base"
+precedence = 97
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute", component = "multiverse", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-updates-main"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-updates-main-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-updates"
+update_mode = "follow"
+enabled = true
+role = "updates"
+precedence = 110
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-updates", component = "main", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-updates-restricted"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-updates-restricted-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-updates"
+update_mode = "follow"
+enabled = true
+role = "updates"
+precedence = 109
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-updates", component = "restricted", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-updates-universe"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-updates-universe-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-updates"
+update_mode = "follow"
+enabled = true
+role = "updates"
+precedence = 108
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-updates", component = "universe", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-updates-multiverse"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-updates-multiverse-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-updates"
+update_mode = "follow"
+enabled = true
+role = "updates"
+precedence = 107
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-updates", component = "multiverse", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-security-main"
+url = "https://security.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-security-main-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-security"
+update_mode = "follow"
+enabled = true
+role = "security"
+precedence = 120
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-security", component = "main", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-security-restricted"
+url = "https://security.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-security-restricted-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-security"
+update_mode = "follow"
+enabled = true
+role = "security"
+precedence = 119
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-security", component = "restricted", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-security-universe"
+url = "https://security.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-security-universe-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-security"
+update_mode = "follow"
+enabled = true
+role = "security"
+precedence = 118
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-security", component = "universe", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-security-multiverse"
+url = "https://security.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-security-multiverse-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-security"
+update_mode = "follow"
+enabled = true
+role = "security"
+precedence = 117
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-security", component = "multiverse", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-backports-main"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-backports-main-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-backports"
+update_mode = "follow"
+enabled = true
+role = "backports"
+precedence = 10
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-backports", component = "main", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-backports-restricted"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-backports-restricted-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-backports"
+update_mode = "follow"
+enabled = true
+role = "backports"
+precedence = 9
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-backports", component = "restricted", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-backports-universe"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-backports-universe-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-backports"
+update_mode = "follow"
+enabled = true
+role = "backports"
+precedence = 8
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-backports", component = "universe", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
+name = "ubuntu-resolute-backports-multiverse"
+url = "https://archive.ubuntu.com/ubuntu"
+profile = "ubuntu-26.04"
+source_identity = "ubuntu-archive"
+repository_identity = "ubuntu-resolute-backports-multiverse-amd64"
+stream_kind = "channel"
+stream_identity = "resolute-backports"
+update_mode = "follow"
+enabled = true
+role = "backports"
+precedence = 7
+required = true
+metadata_expire_seconds = 21600
+parser = { package_format = "deb", distribution = "resolute-backports", component = "multiverse", architecture = "amd64" }
+trust = { ecosystem = "debian", release_keys = [{ url = "https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg", fingerprint = "F6ECB3762474EDA9D21B7022871920D1991BC93C" }] }
+
+[[repositories]]
 name = "arch-core"
 url = "https://geo.mirror.pkgbuild.com/core/os/x86_64"
 profile = "arch"
@@ -68,7 +357,9 @@ stream_identity = "archlinux"
 policy_group = "official-x86_64"
 update_mode = "follow"
 enabled = true
-priority = 80
+role = "base"
+precedence = 80
+required = true
 metadata_expire_seconds = 21600
 
 [repositories.parser]
@@ -105,7 +396,9 @@ stream_kind = "rolling"
 stream_identity = "polaris"
 update_mode = "follow"
 enabled = true
-priority = 50
+role = "base"
+precedence = 50
+required = true
 metadata_expire_seconds = 21600
 
 [repositories.parser]
@@ -127,7 +420,9 @@ stream_identity = "archlinux"
 policy_group = "official-x86_64"
 update_mode = "follow"
 enabled = true
-priority = 70
+role = "base"
+precedence = 70
+required = true
 metadata_expire_seconds = 21600
 
 [repositories.parser]
@@ -165,7 +460,9 @@ stream_identity = "archlinux"
 policy_group = "official-x86_64"
 update_mode = "follow"
 enabled = true
-priority = 60
+role = "base"
+precedence = 60
+required = true
 metadata_expire_seconds = 21600
 
 [repositories.parser]

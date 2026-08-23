@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-22
-revision: 78
-summary: Route feature ownership through focused typed corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+revision: 79
+summary: Route feature ownership through typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1134,10 +1134,10 @@ or native release upload.
 `docs/llms/subsystem-map.md`.
 
 **Safety notes:** configured public feed IDs are exact and narrow:
-`fedora-44`, `ubuntu-26.04`, `arch`, and `solus`. Remi route slugs are
-`fedora`, `ubuntu`, `arch`, and `solus`; generic route slugs such as `fedora` and
-`ubuntu` are not feed IDs. This catalog is not a list of destination distros
-Conary supports.
+`fedora-44`, `ubuntu-26.04`, and `arch`. Their public Remi route slugs are
+`fedora`, `ubuntu`, and `arch`; `solus` is an explicit candidate with no public
+authority. Generic route slugs such as `fedora` and `ubuntu` are not feed IDs.
+This catalog is not a list of destination distros Conary supports.
 
 ## Remi Publication, Serving, Admin, And Fixture Artifacts
 

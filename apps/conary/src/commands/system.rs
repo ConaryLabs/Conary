@@ -8,7 +8,7 @@ mod rollback_restore;
 
 pub use init::cmd_init;
 #[cfg(test)]
-use init::{paths_refer_to_same_location, validate_init_privileges};
+use init::{configure_current_database, paths_refer_to_same_location, validate_init_privileges};
 pub use rebuild_database::cmd_rebuild_database;
 pub use rollback_command::cmd_rollback;
 #[cfg(test)]

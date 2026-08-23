@@ -15,6 +15,12 @@ fn repository(name: &str, identity: &str, priority: i32) -> Repository {
     repository.id = Some(i64::from(priority) + 100);
     repository.source_profile = Some("fedora-44".to_string());
     repository.priority = priority;
+    repository.profile_member_role = Some(if identity.contains("updates") {
+        ProfileSourceRole::Updates
+    } else {
+        ProfileSourceRole::Base
+    });
+    repository.profile_member_required = true;
     repository
         .set_parser_config(RepositoryParserConfig::Rpm {
             architecture: "x86_64".to_string(),
@@ -53,8 +59,8 @@ fn repository(name: &str, identity: &str, priority: i32) -> Repository {
 
 #[test]
 fn member_plan_is_independent_of_input_and_display_name_order() {
-    let updates = repository("aaa-display-name", "fedora-updates-x86_64", 20);
-    let everything = repository("zzz-display-name", "fedora-everything-x86_64", 10);
+    let updates = repository("aaa-display-name", "fedora-44-updates-x86_64", 110);
+    let everything = repository("zzz-display-name", "fedora-44-everything-x86_64", 100);
     let forward =
         plan_profile_sources("fedora-44", vec![everything.clone(), updates.clone()]).unwrap();
     let reversed = plan_profile_sources("fedora-44", vec![updates, everything]).unwrap();
@@ -65,7 +71,7 @@ fn member_plan_is_independent_of_input_and_display_name_order() {
             .map(|plan| {
                 (
                     plan.ordinal,
-                    plan.priority,
+                    plan.precedence,
                     plan.repository.repository_identity.clone().unwrap(),
                 )
             })
@@ -75,20 +81,34 @@ fn member_plan_is_independent_of_input_and_display_name_order() {
     assert_eq!(
         identities(&forward),
         vec![
-            (0, 20, "fedora-updates-x86_64".to_string()),
-            (1, 10, "fedora-everything-x86_64".to_string()),
+            (0, 110, "fedora-44-updates-x86_64".to_string()),
+            (1, 100, "fedora-44-everything-x86_64".to_string()),
         ]
     );
 }
 
 #[test]
 fn member_plan_rejects_mixed_profiles_before_fetch() {
-    let mut mixed = repository("mixed", "fedora-updates-x86_64", 20);
+    let mut mixed = repository("mixed", "fedora-44-updates-x86_64", 110);
     mixed.source_profile = Some("fedora-45".to_string());
     let error = plan_profile_sources("fedora-44", vec![mixed])
         .err()
         .expect("mixed profile must fail");
     assert!(error.to_string().contains("cannot plan"));
+}
+
+#[test]
+fn member_plan_rejects_an_incomplete_declared_profile() {
+    let everything = repository("everything", "fedora-44-everything-x86_64", 100);
+    let error = plan_profile_sources("fedora-44", vec![everything])
+        .err()
+        .expect("missing updates must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("source membership is incomplete")
+    );
+    assert!(error.to_string().contains("fedora-44-updates-x86_64"));
 }
 
 #[test]

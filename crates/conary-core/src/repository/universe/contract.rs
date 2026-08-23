@@ -9,24 +9,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::canonical::CANONICAL_MAP_SCHEMA_VERSION;
 use crate::error::{Error, Result};
-use crate::repository::catalog::{CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV1};
+use crate::repository::catalog::{CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV2};
 use crate::repository::supported_profiles::profile_by_public_id;
 
-use super::super::catalog::PROFILE_REVISION_SCHEMA_V1;
+use super::super::catalog::PROFILE_REVISION_SCHEMA_V2;
 
-pub const REMI_UNIVERSE_SCHEMA_V1: u32 = 1;
+pub const REMI_UNIVERSE_SCHEMA_V2: u32 = 2;
 
 /// One immutable profile-catalog object authorized by the universe manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RemiUniverseCatalogObjectV1 {
+pub struct RemiUniverseCatalogObjectV2 {
     pub schema_version: u32,
     pub sha256: String,
     pub size: u64,
     pub logical_digest_sha256: String,
 }
 
-impl RemiUniverseCatalogObjectV1 {
+impl RemiUniverseCatalogObjectV2 {
     #[must_use]
     pub fn target_path(&self) -> String {
         object_target_path(&self.sha256)
@@ -50,7 +50,7 @@ impl RemiUniverseCatalogObjectV1 {
 /// One strict canonical-map object authorized by the universe manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RemiUniverseCanonicalMapObjectV1 {
+pub struct RemiUniverseCanonicalMapObjectV2 {
     pub schema_version: u32,
     pub sha256: String,
     pub size: u64,
@@ -58,7 +58,7 @@ pub struct RemiUniverseCanonicalMapObjectV1 {
     pub entry_count: u64,
 }
 
-impl RemiUniverseCanonicalMapObjectV1 {
+impl RemiUniverseCanonicalMapObjectV2 {
     #[must_use]
     pub fn target_path(&self) -> String {
         object_target_path(&self.sha256)
@@ -84,20 +84,20 @@ impl RemiUniverseCanonicalMapObjectV1 {
 /// One ordered public profile and its exact immutable resolution object.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RemiUniverseProfileV1 {
+pub struct RemiUniverseProfileV2 {
     pub ordinal: u32,
     pub profile_revision_sha256: String,
-    pub revision: ProfileRevisionV1,
-    pub catalog: RemiUniverseCatalogObjectV1,
+    pub revision: ProfileRevisionV2,
+    pub catalog: RemiUniverseCatalogObjectV2,
 }
 
-impl RemiUniverseProfileV1 {
+impl RemiUniverseProfileV2 {
     fn validate(&self) -> Result<()> {
         self.revision.validate()?;
-        if self.revision.schema_version != PROFILE_REVISION_SCHEMA_V1 {
+        if self.revision.schema_version != PROFILE_REVISION_SCHEMA_V2 {
             return Err(Error::ConfigError(format!(
                 "universe profile revision schema {} is unsupported; expected {}",
-                self.revision.schema_version, PROFILE_REVISION_SCHEMA_V1
+                self.revision.schema_version, PROFILE_REVISION_SCHEMA_V2
             )));
         }
         if profile_by_public_id(&self.revision.profile).is_none() {
@@ -106,6 +106,7 @@ impl RemiUniverseProfileV1 {
                 self.revision.profile
             )));
         }
+        self.revision.validate_member_contract()?;
         validate_sha256(&self.profile_revision_sha256, "universe profile revision")?;
         let actual_revision = self.revision.manifest_sha256()?;
         if actual_revision != self.profile_revision_sha256 {
@@ -134,22 +135,22 @@ impl RemiUniverseProfileV1 {
 /// here must also be an exact target in the same verified targets metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RemiUniverseManifestV1 {
+pub struct RemiUniverseManifestV2 {
     pub schema_version: u32,
     pub sequence: u64,
     pub metadata_root_sha256: String,
     pub generated_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
-    pub profiles: Vec<RemiUniverseProfileV1>,
-    pub canonical_map: RemiUniverseCanonicalMapObjectV1,
+    pub profiles: Vec<RemiUniverseProfileV2>,
+    pub canonical_map: RemiUniverseCanonicalMapObjectV2,
 }
 
-impl RemiUniverseManifestV1 {
+impl RemiUniverseManifestV2 {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != REMI_UNIVERSE_SCHEMA_V1 {
+        if self.schema_version != REMI_UNIVERSE_SCHEMA_V2 {
             return Err(Error::ConfigError(format!(
                 "Remi universe schema {} is unsupported; expected {}",
-                self.schema_version, REMI_UNIVERSE_SCHEMA_V1
+                self.schema_version, REMI_UNIVERSE_SCHEMA_V2
             )));
         }
         if self.sequence == 0 {
@@ -257,7 +258,7 @@ fn validate_sha256(value: &str, label: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::repository::catalog::{
-        CatalogArtifactV1, CatalogCountsV1, ProfileSourceMemberV1, SourceStreamKindV1,
+        CatalogArtifactV1, CatalogCountsV1, ProfileSourceMemberV2, SourceStreamKindV1,
         SourceStreamV1,
     };
 
@@ -265,23 +266,36 @@ mod tests {
         byte.to_string().repeat(64)
     }
 
-    fn profile(profile: &str, byte: char, ordinal: u32) -> RemiUniverseProfileV1 {
-        let revision = ProfileRevisionV1 {
-            schema_version: PROFILE_REVISION_SCHEMA_V1,
-            profile: profile.to_string(),
-            projection_version: 1,
-            members: vec![ProfileSourceMemberV1 {
-                ordinal: 0,
+    fn profile(profile: &str, byte: char, ordinal: u32) -> RemiUniverseProfileV2 {
+        let mut declared = crate::repository::supported_profiles::profile_by_public_id(profile)
+            .unwrap()
+            .members()
+            .iter()
+            .collect::<Vec<_>>();
+        declared.sort_by_key(|member| std::cmp::Reverse(member.precedence));
+        let members = declared
+            .into_iter()
+            .enumerate()
+            .map(|(member_ordinal, member)| ProfileSourceMemberV2 {
+                ordinal: member_ordinal as u32,
                 source_identity: format!("{profile}-source"),
-                repository_identity: format!("{profile}-repository"),
+                repository_identity: member.repository_identity.clone(),
                 stream: SourceStreamV1 {
                     kind: SourceStreamKindV1::Release,
                     identity: "current".to_string(),
                 },
-                priority: 100,
+                role: member.role,
+                precedence: member.precedence,
                 required: true,
                 source_snapshot_sha256: digest(byte),
-            }],
+            })
+            .collect::<Vec<_>>();
+        let source_evidence = members.len() as u64;
+        let revision = ProfileRevisionV2 {
+            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            profile: profile.to_string(),
+            projection_version: 1,
+            members,
             catalog: CatalogArtifactV1 {
                 sha256: digest(byte),
                 size: 4096,
@@ -292,13 +306,13 @@ mod tests {
                 provides: 1,
                 requirement_groups: 0,
                 requirement_atoms: 0,
-                source_evidence: 1,
+                source_evidence,
             },
         };
-        RemiUniverseProfileV1 {
+        RemiUniverseProfileV2 {
             ordinal,
             profile_revision_sha256: revision.manifest_sha256().unwrap(),
-            catalog: RemiUniverseCatalogObjectV1 {
+            catalog: RemiUniverseCatalogObjectV2 {
                 schema_version: CATALOG_CONTENT_SCHEMA_V1,
                 sha256: revision.catalog.sha256.clone(),
                 size: revision.catalog.size,
@@ -308,16 +322,16 @@ mod tests {
         }
     }
 
-    fn manifest() -> RemiUniverseManifestV1 {
+    fn manifest() -> RemiUniverseManifestV2 {
         let generated_at = "2026-08-22T10:00:00Z".parse().unwrap();
-        RemiUniverseManifestV1 {
-            schema_version: REMI_UNIVERSE_SCHEMA_V1,
+        RemiUniverseManifestV2 {
+            schema_version: REMI_UNIVERSE_SCHEMA_V2,
             sequence: 7,
             metadata_root_sha256: digest('a'),
             generated_at,
             expires_at: generated_at + chrono::Duration::days(7),
             profiles: vec![profile("arch", 'b', 0), profile("fedora-44", 'd', 1)],
-            canonical_map: RemiUniverseCanonicalMapObjectV1 {
+            canonical_map: RemiUniverseCanonicalMapObjectV2 {
                 schema_version: CANONICAL_MAP_SCHEMA_VERSION,
                 sha256: digest('f'),
                 size: 128,
@@ -346,13 +360,13 @@ mod tests {
         );
 
         let encoded = crate::json::canonical_json(&manifest).unwrap();
-        let decoded: RemiUniverseManifestV1 = serde_json::from_slice(&encoded).unwrap();
+        let decoded: RemiUniverseManifestV2 = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, manifest);
         assert_eq!(decoded.manifest_sha256().unwrap(), digest);
 
         let mut value = serde_json::to_value(&manifest).unwrap();
         value["invented_authority"] = serde_json::json!(true);
-        assert!(serde_json::from_value::<RemiUniverseManifestV1>(value).is_err());
+        assert!(serde_json::from_value::<RemiUniverseManifestV2>(value).is_err());
     }
 
     #[test]

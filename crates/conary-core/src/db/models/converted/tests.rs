@@ -10,7 +10,6 @@ use crate::db::testing::create_test_db;
 use rusqlite::Connection;
 
 const FEDORA_REVISION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const SOLUS_REVISION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 fn seed_profile_resource(conn: &Connection, profile: &str, manifest_json: &str) -> String {
     let revision = crate::hash::sha256(manifest_json.as_bytes());
@@ -209,12 +208,12 @@ fn stale_conversion_revision_is_reconciled_without_operational_metadata() {
 }
 
 #[test]
-fn sha1_repository_checksum_is_current_and_algorithm_change_invalidates_it() {
+fn sha1_repository_checksum_is_bound_to_the_immutable_profile_revision() {
     let (_temp, conn) = create_test_db();
     let source_checksum = "sha1:1826421aded2a344b7864ffff2fae2430778b1f0";
     conn.execute(
         "INSERT INTO repositories (name, url, source_profile)
-         VALUES ('solus-source', 'https://example.test', 'solus')",
+         VALUES ('fedora-source', 'https://example.test', 'fedora-44')",
         [],
     )
     .unwrap();
@@ -222,18 +221,18 @@ fn sha1_repository_checksum_is_current_and_algorithm_change_invalidates_it() {
         "INSERT INTO repository_packages
          (repository_id, name, version, architecture, checksum, size, download_url, version_scheme)
          VALUES (1, 'fixture', '1.0-1', 'x86_64', ?1, 42,
-                 'https://example.test/fixture.eopkg', 'eopkg')",
+                 'https://example.test/fixture.rpm', 'rpm')",
         [source_checksum],
     )
     .unwrap();
     let transport = crate::ccs::transport::test_transport(&["sha256:chunk".to_string()]);
     let mut converted = ConvertedPackage::new_repository(
-        "solus".to_string(),
-        SOLUS_REVISION.to_string(),
+        "fedora-44".to_string(),
+        FEDORA_REVISION.to_string(),
         "fixture".to_string(),
         "1.0-1".to_string(),
         "x86_64".to_string(),
-        "eopkg".to_string(),
+        "rpm".to_string(),
         source_checksum.to_string(),
         &transport,
         42,
@@ -245,7 +244,7 @@ fn sha1_repository_checksum_is_current_and_algorithm_change_invalidates_it() {
 
     assert!(converted.repository_conversion_is_current().unwrap());
     assert_eq!(
-        ConvertedPackage::find_current_conversions(&conn, SOLUS_REVISION, Some("fixture"))
+        ConvertedPackage::find_current_conversions(&conn, FEDORA_REVISION, Some("fixture"))
             .unwrap()
             .len(),
         1

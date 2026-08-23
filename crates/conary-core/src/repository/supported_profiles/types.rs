@@ -1,6 +1,6 @@
 // conary-core/src/repository/supported_profiles/types.rs
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::repository::versioning::VersionScheme;
 
@@ -14,11 +14,97 @@ pub(super) struct ProfileDocument {
     pub id: String,
     pub display_name: String,
     pub release: String,
+    pub support_tier: SupportTier,
     #[serde(default)]
     pub release_date: Option<String>,
     #[serde(default)]
     pub eol: Option<String>,
+    pub members: Vec<ProfileSourceMemberContract>,
     pub identity: ProfileIdentityDocument,
+}
+
+/// Product support state for one exact source profile.
+///
+/// Only `Public` profiles may be enrolled automatically or exposed through
+/// the canonical Remi public authority. The other tiers remain explicit so
+/// implementation and test evidence cannot accidentally promote a profile.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SupportTier {
+    Public,
+    Candidate,
+    Internal,
+    Retired,
+}
+
+/// Declared function of one repository inside a complete profile universe.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileSourceRole {
+    Base,
+    Updates,
+    Security,
+    Backports,
+    Overlay,
+    Optional,
+    Debug,
+    Source,
+}
+
+/// Exact repository membership required to compose one supported profile.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileSourceMemberContract {
+    pub repository_identity: String,
+    pub role: ProfileSourceRole,
+    pub precedence: i32,
+}
+
+impl ProfileSourceRole {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Base => "base",
+            Self::Updates => "updates",
+            Self::Security => "security",
+            Self::Backports => "backports",
+            Self::Overlay => "overlay",
+            Self::Optional => "optional",
+            Self::Debug => "debug",
+            Self::Source => "source",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "base" => Ok(Self::Base),
+            "updates" => Ok(Self::Updates),
+            "security" => Ok(Self::Security),
+            "backports" => Ok(Self::Backports),
+            "overlay" => Ok(Self::Overlay),
+            "optional" => Ok(Self::Optional),
+            "debug" => Ok(Self::Debug),
+            "source" => Ok(Self::Source),
+            other => Err(format!("unknown profile source role '{other}'")),
+        }
+    }
+}
+
+impl SupportTier {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Candidate => "candidate",
+            Self::Internal => "internal",
+            Self::Retired => "retired",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_public(self) -> bool {
+        matches!(self, Self::Public)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -91,6 +177,16 @@ impl SupportedProfile {
     #[must_use]
     pub fn display_name(&self) -> &str {
         &self.document.display_name
+    }
+
+    #[must_use]
+    pub fn support_tier(&self) -> SupportTier {
+        self.document.support_tier
+    }
+
+    #[must_use]
+    pub fn members(&self) -> &[ProfileSourceMemberContract] {
+        &self.document.members
     }
 
     #[must_use]

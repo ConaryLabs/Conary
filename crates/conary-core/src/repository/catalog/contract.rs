@@ -7,10 +7,11 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
 
 pub const SOURCE_SNAPSHOT_SCHEMA_V1: u32 = 1;
-pub const PROFILE_REVISION_SCHEMA_V1: u32 = 1;
+pub const PROFILE_REVISION_SCHEMA_V2: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,23 +105,24 @@ pub struct SourceSnapshotV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProfileSourceMemberV1 {
+pub struct ProfileSourceMemberV2 {
     pub ordinal: u32,
+    pub role: ProfileSourceRole,
     pub source_identity: String,
     pub repository_identity: String,
     pub stream: SourceStreamV1,
-    pub priority: i32,
+    pub precedence: i32,
     pub required: bool,
     pub source_snapshot_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProfileRevisionV1 {
+pub struct ProfileRevisionV2 {
     pub schema_version: u32,
     pub profile: String,
     pub projection_version: u32,
-    pub members: Vec<ProfileSourceMemberV1>,
+    pub members: Vec<ProfileSourceMemberV2>,
     pub catalog: CatalogArtifactV1,
     pub logical_digest_sha256: String,
     pub counts: CatalogCountsV1,
@@ -211,12 +213,12 @@ impl SourceSnapshotV1 {
     }
 }
 
-impl ProfileRevisionV1 {
+impl ProfileRevisionV2 {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != PROFILE_REVISION_SCHEMA_V1 {
+        if self.schema_version != PROFILE_REVISION_SCHEMA_V2 {
             return Err(Error::ConfigError(format!(
                 "profile revision schema {} is unsupported; expected {}",
-                self.schema_version, PROFILE_REVISION_SCHEMA_V1
+                self.schema_version, PROFILE_REVISION_SCHEMA_V2
             )));
         }
         validate_storage_component(&self.profile, "profile revision profile")?;
@@ -263,6 +265,51 @@ impl ProfileRevisionV1 {
                 &member.source_snapshot_sha256,
                 "profile member source snapshot SHA-256",
             )?;
+        }
+        if self.counts.source_evidence != self.members.len() as u64 {
+            return Err(Error::ConfigError(format!(
+                "profile revision source-evidence count {} does not match {} members",
+                self.counts.source_evidence,
+                self.members.len()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Require the exact typed member universe declared for this known
+    /// profile. The profile catalog stores members in composition order:
+    /// descending unique precedence, then the immutable ordinal assigned by
+    /// that order.
+    pub fn validate_member_contract(&self) -> Result<()> {
+        self.validate()?;
+        let profile = crate::repository::supported_profiles::profile_by_id(&self.profile)
+            .ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "profile revision names unknown profile '{}'",
+                    self.profile
+                ))
+            })?;
+        let mut expected = profile.members().iter().collect::<Vec<_>>();
+        expected.sort_by_key(|member| std::cmp::Reverse(member.precedence));
+        if self.members.len() != expected.len() {
+            return Err(Error::ConfigError(format!(
+                "profile revision '{}' has {} members; expected {}",
+                self.profile,
+                self.members.len(),
+                expected.len()
+            )));
+        }
+        for (index, (actual, expected)) in self.members.iter().zip(expected).enumerate() {
+            if actual.repository_identity != expected.repository_identity
+                || actual.role != expected.role
+                || actual.precedence != expected.precedence
+                || !actual.required
+            {
+                return Err(Error::ConfigError(format!(
+                    "profile revision '{}' member {} disagrees with its exact support contract",
+                    self.profile, index
+                )));
+            }
         }
         Ok(())
     }
@@ -520,32 +567,47 @@ mod tests {
     #[test]
     fn profile_revision_requires_declared_member_order_and_unique_identity() {
         let snapshot_id = source_snapshot().manifest_sha256().unwrap();
-        let mut revision = ProfileRevisionV1 {
-            schema_version: PROFILE_REVISION_SCHEMA_V1,
+        let mut revision = ProfileRevisionV2 {
+            schema_version: PROFILE_REVISION_SCHEMA_V2,
             profile: "arch".to_string(),
             projection_version: 1,
             members: vec![
-                ProfileSourceMemberV1 {
+                ProfileSourceMemberV2 {
                     ordinal: 0,
+                    role: ProfileSourceRole::Base,
                     source_identity: "archlinux".to_string(),
                     repository_identity: "arch-core-x86_64".to_string(),
                     stream: SourceStreamV1 {
                         kind: SourceStreamKindV1::Rolling,
                         identity: "archlinux".to_string(),
                     },
-                    priority: 80,
+                    precedence: 80,
                     required: true,
                     source_snapshot_sha256: snapshot_id.clone(),
                 },
-                ProfileSourceMemberV1 {
+                ProfileSourceMemberV2 {
                     ordinal: 1,
+                    role: ProfileSourceRole::Base,
                     source_identity: "archlinux".to_string(),
                     repository_identity: "arch-extra-x86_64".to_string(),
                     stream: SourceStreamV1 {
                         kind: SourceStreamKindV1::Rolling,
                         identity: "archlinux".to_string(),
                     },
-                    priority: 70,
+                    precedence: 70,
+                    required: true,
+                    source_snapshot_sha256: snapshot_id.clone(),
+                },
+                ProfileSourceMemberV2 {
+                    ordinal: 2,
+                    role: ProfileSourceRole::Base,
+                    source_identity: "archlinux".to_string(),
+                    repository_identity: "arch-multilib-x86_64".to_string(),
+                    stream: SourceStreamV1 {
+                        kind: SourceStreamKindV1::Rolling,
+                        identity: "archlinux".to_string(),
+                    },
+                    precedence: 60,
                     required: true,
                     source_snapshot_sha256: snapshot_id,
                 },
@@ -554,10 +616,12 @@ mod tests {
             logical_digest_sha256: digest('2'),
             counts: CatalogCountsV1 {
                 packages: 3,
+                source_evidence: 3,
                 ..CatalogCountsV1::default()
             },
         };
         revision.validate().unwrap();
+        revision.validate_member_contract().unwrap();
         let first = revision.manifest_sha256().unwrap();
         revision.members[1].ordinal = 2;
         assert!(revision.validate().is_err());
@@ -565,7 +629,14 @@ mod tests {
         revision.members[1].repository_identity = "arch-core-x86_64".to_string();
         assert!(revision.validate().is_err());
         revision.members[1].repository_identity = "arch-extra-x86_64".to_string();
-        revision.members[1].priority = 60;
+        revision.members[1].precedence = 65;
         assert_ne!(revision.manifest_sha256().unwrap(), first);
+        assert!(revision.validate_member_contract().is_err());
+        revision.members[1].precedence = 70;
+        revision.members.swap(0, 1);
+        revision.members[0].ordinal = 0;
+        revision.members[1].ordinal = 1;
+        revision.validate().unwrap();
+        assert!(revision.validate_member_contract().is_err());
     }
 }

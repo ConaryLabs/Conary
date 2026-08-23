@@ -17,8 +17,8 @@ pub use enrollment::{
 pub(crate) use index::{ClientUniverseIndex, build_client_universe_index};
 
 pub use contract::{
-    REMI_UNIVERSE_SCHEMA_V1, RemiUniverseCanonicalMapObjectV1, RemiUniverseCatalogObjectV1,
-    RemiUniverseManifestV1, RemiUniverseProfileV1,
+    REMI_UNIVERSE_SCHEMA_V2, RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2,
+    RemiUniverseManifestV2, RemiUniverseProfileV2,
 };
 pub use metadata::{
     VerifiedRemiUniverseTargetSet, verify_remi_universe_manifest_target,

@@ -13,7 +13,9 @@ mod resource;
 mod session;
 mod validation;
 use crate::error::{Error, Result};
+use crate::repository::supported_profiles::ProfileSourceRole;
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use std::io;
 
 use validation::{
     validate_canonical_manifest, validate_identity, validate_sha256, validate_storage_component,
@@ -35,7 +37,7 @@ pub use session::RemiRuntimeSession;
 const RESOURCE_COLUMNS: &str = "resource_sha256, resource_kind, source_profile, \
     artifact_sha256, artifact_size, logical_digest_sha256, manifest_json, durable, created_at";
 const MEMBER_COLUMNS: &str = "profile_revision_sha256, ordinal, source_snapshot_sha256, \
-    source_identity, repository_identity, stream_kind, stream_identity, priority, required";
+    source_identity, repository_identity, stream_kind, stream_identity, role, precedence, required";
 const ACTIVE_COLUMNS: &str = "source_profile, profile_revision_sha256, fencing_epoch, \
     activation_run_id, owner_instance_uuid, activated_at";
 const PIN_COLUMNS: &str = "pin_id, source_profile, profile_revision_sha256, owner_kind, \
@@ -72,7 +74,7 @@ impl RemiCatalogResourceKind {
 /// One durable catalog artifact and the manifest metadata that binds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemiCatalogResource {
-    /// SHA-256 of the canonical SourceSnapshotV1 or ProfileRevisionV1 manifest.
+    /// SHA-256 of the canonical SourceSnapshotV1 or ProfileRevisionV2 manifest.
     pub resource_sha256: String,
     pub kind: RemiCatalogResourceKind,
     pub source_profile: String,
@@ -193,7 +195,8 @@ pub struct RemiProfileRevisionMember {
     pub repository_identity: String,
     pub stream_kind: String,
     pub stream_identity: String,
-    pub priority: i64,
+    pub role: ProfileSourceRole,
+    pub precedence: i64,
     pub required: bool,
 }
 
@@ -204,8 +207,8 @@ impl RemiProfileRevisionMember {
             "INSERT INTO remi_profile_revision_members (
                  profile_revision_sha256, ordinal, source_snapshot_sha256,
                  source_identity, repository_identity, stream_kind, stream_identity,
-                 priority, required
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 role, precedence, required
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 &self.profile_revision_sha256,
                 self.ordinal,
@@ -214,7 +217,8 @@ impl RemiProfileRevisionMember {
                 &self.repository_identity,
                 &self.stream_kind,
                 &self.stream_identity,
-                self.priority,
+                self.role.as_str(),
+                self.precedence,
                 self.required as i64,
             ],
         )?;
@@ -261,6 +265,13 @@ impl RemiProfileRevisionMember {
     }
 
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let role = ProfileSourceRole::parse(&row.get::<_, String>(7)?).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                7,
+                rusqlite::types::Type::Text,
+                Box::new(io::Error::new(io::ErrorKind::InvalidData, error)),
+            )
+        })?;
         Ok(Self {
             profile_revision_sha256: row.get(0)?,
             ordinal: row.get(1)?,
@@ -269,8 +280,9 @@ impl RemiProfileRevisionMember {
             repository_identity: row.get(4)?,
             stream_kind: row.get(5)?,
             stream_identity: row.get(6)?,
-            priority: row.get(7)?,
-            required: row.get::<_, i64>(8)? != 0,
+            role,
+            precedence: row.get(8)?,
+            required: row.get::<_, i64>(9)? != 0,
         })
     }
 }
@@ -535,7 +547,8 @@ mod tests {
             repository_identity: "fixture-repository".to_string(),
             stream_kind: "release".to_string(),
             stream_identity: "fixture".to_string(),
-            priority: ordinal,
+            role: ProfileSourceRole::Base,
+            precedence: ordinal,
             required: true,
         }
     }
@@ -548,6 +561,8 @@ mod tests {
             "https://fixture.test".to_string(),
         );
         repo.source_profile = Some("fedora-44".to_string());
+        repo.profile_member_role = Some(ProfileSourceRole::Base);
+        repo.profile_member_required = true;
         repo.set_parser_config(RepositoryParserConfig::Rpm {
             architecture: "x86_64".to_string(),
         })
@@ -614,9 +629,10 @@ mod tests {
         conn.execute(
             "INSERT INTO repository_sync_run_members (
                  run_id, ordinal, repository_id, source_identity,
-                 repository_identity, stream_kind, stream_identity, priority,
-                 required, candidate_source_snapshot_sha256
-             ) VALUES (?1, 0, ?2, ?3, ?4, 'release', 'fixture', 0, 1, ?5)",
+                 repository_identity, stream_kind, stream_identity, role,
+                 precedence, required, candidate_source_snapshot_sha256
+             ) VALUES (?1, 0, ?2, ?3, ?4, 'release', 'fixture',
+                       'base', 0, 1, ?5)",
             params![
                 run_id,
                 repository_id,
@@ -880,7 +896,7 @@ mod tests {
 
         let update_error = conn
             .execute(
-                "UPDATE remi_profile_revision_members SET priority = 99
+                "UPDATE remi_profile_revision_members SET precedence = 99
                  WHERE profile_revision_sha256 = ?1 AND ordinal = 0",
                 [resource_digest('a')],
             )

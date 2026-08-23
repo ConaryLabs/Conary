@@ -8,6 +8,7 @@
 //! private filesystem candidate produced.
 
 use crate::error::{Error, Result};
+use crate::repository::supported_profiles::ProfileSourceRole;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -58,7 +59,8 @@ pub struct ProfileSyncRunMember {
     pub repository_identity: String,
     pub stream_kind: String,
     pub stream_identity: String,
-    pub priority: i64,
+    pub role: ProfileSourceRole,
+    pub precedence: i64,
     pub required: bool,
     pub input_source_snapshot_sha256: Option<String>,
     pub candidate_source_snapshot_sha256: Option<String>,
@@ -363,7 +365,7 @@ pub fn record_profile_sync_run_member(
     let existing = tx
         .query_row(
             "SELECT ordinal, repository_id, source_identity, repository_identity,
-                    stream_kind, stream_identity, priority, required,
+                    stream_kind, stream_identity, role, precedence, required,
                     input_source_snapshot_sha256,
                     candidate_source_snapshot_sha256
              FROM repository_sync_run_members
@@ -420,9 +422,9 @@ pub fn record_profile_sync_run_member(
                 "INSERT INTO repository_sync_run_members (
                      run_id, ordinal, repository_id, source_identity,
                      repository_identity, stream_kind, stream_identity,
-                     priority, required, input_source_snapshot_sha256,
+                     role, precedence, required, input_source_snapshot_sha256,
                      candidate_source_snapshot_sha256
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     &run.run_id,
                     member.ordinal,
@@ -431,7 +433,8 @@ pub fn record_profile_sync_run_member(
                     &member.repository_identity,
                     &member.stream_kind,
                     &member.stream_identity,
-                    member.priority,
+                    member.role.as_str(),
+                    member.precedence,
                     member.required as i64,
                     &member.input_source_snapshot_sha256,
                     &member.candidate_source_snapshot_sha256,
@@ -636,6 +639,8 @@ fn touch_owned_run(tx: &Transaction<'_>, run: &RemiSyncRun, now: i64) -> Result<
 
 impl RemiSyncRunMember {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let role = ProfileSourceRole::parse(&row.get::<_, String>(6)?)
+            .map_err(|error| row_conversion_error(6, error))?;
         Ok(Self {
             ordinal: row.get(0)?,
             repository_id: row.get(1)?,
@@ -643,14 +648,27 @@ impl RemiSyncRunMember {
             repository_identity: row.get(3)?,
             stream_kind: row.get(4)?,
             stream_identity: row.get(5)?,
-            priority: row.get(6)?,
-            required: row.get::<_, i64>(7)? != 0,
-            input_source_snapshot_sha256: row.get(8)?,
-            candidate_source_snapshot_sha256: row.get(9)?,
+            role,
+            precedence: row.get(7)?,
+            required: row.get::<_, i64>(8)? != 0,
+            input_source_snapshot_sha256: row.get(9)?,
+            candidate_source_snapshot_sha256: row.get(10)?,
         })
     }
 
-    fn immutable_part(&self) -> (&i64, &i64, &str, &str, &str, &str, &i64, bool) {
+    fn immutable_part(
+        &self,
+    ) -> (
+        &i64,
+        &i64,
+        &str,
+        &str,
+        &str,
+        &str,
+        ProfileSourceRole,
+        &i64,
+        bool,
+    ) {
         (
             &self.ordinal,
             &self.repository_id,
@@ -658,10 +676,19 @@ impl RemiSyncRunMember {
             &self.repository_identity,
             &self.stream_kind,
             &self.stream_identity,
-            &self.priority,
+            self.role,
+            &self.precedence,
             self.required,
         )
     }
+}
+
+fn row_conversion_error(index: usize, error: String) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        index,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+    )
 }
 
 fn fenced_error(run: &RemiSyncRun, reason: &str) -> Error {
@@ -713,7 +740,8 @@ mod tests {
             repository_identity: format!("repository-{ordinal}"),
             stream_kind: "release".to_string(),
             stream_identity: "fixture".to_string(),
-            priority: ordinal,
+            role: ProfileSourceRole::Base,
+            precedence: ordinal,
             required: true,
             input_source_snapshot_sha256: None,
             candidate_source_snapshot_sha256: digest.map(str::to_string),

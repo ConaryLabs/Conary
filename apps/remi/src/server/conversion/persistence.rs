@@ -483,13 +483,12 @@ mod tests {
         String,
     ) {
         let (database, conn) = create_test_db();
-        let exact_profile =
-            conary_core::repository::supported_profiles::profile_by_public_id(profile)
-                .or_else(|| {
-                    conary_core::repository::supported_profiles::profile_for_remi_route(profile)
-                })
-                .unwrap()
-                .id();
+        let exact_profile = conary_core::repository::supported_profiles::profile_by_id(profile)
+            .or_else(|| {
+                conary_core::repository::supported_profiles::profile_for_remi_route(profile)
+            })
+            .unwrap()
+            .id();
         let mut package = RepositoryPackage::new(
             1,
             "systemd-udev".to_string(),
@@ -718,33 +717,35 @@ mod tests {
         assert_eq!(result.name, "systemd-udev");
     }
 
-    #[tokio::test]
-    async fn cache_hit_preserves_eopkg_sha1_source_authority() {
+    #[test]
+    fn candidate_eopkg_conversion_cannot_enter_the_public_serving_cache() {
         let source_checksum = "sha1:1826421aded2a344b7864ffff2fae2430778b1f0";
-        let (_database, _storage, service, package, persisted_checksum, profile_revision) =
-            cache_fixture_for_source(
-                true,
-                "solus-polaris",
-                "solus",
-                "eopkg",
-                VersionScheme::Eopkg,
-                source_checksum,
-            );
+        let (_database, conn) = create_test_db();
+        let storage = tempfile::tempdir().unwrap();
+        let ccs_path = storage.path().join("candidate-solus.ccs");
+        std::fs::write(&ccs_path, b"candidate").unwrap();
+        let transport = crate::server::conversion::test_support::test_transport(&[]);
+        let mut converted = ConvertedPackage::new_repository(
+            "solus".to_string(),
+            PROFILE_REVISION.to_string(),
+            "systemd-udev".to_string(),
+            "259.5-1.fc44".to_string(),
+            "x86_64".to_string(),
+            "eopkg".to_string(),
+            source_checksum.to_string(),
+            &transport,
+            8,
+            "sha256:content".to_string(),
+            ccs_path.to_string_lossy().to_string(),
+            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
+        );
 
-        let result = service
-            .cached_conversion_result_async(
-                "solus",
-                &package,
-                &persisted_checksum,
-                &profile_revision,
-            )
-            .await
-            .unwrap()
-            .expect("exact SHA-1 conversion cache hit");
-
-        assert_eq!(persisted_checksum, source_checksum);
-        assert_eq!(result.source_profile.as_deref(), Some("solus"));
-        assert_eq!(result.cache_state, "hot");
+        let error = converted
+            .insert_with_conversion_pin(&conn, 1)
+            .expect_err("candidate profile must not enter public serving state");
+        let message = error.to_string();
+        assert!(message.contains("unsupported source profile 'solus'"));
+        assert!(message.contains(source_checksum));
     }
 
     #[tokio::test]

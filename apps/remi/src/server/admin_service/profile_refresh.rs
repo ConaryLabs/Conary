@@ -10,7 +10,7 @@ use conary_core::db::models::{
     RemiActiveProfileRevision, RemiProfileRevisionActivation, RemiProfileRevisionMember,
     Repository, activate_profile_revision,
 };
-use conary_core::repository::catalog::{ProfileSourceMemberV1, SourceStreamKindV1};
+use conary_core::repository::catalog::{ProfileSourceMemberV2, SourceStreamKindV1};
 use conary_core::repository::{
     PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncFailureCategory, ProfileSyncFailureStage,
     ProfileSyncRun, ProfileSyncRunMember, RepositoryFormat, abort_profile_sync_run,
@@ -39,6 +39,7 @@ struct RefreshRoots {
 
 pub(super) fn is_native_profile_repository(repository: &Repository) -> bool {
     repository.source_profile.is_some()
+        && repository.profile_member_role.is_some()
         && matches!(
             repository.package_format,
             RepositoryFormat::Arch
@@ -368,7 +369,7 @@ async fn active_catalog_matches_plan(
 }
 
 pub(super) fn profile_members_match_plan(
-    members: &[ProfileSourceMemberV1],
+    members: &[ProfileSourceMemberV2],
     plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
 ) -> bool {
     members.len() == plans.len()
@@ -389,7 +390,8 @@ pub(super) fn profile_members_match_plan(
                 && member.repository_identity == repository_identity
                 && stream_kind == policy.stream.kind()
                 && member.stream.identity == policy.stream.identity()
-                && member.priority == plan.priority
+                && member.role == plan.role
+                && member.precedence == plan.precedence
                 && member.required == plan.required
         })
 }
@@ -409,7 +411,8 @@ async fn begin_run(
         .map(|plan| {
             (
                 plan.ordinal,
-                plan.priority,
+                plan.role,
+                plan.precedence,
                 plan.required,
                 plan.repository.clone(),
             )
@@ -433,7 +436,7 @@ async fn begin_run(
                     .collect::<BTreeMap<_, _>>();
                 let members = repositories
                     .iter()
-                    .map(|(ordinal, priority, required, repository)| {
+                    .map(|(ordinal, role, precedence, required, repository)| {
                         let policy = repository.require_source_policy()?;
                         let repository_identity =
                             repository.repository_identity.clone().ok_or_else(|| {
@@ -454,7 +457,8 @@ async fn begin_run(
                             repository_identity: repository_identity.clone(),
                             stream_kind: policy.stream.kind().to_string(),
                             stream_identity: policy.stream.identity().to_string(),
-                            priority: i64::from(*priority),
+                            role: *role,
+                            precedence: i64::from(*precedence),
                             required: *required,
                             input_source_snapshot_sha256: input_by_repository
                                 .get(&repository_identity)
@@ -508,7 +512,8 @@ async fn record_publication_intent(
                 )?,
                 stream_kind: policy.stream.kind().to_string(),
                 stream_identity: policy.stream.identity().to_string(),
-                priority: i64::from(plan.priority),
+                role: plan.role,
+                precedence: i64::from(plan.precedence),
                 required: plan.required,
                 input_source_snapshot_sha256: None,
                 candidate_source_snapshot_sha256: None,

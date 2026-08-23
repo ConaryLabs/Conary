@@ -144,21 +144,23 @@ fn profile_composition_uses_explicit_member_order_and_binds_exact_content() {
     let second_reader = CatalogReader::open_verified(&second_path, &second_binding).unwrap();
 
     let compose = |reverse: bool| {
-        let first = ProfileCatalogMemberInputV1 {
+        let first = ProfileCatalogMemberInputV2 {
             ordinal: 0,
-            priority: 10,
+            role: ProfileSourceRole::Base,
+            precedence: 10,
             required: true,
             manifest: &first_manifest,
             reader: &first_reader,
         };
-        let second = ProfileCatalogMemberInputV1 {
+        let second = ProfileCatalogMemberInputV2 {
             ordinal: 1,
-            priority: 20,
+            role: ProfileSourceRole::Updates,
+            precedence: 20,
             required: true,
             manifest: &second_manifest,
             reader: &second_reader,
         };
-        ProfileCatalogCandidateV1::compose(
+        ProfileCatalogCandidateV2::compose(
             "fedora-44",
             1,
             if reverse {
@@ -192,6 +194,117 @@ fn profile_composition_uses_explicit_member_order_and_binds_exact_content() {
         profile_binding.logical_digest_sha256
     );
     CatalogReader::open_verified(&profile_path, &profile_binding).unwrap();
+}
+
+#[test]
+fn profile_streaming_composition_deduplicates_identical_package_origins() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_path = directory.path().join("base.sqlite");
+    let updates_path = directory.path().join("updates.sqlite");
+    let base = source_content("fedora-base", "shared", 'a');
+    let mut updates = source_content("fedora-updates", "shared", 'b');
+    updates.packages[0].download_url = "https://updates.example.test/shared.rpm".to_string();
+    let base_binding = write_catalog_candidate(&base_path, &base).unwrap();
+    let updates_binding = write_catalog_candidate(&updates_path, &updates).unwrap();
+    let base_manifest = source_manifest("fedora-base", 'a', &base_binding);
+    let updates_manifest = source_manifest("fedora-updates", 'b', &updates_binding);
+    let base_reader = CatalogReader::open_verified(&base_path, &base_binding).unwrap();
+    let updates_reader = CatalogReader::open_verified(&updates_path, &updates_binding).unwrap();
+
+    let profile_path = directory.path().join("profile.sqlite");
+    let profile = write_profile_catalog_candidate(
+        &profile_path,
+        "fedora-44",
+        2,
+        vec![
+            ProfileCatalogMemberInputV2 {
+                ordinal: 0,
+                role: ProfileSourceRole::Updates,
+                precedence: 100,
+                required: true,
+                manifest: &updates_manifest,
+                reader: &updates_reader,
+            },
+            ProfileCatalogMemberInputV2 {
+                ordinal: 1,
+                role: ProfileSourceRole::Base,
+                precedence: 90,
+                required: true,
+                manifest: &base_manifest,
+                reader: &base_reader,
+            },
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(profile.counts.packages, 1);
+    let binding = CatalogBindingV1 {
+        scope: CatalogScopeV1::Profile {
+            profile: profile.profile.clone(),
+        },
+        artifact: profile.catalog.clone(),
+        logical_digest_sha256: profile.logical_digest_sha256.clone(),
+        counts: profile.counts,
+    };
+    let reader = CatalogReader::open_verified(&profile_path, &binding).unwrap();
+    let packages = reader.packages().unwrap();
+    assert_eq!(packages.len(), 1);
+    assert_eq!(
+        packages[0].origin,
+        CatalogPackageOriginV1::Profile {
+            member_ordinal: 0,
+            source_identity: "fedora-project".to_string(),
+            repository_identity: "fedora-updates".to_string(),
+            source_snapshot_sha256: updates_manifest.manifest_sha256().unwrap(),
+        }
+    );
+    assert_eq!(
+        packages[0].download_url,
+        "https://updates.example.test/shared.rpm"
+    );
+}
+
+#[test]
+fn profile_streaming_composition_rejects_contradictory_duplicate_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let base_path = directory.path().join("base.sqlite");
+    let updates_path = directory.path().join("updates.sqlite");
+    let base = source_content("fedora-base", "shared", 'a');
+    let mut updates = source_content("fedora-updates", "shared", 'b');
+    updates.packages[0].checksum = digest('d');
+    let base_binding = write_catalog_candidate(&base_path, &base).unwrap();
+    let updates_binding = write_catalog_candidate(&updates_path, &updates).unwrap();
+    let base_manifest = source_manifest("fedora-base", 'a', &base_binding);
+    let updates_manifest = source_manifest("fedora-updates", 'b', &updates_binding);
+    let base_reader = CatalogReader::open_verified(&base_path, &base_binding).unwrap();
+    let updates_reader = CatalogReader::open_verified(&updates_path, &updates_binding).unwrap();
+
+    let error = write_profile_catalog_candidate(
+        directory.path().join("profile.sqlite"),
+        "fedora-44",
+        2,
+        vec![
+            ProfileCatalogMemberInputV2 {
+                ordinal: 0,
+                role: ProfileSourceRole::Updates,
+                precedence: 100,
+                required: true,
+                manifest: &updates_manifest,
+                reader: &updates_reader,
+            },
+            ProfileCatalogMemberInputV2 {
+                ordinal: 1,
+                role: ProfileSourceRole::Base,
+                precedence: 90,
+                required: true,
+                manifest: &base_manifest,
+                reader: &base_reader,
+            },
+        ],
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(error.to_string().contains("disagrees between repositories"));
 }
 
 #[test]
@@ -285,16 +398,18 @@ fn bounded_source_and_profile_catalog_peak_rss() {
         "fedora-44",
         1,
         vec![
-            ProfileCatalogMemberInputV1 {
+            ProfileCatalogMemberInputV2 {
                 ordinal: 0,
-                priority: 10,
+                role: ProfileSourceRole::Base,
+                precedence: 10,
                 required: true,
                 manifest: &first_manifest,
                 reader: &first_reader,
             },
-            ProfileCatalogMemberInputV1 {
+            ProfileCatalogMemberInputV2 {
                 ordinal: 1,
-                priority: 20,
+                role: ProfileSourceRole::Updates,
+                precedence: 20,
                 required: true,
                 manifest: &second_manifest,
                 reader: &second_reader,

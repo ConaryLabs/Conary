@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use conary_core::db::models::{RemiCatalogResource, RemiCatalogResourceKind, RemiRuntimeSession};
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CatalogContentV1, CatalogScopeV1, CatalogSourceEvidenceV1,
-    ProfileRevisionV1, ProfileSourceMemberV1, SourceStreamKindV1, SourceStreamV1,
-    publish_profile_catalog_bundle, write_catalog_candidate, write_profile_catalog_manifest,
+    PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1,
+    SourceStreamV1, publish_profile_catalog_bundle, write_catalog_candidate,
+    write_profile_catalog_manifest,
 };
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
@@ -100,19 +101,20 @@ fn add_revision(fixture: &Fixture, marker: char, fencing_epoch: i64) -> Revision
     .expect("build profile catalog content");
     let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
         .expect("write profile catalog artifact");
-    let manifest = ProfileRevisionV1 {
-        schema_version: 1,
+    let manifest = ProfileRevisionV2 {
+        schema_version: PROFILE_REVISION_SCHEMA_V2,
         profile: PROFILE.to_string(),
         projection_version: 1,
-        members: vec![ProfileSourceMemberV1 {
+        members: vec![ProfileSourceMemberV2 {
             ordinal: 0,
+            role: conary_core::repository::supported_profiles::ProfileSourceRole::Base,
             source_identity: format!("source-{marker}"),
             repository_identity: format!("repository-{marker}"),
             stream: SourceStreamV1 {
                 kind: SourceStreamKindV1::Release,
                 identity: "stable".to_string(),
             },
-            priority: 0,
+            precedence: 0,
             required: true,
             source_snapshot_sha256,
         }],

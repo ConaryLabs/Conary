@@ -380,11 +380,7 @@ impl CatalogPackageRecordV1 {
                 source_identity: &'a str,
                 repository_identity: &'a str,
             },
-            Profile {
-                member_ordinal: u32,
-                source_identity: &'a str,
-                repository_identity: &'a str,
-            },
+            Profile,
         }
         #[derive(Serialize)]
         struct PackageKeyInput<'a> {
@@ -404,16 +400,7 @@ impl CatalogPackageRecordV1 {
                 source_identity,
                 repository_identity,
             },
-            CatalogPackageOriginV1::Profile {
-                member_ordinal,
-                source_identity,
-                repository_identity,
-                source_snapshot_sha256: _,
-            } => PackageKeyOrigin::Profile {
-                member_ordinal: *member_ordinal,
-                source_identity,
-                repository_identity,
-            },
+            CatalogPackageOriginV1::Profile { .. } => PackageKeyOrigin::Profile,
         };
         canonical_sha256(&PackageKeyInput {
             origin,
@@ -424,6 +411,32 @@ impl CatalogPackageRecordV1 {
             architecture: &self.architecture,
             version_scheme: self.version_scheme,
         })
+    }
+
+    /// Compare source-independent package truth inside one composed profile.
+    ///
+    /// Origin, package key, and download URL are projections of the selected
+    /// member. Every package semantic and the authenticated payload identity
+    /// must otherwise agree exactly before multiple origins may collapse.
+    pub(in crate::repository) fn same_profile_record(&self, other: &Self) -> bool {
+        self.source_profile == other.source_profile
+            && self.name == other.name
+            && self.version == other.version
+            && self.package_release == other.package_release
+            && self.architecture == other.architecture
+            && self.debian_multi_arch == other.debian_multi_arch
+            && self.description == other.description
+            && self.checksum == other.checksum
+            && self.size == other.size
+            && self.metadata == other.metadata
+            && self.is_security_update == other.is_security_update
+            && self.severity == other.severity
+            && self.cve_ids == other.cve_ids
+            && self.advisory_id == other.advisory_id
+            && self.advisory_url == other.advisory_url
+            && self.version_scheme == other.version_scheme
+            && self.provides == other.provides
+            && self.requirement_groups == other.requirement_groups
     }
 }
 

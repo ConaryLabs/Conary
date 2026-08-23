@@ -9,7 +9,70 @@ fn catalog_contains_exact_public_profiles() {
         .iter()
         .map(|profile| profile.id())
         .collect();
-    assert_eq!(ids, vec!["fedora-44", "ubuntu-26.04", "arch", "solus"]);
+    assert_eq!(ids, vec!["fedora-44", "ubuntu-26.04", "arch"]);
+}
+
+#[test]
+fn catalog_assigns_exact_typed_support_tiers() {
+    let tiers = profiles()
+        .iter()
+        .map(|profile| (profile.id(), profile.support_tier()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tiers,
+        vec![
+            ("fedora-44", SupportTier::Public),
+            ("ubuntu-26.04", SupportTier::Public),
+            ("arch", SupportTier::Public),
+            ("solus", SupportTier::Candidate),
+        ]
+    );
+    assert_eq!(
+        profile_by_id("solus").map(SupportedProfile::id),
+        Some("solus")
+    );
+    assert!(profile_by_public_id("solus").is_none());
+}
+
+#[test]
+fn catalog_declares_complete_exact_repository_membership() {
+    let fedora = profile_by_public_id("fedora-44").unwrap();
+    assert_eq!(fedora.members().len(), 2);
+    assert_eq!(fedora.members()[0].role, ProfileSourceRole::Base);
+    assert_eq!(fedora.members()[1].role, ProfileSourceRole::Updates);
+
+    let ubuntu = profile_by_public_id("ubuntu-26.04").unwrap();
+    assert_eq!(ubuntu.members().len(), 16);
+    for (role, expected) in [
+        (ProfileSourceRole::Base, 4),
+        (ProfileSourceRole::Updates, 4),
+        (ProfileSourceRole::Security, 4),
+        (ProfileSourceRole::Backports, 4),
+    ] {
+        assert_eq!(
+            ubuntu
+                .members()
+                .iter()
+                .filter(|member| member.role == role)
+                .count(),
+            expected
+        );
+    }
+    for component in ["main", "restricted", "universe", "multiverse"] {
+        for pocket in ["", "updates-", "security-", "backports-"] {
+            let identity = format!("ubuntu-resolute-{pocket}{component}-amd64");
+            assert!(
+                ubuntu
+                    .members()
+                    .iter()
+                    .any(|member| member.repository_identity == identity),
+                "missing {identity}"
+            );
+        }
+    }
+
+    assert_eq!(profile_by_public_id("arch").unwrap().members().len(), 3);
+    assert_eq!(profile_by_id("solus").unwrap().members().len(), 1);
 }
 
 #[test]
@@ -48,10 +111,8 @@ fn route_lookup_returns_route_metadata_and_matching_profile_ids() {
     let arch = route_by_slug("arch").expect("arch route");
     assert_eq!(arch.public_profile_ids(), &["arch"]);
 
-    let solus = route_by_slug("solus").expect("solus route");
-    assert_eq!(solus.public_profile_ids(), &["solus"]);
-
     assert!(route_by_slug("debian").is_none());
+    assert!(route_by_slug("solus").is_none());
     assert_eq!(
         profile_for_remi_route("fedora").map(SupportedProfile::id),
         Some("fedora-44")
@@ -72,7 +133,7 @@ fn remi_target_lookup_requires_exact_public_ids() {
 
 #[test]
 fn solus_profile_uses_eopkg_format_and_version_scheme() {
-    let profile = profile_by_public_id("solus").expect("Solus profile");
+    let profile = profile_by_id("solus").expect("known Solus profile");
     assert_eq!(profile.package_format(), ProfilePackageFormat::Eopkg);
     assert_eq!(profile.version_scheme(), VersionScheme::Eopkg);
 }

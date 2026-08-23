@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-16
-revision: 38
-summary: Map fixture ownership, including attributable daily-driver same-name provides, configuration upgrade, payload topology, and cross-source lifecycle proof
+last_updated: 2026-08-23
+revision: 39
+summary: Map fixture ownership, including typed public and candidate profiles, attributable daily-driver same-name provides, configuration upgrade, payload topology, and cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -289,10 +289,10 @@ Each fixture family should record:
   `crates/conary-core/src/repository/supported_profiles/`; CLI smoke:
   `apps/conary/tests/packaging_m4d.rs`; Remi route proof:
   `apps/remi/src/server/handlers/`.
-- **Purpose:** Prove the four currently configured upstream feed IDs
-  (`fedora-44`, `ubuntu-26.04`, `arch`, and `solus`), route/feed
-  agreement for `fedora`, `ubuntu`, `arch`, and `solus`, and exact
-  parser/version-scheme selection.
+- **Purpose:** Prove the three public upstream feed IDs (`fedora-44`,
+  `ubuntu-26.04`, and `arch`), the non-public `solus` candidate tier,
+  public route/feed agreement for `fedora`, `ubuntu`, and `arch`, and exact
+  parser/version-scheme selection without accidental candidate promotion.
 - **Fast proof:** `cargo test -p conary-core supported_profiles`;
   `cargo test -p conary --test packaging_m4d`;
   `cargo test -p remi route`.
@@ -459,7 +459,8 @@ Each fixture family should record:
   repository declaration bytes, and signing roots before real pacman or Zypper
   package adoption and exact repository takeover. `fedora44` is the existing
   `conary-test` runner distro key; public CCS target IDs remain
-  `fedora-44`, `ubuntu-26.04`, `arch`, and `solus`.
+  `fedora-44`, `ubuntu-26.04`, and `arch`; `solus` remains a separate candidate
+  and conformance-fixture identity.
   Published artifacts use
   `cargo run -p conary-test -- images build --distro <distro> --native-package <path>`
   before the same focused suite. Only

@@ -2,8 +2,13 @@
 id = "fedora-44"
 display_name = "Fedora 44"
 release = "44"
+support_tier = "public"
 release_date = "2026-04-28"
 eol = "2027-06-02"
+members = [
+  { repository_identity = "fedora-44-everything-x86_64", role = "base", precedence = 100 },
+  { repository_identity = "fedora-44-updates-x86_64", role = "updates", precedence = 110 },
+]
 
 [profiles.identity]
 family_slug = "fedora"
@@ -16,8 +21,27 @@ version_scheme = "rpm"
 id = "ubuntu-26.04"
 display_name = "Ubuntu 26.04 LTS"
 release = "26.04"
+support_tier = "public"
 release_date = "2026-04-23"
 eol = "2031-05-31"
+members = [
+  { repository_identity = "ubuntu-resolute-main-amd64", role = "base", precedence = 100 },
+  { repository_identity = "ubuntu-resolute-restricted-amd64", role = "base", precedence = 99 },
+  { repository_identity = "ubuntu-resolute-universe-amd64", role = "base", precedence = 98 },
+  { repository_identity = "ubuntu-resolute-multiverse-amd64", role = "base", precedence = 97 },
+  { repository_identity = "ubuntu-resolute-updates-main-amd64", role = "updates", precedence = 110 },
+  { repository_identity = "ubuntu-resolute-updates-restricted-amd64", role = "updates", precedence = 109 },
+  { repository_identity = "ubuntu-resolute-updates-universe-amd64", role = "updates", precedence = 108 },
+  { repository_identity = "ubuntu-resolute-updates-multiverse-amd64", role = "updates", precedence = 107 },
+  { repository_identity = "ubuntu-resolute-security-main-amd64", role = "security", precedence = 120 },
+  { repository_identity = "ubuntu-resolute-security-restricted-amd64", role = "security", precedence = 119 },
+  { repository_identity = "ubuntu-resolute-security-universe-amd64", role = "security", precedence = 118 },
+  { repository_identity = "ubuntu-resolute-security-multiverse-amd64", role = "security", precedence = 117 },
+  { repository_identity = "ubuntu-resolute-backports-main-amd64", role = "backports", precedence = 10 },
+  { repository_identity = "ubuntu-resolute-backports-restricted-amd64", role = "backports", precedence = 9 },
+  { repository_identity = "ubuntu-resolute-backports-universe-amd64", role = "backports", precedence = 8 },
+  { repository_identity = "ubuntu-resolute-backports-multiverse-amd64", role = "backports", precedence = 7 },
+]
 
 [profiles.identity]
 family_slug = "ubuntu"
@@ -30,6 +54,12 @@ version_scheme = "debian"
 id = "arch"
 display_name = "Arch Linux (rolling)"
 release = "rolling"
+support_tier = "public"
+members = [
+  { repository_identity = "arch-core-x86_64", role = "base", precedence = 80 },
+  { repository_identity = "arch-extra-x86_64", role = "base", precedence = 70 },
+  { repository_identity = "arch-multilib-x86_64", role = "base", precedence = 60 },
+]
 
 [profiles.identity]
 family_slug = "arch"
@@ -43,6 +73,10 @@ scriptlet_shell = "/usr/bin/bash"
 id = "solus"
 display_name = "Solus (rolling)"
 release = "rolling"
+support_tier = "candidate"
+members = [
+  { repository_identity = "solus-polaris-x86_64", role = "base", precedence = 50 },
+]
 
 [profiles.identity]
 family_slug = "solus"

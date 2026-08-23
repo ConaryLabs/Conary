@@ -18,7 +18,7 @@ use crate::trust::client::{
 use crate::trust::{RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata};
 
 use super::{
-    ClientUniverseIndex, RemiUniverseManifestV1, build_client_universe_index,
+    ClientUniverseIndex, RemiUniverseManifestV2, build_client_universe_index,
     normalize_remi_endpoint, verify_remi_universe_manifest_target,
 };
 
@@ -50,7 +50,7 @@ struct ClientSyncState {
 }
 
 struct VerifiedCandidate {
-    manifest: RemiUniverseManifestV1,
+    manifest: RemiUniverseManifestV2,
     manifest_sha256: String,
     manifest_json: String,
     tuf: TufUpdateSnapshot,
@@ -273,7 +273,7 @@ async fn fetch_manifest(
     client: &RepositoryClient,
     endpoint: &str,
     tuf: &TufUpdateSnapshot,
-) -> Result<(RemiUniverseManifestV1, String, String)> {
+) -> Result<(RemiUniverseManifestV2, String, String)> {
     let manifest_paths = tuf
         .signed_targets
         .signed
@@ -327,7 +327,7 @@ async fn fetch_manifest(
 
 fn reject_rollback_or_fork(
     state: &ClientSyncState,
-    manifest: &RemiUniverseManifestV1,
+    manifest: &RemiUniverseManifestV2,
     manifest_sha256: &str,
 ) -> Result<()> {
     if let Some(active_sequence) = state.active_sequence {
@@ -387,7 +387,7 @@ async fn fetch_objects(
     client: &RepositoryClient,
     endpoint: &str,
     fencing_epoch: i64,
-    manifest: &RemiUniverseManifestV1,
+    manifest: &RemiUniverseManifestV2,
     tuf: &TufUpdateSnapshot,
     objects_root: &Path,
 ) -> Result<(BTreeMap<String, DownloadedObject>, usize, usize)> {
@@ -495,7 +495,7 @@ fn verify_file_identity(path: &Path, expected_sha256: &str, expected_size: u64) 
 fn persist_unchanged_metadata(
     conn: &Connection,
     state: &ClientSyncState,
-    manifest: &RemiUniverseManifestV1,
+    manifest: &RemiUniverseManifestV2,
     tuf: &TufUpdateSnapshot,
 ) -> Result<()> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
@@ -759,7 +759,7 @@ fn delete_retired_mutable_remi_authority(conn: &Connection, endpoint: &str) -> R
 fn collect_unreachable_files(
     conn: &Connection,
     roots: &StorageRoots,
-    active: &RemiUniverseManifestV1,
+    active: &RemiUniverseManifestV2,
 ) -> Result<()> {
     let reachable = active
         .profiles

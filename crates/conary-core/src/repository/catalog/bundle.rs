@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::contract::validate_storage_component;
 use super::{
-    CatalogBindingV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, ProfileRevisionV1,
+    CatalogBindingV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, ProfileRevisionV2,
     SourceSnapshotV1,
 };
 use crate::error::{Error, Result};
@@ -46,7 +46,7 @@ pub fn write_source_catalog_manifest(
 
 pub fn write_profile_catalog_manifest(
     candidate_directory: impl AsRef<Path>,
-    manifest: &ProfileRevisionV1,
+    manifest: &ProfileRevisionV2,
 ) -> Result<()> {
     manifest.validate()?;
     verify_profile_catalog_binding(candidate_directory.as_ref(), manifest)?;
@@ -65,7 +65,7 @@ pub fn verify_source_catalog_bundle(
 
 pub fn verify_profile_catalog_bundle(
     directory: impl AsRef<Path>,
-    expected: &ProfileRevisionV1,
+    expected: &ProfileRevisionV2,
 ) -> Result<CatalogReader> {
     expected.validate()?;
     verify_exact_directory(directory.as_ref())?;
@@ -103,7 +103,7 @@ pub fn publish_source_catalog_bundle_with_provenance(
 pub fn publish_profile_catalog_bundle(
     candidate_directory: impl AsRef<Path>,
     catalog_root: impl AsRef<Path>,
-    manifest: &ProfileRevisionV1,
+    manifest: &ProfileRevisionV2,
 ) -> Result<PathBuf> {
     publish_profile_catalog_bundle_with_provenance(candidate_directory, catalog_root, manifest)
         .map(PublishedCatalogBundle::into_path)
@@ -114,7 +114,7 @@ pub fn publish_profile_catalog_bundle(
 pub fn publish_profile_catalog_bundle_with_provenance(
     candidate_directory: impl AsRef<Path>,
     catalog_root: impl AsRef<Path>,
-    manifest: &ProfileRevisionV1,
+    manifest: &ProfileRevisionV2,
 ) -> Result<PublishedCatalogBundle> {
     let candidate_directory = candidate_directory.as_ref();
     verify_profile_catalog_bundle(candidate_directory, manifest)?;
@@ -165,7 +165,7 @@ fn verify_source_catalog_binding(
 
 fn verify_profile_catalog_binding(
     directory: &Path,
-    manifest: &ProfileRevisionV1,
+    manifest: &ProfileRevisionV2,
 ) -> Result<CatalogReader> {
     let binding = CatalogBindingV1 {
         scope: CatalogScopeV1::Profile {
