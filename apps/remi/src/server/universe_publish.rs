@@ -12,9 +12,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use chrono::{Duration, Utc};
 use conary_core::canonical::{CanonicalMapSnapshot, validate_canonical_map_snapshot};
-use conary_core::repository::catalog::{
-    CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV2, verify_profile_catalog_bundle,
-};
+use conary_core::repository::catalog::{CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV2};
 use conary_core::repository::universe::{
     REMI_UNIVERSE_SCHEMA_V2, RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2,
     RemiUniverseManifestV2, RemiUniverseProfileV2, verify_remi_universe_manifest_target,
@@ -36,6 +34,7 @@ use super::handlers::canonical::load_canonical_map_snapshot;
 use super::signing_authority::{
     UniverseSigningRole, load_universe_role_key, load_universe_root_metadata,
 };
+use super::universe_validation::validate_canonical_candidate;
 
 pub(crate) const UNIVERSE_MANIFEST_FILE: &str = "manifest.json";
 pub(crate) const UNIVERSE_CANONICAL_MAP_FILE: &str = "canonical-map.json";
@@ -171,6 +170,8 @@ fn publish_current_universe_with_authority(
         }
     }
 
+    validate_canonical_candidate(catalog_dir, &inputs.canonical_map, inputs.profiles.iter())
+        .context("validate canonical contracts against the candidate universe")?;
     let root = load_universe_root_metadata(keys_root)?;
     let candidate = build_candidate(
         inputs.base_sequence,
@@ -654,17 +655,18 @@ fn verify_published_bundle(
     {
         bail!("published universe canonical-map facts disagree with its manifest");
     }
-    for profile in &expected.profiles {
-        let bundle = catalog_dir
-            .join("profiles")
-            .join(&profile.revision.profile)
-            .join(&profile.profile_revision_sha256);
-        let reader = verify_profile_catalog_bundle(bundle, &profile.revision)?;
+    let verified_profiles = validate_canonical_candidate(
+        catalog_dir,
+        &canonical,
+        expected.profiles.iter().map(|profile| &profile.revision),
+    )
+    .context("revalidate canonical contracts in the published universe")?;
+    for profile in verified_profiles {
         if let Some(authority) = catalog_authority {
             authority.remember_verified_profile_reader(
-                &profile.revision.profile,
+                &profile.profile,
                 &profile.profile_revision_sha256,
-                reader,
+                profile.reader,
             );
         }
     }
@@ -860,6 +862,11 @@ fn read_plain_file(path: &Path) -> Result<Vec<u8>> {
 mod tests {
     use std::os::unix::fs::DirBuilderExt;
 
+    use conary_core::db::models::{
+        CanonicalMappingAuthority, CanonicalPackage, MetadataTable, PackageImplementation,
+        set_metadata,
+    };
+
     use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
     use crate::server::signing_authority::ensure_universe_authority;
 
@@ -915,6 +922,37 @@ mod tests {
                 &self.database_writer,
                 Some(self.catalogs.authority()),
             )
+        }
+
+        fn set_canonical_mapping(&self, canonical: &str, profile: &str, package: &str) {
+            let conn = self.catalogs.connection();
+            conn.execute("DELETE FROM package_implementations", [])
+                .expect("clear canonical implementations");
+            conn.execute("DELETE FROM canonical_packages", [])
+                .expect("clear canonical packages");
+            let mut canonical_package =
+                CanonicalPackage::new(canonical.to_string(), "package".to_string());
+            let canonical_id = canonical_package
+                .insert(&conn)
+                .expect("insert canonical package");
+            let mut implementation = PackageImplementation::new(
+                canonical_id,
+                profile.to_string(),
+                package.to_string(),
+                CanonicalMappingAuthority::Contract,
+            );
+            implementation
+                .insert(&conn)
+                .expect("insert canonical implementation");
+            set_metadata(&conn, MetadataTable::Server, "canonical_map_revision", "1")
+                .expect("set canonical revision");
+            set_metadata(
+                &conn,
+                MetadataTable::Server,
+                "last_canonical_rebuild",
+                "2026-08-23T00:00:00Z",
+            )
+            .expect("set canonical generation time");
         }
     }
 
@@ -1137,6 +1175,67 @@ mod tests {
                 row.get::<_, i64>(0)
             })
             .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn missing_canonical_package_preserves_the_active_universe() {
+        let fixture = PublicationFixture::new();
+        fixture.catalogs.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.3",
+                "1.fc44",
+                Some("x86_64"),
+                100,
+                "fedora-bash",
+            )],
+        );
+        let first = fixture.publish().expect("publish initial universe");
+        let UniversePublicationOutcome::Activated {
+            manifest_sha256,
+            sequence: 1,
+        } = first
+        else {
+            panic!("initial publication did not activate sequence 1");
+        };
+        fixture.set_canonical_mapping("shell", "fedora-44", "missing-shell");
+
+        let error = fixture
+            .publish()
+            .expect_err("missing canonical package must block replacement");
+        assert!(
+            format!("{error:#}").contains(
+                "canonical candidate implementation 'shell' names exact package 'missing-shell' absent from profile 'fedora-44'"
+            ),
+            "{error:#}"
+        );
+        let conn = fixture.catalogs.connection();
+        assert_eq!(
+            conn.query_row(
+                "SELECT manifest_sha256, sequence FROM remi_active_universe_revision
+                 WHERE singleton = 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap(),
+            (manifest_sha256, 1)
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM remi_universe_revisions", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            fs::read_dir(fixture.catalogs.catalog_dir().join("universes"))
+                .expect("read durable universe bundles")
+                .count(),
             1
         );
     }

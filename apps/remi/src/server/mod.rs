@@ -61,6 +61,7 @@ pub mod security;
 pub(crate) mod signing_authority;
 pub mod test_db;
 mod universe_publish;
+mod universe_validation;
 
 pub(crate) use analytics::AnalyticsRecorder;
 pub use bloom::{BloomStats, ChunkBloomFilter};

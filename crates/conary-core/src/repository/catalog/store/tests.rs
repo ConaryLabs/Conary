@@ -118,6 +118,9 @@ fn catalog_artifact_is_independent_of_input_order() {
     assert_eq!(reader.packages().unwrap(), left_content.packages);
     assert_eq!(reader.source_evidence().unwrap(), evidence());
     assert_eq!(reader.find_packages_by_name("bash").unwrap().len(), 1);
+    assert!(reader.contains_package_name("bash").unwrap());
+    assert!(!reader.contains_package_name("Bash").unwrap());
+    assert!(!reader.contains_package_name("missing").unwrap());
 }
 
 #[test]
