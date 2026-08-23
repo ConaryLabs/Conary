@@ -59,7 +59,13 @@ pub async fn sync_repo(
     force: bool,
 ) -> Result<Option<RepoRefreshResult>, ServiceError> {
     let _publication_guard = publication::guard(state).await;
-    let result = sync_repo_uncoordinated(state, name, force).await;
+    let result = match sync_repo_uncoordinated(state, name, force).await {
+        Ok(result) => crate::server::universe_publish::publish_current_universe_from_state(state)
+            .await
+            .map(|_| result)
+            .map_err(|error| ServiceError::Internal(format!("{error:#}"))),
+        Err(error) => Err(error),
+    };
     publication::record_single_repository_outcome(state, &result).await;
     result
 }
@@ -167,7 +173,13 @@ pub async fn refresh_repositories(
     force: bool,
 ) -> Result<RepoRefreshBatch, ServiceError> {
     let _publication_guard = publication::guard(state).await;
-    let result = refresh_repositories_uncoordinated(state, force).await;
+    let result = match refresh_repositories_uncoordinated(state, force).await {
+        Ok(result) => crate::server::universe_publish::publish_current_universe_from_state(state)
+            .await
+            .map(|_| result)
+            .map_err(|error| ServiceError::Internal(format!("{error:#}"))),
+        Err(error) => Err(error),
+    };
     let outcome = match result.as_ref().map(RepoRefreshBatch::state) {
         Ok(RepoRefreshBatchState::Complete) => {
             crate::server::readiness::PublicationPhaseState::Complete

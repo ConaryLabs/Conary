@@ -275,8 +275,8 @@ fn active_profile_is_populated(
     catalog_authority: &CatalogAuthority,
     profile: &str,
 ) -> anyhow::Result<bool> {
-    let catalog = catalog_authority.open_active_profile(profile)?;
-    Ok(catalog.reader().binding().counts.packages > 0)
+    let inspection = catalog_authority.inspect_active_profile(profile)?;
+    Ok(inspection.manifest.counts.packages > 0)
 }
 
 /// Check one exact public profile without deriving authority from its route.
@@ -621,6 +621,26 @@ mod tests {
         assert!(report.ready, "expected ready, got {report:?}");
         assert_eq!(report.database, ProbeOutcome::Ready);
         assert_eq!(report.expected_schema_revision, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn readiness_does_not_claim_database_write_authority() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inputs = inputs_for(dir.path());
+        initialize_database(&inputs.db_path);
+        configure_profile(&inputs.db_path, "fedora-44");
+        activate_profile_catalog(&inputs, "fedora-44", true);
+        let database_writer = inputs.catalog_authority.database_writer_for_test();
+        let writer_guard = database_writer.hold_for_test();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let probe = std::thread::spawn(move || {
+            sender.send(evaluate(&inputs)).expect("send report");
+        });
+        let prompt_report = receiver.recv_timeout(std::time::Duration::from_secs(1));
+        drop(writer_guard);
+        probe.join().expect("join readiness probe");
+        let report = prompt_report.expect("readiness must not wait for the process SQLite writer");
+        assert!(report.ready, "expected ready, got {report:?}");
     }
 
     #[test]

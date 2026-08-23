@@ -6,9 +6,11 @@
 //! the package catalog itself is always read from the content-addressed bundle
 //! below `ServerConfig::catalog_dir`.
 
+use std::collections::BTreeMap;
 use std::fmt;
-use std::ops::Deref;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::{
@@ -16,9 +18,11 @@ use conary_core::db::models::{
     RemiProfileRevisionPin, RemiRevisionPinKind, RemiRuntimeSession,
 };
 use conary_core::repository::catalog::{
-    CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogReader, ProfileRevisionV1,
-    SourceSnapshotV1, verify_profile_catalog_bundle, verify_source_catalog_bundle,
+    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CatalogPackageOriginV1, CatalogPackageRecordV1,
+    CatalogReader, ProfileRevisionV1, SourceSnapshotV1, verify_profile_catalog_bundle,
+    verify_source_catalog_bundle,
 };
+use parking_lot::{Mutex, MutexGuard};
 use rusqlite::Connection;
 use rusqlite::{Transaction, TransactionBehavior};
 
@@ -34,6 +38,23 @@ pub struct CatalogAuthority {
     db_path: PathBuf,
     catalog_dir: PathBuf,
     database_writer: DatabaseWriter,
+    verified_readers: Arc<Mutex<BTreeMap<String, CachedProfileReader>>>,
+}
+
+struct CachedProfileReader {
+    profile_revision_sha256: String,
+    reader: Arc<Mutex<CatalogReader>>,
+}
+
+/// Bounded, read-only facts about one active immutable profile catalog.
+///
+/// This is deliberately not a serving reader. Health and deployment probes
+/// use it to establish active identity and population without replaying a
+/// multi-gigabyte catalog or claiming SQLite write authority.
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveProfileInspection {
+    pub(crate) pointer: RemiActiveProfileRevision,
+    pub(crate) manifest: ProfileRevisionV1,
 }
 
 impl CatalogAuthority {
@@ -49,7 +70,40 @@ impl CatalogAuthority {
             db_path: db_path.into(),
             catalog_dir: catalog_dir.into(),
             database_writer,
+            verified_readers: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+
+    /// Build an authority for a process-external read-only inspection.
+    pub(crate) fn for_inspection(
+        db_path: impl Into<PathBuf>,
+        catalog_dir: impl Into<PathBuf>,
+    ) -> Self {
+        Self::from_paths(db_path, catalog_dir, DatabaseWriter::default())
+    }
+
+    /// Inspect the active pointer, strict manifest, and bounded filesystem
+    /// identity without opening or hashing the catalog contents.
+    pub(crate) fn inspect_active_profile(
+        &self,
+        source_profile: &str,
+    ) -> Result<ActiveProfileInspection> {
+        let flags =
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(&self.db_path, flags).with_context(|| {
+            format!("open Remi operational database to inspect profile '{source_profile}'")
+        })?;
+        let resolved = resolve_active_profile(&conn, &self.catalog_dir, source_profile)?;
+        inspect_resolved_profile_files(&resolved)?;
+        Ok(ActiveProfileInspection {
+            pointer: resolved.pointer,
+            manifest: resolved.manifest,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn database_writer_for_test(&self) -> DatabaseWriter {
+        self.database_writer.clone()
     }
 
     /// Open the exact profile revision named by the current operational pointer.
@@ -109,7 +163,7 @@ impl CatalogAuthority {
         pin_id: String,
         resolved: ResolvedProfileCatalog,
     ) -> Result<PinnedProfileCatalog> {
-        match open_resolved_profile(resolved) {
+        match self.open_cached_resolution(resolved) {
             Ok(mut pinned) => {
                 pinned.pin = Some(ReaderPin {
                     db_path: self.db_path.clone(),
@@ -123,6 +177,72 @@ impl CatalogAuthority {
                 Err(error)
             }
         }
+    }
+
+    fn open_cached_resolution(
+        &self,
+        resolved: ResolvedProfileCatalog,
+    ) -> Result<PinnedProfileCatalog> {
+        let profile = resolved.pointer.source_profile.clone();
+        let revision = resolved.pointer.profile_revision_sha256.clone();
+        let mut cache = self.verified_readers.lock();
+        let reader = match cache.get(&profile) {
+            Some(cached) if cached.profile_revision_sha256 == revision => {
+                Arc::clone(&cached.reader)
+            }
+            _ => {
+                let reader = Arc::new(Mutex::new(
+                    verify_profile_catalog_bundle(&resolved.bundle_path, &resolved.manifest)
+                        .with_context(|| {
+                            format!(
+                                "verify active profile catalog bundle {}",
+                                resolved.bundle_path.display()
+                            )
+                        })?,
+                ));
+                cache.insert(
+                    profile,
+                    CachedProfileReader {
+                        profile_revision_sha256: revision,
+                        reader: Arc::clone(&reader),
+                    },
+                );
+                reader
+            }
+        };
+        Ok(PinnedProfileCatalog {
+            pointer: resolved.pointer,
+            manifest: resolved.manifest,
+            reader: Some(reader),
+            pin: None,
+        })
+    }
+
+    pub(crate) fn remember_verified_profile_reader(
+        &self,
+        source_profile: &str,
+        profile_revision_sha256: &str,
+        reader: CatalogReader,
+    ) {
+        self.verified_readers.lock().insert(
+            source_profile.to_string(),
+            CachedProfileReader {
+                profile_revision_sha256: profile_revision_sha256.to_string(),
+                reader: Arc::new(Mutex::new(reader)),
+            },
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_verified_profile_reader_for_test(
+        &self,
+        source_profile: &str,
+        profile_revision_sha256: &str,
+    ) -> bool {
+        self.verified_readers
+            .lock()
+            .get(source_profile)
+            .is_some_and(|cached| cached.profile_revision_sha256 == profile_revision_sha256)
     }
 
     /// Alias kept intentionally small for callers that treat the authority as
@@ -140,7 +260,7 @@ impl CatalogAuthority {
 pub struct PinnedProfileCatalog {
     pointer: RemiActiveProfileRevision,
     manifest: ProfileRevisionV1,
-    reader: Option<CatalogReader>,
+    reader: Option<Arc<Mutex<CatalogReader>>>,
     pin: Option<ReaderPin>,
 }
 
@@ -158,7 +278,10 @@ impl fmt::Debug for PinnedProfileCatalog {
             .field("manifest", &self.manifest)
             .field(
                 "catalog_path",
-                &self.reader.as_ref().map(CatalogReader::path),
+                &self
+                    .reader
+                    .as_ref()
+                    .map(|reader| reader.lock().path().to_path_buf()),
             )
             .field("reader_pin", &self.pin.as_ref().map(|pin| &pin.pin_id))
             .finish()
@@ -175,9 +298,17 @@ impl PinnedProfileCatalog {
         Self {
             pointer,
             manifest,
-            reader: Some(reader),
+            reader: Some(Arc::new(Mutex::new(reader))),
             pin: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_verified_reader_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(
+            self.reader.as_ref().expect("reader"),
+            other.reader.as_ref().expect("reader"),
+        )
     }
 
     /// The exact source profile selected by the activation pointer.
@@ -217,17 +348,17 @@ impl PinnedProfileCatalog {
     }
 
     /// The verified immutable catalog reader.
-    #[must_use]
-    pub fn reader(&self) -> &CatalogReader {
+    pub fn reader(&self) -> MutexGuard<'_, CatalogReader> {
         self.reader
             .as_ref()
             .expect("profile catalog reader is present before drop")
+            .lock()
     }
 
     /// The canonicalized path of the verified catalog SQLite file.
     #[must_use]
-    pub fn catalog_path(&self) -> &Path {
-        self.reader().path()
+    pub fn catalog_path(&self) -> PathBuf {
+        self.reader().path().to_path_buf()
     }
 }
 
@@ -402,14 +533,6 @@ impl CatalogAuthority {
         }
 
         Ok(manifest)
-    }
-}
-
-impl Deref for PinnedProfileCatalog {
-    type Target = CatalogReader;
-
-    fn deref(&self) -> &Self::Target {
-        self.reader()
     }
 }
 
@@ -624,6 +747,7 @@ fn insert_reader_pin(
     Ok(())
 }
 
+#[cfg(test)]
 fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfileCatalog> {
     let ResolvedProfileCatalog {
         pointer,
@@ -640,9 +764,75 @@ fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfi
     Ok(PinnedProfileCatalog {
         pointer,
         manifest,
-        reader: Some(reader),
+        reader: Some(Arc::new(Mutex::new(reader))),
         pin: None,
     })
+}
+
+fn inspect_resolved_profile_files(resolved: &ResolvedProfileCatalog) -> Result<()> {
+    let directory_metadata = fs::symlink_metadata(&resolved.bundle_path).with_context(|| {
+        format!(
+            "inspect active profile catalog directory {}",
+            resolved.bundle_path.display()
+        )
+    })?;
+    if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+        bail!(
+            "active profile catalog {} must be a real directory",
+            resolved.bundle_path.display()
+        );
+    }
+
+    let mut names = fs::read_dir(&resolved.bundle_path)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    names.sort();
+    let mut expected_names = [CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME]
+        .map(std::ffi::OsString::from)
+        .to_vec();
+    expected_names.sort();
+    if names != expected_names {
+        bail!(
+            "active profile catalog {} contains an unexpected file set",
+            resolved.bundle_path.display()
+        );
+    }
+
+    let manifest_path = resolved.bundle_path.join(CATALOG_MANIFEST_FILE_NAME);
+    let manifest_metadata = fs::symlink_metadata(&manifest_path)?;
+    if manifest_metadata.file_type().is_symlink() || !manifest_metadata.is_file() {
+        bail!(
+            "active profile manifest {} must be a regular file",
+            manifest_path.display()
+        );
+    }
+    let expected_manifest = conary_core::json::canonical_json(&resolved.manifest)
+        .map_err(anyhow::Error::msg)
+        .context("canonicalize active profile manifest")?;
+    if fs::read(&manifest_path)? != expected_manifest {
+        bail!(
+            "active profile manifest {} disagrees with operational pointer authority",
+            manifest_path.display()
+        );
+    }
+
+    let catalog_path = resolved.bundle_path.join(CATALOG_FILE_NAME);
+    let catalog_metadata = fs::symlink_metadata(&catalog_path)?;
+    if catalog_metadata.file_type().is_symlink() || !catalog_metadata.is_file() {
+        bail!(
+            "active profile catalog {} must be a regular file",
+            catalog_path.display()
+        );
+    }
+    if catalog_metadata.len() != resolved.manifest.catalog.size {
+        bail!(
+            "active profile catalog {} has {} bytes; expected {}",
+            catalog_path.display(),
+            catalog_metadata.len(),
+            resolved.manifest.catalog.size
+        );
+    }
+    Ok(())
 }
 
 fn unix_seconds() -> Result<i64> {

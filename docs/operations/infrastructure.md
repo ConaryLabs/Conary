@@ -127,10 +127,12 @@ workflow.
   deletion paths.
 - After health succeeds, the deployment job polls
   `conary-remi-deploy inspect-remi --require-repopulated`. Success requires all
-  configured sources to contain metadata, a complete signing role set for
-  every exact source profile, and at least one validated converted artifact for
-  every configured public profile; dispatch or a green health probe alone is
-  not deployment proof.
+  configured public profiles to have populated active immutable catalogs, a
+  complete signing role set, a fresh signed universe naming the exact same
+  profile revisions, and at least one validated converted artifact pinned to
+  every current revision. Mutable `repository_packages` rows are not
+  repopulation evidence; dispatch or a green health probe alone is not
+  deployment proof.
 - Production R2 inventory and backfill use the manually dispatched
   `remi-r2-durability` workflow after its exact `commit_sha` is merged into
   `main` and deployed. The protected job enters through the normal Remi SSH

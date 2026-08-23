@@ -376,7 +376,7 @@ fn run_deployment_command(command: DeploymentCommand) -> Result<()> {
             let state = remi::deployment::inspect_state(&args.config)?;
             println!("{}", serde_json::to_string_pretty(&state)?);
             if args.require_repopulated && !state.repopulation_complete() {
-                anyhow::bail!("Remi source and conversion state is not repopulated");
+                anyhow::bail!("Remi immutable profile universe and conversions are not populated");
             }
         }
     }
