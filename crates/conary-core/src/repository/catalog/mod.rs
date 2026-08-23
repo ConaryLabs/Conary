@@ -25,6 +25,10 @@ pub use contract::{
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
     SourceStreamKindV1, SourceStreamV1,
 };
+#[cfg(feature = "native-alpm-oracle")]
+pub use parity::{
+    ALPM_PARITY_PROJECTION_SCHEMA_V1, AlpmParityMemberInput, produce_alpm_parity_oracle,
+};
 pub use parity::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_PARITY_MANIFEST_FILE_NAME,
     NATIVE_PARITY_ORACLE_SCHEMA_V1, NATIVE_PARITY_PACKAGE_FILE_NAME, NativeParityArtifactV1,

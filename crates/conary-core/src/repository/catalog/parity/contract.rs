@@ -243,6 +243,24 @@ impl NativeParityPackageV1 {
         )
     }
 
+    #[cfg(feature = "native-alpm-oracle")]
+    pub(super) fn canonicalize_for_profile(&mut self, profile: &str) -> Result<()> {
+        let mut record = self.as_catalog_record();
+        record.canonicalize_for_scope(&CatalogScopeV1::Profile {
+            profile: profile.to_string(),
+        })?;
+        self.package_key_sha256 = record.package_key_sha256;
+        self.provides = record.provides;
+        self.requirement_groups = record.requirement_groups;
+        Ok(())
+    }
+
+    #[cfg(feature = "native-alpm-oracle")]
+    pub(super) fn has_same_profile_facts(&self, other: &Self) -> bool {
+        self.as_catalog_record()
+            .same_profile_record(&other.as_catalog_record())
+    }
+
     pub(super) fn validate_authority(
         &self,
         profile: &str,

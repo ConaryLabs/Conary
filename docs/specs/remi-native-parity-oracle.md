@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define the strict content-addressed artifact that independently proves native package facts across one complete immutable profile candidate
 last_updated: 2026-08-23
-revision: 1
+revision: 2
 status: active
 ---
 
@@ -44,6 +44,41 @@ by the manifest. Conary catalog projection may serialize and verify the strict
 contract, but it cannot serve as the evidence producer for release parity. A
 catalog logical digest proves deterministic Conary output, not independent
 native agreement.
+
+The first producer boundary is ALPM. It is built only with the explicit
+`native-alpm-oracle` feature, reads exact profile-member database artifacts
+through pinned upstream Rust bindings to libalpm, and records the linked
+libalpm runtime version. Ordinary Conary and Remi builds do not acquire a
+libalpm dependency. The helper may share the strict oracle serializer and
+typed fact vocabulary; it may not read Conary catalogs, Conary Arch parser
+output, or operational repository SQLite as native evidence.
+
+The producer takes one `SourceSnapshotV1` and one local database file for each
+profile member in exact ordinal order. The source-snapshot manifest digest must
+match the member binding. Separately, the database bytes must match the exact
+`ArchDatabase` authenticated-object digest and size inside that snapshot; the
+two digests describe different objects and are never substituted for one
+another. The snapshot's content URL, or metadata URL when no content URL is
+declared, owns package download authority.
+
+Build and invoke the host-linked helper explicitly:
+
+```bash
+cargo run -p conary-core --features native-alpm-oracle \
+  --bin conary-alpm-oracle -- \
+  --profile-manifest profile.json \
+  --source-snapshot core-source.json --database core.db \
+  --source-snapshot extra-source.json --database extra.db \
+  --source-snapshot multilib-source.json --database multilib.db \
+  --output alpm-oracle
+```
+
+The helper registers the verified databases with libalpm in profile precedence
+order. Every package returned by libalpm is projected or participates in exact
+conflict-checked deduplication; there is no skip input. A private bounded spool
+orders selected rows by package key without retaining the complete profile in
+Rust memory. Success means the two-file bundle has been durably written and
+independently reopened through the strict shared verifier.
 
 ## Separate Slice 6 owners
 

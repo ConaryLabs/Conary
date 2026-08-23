@@ -103,6 +103,7 @@ rpm = { git = "https://github.com/ConaryLabs/rpm-rs", rev = "1d34711495afe021993
 rpm-version = "0.5.0"
 debversion = "0.5.4"
 alpm-types = "0.11.2"
+alpm = { version = "=5.0.2", default-features = false, features = ["checkver", "pkg-config"] }
 semver = "1.0.28"
 
 # CLI

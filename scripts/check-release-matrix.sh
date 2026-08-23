@@ -32,6 +32,7 @@ ccs_build_script="packaging/ccs/build.sh"
 fedora_release_image='registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb'
 ubuntu_release_image='docker.io/library/ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb'
 arch_release_image='docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433'
+arch_archive_pattern='https://archive\.archlinux\.org/repos/2026/08/02/\$repo/os/\$arch'
 rustup_init_url='https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init'
 rustup_init_sha256='20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c'
 
@@ -289,6 +290,9 @@ namespace_before_tests_pattern='uses: \./\.github/actions/setup-exact-ownership-
 require_job_match "$pr_workflow" workspace-tests "$namespace_before_tests_pattern" 'PR workspace tests exact ownership setup order'
 require_job_match "$merge_workflow" workspace-tests "$namespace_before_tests_pattern" 'merge workspace tests exact ownership setup order'
 require_job_match "$release_build" workspace-validation "$namespace_before_tests_pattern" 'release workspace validation exact ownership setup order'
+alpm_parity_pattern="${arch_release_image}[\s\S]*${arch_archive_pattern}[\s\S]*rustup default 1\.98\.0[\s\S]*cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose[\s\S]*cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle -- -D warnings"
+require_job_match "$pr_workflow" alpm-parity-producer "$alpm_parity_pattern" 'hosted PR ALPM parity producer proof'
+require_job_match "$merge_workflow" alpm-parity-producer "$alpm_parity_pattern" 'hosted merge ALPM parity producer proof'
 require_match "$release_build" 'build-ccs:[\s\S]*needs: \[prepare, workspace-validation\]' 'ccs build should need workspace validation'
 require_match "$release_build" 'build-remi:[\s\S]*needs: \[prepare, workspace-validation\]' 'remi build should need workspace validation'
 require_job_match "$release_build" bundle-suite 'needs:[\s\S]*bundle-conary[\s\S]*build-remi[\s\S]*build-conaryd[\s\S]*build-conary-test' 'suite publication must wait for every product bundle'

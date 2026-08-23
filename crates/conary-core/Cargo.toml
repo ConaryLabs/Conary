@@ -11,6 +11,7 @@ license.workspace = true
 [features]
 default = ["composefs-rs"]
 composefs-rs = ["dep:composefs"]
+native-alpm-oracle = ["dep:alpm", "dep:clap"]
 
 [dependencies]
 # Database
@@ -36,6 +37,7 @@ rpm.workspace = true
 rpm-version.workspace = true
 debversion.workspace = true
 alpm-types.workspace = true
+alpm = { workspace = true, optional = true }
 semver.workspace = true
 bzip2 = "0.6"
 num-traits = "0.2"
@@ -138,6 +140,7 @@ goblin = "0.10.4"
 
 # External command discovery
 which = "8.0.0"
+clap = { workspace = true, optional = true }
 
 # Platform directories
 dirs = "6.0.0"
@@ -158,6 +161,11 @@ composefs = { version = "0.7", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+
+[[bin]]
+name = "conary-alpm-oracle"
+path = "src/bin/conary-alpm-oracle.rs"
+required-features = ["native-alpm-oracle"]
 
 [[bench]]
 name = "erofs_build"

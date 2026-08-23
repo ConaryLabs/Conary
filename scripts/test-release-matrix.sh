@@ -1150,6 +1150,21 @@ test_check_release_matrix_rejects_unproven_namespace_action() {
     assert_check_release_matrix_fails "$repo" "exact ownership namespace proof"
 }
 
+test_check_release_matrix_requires_hosted_alpm_parity_producer() {
+    local repo
+    local workflow
+
+    for workflow in pr-gate.yml merge-validation.yml; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/.github/workflows/$workflow" \
+            '        run: cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose' \
+            '        run: echo "ALPM producer proof removed"'
+
+        assert_check_release_matrix_fails "$repo" "hosted"
+    done
+}
+
 test_check_release_matrix_rejects_namespace_setup_after_workspace_tests() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1444,6 +1459,7 @@ main() {
         test_check_release_matrix_rejects_missing_post_deploy_remi_readiness
         test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane
         test_check_release_matrix_rejects_unproven_namespace_action
+        test_check_release_matrix_requires_hosted_alpm_parity_producer
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
