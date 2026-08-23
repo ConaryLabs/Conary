@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-23
-revision: 46
+revision: 47
 summary: Document Remi immutable source and profile catalogs, signed endpoint-wide universe publication and client activation, exact revision pinning, source identity and update policy, signing, repository trust, publication coordination, readiness, and serving authority
 ---
 
@@ -8,9 +8,10 @@ summary: Document Remi immutable source and profile catalogs, signed endpoint-wi
 
 Remi is Conary's on-demand conversion and package-serving service. For the
 limited public preview, its configured public repository feeds are Fedora 44,
-Ubuntu 26.04, and Arch. It converts upstream RPM, DEB, and Arch packages into
-CCS artifacts, stores converted content in the local content-addressed store,
-and publishes every chunk to R2 when that durable authority is configured.
+Ubuntu 26.04, Arch, and Solus. It converts upstream RPM, DEB, Arch, and EOPKG
+packages into CCS artifacts, stores converted content in the local
+content-addressed store, and publishes every chunk to R2 when that durable
+authority is configured.
 
 M4d routes every `{distro}` path parameter through repository-feed profile
 validation before DB queries, cache/key filesystem paths, or release-upload
@@ -262,13 +263,15 @@ than serving authority near expiry.
 
 Clients enroll the universe metadata root independently of CCS package keys.
 Self-hosted `repo add` requires `--remi-metadata-root` from an independently
-authenticated channel. The canonical endpoint currently requires that option
-too, until its first durable authority ceremony supplies the public root for
-release tracking and automatic system enrollment. Sync first verifies the TUF
-chain, freshness, root digest, target set, and rollback/fork rules. It streams
-only missing digest-addressed catalog or canonical objects to private immutable
-files. A manifest-identical sync updates verified freshness state without
-replacing a catalog.
+authenticated channel. The canonical `https://remi.conary.io` ceremony root is
+embedded in the release authority catalog, selected only by that exact origin,
+and enrolled automatically by `conary system init` or canonical `repo add`.
+Supplying `--remi-metadata-root` for that origin is an override attempt and
+fails before mutation. Sync first verifies the TUF chain, freshness, root
+digest, target set, and rollback/fork rules. It streams only missing
+digest-addressed catalog or canonical objects to private immutable files. A
+manifest-identical sync updates verified freshness state without replacing a
+catalog.
 
 Candidate construction verifies every signed catalog's immutable SQLite
 artifact, physical schema, integrity, manifest binding, and relational counts.

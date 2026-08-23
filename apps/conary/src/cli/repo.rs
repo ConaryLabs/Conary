@@ -225,7 +225,10 @@ pub struct RepoAddArgs {
     #[arg(long, value_name = "URL")]
     pub remi_endpoint: Option<String>,
 
-    /// Independently obtained signed TUF root for this Remi universe
+    /// Independently obtained signed TUF root for a self-hosted Remi universe
+    ///
+    /// Canonical remi.conary.io root authority ships with Conary and cannot be
+    /// overridden.
     #[arg(
         long = "remi-metadata-root",
         value_name = "ROOT_JSON",

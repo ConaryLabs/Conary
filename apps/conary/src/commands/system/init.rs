@@ -173,6 +173,26 @@ fn reconcile_remi_seeds(
     messages: &mut Vec<(bool, String)>,
 ) -> conary_core::Result<()> {
     let endpoint = conary_core::repository::remi_authority::canonical_remi_endpoint();
+    let universe_root =
+        conary_core::repository::remi_authority::canonical_remi_universe_root(endpoint)
+            .ok_or_else(|| {
+                conary_core::Error::InitError(
+                    "canonical Remi authority is missing its signed universe root".to_string(),
+                )
+            })?;
+    if matches!(
+        conary_core::repository::universe::enroll_remi_universe_root(
+            conn,
+            endpoint,
+            universe_root,
+        )?,
+        conary_core::repository::universe::RemiUniverseEnrollmentOutcome::Enrolled
+    ) {
+        messages.push((
+            false,
+            "  Enrolled: canonical Remi signed universe authority".to_string(),
+        ));
+    }
     for (index, feed) in conary_core::repository::supported_profiles::public_profiles()
         .iter()
         .enumerate()

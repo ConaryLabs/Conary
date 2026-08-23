@@ -62,16 +62,22 @@ pub async fn cmd_repo_add(mut opts: RepoAddOptions) -> Result<()> {
             .as_deref()
             .context("--remi-endpoint is required when --default-strategy=remi")?;
         let endpoint = conary_core::repository::universe::normalize_remi_endpoint(endpoint)?;
+        let canonical_root =
+            conary_core::repository::remi_authority::canonical_remi_universe_root(&endpoint);
         opts.remi_endpoint = Some(endpoint);
-        let path = opts.remi_metadata_root.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "--remi-metadata-root is required until this Conary release carries the canonical Remi signed root"
-            )
-        })?;
-        Some(
-            std::fs::read(path)
-                .with_context(|| format!("read Remi metadata root {}", path.display()))?,
-        )
+        match (canonical_root, opts.remi_metadata_root.as_ref()) {
+            (Some(root), None) => Some(root.to_vec()),
+            (Some(_), Some(_)) => anyhow::bail!(
+                "--remi-metadata-root cannot override release-tracked canonical Remi universe authority"
+            ),
+            (None, Some(path)) => Some(
+                std::fs::read(path)
+                    .with_context(|| format!("read Remi metadata root {}", path.display()))?,
+            ),
+            (None, None) => {
+                anyhow::bail!("--remi-metadata-root is required for a self-hosted Remi endpoint")
+            }
+        }
     } else {
         None
     };

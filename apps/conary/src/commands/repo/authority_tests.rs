@@ -58,7 +58,11 @@ fn remi_repo_options(
         replace: false,
         default_strategy: Some("remi".to_string()),
         remi_endpoint: Some(endpoint.to_string()),
-        remi_metadata_root: Some(universe_root(db_path)),
+        remi_metadata_root: conary_core::repository::remi_authority::canonical_remi_universe_root(
+            endpoint,
+        )
+        .is_none()
+        .then(|| universe_root(db_path)),
         ccs_package_keys,
         source_profile: Some(profile.to_string()),
         source_id: None,
@@ -116,6 +120,90 @@ async fn repo_add_seeds_exact_canonical_remi_package_authority() {
     assert_eq!(
         RepositoryPackageKey::trusted_keys_for_repository(&conn, repo.id.unwrap()).unwrap(),
         vec![expected]
+    );
+    let trust = conn
+        .query_row(
+            "SELECT trusted_root_sha256, root_version
+             FROM remi_client_universe_trust WHERE endpoint = 'https://remi.conary.io'",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        trust,
+        (
+            "558c112acc4fa71aa537f4027d9430399035a953af7f8acd18c8d198d4454c2c".to_string(),
+            1,
+        )
+    );
+}
+
+#[tokio::test]
+async fn repo_add_rejects_canonical_universe_root_override_without_mutation() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let mut options = remi_repo_options(
+        "canonical-root-override",
+        &db_path,
+        "https://remi.conary.io",
+        "fedora-44",
+        Vec::new(),
+    );
+    options.remi_metadata_root = Some(universe_root(&db_path));
+
+    let error = cmd_repo_add(options).await.unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot override release-tracked canonical Remi universe authority"),
+        "{error:#}"
+    );
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert!(
+        Repository::find_by_name(&conn, "canonical-root-override")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM remi_client_universe_trust",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn repo_add_requires_independent_universe_root_for_self_hosted_remi_without_mutation() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("conary.db");
+    conary_core::db::init(&db_path).unwrap();
+    let mut options = remi_repo_options(
+        "self-hosted-no-root",
+        &db_path,
+        "https://remi.example.invalid",
+        "fedora-44",
+        Vec::new(),
+    );
+    options.remi_metadata_root = None;
+
+    let error = cmd_repo_add(options).await.unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("required for a self-hosted Remi endpoint"),
+        "{error:#}"
+    );
+    let conn = conary_core::db::open(&db_path).unwrap();
+    assert!(
+        Repository::find_by_name(&conn, "self-hosted-no-root")
+            .unwrap()
+            .is_none()
     );
 }
 

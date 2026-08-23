@@ -1,11 +1,12 @@
 # crates/conary-core/src/repository/remi_authority/catalog.toml
 #
-# Public CCS package-authority pins for Conary's canonical Remi service.
+# Public package and universe authority pins for Conary's canonical Remi service.
 # Private signing keys remain only on the Remi host. Rotation must update this
 # catalog and republish current artifacts before a new key becomes active.
 
-schema_version = 1
+schema_version = 2
 endpoint = "https://remi.conary.io"
+universe_root_sha256 = "558c112acc4fa71aa537f4027d9430399035a953af7f8acd18c8d198d4454c2c"
 
 [[profiles]]
 profile = "fedora-44"
