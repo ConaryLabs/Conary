@@ -50,6 +50,10 @@ pub use parity::{
     verify_native_resolution_oracle_bundle, write_native_parity_oracle_manifest,
     write_native_resolution_oracle_manifest,
 };
+#[cfg(feature = "native-rpm-oracle")]
+pub use parity::{
+    RPM_PARITY_PROJECTION_SCHEMA_V1, RpmParityMemberInput, produce_rpm_parity_oracle,
+};
 pub use profile::{
     ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, write_profile_catalog_candidate,
 };

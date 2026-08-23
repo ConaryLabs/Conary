@@ -187,6 +187,31 @@ pub(super) fn rpm_require_to_group(
     crate::packages::rpm::decode_rpm_requirement(name, &evr, dependency_flags)
 }
 
+/// Build one exact RPM weak relation from primary metadata.
+pub(super) fn rpm_weak_require_to_group(
+    kind: crate::repository::dependency_model::RepositoryRequirementKind,
+    name: &str,
+    flags: Option<&str>,
+    epoch: Option<&str>,
+    version: Option<&str>,
+    release: Option<&str>,
+) -> Result<RepositoryRequirementGroup> {
+    if !matches!(
+        kind,
+        crate::repository::dependency_model::RepositoryRequirementKind::Recommends
+            | crate::repository::dependency_model::RepositoryRequirementKind::Suggests
+            | crate::repository::dependency_model::RepositoryRequirementKind::Supplements
+            | crate::repository::dependency_model::RepositoryRequirementKind::Enhances
+    ) {
+        return Err(Error::InternalError(format!(
+            "{kind:?} is not an RPM weak relation"
+        )));
+    }
+    let native_text = rpm_relation_native_text(name, flags, epoch, version, release)?;
+    crate::repository::requirement::parse_native_requirement(kind, VersionScheme::Rpm, &native_text)
+        .map_err(Error::ParseError)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

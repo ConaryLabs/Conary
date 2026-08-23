@@ -276,6 +276,10 @@ pub fn plan_package_relation_batch_facts(
                 RepositoryRequirementKind::Depends
                 | RepositoryRequirementKind::PreDepends
                 | RepositoryRequirementKind::Optional
+                | RepositoryRequirementKind::Recommends
+                | RepositoryRequirementKind::Suggests
+                | RepositoryRequirementKind::Supplements
+                | RepositoryRequirementKind::Enhances
                 | RepositoryRequirementKind::Build => {
                     return Err(Error::ResolutionError(format!(
                         "non-negative relation kind '{}' reached transaction planning",
@@ -708,6 +712,10 @@ fn relation_verb(kind: RepositoryRequirementKind) -> &'static str {
         RepositoryRequirementKind::Depends
         | RepositoryRequirementKind::PreDepends
         | RepositoryRequirementKind::Optional
+        | RepositoryRequirementKind::Recommends
+        | RepositoryRequirementKind::Suggests
+        | RepositoryRequirementKind::Supplements
+        | RepositoryRequirementKind::Enhances
         | RepositoryRequirementKind::Build => "invalid negative relation",
     }
 }

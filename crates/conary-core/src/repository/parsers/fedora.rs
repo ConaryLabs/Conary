@@ -61,6 +61,10 @@ pub struct FedoraParser {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FormatSection {
     Requires,
+    Recommends,
+    Suggests,
+    Supplements,
+    Enhances,
     Provides,
     Conflicts,
     Obsoletes,
@@ -70,6 +74,10 @@ impl FormatSection {
     const fn metadata_name(self) -> &'static str {
         match self {
             Self::Requires => "requires",
+            Self::Recommends => "recommends",
+            Self::Suggests => "suggests",
+            Self::Supplements => "supplements",
+            Self::Enhances => "enhances",
             Self::Provides => "provides",
             Self::Conflicts => "conflicts",
             Self::Obsoletes => "obsoletes",
@@ -242,6 +250,18 @@ impl FedoraParser {
                         "format" => in_format = true,
                         "requires" if in_format => {
                             format_section = Some(FormatSection::Requires);
+                        }
+                        "recommends" if in_format => {
+                            format_section = Some(FormatSection::Recommends);
+                        }
+                        "suggests" if in_format => {
+                            format_section = Some(FormatSection::Suggests);
+                        }
+                        "supplements" if in_format => {
+                            format_section = Some(FormatSection::Supplements);
+                        }
+                        "enhances" if in_format => {
+                            format_section = Some(FormatSection::Enhances);
                         }
                         "provides" if in_format => {
                             format_section = Some(FormatSection::Provides);
@@ -459,6 +479,42 @@ impl FedoraParser {
                                                 pkg.dependencies.push(requirement);
                                             }
                                         }
+                                        FormatSection::Recommends
+                                        | FormatSection::Suggests
+                                        | FormatSection::Supplements
+                                        | FormatSection::Enhances => {
+                                            if dep_pre.is_some() {
+                                                return Err(Error::ParseError(format!(
+                                                    "RPM primary pre marker is invalid on a {} entry",
+                                                    section.metadata_name()
+                                                )));
+                                            }
+                                            let kind = match section {
+                                                FormatSection::Recommends => {
+                                                    RepositoryRequirementKind::Recommends
+                                                }
+                                                FormatSection::Suggests => {
+                                                    RepositoryRequirementKind::Suggests
+                                                }
+                                                FormatSection::Supplements => {
+                                                    RepositoryRequirementKind::Supplements
+                                                }
+                                                FormatSection::Enhances => {
+                                                    RepositoryRequirementKind::Enhances
+                                                }
+                                                _ => unreachable!("weak RPM section selected"),
+                                            };
+                                            pkg.dependencies.push(
+                                                relation::rpm_weak_require_to_group(
+                                                    kind,
+                                                    &name,
+                                                    dep_flags.as_deref(),
+                                                    dep_epoch.as_deref(),
+                                                    dep_ver.as_deref(),
+                                                    dep_rel.as_deref(),
+                                                )?,
+                                            );
+                                        }
                                         FormatSection::Provides => {
                                             if dep_pre.is_some() {
                                                 return Err(Error::ParseError(
@@ -617,7 +673,14 @@ impl FedoraParser {
                         format_section = None;
                     } else if matches!(
                         local_tag,
-                        "requires" | "provides" | "conflicts" | "obsoletes"
+                        "requires"
+                            | "recommends"
+                            | "suggests"
+                            | "supplements"
+                            | "enhances"
+                            | "provides"
+                            | "conflicts"
+                            | "obsoletes"
                     ) {
                         format_section = None;
                     }

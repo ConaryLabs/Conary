@@ -7,11 +7,13 @@ authors.workspace = true
 publish.workspace = true
 description = "Core library for the Conary package manager"
 license.workspace = true
+build = "build.rs"
 
 [features]
 default = ["composefs-rs"]
 composefs-rs = ["dep:composefs"]
 native-alpm-oracle = ["dep:alpm", "dep:clap"]
+native-rpm-oracle = ["dep:clap"]
 
 [dependencies]
 # Database
@@ -162,6 +164,10 @@ composefs = { version = "0.7", default-features = false, optional = true }
 [dev-dependencies]
 criterion.workspace = true
 
+[build-dependencies]
+cc = "1.2"
+pkg-config = "0.3"
+
 [[bin]]
 name = "conary-alpm-oracle"
 path = "src/bin/conary-alpm-oracle.rs"
@@ -171,6 +177,11 @@ required-features = ["native-alpm-oracle"]
 name = "conary-alpm-resolution-oracle"
 path = "src/bin/conary-alpm-resolution-oracle.rs"
 required-features = ["native-alpm-oracle"]
+
+[[bin]]
+name = "conary-rpm-oracle"
+path = "src/bin/conary-rpm-oracle.rs"
+required-features = ["native-rpm-oracle"]
 
 [[bench]]
 name = "erofs_build"

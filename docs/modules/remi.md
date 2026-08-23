@@ -310,7 +310,7 @@ The native evidence producer must be the pinned implementation named by the
 manifest; constructing oracle rows from Conary's own catalog is test support,
 not release evidence.
 
-ALPM is the first implemented native producer. The explicit
+ALPM and RPM have implemented native package-fact producers. The explicit
 `native-alpm-oracle` feature links the exact pinned Rust bindings to libalpm;
 ordinary Conary and Remi builds remain free of that host-library requirement.
 For each ordered profile member, the producer separately verifies the bound
@@ -319,6 +319,17 @@ then reads package and relation facts through libalpm. It uses a bounded private
 spool for profile precedence and exact-identity conflict handling, writes the
 canonical bundle, and reopens the complete result before success. It consumes
 neither the Conary catalog nor Conary's Arch repository parser.
+
+The explicit `native-rpm-oracle` feature links a narrow private C shim to exact
+libsolv 0.7.36. It separately rehashes each ordered member's compressed primary
+and filelists objects before libsolv reopens them, then projects every package
+variant, payload fact, declared and file provider, required/prerequisite group,
+weak RPM relation, conflict, and obsolete. Typed libsolv rich-relation trees
+must agree with the canonical RPM grammar. Profile precedence applies only to
+fact-identical duplicate identities; contradictory duplicates fail. The
+producer uses the shared bounded spool, canonical writer, and independent
+complete bundle reopener and reads neither the Conary catalog nor the Fedora
+parser's projected packages.
 
 The hosted `phase4-native-pm-parity` jobs remain deterministic one-package
 lifecycle and CLI release tests. They do not satisfy this complete-candidate
@@ -342,7 +353,7 @@ then prepares one exact-root libalpm transaction per package against empty
 installed state. It records exact prepared closures or typed missing required
 groups, rejects architecture/conflict/identity drift, writes the canonical
 resolution bundle, and fully reopens it against the exact package oracle before
-success. RPM and Debian solver producers, the complete conversion crawl, proof
+success. RPM and Debian solver producers, Debian package-fact production, the complete conversion crawl, proof
 reuse and target preflight, and Remi promotion wiring remain later independent
 evidence paths.
 The canonical artifact format is

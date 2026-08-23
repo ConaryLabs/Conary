@@ -247,6 +247,56 @@ fn primary_xml_preserves_createrepo_prerequisite_authority() {
 }
 
 #[test]
+fn primary_xml_preserves_every_rpm_weak_relation_kind() {
+    let xml = primary_package_with_format(
+        r#"
+      <rpm:recommends>
+        <rpm:entry name="recommended-provider" flags="GE" epoch="0" ver="2" rel="1"/>
+      </rpm:recommends>
+      <rpm:suggests>
+        <rpm:entry name="suggested-provider"/>
+      </rpm:suggests>
+      <rpm:supplements>
+        <rpm:entry name="(installed-a and installed-b)"/>
+      </rpm:supplements>
+      <rpm:enhances>
+        <rpm:entry name="enhanced-provider"/>
+      </rpm:enhances>
+"#,
+    );
+
+    let packages = parser()
+        .parse_primary_xml(&xml, "https://example.com")
+        .unwrap();
+
+    assert_eq!(
+        packages[0]
+            .requirements
+            .iter()
+            .map(|requirement| (requirement.kind, requirement.native_text.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                RepositoryRequirementKind::Recommends,
+                Some("recommended-provider >= 2-1"),
+            ),
+            (
+                RepositoryRequirementKind::Suggests,
+                Some("suggested-provider"),
+            ),
+            (
+                RepositoryRequirementKind::Supplements,
+                Some("(installed-a and installed-b)"),
+            ),
+            (
+                RepositoryRequirementKind::Enhances,
+                Some("enhanced-provider"),
+            ),
+        ]
+    );
+}
+
+#[test]
 fn primary_xml_projects_every_generator_selected_file_as_a_typed_provide() {
     // Structure derived from createrepo_c 5cf41fe5d703901d78078ed18c67ab667e446c1a
     // tests/testdata/repodata_snippets/primary_snippet_02.xml. The repository
