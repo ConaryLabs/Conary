@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-23
-revision: 50
-summary: Document signed Remi universe and canonical-map authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+revision: 51
+summary: Document typed profile support tiers and complete membership, signed Remi universe and canonical-map authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -85,8 +85,10 @@ replatform may need to realign.
 The repository feed catalog makes
 `crates/conary-core/src/repository/supported_profiles/` the source of truth for
 configured feed IDs, package format, version scheme, and Remi route-family
-mapping. Fedora 44, Ubuntu 26.04, Arch, and Solus are the currently configured public
-feeds, not the only destination systems Conary supports. Internal route slugs
+mapping. Fedora 44, Ubuntu 26.04, and Arch are the public feeds, not the only
+destination systems Conary supports. Solus is a candidate profile available to
+private refresh and conformance work without public route, universe, key, seed,
+or readiness authority. Internal route slugs
 such as `fedora` and `ubuntu` are not feed IDs. The
 `repo add --source-profile` surface accepts only those exact public IDs and
 requires the declared profile's package format to match the repository parser.
@@ -274,7 +276,9 @@ refresh inputs; immutable source catalogs own their revision identity.
 `crates/conary-core/src/db/models/repository/source.rs` owns repository
 validation and persistence;
 `crates/conary-core/src/db/models/repository/source/policy.rs` owns the typed
-policy and schema-revision-31 stream binding. The binding commits to the exact
+policy and schema-revision-31 stream binding; and
+`crates/conary-core/src/db/models/repository/source/persistence.rs` owns typed
+row decoding. The binding commits to the exact
 source/repository/stream identity, endpoints, parser configuration, and
 top-level metadata authority. Refresh recalculates it before network access,
 so an endpoint, parser selector, or metadata trust-root change requires
@@ -304,7 +308,8 @@ Remi applies the same enrolled source, stream, parser, and trust decisions but
 does not publish activated package metadata into its operational SQLite
 database. Each accepted authenticated source becomes a strict immutable
 `SourceSnapshotV1` plus standalone catalog. One deterministic
-`ProfileRevisionV1` binds the exact ordered members and composed package
+`ProfileRevisionV2` binds the exact ordered members, typed roles, precedence,
+required state, and composed package
 catalog for the public profile. Candidate construction is private; durable
 content-addressed publication precedes one fenced active-pointer transaction.
 An exact normalized projection cache can bypass native parsing only when the
@@ -600,12 +605,13 @@ exact native identity remains tied, produce a typed ambiguity. Repository
 names, cache iteration order, and external discovery metadata never break that
 tie.
 
-Remi applies this same ordering to each activated immutable profile revision.
-Package records resolve their member ordinal through the exact pinned manifest;
-request constraints filter eligibility first, higher numeric member priority
-wins next, and native version comparison is confined to that priority tier.
-Catalog order and member ordinal are evidence locators, not selection
-authority.
+Remi composes each activated immutable profile before serving it. Higher exact
+member precedence selects provenance only when two members carry the same
+native package identity and their payload and authoritative logical records are
+identical; disagreement is a typed publication conflict. Every distinct native
+version, release, and architecture remains available to ordinary native version
+selection. Catalog order and member ordinal are evidence locators, not
+selection authority.
 
 Explicit version constraints remain strict and scheme-aware. Cross-distro
 identity mapping helps find equivalent packages; it does not replace native

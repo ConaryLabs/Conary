@@ -163,6 +163,14 @@ mod tests {
         let mut repository =
             conary_core::db::models::Repository::new(name.to_string(), metadata_url.clone());
         repository.source_profile = Some("fedora-44".to_string());
+        let is_updates = identity.contains("updates");
+        repository.priority = if is_updates { 110 } else { 100 };
+        repository.profile_member_role = Some(if is_updates {
+            conary_core::repository::supported_profiles::ProfileSourceRole::Updates
+        } else {
+            conary_core::repository::supported_profiles::ProfileSourceRole::Base
+        });
+        repository.profile_member_required = true;
         repository
             .set_parser_config(RepositoryParserConfig::Rpm {
                 architecture: "x86_64".to_string(),
@@ -216,12 +224,13 @@ mod tests {
              INSERT INTO remi_profile_revision_members (
                  profile_revision_sha256, ordinal, source_snapshot_sha256,
                  source_identity, repository_identity, stream_kind,
-                 stream_identity, priority, required
+                 stream_identity, role, precedence, required
              ) VALUES (
                 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
                 0,
                 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                'fedora-project', 'fedora-everything-x86_64', 'release', '44', 0, 1
+                'fedora-project', 'fedora-44-everything-x86_64', 'release', '44',
+                'base', 100, 1
              );
              INSERT INTO repository_sync_runs (
                  run_id, source_profile, owner_instance_uuid, fencing_epoch,
@@ -265,30 +274,37 @@ mod tests {
     #[test]
     fn active_profile_member_plan_detects_precedence_change() {
         use conary_core::repository::catalog::{
-            ProfileSourceMemberV1, SourceStreamKindV1, SourceStreamV1,
+            ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
         };
 
-        let repository = native_repository("everything", "fedora-everything-x86_64");
-        let mut plans =
-            crate::server::catalog_refresh::plan_profile_sources("fedora-44", vec![repository])
-                .unwrap();
-        let members = vec![ProfileSourceMemberV1 {
-            ordinal: 0,
-            source_snapshot_sha256: "a".repeat(64),
-            source_identity: "fedora-project".to_string(),
-            repository_identity: "fedora-everything-x86_64".to_string(),
-            stream: SourceStreamV1 {
-                kind: SourceStreamKindV1::Release,
-                identity: "44".to_string(),
-            },
-            priority: plans[0].priority,
-            required: true,
-        }];
+        let everything = native_repository("everything", "fedora-44-everything-x86_64");
+        let updates = native_repository("updates", "fedora-44-updates-x86_64");
+        let mut plans = crate::server::catalog_refresh::plan_profile_sources(
+            "fedora-44",
+            vec![everything, updates],
+        )
+        .unwrap();
+        let members = plans
+            .iter()
+            .map(|plan| ProfileSourceMemberV2 {
+                ordinal: plan.ordinal,
+                role: plan.role,
+                source_snapshot_sha256: "a".repeat(64),
+                source_identity: "fedora-project".to_string(),
+                repository_identity: plan.repository.repository_identity.clone().unwrap(),
+                stream: SourceStreamV1 {
+                    kind: SourceStreamKindV1::Release,
+                    identity: "44".to_string(),
+                },
+                precedence: plan.precedence,
+                required: true,
+            })
+            .collect::<Vec<_>>();
         assert!(super::super::profile_refresh::profile_members_match_plan(
             &members, &plans
         ));
 
-        plans[0].priority += 1;
+        plans[0].precedence += 1;
         assert!(!super::super::profile_refresh::profile_members_match_plan(
             &members, &plans
         ));
@@ -400,10 +416,10 @@ mod tests {
         conary_core::db::init(&db_path).expect("initialize operational database");
         {
             let conn = conary_core::db::open_fast(&db_path).expect("open operational database");
-            native_repository("everything", "fedora-everything-x86_64")
+            native_repository("everything", "fedora-44-everything-x86_64")
                 .insert(&conn)
                 .expect("insert first native member");
-            native_repository("updates", "fedora-updates-x86_64")
+            native_repository("updates", "fedora-44-updates-x86_64")
                 .insert(&conn)
                 .expect("insert second native member");
             conn.execute(
@@ -525,7 +541,7 @@ mod tests {
         conary_core::db::init(&db_path).expect("initialize operational database");
         {
             let conn = conary_core::db::open_fast(&db_path).expect("open operational database");
-            let mut repository = native_repository("everything", "fedora-everything-x86_64");
+            let mut repository = native_repository("everything", "fedora-44-everything-x86_64");
             repository.enabled = false;
             repository.insert(&conn).expect("insert disabled member");
             install_active_profile_fixture(&conn);

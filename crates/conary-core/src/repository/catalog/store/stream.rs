@@ -10,8 +10,9 @@ use super::super::{
     CatalogScopeV1, CatalogSourceEvidenceV1,
 };
 use super::{
-    CatalogReader, SELECT_PACKAGES, insert_package_base, insert_provide, insert_requirement_group,
-    load_requirement_atoms, package_from_row, provide_from_row,
+    CatalogReader, SELECT_PACKAGES, insert_package_base, insert_profile_package_base_if_absent,
+    insert_provide, insert_requirement_group, load_requirement_atoms, package_from_row,
+    provide_from_row,
 };
 use crate::error::{Error, Result};
 
@@ -42,10 +43,82 @@ impl CatalogReader {
             }
             package.canonicalize_for_scope(destination_scope)?;
             let destination_key = package.package_key_sha256.clone();
-            insert_package_base(destination, &package)?;
+            let inserted = if profile_origin.is_some() {
+                insert_profile_package_base_if_absent(destination, &package)?
+            } else {
+                insert_package_base(destination, &package)?;
+                true
+            };
+            if inserted {
+                self.copy_provides(destination, &source_key, &destination_key)?;
+                self.copy_requirement_groups(destination, &source_key, &destination_key)?;
+            } else {
+                self.require_same_profile_record(
+                    destination,
+                    &source_key,
+                    &destination_key,
+                    &package,
+                )?;
+            }
+        }
+        Ok(())
+    }
 
-            self.copy_provides(destination, &source_key, &destination_key)?;
-            self.copy_requirement_groups(destination, &source_key, &destination_key)?;
+    fn require_same_profile_record(
+        &self,
+        destination: &Connection,
+        source_key: &str,
+        destination_key: &str,
+        package: &super::super::CatalogPackageRecordV1,
+    ) -> Result<()> {
+        for sql in [
+            "SELECT source_profile, name, version, package_release, architecture,
+                    debian_multi_arch, description, checksum, size, metadata,
+                    is_security_update, severity, cve_ids, advisory_id, advisory_url,
+                    version_scheme
+             FROM catalog_packages WHERE package_key_sha256 = ?1",
+            "SELECT ordinal, capability, version, version_relation, kind, raw,
+                    version_scheme, architecture_qualifier_json, provenance_json
+             FROM catalog_provides WHERE package_key_sha256 = ?1 ORDER BY ordinal",
+            "SELECT ordinal, kind, behavior, description, native_text, expression_json
+             FROM catalog_requirement_groups
+             WHERE package_key_sha256 = ?1 ORDER BY ordinal",
+            "SELECT group_ordinal, ordinal, capability, version_constraint, kind,
+                    dependency_type, raw
+             FROM catalog_requirement_atoms
+             WHERE package_key_sha256 = ?1 ORDER BY group_ordinal, ordinal",
+        ] {
+            if !ordered_rows_match(
+                &self.connection,
+                source_key,
+                destination,
+                destination_key,
+                sql,
+            )? {
+                let selected_origin = destination.query_row(
+                    "SELECT repository_identity FROM catalog_packages
+                     WHERE package_key_sha256 = ?1",
+                    [destination_key],
+                    |row| row.get::<_, String>(0),
+                )?;
+                let duplicate_origin = match &package.origin {
+                    CatalogPackageOriginV1::Profile {
+                        repository_identity,
+                        ..
+                    } => repository_identity.as_str(),
+                    CatalogPackageOriginV1::Source { .. } => "source catalog",
+                };
+                return Err(Error::ConflictError(format!(
+                    "profile package identity {} {}-{} {:?} disagrees between repositories '{}' \
+                     and '{}'",
+                    package.name,
+                    package.version,
+                    package.package_release,
+                    package.architecture,
+                    selected_origin,
+                    duplicate_origin
+                )));
+            }
         }
         Ok(())
     }
@@ -95,6 +168,38 @@ impl CatalogReader {
             insert_requirement_group(destination, destination_key, ordinal, &group)?;
         }
         Ok(())
+    }
+}
+
+fn ordered_rows_match(
+    source: &Connection,
+    source_key: &str,
+    destination: &Connection,
+    destination_key: &str,
+    sql: &str,
+) -> Result<bool> {
+    let mut source_statement = source.prepare(sql)?;
+    let mut destination_statement = destination.prepare(sql)?;
+    let column_count = source_statement.column_count();
+    if destination_statement.column_count() != column_count {
+        return Err(Error::InternalError(
+            "profile duplicate comparison column count differs".to_string(),
+        ));
+    }
+    let mut source_rows = source_statement.query([source_key])?;
+    let mut destination_rows = destination_statement.query([destination_key])?;
+    loop {
+        match (source_rows.next()?, destination_rows.next()?) {
+            (None, None) => return Ok(true),
+            (Some(source_row), Some(destination_row)) => {
+                for column in 0..column_count {
+                    if source_row.get_ref(column)? != destination_row.get_ref(column)? {
+                        return Ok(false);
+                    }
+                }
+            }
+            _ => return Ok(false),
+        }
     }
 }
 

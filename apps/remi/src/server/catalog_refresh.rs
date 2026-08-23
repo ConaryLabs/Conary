@@ -9,20 +9,22 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::Repository;
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, ProfileCatalogMemberInputV1, ProfileRevisionV1, SourceSnapshotV1,
+    CATALOG_FILE_NAME, ProfileCatalogMemberInputV2, ProfileRevisionV2, SourceSnapshotV1,
     publish_profile_catalog_bundle, publish_source_catalog_bundle, verify_source_catalog_bundle,
     write_profile_catalog_candidate, write_profile_catalog_manifest, write_source_catalog_manifest,
 };
+use conary_core::repository::supported_profiles::ProfileSourceRole;
 use futures::StreamExt;
 
-const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 1;
+pub(crate) const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 2;
 const MAX_CONCURRENT_SOURCE_FETCHES: usize = 4;
 
 /// One exact source member and its explicitly assigned profile ordinal.
 #[derive(Clone)]
 pub struct ProfileSourcePlan {
     pub ordinal: u32,
-    pub priority: i32,
+    pub role: ProfileSourceRole,
+    pub precedence: i32,
     pub required: bool,
     pub repository: Repository,
 }
@@ -30,7 +32,8 @@ pub struct ProfileSourcePlan {
 /// One source bundle published before its containing profile can activate.
 pub struct PublishedSourceCatalog {
     pub ordinal: u32,
-    pub priority: i32,
+    pub role: ProfileSourceRole,
+    pub precedence: i32,
     pub required: bool,
     pub manifest: SourceSnapshotV1,
     pub path: PathBuf,
@@ -39,7 +42,8 @@ pub struct PublishedSourceCatalog {
 /// One fully bound and verified source bundle still private to its fenced run.
 pub struct StagedSourceCatalog {
     pub ordinal: u32,
-    pub priority: i32,
+    pub role: ProfileSourceRole,
+    pub precedence: i32,
     pub required: bool,
     pub manifest: SourceSnapshotV1,
     pub path: PathBuf,
@@ -48,7 +52,7 @@ pub struct StagedSourceCatalog {
 /// Complete verified filesystem candidate before immutable publication begins.
 pub struct StagedProfileCatalog {
     pub profile: String,
-    pub manifest: ProfileRevisionV1,
+    pub manifest: ProfileRevisionV2,
     pub path: PathBuf,
     pub sources: Vec<StagedSourceCatalog>,
     pub candidate_run_dir: PathBuf,
@@ -57,7 +61,7 @@ pub struct StagedProfileCatalog {
 /// Complete durable filesystem result, still inactive in operational SQLite.
 pub struct PublishedProfileCatalog {
     pub profile: String,
-    pub manifest: ProfileRevisionV1,
+    pub manifest: ProfileRevisionV2,
     pub path: PathBuf,
     pub sources: Vec<PublishedSourceCatalog>,
     pub candidate_run_dir: PathBuf,
@@ -72,7 +76,22 @@ pub fn plan_profile_sources(
     if repositories.is_empty() {
         bail!("profile '{profile}' has no enabled source repositories");
     }
+    let profile_contract = conary_core::repository::supported_profiles::profile_by_id(profile)
+        .with_context(|| format!("profile '{profile}' has no typed support contract"))?;
+    let expected_members = profile_contract
+        .members()
+        .iter()
+        .map(|member| (member.repository_identity.as_str(), member))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut actual_members = BTreeSet::new();
     for repository in &repositories {
+        if !repository.enabled {
+            bail!(
+                "profile '{}' repository '{}' is disabled",
+                profile,
+                repository.name
+            );
+        }
         if repository.source_profile.as_deref() != Some(profile) {
             bail!(
                 "profile '{}' cannot plan repository '{}' from profile {:?}",
@@ -87,6 +106,69 @@ pub fn plan_profile_sources(
                 repository.name
             )
         })?;
+        let repository_identity = repository.repository_identity.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "profile '{}' repository '{}' has no exact repository identity",
+                profile,
+                repository.name
+            )
+        })?;
+        let expected = expected_members.get(repository_identity).ok_or_else(|| {
+            anyhow::anyhow!(
+                "repository '{}' is not a declared member of profile '{}'",
+                repository_identity,
+                profile
+            )
+        })?;
+        let role = repository.profile_member_role.ok_or_else(|| {
+            anyhow::anyhow!(
+                "profile '{}' repository '{}' has no typed member role",
+                profile,
+                repository.name
+            )
+        })?;
+        if role != expected.role || repository.priority != expected.precedence {
+            bail!(
+                "profile '{}' repository '{}' has role '{}' and precedence {}, expected role \
+                 '{}' and precedence {}",
+                profile,
+                repository_identity,
+                role.as_str(),
+                repository.priority,
+                expected.role.as_str(),
+                expected.precedence
+            );
+        }
+        if !repository.profile_member_required {
+            bail!(
+                "profile '{}' repository '{}' must be required",
+                profile,
+                repository_identity
+            );
+        }
+        if !actual_members.insert(repository_identity) {
+            bail!(
+                "profile '{}' repeats repository identity '{}'",
+                profile,
+                repository_identity
+            );
+        }
+    }
+    let expected_identities = expected_members.keys().copied().collect::<BTreeSet<_>>();
+    if actual_members != expected_identities {
+        let missing = expected_identities
+            .difference(&actual_members)
+            .copied()
+            .collect::<Vec<_>>();
+        let unexpected = actual_members
+            .difference(&expected_identities)
+            .copied()
+            .collect::<Vec<_>>();
+        bail!(
+            "profile '{profile}' source membership is incomplete: missing {:?}, unexpected {:?}",
+            missing,
+            unexpected
+        );
     }
     repositories.sort_by(|left, right| {
         right.priority.cmp(&left.priority).then_with(|| {
@@ -117,8 +199,9 @@ pub fn plan_profile_sources(
             Ok(ProfileSourcePlan {
                 ordinal: u32::try_from(ordinal)
                     .context("profile source count exceeds member ordinal range")?,
-                priority: repository.priority,
-                required: true,
+                role: repository.profile_member_role.expect("validated"),
+                precedence: repository.priority,
+                required: repository.profile_member_required,
                 repository,
             })
         })
@@ -167,7 +250,8 @@ pub async fn stage_profile_catalog(
                 verify_source_catalog_bundle(&candidate_directory, &manifest)?;
                 Ok::<_, anyhow::Error>(StagedSourceCatalog {
                     ordinal: plan.ordinal,
-                    priority: plan.priority,
+                    role: plan.role,
+                    precedence: plan.precedence,
                     required: plan.required,
                     manifest,
                     path: candidate_directory,
@@ -202,9 +286,10 @@ fn stage_profile_candidate(
     let inputs = staged_sources
         .iter()
         .zip(&readers)
-        .map(|(source, reader)| ProfileCatalogMemberInputV1 {
+        .map(|(source, reader)| ProfileCatalogMemberInputV2 {
             ordinal: source.ordinal,
-            priority: source.priority,
+            role: source.role,
+            precedence: source.precedence,
             required: source.required,
             manifest: &source.manifest,
             reader,
@@ -218,6 +303,7 @@ fn stage_profile_candidate(
         PROFILE_CATALOG_PROJECTION_VERSION,
         inputs,
     )?;
+    manifest.validate_member_contract()?;
     write_profile_catalog_manifest(&profile_candidate_directory, &manifest)?;
     conary_core::repository::catalog::verify_profile_catalog_bundle(
         &profile_candidate_directory,
@@ -255,7 +341,8 @@ fn publish_staged_profile(
         let path = publish_source_catalog_bundle(&source.path, catalog_root, &source.manifest)?;
         published_sources.push(PublishedSourceCatalog {
             ordinal: source.ordinal,
-            priority: source.priority,
+            role: source.role,
+            precedence: source.precedence,
             required: source.required,
             manifest: source.manifest,
             path,

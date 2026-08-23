@@ -338,7 +338,7 @@ fn verify_profile_run_members(
 
     let mut statement = tx.prepare(
         "SELECT ordinal, repository_id, source_identity, repository_identity,
-                stream_kind, stream_identity, priority, required,
+                stream_kind, stream_identity, role, precedence, required,
                 input_source_snapshot_sha256, candidate_source_snapshot_sha256
          FROM repository_sync_run_members
          WHERE run_id = ?1 ORDER BY ordinal",
@@ -352,10 +352,11 @@ fn verify_profile_run_members(
         let repository_identity = row.get::<_, String>(3)?;
         let stream_kind = row.get::<_, String>(4)?;
         let stream_identity = row.get::<_, String>(5)?;
-        let priority = row.get::<_, i64>(6)?;
-        let required = row.get::<_, i64>(7)? != 0;
-        let input_source_snapshot = row.get::<_, Option<String>>(8)?;
-        let candidate_source_snapshot = row.get::<_, Option<String>>(9)?;
+        let role = row.get::<_, String>(6)?;
+        let precedence = row.get::<_, i64>(7)?;
+        let required = row.get::<_, i64>(8)? != 0;
+        let input_source_snapshot = row.get::<_, Option<String>>(9)?;
+        let candidate_source_snapshot = row.get::<_, Option<String>>(10)?;
 
         let profile_member = tx
             .query_row(
@@ -374,7 +375,8 @@ fn verify_profile_run_members(
             || profile_member.repository_identity != repository_identity
             || profile_member.stream_kind != stream_kind
             || profile_member.stream_identity != stream_identity
-            || profile_member.priority != priority
+            || profile_member.role.as_str() != role
+            || profile_member.precedence != precedence
             || profile_member.required != required
             || candidate_source_snapshot.as_deref()
                 != Some(profile_member.source_snapshot_sha256.as_str())
@@ -414,21 +416,30 @@ fn verify_profile_run_members(
 
         let repository = tx
             .query_row(
-                "SELECT source_profile, repository_identity, priority, enabled
+                "SELECT source_profile, repository_identity, profile_member_role,
+                        profile_member_required, priority, enabled
                  FROM repositories WHERE id = ?1",
                 [repository_id],
                 |row| {
                     Ok((
                         row.get::<_, Option<String>>(0)?,
                         row.get::<_, Option<String>>(1)?,
-                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<String>>(2)?,
                         row.get::<_, i64>(3)? != 0,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)? != 0,
                     ))
                 },
             )
             .optional()?;
-        let Some((repository_profile, actual_repository_identity, actual_priority, enabled)) =
-            repository
+        let Some((
+            repository_profile,
+            actual_repository_identity,
+            actual_role,
+            actual_required,
+            actual_precedence,
+            enabled,
+        )) = repository
         else {
             return Err(Error::ConflictError(format!(
                 "profile {} run {} member ordinal {} references a missing repository",
@@ -437,12 +448,26 @@ fn verify_profile_run_members(
         };
         if repository_profile.as_deref() != Some(request.source_profile.as_str())
             || actual_repository_identity.as_deref() != Some(repository_identity.as_str())
-            || actual_priority != priority
+            || actual_role.as_deref() != Some(role.as_str())
+            || actual_required != required
+            || actual_precedence != precedence
             || !enabled
         {
             return Err(Error::ConflictError(format!(
-                "profile {} run {} member ordinal {} repository binding changed",
-                request.source_profile, request.run_id, ordinal
+                "profile {} run {} member ordinal {} repository binding changed: expected identity={} role={} required={} precedence={} enabled=true, found profile={:?} identity={:?} role={:?} required={} precedence={} enabled={}",
+                request.source_profile,
+                request.run_id,
+                ordinal,
+                repository_identity,
+                role,
+                required,
+                precedence,
+                repository_profile,
+                actual_repository_identity,
+                actual_role,
+                actual_required,
+                actual_precedence,
+                enabled,
             )));
         }
         seen += 1;

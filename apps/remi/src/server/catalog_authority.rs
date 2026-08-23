@@ -19,7 +19,7 @@ use conary_core::db::models::{
 };
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CatalogPackageOriginV1, CatalogPackageRecordV1,
-    CatalogReader, ProfileRevisionV1, SourceSnapshotV1, verify_profile_catalog_bundle,
+    CatalogReader, ProfileRevisionV2, SourceSnapshotV1, verify_profile_catalog_bundle,
     verify_source_catalog_bundle,
 };
 use parking_lot::{Mutex, MutexGuard};
@@ -54,7 +54,7 @@ struct CachedProfileReader {
 #[derive(Debug, Clone)]
 pub(crate) struct ActiveProfileInspection {
     pub(crate) pointer: RemiActiveProfileRevision,
-    pub(crate) manifest: ProfileRevisionV1,
+    pub(crate) manifest: ProfileRevisionV2,
 }
 
 impl CatalogAuthority {
@@ -259,7 +259,7 @@ impl CatalogAuthority {
 /// identity remains available after operational SQLite changes.
 pub struct PinnedProfileCatalog {
     pointer: RemiActiveProfileRevision,
-    manifest: ProfileRevisionV1,
+    manifest: ProfileRevisionV2,
     reader: Option<Arc<Mutex<CatalogReader>>>,
     pin: Option<ReaderPin>,
 }
@@ -292,7 +292,7 @@ impl PinnedProfileCatalog {
     #[cfg(test)]
     pub(crate) fn from_verified_test_parts(
         pointer: RemiActiveProfileRevision,
-        manifest: ProfileRevisionV1,
+        manifest: ProfileRevisionV2,
         reader: CatalogReader,
     ) -> Self {
         Self {
@@ -343,7 +343,7 @@ impl PinnedProfileCatalog {
 
     /// The strictly typed profile revision manifest used to verify the bundle.
     #[must_use]
-    pub fn manifest(&self) -> &ProfileRevisionV1 {
+    pub fn manifest(&self) -> &ProfileRevisionV2 {
         &self.manifest
     }
 
@@ -590,7 +590,7 @@ fn open_active_profile_from_connection(
 
 struct ResolvedProfileCatalog {
     pointer: RemiActiveProfileRevision,
-    manifest: ProfileRevisionV1,
+    manifest: ProfileRevisionV2,
     bundle_path: PathBuf,
 }
 
@@ -843,15 +843,15 @@ fn unix_seconds() -> Result<i64> {
     i64::try_from(seconds).context("system time exceeds SQLite integer range")
 }
 
-fn deserialize_profile_revision(resource: &RemiCatalogResource) -> Result<ProfileRevisionV1> {
-    let manifest: ProfileRevisionV1 = serde_json::from_str(&resource.manifest_json)
-        .context("parse ProfileRevisionV1 manifest JSON")?;
+fn deserialize_profile_revision(resource: &RemiCatalogResource) -> Result<ProfileRevisionV2> {
+    let manifest: ProfileRevisionV2 = serde_json::from_str(&resource.manifest_json)
+        .context("parse ProfileRevisionV2 manifest JSON")?;
     manifest
         .validate()
-        .context("validate ProfileRevisionV1 manifest")?;
+        .context("validate ProfileRevisionV2 manifest")?;
     let canonical = conary_core::json::canonical_json(&manifest)
         .map_err(anyhow::Error::msg)
-        .context("canonicalize ProfileRevisionV1 manifest")?;
+        .context("canonicalize ProfileRevisionV2 manifest")?;
     if canonical != resource.manifest_json.as_bytes() {
         bail!("profile revision manifest JSON is not canonical");
     }

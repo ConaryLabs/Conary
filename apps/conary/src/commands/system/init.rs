@@ -3,6 +3,7 @@
 use super::*;
 use anyhow::Context;
 use conary_core::runtime_root::ConaryRuntimeRoot;
+use rusqlite::OptionalExtension;
 
 const MAX_INIT_SYMLINK_DEPTH: usize = 40;
 
@@ -258,6 +259,67 @@ fn reconcile_remi_seeds(
         if RepositoryPackageKey::reconcile_for_repository_in_transaction(conn, repo_id, &authority)?
         {
             messages.push((false, format!("  Updated: {name} CCS package authority")));
+        }
+    }
+
+    for feed in conary_core::repository::supported_profiles::profiles()
+        .iter()
+        .filter(|profile| !profile.support_tier().is_public())
+    {
+        let name = format!("remi-{}", feed.id());
+        let row = conn
+            .query_row(
+                "SELECT id, url, default_strategy, default_strategy_endpoint,
+                        source_profile, package_format, parser_config_json
+                 FROM repositories WHERE name = ?1",
+                [&name],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((repository_id, url, strategy, strategy_endpoint, source_profile, format, parser)) =
+            row
+        else {
+            continue;
+        };
+        let retired_canonical_seed = url == endpoint
+            && strategy.as_deref() == Some("remi")
+            && strategy_endpoint.as_deref() == Some(endpoint)
+            && source_profile.as_deref() == Some(feed.id())
+            && format == "json"
+            && parser.as_deref()
+                == Some(
+                    conary_core::repository::RepositoryParserConfig::Json
+                        .to_json()?
+                        .as_str(),
+                );
+        if retired_canonical_seed {
+            Repository::delete(conn, repository_id)?;
+            messages.push((
+                false,
+                format!(
+                    "  Removed: {name} ({} support tier)",
+                    feed.support_tier().as_str()
+                ),
+            ));
+        } else {
+            messages.push((
+                true,
+                format!(
+                    "Existing repository '{name}' is user-managed; leaving it unchanged despite \
+                     the '{}' profile support tier",
+                    feed.support_tier().as_str()
+                ),
+            ));
         }
     }
 

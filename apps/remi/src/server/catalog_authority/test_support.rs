@@ -9,8 +9,8 @@ use conary_core::db::models::{
 };
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CatalogArtifactV1, CatalogContentV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1,
-    ProfileRevisionV1, ProfileSourceMemberV1, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
+    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
+    ProfileRevisionV2, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
     SourceStreamKindV1, SourceStreamV1, publish_profile_catalog_bundle,
     publish_source_catalog_bundle, write_catalog_candidate, write_profile_catalog_manifest,
@@ -209,19 +209,20 @@ impl ActiveCatalogFixture {
         std::fs::create_dir_all(&candidate_dir).expect("create catalog candidate");
         let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
             .expect("write catalog candidate");
-        let manifest = ProfileRevisionV1 {
-            schema_version: PROFILE_REVISION_SCHEMA_V1,
+        let manifest = ProfileRevisionV2 {
+            schema_version: PROFILE_REVISION_SCHEMA_V2,
             profile: profile.to_string(),
             projection_version: 1,
-            members: vec![ProfileSourceMemberV1 {
+            members: vec![ProfileSourceMemberV2 {
                 ordinal: 0,
+                role: conary_core::repository::supported_profiles::ProfileSourceRole::Base,
                 source_identity: source_identity.clone(),
                 repository_identity: repository_identity.clone(),
                 stream: SourceStreamV1 {
                     kind: SourceStreamKindV1::Release,
                     identity: "stable".to_string(),
                 },
-                priority: 0,
+                precedence: 0,
                 required: true,
                 source_snapshot_sha256: source_snapshot_sha256.clone(),
             }],
@@ -334,7 +335,8 @@ impl ActiveCatalogFixture {
             repository_identity,
             stream_kind: "release".to_string(),
             stream_identity: "stable".to_string(),
-            priority: 0,
+            role: conary_core::repository::supported_profiles::ProfileSourceRole::Base,
+            precedence: 0,
             required: true,
         }
         .insert(&conn)

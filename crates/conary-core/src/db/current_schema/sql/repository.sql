@@ -28,6 +28,13 @@ CREATE TABLE repositories (
             url TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             priority INTEGER NOT NULL DEFAULT 0,
+            profile_member_role TEXT
+                CHECK(profile_member_role IS NULL OR profile_member_role IN (
+                    'base', 'updates', 'security', 'backports', 'overlay',
+                    'optional', 'debug', 'source'
+                )),
+            profile_member_required INTEGER NOT NULL DEFAULT 0
+                CHECK(profile_member_required IN (0, 1)),
             trust_policy_json TEXT,
             metadata_expire INTEGER NOT NULL DEFAULT 3600,
             last_checked_at TEXT,
@@ -67,6 +74,7 @@ CREATE TABLE repositories (
             ),
             CHECK(repository_identity IS NULL OR (length(repository_identity) BETWEEN 1 AND 255 AND trim(repository_identity) = repository_identity)),
             CHECK(stream_binding_sha256 IS NULL OR (length(stream_binding_sha256) = 64 AND stream_binding_sha256 NOT GLOB '*[^0-9a-f]*')),
+            CHECK(profile_member_role IS NOT NULL OR profile_member_required = 0),
             UNIQUE(source_policy_id, repository_identity)
         );
 CREATE INDEX idx_repositories_name ON repositories(name);
@@ -217,7 +225,11 @@ CREATE TABLE repository_sync_run_members (
             repository_identity TEXT NOT NULL,
             stream_kind TEXT NOT NULL CHECK(stream_kind IN ('release', 'channel', 'rolling')),
             stream_identity TEXT NOT NULL,
-            priority INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK(role IN (
+                'base', 'updates', 'security', 'backports', 'overlay',
+                'optional', 'debug', 'source'
+            )),
+            precedence INTEGER NOT NULL,
             required INTEGER NOT NULL CHECK(required IN (0, 1)),
             input_source_snapshot_sha256 TEXT CHECK(
                 input_source_snapshot_sha256 IS NULL
@@ -1054,7 +1066,11 @@ CREATE TABLE remi_profile_revision_members (
             repository_identity TEXT NOT NULL,
             stream_kind TEXT NOT NULL CHECK(stream_kind IN ('release', 'channel', 'rolling')),
             stream_identity TEXT NOT NULL,
-            priority INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK(role IN (
+                'base', 'updates', 'security', 'backports', 'overlay',
+                'optional', 'debug', 'source'
+            )),
+            precedence INTEGER NOT NULL,
             required INTEGER NOT NULL CHECK(required IN (0, 1)),
             CHECK(length(source_identity) BETWEEN 1 AND 255
                 AND trim(source_identity) = source_identity),

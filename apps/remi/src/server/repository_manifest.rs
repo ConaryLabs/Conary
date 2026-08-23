@@ -8,7 +8,9 @@ use conary_core::db::models::{
     RepositoryOwnership, RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode,
     SecurityAdvisorySupport,
 };
-use conary_core::repository::supported_profiles::{ProfilePackageFormat, profile_by_public_id};
+use conary_core::repository::supported_profiles::{
+    ProfilePackageFormat, ProfileSourceRole, SupportTier, profile_by_id, public_profiles,
+};
 use conary_core::repository::{
     OpenPgpTrustRoot, RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy,
     RpmMetadataAuthority,
@@ -18,7 +20,7 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub const REPOSITORY_MANIFEST_SCHEMA: u32 = 3;
+pub const REPOSITORY_MANIFEST_SCHEMA: u32 = 4;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -44,7 +46,9 @@ pub struct RepositoryDefinition {
     pub update_mode: String,
     pub pinned_snapshot_sha256: Option<String>,
     pub enabled: bool,
-    pub priority: i32,
+    pub role: ProfileSourceRole,
+    pub precedence: i32,
+    pub required: bool,
     pub trust: RepositoryTrustPolicy,
     pub metadata_expire_seconds: i32,
 }
@@ -68,6 +72,72 @@ impl RepositoryManifest {
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.validate_definitions()?;
+
+        for repository in &self.repositories {
+            let profile = profile_by_id(&repository.profile).expect("definition validation");
+            let expected = profile
+                .members()
+                .iter()
+                .find(|member| member.repository_identity == repository.repository_identity)
+                .with_context(|| {
+                    format!(
+                        "repository '{}' is not a declared member of profile '{}'",
+                        repository.repository_identity, repository.profile
+                    )
+                })?;
+            if repository.role != expected.role || repository.precedence != expected.precedence {
+                bail!(
+                    "repository '{}' has role '{}' and precedence {}, but profile '{}' declares \
+                     role '{}' and precedence {}",
+                    repository.repository_identity,
+                    repository.role.as_str(),
+                    repository.precedence,
+                    repository.profile,
+                    expected.role.as_str(),
+                    expected.precedence
+                );
+            }
+        }
+
+        for profile in public_profiles() {
+            let actual_order = self
+                .repositories
+                .iter()
+                .filter(|repository| repository.profile == profile.id())
+                .map(|repository| repository.repository_identity.as_str())
+                .collect::<Vec<_>>();
+            let expected_order = profile
+                .members()
+                .iter()
+                .map(|member| member.repository_identity.as_str())
+                .collect::<Vec<_>>();
+            let actual = actual_order.iter().copied().collect::<BTreeSet<_>>();
+            let expected = expected_order.iter().copied().collect::<BTreeSet<_>>();
+            if actual != expected {
+                let missing = expected.difference(&actual).copied().collect::<Vec<_>>();
+                let unexpected = actual.difference(&expected).copied().collect::<Vec<_>>();
+                bail!(
+                    "public profile '{}' repository membership is incomplete: missing {:?}, \
+                     unexpected {:?}",
+                    profile.id(),
+                    missing,
+                    unexpected
+                );
+            }
+            if actual_order != expected_order {
+                bail!(
+                    "public profile '{}' repository membership is reordered: expected {:?}, found {:?}",
+                    profile.id(),
+                    expected_order,
+                    actual_order
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_definitions(&self) -> Result<()> {
         if self.schema_version != REPOSITORY_MANIFEST_SCHEMA {
             bail!(
                 "repository manifest schema {} is unsupported; expected {}",
@@ -77,11 +147,33 @@ impl RepositoryManifest {
         }
 
         let mut names = BTreeSet::new();
+        let mut identities = BTreeSet::new();
         for repository in &self.repositories {
             repository.validate()?;
             if !names.insert(repository.name.as_str()) {
                 bail!(
                     "repository manifest contains duplicate name '{}'",
+                    repository.name
+                );
+            }
+            if !identities.insert(repository.repository_identity.as_str()) {
+                bail!(
+                    "repository manifest repeats exact identity '{}'",
+                    repository.repository_identity
+                );
+            }
+            if repository.required && !repository.enabled {
+                bail!(
+                    "required profile member '{}' must be enabled",
+                    repository.name
+                );
+            }
+            if profile_by_id(&repository.profile)
+                .is_some_and(|profile| profile.support_tier().is_public())
+                && (!repository.enabled || !repository.required)
+            {
+                bail!(
+                    "public profile member '{}' must be enabled and required",
                     repository.name
                 );
             }
@@ -243,12 +335,19 @@ impl RepositoryDefinition {
             )?;
         }
 
-        let profile = profile_by_public_id(&self.profile).with_context(|| {
+        let profile = profile_by_id(&self.profile).with_context(|| {
             format!(
-                "repository '{}' names unsupported profile '{}'",
+                "repository '{}' names unknown profile '{}'",
                 self.name, self.profile
             )
         })?;
+        if profile.support_tier() == SupportTier::Retired {
+            bail!(
+                "repository '{}' names retired profile '{}'",
+                self.name,
+                self.profile
+            );
+        }
         let expected = match profile.package_format() {
             ProfilePackageFormat::Rpm => RepositoryFormat::Fedora,
             ProfilePackageFormat::Deb => RepositoryFormat::Debian,
@@ -277,7 +376,9 @@ impl RepositoryDefinition {
         repository.url.clone_from(&self.url);
         repository.content_url.clone_from(&self.content_url);
         repository.enabled = self.enabled;
-        repository.priority = self.priority;
+        repository.priority = self.precedence;
+        repository.profile_member_role = Some(self.role);
+        repository.profile_member_required = self.required;
         repository.trust_policy = Some(self.trust.clone());
         repository.metadata_expire = self.metadata_expire_seconds;
         repository.default_strategy = None;
@@ -317,7 +418,9 @@ impl RepositoryDefinition {
     fn differs(&self, repository: &Repository) -> Result<bool> {
         Ok(self.source_differs(repository)?
             || repository.enabled != self.enabled
-            || repository.priority != self.priority
+            || repository.priority != self.precedence
+            || repository.profile_member_role != Some(self.role)
+            || repository.profile_member_required != self.required
             || repository.metadata_expire != self.metadata_expire_seconds
             || repository.default_strategy.is_some()
             || repository.default_strategy_endpoint.is_some()
@@ -437,40 +540,10 @@ mod tests {
     }
 
     fn manifest() -> RepositoryManifest {
-        RepositoryManifest {
-            schema_version: REPOSITORY_MANIFEST_SCHEMA,
-            repositories: vec![RepositoryDefinition {
-                name: "opaque-source".to_string(),
-                url: "https://packages.example.test/repository".to_string(),
-                content_url: None,
-                parser: RepositoryParserConfig::Rpm {
-                    architecture: "x86_64".to_string(),
-                },
-                profile: "fedora-44".to_string(),
-                source_identity: "fedora-project".to_string(),
-                repository_identity: "fedora-44-everything-x86_64".to_string(),
-                stream_kind: "release".to_string(),
-                stream_identity: "44".to_string(),
-                policy_group: None,
-                update_mode: "follow".to_string(),
-                pinned_snapshot_sha256: None,
-                enabled: true,
-                priority: 100,
-                trust: RepositoryTrustPolicy::Rpm {
-                    metadata: RpmMetadataAuthority::OpenPgp {
-                        keys: vec![OpenPgpTrustRoot {
-                            url: "https://keys.example.test/rpm-metadata.asc".to_string(),
-                            fingerprint: "A".repeat(40),
-                        }],
-                    },
-                    package_keys: vec![OpenPgpTrustRoot {
-                        url: "https://keys.example.test/rpm-package.asc".to_string(),
-                        fingerprint: "B".repeat(40),
-                    }],
-                },
-                metadata_expire_seconds: 21_600,
-            }],
-        }
+        RepositoryManifest::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/remi-repositories.toml"),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -494,26 +567,64 @@ mod tests {
     }
 
     #[test]
+    fn public_profile_membership_and_member_contract_are_exact() {
+        let mut missing = manifest();
+        missing
+            .repositories
+            .retain(|repository| repository.name != "fedora-44-updates");
+        let error = missing.validate().unwrap_err().to_string();
+        assert!(error.contains("repository membership is incomplete"));
+        assert!(error.contains("fedora-44-updates-x86_64"));
+
+        let mut wrong_role = manifest();
+        wrong_role
+            .repositories
+            .iter_mut()
+            .find(|repository| repository.name == "fedora-44-updates")
+            .unwrap()
+            .role = ProfileSourceRole::Base;
+        let error = wrong_role.validate().unwrap_err().to_string();
+        assert!(error.contains("has role 'base' and precedence 110"));
+        assert!(error.contains("declares role 'updates'"));
+
+        let mut reordered = manifest();
+        let base = reordered
+            .repositories
+            .iter()
+            .position(|repository| repository.name == "fedora-44")
+            .unwrap();
+        let updates = reordered
+            .repositories
+            .iter()
+            .position(|repository| repository.name == "fedora-44-updates")
+            .unwrap();
+        reordered.repositories.swap(base, updates);
+        let error = reordered.validate().unwrap_err().to_string();
+        assert!(error.contains("repository membership is reordered"));
+    }
+
+    #[test]
     fn reconcile_is_idempotent_and_config_owned() {
         let (_temp, mut conn) = create_test_db();
         let desired = manifest();
+        let repository_count = desired.repositories.len();
 
         assert_eq!(
             desired.reconcile(&mut conn).unwrap(),
             ReconcileResult {
-                inserted: 1,
+                inserted: repository_count,
                 ..ReconcileResult::default()
             }
         );
         assert_eq!(
             desired.reconcile(&mut conn).unwrap(),
             ReconcileResult {
-                unchanged: 1,
+                unchanged: repository_count,
                 ..ReconcileResult::default()
             }
         );
 
-        let repository = Repository::find_by_name(&conn, "opaque-source")
+        let repository = Repository::find_by_name(&conn, "fedora-44")
             .unwrap()
             .unwrap();
         assert_eq!(repository.package_format, RepositoryFormat::Fedora);
@@ -533,7 +644,7 @@ mod tests {
         let error = manifest().reconcile(&mut conn).unwrap_err().to_string();
         assert!(error.contains("operator-owned"));
         assert_eq!(
-            Repository::find_by_name(&conn, "opaque-source")
+            Repository::find_by_name(&conn, "fedora-44")
                 .unwrap()
                 .unwrap()
                 .url,

@@ -3,8 +3,8 @@
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1,
-    ProfileSourceMemberV1, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
+    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
+    ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
     SourceStreamV1, write_catalog_candidate,
 };
@@ -371,11 +371,11 @@ fn profile_bundle_rejects_mixed_member_evidence() {
     )
     .unwrap();
     let binding = write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &content).unwrap();
-    let manifest = ProfileRevisionV1 {
-        schema_version: PROFILE_REVISION_SCHEMA_V1,
+    let manifest = ProfileRevisionV2 {
+        schema_version: PROFILE_REVISION_SCHEMA_V2,
         profile: "fedora-44".to_string(),
         projection_version: 1,
-        members: vec![ProfileSourceMemberV1 {
+        members: vec![ProfileSourceMemberV2 {
             ordinal: 0,
             source_identity: "fedora-project".to_string(),
             repository_identity: "fedora-everything-x86_64".to_string(),
@@ -383,7 +383,8 @@ fn profile_bundle_rejects_mixed_member_evidence() {
                 kind: SourceStreamKindV1::Release,
                 identity: "44".to_string(),
             },
-            priority: 10,
+            role: crate::repository::supported_profiles::ProfileSourceRole::Base,
+            precedence: 10,
             required: true,
             source_snapshot_sha256: digest('4'),
         }],

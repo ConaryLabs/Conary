@@ -8,14 +8,14 @@ use crate::error::{Error, Result};
 use crate::trust::TargetDescription;
 
 use super::{
-    RemiUniverseCanonicalMapObjectV1, RemiUniverseCatalogObjectV1, RemiUniverseManifestV1,
+    RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2, RemiUniverseManifestV2,
 };
 
 /// A manifest whose target and complete object set are bound by one verified
 /// dedicated universe `targets` role.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedRemiUniverseTargetSet {
-    pub manifest: RemiUniverseManifestV1,
+    pub manifest: RemiUniverseManifestV2,
     pub manifest_sha256: String,
 }
 
@@ -25,7 +25,7 @@ pub fn verify_remi_universe_manifest_target(
     manifest_bytes: &[u8],
     targets: &BTreeMap<String, TargetDescription>,
 ) -> Result<VerifiedRemiUniverseTargetSet> {
-    let manifest = serde_json::from_slice::<RemiUniverseManifestV1>(manifest_bytes)
+    let manifest = serde_json::from_slice::<RemiUniverseManifestV2>(manifest_bytes)
         .map_err(|error| Error::ParseError(format!("invalid Remi universe manifest: {error}")))?;
     manifest.validate()?;
     let manifest_sha256 = manifest.manifest_sha256()?;
@@ -87,7 +87,7 @@ pub fn verify_remi_universe_object_target(
 }
 
 fn verify_descriptor_target(
-    descriptor: &RemiUniverseCatalogObjectV1,
+    descriptor: &RemiUniverseCatalogObjectV2,
     targets: &BTreeMap<String, TargetDescription>,
 ) -> Result<()> {
     verify_target_descriptor(
@@ -99,7 +99,7 @@ fn verify_descriptor_target(
 }
 
 fn verify_canonical_descriptor_target(
-    descriptor: &RemiUniverseCanonicalMapObjectV1,
+    descriptor: &RemiUniverseCanonicalMapObjectV2,
     targets: &BTreeMap<String, TargetDescription>,
 ) -> Result<()> {
     verify_target_descriptor(
@@ -174,10 +174,10 @@ fn require_exact_sha256(
 mod tests {
     use super::*;
     use crate::repository::catalog::{
-        CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V1,
-        ProfileRevisionV1, ProfileSourceMemberV1, SourceStreamKindV1, SourceStreamV1,
+        CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2,
+        ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
     };
-    use crate::repository::universe::{REMI_UNIVERSE_SCHEMA_V1, RemiUniverseProfileV1};
+    use crate::repository::universe::{REMI_UNIVERSE_SCHEMA_V2, RemiUniverseProfileV2};
 
     fn digest(byte: char) -> String {
         byte.to_string().repeat(64)
@@ -190,23 +190,36 @@ mod tests {
         }
     }
 
-    fn manifest() -> RemiUniverseManifestV1 {
-        let revision = ProfileRevisionV1 {
-            schema_version: PROFILE_REVISION_SCHEMA_V1,
-            profile: "fedora-44".to_string(),
-            projection_version: 1,
-            members: vec![ProfileSourceMemberV1 {
-                ordinal: 0,
+    fn manifest() -> RemiUniverseManifestV2 {
+        let mut declared = crate::repository::supported_profiles::profile_by_public_id("fedora-44")
+            .unwrap()
+            .members()
+            .iter()
+            .collect::<Vec<_>>();
+        declared.sort_by(|left, right| right.precedence.cmp(&left.precedence));
+        let members = declared
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, member)| ProfileSourceMemberV2 {
+                ordinal: ordinal as u32,
                 source_identity: "fedora-project".to_string(),
-                repository_identity: "fedora-everything".to_string(),
+                repository_identity: member.repository_identity.clone(),
                 stream: SourceStreamV1 {
                     kind: SourceStreamKindV1::Release,
                     identity: "44".to_string(),
                 },
-                priority: 100,
+                role: member.role,
+                precedence: member.precedence,
                 required: true,
                 source_snapshot_sha256: digest('1'),
-            }],
+            })
+            .collect::<Vec<_>>();
+        let source_evidence = members.len() as u64;
+        let revision = ProfileRevisionV2 {
+            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            profile: "fedora-44".to_string(),
+            projection_version: 1,
+            members,
             catalog: CatalogArtifactV1 {
                 sha256: digest('2'),
                 size: 17,
@@ -217,20 +230,20 @@ mod tests {
                 provides: 1,
                 requirement_groups: 0,
                 requirement_atoms: 0,
-                source_evidence: 1,
+                source_evidence,
             },
         };
         let generated_at = "2026-08-22T10:00:00Z".parse().unwrap();
-        RemiUniverseManifestV1 {
-            schema_version: REMI_UNIVERSE_SCHEMA_V1,
+        RemiUniverseManifestV2 {
+            schema_version: REMI_UNIVERSE_SCHEMA_V2,
             sequence: 1,
             metadata_root_sha256: digest('4'),
             generated_at,
             expires_at: generated_at + chrono::Duration::days(7),
-            profiles: vec![RemiUniverseProfileV1 {
+            profiles: vec![RemiUniverseProfileV2 {
                 ordinal: 0,
                 profile_revision_sha256: revision.manifest_sha256().unwrap(),
-                catalog: RemiUniverseCatalogObjectV1 {
+                catalog: RemiUniverseCatalogObjectV2 {
                     schema_version: CATALOG_CONTENT_SCHEMA_V1,
                     sha256: revision.catalog.sha256.clone(),
                     size: revision.catalog.size,
@@ -238,7 +251,7 @@ mod tests {
                 },
                 revision,
             }],
-            canonical_map: RemiUniverseCanonicalMapObjectV1 {
+            canonical_map: RemiUniverseCanonicalMapObjectV2 {
                 schema_version: crate::canonical::CANONICAL_MAP_SCHEMA_VERSION,
                 sha256: digest('5'),
                 size: 19,
@@ -249,7 +262,7 @@ mod tests {
     }
 
     fn authorized_targets(
-        manifest: &RemiUniverseManifestV1,
+        manifest: &RemiUniverseManifestV2,
         bytes: &[u8],
     ) -> BTreeMap<String, TargetDescription> {
         BTreeMap::from([

@@ -7,10 +7,9 @@
 //! read remains bound to the reader pin and exact activated revision held by
 //! that handle.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use conary_core::repository::catalog::{
-    CatalogPackageNamePageV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
-    CatalogRequirementGroupV1, ProfileRevisionV1,
+    CatalogPackageNamePageV1, CatalogPackageRecordV1, CatalogRequirementGroupV1,
 };
 use conary_core::repository::remi_metadata::{RemiProvide, RemiRequirement, RemiRequirementGroup};
 
@@ -20,13 +19,6 @@ use super::catalog_authority::PinnedProfileCatalog;
 /// catalog reader supplied by the caller.
 pub struct ProfileCatalog<'a> {
     pinned: &'a PinnedProfileCatalog,
-}
-
-/// One package together with the exact priority of its immutable profile
-/// member. Higher numeric priority is authoritative.
-pub(crate) struct RankedProfilePackage {
-    pub(crate) package: CatalogPackageRecordV1,
-    pub(crate) member_priority: i32,
 }
 
 impl<'a> ProfileCatalog<'a> {
@@ -83,21 +75,21 @@ impl<'a> ProfileCatalog<'a> {
     }
 
     /// Look up raw downloadable catalog records for one exact package name.
-    /// Size eligibility is applied before member priority so a zero-sized
-    /// placeholder cannot suppress a real artifact from another member.
+    /// Different native variants remain visible across every declared member.
+    /// Exact-identity duplicates were already resolved during profile
+    /// construction, before this immutable reader could be opened.
     pub(crate) fn find_downloadable_package_records_by_name(
         &self,
         name: &str,
         minimum_size: u64,
     ) -> Result<Vec<CatalogPackageRecordV1>> {
-        let ranked = self
-            .ranked_package_records_by_name(name)?
+        let mut packages = self
+            .pinned
+            .reader()
+            .find_packages_by_name(name)
+            .map_err(anyhow::Error::from)?
             .into_iter()
-            .filter(|candidate| candidate.package.size >= minimum_size)
-            .collect::<Vec<_>>();
-        let mut packages = retain_highest_priority(ranked)
-            .into_iter()
-            .map(|candidate| candidate.package)
+            .filter(|package| package.size >= minimum_size)
             .collect::<Vec<_>>();
         sort_packages(&mut packages);
         Ok(packages)
@@ -105,46 +97,28 @@ impl<'a> ProfileCatalog<'a> {
 
     /// Look up raw catalog records for one exact package name.
     ///
-    /// The serving boundary resolves exact member identity, retains only the
-    /// highest-priority tier, and applies the complete public tuple as a final
-    /// deterministic ordering contract.
+    /// The serving boundary preserves every distinct native variant and
+    /// applies the complete public tuple as a deterministic ordering contract.
     pub fn find_package_records_by_name(&self, name: &str) -> Result<Vec<CatalogPackageRecordV1>> {
-        let ranked = self.ranked_package_records_by_name(name)?;
-        let mut packages = retain_highest_priority(ranked)
-            .into_iter()
-            .map(|candidate| candidate.package)
-            .collect::<Vec<_>>();
+        let mut packages = self
+            .pinned
+            .reader()
+            .find_packages_by_name(name)
+            .map_err(anyhow::Error::from)?;
         sort_packages(&mut packages);
         Ok(packages)
     }
 
-    /// Look up packages for one name with their exact immutable member
-    /// priority. Callers with additional eligibility constraints must apply
-    /// those constraints before retaining the highest-priority tier.
-    pub(crate) fn ranked_package_records_by_name(
-        &self,
-        name: &str,
-    ) -> Result<Vec<RankedProfilePackage>> {
-        self.pinned
-            .reader()
-            .find_packages_by_name(name)
-            .map_err(anyhow::Error::from)?
-            .into_iter()
-            .map(|package| self.rank_package(package))
-            .collect()
-    }
-
     /// Return the authoritative package universe for this profile revision.
-    /// Lower-priority duplicates of a package name are omitted; equal-priority
-    /// members remain visible for native version comparison or typed ambiguity.
+    /// Every distinct native variant remains available. Exact duplicates were
+    /// collapsed, or rejected as conflicts, while the profile was built.
     pub(crate) fn package_records(&self) -> Result<Vec<CatalogPackageRecordV1>> {
         self.package_records_matching(|_| true)
     }
 
     /// Return the authoritative downloadable package universe after applying
-    /// the caller's minimum-size eligibility threshold and before repository
-    /// priority. This keeps sparse, search, index, prewarm, and benchmark
-    /// projections on the same precedence contract.
+    /// the caller's minimum-size eligibility threshold. This keeps sparse,
+    /// search, index, prewarm, and benchmark projections on one universe.
     pub(crate) fn downloadable_package_records(
         &self,
         minimum_size: u64,
@@ -156,42 +130,16 @@ impl<'a> ProfileCatalog<'a> {
         &self,
         eligible: impl Fn(&CatalogPackageRecordV1) -> bool,
     ) -> Result<Vec<CatalogPackageRecordV1>> {
-        let ranked = self
+        let mut packages = self
             .pinned
             .reader()
             .packages()
             .map_err(anyhow::Error::from)?
             .into_iter()
             .filter(eligible)
-            .map(|package| self.rank_package(package))
-            .collect::<Result<Vec<_>>>()?;
-        let mut packages = retain_highest_priority_per_name(ranked)
-            .into_iter()
-            .map(|candidate| candidate.package)
             .collect::<Vec<_>>();
         sort_packages(&mut packages);
         Ok(packages)
-    }
-
-    fn rank_package(&self, package: CatalogPackageRecordV1) -> Result<RankedProfilePackage> {
-        let member_priority = member_priority(
-            self.pinned.manifest(),
-            self.pinned.source_profile(),
-            &package,
-        )?;
-        Ok(RankedProfilePackage {
-            package,
-            member_priority,
-        })
-    }
-
-    /// Retain only the highest-priority eligible tier. This is exposed for
-    /// conversion lookup, which must filter version and architecture before
-    /// applying repository precedence.
-    pub(crate) fn retain_highest_priority(
-        candidates: Vec<RankedProfilePackage>,
-    ) -> Vec<RankedProfilePackage> {
-        retain_highest_priority(candidates)
     }
 
     /// Project one verified catalog package into the sparse resolution wire
@@ -210,89 +158,6 @@ impl<'a> ProfileCatalog<'a> {
     pub fn pinned(&self) -> &'a PinnedProfileCatalog {
         self.pinned
     }
-}
-
-fn member_priority(
-    manifest: &ProfileRevisionV1,
-    source_profile: &str,
-    package: &CatalogPackageRecordV1,
-) -> Result<i32> {
-    if package.source_profile != source_profile || manifest.profile != source_profile {
-        bail!(
-            "profile '{}' package '{}' carries source profile '{}' under manifest '{}'",
-            source_profile,
-            package.name,
-            package.source_profile,
-            manifest.profile
-        );
-    }
-    let CatalogPackageOriginV1::Profile {
-        member_ordinal,
-        source_identity,
-        repository_identity,
-        source_snapshot_sha256,
-    } = &package.origin
-    else {
-        bail!(
-            "profile '{}' package '{}' has source origin without a profile member",
-            source_profile,
-            package.name
-        );
-    };
-    let member = manifest
-        .members
-        .iter()
-        .find(|member| member.ordinal == *member_ordinal)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "profile '{}' package '{}' names missing member ordinal {}",
-                source_profile,
-                package.name,
-                member_ordinal
-            )
-        })?;
-    if member.source_identity != *source_identity
-        || member.repository_identity != *repository_identity
-        || member.source_snapshot_sha256 != *source_snapshot_sha256
-    {
-        bail!(
-            "profile '{}' package '{}' origin disagrees with member ordinal {}",
-            source_profile,
-            package.name,
-            member_ordinal
-        );
-    }
-    Ok(member.priority)
-}
-
-fn retain_highest_priority(mut candidates: Vec<RankedProfilePackage>) -> Vec<RankedProfilePackage> {
-    let Some(highest) = candidates
-        .iter()
-        .map(|candidate| candidate.member_priority)
-        .max()
-    else {
-        return candidates;
-    };
-    candidates.retain(|candidate| candidate.member_priority == highest);
-    candidates
-}
-
-fn retain_highest_priority_per_name(
-    candidates: Vec<RankedProfilePackage>,
-) -> Vec<RankedProfilePackage> {
-    let mut priorities = std::collections::BTreeMap::<String, i32>::new();
-    for candidate in &candidates {
-        priorities
-            .entry(candidate.package.name.clone())
-            .and_modify(|priority| *priority = (*priority).max(candidate.member_priority))
-            .or_insert(candidate.member_priority);
-    }
-    candidates
-        .into_iter()
-        .filter(|candidate| {
-            priorities.get(&candidate.package.name) == Some(&candidate.member_priority)
-        })
-        .collect()
 }
 
 fn sort_packages(packages: &mut [CatalogPackageRecordV1]) {
@@ -382,8 +247,8 @@ mod tests {
     use conary_core::repository::catalog::{
         CatalogArtifactV1, CatalogContentV1, CatalogCountsV1, CatalogPackageOriginV1,
         CatalogProvideRecordV1, CatalogReader, CatalogRequirementAtomV1, CatalogScopeV1,
-        CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1, ProfileSourceMemberV1,
-        SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
+        CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,
+        ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
     };
     use conary_core::repository::dependency_model::{
         CapabilityProvenance, ProvideArchitectureQualifier,
@@ -443,33 +308,35 @@ mod tests {
         }
     }
 
-    fn profile_manifest() -> ProfileRevisionV1 {
-        ProfileRevisionV1 {
-            schema_version: PROFILE_REVISION_SCHEMA_V1,
+    fn profile_manifest() -> ProfileRevisionV2 {
+        ProfileRevisionV2 {
+            schema_version: PROFILE_REVISION_SCHEMA_V2,
             profile: "profile".to_string(),
             projection_version: 1,
             members: vec![
-                ProfileSourceMemberV1 {
+                ProfileSourceMemberV2 {
                     ordinal: 0,
+                    role: conary_core::repository::supported_profiles::ProfileSourceRole::Updates,
                     source_identity: "higher-source".to_string(),
                     repository_identity: "higher-repository".to_string(),
                     stream: SourceStreamV1 {
                         kind: SourceStreamKindV1::Release,
                         identity: "stable".to_string(),
                     },
-                    priority: 20,
+                    precedence: 20,
                     required: true,
                     source_snapshot_sha256: "d".repeat(64),
                 },
-                ProfileSourceMemberV1 {
+                ProfileSourceMemberV2 {
                     ordinal: 1,
+                    role: conary_core::repository::supported_profiles::ProfileSourceRole::Base,
                     source_identity: "lower-source".to_string(),
                     repository_identity: "lower-repository".to_string(),
                     stream: SourceStreamV1 {
                         kind: SourceStreamKindV1::Release,
                         identity: "stable".to_string(),
                     },
-                    priority: 10,
+                    precedence: 10,
                     required: true,
                     source_snapshot_sha256: "c".repeat(64),
                 },
@@ -542,51 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_member_priority_requires_exact_manifest_identity() {
-        let manifest = profile_manifest();
-        let higher = profile_package("demo", 0);
-        assert_eq!(member_priority(&manifest, "profile", &higher).unwrap(), 20);
-
-        let mut mismatched = higher;
-        let CatalogPackageOriginV1::Profile {
-            repository_identity,
-            ..
-        } = &mut mismatched.origin
-        else {
-            panic!("profile package origin");
-        };
-        *repository_identity = "wrong-repository".to_string();
-        assert!(member_priority(&manifest, "profile", &mismatched).is_err());
-    }
-
-    #[test]
-    fn authoritative_projection_keeps_highest_priority_per_name() {
-        let retained = retain_highest_priority_per_name(vec![
-            RankedProfilePackage {
-                package: profile_package("demo", 1),
-                member_priority: 10,
-            },
-            RankedProfilePackage {
-                package: profile_package("demo", 0),
-                member_priority: 20,
-            },
-            RankedProfilePackage {
-                package: profile_package("other", 1),
-                member_priority: 10,
-            },
-        ]);
-
-        assert_eq!(retained.len(), 2);
-        assert!(retained.iter().any(|candidate| {
-            candidate.package.name == "demo" && candidate.member_priority == 20
-        }));
-        assert!(retained.iter().any(|candidate| {
-            candidate.package.name == "other" && candidate.member_priority == 10
-        }));
-    }
-
-    #[test]
-    fn downloadable_projection_applies_size_before_manifest_priority() {
+    fn profile_projection_preserves_distinct_variants_before_downloadability() {
         let mut higher_placeholder = profile_package("demo", 0);
         higher_placeholder.version = "2.0".to_string();
         higher_placeholder.size = 0;
@@ -646,10 +469,10 @@ mod tests {
 
         let all = catalog
             .find_package_records_by_name("demo")
-            .expect("select authoritative package tier");
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].version, "2.0");
-        assert_eq!(all[0].size, 0);
+            .expect("load complete native variants");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].version, "1.0");
+        assert_eq!(all[1].version, "2.0");
 
         let downloadable = catalog
             .find_downloadable_package_records_by_name("demo", 1)

@@ -174,7 +174,8 @@ pub fn evaluate(inputs: &ReadinessInputs) -> ReadinessReport {
     )
 }
 
-/// Require at least one package in every enabled profile's active catalog.
+/// Require the current exact member contract and at least one package in every
+/// public profile's active catalog.
 ///
 /// Operational SQLite owns which exact profiles are enabled. The verified,
 /// pinned immutable catalog alone owns whether an activated profile contains
@@ -265,7 +266,7 @@ fn probe_source_profiles(
         ProbeOutcome::Ready
     } else {
         ProbeOutcome::not_ready(format!(
-            "enabled source profiles have no packages in their active immutable catalogs: {}",
+            "public source profiles lack their exact current members or populated active immutable catalogs: {}",
             missing.join(", ")
         ))
     }
@@ -276,7 +277,14 @@ fn active_profile_is_populated(
     profile: &str,
 ) -> anyhow::Result<bool> {
     let inspection = catalog_authority.inspect_active_profile(profile)?;
-    Ok(inspection.manifest.counts.packages > 0)
+    conary_core::repository::supported_profiles::profile_by_public_id(profile)
+        .ok_or_else(|| anyhow::anyhow!("profile '{profile}' has no public support contract"))?;
+    if inspection.manifest.validate_member_contract().is_err() {
+        return Ok(false);
+    }
+    Ok(inspection.manifest.projection_version
+        == super::catalog_refresh::PROFILE_CATALOG_PROJECTION_VERSION
+        && inspection.manifest.counts.packages > 0)
 }
 
 /// Check one exact public profile without deriving authority from its route.
@@ -442,29 +450,41 @@ mod tests {
         };
         use conary_core::repository::catalog::{
             CATALOG_FILE_NAME, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
-            CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1, ProfileRevisionV1,
-            ProfileSourceMemberV1, SourceStreamKindV1, SourceStreamV1,
+            CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,
+            ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
             publish_profile_catalog_bundle, write_catalog_candidate,
             write_profile_catalog_manifest,
         };
         use conary_core::repository::versioning::VersionScheme;
 
         let source_identity = format!("source-{profile}");
-        let repository_identity = format!("repository-{profile}");
-        let source_manifest_json = String::from_utf8(
-            conary_core::json::canonical_json(&serde_json::json!({
-                "fixture": "readiness-source-snapshot",
-                "profile": profile,
-            }))
-            .expect("serialize readiness source resource"),
-        )
-        .expect("source manifest JSON is UTF-8");
-        let source_snapshot_sha256 = conary_core::hash::sha256(source_manifest_json.as_bytes());
+        let profile_contract =
+            conary_core::repository::supported_profiles::profile_by_public_id(profile)
+                .expect("readiness fixture uses public profile");
+        let mut declared_members = profile_contract.members().iter().collect::<Vec<_>>();
+        declared_members.sort_by(|left, right| right.precedence.cmp(&left.precedence));
+        let first_member = declared_members.first().expect("profile member");
+        let source_resources = declared_members
+            .iter()
+            .map(|member| {
+                let json = String::from_utf8(
+                    conary_core::json::canonical_json(&serde_json::json!({
+                        "fixture": "readiness-source-snapshot",
+                        "profile": profile,
+                        "repository_identity": member.repository_identity,
+                    }))
+                    .expect("serialize readiness source resource"),
+                )
+                .expect("source manifest JSON is UTF-8");
+                let digest = conary_core::hash::sha256(json.as_bytes());
+                (json, digest)
+            })
+            .collect::<Vec<_>>();
         let origin = CatalogPackageOriginV1::Profile {
             member_ordinal: 0,
             source_identity: source_identity.clone(),
-            repository_identity: repository_identity.clone(),
-            source_snapshot_sha256: source_snapshot_sha256.clone(),
+            repository_identity: first_member.repository_identity.clone(),
+            source_snapshot_sha256: source_resources[0].1.clone(),
         };
         let packages = populated
             .then(|| CatalogPackageRecordV1 {
@@ -496,12 +516,18 @@ mod tests {
             CatalogScopeV1::Profile {
                 profile: profile.to_string(),
             },
-            vec![CatalogSourceEvidenceV1::SourceSnapshot {
-                member_ordinal: 0,
-                source_identity: source_identity.clone(),
-                repository_identity: repository_identity.clone(),
-                source_snapshot_sha256: source_snapshot_sha256.clone(),
-            }],
+            declared_members
+                .iter()
+                .enumerate()
+                .map(
+                    |(ordinal, member)| CatalogSourceEvidenceV1::SourceSnapshot {
+                        member_ordinal: u32::try_from(ordinal).unwrap(),
+                        source_identity: source_identity.clone(),
+                        repository_identity: member.repository_identity.clone(),
+                        source_snapshot_sha256: source_resources[ordinal].1.clone(),
+                    },
+                )
+                .collect(),
             packages,
         )
         .expect("build readiness profile catalog");
@@ -514,22 +540,27 @@ mod tests {
         std::fs::create_dir_all(&candidate_dir).expect("create catalog candidate");
         let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
             .expect("write readiness catalog candidate");
-        let manifest = ProfileRevisionV1 {
-            schema_version: PROFILE_REVISION_SCHEMA_V1,
+        let manifest = ProfileRevisionV2 {
+            schema_version: PROFILE_REVISION_SCHEMA_V2,
             profile: profile.to_string(),
-            projection_version: 1,
-            members: vec![ProfileSourceMemberV1 {
-                ordinal: 0,
-                source_identity,
-                repository_identity,
-                stream: SourceStreamV1 {
-                    kind: SourceStreamKindV1::Release,
-                    identity: "stable".to_string(),
-                },
-                priority: 0,
-                required: true,
-                source_snapshot_sha256: source_snapshot_sha256.clone(),
-            }],
+            projection_version: super::super::catalog_refresh::PROFILE_CATALOG_PROJECTION_VERSION,
+            members: declared_members
+                .iter()
+                .enumerate()
+                .map(|(ordinal, member)| ProfileSourceMemberV2 {
+                    ordinal: u32::try_from(ordinal).unwrap(),
+                    role: member.role,
+                    source_identity: source_identity.clone(),
+                    repository_identity: member.repository_identity.clone(),
+                    stream: SourceStreamV1 {
+                        kind: SourceStreamKindV1::Release,
+                        identity: "stable".to_string(),
+                    },
+                    precedence: member.precedence,
+                    required: true,
+                    source_snapshot_sha256: source_resources[ordinal].1.clone(),
+                })
+                .collect(),
             catalog: binding.artifact.clone(),
             logical_digest_sha256: binding.logical_digest_sha256.clone(),
             counts: binding.counts,
@@ -544,23 +575,27 @@ mod tests {
         )
         .expect("manifest JSON is UTF-8");
         let conn = conary_core::db::open_fast(&inputs.db_path).expect("open readiness database");
-        RemiCatalogResource {
-            resource_sha256: source_snapshot_sha256.clone(),
-            kind: RemiCatalogResourceKind::SourceSnapshot,
-            source_profile: profile.to_string(),
-            artifact_sha256: conary_core::hash::sha256(
-                format!("readiness-source-artifact-{profile}").as_bytes(),
-            ),
-            artifact_size: 1,
-            logical_digest_sha256: conary_core::hash::sha256(
-                format!("readiness-source-logical-{profile}").as_bytes(),
-            ),
-            manifest_json: source_manifest_json,
-            durable: true,
-            created_at: 1,
+        for (ordinal, (source_manifest_json, source_snapshot_sha256)) in
+            source_resources.iter().enumerate()
+        {
+            RemiCatalogResource {
+                resource_sha256: source_snapshot_sha256.clone(),
+                kind: RemiCatalogResourceKind::SourceSnapshot,
+                source_profile: profile.to_string(),
+                artifact_sha256: conary_core::hash::sha256(
+                    format!("readiness-source-artifact-{profile}-{ordinal}").as_bytes(),
+                ),
+                artifact_size: 1,
+                logical_digest_sha256: conary_core::hash::sha256(
+                    format!("readiness-source-logical-{profile}-{ordinal}").as_bytes(),
+                ),
+                manifest_json: source_manifest_json.clone(),
+                durable: true,
+                created_at: 1,
+            }
+            .insert(&conn)
+            .expect("insert readiness source resource");
         }
-        .insert(&conn)
-        .expect("insert readiness source resource");
         RemiCatalogResource {
             resource_sha256: digest.clone(),
             kind: RemiCatalogResourceKind::ProfileRevision,
@@ -574,19 +609,22 @@ mod tests {
         }
         .insert(&conn)
         .expect("insert readiness profile resource");
-        RemiProfileRevisionMember {
-            profile_revision_sha256: digest.clone(),
-            ordinal: 0,
-            source_snapshot_sha256,
-            source_identity: manifest.members[0].source_identity.clone(),
-            repository_identity: manifest.members[0].repository_identity.clone(),
-            stream_kind: "release".to_string(),
-            stream_identity: "stable".to_string(),
-            priority: 0,
-            required: true,
+        for member in &manifest.members {
+            RemiProfileRevisionMember {
+                profile_revision_sha256: digest.clone(),
+                ordinal: i64::from(member.ordinal),
+                source_snapshot_sha256: member.source_snapshot_sha256.clone(),
+                source_identity: member.source_identity.clone(),
+                repository_identity: member.repository_identity.clone(),
+                stream_kind: "release".to_string(),
+                stream_identity: "stable".to_string(),
+                role: member.role,
+                precedence: i64::from(member.precedence),
+                required: true,
+            }
+            .insert(&conn)
+            .expect("insert readiness profile member");
         }
-        .insert(&conn)
-        .expect("insert readiness profile member");
         let run_id = uuid::Uuid::new_v4().to_string();
         let owner_instance_uuid = uuid::Uuid::new_v4().to_string();
         conn.execute(

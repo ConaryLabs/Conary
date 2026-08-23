@@ -12,16 +12,16 @@ use crate::ccs::signing::SigningKeyPair;
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
-    CatalogProvideRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V1,
-    ProfileRevisionV1, ProfileSourceMemberV1, SourceStreamKindV1, SourceStreamV1,
+    CatalogProvideRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
+    ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
     write_catalog_candidate,
 };
 use crate::repository::dependency_model::{
     CapabilityProvenance, ProvideArchitectureQualifier, ProvideVersionRelation,
 };
 use crate::repository::universe::{
-    REMI_UNIVERSE_SCHEMA_V1, RemiUniverseCanonicalMapObjectV1, RemiUniverseCatalogObjectV1,
-    RemiUniverseProfileV1, enroll_remi_universe_root,
+    REMI_UNIVERSE_SCHEMA_V2, RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2,
+    RemiUniverseProfileV2, enroll_remi_universe_root,
 };
 use crate::repository::versioning::VersionScheme;
 use crate::trust::ceremony::create_initial_root;
@@ -67,13 +67,51 @@ fn digest(byte: char) -> String {
     byte.to_string().repeat(64)
 }
 
+fn profile_members() -> Vec<ProfileSourceMemberV2> {
+    let mut declared = crate::repository::supported_profiles::profile_by_public_id(PROFILE)
+        .unwrap()
+        .members()
+        .iter()
+        .collect::<Vec<_>>();
+    declared.sort_by(|left, right| right.precedence.cmp(&left.precedence));
+    declared
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, member)| ProfileSourceMemberV2 {
+            ordinal: ordinal as u32,
+            source_identity: "fedora-project".to_string(),
+            repository_identity: member.repository_identity.clone(),
+            stream: SourceStreamV1 {
+                kind: SourceStreamKindV1::Release,
+                identity: "44".to_string(),
+            },
+            role: member.role,
+            precedence: member.precedence,
+            required: true,
+            source_snapshot_sha256: digest('1'),
+        })
+        .collect()
+}
+
+fn profile_evidence() -> Vec<CatalogSourceEvidenceV1> {
+    profile_members()
+        .into_iter()
+        .map(|member| CatalogSourceEvidenceV1::SourceSnapshot {
+            member_ordinal: member.ordinal,
+            source_identity: member.source_identity,
+            repository_identity: member.repository_identity,
+            source_snapshot_sha256: member.source_snapshot_sha256,
+        })
+        .collect()
+}
+
 fn package(version: &str) -> CatalogPackageRecordV1 {
     CatalogPackageRecordV1 {
         package_key_sha256: String::new(),
         origin: CatalogPackageOriginV1::Profile {
             member_ordinal: 0,
             source_identity: "fedora-project".to_string(),
-            repository_identity: "everything".to_string(),
+            repository_identity: "fedora-44-updates-x86_64".to_string(),
             source_snapshot_sha256: digest('1'),
         },
         source_profile: PROFILE.to_string(),
@@ -121,33 +159,17 @@ fn publish_bundle(
         CatalogScopeV1::Profile {
             profile: PROFILE.to_string(),
         },
-        vec![CatalogSourceEvidenceV1::SourceSnapshot {
-            member_ordinal: 0,
-            source_identity: "fedora-project".to_string(),
-            repository_identity: "everything".to_string(),
-            source_snapshot_sha256: digest('1'),
-        }],
+        profile_evidence(),
         vec![package(package_version)],
     )
     .unwrap();
     let binding = write_catalog_candidate(&catalog_path, &content).unwrap();
     let catalog_bytes = fs::read(&catalog_path).unwrap();
-    let revision = ProfileRevisionV1 {
-        schema_version: PROFILE_REVISION_SCHEMA_V1,
+    let revision = ProfileRevisionV2 {
+        schema_version: PROFILE_REVISION_SCHEMA_V2,
         profile: PROFILE.to_string(),
         projection_version: 1,
-        members: vec![ProfileSourceMemberV1 {
-            ordinal: 0,
-            source_identity: "fedora-project".to_string(),
-            repository_identity: "everything".to_string(),
-            stream: SourceStreamV1 {
-                kind: SourceStreamKindV1::Release,
-                identity: "44".to_string(),
-            },
-            priority: 100,
-            required: true,
-            source_snapshot_sha256: digest('1'),
-        }],
+        members: profile_members(),
         catalog: binding.artifact.clone(),
         logical_digest_sha256: binding.logical_digest_sha256.clone(),
         counts: binding.counts,
@@ -165,16 +187,16 @@ fn publish_bundle(
     };
     let canonical_bytes = crate::json::canonical_json(&canonical_map).unwrap();
     let canonical_sha256 = crate::hash::sha256(&canonical_bytes);
-    let manifest = RemiUniverseManifestV1 {
-        schema_version: REMI_UNIVERSE_SCHEMA_V1,
+    let manifest = RemiUniverseManifestV2 {
+        schema_version: REMI_UNIVERSE_SCHEMA_V2,
         sequence,
         metadata_root_sha256: crate::hash::sha256(&authority.root_bytes()),
         generated_at,
         expires_at,
-        profiles: vec![RemiUniverseProfileV1 {
+        profiles: vec![RemiUniverseProfileV2 {
             ordinal: 0,
             profile_revision_sha256: revision.manifest_sha256().unwrap(),
-            catalog: RemiUniverseCatalogObjectV1 {
+            catalog: RemiUniverseCatalogObjectV2 {
                 schema_version: CATALOG_CONTENT_SCHEMA_V1,
                 sha256: binding.artifact.sha256.clone(),
                 size: binding.artifact.size,
@@ -182,7 +204,7 @@ fn publish_bundle(
             },
             revision,
         }],
-        canonical_map: RemiUniverseCanonicalMapObjectV1 {
+        canonical_map: RemiUniverseCanonicalMapObjectV2 {
             schema_version: canonical_map.schema_version,
             sha256: canonical_sha256.clone(),
             size: canonical_bytes.len() as u64,

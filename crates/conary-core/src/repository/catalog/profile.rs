@@ -5,48 +5,65 @@
 use super::{
     CatalogBindingV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
     CatalogPackageRecordV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1,
-    PROFILE_REVISION_SCHEMA_V1, ProfileRevisionV1, ProfileSourceMemberV1, SourceSnapshotV1,
+    PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1,
 };
 use crate::error::{Error, Result};
+use crate::repository::supported_profiles::ProfileSourceRole;
+use std::collections::BTreeMap;
 
 /// One verified source selected explicitly for a profile revision.
-pub struct ProfileCatalogMemberInputV1<'a> {
+pub struct ProfileCatalogMemberInputV2<'a> {
     pub ordinal: u32,
-    pub priority: i32,
+    pub role: ProfileSourceRole,
+    pub precedence: i32,
     pub required: bool,
     pub manifest: &'a SourceSnapshotV1,
     pub reader: &'a CatalogReader,
 }
 
 /// Complete logical profile candidate before its SQLite byte artifact is bound.
-pub struct ProfileCatalogCandidateV1 {
+pub struct ProfileCatalogCandidateV2 {
     profile: String,
     projection_version: u32,
-    members: Vec<ProfileSourceMemberV1>,
+    members: Vec<ProfileSourceMemberV2>,
     content: CatalogContentV1,
 }
 
-impl ProfileCatalogCandidateV1 {
+impl ProfileCatalogCandidateV2 {
     pub fn compose(
         profile: impl Into<String>,
         projection_version: u32,
-        inputs: Vec<ProfileCatalogMemberInputV1<'_>>,
+        inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
     ) -> Result<Self> {
         let profile = profile.into();
+        let scope = CatalogScopeV1::Profile {
+            profile: profile.clone(),
+        };
         let mut packages = Vec::new();
+        let mut package_indexes = BTreeMap::new();
         let (members, evidence) =
-            visit_profile_packages(&profile, projection_version, inputs, |package| {
+            visit_profile_packages(&profile, projection_version, inputs, |mut package| {
+                package.canonicalize_for_scope(&scope)?;
+                if let Some(index) = package_indexes.get(&package.package_key_sha256).copied() {
+                    let existing: &CatalogPackageRecordV1 = &packages[index];
+                    if existing.same_profile_record(&package) {
+                        return Ok(());
+                    }
+                    return Err(Error::ConflictError(format!(
+                        "profile '{}' has contradictory package identity {} {}-{} {:?}",
+                        profile,
+                        package.name,
+                        package.version,
+                        package.package_release,
+                        package.architecture
+                    )));
+                }
+                package_indexes.insert(package.package_key_sha256.clone(), packages.len());
                 packages.push(package);
                 Ok(())
             })?;
 
-        let content = CatalogContentV1::new(
-            CatalogScopeV1::Profile {
-                profile: profile.clone(),
-            },
-            evidence,
-            packages,
-        )?;
+        let content = CatalogContentV1::new(scope, evidence, packages)?;
         Ok(Self {
             profile,
             projection_version,
@@ -61,11 +78,11 @@ impl ProfileCatalogCandidateV1 {
     }
 
     #[must_use]
-    pub fn members(&self) -> &[ProfileSourceMemberV1] {
+    pub fn members(&self) -> &[ProfileSourceMemberV2] {
         &self.members
     }
 
-    pub fn bind(self, binding: &CatalogBindingV1) -> Result<ProfileRevisionV1> {
+    pub fn bind(self, binding: &CatalogBindingV1) -> Result<ProfileRevisionV2> {
         let expected_scope = CatalogScopeV1::Profile {
             profile: self.profile.clone(),
         };
@@ -88,8 +105,8 @@ pub fn write_profile_catalog_candidate(
     path: impl AsRef<std::path::Path>,
     profile: impl Into<String>,
     projection_version: u32,
-    inputs: Vec<ProfileCatalogMemberInputV1<'_>>,
-) -> Result<ProfileRevisionV1> {
+    inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
+) -> Result<ProfileRevisionV2> {
     let profile = profile.into();
     let mut writer = CatalogCandidateWriter::create(
         path,
@@ -118,9 +135,9 @@ pub fn write_profile_catalog_candidate(
 fn visit_profile_packages(
     profile: &str,
     projection_version: u32,
-    inputs: Vec<ProfileCatalogMemberInputV1<'_>>,
+    inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
     mut visitor: impl FnMut(CatalogPackageRecordV1) -> Result<()>,
-) -> Result<(Vec<ProfileSourceMemberV1>, Vec<CatalogSourceEvidenceV1>)> {
+) -> Result<(Vec<ProfileSourceMemberV2>, Vec<CatalogSourceEvidenceV1>)> {
     visit_profile_members(
         profile,
         projection_version,
@@ -142,9 +159,9 @@ fn visit_profile_packages(
 fn visit_profile_members(
     profile: &str,
     projection_version: u32,
-    mut inputs: Vec<ProfileCatalogMemberInputV1<'_>>,
-    mut visitor: impl FnMut(&ProfileCatalogMemberInputV1<'_>, &str) -> Result<()>,
-) -> Result<(Vec<ProfileSourceMemberV1>, Vec<CatalogSourceEvidenceV1>)> {
+    mut inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
+    mut visitor: impl FnMut(&ProfileCatalogMemberInputV2<'_>, &str) -> Result<()>,
+) -> Result<(Vec<ProfileSourceMemberV2>, Vec<CatalogSourceEvidenceV1>)> {
     if projection_version == 0 {
         return Err(Error::ConfigError(
             "profile catalog projection version must be positive".to_string(),
@@ -177,12 +194,13 @@ fn visit_profile_members(
         }
         let source_snapshot_sha256 = input.manifest.manifest_sha256()?;
         require_reader_matches_source(input.reader, input.manifest)?;
-        members.push(ProfileSourceMemberV1 {
+        members.push(ProfileSourceMemberV2 {
             ordinal: input.ordinal,
+            role: input.role,
             source_identity: input.manifest.source_identity.clone(),
             repository_identity: input.manifest.repository_identity.clone(),
             stream: input.manifest.stream.clone(),
-            priority: input.priority,
+            precedence: input.precedence,
             required: input.required,
             source_snapshot_sha256: source_snapshot_sha256.clone(),
         });
@@ -200,11 +218,11 @@ fn visit_profile_members(
 fn bind_profile_revision(
     profile: String,
     projection_version: u32,
-    members: Vec<ProfileSourceMemberV1>,
+    members: Vec<ProfileSourceMemberV2>,
     binding: &CatalogBindingV1,
-) -> Result<ProfileRevisionV1> {
-    let manifest = ProfileRevisionV1 {
-        schema_version: PROFILE_REVISION_SCHEMA_V1,
+) -> Result<ProfileRevisionV2> {
+    let manifest = ProfileRevisionV2 {
+        schema_version: PROFILE_REVISION_SCHEMA_V2,
         profile,
         projection_version,
         members,

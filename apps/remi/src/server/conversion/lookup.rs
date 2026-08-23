@@ -3,7 +3,7 @@
 
 use super::ConversionService;
 use crate::server::catalog_authority::PinnedProfileCatalog;
-use crate::server::profile_catalog::{ProfileCatalog, RankedProfilePackage};
+use crate::server::profile_catalog::ProfileCatalog;
 use anyhow::{Context, Result, anyhow, bail};
 use conary_core::db::models::{RemiActiveProfileRevision, Repository, RepositoryPackage};
 use conary_core::repository::catalog::{
@@ -200,7 +200,7 @@ impl ConversionService {
                 .with_context(|| format!("open pinned catalog for profile '{}'", profile.id()))?,
         };
         let candidates =
-            ProfileCatalog::new(&catalog).ranked_package_records_by_name(package_name)?;
+            ProfileCatalog::new(&catalog).find_package_records_by_name(package_name)?;
         let package = select_catalog_package(
             profile.id(),
             package_name,
@@ -241,7 +241,7 @@ fn select_catalog_package(
     package_name: &str,
     version: Option<&str>,
     architecture: Option<&str>,
-    candidates: Vec<RankedProfilePackage>,
+    candidates: Vec<CatalogPackageRecordV1>,
 ) -> Result<CatalogPackageRecordV1> {
     let version_label = version
         .map(|value| format!(" version '{value}'"))
@@ -263,31 +263,28 @@ fn select_catalog_package(
     let mut candidates = candidates
         .into_iter()
         .filter(|candidate| {
-            candidate.package.name == package_name
-                && candidate.package.source_profile == profile
-                && candidate.package.size >= minimum_size
-                && version.is_none_or(|requested| candidate.package.version == requested)
-                && architecture.is_none_or(|requested| {
-                    candidate.package.architecture.as_deref() == Some(requested)
-                })
+            candidate.name == package_name
+                && candidate.source_profile == profile
+                && candidate.size >= minimum_size
+                && version.is_none_or(|requested| candidate.version == requested)
+                && architecture
+                    .is_none_or(|requested| candidate.architecture.as_deref() == Some(requested))
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
         return Err(not_found());
     }
 
-    candidates = ProfileCatalog::retain_highest_priority(candidates);
-
     if version.is_none() {
-        let scheme = candidates[0].package.version_scheme;
-        let mut latest_version = candidates[0].package.version.clone();
+        let scheme = candidates[0].version_scheme;
+        let mut latest_version = candidates[0].version.clone();
         for candidate in candidates.iter().skip(1) {
-            match compare_repo_versions(scheme, &candidate.package.version, &latest_version)? {
-                Ordering::Greater => latest_version = candidate.package.version.clone(),
+            match compare_repo_versions(scheme, &candidate.version, &latest_version)? {
+                Ordering::Greater => latest_version = candidate.version.clone(),
                 Ordering::Equal | Ordering::Less => {}
             }
         }
-        candidates.retain(|candidate| candidate.package.version == latest_version);
+        candidates.retain(|candidate| candidate.version == latest_version);
     }
 
     // A request without an architecture is only unambiguous when the selected
@@ -302,10 +299,7 @@ fn select_catalog_package(
             candidate_count: candidates.len(),
         }));
     }
-    Ok(candidates
-        .pop()
-        .expect("candidate count checked as one")
-        .package)
+    Ok(candidates.pop().expect("candidate count checked as one"))
 }
 
 fn lookup_repository_key_material(
@@ -398,13 +392,6 @@ mod tests {
         package
     }
 
-    fn ranked(package: CatalogPackageRecordV1, member_priority: i32) -> RankedProfilePackage {
-        RankedProfilePackage {
-            package,
-            member_priority,
-        }
-    }
-
     #[test]
     fn catalog_lookup_picks_latest_unique_version() {
         let selected = select_catalog_package(
@@ -413,8 +400,8 @@ mod tests {
             None,
             Some("x86_64"),
             vec![
-                ranked(package("1.0-1.fc44", Some("x86_64"), "old"), 0),
-                ranked(package("1.1-1.fc44", Some("x86_64"), "new"), 0),
+                package("1.0-1.fc44", Some("x86_64"), "old"),
+                package("1.1-1.fc44", Some("x86_64"), "new"),
             ],
         )
         .unwrap();
@@ -430,8 +417,8 @@ mod tests {
             Some("1.1-1.fc44"),
             None,
             vec![
-                ranked(package("1.1-1.fc44", Some("x86_64"), "one"), 0),
-                ranked(package("1.1-1.fc44", Some("aarch64"), "two"), 0),
+                package("1.1-1.fc44", Some("x86_64"), "one"),
+                package("1.1-1.fc44", Some("aarch64"), "two"),
             ],
         )
         .unwrap_err();
@@ -454,43 +441,43 @@ mod tests {
     }
 
     #[test]
-    fn catalog_lookup_applies_priority_before_native_version_ordering() {
+    fn catalog_lookup_compares_native_versions_across_profile_members() {
         let selected = select_catalog_package(
             "fedora-44",
             "demo",
             None,
             Some("x86_64"),
             vec![
-                ranked(package("2.0-1.fc44", Some("x86_64"), "lower"), 10),
-                ranked(package("1.0-1.fc44", Some("x86_64"), "higher"), 20),
+                package("2.0-1.fc44", Some("x86_64"), "newer"),
+                package("1.0-1.fc44", Some("x86_64"), "older"),
             ],
         )
-        .expect("higher-priority eligible member wins");
+        .expect("native version ordering spans the complete profile");
 
-        assert_eq!(selected.version, "1.0-1.fc44");
-        assert_eq!(selected.checksum, conary_core::hash::sha256(b"higher"));
+        assert_eq!(selected.version, "2.0-1.fc44");
+        assert_eq!(selected.checksum, conary_core::hash::sha256(b"newer"));
     }
 
     #[test]
-    fn catalog_lookup_filters_exact_version_before_priority() {
+    fn catalog_lookup_filters_exact_version_before_native_ordering() {
         let selected = select_catalog_package(
             "fedora-44",
             "demo",
             Some("1.0-1.fc44"),
             Some("x86_64"),
             vec![
-                ranked(package("2.0-1.fc44", Some("x86_64"), "higher"), 20),
-                ranked(package("1.0-1.fc44", Some("x86_64"), "eligible"), 10),
+                package("2.0-1.fc44", Some("x86_64"), "newer"),
+                package("1.0-1.fc44", Some("x86_64"), "eligible"),
             ],
         )
-        .expect("priority applies only within the eligible exact version");
+        .expect("exact version remains selectable from the complete profile");
 
         assert_eq!(selected.version, "1.0-1.fc44");
         assert_eq!(selected.checksum, conary_core::hash::sha256(b"eligible"));
     }
 
     #[test]
-    fn catalog_lookup_filters_downloadability_before_priority() {
+    fn catalog_lookup_filters_downloadability_before_native_ordering() {
         let mut higher_placeholder = package("2.0-1.fc44", Some("x86_64"), "placeholder");
         higher_placeholder.size = 0;
         let selected = select_catalog_package(
@@ -499,11 +486,11 @@ mod tests {
             None,
             Some("x86_64"),
             vec![
-                ranked(higher_placeholder, 20),
-                ranked(package("1.0-1.fc44", Some("x86_64"), "downloadable"), 10),
+                higher_placeholder,
+                package("1.0-1.fc44", Some("x86_64"), "downloadable"),
             ],
         )
-        .expect("downloadable lower-priority member remains eligible");
+        .expect("downloadable native variant remains eligible");
 
         assert_eq!(selected.version, "1.0-1.fc44");
         assert_eq!(

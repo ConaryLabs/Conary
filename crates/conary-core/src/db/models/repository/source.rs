@@ -2,7 +2,10 @@
 
 //! Repository source identity, policy, trust, validation, and persistence.
 
+mod persistence;
 mod policy;
+
+use persistence::source_policy_from_row;
 
 pub use policy::{
     AuthenticatedSnapshotIdentity, NativeSourceEcosystem, NativeSourceStream,
@@ -10,10 +13,11 @@ pub use policy::{
 };
 
 use crate::error::{Error, Result};
-use crate::repository::supported_profiles::{ProfilePackageFormat, SupportedProfile};
+use crate::repository::supported_profiles::{
+    ProfilePackageFormat, ProfileSourceRole, SupportedProfile,
+};
 use crate::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
-use rusqlite::{Connection, OptionalExtension, Row, params};
-use std::io;
+use rusqlite::{Connection, OptionalExtension, params};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityAdvisorySupport {
@@ -85,7 +89,13 @@ pub struct Repository {
     /// If None, uses the same URL as metadata
     pub content_url: Option<String>,
     pub enabled: bool,
+    /// Numeric precedence inside the exact profile-member contract. Higher
+    /// values select provenance when exact package records deduplicate.
     pub priority: i32,
+    /// Typed function of this repository inside a Remi profile universe.
+    pub profile_member_role: Option<ProfileSourceRole>,
+    /// Whether profile publication requires this exact member.
+    pub profile_member_required: bool,
     /// Exact ecosystem-native authority used to authenticate metadata and
     /// package payloads. Native repositories require a matching policy.
     pub trust_policy: Option<RepositoryTrustPolicy>,
@@ -139,7 +149,7 @@ impl Repository {
          r.default_strategy, r.default_strategy_endpoint, r.source_profile, \
          r.tuf_enabled, r.tuf_root_version, r.tuf_root_url, r.security_advisory_support, \
          r.package_format, r.parser_config_json, r.managed_by, r.repository_identity, \
-         r.stream_binding_sha256, \
+         r.stream_binding_sha256, r.profile_member_role, r.profile_member_required, \
          sp.id, sp.source_identity, sp.scope_kind, sp.scope_identity, sp.ecosystem, \
          sp.version_scheme, sp.stream_kind, sp.stream_identity, sp.update_mode, pin.snapshot_sha256";
     const FROM: &'static str = "repositories r \
@@ -155,6 +165,8 @@ impl Repository {
             content_url: None,
             enabled: true,
             priority: 0,
+            profile_member_role: None,
+            profile_member_required: false,
             trust_policy: None,
             metadata_expire: 3600, // Default: 1 hour
             last_checked_at: None,
@@ -382,7 +394,7 @@ impl Repository {
         Ok(config)
     }
 
-    /// Return the exact public source profile served by this repository.
+    /// Return the exact known source profile served by this repository.
     pub fn require_source_profile(&self) -> Result<&'static SupportedProfile> {
         let profile_id = self.source_profile.as_deref().ok_or_else(|| {
             Error::ConfigError(format!(
@@ -390,8 +402,8 @@ impl Repository {
                 self.name
             ))
         })?;
-        let profile = crate::repository::supported_profiles::profile_by_public_id(profile_id)
-            .ok_or_else(|| {
+        let profile =
+            crate::repository::supported_profiles::profile_by_id(profile_id).ok_or_else(|| {
                 Error::ConfigError(format!(
                     "repository '{}' declares unsupported source profile '{}'",
                     self.name, profile_id
@@ -418,6 +430,19 @@ impl Repository {
         Ok(profile)
     }
 
+    /// Return the exact public profile required by Remi client resolution.
+    pub fn require_public_source_profile(&self) -> Result<&'static SupportedProfile> {
+        let profile = self.require_source_profile()?;
+        if !profile.support_tier().is_public() {
+            return Err(Error::ConfigError(format!(
+                "repository '{}' declares non-public source profile '{}'",
+                self.name,
+                profile.id()
+            )));
+        }
+        Ok(profile)
+    }
+
     /// Return the exact profile authority for dependency resolution.
     ///
     /// Native CCS repositories are already bound by their signed repository
@@ -437,7 +462,7 @@ impl Repository {
             return self
                 .source_profile
                 .as_deref()
-                .map(|_| self.require_source_profile())
+                .map(|_| self.require_public_source_profile())
                 .transpose();
         }
 
@@ -475,6 +500,12 @@ impl Repository {
     }
 
     fn validate_parser_contract(&self) -> Result<()> {
+        if self.profile_member_role.is_none() && self.profile_member_required {
+            return Err(Error::ConfigError(format!(
+                "repository '{}' requires a profile member role before it can be required",
+                self.name
+            )));
+        }
         match self.default_strategy.as_deref() {
             None | Some("binary") | Some("static") => {}
             Some("remi") => {
@@ -588,8 +619,8 @@ impl Repository {
         let trust_policy_json = self.trust_policy_json()?;
         let source_policy_id = self.ensure_source_policy(conn)?;
         let inserted = conn.execute(
-            "INSERT INTO repositories (name, url, content_url, enabled, priority, trust_policy_json, metadata_expire, default_strategy, default_strategy_endpoint, source_profile, tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support, package_format, parser_config_json, managed_by, source_policy_id, repository_identity, stream_binding_sha256)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+            "INSERT INTO repositories (name, url, content_url, enabled, priority, trust_policy_json, metadata_expire, default_strategy, default_strategy_endpoint, source_profile, tuf_enabled, tuf_root_version, tuf_root_url, security_advisory_support, package_format, parser_config_json, managed_by, source_policy_id, repository_identity, stream_binding_sha256, profile_member_role, profile_member_required)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
              ON CONFLICT(name) DO NOTHING",
             params![
                 &self.name,
@@ -612,6 +643,8 @@ impl Repository {
                 source_policy_id,
                 &self.repository_identity,
                 &self.stream_binding_sha256,
+                self.profile_member_role.map(ProfileSourceRole::as_str),
+                self.profile_member_required as i32,
             ],
         )?;
         if inserted == 0 {
@@ -803,8 +836,9 @@ impl Repository {
              default_strategy = ?12, default_strategy_endpoint = ?13, source_profile = ?14,
              tuf_enabled = ?15, tuf_root_version = ?16, tuf_root_url = ?17,
              security_advisory_support = ?18, package_format = ?19, parser_config_json = ?20,
-             managed_by = ?21, repository_identity = ?22, stream_binding_sha256 = ?23
-             WHERE id = ?24",
+             managed_by = ?21, repository_identity = ?22, stream_binding_sha256 = ?23,
+             profile_member_role = ?24, profile_member_required = ?25
+             WHERE id = ?26",
             params![
                 &self.name,
                 &self.url,
@@ -829,6 +863,8 @@ impl Repository {
                 self.managed_by.as_str(),
                 &self.repository_identity,
                 &self.stream_binding_sha256,
+                self.profile_member_role.map(ProfileSourceRole::as_str),
+                self.profile_member_required as i32,
                 id,
             ],
         )?;
@@ -859,141 +895,4 @@ impl Repository {
         }
         Ok(())
     }
-
-    /// Convert a database row to a Repository
-    fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let package_format_value = row.get::<_, String>(20)?;
-        let package_format = RepositoryFormat::from_db(&package_format_value).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                20,
-                rusqlite::types::Type::Text,
-                Box::new(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    error.to_string(),
-                )),
-            )
-        })?;
-        let parser_config = row
-            .get::<_, Option<String>>(21)?
-            .map(|value| RepositoryParserConfig::from_json(&value))
-            .transpose()
-            .map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    21,
-                    rusqlite::types::Type::Text,
-                    Box::new(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        error.to_string(),
-                    )),
-                )
-            })?;
-        let trust_policy = row
-            .get::<_, Option<String>>(6)?
-            .map(|value| RepositoryTrustPolicy::from_json(&value))
-            .transpose()
-            .map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    6,
-                    rusqlite::types::Type::Text,
-                    Box::new(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        error.to_string(),
-                    )),
-                )
-            })?;
-        let ownership_value = row.get::<_, String>(22)?;
-        let managed_by = RepositoryOwnership::from_db(&ownership_value).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                22,
-                rusqlite::types::Type::Text,
-                Box::new(io::Error::new(io::ErrorKind::InvalidData, error)),
-            )
-        })?;
-        let source_policy = if row.get::<_, Option<i64>>(25)?.is_some() {
-            Some(source_policy_from_row(row, 25)?)
-        } else {
-            None
-        };
-        let pinned_snapshot = row
-            .get::<_, Option<String>>(34)?
-            .map(AuthenticatedSnapshotIdentity::from_sha256)
-            .transpose()
-            .map_err(|error| row_conversion_error(34, error.to_string()))?;
-        let repository = Self {
-            id: Some(row.get(0)?),
-            name: row.get(1)?,
-            url: row.get(2)?,
-            content_url: row.get(3)?,
-            enabled: row.get::<_, i32>(4)? != 0,
-            priority: row.get(5)?,
-            trust_policy,
-            metadata_expire: row.get(7)?,
-            last_checked_at: row.get(8)?,
-            last_changed_at: row.get(9)?,
-            last_validated_at: row.get(10)?,
-            last_published_at: row.get(11)?,
-            created_at: row.get(12)?,
-            default_strategy: row.get(13)?,
-            default_strategy_endpoint: row.get(14)?,
-            source_profile: row.get(15)?,
-            tuf_enabled: row.get::<_, i32>(16)? != 0,
-            tuf_root_version: row.get(17)?,
-            tuf_root_url: row.get(18)?,
-            security_advisory_support: SecurityAdvisorySupport::from_db(
-                row.get::<_, String>(19)?.as_str(),
-            ),
-            package_format,
-            parser_config,
-            managed_by,
-            source_policy,
-            repository_identity: row.get(23)?,
-            stream_binding_sha256: row.get(24)?,
-            pinned_snapshot,
-        };
-        repository
-            .validate_parser_contract()
-            .map_err(|error| row_conversion_error(23, error.to_string()))?;
-        Ok(repository)
-    }
-}
-
-fn source_policy_from_row(
-    row: &Row<'_>,
-    offset: usize,
-) -> rusqlite::Result<RepositorySourcePolicy> {
-    let scope =
-        RepositoryPolicyScope::from_db(&row.get::<_, String>(offset + 2)?, row.get(offset + 3)?)
-            .map_err(|error| row_conversion_error(offset + 2, error))?;
-    let ecosystem = NativeSourceEcosystem::from_db(&row.get::<_, String>(offset + 4)?)
-        .map_err(|error| row_conversion_error(offset + 4, error))?;
-    let version_scheme = row
-        .get::<_, String>(offset + 5)?
-        .parse()
-        .map_err(|error: String| row_conversion_error(offset + 5, error))?;
-    let stream =
-        NativeSourceStream::from_db(&row.get::<_, String>(offset + 6)?, row.get(offset + 7)?)
-            .map_err(|error| row_conversion_error(offset + 6, error))?;
-    let update_mode = RepositoryUpdateMode::from_db(&row.get::<_, String>(offset + 8)?)
-        .map_err(|error| row_conversion_error(offset + 8, error))?;
-    let policy = RepositorySourcePolicy {
-        id: Some(row.get(offset)?),
-        source_identity: row.get(offset + 1)?,
-        scope,
-        ecosystem,
-        version_scheme,
-        stream,
-        update_mode,
-    };
-    policy
-        .validate()
-        .map_err(|error| row_conversion_error(offset + 1, error.to_string()))?;
-    Ok(policy)
-}
-
-fn row_conversion_error(index: usize, error: String) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        index,
-        rusqlite::types::Type::Text,
-        Box::new(io::Error::new(io::ErrorKind::InvalidData, error)),
-    )
 }

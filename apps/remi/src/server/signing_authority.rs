@@ -4,7 +4,7 @@
 use crate::server::repository_manifest::RepositoryManifest;
 use anyhow::{Context, Result, bail};
 use conary_core::ccs::signing::{SigningKeyPair, load_signing_public_key};
-use conary_core::repository::supported_profiles::{SupportedProfile, profile_by_public_id};
+use conary_core::repository::supported_profiles::{SupportedProfile, profile_by_id};
 use conary_core::trust::ceremony::create_initial_root;
 use conary_core::trust::verify::{extract_role_keys, verify_not_expired, verify_root};
 use conary_core::trust::{Role, RootMetadata, Signed, signing_keypair_to_tuf_key};
@@ -155,7 +155,7 @@ pub(crate) fn load_role_key(
     profile_id: &str,
     role: RepositorySigningRole,
 ) -> Result<SigningKeyPair> {
-    let profile = profile_by_public_id(profile_id)
+    let profile = profile_by_id(profile_id)
         .with_context(|| format!("unknown exact repository profile '{profile_id}'"))?;
     let owner = require_authority_root(keys_root)?;
     let profile_dir = keys_root.join(profile.id());
@@ -186,10 +186,10 @@ pub(crate) fn load_universe_role_key(
 }
 
 fn exact_profiles(manifest: &RepositoryManifest) -> Result<Vec<&'static SupportedProfile>> {
-    manifest.validate()?;
+    manifest.validate_definitions()?;
     let mut profiles = BTreeMap::new();
     for repository in &manifest.repositories {
-        let profile = profile_by_public_id(&repository.profile).with_context(|| {
+        let profile = profile_by_id(&repository.profile).with_context(|| {
             format!(
                 "repository '{}' names unknown exact profile '{}'",
                 repository.name, repository.profile
@@ -677,7 +677,7 @@ mod tests {
     fn manifest() -> RepositoryManifest {
         toml::from_str(
             r#"
-schema_version = 3
+schema_version = 4
 
 [[repositories]]
 name = "fedora-source"
@@ -689,7 +689,9 @@ stream_kind = "release"
 stream_identity = "44"
 update_mode = "follow"
 enabled = true
-priority = 100
+role = "base"
+precedence = 100
+required = true
 metadata_expire_seconds = 21600
 
 [repositories.parser]

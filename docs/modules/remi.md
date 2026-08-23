@@ -1,15 +1,17 @@
 ---
 last_updated: 2026-08-23
-revision: 47
-summary: Document Remi immutable source and profile catalogs, signed endpoint-wide universe publication and client activation, exact revision pinning, source identity and update policy, signing, repository trust, publication coordination, readiness, and serving authority
+revision: 48
+summary: Document Remi typed support tiers, complete source universes, immutable source and profile catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and client activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
 
 Remi is Conary's on-demand conversion and package-serving service. For the
-limited public preview, its configured public repository feeds are Fedora 44,
-Ubuntu 26.04, Arch, and Solus. It converts upstream RPM, DEB, Arch, and EOPKG
-packages into CCS artifacts, stores converted content in the local
+limited public preview, its public repository profiles are Fedora 44, Ubuntu
+26.04, and Arch. Solus is a typed candidate profile: Remi may refresh and test
+its eopkg source privately, but it receives no public route, universe entry,
+client seed, readiness obligation, or canonical package key. Remi converts
+upstream RPM, DEB, Arch, and candidate EOPKG packages into CCS artifacts, stores converted content in the local
 content-addressed store, and publishes every chunk to R2 when that durable
 authority is configured.
 
@@ -23,19 +25,26 @@ they are backed by profile route metadata rather than a local hard-coded
 
 Hosted package sources are declared in `deploy/remi-repositories.toml` and
 loaded by `apps/remi/src/server/repository_manifest.rs`. Every source names one
-exact public profile and carries typed parser construction data: RPM declares
+exact known profile and carries typed parser construction data: RPM declares
 architecture; Debian declares distribution, component, and architecture; Arch
 declares the repository database name; JSON is explicit when a source actually
 serves Conary JSON metadata.
 
-Repository manifest schema 3 also requires each native source's exact source
+Repository manifest schema 4 also requires each native source's typed member
+role, numeric precedence, required state, exact source
 identity, distinct repository identity, release/channel/rolling stream, and
 closed follow-or-pin policy. An optional policy group shares one normalized
 source policy while each repository retains its own member pin. Authenticated
 roots are transient refresh inputs and become immutable source-catalog evidence;
 they are not mutable repository revision state. Reconciliation replaces a
 repository transactionally when those source inputs change; ordinary enabled,
-priority, and expiry changes preserve the enrollment. The same contract is persisted by the core repository source model
+precedence, and expiry changes preserve the enrollment. The supported-profile
+catalog independently declares the exact repository identities, roles, and
+precedence required for each complete profile. The hosted manifest must match
+every public declaration exactly: Fedora includes release and updates; Ubuntu
+includes release, updates, security, and backports across main, restricted,
+universe, and multiverse; Arch includes core, extra, and multilib. The same
+contract is persisted by the core repository source model
 and is not inferred from the profile, URL, or display name.
 
 Every native source also carries the matching `RepositoryTrustPolicy`. Fedora
@@ -63,15 +72,21 @@ and a canonical `SourceSnapshotV1` manifest under
 `<storage.root>/catalogs/sources/<manifest-sha256>/`. The manifest binds exact
 source, repository, stream, parser-projection, authenticated root and child
 objects, catalog bytes, logical digest, and row counts. A strict
-`ProfileRevisionV1` then binds the ordered source members and one composed
+`ProfileRevisionV2` then binds each member's role, precedence, required state,
+ordered source identity, and one composed
 profile catalog under `catalogs/profiles/<manifest-sha256>/`. Core contract and
 bundle verification live in `crates/conary-core/src/repository/catalog/`.
 Every serving projection resolves a package origin back to that manifest.
-After request constraints establish eligibility, only the highest numeric
-repository-priority tier remains; native version ordering applies only within
-that tier. Equal-priority candidates remain visible for exact native comparison
-or typed ambiguity. Member order, repository names, and catalog insertion order
-never select a package.
+When two members publish the same source-independent native package identity,
+profile composition retains the member with the exact higher declared
+precedence. Public member precedences are unique, so no repository identity or
+incidental order breaks a tie. The origins collapse only when payload digest and
+every source-independent semantic and relation row agree; any disagreement is
+a typed conflict and the candidate cannot publish. After request constraints
+establish eligibility, every distinct native variant remains available for
+native version comparison. Member precedence never hides a different version,
+release, or architecture. Member order, repository names, and catalog insertion
+order never select a package.
 
 `RepositorySnapshotSink` schema 1 is the only native parser output contract.
 Fedora primary/filelists XML, Debian Packages stanzas, ALPM archive records,
@@ -244,8 +259,8 @@ universe.
 ## Signed Client Universe
 
 The Conary `remi` strategy synchronizes one endpoint-wide signed immutable
-universe. `RemiUniverseManifestV1` binds one monotonic sequence, the complete
-ordered set of public `ProfileRevisionV1` catalogs, the exact canonical-map
+universe. `RemiUniverseManifestV2` binds one monotonic sequence, the complete
+ordered set of public `ProfileRevisionV2` catalogs, the exact canonical-map
 object, every content digest and size, schema versions, row counts, generation
 time, expiry, and the dedicated metadata-root digest. The universe
 `targets` role authorizes exactly that manifest and its digest-addressed
@@ -339,7 +354,7 @@ Conversion and recipe builds load `targets` by the persisted exact source
 profile. Public native-release and timestamp routes first resolve their route
 slug through the supported-profile registry, then load the exact profile's
 role keys. `fedora` and `ubuntu` are therefore never key-directory aliases for
-`fedora-44`, `ubuntu-26.04`, and `solus`.
+`fedora-44`, `ubuntu-26.04`, and `arch`.
 
 The public half of each deployed `targets` key is the client-side CCS package
 authority. Conary releases track the current canonical

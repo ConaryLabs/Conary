@@ -283,6 +283,10 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         .repositories
         .iter()
         .filter(|definition| definition.enabled)
+        .filter(|definition| {
+            conary_core::repository::supported_profiles::profile_by_public_id(&definition.profile)
+                .is_some()
+        })
         .fold(
             BTreeMap::<String, usize>::new(),
             |mut profiles, definition| {
@@ -400,7 +404,7 @@ fn inspect_active_universe(
         return Ok(None);
     };
     let manifest =
-        serde_json::from_str::<conary_core::repository::universe::RemiUniverseManifestV1>(
+        serde_json::from_str::<conary_core::repository::universe::RemiUniverseManifestV2>(
             &manifest_json,
         )
         .context("parse active Remi universe manifest")?;
@@ -502,6 +506,10 @@ fn build_current_config(
     let profiles = repository_manifest
         .repositories
         .iter()
+        .filter(|repository| {
+            conary_core::repository::supported_profiles::profile_by_public_id(&repository.profile)
+                .is_some()
+        })
         .map(|repository| {
             conary_core::repository::supported_profiles::profile_by_public_id(&repository.profile)
                 .map(|profile| profile.remi_route_slug())

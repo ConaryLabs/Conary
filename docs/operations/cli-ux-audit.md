@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-22
-revision: 3
+last_updated: 2026-08-23
+revision: 4
 summary: Working CLI UX audit of daily-driver flows with annotated captures, comparator notes, design direction, and proposed implementation slices
 ---
 
@@ -97,7 +97,6 @@ Initialized database at <sandbox>/conary.db
 [ok]       Added: remi-fedora-44 (Conary Remi, Fedora 44 source)
 [ok]       Added: remi-ubuntu-26.04 (Conary Remi, Ubuntu 26.04 LTS source)
 [ok]       Added: remi-arch (Conary Remi, Arch Linux (rolling) source)
-[ok]       Added: remi-solus (Conary Remi, Solus (rolling) source)
 Configured built-in Remi package source feeds
 Discovered typed host lifecycle interfaces (service manager, sysusers, tmpfiles, sysctl, ldconfig)
 note: Run 'conary repo sync' to download metadata from every enabled Remi feed.

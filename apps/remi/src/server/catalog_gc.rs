@@ -877,10 +877,10 @@ mod tests {
         conn.execute(
             "INSERT INTO repository_sync_run_members (
                  run_id, ordinal, repository_id, source_identity,
-                 repository_identity, stream_kind, stream_identity, priority,
-                 required, candidate_source_snapshot_sha256
+                 repository_identity, stream_kind, stream_identity, role,
+                 precedence, required, candidate_source_snapshot_sha256
              ) VALUES (?1, 0, ?2, 'fixture-source', 'fixture-repository',
-                       'release', '44', 0, 1, ?3)",
+                       'release', '44', 'base', 0, 1, ?3)",
             rusqlite::params![
                 "10000000-0000-4000-8000-000000000001",
                 repository_id,

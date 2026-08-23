@@ -40,7 +40,8 @@ fn member(profile: char, source: char, ordinal: i64) -> RemiProfileRevisionMembe
         repository_identity: format!("fixture-repository-{ordinal}"),
         stream_kind: "release".to_string(),
         stream_identity: "fixture".to_string(),
-        priority: ordinal,
+        role: crate::repository::supported_profiles::ProfileSourceRole::Base,
+        precedence: ordinal,
         required: true,
     }
 }
@@ -130,11 +131,11 @@ fn insert_run_member(
     conn.execute(
         "INSERT INTO repository_sync_run_members (
                  run_id, ordinal, repository_id, source_identity,
-                 repository_identity, stream_kind, stream_identity, priority,
-                 required, input_source_snapshot_sha256,
+                 repository_identity, stream_kind, stream_identity, role,
+                 precedence, required, input_source_snapshot_sha256,
                  candidate_source_snapshot_sha256
              ) VALUES (?1, ?2, ?3, 'fixture-source', ?4, 'release', 'fixture',
-                       0, 1, ?5, ?6)",
+                       'base', 0, 1, ?5, ?6)",
         params![
             run_id,
             ordinal,
