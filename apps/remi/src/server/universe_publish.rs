@@ -12,9 +12,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use chrono::{Duration, Utc};
 use conary_core::canonical::{CanonicalMapSnapshot, validate_canonical_map_snapshot};
-use conary_core::repository::catalog::{
-    CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV2, verify_profile_catalog_bundle,
-};
+use conary_core::repository::catalog::{CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV2};
 use conary_core::repository::universe::{
     REMI_UNIVERSE_SCHEMA_V2, RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2,
     RemiUniverseManifestV2, RemiUniverseProfileV2, verify_remi_universe_manifest_target,
@@ -36,6 +34,7 @@ use super::handlers::canonical::load_canonical_map_snapshot;
 use super::signing_authority::{
     UniverseSigningRole, load_universe_role_key, load_universe_root_metadata,
 };
+use super::universe_validation::validate_canonical_candidate;
 
 pub(crate) const UNIVERSE_MANIFEST_FILE: &str = "manifest.json";
 pub(crate) const UNIVERSE_CANONICAL_MAP_FILE: &str = "canonical-map.json";
@@ -171,6 +170,8 @@ fn publish_current_universe_with_authority(
         }
     }
 
+    validate_canonical_candidate(catalog_dir, &inputs.canonical_map, inputs.profiles.iter())
+        .context("validate canonical contracts against the candidate universe")?;
     let root = load_universe_root_metadata(keys_root)?;
     let candidate = build_candidate(
         inputs.base_sequence,
@@ -654,17 +655,18 @@ fn verify_published_bundle(
     {
         bail!("published universe canonical-map facts disagree with its manifest");
     }
-    for profile in &expected.profiles {
-        let bundle = catalog_dir
-            .join("profiles")
-            .join(&profile.revision.profile)
-            .join(&profile.profile_revision_sha256);
-        let reader = verify_profile_catalog_bundle(bundle, &profile.revision)?;
+    let verified_profiles = validate_canonical_candidate(
+        catalog_dir,
+        &canonical,
+        expected.profiles.iter().map(|profile| &profile.revision),
+    )
+    .context("revalidate canonical contracts in the published universe")?;
+    for profile in verified_profiles {
         if let Some(authority) = catalog_authority {
             authority.remember_verified_profile_reader(
-                &profile.revision.profile,
+                &profile.profile,
                 &profile.profile_revision_sha256,
-                reader,
+                profile.reader,
             );
         }
     }

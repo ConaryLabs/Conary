@@ -337,6 +337,20 @@ impl CatalogReader {
         )
     }
 
+    /// Return whether the catalog contains at least one exact package name.
+    ///
+    /// This uses the catalog's package-name index and does not project package
+    /// variants or relation rows. Provides, descriptions, and case folding are
+    /// deliberately outside this exact-identity query.
+    pub fn contains_package_name(&self, name: &str) -> Result<bool> {
+        validate_identity(name, "catalog package presence query name")?;
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM catalog_packages WHERE name = ?1)",
+            [name],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Return one exact page of distinct downloadable package names.
     ///
     /// `offset` is zero-based. Both the total and the page use the same
