@@ -5,7 +5,9 @@
 mod compare;
 mod contract;
 mod io;
+mod resolution_compare;
 mod resolution_contract;
+mod resolution_io;
 
 #[cfg(feature = "native-alpm-oracle")]
 mod alpm;
@@ -30,12 +32,22 @@ pub use io::{
     NativeParityOracleWriter, verify_native_parity_oracle_bundle,
     write_native_parity_oracle_manifest,
 };
+pub use resolution_compare::{
+    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1, NativeResolutionComparisonError,
+    NativeResolutionComparisonV1, NativeResolutionMismatchV1, NativeResolutionOutcomeKindV1,
+    compare_native_resolution_oracle,
+};
 pub use resolution_contract::{
     NATIVE_RESOLUTION_ORACLE_SCHEMA_V1, NativeResolutionArtifactV1, NativeResolutionCountsV1,
     NativeResolutionInstalledStateV1, NativeResolutionOracleV1, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1, NativeResolutionRootV1,
-    NativeUnresolvedDependencyV1,
+    NativeUnresolvedDependencyV1, native_requirement_group_sha256,
+};
+pub use resolution_io::{
+    NATIVE_RESOLUTION_MANIFEST_FILE_NAME, NATIVE_RESOLUTION_ROOT_FILE_NAME,
+    NativeResolutionOracleReader, NativeResolutionOracleWriter,
+    verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
 };
 
 #[cfg(test)]
