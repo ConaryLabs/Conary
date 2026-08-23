@@ -290,7 +290,7 @@ impl ProfileRevisionV2 {
                 ))
             })?;
         let mut expected = profile.members().iter().collect::<Vec<_>>();
-        expected.sort_by(|left, right| right.precedence.cmp(&left.precedence));
+        expected.sort_by_key(|member| std::cmp::Reverse(member.precedence));
         if self.members.len() != expected.len() {
             return Err(Error::ConfigError(format!(
                 "profile revision '{}' has {} members; expected {}",

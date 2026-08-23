@@ -272,7 +272,7 @@ mod tests {
             .members()
             .iter()
             .collect::<Vec<_>>();
-        declared.sort_by(|left, right| right.precedence.cmp(&left.precedence));
+        declared.sort_by_key(|member| std::cmp::Reverse(member.precedence));
         let members = declared
             .into_iter()
             .enumerate()

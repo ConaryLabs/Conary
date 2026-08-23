@@ -114,7 +114,7 @@ impl ActiveCatalogFixture {
                         0,
                     )]
                 });
-        member_contracts.sort_by(|left, right| right.2.cmp(&left.2));
+        member_contracts.sort_by_key(|member| std::cmp::Reverse(member.2));
 
         let mut source_manifests = Vec::with_capacity(member_contracts.len());
         let mut members = Vec::with_capacity(member_contracts.len());

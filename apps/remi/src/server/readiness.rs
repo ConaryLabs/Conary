@@ -462,7 +462,7 @@ mod tests {
             conary_core::repository::supported_profiles::profile_by_public_id(profile)
                 .expect("readiness fixture uses public profile");
         let mut declared_members = profile_contract.members().iter().collect::<Vec<_>>();
-        declared_members.sort_by(|left, right| right.precedence.cmp(&left.precedence));
+        declared_members.sort_by_key(|member| std::cmp::Reverse(member.precedence));
         let first_member = declared_members.first().expect("profile member");
         let source_resources = declared_members
             .iter()
