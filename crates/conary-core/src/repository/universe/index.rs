@@ -266,13 +266,7 @@ pub(crate) fn build_client_universe_index(
     for (alias, _, _) in &catalogs {
         replay::detach_catalog(&index, alias)?;
     }
-    index.execute_batch("PRAGMA optimize; VACUUM;")?;
-    let integrity: String = index.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-    if integrity != "ok" {
-        return Err(Error::InitError(format!(
-            "client universe index failed integrity_check: {integrity}"
-        )));
-    }
+    finalize_candidate(&index)?;
     drop(index);
     candidate.as_file().sync_all()?;
     fs::set_permissions(candidate.path(), fs::Permissions::from_mode(0o400))?;
@@ -284,6 +278,23 @@ pub(crate) fn build_client_universe_index(
         std::fs::File::open(parent)?.sync_all()?;
     }
     inspect_existing_index(&destination, &manifest_sha256)
+}
+
+fn finalize_candidate(index: &Connection) -> Result<()> {
+    index.execute_batch("PRAGMA optimize;")?;
+    let freelist_pages: i64 = index.query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+    if freelist_pages != 0 {
+        return Err(Error::InitError(format!(
+            "client universe append-only candidate has {freelist_pages} free pages"
+        )));
+    }
+    let integrity: String = index.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        return Err(Error::InitError(format!(
+            "client universe index failed integrity_check: {integrity}"
+        )));
+    }
+    Ok(())
 }
 
 fn remi_profile_repositories(
@@ -554,6 +565,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(after, 11);
+    }
+
+    #[test]
+    fn private_index_finalization_requires_an_append_only_candidate() {
+        let index = Connection::open_in_memory().unwrap();
+        index
+            .execute_batch(
+                "PRAGMA page_size = 4096;
+                 CREATE TABLE discarded (payload BLOB NOT NULL);
+                 INSERT INTO discarded VALUES (zeroblob(1048576));
+                 DROP TABLE discarded;",
+            )
+            .unwrap();
+        let freelist_pages: i64 = index
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+            .unwrap();
+        assert!(freelist_pages > 0);
+
+        let error = finalize_candidate(&index).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("client universe append-only candidate has")
+        );
     }
 
     fn package(version: &str) -> CatalogPackageRecordV1 {
