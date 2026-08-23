@@ -31,12 +31,16 @@ pub use parity::{
 };
 pub use parity::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_PARITY_MANIFEST_FILE_NAME,
-    NATIVE_PARITY_ORACLE_SCHEMA_V1, NATIVE_PARITY_PACKAGE_FILE_NAME, NativeParityArtifactV1,
-    NativeParityComparisonError, NativeParityComparisonV1, NativeParityCountsV1,
-    NativeParityEcosystemV1, NativeParityFactV1, NativeParityImplementationV1,
-    NativeParityMismatchV1, NativeParityOracleReader, NativeParityOracleV1,
-    NativeParityOracleWriter, NativeParityPackageIdentityV1, NativeParityPackageV1,
-    compare_native_parity_oracle, verify_native_parity_oracle_bundle,
+    NATIVE_PARITY_ORACLE_SCHEMA_V1, NATIVE_PARITY_PACKAGE_FILE_NAME,
+    NATIVE_RESOLUTION_ORACLE_SCHEMA_V1, NativeParityArtifactV1, NativeParityComparisonError,
+    NativeParityComparisonV1, NativeParityCountsV1, NativeParityEcosystemV1, NativeParityFactV1,
+    NativeParityImplementationV1, NativeParityMismatchV1, NativeParityOracleReader,
+    NativeParityOracleV1, NativeParityOracleWriter, NativeParityPackageIdentityV1,
+    NativeParityPackageV1, NativeResolutionArtifactV1, NativeResolutionCountsV1,
+    NativeResolutionInstalledStateV1, NativeResolutionOracleV1, NativeResolutionOutcomeV1,
+    NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
+    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1, NativeResolutionRootV1,
+    NativeUnresolvedDependencyV1, compare_native_parity_oracle, verify_native_parity_oracle_bundle,
     write_native_parity_oracle_manifest,
 };
 pub use profile::{
