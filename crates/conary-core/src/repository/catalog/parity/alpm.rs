@@ -26,6 +26,10 @@ use crate::repository::dependency_model::{
 use crate::repository::dependency_source::{CapabilityProvenance, SourcePackageFormat};
 use crate::repository::versioning::VersionScheme;
 
+mod resolution;
+
+pub use resolution::ALPM_RESOLUTION_PROJECTION_SCHEMA_V1;
+
 pub const ALPM_PARITY_PROJECTION_SCHEMA_V1: u32 = 1;
 
 const CREATE_SPOOL: &str = "
