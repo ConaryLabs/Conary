@@ -181,7 +181,12 @@ fn solve_requirement_groups_for_architecture_with_policy(
                     )?,
                 );
             }
-            RepositoryRequirementKind::Optional | RepositoryRequirementKind::Build => {}
+            RepositoryRequirementKind::Optional
+            | RepositoryRequirementKind::Recommends
+            | RepositoryRequirementKind::Suggests
+            | RepositoryRequirementKind::Supplements
+            | RepositoryRequirementKind::Enhances
+            | RepositoryRequirementKind::Build => {}
             RepositoryRequirementKind::Conflict
             | RepositoryRequirementKind::Breaks
             | RepositoryRequirementKind::Replace

@@ -132,7 +132,11 @@ fn positive_dependency_type(kind: RepositoryRequirementKind) -> Option<&'static 
         RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends => {
             Some("runtime")
         }
-        RepositoryRequirementKind::Optional => Some("optional"),
+        RepositoryRequirementKind::Optional
+        | RepositoryRequirementKind::Recommends
+        | RepositoryRequirementKind::Suggests
+        | RepositoryRequirementKind::Supplements
+        | RepositoryRequirementKind::Enhances => Some("optional"),
         RepositoryRequirementKind::Build => Some("build"),
         RepositoryRequirementKind::Conflict
         | RepositoryRequirementKind::Breaks

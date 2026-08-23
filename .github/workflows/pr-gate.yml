@@ -156,6 +156,26 @@ jobs:
       - name: Lint the libalpm parity producer
         run: cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle --bin conary-alpm-resolution-oracle -- -D warnings
 
+  rpm-parity-producer:
+    name: rpm-parity-producer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb
+    steps:
+      - name: Install pinned Fedora build dependencies
+        run: dnf -y --disablerepo=updates install gcc gcc-c++ openssl-devel xz-devel libseccomp-devel pkgconf-pkg-config cmake perl clang rustup git libsolv-devel-0.7.36-2.fc44.x86_64
+      - name: Install exact Rust toolchain
+        run: |
+          rustup-init -y --default-toolchain 1.98.0 --profile minimal
+          "$HOME/.cargo/bin/rustup" component add clippy
+          printf '%s\n' "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Test the libsolv parity producer
+        run: cargo test -p conary-core --features native-rpm-oracle repository::catalog::parity::rpm --verbose
+      - name: Lint the libsolv parity producer
+        run: cargo clippy -p conary-core --features native-rpm-oracle --lib --bin conary-rpm-oracle -- -D warnings
+
   generation-db-reflink:
     name: generation-db-reflink
     runs-on: ubuntu-latest

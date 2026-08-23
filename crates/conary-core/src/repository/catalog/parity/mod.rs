@@ -12,11 +12,17 @@ mod resolution_io;
 #[cfg(feature = "native-alpm-oracle")]
 mod alpm;
 
+#[cfg(feature = "native-rpm-oracle")]
+mod rpm;
+
 #[cfg(feature = "native-alpm-oracle")]
 pub use alpm::{
     ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, AlpmParityMemberInput,
     produce_alpm_parity_oracle, produce_alpm_resolution_oracle,
 };
+
+#[cfg(feature = "native-rpm-oracle")]
+pub use rpm::{RPM_PARITY_PROJECTION_SCHEMA_V1, RpmParityMemberInput, produce_rpm_parity_oracle};
 
 pub use compare::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NativeParityComparisonError, NativeParityComparisonV1,

@@ -64,6 +64,14 @@ pub enum RepositoryRequirementKind {
     PreDepends,
     /// Optional / recommended (RPM Suggests, Debian Recommends, Arch optdepends).
     Optional,
+    /// RPM weak recommendation; installed by default when policy permits.
+    Recommends,
+    /// RPM weak suggestion; weaker than a recommendation.
+    Suggests,
+    /// RPM reverse weak dependency activated by a matching installed capability.
+    Supplements,
+    /// RPM reverse suggestion activated by a matching installed capability.
+    Enhances,
     /// Build-time only dependency (RPM BuildRequires, Debian Build-Depends).
     Build,
     /// Mutual exclusion (RPM Conflicts, Debian Conflicts).
@@ -92,6 +100,10 @@ impl RepositoryRequirementKind {
             Self::Depends => "depends",
             Self::PreDepends => "pre_depends",
             Self::Optional => "optional",
+            Self::Recommends => "recommends",
+            Self::Suggests => "suggests",
+            Self::Supplements => "supplements",
+            Self::Enhances => "enhances",
             Self::Build => "build",
             Self::Conflict => "conflict",
             Self::Breaks => "breaks",
@@ -106,6 +118,10 @@ impl RepositoryRequirementKind {
             "depends" => Some(Self::Depends),
             "pre_depends" => Some(Self::PreDepends),
             "optional" => Some(Self::Optional),
+            "recommends" => Some(Self::Recommends),
+            "suggests" => Some(Self::Suggests),
+            "supplements" => Some(Self::Supplements),
+            "enhances" => Some(Self::Enhances),
             "build" => Some(Self::Build),
             "conflict" => Some(Self::Conflict),
             "breaks" => Some(Self::Breaks),
@@ -133,7 +149,15 @@ impl RepositoryRequirementKind {
         match self {
             Self::Conflict => Some(PackageRelationRemovalMode::Constraint),
             Self::Replace | Self::Obsolete => Some(PackageRelationRemovalMode::OwnershipTransfer),
-            Self::Depends | Self::PreDepends | Self::Optional | Self::Build | Self::Breaks => None,
+            Self::Depends
+            | Self::PreDepends
+            | Self::Optional
+            | Self::Recommends
+            | Self::Suggests
+            | Self::Supplements
+            | Self::Enhances
+            | Self::Build
+            | Self::Breaks => None,
         }
     }
 }

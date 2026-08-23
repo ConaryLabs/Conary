@@ -274,7 +274,11 @@ pub(in crate::repository) fn convert_requirement_groups(
             .iter()
             .map(|clause| {
                 let dependency_type = match group.kind {
-                    RepositoryRequirementKind::Optional => "optional",
+                    RepositoryRequirementKind::Optional
+                    | RepositoryRequirementKind::Recommends
+                    | RepositoryRequirementKind::Suggests
+                    | RepositoryRequirementKind::Supplements
+                    | RepositoryRequirementKind::Enhances => "optional",
                     RepositoryRequirementKind::Build => "build",
                     _ => "runtime",
                 };

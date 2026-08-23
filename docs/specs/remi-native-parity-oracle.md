@@ -45,7 +45,7 @@ contract, but it cannot serve as the evidence producer for release parity. A
 catalog logical digest proves deterministic Conary output, not independent
 native agreement.
 
-The first producer boundary is ALPM. It is built only with the explicit
+The ALPM producer is built only with the explicit
 `native-alpm-oracle` feature, reads exact profile-member database artifacts
 through pinned upstream Rust bindings to libalpm, and records the linked
 libalpm runtime version. Ordinary Conary and Remi builds do not acquire a
@@ -79,6 +79,37 @@ conflict-checked deduplication; there is no skip input. A private bounded spool
 orders selected rows by package key without retaining the complete profile in
 Rust memory. Success means the two-file bundle has been durably written and
 independently reopened through the strict shared verifier.
+
+RPM package-fact evidence is produced only with the explicit
+`native-rpm-oracle` feature and exact libsolv 0.7.36 runtime. Ordinary Conary
+and Remi builds do not acquire a libsolv dependency. For every profile member
+in exact ordinal order, the producer requires one `SourceSnapshotV1` that
+binds exactly the compressed `RpmPrimary` and `RpmFilelists` objects in that
+order. It copies both objects to private staging, independently verifies their
+exact authenticated sizes and SHA-256 digests, and only then lets libsolv
+reopen the staged bytes with filelists extending the primary solvables.
+
+The producer projects every libsolv package and variant, payload location,
+SHA-256 and size, declared and complete file providers, required and
+prerequisite relations, recommends, suggests, supplements, enhances,
+conflicts, and obsoletes. Rich dependency trees are decoded through libsolv's
+typed relation IDs and must agree with Conary's canonical typed RPM grammar;
+native display text alone cannot establish parity. Exact-identity duplicates
+obey profile precedence only when every projected fact agrees. A contradictory
+duplicate fails the complete crawl. The private SQLite spool, canonical bundle
+write, and independent complete reopen use the same bounded contract as the
+ALPM producer.
+
+Build and invoke the host-linked RPM helper explicitly:
+
+```bash
+cargo run -p conary-core --features native-rpm-oracle \
+  --bin conary-rpm-oracle -- \
+  --profile-manifest profile.json \
+  --source-snapshot fedora-source.json \
+  --primary primary.xml.gz --filelists filelists.xml.zst \
+  --output rpm-oracle
+```
 
 ## Dependency resolution evidence
 
