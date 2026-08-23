@@ -375,6 +375,27 @@ async fn async_reader_drop_queues_release_without_blocking_the_executor() {
 }
 
 #[test]
+fn repeated_revision_open_reuses_one_verified_catalog_reader() {
+    let fixture = fixture();
+    let _revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("cached-reader-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+
+    let first = authority.open_active_profile(PROFILE).expect("first open");
+    let second = authority.open_active_profile(PROFILE).expect("second open");
+
+    assert!(first.shares_verified_reader_with(&second));
+}
+
+#[test]
 fn public_reader_fails_closed_without_a_runtime_session() {
     let fixture = fixture();
     let _revision = add_revision(&fixture, 'a', 1);

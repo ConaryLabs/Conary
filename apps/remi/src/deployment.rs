@@ -8,6 +8,7 @@ use crate::server::runtime_lock::RuntimeRootLock;
 use anyhow::{Context, Result, bail};
 use conary_core::db::schema::{SCHEMA_EPOCH, SCHEMA_VERSION, SchemaCompatibility};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -17,37 +18,54 @@ const TRANSITION_SCHEMA: u32 = 2;
 const DEFAULT_REPOSITORY_MANIFEST_TARGET: &str = "/etc/conary/remi-repositories.toml";
 const DEFAULT_REPOSITORY_KEYS_DIR: &str = "/conary/repository-keys";
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeploymentState {
     pub schema_epoch: &'static str,
     pub schema_revision: i32,
-    pub configured_sources: usize,
-    pub populated_sources: usize,
-    pub repository_packages: i64,
+    pub configured_profiles: usize,
+    pub populated_profiles: usize,
+    pub catalog_packages: u64,
     pub converted_packages: i64,
     pub signing_profiles: Vec<String>,
-    pub sources: Vec<DeploymentSourceState>,
+    pub universe: Option<DeploymentUniverseState>,
+    pub profiles: Vec<DeploymentProfileState>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct DeploymentSourceState {
-    pub name: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeploymentProfileState {
     pub profile: String,
-    pub package_format: &'static str,
-    pub packages: i64,
+    pub configured_sources: usize,
+    pub profile_revision_sha256: Option<String>,
+    pub packages: u64,
     pub converted_packages: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeploymentUniverseState {
+    pub manifest_sha256: String,
+    pub sequence: u64,
+    pub profiles: usize,
+    pub canonical_map_revision: u64,
+    pub canonical_map_entries: u64,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub matches_active_profiles: bool,
+    pub fresh: bool,
 }
 
 impl DeploymentState {
     #[must_use]
     pub fn repopulation_complete(&self) -> bool {
-        self.configured_sources > 0
-            && self.populated_sources == self.configured_sources
+        self.configured_profiles > 0
+            && self.populated_profiles == self.configured_profiles
             && self.converted_packages > 0
             && self
-                .sources
+                .profiles
                 .iter()
-                .all(|source| source.converted_packages > 0)
+                .all(|profile| profile.converted_packages > 0)
+            && self
+                .universe
+                .as_ref()
+                .is_some_and(|universe| universe.matches_active_profiles && universe.fresh)
     }
 }
 
@@ -261,50 +279,163 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
 
     let conn = conary_core::db::open_fast(&db_path)?;
     repository_manifest.verify_reconciled(&conn)?;
-    let mut sources = Vec::with_capacity(repository_manifest.repositories.len());
-    let mut populated_sources = 0;
-    for definition in &repository_manifest.repositories {
-        let packages: i64 = conn.query_row(
-            "SELECT COUNT(*)
-             FROM repository_packages rp
-             JOIN repositories r ON r.id = rp.repository_id
-             WHERE r.name = ?1",
-            [&definition.name],
-            |row| row.get(0),
-        )?;
-        if packages > 0 {
-            populated_sources += 1;
-        }
-        let converted_packages: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM converted_packages WHERE source_profile = ?1",
-            [&definition.profile],
-            |row| row.get(0),
-        )?;
-        sources.push(DeploymentSourceState {
-            name: definition.name.clone(),
-            profile: definition.profile.clone(),
-            package_format: definition.parser.format().as_str(),
-            packages,
-            converted_packages,
-        });
-    }
+    let configured = repository_manifest
+        .repositories
+        .iter()
+        .filter(|definition| definition.enabled)
+        .fold(
+            BTreeMap::<String, usize>::new(),
+            |mut profiles, definition| {
+                *profiles.entry(definition.profile.clone()).or_default() += 1;
+                profiles
+            },
+        );
+    let authority = crate::server::catalog_authority::CatalogAuthority::for_inspection(
+        &db_path,
+        config.storage_root().join("catalogs"),
+    );
+    let profiles = inspect_deployment_profiles(&conn, &authority, &configured)?;
+    let populated_profiles = profiles
+        .iter()
+        .filter(|profile| profile.packages > 0)
+        .count();
+    let catalog_packages = profiles.iter().try_fold(0_u64, |total, profile| {
+        total
+            .checked_add(profile.packages)
+            .context("deployment catalog package count overflow")
+    })?;
+    let converted_packages = profiles.iter().try_fold(0_i64, |total, profile| {
+        total
+            .checked_add(profile.converted_packages)
+            .context("deployment converted package count overflow")
+    })?;
+    let universe = inspect_active_universe(&conn, &profiles)?;
 
     Ok(DeploymentState {
         schema_epoch: SCHEMA_EPOCH,
         schema_revision: SCHEMA_VERSION,
-        configured_sources: sources.len(),
-        populated_sources,
-        repository_packages: count_rows(&conn, "repository_packages")?,
-        converted_packages: count_rows(&conn, "converted_packages")?,
+        configured_profiles: profiles.len(),
+        populated_profiles,
+        catalog_packages,
+        converted_packages,
         signing_profiles,
-        sources,
+        universe,
+        profiles,
     })
 }
 
-fn count_rows(conn: &rusqlite::Connection, table: &str) -> Result<i64> {
-    let sql = format!("SELECT COUNT(*) FROM {table}");
-    conn.query_row(&sql, [], |row| row.get(0))
-        .with_context(|| format!("failed to count {table}"))
+fn inspect_deployment_profiles(
+    conn: &rusqlite::Connection,
+    authority: &crate::server::catalog_authority::CatalogAuthority,
+    configured: &BTreeMap<String, usize>,
+) -> Result<Vec<DeploymentProfileState>> {
+    let mut profiles = Vec::with_capacity(configured.len());
+    for (profile, configured_sources) in configured {
+        let pointer = conary_core::db::models::RemiActiveProfileRevision::find(conn, profile)?;
+        let Some(pointer) = pointer else {
+            profiles.push(DeploymentProfileState {
+                profile: profile.clone(),
+                configured_sources: *configured_sources,
+                profile_revision_sha256: None,
+                packages: 0,
+                converted_packages: 0,
+            });
+            continue;
+        };
+        let inspection = authority
+            .inspect_active_profile(profile)
+            .with_context(|| format!("inspect active immutable profile '{profile}'"))?;
+        if inspection.pointer != pointer {
+            bail!("active profile '{profile}' changed during deployment inspection");
+        }
+        if inspection.manifest.members.len() != *configured_sources {
+            bail!(
+                "active profile '{profile}' contains {} sources; configured authority contains {}",
+                inspection.manifest.members.len(),
+                configured_sources
+            );
+        }
+        let converted_packages = conn.query_row(
+            "SELECT COUNT(*)
+             FROM converted_packages
+             WHERE source_profile = ?1 AND profile_revision_sha256 = ?2",
+            rusqlite::params![profile, &pointer.profile_revision_sha256],
+            |row| row.get(0),
+        )?;
+        profiles.push(DeploymentProfileState {
+            profile: profile.clone(),
+            configured_sources: *configured_sources,
+            profile_revision_sha256: Some(pointer.profile_revision_sha256),
+            packages: inspection.manifest.counts.packages,
+            converted_packages,
+        });
+    }
+    Ok(profiles)
+}
+
+fn inspect_active_universe(
+    conn: &rusqlite::Connection,
+    profiles: &[DeploymentProfileState],
+) -> Result<Option<DeploymentUniverseState>> {
+    use rusqlite::OptionalExtension;
+
+    let active = conn
+        .query_row(
+            "SELECT active.manifest_sha256, active.sequence, revision.manifest_json
+             FROM remi_active_universe_revision active
+             JOIN remi_universe_revisions revision
+               ON revision.manifest_sha256 = active.manifest_sha256
+             WHERE active.singleton = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((manifest_sha256, sequence, manifest_json)) = active else {
+        return Ok(None);
+    };
+    let manifest =
+        serde_json::from_str::<conary_core::repository::universe::RemiUniverseManifestV1>(
+            &manifest_json,
+        )
+        .context("parse active Remi universe manifest")?;
+    manifest.validate().map_err(anyhow::Error::from)?;
+    let canonical = conary_core::json::canonical_json(&manifest)
+        .map_err(anyhow::Error::msg)
+        .context("canonicalize active Remi universe manifest")?;
+    let sequence = u64::try_from(sequence).context("active universe sequence is negative")?;
+    if canonical != manifest_json.as_bytes()
+        || manifest.manifest_sha256()? != manifest_sha256
+        || manifest.sequence != sequence
+    {
+        bail!("active Remi universe pointer disagrees with its manifest authority");
+    }
+    let matches_active_profiles = manifest.profiles.len() == profiles.len()
+        && manifest
+            .profiles
+            .iter()
+            .zip(profiles)
+            .all(|(member, active)| {
+                member.revision.profile == active.profile
+                    && active.profile_revision_sha256.as_deref()
+                        == Some(member.profile_revision_sha256.as_str())
+            });
+    let fresh = manifest.expires_at > chrono::Utc::now();
+    Ok(Some(DeploymentUniverseState {
+        manifest_sha256,
+        sequence,
+        profiles: manifest.profiles.len(),
+        canonical_map_revision: manifest.canonical_map.revision,
+        canonical_map_entries: manifest.canonical_map.entry_count,
+        expires_at: manifest.expires_at,
+        matches_active_profiles,
+        fresh,
+    }))
 }
 
 fn build_current_config(
@@ -763,186 +894,4 @@ fn sync_parent(path: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::symlink;
-
-    mod fixtures;
-    mod ownership;
-
-    use fixtures::{arrange, repository_manifest};
-
-    #[test]
-    fn prepare_hard_switches_config_and_initializes_fresh_database() {
-        let (temp, options) = arrange();
-        let manifest = prepare(&options).unwrap();
-
-        let transition_json: serde_json::Value =
-            serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
-        assert_eq!(transition_json["schema_version"], TRANSITION_SCHEMA);
-        assert_eq!(
-            transition_json["runtime_root"],
-            std::fs::canonicalize(temp.path())
-                .unwrap()
-                .to_string_lossy()
-                .as_ref()
-        );
-        let mut retired_shape = transition_json.clone();
-        retired_shape
-            .as_object_mut()
-            .unwrap()
-            .remove("runtime_root");
-        assert!(serde_json::from_value::<TransitionManifest>(retired_shape).is_err());
-
-        let config = fs::read_to_string(&options.config_path).unwrap();
-        assert!(!config.contains("[upstream"));
-        assert!(config.contains("max_concurrent = 32"));
-        assert!(config.contains("repository_manifest"));
-        assert!(config.contains("repository_keys_dir"));
-        assert!(config.contains("convert_top_n = 1000"));
-        assert!(config.contains("distros = [\"fedora\"]"));
-        assert!(config.contains("enabled = true"));
-        assert!(config.contains("endpoint = \"https://r2.example.test\""));
-        for retired in [
-            "eviction_threshold",
-            "eviction_min_age",
-            "account_id",
-            "write_through",
-            "r2_redirect",
-        ] {
-            assert!(!config.contains(retired), "retired key survived: {retired}");
-        }
-        assert_eq!(
-            fs::read_to_string(&options.repository_manifest_target).unwrap(),
-            repository_manifest()
-        );
-
-        fs::write(
-            temp.path().join("metadata/conary.db"),
-            b"new-current-database",
-        )
-        .unwrap();
-        rollback(&manifest).unwrap();
-        assert!(
-            fs::read_to_string(&options.config_path)
-                .unwrap()
-                .contains("[upstream.old]")
-        );
-        assert!(!options.repository_manifest_target.exists());
-        assert!(!temp.path().join("metadata/conary.db").exists());
-    }
-
-    #[test]
-    fn inspect_state_proves_exact_reconciled_source_authority() {
-        let (_temp, options) = arrange();
-        prepare(&options).unwrap();
-
-        let config = RemiConfig::load(&options.config_path).unwrap();
-        let db_path = config.storage_root().join("metadata/conary.db");
-        let mut conn = rusqlite::Connection::open(&db_path).unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
-        RepositoryManifest::load(&options.repository_manifest_target)
-            .unwrap()
-            .reconcile(&mut conn)
-            .unwrap();
-        drop(conn);
-
-        let state = inspect_state(&options.config_path).unwrap();
-        assert_eq!(state.schema_epoch, SCHEMA_EPOCH);
-        assert_eq!(state.configured_sources, 1);
-        assert_eq!(state.populated_sources, 0);
-        assert_eq!(state.signing_profiles, vec!["fedora-44"]);
-        assert_eq!(state.sources[0].name, "opaque-source");
-        assert_eq!(state.sources[0].profile, "fedora-44");
-        assert_eq!(state.sources[0].package_format, "rpm");
-        assert!(!state.repopulation_complete());
-        let json = serde_json::to_value(&state).unwrap();
-        assert!(json.get("evidence_clusters").is_none());
-        assert!(json.get("evidence_samples").is_none());
-        assert!(json["sources"][0].get("evidence_samples").is_none());
-    }
-
-    #[test]
-    fn retired_database_is_moved_and_restored_on_rollback() {
-        let (temp, options) = arrange();
-        let db_path = temp.path().join("metadata/conary.db");
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            INSERT INTO schema_version (version) VALUES (79);",
-        )
-        .unwrap();
-        drop(conn);
-        let original = fs::read(&db_path).unwrap();
-
-        let manifest = prepare(&options).unwrap();
-        assert!(!db_path.exists());
-        conary_core::db::init(&db_path).unwrap();
-        rollback(&manifest).unwrap();
-        assert_eq!(fs::read(&db_path).unwrap(), original);
-        assert!(
-            manifest
-                .parent()
-                .unwrap()
-                .join("failed-current/conary.db")
-                .exists()
-        );
-    }
-
-    #[test]
-    fn current_database_is_snapshotted_and_restored_on_rollback() {
-        let (temp, options) = arrange();
-        let db_path = temp.path().join("metadata/conary.db");
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conary_core::db::schema::ensure_current(&conn).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE deployment_marker (value TEXT NOT NULL);
-             INSERT INTO deployment_marker (value) VALUES ('before');",
-        )
-        .unwrap();
-        drop(conn);
-
-        let manifest = prepare(&options).unwrap();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute("UPDATE deployment_marker SET value = 'after'", [])
-            .unwrap();
-        drop(conn);
-
-        rollback(&manifest).unwrap();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let marker: String = conn
-            .query_row("SELECT value FROM deployment_marker", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(marker, "before");
-        assert!(
-            manifest
-                .parent()
-                .unwrap()
-                .join("failed-current/conary.db")
-                .exists()
-        );
-    }
-
-    #[test]
-    fn prepare_rejects_symlinked_authority_inputs() {
-        let (temp, options) = arrange();
-        let real = temp.path().join("real-manifest.toml");
-        fs::rename(&options.repository_manifest_source, &real).unwrap();
-        symlink(&real, &options.repository_manifest_source).unwrap();
-
-        assert!(
-            prepare(&options)
-                .unwrap_err()
-                .to_string()
-                .contains("plain file")
-        );
-        assert!(
-            fs::read_to_string(&options.config_path)
-                .unwrap()
-                .contains("[upstream.old]")
-        );
-    }
-}
+mod tests;

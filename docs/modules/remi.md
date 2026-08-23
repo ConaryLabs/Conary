@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-22
-revision: 45
+last_updated: 2026-08-23
+revision: 46
 summary: Document Remi immutable source and profile catalogs, signed endpoint-wide universe publication and client activation, exact revision pinning, source identity and update policy, signing, repository trust, publication coordination, readiness, and serving authority
 ---
 
@@ -113,6 +113,12 @@ profile members, the active pointer, and exact revision pins. It does not own
 package, provide, or requirement rows for the activated native Remi catalog.
 `CatalogAuthority` resolves the pointer and verified bundle, opens SQLite in
 immutable read-only mode, and records a reader pin for the handle lifetime.
+Universe publication performs the complete digest, integrity, binding, count,
+and logical verification and seeds the serving cache with that exact reader; a
+first serving open performs the same proof if no publisher has done so. Later
+opens in that process share the verified read-only connection behind a bounded
+per-profile cache instead of rehashing gigabytes for every lookup. A new
+revision replaces that cache entry only after its own complete verification.
 Readers opened before activation therefore finish on the old revision; later
 readers see the complete new revision. Conversion outcomes own durable exact
 revision pins. Catalog garbage collection computes reachability from active,
@@ -132,9 +138,12 @@ unconditional liveness reply and proves only that the process is listening;
 requires the expected schema revision, and requires usable typed repository and
 canonical publication outcomes from the initial scheduler cycle. The validated
 manifest supplies the required exact-profile policy; every required profile
-must have a valid durable active pointer whose immutable catalog reopens and
-verifies, and a server without an exact configured profile is not ready. It also checks the serving
-directories and configured free-space floor. A probe that cannot run reports
+must have a valid durable active pointer, strict canonical manifest, exact
+two-file bundle, and a regular catalog file with the signed size and a nonzero
+package count. This bounded inspection neither claims the process SQLite writer
+nor rehashes the catalog; serving opens retain the complete verification
+contract above. A server without an exact configured profile is not ready. It
+also checks the serving directories and configured free-space floor. A probe that cannot run reports
 `unavailable` rather than success, so an unmeasurable resource never reads as
 ready. A public package cache miss before that profile is populated returns the
 typed retryable `REPOSITORY_NOT_READY` 503 response and creates no conversion
@@ -161,7 +170,12 @@ backup, config, repository-manifest, or database mutation, and records the
 canonical root in transition-manifest schema 2. Rollback reads that typed root
 and acquires the same lock before restoring any target. The superseded manifest
 shape has no compatibility reader. Deployment inspection remains read-only
-evidence and never establishes quiescence or mutation ownership.
+evidence and never establishes quiescence or mutation ownership. Its
+population report is profile-scoped: it reads package counts from each active
+immutable profile manifest, counts only conversions pinned to that active
+revision, and requires the fresh signed universe to name the exact same
+ordered revision set. Retired mutable Remi package rows are not deployment
+evidence.
 
 `apps/remi/src/server/publication_scheduler.rs` owns startup publication order
 and both periodic clocks; one process-local publication coordinator also
@@ -178,7 +192,11 @@ inside that owner.
 There is no warm-up timer or blind retry; a later cycle occurs at the configured
 interval, an overdue canonical deadline is serviced immediately after the
 current refresh, and each deadline resets only after its owning attempt
-completes.
+completes. Concurrent profile refreshes never publish partial endpoint
+universes independently. The owning admin batch publishes once after its
+profile set settles; the background scheduler publishes once after the
+following canonical-map cycle, so one sequence binds one coherent endpoint
+state.
 
 Eligible exact-profile prewarm jobs run concurrently under the configured
 conversion bound shared with request-driven conversions. Each profile preserves
@@ -189,14 +207,18 @@ discard successful source commits or suppress prewarm for another exact
 profile. Prewarm eligibility comes only from the successful result's persisted
 `source_profile`; repository names, URLs, formats, and error text are not
 selectors.
+All conversions for one unchanged profile revision share the process's already
+verified immutable catalog reader; the top-N loop does not repeat whole-catalog
+digest and integrity verification for each package.
 
 Both internal and external `POST /v1/admin/refresh` routes use the same response
 projection: HTTP 200 means every source completed or was current, 207 carries a
 mixed success/failure batch, and 502 means every configured source failed.
 Global database/setup failures remain HTTP 500. The release deployment gate
-still requires exact source reconciliation, all sources populated, and at
-least one conversion and validated converted artifact for every configured
-public profile. Result and failure arrays are sorted by exact repository name,
+requires exact source reconciliation, every configured profile populated in
+its active immutable catalog, the fresh signed universe matching those
+revisions, and at least one validated converted artifact pinned to every
+current profile revision. Result and failure arrays are sorted by exact repository name,
 so concurrent completion order is not API order.
 
 `apps/remi/src/server/admin_service/refresh.rs` owns the batch state, typed

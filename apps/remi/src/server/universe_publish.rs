@@ -72,7 +72,7 @@ pub(crate) enum UniversePublicationOutcome {
 pub(crate) async fn publish_current_universe_from_state(
     state: &Arc<RwLock<ServerState>>,
 ) -> Result<UniversePublicationOutcome> {
-    let (db_path, catalog_dir, candidate_dir, keys_root, database_writer) = {
+    let (db_path, catalog_dir, candidate_dir, keys_root, database_writer, catalog_authority) = {
         let guard = state.read().await;
         (
             guard.config.db_path.clone(),
@@ -80,15 +80,17 @@ pub(crate) async fn publish_current_universe_from_state(
             guard.config.catalog_candidate_dir.clone(),
             guard.config.release_publish.repository_keys_dir.clone(),
             guard.database_writer.clone(),
+            guard.catalog_authority.clone(),
         )
     };
     tokio::task::spawn_blocking(move || {
-        publish_current_universe(
+        publish_current_universe_with_authority(
             &db_path,
             &catalog_dir,
             &candidate_dir,
             keys_root.as_deref(),
             &database_writer,
+            Some(&catalog_authority),
         )
     })
     .await
@@ -121,12 +123,31 @@ struct SignedUniverseCandidate {
 
 /// Publish the exact active profile set and canonical map as one signed public
 /// universe. Files become durable before the one-row pointer transaction.
+#[cfg(test)]
 pub(crate) fn publish_current_universe(
     db_path: &Path,
     catalog_dir: &Path,
     candidate_dir: &Path,
     keys_root: Option<&Path>,
     database_writer: &DatabaseWriter,
+) -> Result<UniversePublicationOutcome> {
+    publish_current_universe_with_authority(
+        db_path,
+        catalog_dir,
+        candidate_dir,
+        keys_root,
+        database_writer,
+        None,
+    )
+}
+
+fn publish_current_universe_with_authority(
+    db_path: &Path,
+    catalog_dir: &Path,
+    candidate_dir: &Path,
+    keys_root: Option<&Path>,
+    database_writer: &DatabaseWriter,
+    catalog_authority: Option<&super::catalog_authority::CatalogAuthority>,
 ) -> Result<UniversePublicationOutcome> {
     let inputs = database_writer.execute(|| load_inputs(db_path))?;
     if inputs.profiles.is_empty() {
@@ -141,7 +162,7 @@ pub(crate) fn publish_current_universe(
         (&inputs.active_manifest, &inputs.base_manifest_sha256)
         && same_authority(active, &inputs.profiles, &canonical_map_sha256)
     {
-        verify_published_bundle(catalog_dir, active, manifest_sha256)?;
+        verify_published_bundle(catalog_dir, active, manifest_sha256, catalog_authority)?;
         if active_bundle_is_fresh(catalog_dir, active, manifest_sha256, Utc::now())? {
             return Ok(UniversePublicationOutcome::Unchanged {
                 manifest_sha256: manifest_sha256.clone(),
@@ -158,8 +179,8 @@ pub(crate) fn publish_current_universe(
         root,
         keys_root,
     )?;
-    let bundle = publish_candidate_files(candidate_dir, catalog_dir, &candidate)?;
-    verify_published_bundle(catalog_dir, &candidate.manifest, &candidate.manifest_sha256)?;
+    let bundle =
+        publish_candidate_files(candidate_dir, catalog_dir, &candidate, catalog_authority)?;
 
     database_writer
         .execute(|| activate_candidate(db_path, &inputs, &candidate, &bundle))
@@ -525,6 +546,7 @@ fn publish_candidate_files(
     candidate_root: &Path,
     catalog_dir: &Path,
     candidate: &SignedUniverseCandidate,
+    catalog_authority: Option<&super::catalog_authority::CatalogAuthority>,
 ) -> Result<PathBuf> {
     require_real_directory(candidate_root, "universe candidate root")?;
     require_real_directory(catalog_dir, "catalog root")?;
@@ -534,7 +556,12 @@ fn publish_candidate_files(
     let universes = ensure_real_subdirectory(catalog_dir, "universes")?;
     let destination = universes.join(&candidate.manifest_sha256);
     if destination.exists() {
-        verify_published_bundle(catalog_dir, &candidate.manifest, &candidate.manifest_sha256)?;
+        verify_published_bundle(
+            catalog_dir,
+            &candidate.manifest,
+            &candidate.manifest_sha256,
+            catalog_authority,
+        )?;
         return Ok(destination);
     }
 
@@ -562,7 +589,12 @@ fn publish_candidate_files(
     fs::rename(&staged_path, &destination)
         .with_context(|| format!("publish signed universe {}", candidate.manifest_sha256))?;
     File::open(&universes)?.sync_all()?;
-    verify_published_bundle(catalog_dir, &candidate.manifest, &candidate.manifest_sha256)?;
+    verify_published_bundle(
+        catalog_dir,
+        &candidate.manifest,
+        &candidate.manifest_sha256,
+        catalog_authority,
+    )?;
     Ok(destination)
 }
 
@@ -570,6 +602,7 @@ fn verify_published_bundle(
     catalog_dir: &Path,
     expected: &RemiUniverseManifestV1,
     expected_sha256: &str,
+    catalog_authority: Option<&super::catalog_authority::CatalogAuthority>,
 ) -> Result<()> {
     expected.validate().map_err(anyhow::Error::from)?;
     if expected.manifest_sha256()? != expected_sha256 {
@@ -614,7 +647,14 @@ fn verify_published_bundle(
             .join("profiles")
             .join(&profile.revision.profile)
             .join(&profile.profile_revision_sha256);
-        verify_profile_catalog_bundle(bundle, &profile.revision)?;
+        let reader = verify_profile_catalog_bundle(bundle, &profile.revision)?;
+        if let Some(authority) = catalog_authority {
+            authority.remember_verified_profile_reader(
+                &profile.revision.profile,
+                &profile.profile_revision_sha256,
+                reader,
+            );
+        }
     }
     Ok(())
 }
@@ -853,6 +893,17 @@ mod tests {
                 &self.database_writer,
             )
         }
+
+        fn publish_and_seed_serving_reader(&self) -> Result<UniversePublicationOutcome> {
+            publish_current_universe_with_authority(
+                self.catalogs.db_path(),
+                self.catalogs.catalog_dir(),
+                &self.candidate_dir,
+                Some(&self.keys_root),
+                &self.database_writer,
+                Some(self.catalogs.authority()),
+            )
+        }
     }
 
     #[test]
@@ -993,6 +1044,35 @@ mod tests {
             })
             .unwrap(),
             2
+        );
+    }
+
+    #[test]
+    fn publication_seeds_the_exact_serving_reader_cache() {
+        let fixture = PublicationFixture::new();
+        let revision = fixture.catalogs.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.3",
+                "1.fc44",
+                Some("x86_64"),
+                100,
+                "fedora-cache-seed",
+            )],
+        );
+
+        fixture
+            .publish_and_seed_serving_reader()
+            .expect("publish universe and seed serving reader");
+
+        assert!(
+            fixture
+                .catalogs
+                .authority()
+                .has_verified_profile_reader_for_test("fedora-44", &revision)
         );
     }
 

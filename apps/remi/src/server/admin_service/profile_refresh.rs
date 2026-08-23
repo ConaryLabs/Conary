@@ -77,9 +77,6 @@ pub(super) async fn refresh_native_profile(
             .all(|repository| !conary_core::repository::needs_sync(repository))
         && active_catalog_matches_plan(&roots, &source_profile, &plans).await
     {
-        crate::server::universe_publish::publish_current_universe_from_state(state)
-            .await
-            .map_err(|error| ServiceError::Internal(format!("{error:#}")))?;
         return Ok(repositories
             .into_iter()
             .map(|repository| RepoRefreshResult {
@@ -232,9 +229,6 @@ pub(super) async fn refresh_native_profile(
             ))),
         };
     }
-    crate::server::universe_publish::publish_current_universe_from_state(state)
-        .await
-        .map_err(|error| ServiceError::Internal(format!("{error:#}")))?;
     log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
 
     if let Err(error) = collect_catalog_garbage(&roots).await {
@@ -366,8 +360,8 @@ async fn active_catalog_matches_plan(
     let plans = plans.to_vec();
     tokio::task::spawn_blocking(move || {
         authority
-            .open_active_profile(&source_profile)
-            .is_ok_and(|catalog| profile_members_match_plan(&catalog.manifest().members, &plans))
+            .inspect_active_profile(&source_profile)
+            .is_ok_and(|catalog| profile_members_match_plan(&catalog.manifest.members, &plans))
     })
     .await
     .unwrap_or(false)
