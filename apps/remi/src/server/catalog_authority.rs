@@ -348,7 +348,6 @@ impl PinnedProfileCatalog {
     }
 
     /// The verified immutable catalog reader.
-    #[must_use]
     pub fn reader(&self) -> MutexGuard<'_, CatalogReader> {
         self.reader
             .as_ref()
