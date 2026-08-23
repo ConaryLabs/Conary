@@ -100,7 +100,9 @@ Object transfer bounds each request and interval without body progress; it does
 not impose a fixed wall-clock ceiling on a healthy multi-gigabyte stream.
 Interrupted bodies use bounded retries and resume from exact retained bytes
 when the server supports ranges. A complete-operation deadline belongs to the
-caller.
+caller. Private replay creates resolution indexes only after bulk row transfer;
+the candidate remains unpublished through index construction, verification,
+and durable rename.
 The client rejects mixed revisions, rollback, forks, expiry, altered objects,
 and a manifest that does not authorize the exact object set. Sync neither
 fetches whole-distribution JSON nor retains distribution-sized package or

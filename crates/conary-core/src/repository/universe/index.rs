@@ -60,10 +60,6 @@ CREATE TABLE repository_packages (
     canonical_id INTEGER,
     UNIQUE(repository_id, name, version, package_release, architecture)
 ) STRICT;
-CREATE INDEX repository_packages_name ON repository_packages(name, version, id);
-CREATE INDEX repository_packages_repo ON repository_packages(repository_id, name, id);
-CREATE INDEX repository_packages_canonical ON repository_packages(canonical_id, id);
-
 CREATE TABLE repository_provides (
     id INTEGER PRIMARY KEY CHECK(id < 0),
     repository_package_id INTEGER NOT NULL REFERENCES repository_packages(id) ON DELETE CASCADE,
@@ -78,11 +74,6 @@ CREATE TABLE repository_provides (
     provenance TEXT NOT NULL,
     CHECK((version IS NULL) = (version_relation IS NULL))
 ) STRICT;
-CREATE INDEX repository_provides_package ON repository_provides(repository_package_id, id);
-CREATE INDEX repository_provides_capability ON repository_provides(capability, kind, id);
-CREATE INDEX repository_provides_raw ON repository_provides(raw, id)
-    WHERE raw IS NOT NULL AND raw != '';
-
 CREATE TABLE repository_requirement_groups (
     id INTEGER PRIMARY KEY CHECK(id < 0),
     repository_package_id INTEGER NOT NULL REFERENCES repository_packages(id) ON DELETE CASCADE,
@@ -92,9 +83,6 @@ CREATE TABLE repository_requirement_groups (
     native_text TEXT,
     expression_json TEXT NOT NULL
 ) STRICT;
-CREATE INDEX repository_requirement_groups_package
-    ON repository_requirement_groups(repository_package_id, id);
-
 CREATE TABLE repository_requirements (
     id INTEGER PRIMARY KEY CHECK(id < 0),
     repository_package_id INTEGER NOT NULL REFERENCES repository_packages(id) ON DELETE CASCADE,
@@ -105,10 +93,6 @@ CREATE TABLE repository_requirements (
     dependency_type TEXT NOT NULL,
     raw TEXT
 ) STRICT;
-CREATE INDEX repository_requirements_package ON repository_requirements(repository_package_id, id);
-CREATE INDEX repository_requirements_capability ON repository_requirements(capability, kind, id);
-CREATE INDEX repository_requirements_group ON repository_requirements(group_id, id);
-
 CREATE TABLE canonical_packages (
     id INTEGER PRIMARY KEY CHECK(id < 0),
     name TEXT NOT NULL UNIQUE,
@@ -127,14 +111,35 @@ CREATE TABLE package_implementations (
     UNIQUE(distro, distro_name),
     UNIQUE(canonical_id, distro)
 ) STRICT;
-CREATE INDEX package_implementations_canonical ON package_implementations(canonical_id, id);
-
 CREATE TABLE canonical_resolution (
     distro TEXT NOT NULL,
     distro_name TEXT NOT NULL,
     canonical_id INTEGER NOT NULL,
     PRIMARY KEY(distro, distro_name)
 ) STRICT;
+"#;
+
+// The candidate is private until replay, validation, fsync, and rename finish.
+// Building these after bulk replay avoids maintaining eleven B-trees row by
+// row while Fedora contributes more than ten million capability records.
+const CLIENT_INDEX_INDEXES: &str = r#"
+CREATE INDEX repository_packages_name ON repository_packages(name, version, id);
+CREATE INDEX repository_packages_repo ON repository_packages(repository_id, name, id);
+CREATE INDEX repository_packages_canonical ON repository_packages(canonical_id, id);
+
+CREATE INDEX repository_provides_package ON repository_provides(repository_package_id, id);
+CREATE INDEX repository_provides_capability ON repository_provides(capability, kind, id);
+CREATE INDEX repository_provides_raw ON repository_provides(raw, id)
+    WHERE raw IS NOT NULL AND raw != '';
+
+CREATE INDEX repository_requirement_groups_package
+    ON repository_requirement_groups(repository_package_id, id);
+
+CREATE INDEX repository_requirements_package ON repository_requirements(repository_package_id, id);
+CREATE INDEX repository_requirements_capability ON repository_requirements(capability, kind, id);
+CREATE INDEX repository_requirements_group ON repository_requirements(group_id, id);
+
+CREATE INDEX package_implementations_canonical ON package_implementations(canonical_id, id);
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,6 +261,7 @@ pub(crate) fn build_client_universe_index(
             checked_i64(counts.requirements, "requirement count")?,
         ],
     )?;
+    tx.execute_batch(CLIENT_INDEX_INDEXES)?;
     tx.commit()?;
     for (alias, _, _) in &catalogs {
         replay::detach_catalog(&index, alias)?;
@@ -522,6 +528,32 @@ mod tests {
 
     fn digest(byte: char) -> String {
         byte.to_string().repeat(64)
+    }
+
+    #[test]
+    fn private_index_defers_secondary_indexes_until_after_bulk_replay() {
+        let index = Connection::open_in_memory().unwrap();
+        index.execute_batch(CLIENT_INDEX_SCHEMA).unwrap();
+        let before = index
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema
+                 WHERE type = 'index' AND sql IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(before, 0);
+
+        index.execute_batch(CLIENT_INDEX_INDEXES).unwrap();
+        let after = index
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema
+                 WHERE type = 'index' AND sql IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(after, 11);
     }
 
     fn package(version: &str) -> CatalogPackageRecordV1 {
