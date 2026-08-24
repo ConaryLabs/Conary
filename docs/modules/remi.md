@@ -347,15 +347,20 @@ authority plus a bounded merge walk for complete root coverage. Comparison
 retains one native/candidate root pair and reports typed root, outcome, closure,
 or unresolved-set drift.
 
-ALPM has the first native solver producer. It independently reopens and freshly
-reproduces the bound package oracle from the authenticated database objects,
-then prepares one exact-root libalpm transaction per package against empty
-installed state. It records exact prepared closures or typed missing required
-groups, rejects architecture/conflict/identity drift, writes the canonical
-resolution bundle, and fully reopens it against the exact package oracle before
-success. RPM and Debian solver producers, Debian package-fact production, the complete conversion crawl, proof
-reuse and target preflight, and Remi promotion wiring remain later independent
-evidence paths.
+ALPM and RPM have implemented native solver producers. Each independently
+reopens and freshly reproduces the bound package oracle from the exact
+authenticated native metadata before solving every package as an exact root
+against empty installed state. The ALPM producer records prepared libalpm
+transaction packages and typed missing-dependency records. The RPM producer
+uses exact libsolv transaction and problem-rule IDs, applies profile precedence
+as native repository priority, excludes weak relations, and reopens complete
+filelists for typed file-provider resolution. Both bind closures and missing
+groups back to exact package-oracle authority, reject
+architecture/conflict/identity drift, write the canonical resolution bundle,
+and fully reopen it before success. Debian package-fact and solver production,
+the complete conversion crawl, proof reuse and target preflight, and Remi
+promotion wiring remain later independent evidence paths.
+
 The canonical artifact format is
 `docs/specs/remi-native-parity-oracle.md`.
 

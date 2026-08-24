@@ -22,7 +22,10 @@ pub use alpm::{
 };
 
 #[cfg(feature = "native-rpm-oracle")]
-pub use rpm::{RPM_PARITY_PROJECTION_SCHEMA_V1, RpmParityMemberInput, produce_rpm_parity_oracle};
+pub use rpm::{
+    RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V1, RpmParityMemberInput,
+    produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
+};
 
 pub use compare::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NativeParityComparisonError, NativeParityComparisonV1,

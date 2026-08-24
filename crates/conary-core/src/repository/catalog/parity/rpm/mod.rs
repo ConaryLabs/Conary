@@ -27,6 +27,7 @@ use crate::repository::dependency_source::{CapabilityProvenance, SourcePackageFo
 use crate::repository::versioning::VersionScheme;
 
 mod ffi;
+mod resolution;
 
 #[cfg(test)]
 mod tests;
@@ -34,6 +35,7 @@ mod tests;
 use ffi::{DependencyField, SolvDependency, SolvPackage, SolvPool};
 
 pub const RPM_PARITY_PROJECTION_SCHEMA_V1: u32 = 1;
+pub use resolution::{RPM_RESOLUTION_PROJECTION_SCHEMA_V1, produce_rpm_resolution_oracle};
 pub const PINNED_LIBSOLV_VERSION: &str = "0.7.36";
 
 const CREATE_SPOOL: &str = "
@@ -76,6 +78,7 @@ pub fn produce_rpm_parity_oracle(
             &member.primary,
             &member.filelists,
             ordinal,
+            profile.members[ordinal as usize].precedence,
         )?;
     }
 

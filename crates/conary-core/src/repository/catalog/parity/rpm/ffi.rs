@@ -43,6 +43,25 @@ unsafe extern "C" {
         primary_path: *const c_char,
         filelists_path: *const c_char,
         member: u32,
+        precedence: c_int,
+    ) -> c_int;
+    fn conary_solv_set_architecture(handle: *mut c_void, architecture: *const c_char) -> c_int;
+    fn conary_solv_solve(handle: *mut c_void, root_index: usize) -> c_int;
+    fn conary_solv_closure_count(handle: *mut c_void) -> usize;
+    fn conary_solv_closure_package_index(handle: *mut c_void, index: usize) -> usize;
+    fn conary_solv_problem_rule_count(handle: *mut c_void) -> usize;
+    fn conary_solv_problem_rule(
+        handle: *mut c_void,
+        index: usize,
+        rule_type: *mut c_int,
+        from_index: *mut usize,
+        to_index: *mut usize,
+        dependency: *mut c_int,
+    ) -> c_int;
+    fn conary_solv_required_kind(
+        handle: *mut c_void,
+        package_index: usize,
+        dependency: c_int,
     ) -> c_int;
     fn conary_solv_package_count(handle: *mut c_void) -> usize;
     fn conary_solv_package_member(handle: *mut c_void, index: usize) -> u32;
@@ -97,6 +116,7 @@ impl SolvPool {
         primary: &Path,
         filelists: &Path,
         member: u32,
+        precedence: i32,
     ) -> Result<()> {
         let name = CString::new(name)
             .map_err(|_| Error::ConfigError("libsolv repository name contains NUL".to_string()))?;
@@ -109,12 +129,98 @@ impl SolvPool {
                 primary.as_ptr(),
                 filelists.as_ptr(),
                 member,
+                precedence,
             )
         };
         if result == 0 {
             return Err(Error::ParseError(self.last_error()?));
         }
         Ok(())
+    }
+
+    pub(super) fn set_architecture(&mut self, architecture: &str) -> Result<()> {
+        let architecture = CString::new(architecture)
+            .map_err(|_| Error::ConfigError("RPM architecture contains NUL".to_string()))?;
+        if unsafe { conary_solv_set_architecture(self.handle.as_ptr(), architecture.as_ptr()) } != 1
+        {
+            return Err(Error::ConfigError(
+                "set pinned libsolv target architecture".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn solve(&mut self, root_index: usize) -> Result<SolvResolution> {
+        let result = unsafe { conary_solv_solve(self.handle.as_ptr(), root_index) };
+        match result {
+            1 => {
+                let count = unsafe { conary_solv_closure_count(self.handle.as_ptr()) };
+                let mut packages = Vec::with_capacity(count);
+                for index in 0..count {
+                    let package_index =
+                        unsafe { conary_solv_closure_package_index(self.handle.as_ptr(), index) };
+                    if package_index == usize::MAX {
+                        return Err(Error::ConflictError(
+                            "libsolv transaction contains a package outside the authenticated RPM profile"
+                                .to_string(),
+                        ));
+                    }
+                    packages.push(package_index);
+                }
+                Ok(SolvResolution::Resolved(packages))
+            }
+            0 => {
+                let count = unsafe { conary_solv_problem_rule_count(self.handle.as_ptr()) };
+                let mut rules = Vec::with_capacity(count);
+                for index in 0..count {
+                    let mut rule_type = 0;
+                    let mut from_index = usize::MAX;
+                    let mut to_index = usize::MAX;
+                    let mut dependency = 0;
+                    let found = unsafe {
+                        conary_solv_problem_rule(
+                            self.handle.as_ptr(),
+                            index,
+                            &mut rule_type,
+                            &mut from_index,
+                            &mut to_index,
+                            &mut dependency,
+                        )
+                    };
+                    if found != 1 {
+                        return Err(Error::InternalError(
+                            "libsolv problem rule disappeared during typed inspection".to_string(),
+                        ));
+                    }
+                    rules.push(SolvProblemRule {
+                        rule_type,
+                        from_index: (from_index != usize::MAX).then_some(from_index),
+                        to_index: (to_index != usize::MAX).then_some(to_index),
+                        dependency,
+                    });
+                }
+                Ok(SolvResolution::Unresolved(rules))
+            }
+            _ => Err(Error::ConfigError(self.last_error()?)),
+        }
+    }
+
+    pub(super) fn required_kind(
+        &self,
+        package_index: usize,
+        dependency: i32,
+    ) -> Result<RequiredKind> {
+        match unsafe { conary_solv_required_kind(self.handle.as_ptr(), package_index, dependency) }
+        {
+            1 => Ok(RequiredKind::Depends),
+            2 => Ok(RequiredKind::PreDepends),
+            -1 => Err(Error::ConflictError(format!(
+                "libsolv dependency {dependency} is both required and pre-required"
+            ))),
+            _ => Err(Error::ConflictError(format!(
+                "libsolv problem dependency {dependency} is not bound to its requiring package"
+            ))),
+        }
     }
 
     pub(super) fn package_count(&self) -> usize {
@@ -147,6 +253,23 @@ impl SolvPool {
         }
         Ok(SolvDependency { pool: self, id })
     }
+}
+
+pub(super) enum SolvResolution {
+    Resolved(Vec<usize>),
+    Unresolved(Vec<SolvProblemRule>),
+}
+
+pub(super) struct SolvProblemRule {
+    pub(super) rule_type: i32,
+    pub(super) from_index: Option<usize>,
+    pub(super) to_index: Option<usize>,
+    pub(super) dependency: i32,
+}
+
+pub(super) enum RequiredKind {
+    Depends,
+    PreDepends,
 }
 
 impl Drop for SolvPool {

@@ -183,6 +183,11 @@ name = "conary-rpm-oracle"
 path = "src/bin/conary-rpm-oracle.rs"
 required-features = ["native-rpm-oracle"]
 
+[[bin]]
+name = "conary-rpm-resolution-oracle"
+path = "src/bin/conary-rpm-resolution-oracle.rs"
+required-features = ["native-rpm-oracle"]
+
 [[bench]]
 name = "erofs_build"
 harness = false
