@@ -11,9 +11,13 @@
 #include <solv/pool.h>
 #include <solv/repo.h>
 #include <solv/repo_rpmmd.h>
+#include <solv/problems.h>
+#include <solv/queue.h>
+#include <solv/solver.h>
 #include <solv/solv_xfopen.h>
 #include <solv/solvable.h>
 #include <solv/solvversion.h>
+#include <solv/transaction.h>
 
 typedef struct {
     Pool *pool;
@@ -21,6 +25,10 @@ typedef struct {
     uint32_t *members;
     size_t package_count;
     size_t package_capacity;
+    Solver *solver;
+    Transaction *transaction;
+    Queue closure;
+    Queue problem_rules;
     char error[512];
 } ConarySolv;
 
@@ -53,6 +61,34 @@ package_at(ConarySolv *handle, size_t index)
     if (!handle || !handle->pool || index >= handle->package_count)
         return NULL;
     return handle->pool->solvables + handle->packages[index];
+}
+
+static size_t
+package_index_for_id(ConarySolv *handle, Id package_id)
+{
+    if (!handle || package_id <= 0)
+        return SIZE_MAX;
+    for (size_t index = 0; index < handle->package_count; index++)
+        if (handle->packages[index] == package_id)
+            return index;
+    return SIZE_MAX;
+}
+
+static void
+clear_resolution(ConarySolv *handle)
+{
+    if (!handle)
+        return;
+    if (handle->transaction) {
+        transaction_free(handle->transaction);
+        handle->transaction = NULL;
+    }
+    if (handle->solver) {
+        solver_free(handle->solver);
+        handle->solver = NULL;
+    }
+    queue_empty(&handle->closure);
+    queue_empty(&handle->problem_rules);
 }
 
 static Offset
@@ -132,6 +168,8 @@ conary_solv_create(void)
         return NULL;
     }
     pool_setdisttype(handle->pool, DISTTYPE_RPM);
+    queue_init(&handle->closure);
+    queue_init(&handle->problem_rules);
     return handle;
 }
 
@@ -140,6 +178,9 @@ conary_solv_free(ConarySolv *handle)
 {
     if (!handle)
         return;
+    clear_resolution(handle);
+    queue_free(&handle->closure);
+    queue_free(&handle->problem_rules);
     pool_free(handle->pool);
     free(handle->packages);
     free(handle->members);
@@ -161,7 +202,7 @@ conary_solv_error(ConarySolv *handle)
 int
 conary_solv_load_rpmmd(ConarySolv *handle, const char *name,
                        const char *primary_path, const char *filelists_path,
-                       uint32_t member)
+                       uint32_t member, int precedence)
 {
     if (!handle || !name || !primary_path || !filelists_path)
         return 0;
@@ -171,6 +212,7 @@ conary_solv_load_rpmmd(ConarySolv *handle, const char *name,
         set_error(handle, "create RPM repository", pool_errstr(handle->pool));
         return 0;
     }
+    repo->priority = precedence;
 
     FILE *primary = solv_xfopen(primary_path, "r");
     if (!primary) {
@@ -197,6 +239,131 @@ conary_solv_load_rpmmd(ConarySolv *handle, const char *name,
     }
     repo_internalize(repo);
     return append_repo_packages(handle, repo, member);
+}
+
+int
+conary_solv_set_architecture(ConarySolv *handle, const char *architecture)
+{
+    if (!handle || !architecture || !*architecture)
+        return 0;
+    clear_resolution(handle);
+    pool_setarch(handle->pool, architecture);
+    return 1;
+}
+
+int
+conary_solv_solve(ConarySolv *handle, size_t root_index)
+{
+    if (!handle || root_index >= handle->package_count)
+        return -1;
+    clear_resolution(handle);
+    handle->error[0] = '\0';
+    handle->solver = solver_create(handle->pool);
+    if (!handle->solver) {
+        set_error(handle, "create RPM solver", "allocation failed");
+        return -1;
+    }
+    solver_set_flag(handle->solver, SOLVER_FLAG_IGNORE_RECOMMENDED, 1);
+    solver_set_flag(handle->solver, SOLVER_FLAG_STRICT_REPO_PRIORITY, 1);
+
+    Queue jobs;
+    queue_init(&jobs);
+    queue_push2(&jobs, SOLVER_INSTALL | SOLVER_SOLVABLE,
+                handle->packages[root_index]);
+    int result = solver_solve(handle->solver, &jobs);
+    queue_free(&jobs);
+    if (result != 0) {
+        Id problem = 0;
+        while ((problem = solver_next_problem(handle->solver, problem)) != 0) {
+            Queue rules;
+            queue_init(&rules);
+            solver_findallproblemrules(handle->solver, problem, &rules);
+            for (int index = 0; index < rules.count; index++)
+                queue_pushunique(&handle->problem_rules, rules.elements[index]);
+            queue_free(&rules);
+        }
+        if (!handle->problem_rules.count) {
+            set_error(handle, "solve RPM root", "problems carried no typed rules");
+            return -1;
+        }
+        return 0;
+    }
+
+    handle->transaction = solver_create_transaction(handle->solver);
+    if (!handle->transaction) {
+        set_error(handle, "create RPM transaction", "allocation failed");
+        return -1;
+    }
+    transaction_installedresult(handle->transaction, &handle->closure);
+    return 1;
+}
+
+size_t
+conary_solv_closure_count(ConarySolv *handle)
+{
+    return handle ? (size_t)handle->closure.count : 0;
+}
+
+size_t
+conary_solv_closure_package_index(ConarySolv *handle, size_t index)
+{
+    if (!handle || index >= (size_t)handle->closure.count)
+        return SIZE_MAX;
+    return package_index_for_id(handle, handle->closure.elements[index]);
+}
+
+size_t
+conary_solv_problem_rule_count(ConarySolv *handle)
+{
+    return handle ? (size_t)handle->problem_rules.count : 0;
+}
+
+int
+conary_solv_problem_rule(ConarySolv *handle, size_t index, int *type,
+                         size_t *from_index, size_t *to_index, int *dependency)
+{
+    if (!handle || !handle->solver || index >= (size_t)handle->problem_rules.count)
+        return 0;
+    Id from = 0;
+    Id to = 0;
+    Id dep = 0;
+    SolverRuleinfo info = solver_ruleinfo(
+        handle->solver, handle->problem_rules.elements[index], &from, &to, &dep);
+    if (type)
+        *type = (int)info;
+    if (from_index)
+        *from_index = package_index_for_id(handle, from);
+    if (to_index)
+        *to_index = package_index_for_id(handle, to);
+    if (dependency)
+        *dependency = dep;
+    return 1;
+}
+
+int
+conary_solv_required_kind(ConarySolv *handle, size_t package_index,
+                          int dependency)
+{
+    Solvable *solvable = package_at(handle, package_index);
+    if (!solvable || !solvable->requires || dependency == 0)
+        return 0;
+    int prerequisite = 0;
+    int found = 0;
+    for (Offset offset = solvable->requires;
+         solvable->repo->idarraydata[offset] != 0; offset++) {
+        Id current = solvable->repo->idarraydata[offset];
+        if (current == SOLVABLE_PREREQMARKER) {
+            prerequisite = 1;
+            continue;
+        }
+        if (current == dependency) {
+            int kind = prerequisite ? 2 : 1;
+            if (found && found != kind)
+                return -1;
+            found = kind;
+        }
+    }
+    return found;
 }
 
 size_t
