@@ -35,6 +35,8 @@ const SOLVER_RULE_PKG_NOT_INSTALLABLE: i32 = 0x101;
 const SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP: i32 = 0x102;
 const SOLVER_RULE_PKG_REQUIRES: i32 = 0x103;
 const SOLVER_RULE_JOB: i32 = 0x400;
+const SOLVER_RULE_JOB_UNSUPPORTED: i32 = 0x404;
+const SOLVER_RULE_INFARCH: i32 = 0x600;
 
 const CREATE_INDEX: &str = "
 CREATE TABLE oracle_packages (
@@ -110,7 +112,8 @@ pub fn produce_rpm_resolution_oracle(
     )?;
     package_oracle.for_each_package(|root| {
         let root_index = package_index.selected_native_index(&root.package_key_sha256)?;
-        let outcome = resolve_exact_root(&mut pool, &package_index, root_index, &root)?;
+        let outcome =
+            resolve_exact_root(&mut pool, &package_index, root_index, &root, architecture)?;
         writer.root(&NativeResolutionRootV1 {
             root_package_key_sha256: root.package_key_sha256,
             outcome,
@@ -208,10 +211,14 @@ impl PackageResolutionIndex {
                     package.name
                 )));
             };
-            let actual = crate::json::canonical_json(&package).map_err(|error| {
-                Error::ParseError(format!("serialize indexed native RPM package: {error}"))
-            })?;
-            if actual != expected {
+            let expected: crate::repository::catalog::parity::NativeParityPackageV1 =
+                serde_json::from_slice(&expected).map_err(|error| {
+                    Error::InternalError(format!(
+                        "reopen indexed RPM package-oracle row '{}': {error}",
+                        package.package_key_sha256
+                    ))
+                })?;
+            if !expected.has_same_profile_facts(&package) {
                 return Err(Error::ConflictError(format!(
                     "libsolv native package '{}' disagrees with the bound RPM package oracle",
                     package.name
@@ -278,6 +285,7 @@ fn resolve_exact_root(
     package_index: &PackageResolutionIndex,
     root_index: usize,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    architecture: &str,
 ) -> Result<NativeResolutionOutcomeV1> {
     match pool.solve(root_index)? {
         SolvResolution::Resolved(packages) => {
@@ -295,7 +303,9 @@ fn resolve_exact_root(
                 closure_package_keys_sha256: closure.into_iter().collect(),
             })
         }
-        SolvResolution::Unresolved(rules) => unresolved_outcome(pool, package_index, root, rules),
+        SolvResolution::Unresolved(rules) => {
+            unresolved_outcome(pool, package_index, root, architecture, rules)
+        }
     }
 }
 
@@ -303,6 +313,7 @@ fn unresolved_outcome(
     pool: &SolvPool,
     package_index: &PackageResolutionIndex,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    architecture: &str,
     rules: Vec<SolvProblemRule>,
 ) -> Result<NativeResolutionOutcomeV1> {
     let mut dependencies = BTreeSet::new();
@@ -334,8 +345,14 @@ fn unresolved_outcome(
             SOLVER_RULE_PKG_REQUIRES | SOLVER_RULE_JOB => {}
             SOLVER_RULE_PKG_NOT_INSTALLABLE => {
                 return Err(Error::ConfigError(format!(
-                    "libsolv found exact root '{}' not installable for the target architecture",
-                    root.name
+                    "libsolv found exact root '{}' not installable under target architecture '{}'",
+                    root.name, architecture
+                )));
+            }
+            SOLVER_RULE_JOB_UNSUPPORTED | SOLVER_RULE_INFARCH => {
+                return Err(Error::ConfigError(format!(
+                    "libsolv rejected exact root '{}' for target architecture '{}'",
+                    root.name, architecture
                 )));
             }
             rule_type => {

@@ -179,11 +179,48 @@ Success means every exact package-oracle row has one canonical outcome and the
 two-file resolution bundle has been durably written, reopened, and fully
 cross-checked against that exact package oracle.
 
+RPM resolution evidence is produced by the same explicit
+`native-rpm-oracle` feature and exact libsolv 0.7.36 runtime as the RPM
+package-fact oracle. The resolver independently reopens the supplied package
+bundle, freshly reproduces its entire manifest from the authenticated primary
+and filelists objects, and loads those objects again into a target-architecture
+solver pool. Profile member precedence becomes native repository priority;
+distinct versions remain native candidates, while exact duplicate identities
+retain the already-proved higher-precedence provenance.
+
+Every package-oracle key binds through a private disk-backed index to one exact
+native solvable root. Weak relations are disabled. Successful transaction IDs
+become exact closure package keys. Typed libsolv problem-rule and dependency
+IDs become exact requiring-package keys and canonical required or pre-required
+group digests. A typed missing file requirement triggers an exact lookup in
+libsolv's independently reopened complete filelists and one re-solve before it
+may remain unresolved. Architecture rejection, conflicts, non-installable
+roots, unexpected rule classes, native identity ambiguity, and input or oracle
+drift fail the complete crawl. Diagnostic strings never establish an outcome.
+
+Invoke the resolver helper with the exact RPM package bundle produced above:
+
+```bash
+cargo run -p conary-core --features native-rpm-oracle \
+  --bin conary-rpm-resolution-oracle -- \
+  --profile-manifest profile.json \
+  --source-snapshot fedora-source.json \
+  --primary primary.xml.gz --filelists filelists.xml.zst \
+  --package-oracle rpm-oracle \
+  --architecture x86_64 \
+  --output rpm-resolution-oracle
+```
+
+Success has the same complete per-root and independent reopen meaning as the
+ALPM producer. Neither native helper reads Conary catalog rows or invokes a
+source package manager executable.
+
 ## Separate Slice 6 owners
 
 The shared resolver artifact and comparator do not produce native evidence.
-ALPM now has a pinned native solver helper. RPM and Debian solver helpers remain
-separate owners and must derive their rows from the named native libraries over
-the exact package universe. Complete conversion crawling, conversion-proof
-reuse, independent CCS reopen and target preflight, and final Remi promotion
-after durable object reopen remain separate authority boundaries under #517.
+ALPM and RPM now have pinned native solver helpers. Debian package-fact and
+solver production remains a separate owner and must derive rows from the named
+native library over the exact package universe. Complete conversion crawling,
+conversion-proof reuse, independent CCS reopen and target preflight, and final
+Remi promotion after durable object reopen remain separate authority boundaries
+under #517.

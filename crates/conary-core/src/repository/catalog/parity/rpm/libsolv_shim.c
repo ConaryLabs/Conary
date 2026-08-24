@@ -29,6 +29,7 @@ typedef struct {
     Transaction *transaction;
     Queue closure;
     Queue problem_rules;
+    int fileprovides_added;
     char error[512];
 } ConarySolv;
 
@@ -89,6 +90,78 @@ clear_resolution(ConarySolv *handle)
     }
     queue_empty(&handle->closure);
     queue_empty(&handle->problem_rules);
+}
+
+static int
+package_provides_dependency(Solvable *solvable, Id dependency)
+{
+    if (!solvable || !solvable->repo || !solvable->provides)
+        return 0;
+    for (Offset offset = solvable->provides;
+         solvable->repo->idarraydata[offset] != 0; offset++)
+        if (solvable->repo->idarraydata[offset] == dependency)
+            return 1;
+    return 0;
+}
+
+static int
+add_exact_file_providers(ConarySolv *handle, Id dependency)
+{
+    if (!handle || !handle->pool || dependency <= 0 || ISRELDEP(dependency))
+        return 0;
+    const char *path = pool_id2str(handle->pool, dependency);
+    if (!path || *path != '/')
+        return 0;
+    /*
+     * pool_addfileprovides handles normal RPMMD file dependencies first.
+     * Some complete filelists extensions are not indexed by that helper, so
+     * a typed missing file rule triggers one exact scan of libsolv's own
+     * reopened filelist data before the root is declared unresolved.
+     */
+    Dataiterator iterator;
+    dataiterator_init(&iterator, handle->pool, NULL, 0, SOLVABLE_FILELIST,
+                      NULL, SEARCH_FILES);
+    int added = 0;
+    while (dataiterator_step(&iterator)) {
+        if (!iterator.kv.str || strcmp(iterator.kv.str, path) != 0)
+            continue;
+        Id package_id = iterator.solvid;
+        if (package_id <= 0 || package_id >= handle->pool->nsolvables)
+            continue;
+        Solvable *solvable = handle->pool->solvables + package_id;
+        if (!solvable->repo || package_provides_dependency(solvable, dependency))
+            continue;
+        solvable->provides = repo_addid_dep(solvable->repo, solvable->provides,
+                                            dependency, SOLVABLE_FILEMARKER);
+        added++;
+    }
+    dataiterator_free(&iterator);
+    return added;
+}
+
+static int
+add_problem_file_providers(ConarySolv *handle)
+{
+    if (!handle || !handle->solver)
+        return 0;
+    int added = 0;
+    Id problem = 0;
+    while ((problem = solver_next_problem(handle->solver, problem)) != 0) {
+        Queue rules;
+        queue_init(&rules);
+        solver_findallproblemrules(handle->solver, problem, &rules);
+        for (int index = 0; index < rules.count; index++) {
+            Id from = 0;
+            Id to = 0;
+            Id dependency = 0;
+            SolverRuleinfo info = solver_ruleinfo(
+                handle->solver, rules.elements[index], &from, &to, &dependency);
+            if (info == SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP)
+                added += add_exact_file_providers(handle, dependency);
+        }
+        queue_free(&rules);
+    }
+    return added;
 }
 
 static Offset
@@ -206,6 +279,11 @@ conary_solv_load_rpmmd(ConarySolv *handle, const char *name,
 {
     if (!handle || !name || !primary_path || !filelists_path)
         return 0;
+    if (handle->fileprovides_added) {
+        set_error(handle, "load RPM repository",
+                  "repositories cannot be added after solver preparation");
+        return 0;
+    }
     handle->error[0] = '\0';
     Repo *repo = repo_create(handle->pool, name);
     if (!repo) {
@@ -258,21 +336,33 @@ conary_solv_solve(ConarySolv *handle, size_t root_index)
         return -1;
     clear_resolution(handle);
     handle->error[0] = '\0';
-    handle->solver = solver_create(handle->pool);
-    if (!handle->solver) {
-        set_error(handle, "create RPM solver", "allocation failed");
-        return -1;
+    if (!handle->fileprovides_added) {
+        pool_addfileprovides(handle->pool);
+        handle->fileprovides_added = 1;
     }
-    solver_set_flag(handle->solver, SOLVER_FLAG_IGNORE_RECOMMENDED, 1);
-    solver_set_flag(handle->solver, SOLVER_FLAG_STRICT_REPO_PRIORITY, 1);
+    for (;;) {
+        handle->solver = solver_create(handle->pool);
+        if (!handle->solver) {
+            set_error(handle, "create RPM solver", "allocation failed");
+            return -1;
+        }
+        solver_set_flag(handle->solver, SOLVER_FLAG_IGNORE_RECOMMENDED, 1);
+        solver_set_flag(handle->solver, SOLVER_FLAG_STRICT_REPO_PRIORITY, 1);
 
-    Queue jobs;
-    queue_init(&jobs);
-    queue_push2(&jobs, SOLVER_INSTALL | SOLVER_SOLVABLE,
-                handle->packages[root_index]);
-    int result = solver_solve(handle->solver, &jobs);
-    queue_free(&jobs);
-    if (result != 0) {
+        Queue jobs;
+        queue_init(&jobs);
+        queue_push2(&jobs, SOLVER_INSTALL | SOLVER_SOLVABLE,
+                    handle->packages[root_index]);
+        int result = solver_solve(handle->solver, &jobs);
+        queue_free(&jobs);
+        if (result == 0)
+            break;
+        if (add_problem_file_providers(handle)) {
+            solver_free(handle->solver);
+            handle->solver = NULL;
+            pool_freewhatprovides(handle->pool);
+            continue;
+        }
         Id problem = 0;
         while ((problem = solver_next_problem(handle->solver, problem)) != 0) {
             Queue rules;

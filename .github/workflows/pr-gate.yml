@@ -174,7 +174,7 @@ jobs:
       - name: Test the libsolv parity producer
         run: cargo test -p conary-core --features native-rpm-oracle repository::catalog::parity::rpm --verbose
       - name: Lint the libsolv parity producer
-        run: cargo clippy -p conary-core --features native-rpm-oracle --lib --bin conary-rpm-oracle -- -D warnings
+        run: cargo clippy -p conary-core --features native-rpm-oracle --lib --bin conary-rpm-oracle --bin conary-rpm-resolution-oracle -- -D warnings
 
   generation-db-reflink:
     name: generation-db-reflink
