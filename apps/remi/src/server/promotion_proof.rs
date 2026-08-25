@@ -309,6 +309,35 @@ mod tests {
         assert!(validate_inputs(&inputs).is_err());
     }
 
+    #[test]
+    fn failed_operator_proof_removes_staged_partial_output() {
+        let catalogs = ActiveCatalogFixture::new();
+        let output_parent = tempfile::tempdir().expect("promotion proof output parent");
+        let output = output_parent.path().join("proof");
+
+        let error = produce_remi_promotion_proof(
+            &RemiPromotionProofConfig {
+                db_path: catalogs.db_path().to_path_buf(),
+                catalog_dir: catalogs.catalog_dir().to_path_buf(),
+                conversion_crawl_path: output_parent.path().join("missing-crawl.json"),
+                output_dir: output.clone(),
+                profiles: valid_inputs(),
+            },
+            catalogs.authority(),
+        )
+        .expect_err("unregistered candidate revision must fail");
+
+        assert!(error.to_string().contains("reopen promotion-proof profile"));
+        assert!(!output.exists());
+        assert_eq!(
+            fs::read_dir(output_parent.path())
+                .expect("inspect output parent")
+                .count(),
+            0,
+            "failed proof must remove its private staged directory"
+        );
+    }
+
     struct OracleFixture {
         input: RemiPromotionProofProfileInput,
         revision: ProfileRevisionV2,
