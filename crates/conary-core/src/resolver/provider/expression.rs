@@ -33,6 +33,7 @@ impl ConaryProvider<'_> {
     pub(super) fn compile_dependency_requirements(&mut self) -> Result<()> {
         let dependencies = std::mem::take(&mut self.dependencies);
         self.compiled_dependencies.clear();
+        self.compiled_requirement_groups.clear();
 
         for (solvable, deps) in &dependencies {
             let mut requirements = Vec::new();
@@ -137,13 +138,17 @@ impl ConaryProvider<'_> {
         if let Some((solvable, group)) = provenance {
             for version_set in &positive {
                 self.compiled_requirement_groups
-                    .insert((solvable, version_set.0), group);
+                    .entry((solvable, version_set.0))
+                    .or_default()
+                    .insert(group);
             }
             if positive.is_empty()
                 && let Requirement::Single(version_set) = requirement
             {
                 self.compiled_requirement_groups
-                    .insert((solvable, version_set.0), group);
+                    .entry((solvable, version_set.0))
+                    .or_default()
+                    .insert(group);
             }
         }
 

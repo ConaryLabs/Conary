@@ -30,12 +30,8 @@ pub use parity::{
     ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, AlpmParityMemberInput,
     produce_alpm_parity_oracle, produce_alpm_resolution_oracle,
 };
-#[cfg(feature = "native-debian-oracle")]
 pub use parity::{
-    DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1,
-    DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
-};
-pub use parity::{
+    CONARY_RESOLUTION_PROJECTION_SCHEMA_V1, ConaryResolutionCandidateV1,
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_PARITY_MANIFEST_FILE_NAME,
     NATIVE_PARITY_ORACLE_SCHEMA_V1, NATIVE_PARITY_PACKAGE_FILE_NAME,
     NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
@@ -51,9 +47,14 @@ pub use parity::{
     NativeResolutionProviderPolicyV1, NativeResolutionRequirementPolicyV1,
     NativeResolutionRootPolicyV1, NativeResolutionRootV1, NativeUnresolvedDependencyV1,
     compare_native_parity_oracle, compare_native_resolution_oracle,
-    native_requirement_group_sha256, verify_native_parity_oracle_bundle,
-    verify_native_resolution_oracle_bundle, write_native_parity_oracle_manifest,
-    write_native_resolution_oracle_manifest,
+    native_requirement_group_sha256, produce_conary_resolution_candidate,
+    verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
+    write_native_parity_oracle_manifest, write_native_resolution_oracle_manifest,
+};
+#[cfg(feature = "native-debian-oracle")]
+pub use parity::{
+    DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1,
+    DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
 };
 #[cfg(feature = "native-rpm-oracle")]
 pub use parity::{

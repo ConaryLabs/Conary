@@ -87,7 +87,8 @@ pub struct ConaryProvider<'db> {
     pub(super) compiled_dependencies: HashMap<u32, Vec<ConditionalRequirement>>,
 
     /// Exact persisted group behind each compiled positive version set.
-    compiled_requirement_groups: HashMap<(u32, u32), types::RepositoryRequirementGroupIdentity>,
+    compiled_requirement_groups:
+        HashMap<(u32, u32), std::collections::BTreeSet<types::RepositoryRequirementGroupIdentity>>,
 
     /// Boolean conditions referenced by compiled conditional requirements.
     pub(super) conditions: Vec<Condition>,

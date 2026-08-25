@@ -301,6 +301,55 @@ fn exact_repository_root_returns_typed_missing_group() {
 }
 
 #[test]
+fn exact_repository_root_preserves_all_groups_sharing_one_constraint() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.invalid/fedora".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let root = insert_rpm_repo_package(&conn, repository_id, "root", "1-1");
+    let first = insert_repo_requirement_group(
+        &conn,
+        root,
+        "missing",
+        None,
+        Some("first missing declaration"),
+    );
+    let second = insert_repo_requirement_group(
+        &conn,
+        root,
+        "missing",
+        None,
+        Some("second missing declaration"),
+    );
+
+    let result = solve_exact_repository_package_with_policy(
+        &conn,
+        root,
+        "x86_64",
+        &ResolutionPolicy::new().with_primary_source_identity("fedora-44"),
+    )
+    .unwrap();
+    assert_eq!(
+        result,
+        SatExactResolution::Unresolved {
+            dependencies: vec![
+                SatUnresolvedDependency {
+                    repository_package_id: root,
+                    repository_requirement_group_id: first,
+                },
+                SatUnresolvedDependency {
+                    repository_package_id: root,
+                    repository_requirement_group_id: second,
+                },
+            ],
+        }
+    );
+}
+
+#[test]
 fn adopted_malformed_self_provides_return_conflict_without_diagnostic_panic() {
     let (_dir, conn) = setup_test_db();
     let mut repository = Repository::new(

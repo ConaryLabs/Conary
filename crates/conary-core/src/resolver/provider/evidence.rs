@@ -41,9 +41,11 @@ impl ConaryProvider<'_> {
         };
         version_sets
             .into_iter()
-            .filter_map(|version_set| {
+            .flat_map(|version_set| {
                 self.compiled_requirement_groups
                     .get(&(solvable.into_raw(), version_set.0))
+                    .into_iter()
+                    .flatten()
                     .copied()
             })
             .collect()
