@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-08-25
-revision: 8
+revision: 9
 status: active
 ---
 
@@ -330,5 +330,8 @@ conversion crawling, exact proof reuse, independent CCS reopen, and target
 preflight remain separate evidence owners. `RemiPromotionEvidenceV1`
 independently reopens their artifacts, recomputes both parity comparisons, and
 binds them with the complete crawl and canonical-map validation to the same
-exact ordered public candidate set. Final pointer activation must still wait
-for durable catalog, CAS, and signed metadata reopen under #517.
+exact ordered public candidate set. The promotion owner consumes that evidence,
+reopens exact proof-bound CCS bytes and every referenced durable CAS object,
+publishes and reopens the signed universe bundle, and changes every selected
+profile pointer plus the universe pointer in one transaction. Evidence-free
+publication is limited to exact-active-authority metadata renewal.
