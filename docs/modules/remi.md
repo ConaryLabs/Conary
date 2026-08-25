@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 58
-summary: Document exact candidate promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 59
+summary: Document exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -389,12 +389,14 @@ these independently reopened records to the same exact candidates.
 
 ### Initial Full-Universe Conversion Crawl
 
-`remi conversion-crawl` is the strict initial-crawl owner. It derives its
-ordered scope directly from the typed public-profile catalog, opens and pins
-the exact active Fedora, Ubuntu, and Arch profile revisions before conversion,
-and enumerates every exact catalog variant in canonical order. Candidate-tier
-Solus cannot enter the scope. The command deliberately has no profile,
-package-count, popularity, regex, allowlist, dry-run, skip, or exclusion
+`remi conversion-crawl` is the strict initial-crawl owner. It requires one
+exact `PROFILE=SHA256` candidate binding for every typed public profile in
+canonical Fedora, Ubuntu, and Arch order. It independently reopens and pins
+those durable registered revisions without consulting the active pointers,
+then enumerates every exact catalog variant in canonical order. Missing,
+repeated, reordered, unknown, uppercase-digest, and candidate-tier Solus
+bindings fail closed. The command deliberately has no package-count,
+popularity, regex, allowlist, dry-run, skip, exclusion, or per-profile scope
 control.
 
 Each catalog record is selected by its exact package-key SHA-256 rather than
@@ -436,10 +438,10 @@ reopened value before the command may report success. A structurally valid
 failure report is still published for diagnosis, then the command exits
 unsuccessfully.
 
-The crawl currently consumes activated immutable catalogs; it does not promote
-a candidate. The promotion-evidence contract consumes its complete report.
-Final pointer activation and catalog/CAS/signed-metadata durability reopen
-remain a separate Slice 6 gate under #517.
+The crawl validates registered immutable candidates; it does not activate
+them. The promotion-evidence contract consumes its complete report. Final
+pointer activation and catalog/CAS/signed-metadata durability reopen remain a
+separate Slice 6 gate under #517.
 
 ```text
 remi conversion-crawl \
@@ -448,6 +450,9 @@ remi conversion-crawl \
   --chunk-dir /var/lib/conary/data/chunks \
   --cache-dir /var/lib/conary/data/cache \
   --repository-keys-dir /etc/conary/repository-keys \
+  --candidate fedora-44=<profile-revision-sha256> \
+  --candidate ubuntu-26.04=<profile-revision-sha256> \
+  --candidate arch=<profile-revision-sha256> \
   --output /var/lib/conary/evidence/initial-conversion-crawl.json
 ```
 

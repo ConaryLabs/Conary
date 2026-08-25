@@ -266,27 +266,48 @@ async fn crawl_attempts_every_exact_variant_once_and_preserves_canonical_order()
 }
 
 #[test]
-fn crawl_planning_pins_every_public_profile_and_excludes_candidate_tiers() {
+fn crawl_planning_pins_registered_candidates_without_reading_active_pointers() {
     let fixture = ActiveCatalogFixture::new();
+    let mut candidates = Vec::new();
+    let mut active_revisions = Vec::new();
     for (index, profile) in conary_core::repository::supported_profiles::public_profiles()
         .iter()
         .enumerate()
     {
-        fixture.activate(
+        let epoch = i64::try_from(index + 1).expect("fixture epoch");
+        active_revisions.push(fixture.activate(
             profile.id(),
-            i64::try_from(index + 1).expect("fixture epoch"),
+            epoch,
             vec![package(
                 profile.id(),
-                "demo",
+                "active-only",
                 "1.0",
                 "1",
                 Some("x86_64"),
                 42,
+                &format!("active-{}", profile.id()),
+            )],
+        ));
+        let candidate_revision = fixture.register(
+            profile.id(),
+            epoch + 10,
+            vec![package(
                 profile.id(),
+                "candidate-only",
+                "2.0",
+                "1",
+                Some("x86_64"),
+                42,
+                &format!("candidate-{}", profile.id()),
             )],
         );
+        candidates.push(ProfileRevisionSelection {
+            source_profile: profile.id().to_string(),
+            profile_revision_sha256: candidate_revision,
+        });
     }
-    let plans = build_crawl_plans(fixture.authority()).expect("build public crawl plans");
+    let plans =
+        build_crawl_plans(fixture.authority(), &candidates).expect("build public crawl plans");
     assert_eq!(
         plans
             .iter()
@@ -294,10 +315,42 @@ fn crawl_planning_pins_every_public_profile_and_excludes_candidate_tiers() {
             .collect::<Vec<_>>(),
         vec!["fedora-44", "ubuntu-26.04", "arch"]
     );
-    assert!(plans.iter().all(|plan| plan.packages.len() == 1));
     assert!(
         plans
             .iter()
-            .all(|plan| plan.selection.source_profile != "solus")
+            .all(|plan| plan.packages.len() == 1 && plan.packages[0].name == "candidate-only")
     );
+    let conn = fixture.connection();
+    for (profile, active_revision) in conary_core::repository::supported_profiles::public_profiles()
+        .iter()
+        .zip(active_revisions)
+    {
+        let active = conary_core::db::models::RemiActiveProfileRevision::find(&conn, profile.id())
+            .expect("read active pointer")
+            .expect("active pointer");
+        assert_eq!(active.profile_revision_sha256, active_revision);
+    }
+}
+
+#[test]
+fn crawl_planning_rejects_incomplete_reordered_and_candidate_tier_selections() {
+    let fixture = ActiveCatalogFixture::new();
+    let digest = "a".repeat(64);
+    let mut candidates = conary_core::repository::supported_profiles::public_profiles()
+        .iter()
+        .map(|profile| ProfileRevisionSelection {
+            source_profile: profile.id().to_string(),
+            profile_revision_sha256: digest.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    assert!(build_crawl_plans(fixture.authority(), &candidates[..2]).is_err());
+    candidates.swap(0, 1);
+    assert!(build_crawl_plans(fixture.authority(), &candidates).is_err());
+    candidates.swap(0, 1);
+    candidates[2].source_profile = "solus".to_string();
+    assert!(build_crawl_plans(fixture.authority(), &candidates).is_err());
+    candidates[2].source_profile = "arch".to_string();
+    candidates[0].profile_revision_sha256 = "A".repeat(64);
+    assert!(build_crawl_plans(fixture.authority(), &candidates).is_err());
 }

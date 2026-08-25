@@ -6,11 +6,12 @@ use super::{
     CcsTargetCompatibilityProofV1, ReopenedCcsArtifactEvidence, exact_prefixed_sha256,
     target_preflight, validate_sha256,
 };
+use crate::server::catalog_authority::ProfileRevisionSelection;
 use crate::server::conversion::{ConversionService, ServerConversionResult};
 use crate::server::database_writer::DatabaseWriter;
 use anyhow::{Context, Result, ensure};
 use conary_core::ccs::{CcsTransportEnvelopeV1, TargetProfileV1, supported_target_contracts};
-use conary_core::db::models::{ConvertedPackage, RemiActiveProfileRevision};
+use conary_core::db::models::ConvertedPackage;
 use conary_core::repository::catalog::CatalogPackageRecordV1;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -426,7 +427,7 @@ pub(super) async fn validate_or_reuse(
     reopener: CcsArtifactReopener,
     route: String,
     package: CatalogPackageRecordV1,
-    selection: RemiActiveProfileRevision,
+    selection: ProfileRevisionSelection,
 ) -> Result<(ConversionProofDispositionV1, ConversionProofV1)> {
     let signer = reopener.signer_public_key_sha256().to_string();
     if let Some(proof) = store

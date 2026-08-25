@@ -2,10 +2,10 @@
 //! Immutable catalog package lookup and pinned upstream download for conversion.
 
 use super::ConversionService;
-use crate::server::catalog_authority::PinnedProfileCatalog;
+use crate::server::catalog_authority::{PinnedProfileCatalog, ProfileRevisionSelection};
 use crate::server::profile_catalog::ProfileCatalog;
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use conary_core::db::models::{RemiActiveProfileRevision, Repository, RepositoryPackage};
+use conary_core::db::models::{Repository, RepositoryPackage};
 use conary_core::repository::catalog::{
     CatalogPackageOriginV1, CatalogPackageRecordV1, SourceSnapshotV1,
 };
@@ -140,7 +140,7 @@ impl ConversionService {
 
     pub(super) async fn find_package_for_selected_revision_async(
         &self,
-        selection: RemiActiveProfileRevision,
+        selection: ProfileRevisionSelection,
         package_name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
@@ -165,7 +165,7 @@ impl ConversionService {
 
     pub(super) async fn find_exact_package_for_selected_revision_async(
         &self,
-        selection: RemiActiveProfileRevision,
+        selection: ProfileRevisionSelection,
         expected: CatalogPackageRecordV1,
     ) -> Result<PinnedConversionSource> {
         let service = self.clone();
@@ -178,7 +178,7 @@ impl ConversionService {
 
     fn find_exact_catalog_package(
         &self,
-        selection: &RemiActiveProfileRevision,
+        selection: &ProfileRevisionSelection,
         expected: CatalogPackageRecordV1,
     ) -> Result<PinnedConversionSource> {
         let profile = conary_core::repository::supported_profiles::profile_by_public_id(
@@ -227,7 +227,7 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
-        selection: Option<&RemiActiveProfileRevision>,
+        selection: Option<&ProfileRevisionSelection>,
     ) -> Result<PinnedConversionSource> {
         let profile = conary_core::repository::supported_profiles::profile_by_public_id(distro)
             .ok_or_else(|| anyhow!("unsupported public profile: {}", distro))?;
@@ -666,7 +666,7 @@ mod tests {
             .authority()
             .open_active_profile("fedora-44")
             .expect("pin old active selection");
-        let selection = selection_pin.activation().clone();
+        let selection = selection_pin.selection().clone();
         let new_revision = fixture.activate(
             "fedora-44",
             2,

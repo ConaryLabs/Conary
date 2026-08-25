@@ -4,6 +4,7 @@
 use super::ConversionService;
 use super::lookup::{PackageDownloadRequest, PinnedConversionSource};
 use super::persistence::PersistConversionInput;
+use crate::server::catalog_authority::ProfileRevisionSelection;
 use crate::server::conversion_timing::{
     ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionSourceIdentity,
     ConversionTimingReport,
@@ -12,7 +13,7 @@ use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::convert::{ConversionOptions, ConversionResult, NativePackageConverter};
-use conary_core::db::models::{RemiActiveProfileRevision, RepositoryPackage};
+use conary_core::db::models::RepositoryPackage;
 use conary_core::repository::catalog::CatalogPackageRecordV1;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -31,9 +32,9 @@ struct ParsedConversion {
 
 enum ConversionSourceSelection {
     Active,
-    Pinned(RemiActiveProfileRevision),
+    Pinned(ProfileRevisionSelection),
     Exact {
-        selection: RemiActiveProfileRevision,
+        selection: ProfileRevisionSelection,
         package: Box<CatalogPackageRecordV1>,
     },
 }
@@ -87,7 +88,7 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
-        selection: RemiActiveProfileRevision,
+        selection: ProfileRevisionSelection,
     ) -> Result<super::ServerConversionResult> {
         self.convert_package_with_selection_async(
             distro,
@@ -103,7 +104,7 @@ impl ConversionService {
         &self,
         distro: &str,
         package: CatalogPackageRecordV1,
-        selection: RemiActiveProfileRevision,
+        selection: ProfileRevisionSelection,
     ) -> Result<super::ServerConversionResult> {
         let name = package.name.clone();
         let version = package.version.clone();

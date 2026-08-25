@@ -78,6 +78,25 @@ impl ActiveCatalogFixture {
         fencing_epoch: i64,
         packages: Vec<CatalogPackageRecordV1>,
     ) -> String {
+        self.publish_revision(profile, fencing_epoch, packages, true)
+    }
+
+    pub(crate) fn register(
+        &self,
+        profile: &str,
+        fencing_epoch: i64,
+        packages: Vec<CatalogPackageRecordV1>,
+    ) -> String {
+        self.publish_revision(profile, fencing_epoch, packages, false)
+    }
+
+    fn publish_revision(
+        &self,
+        profile: &str,
+        fencing_epoch: i64,
+        packages: Vec<CatalogPackageRecordV1>,
+        activate: bool,
+    ) -> String {
         let (parser_config, trust_policy, ecosystem, evidence_role) =
             source_fixture_authority(profile);
         let parser_config_sha256 = conary_core::hash::sha256(
@@ -405,25 +424,26 @@ impl ActiveCatalogFixture {
             .insert(&conn)
             .expect("insert profile member");
         }
-        let run_id = uuid::Uuid::new_v4().to_string();
-        let owner_instance_uuid = uuid::Uuid::new_v4().to_string();
-        conn.execute(
-            "INSERT INTO repository_sync_runs (
+        if activate {
+            let run_id = uuid::Uuid::new_v4().to_string();
+            let owner_instance_uuid = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO repository_sync_runs (
                  run_id, source_profile, owner_instance_uuid, fencing_epoch,
                  input_profile_digest, candidate_profile_digest, state,
                  started_at, heartbeat_at, lease_expires_at, finished_at
              ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, 'published', ?4, ?4, ?4, ?4)",
-            rusqlite::params![
-                run_id,
-                profile,
-                owner_instance_uuid,
-                fencing_epoch,
-                profile_revision_sha256,
-            ],
-        )
-        .expect("insert activation run");
-        conn.execute(
-            "INSERT INTO remi_active_profile_revisions (
+                rusqlite::params![
+                    run_id,
+                    profile,
+                    owner_instance_uuid,
+                    fencing_epoch,
+                    profile_revision_sha256,
+                ],
+            )
+            .expect("insert activation run");
+            conn.execute(
+                "INSERT INTO remi_active_profile_revisions (
                  source_profile, profile_revision_sha256, fencing_epoch,
                  activation_run_id, owner_instance_uuid, activated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?3)
@@ -433,15 +453,16 @@ impl ActiveCatalogFixture {
                  activation_run_id = excluded.activation_run_id,
                  owner_instance_uuid = excluded.owner_instance_uuid,
                  activated_at = excluded.activated_at",
-            rusqlite::params![
-                profile,
-                profile_revision_sha256,
-                fencing_epoch,
-                run_id,
-                owner_instance_uuid,
-            ],
-        )
-        .expect("activate profile revision");
+                rusqlite::params![
+                    profile,
+                    profile_revision_sha256,
+                    fencing_epoch,
+                    run_id,
+                    owner_instance_uuid,
+                ],
+            )
+            .expect("activate profile revision");
+        }
         profile_revision_sha256
     }
 }

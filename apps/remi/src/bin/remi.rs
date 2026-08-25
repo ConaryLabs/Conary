@@ -4,8 +4,9 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use remi::server::{
-    ConversionCrawlConfig, IndexGenConfig, PrewarmConfig, ProxyConfig, RemiConfig,
-    generate_indices, run_conversion_crawl, run_prewarm, run_proxy, run_server_from_config,
+    ConversionCrawlConfig, IndexGenConfig, PrewarmConfig, ProfileRevisionSelection, ProxyConfig,
+    RemiConfig, generate_indices, run_conversion_crawl, run_prewarm, run_proxy,
+    run_server_from_config,
 };
 use remi::trust;
 use std::path::PathBuf;
@@ -170,11 +171,11 @@ struct PrewarmArgs {
 
 #[derive(Args)]
 struct ConversionCrawlArgs {
-    /// Database containing exact active profile pointers and repository keys.
+    /// Database containing durable registered profile revisions and repository keys.
     #[arg(long, default_value = "/var/lib/conary/conary.db")]
     db: PathBuf,
 
-    /// Root containing immutable activated source and profile catalogs.
+    /// Root containing immutable source and profile catalogs.
     #[arg(long, default_value = "/var/lib/conary/data/catalogs")]
     catalog_dir: PathBuf,
 
@@ -189,6 +190,15 @@ struct ConversionCrawlArgs {
     /// Directory containing exact per-profile TUF signing authority.
     #[arg(long)]
     repository_keys_dir: PathBuf,
+
+    /// Exact public candidate as PROFILE=REVISION; repeat in canonical order.
+    #[arg(
+        long = "candidate",
+        value_name = "PROFILE=SHA256",
+        required = true,
+        value_parser = parse_candidate
+    )]
+    candidates: Vec<ProfileRevisionSelection>,
 
     /// Canonical crawl evidence output path.
     #[arg(long)]
@@ -593,6 +603,7 @@ fn run_conversion_crawl_command(args: ConversionCrawlArgs) -> Result<()> {
         repository_keys_dir: args.repository_keys_dir,
         output_path: args.output,
         concurrency: args.concurrency,
+        candidates: args.candidates,
     };
     conary_bootstrap::run_with_runtime(move || async move {
         let report = run_conversion_crawl(&config).await?;
@@ -608,6 +619,27 @@ fn run_conversion_crawl_command(args: ConversionCrawlArgs) -> Result<()> {
         );
         println!("Evidence: {}", config.output_path.display());
         Ok(())
+    })
+}
+
+fn parse_candidate(value: &str) -> std::result::Result<ProfileRevisionSelection, String> {
+    let (source_profile, profile_revision_sha256) = value
+        .split_once('=')
+        .ok_or_else(|| "candidate must be PROFILE=SHA256".to_string())?;
+    if source_profile.is_empty() {
+        return Err("candidate profile must not be empty".to_string());
+    }
+    if profile_revision_sha256.len() != 64
+        || !profile_revision_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || profile_revision_sha256 != profile_revision_sha256.to_ascii_lowercase()
+    {
+        return Err("candidate revision must be an exact lowercase SHA-256 digest".to_string());
+    }
+    Ok(ProfileRevisionSelection {
+        source_profile: source_profile.to_string(),
+        profile_revision_sha256: profile_revision_sha256.to_string(),
     })
 }
 
@@ -798,5 +830,23 @@ root = "{storage_root}"
         assert_eq!(config.server.bind, "0.0.0.0:9501");
         assert_eq!(config.server.admin_bind, "127.0.0.1:9502");
         assert_eq!(config.storage.root, PathBuf::from("/from-cli"));
+    }
+
+    #[test]
+    fn conversion_crawl_candidate_parser_requires_exact_identity() {
+        let digest = "a".repeat(64);
+        assert_eq!(
+            parse_candidate(&format!("fedora-44={digest}")).unwrap(),
+            ProfileRevisionSelection {
+                source_profile: "fedora-44".to_string(),
+                profile_revision_sha256: digest,
+            }
+        );
+        assert!(parse_candidate("fedora-44").is_err());
+        assert!(parse_candidate(&format!("fedora-44={}", "A".repeat(64))).is_err());
+        assert!(
+            parse_candidate("=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .is_err()
+        );
     }
 }

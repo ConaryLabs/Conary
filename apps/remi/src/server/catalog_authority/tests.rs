@@ -188,7 +188,6 @@ fn opens_valid_active_profile_catalog() {
 
     assert_eq!(pinned.source_profile(), PROFILE);
     assert_eq!(pinned.profile_revision_sha256(), revision.digest);
-    assert_eq!(pinned.fencing_epoch(), 1);
     assert_eq!(pinned.manifest().profile, PROFILE);
     assert_eq!(pinned.reader().binding().counts, pinned.manifest().counts);
     assert_eq!(
@@ -260,9 +259,7 @@ fn old_handle_remains_pinned_after_new_activation() {
     let new_handle = open(&fixture).expect("open second active profile");
 
     assert_eq!(old_handle.profile_revision_sha256(), first.digest);
-    assert_eq!(old_handle.fencing_epoch(), 1);
     assert_eq!(new_handle.profile_revision_sha256(), second.digest);
-    assert_eq!(new_handle.fencing_epoch(), 2);
     assert_ne!(old_handle.catalog_path(), new_handle.catalog_path());
     assert_eq!(old_handle.reader().source_evidence().unwrap().len(), 1);
     assert_eq!(new_handle.reader().source_evidence().unwrap().len(), 1);
