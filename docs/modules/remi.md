@@ -180,9 +180,19 @@ rename, and independent reopen. A current exact cache hit writes and reserves
 nothing. Refusal is typed and leaves no cache candidate. Immutable source and
 profile publication itself moves verified candidates by same-filesystem atomic
 rename, so it creates no second catalog-file copy.
+Before Fedora or Debian child metadata is downloaded, the authenticated root
+supplies each selected object's exact compressed length: signed `repomd.xml`
+records bind RPM primary/filelists bytes, while the verified Debian `Release`
+SHA256 entry binds `Packages.gz`. The parser turns those role, path, and size
+facts into one canonical typed requirement, reserves the candidate filesystem
+through the same device ledger, and applies each signed size as the HTTP stream
+cap. The immutable sink retains that lease until its run-local work directory
+and every staged child file have been removed, including error and cancellation
+unwind. A typed refusal therefore precedes child-file creation.
 These construction admissions are independent of the serving readiness floor
-and do not yet estimate initial source/profile candidate growth or authenticated
-metadata and parser spools.
+and do not yet estimate initial source/profile candidate growth, Arch/eopkg
+downloads whose authenticated roots do not publish a byte length, or parser
+SQLite/audit spools.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
@@ -922,8 +932,8 @@ Implementation ownership lives in child modules:
 
 - `catalog_refresh.rs`: private source/profile candidate construction, durable
   content-addressed registration, and fenced candidate inputs.
-- `catalog_capacity.rs`: shared filesystem-scoped catalog finalization and
-  projection-copy reservations with typed capacity refusal.
+- `catalog_capacity.rs`: shared filesystem-scoped metadata, catalog
+  finalization, and projection-copy reservations with typed capacity refusal.
 - `catalog_authority.rs` and `profile_catalog.rs`: active-pointer resolution,
   verified immutable readers, reader-lifetime pins, and serving projections.
 - `catalog_gc.rs`: exact active/current-candidate/work/reader/conversion

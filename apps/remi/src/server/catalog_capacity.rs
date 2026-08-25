@@ -7,8 +7,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use conary_core::repository::catalog::{
-    CatalogCopyScratchV1, CatalogFinalizationScratchV1, CatalogScratchAdmission,
-    CatalogScratchCapacityError,
+    CatalogCopyScratchV1, CatalogFinalizationScratchV1, CatalogMetadataScratchV1,
+    CatalogScratchAdmission, CatalogScratchCapacityError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -62,6 +62,15 @@ impl CatalogScratchCoordinator {
 }
 
 impl CatalogScratchAdmission for CatalogScratchCoordinator {
+    fn reserve_metadata(
+        &self,
+        work_directory: &Path,
+        requirement: CatalogMetadataScratchV1,
+    ) -> conary_core::Result<Box<dyn Send>> {
+        requirement.validate()?;
+        self.reserve_on_filesystem(work_directory, requirement.required_additional_bytes)
+    }
+
     fn reserve_finalization(
         &self,
         candidate_path: &Path,
@@ -162,6 +171,9 @@ fn filesystem_identity(path: &Path) -> conary_core::Result<FilesystemIdentity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::repository::catalog::{
+        CatalogMetadataObjectScratchV1, SourceMetadataObjectRoleV1,
+    };
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -189,6 +201,15 @@ mod tests {
 
     fn copy_requirement(required_bytes: u64) -> CatalogCopyScratchV1 {
         CatalogCopyScratchV1::from_exact_bytes(required_bytes - 1, 1).unwrap()
+    }
+
+    fn metadata_requirement(required_bytes: u64) -> CatalogMetadataScratchV1 {
+        CatalogMetadataScratchV1::from_signed_objects(vec![CatalogMetadataObjectScratchV1 {
+            role: SourceMetadataObjectRoleV1::DebianPackages,
+            source_path: "main/binary-amd64/Packages.gz".to_string(),
+            size: required_bytes,
+        }])
+        .unwrap()
     }
 
     fn candidate(root: &Path) -> PathBuf {
@@ -224,6 +245,27 @@ mod tests {
     }
 
     #[test]
+    fn metadata_exact_bound_succeeds_and_one_byte_short_precedes_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let probe = Arc::new(MutableProbe::new(4096));
+        let coordinator = CatalogScratchCoordinator::with_probe(probe.clone());
+        let lease = coordinator
+            .reserve_metadata(root.path(), metadata_requirement(4096))
+            .unwrap();
+        drop(lease);
+
+        probe.set(4095);
+        let error = refused(coordinator.reserve_metadata(root.path(), metadata_requirement(4096)));
+        let conary_core::Error::CatalogScratchCapacity(error) = error else {
+            panic!("expected typed catalog capacity refusal");
+        };
+        assert_eq!(error.required_bytes, 4096);
+        assert_eq!(error.available_bytes, 4095);
+        assert_eq!(error.reserved_bytes, 0);
+        assert!(root.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
     fn concurrent_reservations_cannot_overcommit_and_drop_releases() {
         let root = tempfile::tempdir().unwrap();
         let coordinator = CatalogScratchCoordinator::with_probe(Arc::new(MutableProbe::new(100)));
@@ -244,20 +286,25 @@ mod tests {
     }
 
     #[test]
-    fn copy_and_finalization_share_one_filesystem_ledger() {
+    fn metadata_copy_and_finalization_share_one_filesystem_ledger() {
         let root = tempfile::tempdir().unwrap();
         let coordinator = CatalogScratchCoordinator::with_probe(Arc::new(MutableProbe::new(100)));
-        let finalizer = coordinator
-            .reserve_finalization(&candidate(root.path()), requirement(30))
+        let metadata = coordinator
+            .reserve_metadata(root.path(), metadata_requirement(30))
             .unwrap();
-        let error = refused(coordinator.reserve_copy(root.path(), copy_requirement(41)));
+        let copy = coordinator
+            .reserve_copy(root.path(), copy_requirement(30))
+            .unwrap();
+        let error =
+            refused(coordinator.reserve_finalization(&candidate(root.path()), requirement(21)));
         let conary_core::Error::CatalogScratchCapacity(error) = error else {
             panic!("expected typed catalog capacity refusal");
         };
-        assert_eq!(error.required_bytes, 41);
+        assert_eq!(error.required_bytes, 42);
         assert_eq!(error.reserved_bytes, 60);
 
-        drop(finalizer);
+        drop(metadata);
+        drop(copy);
         coordinator
             .reserve_copy(root.path(), copy_requirement(100))
             .unwrap();

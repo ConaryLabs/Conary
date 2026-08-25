@@ -403,3 +403,59 @@ async fn test_download_file_retries_and_resumes_after_body_failure() {
     assert!(!requests[0].to_ascii_lowercase().contains("range:"));
     assert!(requests[1].to_ascii_lowercase().contains("range: bytes=3-"));
 }
+
+#[tokio::test]
+async fn exact_file_limit_rejects_oversized_stream_before_writing_payload() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut buf).await.unwrap();
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsigned")
+            .await;
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let destination = root.path().join("signed-metadata");
+    let client = RepositoryClient::new()
+        .unwrap()
+        .with_retry_policy(RetryConfig {
+            max_attempts: 1,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter_factor: 0.0,
+        });
+    let error = client
+        .download_file_with_identity_limit(
+            &format!("http://{addr}/signed-metadata"),
+            &destination,
+            5,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("declared size limit of 5 bytes"));
+    assert!(!destination.exists());
+    assert_eq!(
+        std::fs::metadata(destination.with_extension("tmp"))
+            .unwrap()
+            .len(),
+        0
+    );
+    server.await.unwrap();
+}

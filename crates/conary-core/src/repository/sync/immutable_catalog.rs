@@ -114,6 +114,8 @@ struct NativeCatalogSnapshotSink {
         Vec<AuthenticatedMetadataObject>,
     )>,
     cache_hit: bool,
+    work_leases: Vec<Box<dyn Send>>,
+    scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
 }
 
 impl NativeCatalogSnapshotSink {
@@ -166,15 +168,16 @@ impl NativeCatalogSnapshotSink {
                 ),
             })
             .transpose()?;
+        let writer = match scratch_admission.as_ref() {
+            Some(admission) => CatalogCandidateWriter::create_with_scratch_admission(
+                candidate_path,
+                scope,
+                Arc::clone(admission),
+            )?,
+            None => CatalogCandidateWriter::create(candidate_path, scope)?,
+        };
         Ok(Self {
-            writer: match scratch_admission {
-                Some(admission) => CatalogCandidateWriter::create_with_scratch_admission(
-                    candidate_path,
-                    scope,
-                    admission,
-                )?,
-                None => CatalogCandidateWriter::create(candidate_path, scope)?,
-            },
+            writer,
             repository_id: repo
                 .id
                 .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?,
@@ -191,6 +194,8 @@ impl NativeCatalogSnapshotSink {
             projection_cache,
             cache_inputs: None,
             cache_hit: false,
+            work_leases: Vec::new(),
+            scratch_admission,
         })
     }
 
@@ -206,8 +211,12 @@ impl NativeCatalogSnapshotSink {
             projection_cache,
             cache_inputs,
             cache_hit,
+            work_directory,
+            work_leases,
             ..
         } = self;
+        drop(work_directory);
+        drop(work_leases);
         let authenticated_objects = authenticated_objects.into_values().collect::<Vec<_>>();
         let evidence = authenticated_objects
             .iter()
@@ -233,6 +242,18 @@ impl NativeCatalogSnapshotSink {
 impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
     fn work_directory(&self) -> &Path {
         self.work_directory.path()
+    }
+
+    fn reserve_authenticated_metadata(
+        &mut self,
+        requirement: crate::repository::catalog::CatalogMetadataScratchV1,
+    ) -> Result<()> {
+        requirement.validate()?;
+        if let Some(admission) = &self.scratch_admission {
+            let lease = admission.reserve_metadata(self.work_directory.path(), requirement)?;
+            self.work_leases.push(lease);
+        }
+        Ok(())
     }
 
     fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()> {

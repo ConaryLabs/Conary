@@ -3,8 +3,9 @@
 use super::*;
 use crate::db::models::{RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode};
 use crate::repository::catalog::{
-    CatalogPackageOriginV1, CatalogScopeV1, CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1,
-    write_catalog_candidate,
+    CatalogCopyScratchV1, CatalogFinalizationScratchV1, CatalogMetadataObjectScratchV1,
+    CatalogMetadataScratchV1, CatalogPackageOriginV1, CatalogScopeV1, CatalogScratchAdmission,
+    CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1, write_catalog_candidate,
 };
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::parsers::PackageMetadata;
@@ -13,6 +14,48 @@ use crate::repository::versioning::VersionScheme;
 use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+struct RecordingAdmission {
+    metadata: Mutex<Vec<CatalogMetadataScratchV1>>,
+    lease_drops: Arc<AtomicUsize>,
+}
+
+struct RecordingLease(Arc<AtomicUsize>);
+
+impl Drop for RecordingLease {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl CatalogScratchAdmission for RecordingAdmission {
+    fn reserve_metadata(
+        &self,
+        _work_directory: &Path,
+        requirement: CatalogMetadataScratchV1,
+    ) -> Result<Box<dyn Send>> {
+        self.metadata.lock().unwrap().push(requirement);
+        Ok(Box::new(RecordingLease(Arc::clone(&self.lease_drops))))
+    }
+
+    fn reserve_finalization(
+        &self,
+        _candidate_path: &Path,
+        _requirement: CatalogFinalizationScratchV1,
+    ) -> Result<Box<dyn Send>> {
+        panic!("metadata lease test must not finalize a catalog")
+    }
+
+    fn reserve_copy(
+        &self,
+        _destination_root: &Path,
+        _requirement: CatalogCopyScratchV1,
+    ) -> Result<Box<dyn Send>> {
+        panic!("metadata lease test must not publish a cache copy")
+    }
+}
 
 fn repository() -> Repository {
     let mut repository = Repository::new(
@@ -84,6 +127,41 @@ fn authenticated_object() -> SourceMetadataObjectV1 {
         sha256: "d".repeat(64),
         size: 2048,
     }
+}
+
+#[test]
+fn immutable_sink_retains_metadata_lease_until_work_files_are_removed() {
+    let root = tempfile::tempdir().unwrap();
+    let candidate = root.path().join("catalog.sqlite");
+    let lease_drops = Arc::new(AtomicUsize::new(0));
+    let admission = Arc::new(RecordingAdmission {
+        metadata: Mutex::new(Vec::new()),
+        lease_drops: Arc::clone(&lease_drops),
+    });
+    let mut sink =
+        NativeCatalogSnapshotSink::create(&repository(), &candidate, None, Some(admission.clone()))
+            .unwrap();
+    let work_directory = sink.work_directory().to_path_buf();
+    let requirement =
+        CatalogMetadataScratchV1::from_signed_objects(vec![CatalogMetadataObjectScratchV1 {
+            role: SourceMetadataObjectRoleV1::RpmPrimary,
+            source_path: "repodata/primary.xml.zst".to_string(),
+            size: 4096,
+        }])
+        .unwrap();
+
+    sink.reserve_authenticated_metadata(requirement.clone())
+        .unwrap();
+    assert_eq!(
+        admission.metadata.lock().unwrap().as_slice(),
+        &[requirement]
+    );
+    assert_eq!(lease_drops.load(Ordering::SeqCst), 0);
+    assert!(work_directory.exists());
+
+    drop(sink);
+    assert!(!work_directory.exists());
+    assert_eq!(lease_drops.load(Ordering::SeqCst), 1);
 }
 
 #[test]

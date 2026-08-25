@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 use super::{
     AuthenticatedMetadataObject, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
 };
+use crate::repository::catalog::CatalogMetadataScratchV1;
 use crate::repository::dependency_model::RepositoryProvide;
 
 /// Normalized parser projection and sink schema version used in cache keys.
@@ -56,6 +57,14 @@ pub trait RepositorySnapshotSink {
     /// Private run-local directory for authenticated child downloads and
     /// parser spools. Its contents never become immutable publication.
     fn work_directory(&self) -> &Path;
+
+    /// Retain exact authenticated-metadata capacity until the sink removes its
+    /// run-local work files. Compatibility sinks validate but do not admit
+    /// host capacity; Remi's immutable sink owns that policy.
+    fn reserve_authenticated_metadata(
+        &mut self,
+        requirement: CatalogMetadataScratchV1,
+    ) -> Result<()>;
 
     /// Record one authenticated child object consumed by the projection.
     fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()>;
@@ -114,6 +123,13 @@ impl CollectingRepositorySnapshotSink {
 impl RepositorySnapshotSink for CollectingRepositorySnapshotSink {
     fn work_directory(&self) -> &Path {
         self.work_directory.path()
+    }
+
+    fn reserve_authenticated_metadata(
+        &mut self,
+        requirement: CatalogMetadataScratchV1,
+    ) -> Result<()> {
+        requirement.validate()
     }
 
     fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()> {

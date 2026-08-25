@@ -1,6 +1,6 @@
 // conary-core/src/repository/catalog/capacity.rs
 
-//! Typed scratch-space contract for immutable SQLite catalog finalization.
+//! Typed scratch-space contracts for immutable catalog construction.
 
 use std::path::Path;
 
@@ -84,8 +84,7 @@ impl CatalogMetadataScratchV1 {
                 ));
             }
             if let Some(previous) = previous
-                && (previous.role >= object.role
-                    || (previous.role == object.role && previous.source_path >= object.source_path))
+                && previous.role >= object.role
             {
                 return Err(crate::Error::ConfigError(
                     "catalog metadata scratch objects are repeated or noncanonical".to_string(),
@@ -260,13 +259,21 @@ pub struct CatalogScratchCapacityError {
     pub required_bytes: u64,
     /// Bytes reported available on the owning filesystem at admission.
     pub available_bytes: u64,
-    /// Bytes already promised to other finalizers in this process.
+    /// Bytes already promised to other catalog work in this process.
     pub reserved_bytes: u64,
 }
 
 /// Process owner that admits an exact catalog scratch requirement. A returned
 /// lease retains its reservation until the owning operation completes or aborts.
 pub trait CatalogScratchAdmission: Send + Sync {
+    /// Reserve authenticated native metadata bytes at the existing run-local
+    /// work directory until the sink removes those files.
+    fn reserve_metadata(
+        &self,
+        work_directory: &Path,
+        requirement: CatalogMetadataScratchV1,
+    ) -> Result<Box<dyn Send>>;
+
     /// Reserve the exact additional bytes and retain them in the returned lease.
     fn reserve_finalization(
         &self,
