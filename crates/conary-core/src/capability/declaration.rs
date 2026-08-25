@@ -110,6 +110,20 @@ impl CapabilityDeclaration {
             .validate_for_target_arch(version_scheme, architecture)
     }
 
+    /// Validate exact syscall names against one target machine ABI.
+    ///
+    /// This is the static-publication counterpart to current-target
+    /// validation. It resolves architecture-independent source packages
+    /// against the concrete destination machine rather than deferring them.
+    pub fn validate_for_machine_architecture(
+        &self,
+        machine_architecture: &str,
+    ) -> Result<(), CapabilityValidationError> {
+        self.validate()?;
+        self.syscalls
+            .validate_for_target_arch(VersionScheme::Conary, Some(machine_architecture))
+    }
+
     /// Validate target-dependent requirements against the running system.
     pub fn validate_for_current_target(&self) -> Result<(), CapabilityValidationError> {
         self.validate()?;

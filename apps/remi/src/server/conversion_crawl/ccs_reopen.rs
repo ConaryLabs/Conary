@@ -1,7 +1,10 @@
 // apps/remi/src/server/conversion_crawl/ccs_reopen.rs
 //! Independent post-persistence CCS artifact reopen authority.
 
-use super::{CCS_ARTIFACT_REOPEN_PROOF_SCHEMA_V1, CcsArtifactReopenProofV1, exact_prefixed_sha256};
+use super::{
+    CCS_ARTIFACT_REOPEN_PROOF_SCHEMA_V1, CcsArtifactReopenProofV1, ReopenedCcsArtifactEvidence,
+    exact_prefixed_sha256, target_preflight,
+};
 use crate::server::conversion::ServerConversionResult;
 use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, ensure};
@@ -31,7 +34,7 @@ impl CcsArtifactReopener {
         &self,
         package: &CatalogPackageRecordV1,
         result: &ServerConversionResult,
-    ) -> Result<(String, String, CcsArtifactReopenProofV1)> {
+    ) -> Result<ReopenedCcsArtifactEvidence> {
         ensure!(
             result.name == package.name
                 && result.version == package.version
@@ -113,7 +116,14 @@ impl CcsArtifactReopener {
                 .context("reopened CCS object count exceeds u64")?,
         };
         proof.validate()?;
-        Ok((source.to_string(), actual_ccs.as_str().to_string(), proof))
+        let target_compatibility_proofs =
+            target_preflight::preflight_all_targets(authority, actual_ccs.as_str())?;
+        Ok(ReopenedCcsArtifactEvidence {
+            source_artifact_sha256: source.to_string(),
+            ccs_sha256: actual_ccs.as_str().to_string(),
+            reopen_proof: proof,
+            target_compatibility_proofs,
+        })
     }
 
     #[cfg(test)]
@@ -230,23 +240,24 @@ mod tests {
     #[test]
     fn persisted_ccs_is_independently_reopened_and_bound_to_exact_evidence() {
         let fixture = fixture();
-        let (source, ccs, proof) = fixture
+        let evidence = fixture
             .reopener
             .reopen(&fixture.package, &fixture.result)
             .expect("independently reopen persisted CCS");
-        assert_eq!(source, "d".repeat(64));
+        assert_eq!(evidence.source_artifact_sha256, "d".repeat(64));
         assert_eq!(
-            ccs,
+            evidence.ccs_sha256,
             fixture.result.content_hash.trim_start_matches("sha256:")
         );
         assert_eq!(
-            proof.ccs_format_version,
+            evidence.reopen_proof.ccs_format_version,
             conary_core::ccs::v3::FORMAT_VERSION_V3
         );
         assert_eq!(
-            proof.verified_objects,
+            evidence.reopen_proof.verified_objects,
             fixture.result.transport.objects.len() as u64
         );
+        assert_eq!(evidence.target_compatibility_proofs.len(), 3);
     }
 
     #[test]
