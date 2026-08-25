@@ -27,6 +27,7 @@ pub enum RepoRefreshFailureKind {
     SourceRejected,
     SourceNotFound,
     Conflict,
+    StorageCapacity,
     Internal,
 }
 
@@ -57,6 +58,7 @@ impl RepoRefreshFailure {
             ServiceError::BadRequest(_) => RepoRefreshFailureKind::SourceRejected,
             ServiceError::NotFound(_) => RepoRefreshFailureKind::SourceNotFound,
             ServiceError::Conflict(_) => RepoRefreshFailureKind::Conflict,
+            ServiceError::StorageCapacity(_) => RepoRefreshFailureKind::StorageCapacity,
             ServiceError::Internal(_) => RepoRefreshFailureKind::Internal,
         };
         Self {
@@ -157,6 +159,24 @@ mod tests {
     };
     use std::sync::Arc;
     use tokio::sync::RwLock;
+
+    #[test]
+    fn catalog_scratch_refusal_has_a_stable_refresh_failure_kind() {
+        let failure = RepoRefreshFailure::from_service_error(
+            "fedora".to_string(),
+            Some("fedora-44".to_string()),
+            ServiceError::StorageCapacity(
+                conary_core::repository::catalog::CatalogScratchCapacityError {
+                    required_bytes: 4096,
+                    available_bytes: 4095,
+                    reserved_bytes: 0,
+                },
+            ),
+        );
+
+        assert_eq!(failure.kind, RepoRefreshFailureKind::StorageCapacity);
+        assert!(failure.message.contains("requires 4096 additional bytes"));
+    }
 
     fn native_repository(name: &str, identity: &str) -> conary_core::db::models::Repository {
         let metadata_url = format!("https://127.0.0.1:9/{identity}");

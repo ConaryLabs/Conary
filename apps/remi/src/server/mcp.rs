@@ -43,6 +43,7 @@ fn service_err_to_mcp(e: ServiceError) -> McpError {
         ServiceError::BadRequest(msg) => McpError::invalid_params(msg, None),
         ServiceError::NotFound(msg) => McpError::resource_not_found(msg, None),
         ServiceError::Conflict(msg) => McpError::invalid_request(msg, None),
+        ServiceError::StorageCapacity(error) => McpError::invalid_request(error.to_string(), None),
         ServiceError::Internal(msg) => McpError::internal_error(msg, None),
     }
 }

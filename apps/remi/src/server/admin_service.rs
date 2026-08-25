@@ -67,6 +67,9 @@ pub enum ServiceError {
     /// A uniqueness constraint was violated (409).
     #[error("conflict: {0}")]
     Conflict(String),
+    /// Immutable catalog construction lacks structurally required scratch space.
+    #[error(transparent)]
+    StorageCapacity(#[from] conary_core::repository::catalog::CatalogScratchCapacityError),
     /// An internal failure -- DB error, join error, etc. (500).
     #[error("internal error: {0}")]
     Internal(String),
@@ -85,6 +88,9 @@ impl From<conary_core::Error> for ServiceError {
             }
             conary_core::Error::ParseError(_) | conary_core::Error::ConfigError(_) => {
                 ServiceError::BadRequest(e.to_string())
+            }
+            conary_core::Error::CatalogScratchCapacity(error) => {
+                ServiceError::StorageCapacity(error.clone())
             }
             _ => ServiceError::Internal(e.to_string()),
         }
