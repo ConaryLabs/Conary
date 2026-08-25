@@ -496,6 +496,16 @@ impl RepositoryParser for DebianParser {
             info!("Reused cached Debian repository projection");
             return Ok(snapshot);
         }
+        if sink.requires_source_candidate_preflight() {
+            let decoder = common::open_metadata_decoder(
+                &packages_path,
+                &format!("Debian Packages metadata {}", packages_path.display()),
+            )?;
+            stanza::parse_packages(std::io::BufReader::new(decoder), |entry| {
+                sink.preflight_package(self.package_from_entry(repo_url, entry)?)
+            })?;
+            sink.begin_source_candidate()?;
+        }
         let decoder = common::open_metadata_decoder(
             &packages_path,
             &format!("Debian Packages metadata {}", packages_path.display()),

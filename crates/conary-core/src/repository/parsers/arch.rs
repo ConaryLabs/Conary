@@ -28,6 +28,8 @@ use tracing::{debug, info};
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 
+mod preflight;
+
 #[cfg(test)]
 fn authenticated_database_snapshot(bytes: &[u8]) -> AuthenticatedSnapshotIdentity {
     AuthenticatedSnapshotIdentity::for_bytes(bytes)
@@ -427,6 +429,10 @@ impl RepositoryParser for ArchParser {
         if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&database_object))? {
             info!("Reused cached Arch repository projection");
             return Ok(snapshot);
+        }
+        if sink.requires_source_candidate_preflight() {
+            preflight::preflight_database(self, repo_url, &database_file, sink)?;
+            sink.begin_source_candidate()?;
         }
         let decoder = super::common::open_metadata_decoder(
             &database_file,

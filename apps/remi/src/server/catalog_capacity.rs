@@ -10,6 +10,7 @@ use conary_core::repository::catalog::{
     CatalogCopyScratchV1, CatalogFinalizationScratchV1, CatalogMetadataScratchV1,
     CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
     CatalogProfileCandidateScratchV1, CatalogScratchAdmission, CatalogScratchCapacityError,
+    CatalogSourceCandidateScratchV1,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -63,6 +64,20 @@ impl CatalogScratchCoordinator {
 }
 
 impl CatalogScratchAdmission for CatalogScratchCoordinator {
+    fn reserve_source_candidate(
+        &self,
+        candidate_path: &Path,
+        requirement: CatalogSourceCandidateScratchV1,
+    ) -> conary_core::Result<Box<dyn Send>> {
+        let parent = candidate_path.parent().ok_or_else(|| {
+            conary_core::Error::InvalidPath(
+                "source catalog candidate has no parent for growth admission".to_string(),
+            )
+        })?;
+        requirement.validate()?;
+        self.reserve_on_filesystem(parent, requirement.required_additional_bytes)
+    }
+
     fn reserve_profile_candidate(
         &self,
         candidate_path: &Path,
@@ -284,6 +299,10 @@ mod tests {
         .unwrap()
     }
 
+    fn source_requirement() -> CatalogSourceCandidateScratchV1 {
+        CatalogSourceCandidateScratchV1::from_projection_facts(4096, 1).unwrap()
+    }
+
     fn candidate(root: &Path) -> PathBuf {
         root.join("candidate.sqlite3")
     }
@@ -357,6 +376,52 @@ mod tests {
         assert_eq!(
             error.reserved_bytes,
             profile_scratch.required_additional_bytes
+        );
+        drop(growth);
+        coordinator
+            .reserve_finalization(&candidate(root.path()), requirement(1))
+            .unwrap();
+    }
+
+    #[test]
+    fn source_growth_refuses_one_byte_short_and_shares_the_filesystem_ledger() {
+        let root = tempfile::tempdir().unwrap();
+        let source_scratch = source_requirement();
+        let probe = Arc::new(MutableProbe::new(source_scratch.required_additional_bytes));
+        let coordinator = CatalogScratchCoordinator::with_probe(probe.clone());
+        let lease = coordinator
+            .reserve_source_candidate(&candidate(root.path()), source_scratch)
+            .unwrap();
+        drop(lease);
+
+        probe.set(source_scratch.required_additional_bytes - 1);
+        let error =
+            refused(coordinator.reserve_source_candidate(&candidate(root.path()), source_scratch));
+        let conary_core::Error::CatalogScratchCapacity(error) = error else {
+            panic!("expected typed source growth refusal");
+        };
+        assert_eq!(
+            error.required_bytes,
+            source_scratch.required_additional_bytes
+        );
+        assert_eq!(
+            error.available_bytes,
+            source_scratch.required_additional_bytes - 1
+        );
+        assert_eq!(error.reserved_bytes, 0);
+
+        probe.set(source_scratch.required_additional_bytes + 1);
+        let growth = coordinator
+            .reserve_source_candidate(&candidate(root.path()), source_scratch)
+            .unwrap();
+        let error =
+            refused(coordinator.reserve_finalization(&candidate(root.path()), requirement(1)));
+        let conary_core::Error::CatalogScratchCapacity(error) = error else {
+            panic!("expected shared-ledger capacity refusal");
+        };
+        assert_eq!(
+            error.reserved_bytes,
+            source_scratch.required_additional_bytes
         );
         drop(growth);
         coordinator

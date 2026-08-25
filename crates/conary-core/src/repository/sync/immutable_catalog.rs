@@ -13,10 +13,11 @@ use crate::error::{Error, Result};
 use crate::repository::catalog::source::SourceCatalogAuthorityV1;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogMetadataStreamAdmission,
-    CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogScopeV1,
-    CatalogScratchAdmission, CatalogSourceEvidenceV1, SourceCatalogCandidateV1, SourceEcosystemV1,
-    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
-    SourceStreamKindV1, SourceStreamV1,
+    CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
+    CatalogProvideRecordV1, CatalogScopeV1, CatalogScratchAdmission,
+    CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SourceCatalogCandidateV1,
+    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
+    SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
 };
 use crate::repository::parsers::{
     ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject, ChecksumType,
@@ -100,7 +101,10 @@ async fn stream_native_source_catalog_inner(
 }
 
 struct NativeCatalogSnapshotSink {
-    writer: CatalogCandidateWriter,
+    writer: Option<CatalogCandidateWriter>,
+    scope: CatalogScopeV1,
+    preflight_projection_bytes: u64,
+    preflight_package_count: u64,
     repository_id: i64,
     source_profile: String,
     repository_url: String,
@@ -169,16 +173,23 @@ impl NativeCatalogSnapshotSink {
                 ),
             })
             .transpose()?;
-        let writer = match scratch_admission.as_ref() {
-            Some(admission) => CatalogCandidateWriter::create_with_scratch_admission(
-                candidate_path,
-                scope,
-                Arc::clone(admission),
-            )?,
-            None => CatalogCandidateWriter::create(candidate_path, scope)?,
-        };
+        let writer = scratch_admission
+            .is_none()
+            .then(|| CatalogCandidateWriter::create(candidate_path, scope.clone()))
+            .transpose()?;
+        let preflight_projection_bytes = u64::try_from(
+            crate::json::canonical_json(&scope)
+                .map_err(|error| {
+                    Error::ParseError(format!("serialize native source scope: {error}"))
+                })?
+                .len(),
+        )
+        .map_err(|_| Error::IoError("native source scope byte count exceeds u64".to_string()))?;
         Ok(Self {
             writer,
+            scope,
+            preflight_projection_bytes,
+            preflight_package_count: 0,
             repository_id: repo
                 .id
                 .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?,
@@ -218,6 +229,12 @@ impl NativeCatalogSnapshotSink {
         } = self;
         drop(work_directory);
         drop(work_leases);
+        let writer = writer.ok_or_else(|| {
+            Error::InternalError(
+                "native source parser completed without beginning its admitted candidate"
+                    .to_string(),
+            )
+        })?;
         let authenticated_objects = authenticated_objects.into_values().collect::<Vec<_>>();
         let evidence = authenticated_objects
             .iter()
@@ -237,6 +254,48 @@ impl NativeCatalogSnapshotSink {
         }
         let authority = source_catalog_authority(repo, snapshot, authenticated_objects)?;
         crate::repository::catalog::source::bind_source_snapshot(authority, &binding)
+    }
+
+    fn project_package(&self, package: PackageMetadata) -> Result<CatalogPackageRecordV1> {
+        let row = super::synced_package_row(
+            self.repository_id,
+            Some(&self.source_profile),
+            &self.repository_url,
+            self.content_url.as_deref(),
+            package,
+        );
+        let mut record = CatalogPackageRecordV1::from_repository_projection(
+            row.package,
+            row.provides,
+            row.requirement_groups,
+            row.requirement_group_clauses,
+            self.origin.clone(),
+        )?;
+        record.canonicalize_for_scope(&self.scope)?;
+        Ok(record)
+    }
+
+    fn observe_projection<T: serde::Serialize>(&mut self, value: &T) -> Result<()> {
+        let bytes = crate::json::canonical_json(value).map_err(|error| {
+            Error::ParseError(format!("serialize native source preflight fact: {error}"))
+        })?;
+        self.preflight_projection_bytes = self
+            .preflight_projection_bytes
+            .checked_add(u64::try_from(bytes.len()).map_err(|_| {
+                Error::IoError("native source preflight byte count exceeds u64".to_string())
+            })?)
+            .ok_or_else(|| {
+                Error::IoError("native source preflight byte count overflow".to_string())
+            })?;
+        Ok(())
+    }
+
+    fn writer_mut(&mut self) -> Result<&mut CatalogCandidateWriter> {
+        self.writer.as_mut().ok_or_else(|| {
+            Error::InternalError(
+                "native source candidate mutation preceded scratch admission".to_string(),
+            )
+        })
     }
 }
 
@@ -293,7 +352,22 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         let Some(reader) = cache.lookup(snapshot, objects)? else {
             return Ok(false);
         };
-        self.writer.copy_source_catalog(&reader)?;
+        if let Some(admission) = &self.scratch_admission {
+            let requirement = CatalogSourceCandidateScratchV1::from_cached_catalog(
+                reader.binding().artifact.size,
+                reader.binding().counts.packages,
+            )?;
+            let admission = Arc::clone(admission);
+            self.writer = Some(
+                CatalogCandidateWriter::create_with_source_scratch_admission(
+                    &self.candidate_path,
+                    self.scope.clone(),
+                    admission,
+                    requirement,
+                )?,
+            );
+        }
+        self.writer_mut()?.copy_source_catalog(&reader)?;
         for object in objects.iter().cloned() {
             self.authenticated_object(object)?;
         }
@@ -301,22 +375,112 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         Ok(true)
     }
 
-    fn package(&mut self, package: PackageMetadata) -> Result<()> {
-        let row = super::synced_package_row(
-            self.repository_id,
-            Some(&self.source_profile),
-            &self.repository_url,
-            self.content_url.as_deref(),
-            package,
-        );
-        let record = CatalogPackageRecordV1::from_repository_projection(
-            row.package,
-            row.provides,
-            row.requirement_groups,
-            row.requirement_group_clauses,
-            self.origin.clone(),
+    fn requires_source_candidate_preflight(&self) -> bool {
+        self.scratch_admission.is_some()
+    }
+
+    fn preflight_package(&mut self, package: PackageMetadata) -> Result<()> {
+        if !self.requires_source_candidate_preflight() {
+            return Ok(());
+        }
+        let record = self.project_package(package)?;
+        self.observe_projection(&record)?;
+        self.preflight_package_count = self
+            .preflight_package_count
+            .checked_add(1)
+            .ok_or_else(|| Error::IoError("native source package count overflow".to_string()))?;
+        Ok(())
+    }
+
+    fn preflight_package_provides(
+        &mut self,
+        provides: Vec<crate::repository::dependency_model::RepositoryProvide>,
+    ) -> Result<()> {
+        if !self.requires_source_candidate_preflight() {
+            return Ok(());
+        }
+        for provide in provides {
+            let normalized = super::native::normalized_repository_provide(
+                &provide,
+                crate::repository::versioning::VersionScheme::Rpm,
+            );
+            self.observe_projection(&CatalogProvideRecordV1::from(normalized))?;
+        }
+        Ok(())
+    }
+
+    fn preflight_requirement_groups(
+        &mut self,
+        groups: Vec<crate::repository::dependency_model::RepositoryRequirementGroup>,
+    ) -> Result<()> {
+        if !self.requires_source_candidate_preflight() || groups.is_empty() {
+            return Ok(());
+        }
+        let package = PackageMetadata {
+            name: "conary-preflight-requirements".to_string(),
+            version: "0".to_string(),
+            architecture: None,
+            debian_multi_arch: None,
+            description: None,
+            checksum: "0".repeat(64),
+            checksum_type: ChecksumType::Sha256,
+            size: 0,
+            download_url: "preflight.pkg.tar.zst".to_string(),
+            extra_metadata: serde_json::Value::Null,
+            dependency_flavor:
+                crate::repository::dependency_source::RepositoryDependencyFlavor::Arch,
+            version_scheme: crate::repository::versioning::VersionScheme::Arch,
+            requirements: groups,
+            provides: Vec::new(),
+        };
+        let record = self.project_package(package)?;
+        self.observe_projection(&record)
+    }
+
+    fn preflight_arch_package_fragment(
+        &mut self,
+        directory: &str,
+        kind: ArchPackageFragmentKind,
+        content: &str,
+    ) -> Result<()> {
+        if !self.requires_source_candidate_preflight() {
+            return Ok(());
+        }
+        let kind = match kind {
+            ArchPackageFragmentKind::Desc => "desc",
+            ArchPackageFragmentKind::Depends => "depends",
+        };
+        self.observe_projection(&(directory, kind, content))
+    }
+
+    fn begin_source_candidate(&mut self) -> Result<()> {
+        if !self.requires_source_candidate_preflight() {
+            return Ok(());
+        }
+        if self.writer.is_some() {
+            return Err(Error::ConflictError(
+                "native source candidate was begun more than once".to_string(),
+            ));
+        }
+        let requirement = CatalogSourceCandidateScratchV1::from_projection_facts(
+            self.preflight_projection_bytes,
+            self.preflight_package_count,
         )?;
-        self.writer.package(record)
+        let admission = Arc::clone(self.scratch_admission.as_ref().expect("checked"));
+        self.writer = Some(
+            CatalogCandidateWriter::create_with_source_scratch_admission(
+                &self.candidate_path,
+                self.scope.clone(),
+                admission,
+                requirement,
+            )?,
+        );
+        Ok(())
+    }
+
+    fn package(&mut self, package: PackageMetadata) -> Result<()> {
+        let record = self.project_package(package)?;
+        self.writer_mut()?.package(record)
     }
 
     fn stage_arch_package_fragment(
@@ -325,12 +489,12 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         kind: ArchPackageFragmentKind,
         content: String,
     ) -> Result<()> {
-        self.writer
+        self.writer_mut()?
             .stage_arch_package_fragment(directory, kind, content)
     }
 
     fn take_arch_package_record(&mut self) -> Result<Option<ArchPackageRecord>> {
-        self.writer.take_arch_package_record()
+        self.writer_mut()?.take_arch_package_record()
     }
 
     fn extend_package_provides(
@@ -339,6 +503,15 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         identity: &SnapshotPackageIdentity,
         provides: Vec<crate::repository::dependency_model::RepositoryProvide>,
     ) -> Result<SnapshotProvideUpdate> {
+        if self.requires_source_candidate_preflight() && self.writer.is_none() {
+            let added = provides.len();
+            self.preflight_package_provides(provides)?;
+            return Ok(SnapshotProvideUpdate {
+                matched_packages: 1,
+                added,
+                already_known: 0,
+            });
+        }
         let checksum = match identity.checksum_type {
             ChecksumType::Sha1 => format!("sha1:{}", identity.checksum.trim_start_matches("sha1:")),
             ChecksumType::Sha256 => {
@@ -356,7 +529,7 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
                 .into()
             })
             .collect();
-        let result = self.writer.extend_package_provides(
+        let result = self.writer_mut()?.extend_package_provides(
             join.as_str(),
             &checksum,
             &identity.name,
@@ -372,11 +545,18 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
     }
 
     fn finish_package_join(&mut self, join: SnapshotPackageJoin) -> Result<()> {
-        self.writer.finish_package_join(join.as_str())
+        if self.requires_source_candidate_preflight() && self.writer.is_none() {
+            return Ok(());
+        }
+        self.writer_mut()?.finish_package_join(join.as_str())
     }
 
     fn validate_rpm_primary_file_requirements(&mut self, repo_url: &str) -> Result<()> {
-        self.writer.validate_rpm_primary_file_requirements(repo_url)
+        if self.requires_source_candidate_preflight() && self.writer.is_none() {
+            return Ok(());
+        }
+        self.writer_mut()?
+            .validate_rpm_primary_file_requirements(repo_url)
     }
 }
 

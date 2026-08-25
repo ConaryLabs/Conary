@@ -88,6 +88,17 @@ impl RepositoryParser for EopkgParser {
         if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&index_object))? {
             return Ok(snapshot);
         }
+        if sink.requires_source_candidate_preflight() {
+            let decoder =
+                super::common::open_metadata_decoder(&index_path, "authenticated eopkg index")?;
+            parse_index_reader(
+                std::io::BufReader::new(decoder),
+                origin,
+                &self.architecture,
+                |package| sink.preflight_package(package),
+            )?;
+            sink.begin_source_candidate()?;
+        }
         let decoder =
             super::common::open_metadata_decoder(&index_path, "authenticated eopkg index")?;
         parse_index_reader(

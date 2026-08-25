@@ -27,8 +27,14 @@ pub const CATALOG_METADATA_STREAM_SCRATCH_SCHEMA_V1: u32 = 1;
 /// Current schema for profile-candidate construction admission.
 pub const CATALOG_PROFILE_CANDIDATE_SCRATCH_SCHEMA_V1: u32 = 1;
 
+/// Current schema for native source-candidate construction admission.
+pub const CATALOG_SOURCE_CANDIDATE_SCRATCH_SCHEMA_V1: u32 = 1;
+
 /// SQLite page size fixed by the immutable catalog schema.
 pub const CATALOG_SQLITE_PAGE_SIZE_V1: u64 = 4096;
+
+/// Fixed table and index roots created by catalog schema 1 before package rows.
+pub const CATALOG_SQLITE_SCHEMA_PAGE_COUNT_V1: u64 = 16;
 
 /// One authenticated metadata stream whose exact served size is learned only
 /// as bytes arrive.
@@ -259,6 +265,143 @@ impl CatalogProfileCandidateScratchV1 {
             required_additional_bytes,
         })
     }
+}
+
+/// Conservative pre-write allocation for one native source-catalog candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogSourceCandidateScratchV1 {
+    /// Contract schema version.
+    pub schema_version: u32,
+    /// Page size fixed by the immutable catalog schema.
+    pub page_size: u64,
+    /// Exact canonical bytes of normalized package and supplemental relation facts.
+    pub canonical_projection_bytes: u64,
+    /// Exact package count observed by the authenticated preflight.
+    pub package_count: u64,
+    /// Baseline destination payload allocation supplied by the projection.
+    pub destination_payload_bytes: u64,
+    /// Separate full projection-byte budget for arbitrary B-tree repacking.
+    pub btree_rewrite_bytes: u64,
+    /// Fixed schema roots plus one page per source package for row structure.
+    pub package_structure_bytes: u64,
+    /// Complete database-file ceiling before final compaction.
+    pub candidate_database_bytes: u64,
+    /// Full candidate-database ceiling for the rollback journal.
+    pub rollback_journal_bytes: u64,
+    /// Sum of candidate and journal allocations.
+    pub required_additional_bytes: u64,
+}
+
+impl CatalogSourceCandidateScratchV1 {
+    /// Derive a complete native-candidate bound from exact preflight facts.
+    pub fn from_projection_facts(
+        canonical_projection_bytes: u64,
+        package_count: u64,
+    ) -> Result<Self> {
+        if canonical_projection_bytes == 0 {
+            return Err(crate::Error::ConfigError(
+                "source candidate scratch admission requires positive projection bytes".to_string(),
+            ));
+        }
+        let package_structure_bytes = package_count
+            .checked_add(CATALOG_SQLITE_SCHEMA_PAGE_COUNT_V1)
+            .and_then(|pages| pages.checked_mul(CATALOG_SQLITE_PAGE_SIZE_V1))
+            .ok_or_else(source_candidate_overflow)?;
+        let candidate_database_bytes = canonical_projection_bytes
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(package_structure_bytes))
+            .ok_or_else(source_candidate_overflow)?;
+        let required_additional_bytes = candidate_database_bytes
+            .checked_mul(2)
+            .ok_or_else(source_candidate_overflow)?;
+        let requirement = Self {
+            schema_version: CATALOG_SOURCE_CANDIDATE_SCRATCH_SCHEMA_V1,
+            page_size: CATALOG_SQLITE_PAGE_SIZE_V1,
+            canonical_projection_bytes,
+            package_count,
+            destination_payload_bytes: canonical_projection_bytes,
+            btree_rewrite_bytes: canonical_projection_bytes,
+            package_structure_bytes,
+            candidate_database_bytes,
+            rollback_journal_bytes: candidate_database_bytes,
+            required_additional_bytes,
+        };
+        requirement.validate()?;
+        Ok(requirement)
+    }
+
+    /// Reuse one independently reopened source catalog as exact replay evidence.
+    pub fn from_cached_catalog(catalog_bytes: u64, package_count: u64) -> Result<Self> {
+        if catalog_bytes == 0 || !catalog_bytes.is_multiple_of(CATALOG_SQLITE_PAGE_SIZE_V1) {
+            return Err(crate::Error::ConfigError(
+                "cached source candidate scratch admission requires positive page-aligned catalog bytes"
+                    .to_string(),
+            ));
+        }
+        Self::from_projection_facts(catalog_bytes, package_count)
+    }
+
+    /// Reject contradictory or superseded source-candidate evidence.
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != CATALOG_SOURCE_CANDIDATE_SCRATCH_SCHEMA_V1
+            || self.page_size != CATALOG_SQLITE_PAGE_SIZE_V1
+            || self.canonical_projection_bytes == 0
+        {
+            return Err(crate::Error::ConfigError(
+                "source candidate scratch evidence has invalid schema or facts".to_string(),
+            ));
+        }
+        let canonical = Self::from_projection_facts_unchecked(
+            self.canonical_projection_bytes,
+            self.package_count,
+        )?;
+        if canonical.destination_payload_bytes != self.destination_payload_bytes
+            || canonical.btree_rewrite_bytes != self.btree_rewrite_bytes
+            || canonical.package_structure_bytes != self.package_structure_bytes
+            || canonical.candidate_database_bytes != self.candidate_database_bytes
+            || canonical.rollback_journal_bytes != self.rollback_journal_bytes
+            || canonical.required_additional_bytes != self.required_additional_bytes
+        {
+            return Err(crate::Error::ConfigError(
+                "source candidate scratch evidence contradicts its projection facts".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn from_projection_facts_unchecked(
+        canonical_projection_bytes: u64,
+        package_count: u64,
+    ) -> Result<Self> {
+        let package_structure_bytes = package_count
+            .checked_add(CATALOG_SQLITE_SCHEMA_PAGE_COUNT_V1)
+            .and_then(|pages| pages.checked_mul(CATALOG_SQLITE_PAGE_SIZE_V1))
+            .ok_or_else(source_candidate_overflow)?;
+        let candidate_database_bytes = canonical_projection_bytes
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(package_structure_bytes))
+            .ok_or_else(source_candidate_overflow)?;
+        let required_additional_bytes = candidate_database_bytes
+            .checked_mul(2)
+            .ok_or_else(source_candidate_overflow)?;
+        Ok(Self {
+            schema_version: CATALOG_SOURCE_CANDIDATE_SCRATCH_SCHEMA_V1,
+            page_size: CATALOG_SQLITE_PAGE_SIZE_V1,
+            canonical_projection_bytes,
+            package_count,
+            destination_payload_bytes: canonical_projection_bytes,
+            btree_rewrite_bytes: canonical_projection_bytes,
+            package_structure_bytes,
+            candidate_database_bytes,
+            rollback_journal_bytes: candidate_database_bytes,
+            required_additional_bytes,
+        })
+    }
+}
+
+fn source_candidate_overflow() -> crate::Error {
+    crate::Error::IoError("source candidate scratch-space arithmetic overflow".to_string())
 }
 
 /// One authenticated child object whose signed bytes coexist in run-local
@@ -515,6 +658,13 @@ pub trait CatalogMetadataStreamAdmission: Send + Sync {
 /// Process owner that admits an exact catalog scratch requirement. A returned
 /// lease retains its reservation until the owning operation completes or aborts.
 pub trait CatalogScratchAdmission: Send + Sync {
+    /// Reserve complete native source-candidate growth before its private file exists.
+    fn reserve_source_candidate(
+        &self,
+        candidate_path: &Path,
+        requirement: CatalogSourceCandidateScratchV1,
+    ) -> Result<Box<dyn Send>>;
+
     /// Reserve complete profile-candidate growth before its private file exists.
     fn reserve_profile_candidate(
         &self,
@@ -601,6 +751,27 @@ mod tests {
             },])
             .is_err()
         );
+    }
+
+    #[test]
+    fn source_candidate_requirement_is_structural_and_rejects_contradiction() {
+        let requirement = CatalogSourceCandidateScratchV1::from_projection_facts(8192, 3).unwrap();
+
+        assert_eq!(requirement.destination_payload_bytes, 8192);
+        assert_eq!(requirement.btree_rewrite_bytes, 8192);
+        assert_eq!(requirement.package_structure_bytes, 19 * 4096);
+        assert_eq!(requirement.candidate_database_bytes, 23 * 4096);
+        assert_eq!(requirement.rollback_journal_bytes, 23 * 4096);
+        assert_eq!(requirement.required_additional_bytes, 46 * 4096);
+
+        let cached = CatalogSourceCandidateScratchV1::from_cached_catalog(4096, 0).unwrap();
+        cached.validate().unwrap();
+        assert!(CatalogSourceCandidateScratchV1::from_cached_catalog(4095, 1).is_err());
+        assert!(CatalogSourceCandidateScratchV1::from_projection_facts(0, 1).is_err());
+
+        let mut contradictory = requirement;
+        contradictory.candidate_database_bytes += 1;
+        assert!(contradictory.validate().is_err());
     }
 
     fn object(
