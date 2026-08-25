@@ -1,4 +1,4 @@
-// apps/remi/src/bin/deployment_command.rs
+// apps/remi/src/bin/remi/deployment_command.rs
 
 //! Typed deployment administration commands for the standalone Remi binary.
 
