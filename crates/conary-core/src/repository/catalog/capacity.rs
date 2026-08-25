@@ -10,6 +10,7 @@ use thiserror::Error;
 use crate::error::Result;
 
 use super::SourceMetadataObjectRoleV1;
+use super::contract::validate_relative_source_path;
 
 /// Current schema for exact SQLite catalog-finalization scratch evidence.
 pub const CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1: u32 = 1;
@@ -77,10 +78,10 @@ impl CatalogMetadataScratchV1 {
         let mut previous: Option<&CatalogMetadataObjectScratchV1> = None;
         let mut required_additional_bytes = 0_u64;
         for object in &self.objects {
-            if object.source_path.is_empty() || object.size == 0 {
+            validate_relative_source_path(&object.source_path)?;
+            if object.size == 0 {
                 return Err(crate::Error::ConfigError(
-                    "catalog metadata scratch evidence has an empty path or zero-sized object"
-                        .to_string(),
+                    "catalog metadata scratch evidence has a zero-sized object".to_string(),
                 ));
             }
             if let Some(previous) = previous
@@ -338,6 +339,14 @@ mod tests {
                 SourceMetadataObjectRoleV1::DebianPackages,
                 "Packages.gz",
                 0,
+            )])
+            .is_err()
+        );
+        assert!(
+            CatalogMetadataScratchV1::from_signed_objects(vec![object(
+                SourceMetadataObjectRoleV1::DebianPackages,
+                "../Packages.gz",
+                1,
             )])
             .is_err()
         );
