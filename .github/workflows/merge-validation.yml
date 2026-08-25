@@ -150,6 +150,7 @@ jobs:
     steps:
       - name: Install pinned Arch build dependencies
         run: |
+          sed -i '/^\[options\]/a DisableDownloadTimeout' /etc/pacman.conf
           printf 'Server = https://archive.archlinux.org/repos/2026/08/02/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
           pacman -Syu --noconfirm
           pacman -S --noconfirm base-devel openssl xz libseccomp pkgconf cmake perl clang rustup git
