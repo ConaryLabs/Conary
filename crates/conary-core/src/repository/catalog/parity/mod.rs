@@ -15,6 +15,9 @@ mod alpm;
 #[cfg(feature = "native-rpm-oracle")]
 mod rpm;
 
+#[cfg(feature = "native-debian-oracle")]
+mod debian;
+
 #[cfg(feature = "native-alpm-oracle")]
 pub use alpm::{
     ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, AlpmParityMemberInput,
@@ -25,6 +28,11 @@ pub use alpm::{
 pub use rpm::{
     RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V1, RpmParityMemberInput,
     produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
+};
+
+#[cfg(feature = "native-debian-oracle")]
+pub use debian::{
+    DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DebianParityMemberInput, produce_debian_parity_oracle,
 };
 
 pub use compare::{

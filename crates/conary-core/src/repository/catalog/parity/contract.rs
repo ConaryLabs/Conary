@@ -243,7 +243,11 @@ impl NativeParityPackageV1 {
         )
     }
 
-    #[cfg(any(feature = "native-alpm-oracle", feature = "native-rpm-oracle"))]
+    #[cfg(any(
+        feature = "native-alpm-oracle",
+        feature = "native-rpm-oracle",
+        feature = "native-debian-oracle"
+    ))]
     pub(super) fn canonicalize_for_profile(&mut self, profile: &str) -> Result<()> {
         let mut record = self.as_catalog_record();
         record.canonicalize_for_scope(&CatalogScopeV1::Profile {
@@ -255,7 +259,11 @@ impl NativeParityPackageV1 {
         Ok(())
     }
 
-    #[cfg(any(feature = "native-alpm-oracle", feature = "native-rpm-oracle"))]
+    #[cfg(any(
+        feature = "native-alpm-oracle",
+        feature = "native-rpm-oracle",
+        feature = "native-debian-oracle"
+    ))]
     pub(super) fn has_same_profile_facts(&self, other: &Self) -> bool {
         self.as_catalog_record()
             .same_profile_record(&other.as_catalog_record())

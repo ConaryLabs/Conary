@@ -14,6 +14,7 @@ default = ["composefs-rs"]
 composefs-rs = ["dep:composefs"]
 native-alpm-oracle = ["dep:alpm", "dep:clap"]
 native-rpm-oracle = ["dep:clap"]
+native-debian-oracle = ["dep:clap"]
 
 [dependencies]
 # Database
@@ -187,6 +188,11 @@ required-features = ["native-rpm-oracle"]
 name = "conary-rpm-resolution-oracle"
 path = "src/bin/conary-rpm-resolution-oracle.rs"
 required-features = ["native-rpm-oracle"]
+
+[[bin]]
+name = "conary-debian-oracle"
+path = "src/bin/conary-debian-oracle.rs"
+required-features = ["native-debian-oracle"]
 
 [[bench]]
 name = "erofs_build"
