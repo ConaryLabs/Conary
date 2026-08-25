@@ -605,8 +605,8 @@ mod tests {
             "INSERT INTO repository_sync_runs (
                  run_id, source_profile, owner_instance_uuid, fencing_epoch,
                  candidate_profile_digest, state, started_at, heartbeat_at,
-                 lease_expires_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, 'ready_to_publish', 100, 100, 1000)",
+                 lease_expires_at, finished_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'candidate', 100, 100, 100, 100)",
             params![
                 run_id,
                 repo.source_profile.as_deref(),
@@ -736,6 +736,31 @@ mod tests {
     }
 
     #[test]
+    fn activation_rejects_a_live_ready_run_until_candidate_completion() {
+        let (conn, repo) = setup();
+        insert_run(&conn, &repo, RUN_ONE, OWNER_ONE, 1);
+        install_catalog(&conn, 'd', 'e', true);
+        conn.execute(
+            "UPDATE repository_sync_runs
+             SET state = 'ready_to_publish', finished_at = NULL,
+                 heartbeat_at = 100, lease_expires_at = 1000
+             WHERE run_id = ?1",
+            [RUN_ONE],
+        )
+        .unwrap();
+
+        let error =
+            activate_profile_revision_at(&conn, &activation(1, RUN_ONE, OWNER_ONE, 'd'), 200)
+                .unwrap_err();
+        assert!(error.to_string().contains("lost run"));
+        assert!(
+            RemiActiveProfileRevision::find(&conn, "fedora-44")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn activation_rejects_repository_precedence_changed_after_run_start() {
         let (conn, repo) = setup();
         insert_run(&conn, &repo, RUN_ONE, OWNER_ONE, 1);
@@ -785,6 +810,10 @@ mod tests {
 
         insert_run(&conn, &repo, RUN_TWO, OWNER_TWO, 2);
         install_catalog(&conn, 'f', '0', true);
+        assert_eq!(
+            RemiActiveProfileRevision::find(&conn, "fedora-44").unwrap(),
+            Some(first.clone())
+        );
         let second =
             activate_profile_revision_at(&conn, &activation(2, RUN_TWO, OWNER_TWO, 'f'), 200)
                 .unwrap();

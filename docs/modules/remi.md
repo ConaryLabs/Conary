@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 59
-summary: Document exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 60
+summary: Document durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -66,7 +66,8 @@ expressions are not source, parser, or trust authority. A configured native
 parser or trust failure is an error for that source; it does not silently retry
 the URL as another metadata format or continue unsigned.
 
-Native refresh publishes package authority outside the operational database.
+Native refresh writes immutable candidate package authority outside the
+operational database.
 Each authenticated source is projected into a strict standalone SQLite catalog
 and a canonical `SourceSnapshotV1` manifest under
 `<storage.root>/catalogs/sources/<manifest-sha256>/`. The manifest binds exact
@@ -112,21 +113,32 @@ pointer unchanged.
 
 Construction is private beneath `catalog-candidates/<run-id>/`. Candidate
 SQLite integrity, schema, ordering, counts, logical digest, and source
-membership are reopened and checked before publication. Catalog and manifest
+membership are reopened and checked before durable registration. Catalog and manifest
 files and their directories are synchronized before an atomic rename makes the
-content-addressed bundle durable. Only then may one short operational-database
-transaction prove the current run owner and fencing epoch and replace the
-profile's active revision pointer. A failed required member, stale fence,
-replayed activation, malformed bundle, publication fault, or activation fault
-leaves the previous pointer readable.
+content-addressed bundle durable. Only then does one short operational-database
+transaction prove the current run owner and fencing epoch, register the exact
+source/profile resources, and complete the run as a terminal `candidate`.
+Refresh never advances a profile or universe pointer and never updates
+`last_published_at`; checked, changed, and validated timestamps describe only
+the private candidate work. A failed required member, stale fence, malformed
+bundle, or durable-registration fault leaves both the previous active pointer
+and the previous public universe readable.
 Long parser, profile-composition, and immutable publication-verification calls
 renew that fenced lease from an independent coordinator thread at the
-core-owned heartbeat cadence, including while the run is `ready_to_publish`,
-so a CPU-bound metadata record stream cannot starve its own ownership proof.
+core-owned heartbeat cadence, including while the run is `ready_to_publish`.
+Candidate completion ends the lease; the exact current candidate survives
+restart and lease expiry as typed promotion input. A successor refresh advances
+the fencing scope and thereby supersedes the prior candidate without changing
+public serving state. Thus a CPU-bound metadata record stream cannot
+starve its own ownership proof.
 
 Operational SQLite owns refresh runs and leases, resource metadata, ordered
-profile members, the active pointer, and exact revision pins. It does not own
+profile members, the exact current private candidate, the active pointer, and
+exact revision pins. It does not own
 package, provide, or requirement rows for the activated native Remi catalog.
+`crates/conary-core/src/repository/sync/remi/run/candidate.rs` owns the durable
+candidate transition, exact run-to-revision member proof, and current-candidate
+lookup; the parent run module retains lease, heartbeat, and failure fencing.
 `CatalogAuthority` resolves the pointer and verified bundle, opens SQLite in
 immutable read-only mode, and records a reader pin for the handle lifetime.
 Universe publication performs the complete digest, integrity, binding, count,
@@ -135,12 +147,13 @@ first serving open performs the same proof if no publisher has done so. Later
 opens in that process share the verified read-only connection behind a bounded
 per-profile cache instead of rehashing gigabytes for every lookup. A new
 revision replaces that cache entry only after its own complete verification.
-Readers opened before activation therefore finish on the old revision; later
+Readers opened before promotion therefore finish on the old revision; later
 readers see the complete new revision. Conversion outcomes own durable exact
 revision pins. Catalog garbage collection computes reachability from active,
-reader, work, and conversion pins and removes only resources absent from that
-exact graph; age, repository names, process liveness, and guessed retention
-windows are not collection authority. An absent exact bundle or
+current-candidate, reader, work, and conversion pins and removes only resources
+absent from that exact graph. A superseded candidate is collectable unless a
+different typed pin retains it; age, repository names, process liveness, and
+guessed retention windows are not collection authority. An absent exact bundle or
 never-published profile namespace is idempotent absence during collection; a
 symlink or non-directory at either boundary still fails closed.
 Concurrent profile refreshes share one narrow catalog-collection coordinator,
@@ -203,16 +216,15 @@ before awaiting ownership, so the current cycle can record readiness through
 the state write boundary. The narrower database writer serializes only their SQLite mutation
 phases, including catalog-pointer, canonical-cache, and exact-map commits. The process-wide root
 lock excludes a second Remi runtime; durable refresh-run leases and monotonic
-fencing epochs authorize private source/profile candidates and activation
-inside that owner.
+fencing epochs authorize private source/profile candidate construction.
 There is no warm-up timer or blind retry; a later cycle occurs at the configured
 interval, an overdue canonical deadline is serviced immediately after the
 current refresh, and each deadline resets only after its owning attempt
-completes. Concurrent profile refreshes never publish partial endpoint
-universes independently. The owning admin batch publishes once after its
-profile set settles; the background scheduler publishes once after the
-following canonical-map cycle, so one sequence binds one coherent endpoint
-state.
+completes. Repository refresh entrypoints never publish endpoint universes.
+The Slice 6 promotion owner must later consume exact completed candidates and
+their reopened proof before it may activate profiles or signed universe
+metadata, so no partial candidate set becomes public merely because an admin or
+background refresh completed.
 
 Eligible exact-profile prewarm jobs run concurrently under the configured
 conversion bound shared with request-driven conversions. Each profile preserves
@@ -431,7 +443,7 @@ disposition is valid only when that validation-origin revision differs from
 the report's current revision; flipping a current validation to invented reuse
 fails report reopen. Missing, repeated, reordered, contract-drifted,
 unattempted, corrupt, or failed outcomes prevent success. The proof ledger and
-per-revision bindings are one schema-51 database authority and publish
+per-revision bindings are one schema-52 database authority and publish
 atomically. The writer syncs an atomic staged report, reopens the published
 bytes, rejects noncanonical or unknown input, and compares the complete
 reopened value before the command may report success. A structurally valid
@@ -805,11 +817,11 @@ stable public hub for `ConversionService` and conversion result DTO re-exports.
 Implementation ownership lives in child modules:
 
 - `catalog_refresh.rs`: private source/profile candidate construction, durable
-  content-addressed publication, and fenced activation inputs.
+  content-addressed registration, and fenced candidate inputs.
 - `catalog_authority.rs` and `profile_catalog.rs`: active-pointer resolution,
   verified immutable readers, reader-lifetime pins, and serving projections.
-- `catalog_gc.rs`: exact active/work/reader/conversion reachability and bundle
-  deletion after operational intent is durable.
+- `catalog_gc.rs`: exact active/current-candidate/work/reader/conversion
+  reachability and bundle deletion after operational intent is durable.
 - `handlers/detail.rs` and `handlers/detail/catalog.rs`: detail and analytics
   response assembly, with one exact profile pin per response and catalog-owned
   package/version metadata.

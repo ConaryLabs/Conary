@@ -126,6 +126,7 @@ CREATE TABLE repository_sync_runs (
                 'ingesting',
                 'validating',
                 'ready_to_publish',
+                'candidate',
                 'published',
                 'failed',
                 'abandoned'
@@ -162,8 +163,9 @@ CREATE TABLE repository_sync_runs (
                 AND candidate_cleaned_at >= finished_at
             )),
             CHECK(
-                (state = 'published'
+                (state IN ('candidate', 'published')
                     AND finished_at IS NOT NULL
+                    AND candidate_profile_digest IS NOT NULL
                     AND failure_stage IS NULL
                     AND failure_category IS NULL
                     AND failure_evidence IS NULL)
@@ -172,7 +174,7 @@ CREATE TABLE repository_sync_runs (
                     AND failure_stage IS NOT NULL
                     AND failure_category IS NOT NULL
                     AND failure_evidence IS NOT NULL)
-                OR (state NOT IN ('published', 'failed', 'abandoned')
+                OR (state NOT IN ('candidate', 'published', 'failed', 'abandoned')
                     AND finished_at IS NULL
                     AND failure_stage IS NULL
                     AND failure_category IS NULL

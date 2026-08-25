@@ -80,5 +80,5 @@ pub(super) fn validate_uuid(value: &str, label: &str) -> Result<()> {
 }
 
 pub(super) fn is_terminal_state(state: &str) -> bool {
-    matches!(state, "published" | "failed" | "abandoned")
+    matches!(state, "candidate" | "published" | "failed" | "abandoned")
 }

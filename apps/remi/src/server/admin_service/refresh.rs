@@ -373,7 +373,7 @@ mod tests {
         }
 
         let config = crate::server::ServerConfig {
-            db_path,
+            db_path: db_path.clone(),
             chunk_dir,
             cache_dir,
             ..Default::default()
@@ -392,6 +392,15 @@ mod tests {
         assert_eq!(batch.failures.len(), 1);
         assert_eq!(batch.failures[0].name, "broken-fedora");
         assert_eq!(batch.failures[0].kind, RepoRefreshFailureKind::Internal);
+        let conn = conary_core::db::open_fast(&db_path).expect("reopen operational database");
+        let active_universe_count = conn
+            .query_row(
+                "SELECT COUNT(*) FROM remi_active_universe_revision",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count active universe pointers");
+        assert_eq!(active_universe_count, 0);
     }
 
     #[tokio::test]

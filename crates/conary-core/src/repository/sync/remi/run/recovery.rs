@@ -42,7 +42,7 @@ fn recover_expired_profile_sync_runs_in_transaction(
         let mut statement = tx.prepare(
             "SELECT run_id, source_profile, fencing_epoch
              FROM repository_sync_runs
-             WHERE state NOT IN ('published', 'failed', 'abandoned')
+             WHERE state NOT IN ('candidate', 'published', 'failed', 'abandoned')
                AND lease_expires_at <= ?1
              ORDER BY source_profile, fencing_epoch",
         )?;
@@ -81,7 +81,7 @@ pub fn acknowledge_profile_sync_candidate_cleanup(conn: &Connection, run_id: &st
         "UPDATE repository_sync_runs
          SET candidate_cleaned_at = ?1
          WHERE run_id = ?2
-           AND state IN ('published', 'failed', 'abandoned')
+           AND state IN ('candidate', 'published', 'failed', 'abandoned')
            AND finished_at IS NOT NULL
            AND candidate_cleaned_at IS NULL",
         params![now, run_id],
@@ -108,7 +108,7 @@ pub(super) fn abandon_expired_run(
              failure_category = 'fenced', failure_evidence = ?2
          WHERE run_id = ?3
            AND source_profile = ?4
-           AND state NOT IN ('published', 'failed', 'abandoned')
+           AND state NOT IN ('candidate', 'published', 'failed', 'abandoned')
            AND lease_expires_at <= ?1",
         params![now, evidence, run_id, source_profile],
     )?;
@@ -127,7 +127,7 @@ pub(super) fn pending_candidate_recovery(
     let mut statement = tx.prepare(
         "SELECT run_id, source_profile
          FROM repository_sync_runs
-         WHERE state IN ('published', 'failed', 'abandoned')
+         WHERE state IN ('candidate', 'published', 'failed', 'abandoned')
            AND candidate_cleaned_at IS NULL
            AND (?1 IS NULL OR source_profile = ?1)
          ORDER BY finished_at, source_profile, fencing_epoch",
