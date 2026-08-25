@@ -8,14 +8,13 @@ mod target_preflight;
 #[cfg(test)]
 mod tests_v4;
 
-use super::catalog_authority::{CatalogAuthority, PinnedProfileCatalog};
+use super::catalog_authority::{CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection};
 use super::conversion::ConversionService;
 use super::database_writer::DatabaseWriter;
 use super::profile_catalog::ProfileCatalog;
 use anyhow::{Context, Result, ensure};
 use ccs_reopen::CcsArtifactReopener;
 use conary_core::corpus::ConversionFailure;
-use conary_core::db::models::RemiActiveProfileRevision;
 use conary_core::repository::catalog::CatalogPackageRecordV1;
 use futures::StreamExt;
 pub use proof_reuse::{
@@ -55,7 +54,7 @@ pub struct ConversionCrawlConfig {
 
 struct ProfileCrawlPlan {
     route: String,
-    selection: RemiActiveProfileRevision,
+    selection: ProfileRevisionSelection,
     packages: Vec<CatalogPackageRecordV1>,
     _pin: PinnedProfileCatalog,
 }
@@ -118,7 +117,7 @@ fn build_crawl_plans(authority: &CatalogAuthority) -> Result<Vec<ProfileCrawlPla
                 .with_context(|| {
                     format!("pin public profile '{}' for conversion crawl", profile.id())
                 })?;
-            let selection = pin.activation().clone();
+            let selection = pin.selection().clone();
             let packages = ProfileCatalog::new(&pin)
                 .package_records()
                 .with_context(|| {

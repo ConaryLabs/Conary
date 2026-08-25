@@ -148,7 +148,7 @@ async fn run_prewarm_with_permits(
     })
     .await
     .map_err(|e| anyhow::anyhow!("prewarm package lookup task panicked: {e}"))??;
-    let selection = selection_pin.activation().clone();
+    let selection = selection_pin.selection().clone();
     let profile_revision_sha256 = selection.profile_revision_sha256.clone();
     info!("Found {} packages to potentially convert", packages.len());
 

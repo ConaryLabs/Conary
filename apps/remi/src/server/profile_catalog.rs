@@ -28,7 +28,7 @@ impl<'a> ProfileCatalog<'a> {
         Self { pinned }
     }
 
-    /// Return the exact source profile selected by the activation pointer.
+    /// Return the exact selected source profile.
     #[must_use]
     pub fn source_profile(&self) -> &str {
         self.pinned.source_profile()
@@ -38,12 +38,6 @@ impl<'a> ProfileCatalog<'a> {
     #[must_use]
     pub fn profile_revision_sha256(&self) -> &str {
         self.pinned.profile_revision_sha256()
-    }
-
-    /// Return the monotonic activation fence captured by this reader.
-    #[must_use]
-    pub fn fencing_epoch(&self) -> i64 {
-        self.pinned.fencing_epoch()
     }
 
     /// Return one deterministic page of downloadable package names.

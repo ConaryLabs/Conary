@@ -399,7 +399,6 @@ mod tests {
 
         assert_eq!(old.profile_revision_sha256(), revision_a);
         assert_eq!(new.profile_revision_sha256(), revision_b);
-        assert_eq!(new.fencing_epoch(), 2);
         assert_ne!(
             package_a.checksum,
             new.reader()

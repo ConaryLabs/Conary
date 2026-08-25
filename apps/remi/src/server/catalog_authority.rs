@@ -1,6 +1,6 @@
 // apps/remi/src/server/catalog_authority.rs
 
-//! Read-only authority for activated immutable Remi profile catalogs.
+//! Read-only authority for exact immutable Remi profile catalogs.
 //!
 //! Operational SQLite owns the fenced pointer and the exact resource metadata;
 //! the package catalog itself is always read from the content-addressed bundle
@@ -44,6 +44,26 @@ pub struct CatalogAuthority {
 struct CachedProfileReader {
     profile_revision_sha256: String,
     reader: Arc<Mutex<CatalogReader>>,
+}
+
+/// Minimal identity of one exact immutable profile revision.
+///
+/// Activation fencing and ownership decide whether a revision is public. They
+/// are deliberately absent here so private validation can select a durable
+/// registered candidate without inventing an active pointer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileRevisionSelection {
+    pub source_profile: String,
+    pub profile_revision_sha256: String,
+}
+
+impl From<&RemiActiveProfileRevision> for ProfileRevisionSelection {
+    fn from(active: &RemiActiveProfileRevision) -> Self {
+        Self {
+            source_profile: active.source_profile.clone(),
+            profile_revision_sha256: active.profile_revision_sha256.clone(),
+        }
+    }
 }
 
 /// Bounded, read-only facts about one active immutable profile catalog.
@@ -93,10 +113,21 @@ impl CatalogAuthority {
         let conn = Connection::open_with_flags(&self.db_path, flags).with_context(|| {
             format!("open Remi operational database to inspect profile '{source_profile}'")
         })?;
-        let resolved = resolve_active_profile(&conn, &self.catalog_dir, source_profile)?;
+        let pointer = RemiActiveProfileRevision::find(&conn, source_profile)
+            .context("resolve active Remi profile revision pointer")?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "profile '{source_profile}' has no active immutable catalog revision"
+                )
+            })?;
+        let resolved = resolve_profile_selection(
+            &conn,
+            &self.catalog_dir,
+            ProfileRevisionSelection::from(&pointer),
+        )?;
         inspect_resolved_profile_files(&resolved)?;
         Ok(ActiveProfileInspection {
-            pointer: resolved.pointer,
+            pointer,
             manifest: resolved.manifest,
         })
     }
@@ -120,7 +151,7 @@ impl CatalogAuthority {
             let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
                 .context("acquire immutable catalog reader-pin transaction")?;
             let resolved = resolve_active_profile(&tx, &self.catalog_dir, source_profile)?;
-            insert_reader_pin(&tx, &pin_id, &resolved.pointer)?;
+            insert_reader_pin(&tx, &pin_id, &resolved.selection)?;
             tx.commit().context("commit immutable catalog reader pin")?;
             Ok::<_, anyhow::Error>(resolved)
         })?;
@@ -128,7 +159,7 @@ impl CatalogAuthority {
         self.open_pinned_resolution(pin_id, resolved)
     }
 
-    /// Reopen an exact activation selection even when a newer revision is active.
+    /// Reopen an exact registered revision without consulting the active pointer.
     ///
     /// Long-running work captures the typed active pointer during selection,
     /// then uses this method for each later read. The current pointer is not
@@ -136,7 +167,7 @@ impl CatalogAuthority {
     /// universe between selection and conversion.
     pub(crate) fn open_selected_profile(
         &self,
-        selection: &RemiActiveProfileRevision,
+        selection: &ProfileRevisionSelection,
     ) -> Result<PinnedProfileCatalog> {
         let pin_id = uuid::Uuid::new_v4().to_string();
         let selection = selection.clone();
@@ -150,7 +181,7 @@ impl CatalogAuthority {
             let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
                 .context("acquire exact catalog reader-pin transaction")?;
             let resolved = resolve_profile_selection(&tx, &self.catalog_dir, selection.clone())?;
-            insert_reader_pin(&tx, &pin_id, &resolved.pointer)?;
+            insert_reader_pin(&tx, &pin_id, &resolved.selection)?;
             tx.commit().context("commit exact catalog reader pin")?;
             Ok::<_, anyhow::Error>(resolved)
         })?;
@@ -183,8 +214,8 @@ impl CatalogAuthority {
         &self,
         resolved: ResolvedProfileCatalog,
     ) -> Result<PinnedProfileCatalog> {
-        let profile = resolved.pointer.source_profile.clone();
-        let revision = resolved.pointer.profile_revision_sha256.clone();
+        let profile = resolved.selection.source_profile.clone();
+        let revision = resolved.selection.profile_revision_sha256.clone();
         let mut cache = self.verified_readers.lock();
         let reader = match cache.get(&profile) {
             Some(cached) if cached.profile_revision_sha256 == revision => {
@@ -211,7 +242,7 @@ impl CatalogAuthority {
             }
         };
         Ok(PinnedProfileCatalog {
-            pointer: resolved.pointer,
+            selection: resolved.selection,
             manifest: resolved.manifest,
             reader: Some(reader),
             pin: None,
@@ -258,7 +289,7 @@ impl CatalogAuthority {
 /// pointer and manifest are copied into this handle so the profile revision
 /// identity remains available after operational SQLite changes.
 pub struct PinnedProfileCatalog {
-    pointer: RemiActiveProfileRevision,
+    selection: ProfileRevisionSelection,
     manifest: ProfileRevisionV2,
     reader: Option<Arc<Mutex<CatalogReader>>>,
     pin: Option<ReaderPin>,
@@ -274,7 +305,7 @@ impl fmt::Debug for PinnedProfileCatalog {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PinnedProfileCatalog")
-            .field("pointer", &self.pointer)
+            .field("selection", &self.selection)
             .field("manifest", &self.manifest)
             .field(
                 "catalog_path",
@@ -296,7 +327,7 @@ impl PinnedProfileCatalog {
         reader: CatalogReader,
     ) -> Self {
         Self {
-            pointer,
+            selection: ProfileRevisionSelection::from(&pointer),
             manifest,
             reader: Some(Arc::new(Mutex::new(reader))),
             pin: None,
@@ -311,16 +342,16 @@ impl PinnedProfileCatalog {
         )
     }
 
-    /// The exact source profile selected by the activation pointer.
+    /// The exact selected source profile.
     #[must_use]
     pub fn source_profile(&self) -> &str {
-        &self.pointer.source_profile
+        &self.selection.source_profile
     }
 
     /// The exact content address of this profile revision's manifest.
     #[must_use]
     pub fn profile_revision_sha256(&self) -> &str {
-        &self.pointer.profile_revision_sha256
+        &self.selection.profile_revision_sha256
     }
 
     /// Short alias for [`Self::profile_revision_sha256`].
@@ -329,16 +360,10 @@ impl PinnedProfileCatalog {
         self.profile_revision_sha256()
     }
 
-    /// The monotonic activation fence captured when this handle was opened.
+    /// The complete immutable revision identity that selected this handle.
     #[must_use]
-    pub fn fencing_epoch(&self) -> i64 {
-        self.pointer.fencing_epoch
-    }
-
-    /// The complete pointer identity that selected this handle.
-    #[must_use]
-    pub fn activation(&self) -> &RemiActiveProfileRevision {
-        &self.pointer
+    pub fn selection(&self) -> &ProfileRevisionSelection {
+        &self.selection
     }
 
     /// The strictly typed profile revision manifest used to verify the bundle.
@@ -589,7 +614,7 @@ fn open_active_profile_from_connection(
 }
 
 struct ResolvedProfileCatalog {
-    pointer: RemiActiveProfileRevision,
+    selection: ProfileRevisionSelection,
     manifest: ProfileRevisionV2,
     bundle_path: PathBuf,
 }
@@ -612,84 +637,84 @@ fn resolve_active_profile(
         );
     }
 
-    resolve_profile_selection(conn, catalog_dir, pointer)
+    resolve_profile_selection(conn, catalog_dir, ProfileRevisionSelection::from(&pointer))
 }
 
 fn resolve_profile_selection(
     conn: &Connection,
     catalog_dir: &Path,
-    pointer: RemiActiveProfileRevision,
+    selection: ProfileRevisionSelection,
 ) -> Result<ResolvedProfileCatalog> {
     let resource = RemiCatalogResource::find_profile_revision(
         conn,
-        &pointer.source_profile,
-        &pointer.profile_revision_sha256,
+        &selection.source_profile,
+        &selection.profile_revision_sha256,
     )
     .context("resolve active profile catalog resource")?
     .ok_or_else(|| {
         anyhow::anyhow!(
             "active profile '{}' revision {} has no catalog resource",
-            pointer.source_profile,
-            pointer.profile_revision_sha256
+            selection.source_profile,
+            selection.profile_revision_sha256
         )
     })?;
 
     if resource.kind != RemiCatalogResourceKind::ProfileRevision {
         bail!(
             "active profile '{}' revision {} has resource kind {:?}",
-            pointer.source_profile,
-            pointer.profile_revision_sha256,
+            selection.source_profile,
+            selection.profile_revision_sha256,
             resource.kind
         );
     }
     if !resource.durable {
         bail!(
             "active profile '{}' revision {} is not durable",
-            pointer.source_profile,
-            pointer.profile_revision_sha256
+            selection.source_profile,
+            selection.profile_revision_sha256
         );
     }
-    if resource.resource_sha256 != pointer.profile_revision_sha256 {
+    if resource.resource_sha256 != selection.profile_revision_sha256 {
         bail!(
             "active profile '{}' pointer and resource revision digests disagree",
-            pointer.source_profile
+            selection.source_profile
         );
     }
-    if resource.source_profile != pointer.source_profile {
+    if resource.source_profile != selection.source_profile {
         bail!(
             "active profile revision {} belongs to '{}' instead of '{}'",
-            pointer.profile_revision_sha256,
+            selection.profile_revision_sha256,
             resource.source_profile,
-            pointer.source_profile
+            selection.source_profile
         );
     }
 
     let manifest = deserialize_profile_revision(&resource)
         .context("deserialize active profile revision manifest")?;
-    if manifest.profile != pointer.source_profile {
+    if manifest.profile != selection.source_profile {
         bail!(
             "active profile revision {} names '{}' instead of '{}'",
-            pointer.profile_revision_sha256,
+            selection.profile_revision_sha256,
             manifest.profile,
-            pointer.source_profile
+            selection.source_profile
         );
     }
 
     let manifest_digest = manifest
         .manifest_sha256()
         .context("compute active profile revision digest")?;
-    if manifest_digest != pointer.profile_revision_sha256
+    if manifest_digest != selection.profile_revision_sha256
         || manifest_digest != resource.resource_sha256
     {
         bail!(
             "active profile '{}' manifest and resource digests disagree",
-            pointer.source_profile
+            selection.source_profile
         );
     }
     if resource.artifact_sha256 != manifest.catalog.sha256 {
         bail!(
             "active profile '{}' resource and manifest artifact digests disagree",
-            pointer.source_profile
+            selection.source_profile
         );
     }
     let manifest_artifact_size = i64::try_from(manifest.catalog.size)
@@ -697,13 +722,13 @@ fn resolve_profile_selection(
     if resource.artifact_size != manifest_artifact_size {
         bail!(
             "active profile '{}' resource and manifest artifact sizes disagree",
-            pointer.source_profile
+            selection.source_profile
         );
     }
     if resource.logical_digest_sha256 != manifest.logical_digest_sha256 {
         bail!(
             "active profile '{}' resource and manifest logical digests disagree",
-            pointer.source_profile
+            selection.source_profile
         );
     }
 
@@ -712,10 +737,10 @@ fn resolve_profile_selection(
     let bundle_path = catalog_dir
         .join("profiles")
         .join(&manifest.profile)
-        .join(&pointer.profile_revision_sha256);
+        .join(&selection.profile_revision_sha256);
 
     Ok(ResolvedProfileCatalog {
-        pointer,
+        selection,
         manifest,
         bundle_path,
     })
@@ -724,7 +749,7 @@ fn resolve_profile_selection(
 fn insert_reader_pin(
     conn: &Connection,
     pin_id: &str,
-    selection: &RemiActiveProfileRevision,
+    selection: &ProfileRevisionSelection,
 ) -> Result<()> {
     let runtime_session = RemiRuntimeSession::current(conn)
         .context("resolve current Remi runtime session for reader pin")?
@@ -750,7 +775,7 @@ fn insert_reader_pin(
 #[cfg(test)]
 fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfileCatalog> {
     let ResolvedProfileCatalog {
-        pointer,
+        selection,
         manifest,
         bundle_path,
     } = resolved;
@@ -762,7 +787,7 @@ fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfi
     })?;
 
     Ok(PinnedProfileCatalog {
-        pointer,
+        selection,
         manifest,
         reader: Some(Arc::new(Mutex::new(reader))),
         pin: None,
