@@ -3,7 +3,7 @@
 //! Ownership-safe Rust projection of the narrow apt-pkg C++ ABI.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::{Mutex, MutexGuard};
 
@@ -155,6 +155,203 @@ unsafe extern "C" {
         group: usize,
         atom: usize,
     ) -> c_int;
+    fn conary_apt_resolution_open(
+        paths: *const *const c_char,
+        path_count: usize,
+        architecture: *const c_char,
+    ) -> *mut c_void;
+    fn conary_apt_resolution_free(handle: *mut c_void);
+    fn conary_apt_resolution_resolve(
+        handle: *mut c_void,
+        name: *const c_char,
+        version: *const c_char,
+        architecture: *const c_char,
+    ) -> c_int;
+    fn conary_apt_resolution_error(handle: *const c_void) -> *const c_char;
+    fn conary_apt_resolution_closure_count(handle: *const c_void) -> usize;
+    fn conary_apt_resolution_closure_name(handle: *const c_void, index: usize) -> *const c_char;
+    fn conary_apt_resolution_closure_version(handle: *const c_void, index: usize) -> *const c_char;
+    fn conary_apt_resolution_closure_architecture(
+        handle: *const c_void,
+        index: usize,
+    ) -> *const c_char;
+    fn conary_apt_resolution_missing_count(handle: *const c_void) -> usize;
+    fn conary_apt_resolution_missing_name(handle: *const c_void, index: usize) -> *const c_char;
+    fn conary_apt_resolution_missing_version(handle: *const c_void, index: usize) -> *const c_char;
+    fn conary_apt_resolution_missing_architecture(
+        handle: *const c_void,
+        index: usize,
+    ) -> *const c_char;
+    fn conary_apt_resolution_missing_kind(handle: *const c_void, index: usize) -> c_int;
+    fn conary_apt_resolution_missing_native_text(
+        handle: *const c_void,
+        index: usize,
+    ) -> *const c_char;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AptNativeIdentity {
+    pub(super) name: String,
+    pub(super) version: String,
+    pub(super) architecture: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AptMissingRequirement {
+    pub(super) requiring: AptNativeIdentity,
+    pub(super) kind: AptRelationKind,
+    pub(super) native_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AptResolutionOutcome {
+    Resolved(Vec<AptNativeIdentity>),
+    Unresolved(Vec<AptMissingRequirement>),
+}
+
+#[derive(Debug)]
+pub(super) struct AptResolution {
+    handle: NonNull<c_void>,
+    _guard: MutexGuard<'static, ()>,
+}
+
+impl AptResolution {
+    pub(super) fn open(paths: &[PathBuf], architecture: &str) -> Result<Self> {
+        let guard = apt_pkg_lock()?;
+        let paths = paths
+            .iter()
+            .map(|path| {
+                let path = path.to_str().ok_or_else(|| {
+                    Error::InvalidPath(format!("path is not UTF-8: {}", path.display()))
+                })?;
+                CString::new(path).map_err(|_| {
+                    Error::InvalidPath("Debian Packages path contains NUL".to_string())
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let pointers = paths.iter().map(|path| path.as_ptr()).collect::<Vec<_>>();
+        let architecture = CString::new(architecture)
+            .map_err(|_| Error::ConfigError("Debian architecture contains NUL".to_string()))?;
+        let handle = NonNull::new(unsafe {
+            conary_apt_resolution_open(pointers.as_ptr(), pointers.len(), architecture.as_ptr())
+        })
+        .ok_or_else(|| {
+            Error::ConfigError(
+                copy_required(
+                    unsafe { conary_apt_last_error() },
+                    "apt-pkg resolution error",
+                )
+                .unwrap_or_else(|error| error.to_string()),
+            )
+        })?;
+        Ok(Self {
+            handle,
+            _guard: guard,
+        })
+    }
+
+    pub(super) fn resolve(
+        &mut self,
+        name: &str,
+        version: &str,
+        architecture: &str,
+    ) -> Result<AptResolutionOutcome> {
+        let name = CString::new(name)
+            .map_err(|_| Error::ConfigError("Debian package name contains NUL".to_string()))?;
+        let version = CString::new(version)
+            .map_err(|_| Error::ConfigError("Debian package version contains NUL".to_string()))?;
+        let architecture = CString::new(architecture).map_err(|_| {
+            Error::ConfigError("Debian package architecture contains NUL".to_string())
+        })?;
+        if unsafe {
+            conary_apt_resolution_resolve(
+                self.handle.as_ptr(),
+                name.as_ptr(),
+                version.as_ptr(),
+                architecture.as_ptr(),
+            )
+        } != 1
+        {
+            return Err(Error::ConflictError(
+                copy_required(
+                    unsafe { conary_apt_resolution_error(self.handle.as_ptr()) },
+                    "apt-pkg resolution failure",
+                )
+                .unwrap_or_else(|error| error.to_string()),
+            ));
+        }
+        let missing_count = unsafe { conary_apt_resolution_missing_count(self.handle.as_ptr()) };
+        if missing_count != 0 {
+            return (0..missing_count)
+                .map(|index| self.missing(index))
+                .collect::<Result<Vec<_>>>()
+                .map(AptResolutionOutcome::Unresolved);
+        }
+        let closure_count = unsafe { conary_apt_resolution_closure_count(self.handle.as_ptr()) };
+        (0..closure_count)
+            .map(|index| self.closure_identity(index))
+            .collect::<Result<Vec<_>>>()
+            .map(AptResolutionOutcome::Resolved)
+    }
+
+    fn closure_identity(&self, index: usize) -> Result<AptNativeIdentity> {
+        Ok(AptNativeIdentity {
+            name: copy_required(
+                unsafe { conary_apt_resolution_closure_name(self.handle.as_ptr(), index) },
+                "apt-pkg closure package name",
+            )?,
+            version: copy_required(
+                unsafe { conary_apt_resolution_closure_version(self.handle.as_ptr(), index) },
+                "apt-pkg closure package version",
+            )?,
+            architecture: copy_required(
+                unsafe { conary_apt_resolution_closure_architecture(self.handle.as_ptr(), index) },
+                "apt-pkg closure package architecture",
+            )?,
+        })
+    }
+
+    fn missing(&self, index: usize) -> Result<AptMissingRequirement> {
+        let kind = match unsafe { conary_apt_resolution_missing_kind(self.handle.as_ptr(), index) }
+        {
+            1 => AptRelationKind::Depends,
+            2 => AptRelationKind::PreDepends,
+            value => {
+                return Err(Error::ParseError(format!(
+                    "apt-pkg returned unknown missing relation kind {value}"
+                )));
+            }
+        };
+        Ok(AptMissingRequirement {
+            requiring: AptNativeIdentity {
+                name: copy_required(
+                    unsafe { conary_apt_resolution_missing_name(self.handle.as_ptr(), index) },
+                    "apt-pkg missing requiring package name",
+                )?,
+                version: copy_required(
+                    unsafe { conary_apt_resolution_missing_version(self.handle.as_ptr(), index) },
+                    "apt-pkg missing requiring package version",
+                )?,
+                architecture: copy_required(
+                    unsafe {
+                        conary_apt_resolution_missing_architecture(self.handle.as_ptr(), index)
+                    },
+                    "apt-pkg missing requiring package architecture",
+                )?,
+            },
+            kind,
+            native_text: copy_required(
+                unsafe { conary_apt_resolution_missing_native_text(self.handle.as_ptr(), index) },
+                "apt-pkg missing native requirement text",
+            )?,
+        })
+    }
+}
+
+impl Drop for AptResolution {
+    fn drop(&mut self) {
+        unsafe { conary_apt_resolution_free(self.handle.as_ptr()) };
+    }
 }
 
 #[derive(Debug)]
