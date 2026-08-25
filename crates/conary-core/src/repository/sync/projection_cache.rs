@@ -136,6 +136,12 @@ impl ProjectionCache {
         let manifest_size = u64::try_from(manifest_bytes.len()).map_err(|_| {
             Error::IoError("native projection cache manifest exceeds byte range".to_string())
         })?;
+        if manifest_size > MAX_MANIFEST_SIZE {
+            return Err(Error::ConfigError(format!(
+                "native projection cache manifest requires {manifest_size} bytes, exceeding the \
+                 {MAX_MANIFEST_SIZE}-byte bound"
+            )));
+        }
         let copy_requirement =
             CatalogCopyScratchV1::from_exact_bytes(catalog.artifact.size, manifest_size)?;
         let _scratch_lease = self

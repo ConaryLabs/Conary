@@ -187,3 +187,25 @@ pub trait CatalogScratchAdmission: Send + Sync {
         requirement: CatalogCopyScratchV1,
     ) -> Result<Box<dyn Send>>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_requirement_is_exact_and_rejects_contradiction() {
+        let requirement = CatalogCopyScratchV1::from_exact_bytes(4096, 257).unwrap();
+        assert_eq!(requirement.required_additional_bytes, 4353);
+
+        let mut contradictory = requirement;
+        contradictory.required_additional_bytes += 1;
+        assert!(contradictory.validate().is_err());
+    }
+
+    #[test]
+    fn copy_requirement_rejects_zero_and_overflow() {
+        assert!(CatalogCopyScratchV1::from_exact_bytes(0, 1).is_err());
+        assert!(CatalogCopyScratchV1::from_exact_bytes(1, 0).is_err());
+        assert!(CatalogCopyScratchV1::from_exact_bytes(u64::MAX, 1).is_err());
+    }
+}
