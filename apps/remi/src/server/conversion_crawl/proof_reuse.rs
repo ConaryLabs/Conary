@@ -145,20 +145,18 @@ mod tests {
     use crate::server::catalog_authority::test_support::package;
 
     fn key() -> ConversionProofKeyV1 {
-        ConversionProofKeyV1::current(
-            &package(
-                "fedora-44",
-                "demo",
-                "1.0",
-                "1",
-                Some("x86_64"),
-                1,
-                "proof-key",
-            ),
-            "a".repeat(64),
-            "b".repeat(64),
-        )
-        .expect("current conversion proof key")
+        let mut package = package(
+            "fedora-44",
+            "demo",
+            "1.0",
+            "1",
+            Some("x86_64"),
+            1,
+            "proof-key",
+        );
+        package.package_key_sha256 = "c".repeat(64);
+        ConversionProofKeyV1::current(&package, "a".repeat(64), "b".repeat(64))
+            .expect("current conversion proof key")
     }
 
     #[test]
