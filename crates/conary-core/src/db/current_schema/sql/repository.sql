@@ -1226,6 +1226,8 @@ END;
 CREATE TABLE remi_universe_revisions (
             manifest_sha256 TEXT PRIMARY KEY,
             sequence INTEGER NOT NULL UNIQUE CHECK(sequence > 0),
+            promotion_evidence_sha256 TEXT NOT NULL,
+            conversion_crawl_sha256 TEXT NOT NULL,
             metadata_root_sha256 TEXT NOT NULL,
             canonical_map_sha256 TEXT NOT NULL,
             canonical_map_size INTEGER NOT NULL CHECK(canonical_map_size >= 0),
@@ -1238,6 +1240,10 @@ CREATE TABLE remi_universe_revisions (
             created_at INTEGER NOT NULL CHECK(created_at >= 0),
             CHECK(length(manifest_sha256) = 64
                 AND manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(promotion_evidence_sha256) = 64
+                AND promotion_evidence_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(conversion_crawl_sha256) = 64
+                AND conversion_crawl_sha256 NOT GLOB '*[^0-9a-f]*'),
             CHECK(length(metadata_root_sha256) = 64
                 AND metadata_root_sha256 NOT GLOB '*[^0-9a-f]*'),
             CHECK(length(canonical_map_sha256) = 64

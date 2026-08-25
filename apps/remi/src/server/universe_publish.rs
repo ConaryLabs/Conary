@@ -100,24 +100,26 @@ pub(crate) async fn publish_current_universe_from_state(
 struct UniverseInputs {
     base_manifest_sha256: Option<String>,
     base_sequence: u64,
+    base_promotion_evidence_sha256: Option<String>,
+    base_conversion_crawl_sha256: Option<String>,
     active_manifest: Option<RemiUniverseManifestV2>,
     profiles: Vec<ProfileRevisionV2>,
     canonical_map: CanonicalMapSnapshot,
 }
 
-struct SignedUniverseCandidate {
-    manifest: RemiUniverseManifestV2,
-    manifest_sha256: String,
-    manifest_bytes: Vec<u8>,
-    canonical_map_bytes: Vec<u8>,
-    root: Signed<conary_core::trust::RootMetadata>,
-    root_bytes: Vec<u8>,
-    targets: Signed<TargetsMetadata>,
-    targets_bytes: Vec<u8>,
-    snapshot: Signed<SnapshotMetadata>,
-    snapshot_bytes: Vec<u8>,
-    timestamp: Signed<TimestampMetadata>,
-    timestamp_bytes: Vec<u8>,
+pub(crate) struct SignedUniverseCandidate {
+    pub(crate) manifest: RemiUniverseManifestV2,
+    pub(crate) manifest_sha256: String,
+    pub(crate) manifest_bytes: Vec<u8>,
+    pub(crate) canonical_map_bytes: Vec<u8>,
+    pub(crate) root: Signed<conary_core::trust::RootMetadata>,
+    pub(crate) root_bytes: Vec<u8>,
+    pub(crate) targets: Signed<TargetsMetadata>,
+    pub(crate) targets_bytes: Vec<u8>,
+    pub(crate) snapshot: Signed<SnapshotMetadata>,
+    pub(crate) snapshot_bytes: Vec<u8>,
+    pub(crate) timestamp: Signed<TimestampMetadata>,
+    pub(crate) timestamp_bytes: Vec<u8>,
 }
 
 /// Publish the exact active profile set and canonical map as one signed public
@@ -140,6 +142,40 @@ pub(crate) fn publish_current_universe(
     )
 }
 
+#[cfg(test)]
+fn publish_initial_universe_for_test(
+    db_path: &Path,
+    catalog_dir: &Path,
+    candidate_dir: &Path,
+    keys_root: &Path,
+    database_writer: &DatabaseWriter,
+    catalog_authority: Option<&super::catalog_authority::CatalogAuthority>,
+) -> Result<UniversePublicationOutcome> {
+    let mut inputs = database_writer.execute(|| load_inputs(db_path))?;
+    anyhow::ensure!(
+        inputs.active_manifest.is_none() && !inputs.profiles.is_empty(),
+        "test initial universe requires profiles and no active universe"
+    );
+    inputs.base_promotion_evidence_sha256 = Some("e".repeat(64));
+    inputs.base_conversion_crawl_sha256 = Some("c".repeat(64));
+    let canonical_map_bytes = canonical_bytes(&inputs.canonical_map)?;
+    validate_canonical_candidate(catalog_dir, &inputs.canonical_map, inputs.profiles.iter())?;
+    let candidate = build_candidate(
+        0,
+        inputs.profiles.clone(),
+        canonical_map_bytes,
+        load_universe_root_metadata(keys_root)?,
+        keys_root,
+    )?;
+    let bundle =
+        publish_candidate_files(candidate_dir, catalog_dir, &candidate, catalog_authority)?;
+    database_writer.execute(|| activate_candidate(db_path, &inputs, &candidate, &bundle))?;
+    Ok(UniversePublicationOutcome::Activated {
+        manifest_sha256: candidate.manifest_sha256,
+        sequence: candidate.manifest.sequence,
+    })
+}
+
 fn publish_current_universe_with_authority(
     db_path: &Path,
     catalog_dir: &Path,
@@ -157,17 +193,20 @@ fn publish_current_universe_with_authority(
     )?;
     let canonical_map_bytes = canonical_bytes(&inputs.canonical_map)?;
     let canonical_map_sha256 = conary_core::hash::sha256(&canonical_map_bytes);
-    if let (Some(active), Some(manifest_sha256)) =
+    let (Some(active), Some(manifest_sha256)) =
         (&inputs.active_manifest, &inputs.base_manifest_sha256)
-        && same_authority(active, &inputs.profiles, &canonical_map_sha256)
-    {
-        verify_published_bundle(catalog_dir, active, manifest_sha256, catalog_authority)?;
-        if active_bundle_is_fresh(catalog_dir, active, manifest_sha256, Utc::now())? {
-            return Ok(UniversePublicationOutcome::Unchanged {
-                manifest_sha256: manifest_sha256.clone(),
-                sequence: inputs.base_sequence,
-            });
-        }
+    else {
+        return Ok(UniversePublicationOutcome::Unavailable);
+    };
+    if !same_authority(active, &inputs.profiles, &canonical_map_sha256) {
+        bail!("evidence-free universe publication cannot change active profile authority");
+    }
+    verify_published_bundle(catalog_dir, active, manifest_sha256, catalog_authority)?;
+    if active_bundle_is_fresh(catalog_dir, active, manifest_sha256, Utc::now())? {
+        return Ok(UniversePublicationOutcome::Unchanged {
+            manifest_sha256: manifest_sha256.clone(),
+            sequence: inputs.base_sequence,
+        });
     }
 
     validate_canonical_candidate(catalog_dir, &inputs.canonical_map, inputs.profiles.iter())
@@ -201,7 +240,9 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
     let conn = conary_core::db::open_fast(db_path)?;
     let active = conn
         .query_row(
-            "SELECT active.manifest_sha256, active.sequence, revision.manifest_json
+            "SELECT active.manifest_sha256, active.sequence,
+                    revision.promotion_evidence_sha256,
+                    revision.conversion_crawl_sha256, revision.manifest_json
              FROM remi_active_universe_revision active
              JOIN remi_universe_revisions revision
                ON revision.manifest_sha256 = active.manifest_sha256
@@ -212,12 +253,20 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
         .optional()?;
-    let (base_manifest_sha256, base_sequence, active_manifest) = match active {
-        Some((sha256, sequence, manifest_json)) => {
+    let (
+        base_manifest_sha256,
+        base_sequence,
+        base_promotion_evidence_sha256,
+        base_conversion_crawl_sha256,
+        active_manifest,
+    ) = match active {
+        Some((sha256, sequence, promotion_evidence, conversion_crawl, manifest_json)) => {
             let sequence =
                 u64::try_from(sequence).context("active universe sequence is negative")?;
             let manifest = serde_json::from_str::<RemiUniverseManifestV2>(&manifest_json)
@@ -226,9 +275,15 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
             if manifest.sequence != sequence || manifest.manifest_sha256()? != sha256 {
                 bail!("active Remi universe pointer disagrees with its manifest authority");
             }
-            (Some(sha256), sequence, Some(manifest))
+            (
+                Some(sha256),
+                sequence,
+                Some(promotion_evidence),
+                Some(conversion_crawl),
+                Some(manifest),
+            )
         }
-        None => (None, 0, None),
+        None => (None, 0, None, None, None),
     };
 
     let mut statement = conn.prepare(
@@ -264,6 +319,8 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
     Ok(UniverseInputs {
         base_manifest_sha256,
         base_sequence,
+        base_promotion_evidence_sha256,
+        base_conversion_crawl_sha256,
         active_manifest,
         profiles,
         canonical_map,
@@ -311,7 +368,7 @@ fn requires_renewal(
         || timestamp_expires <= now + UNIVERSE_RENEWAL_WINDOW
 }
 
-fn build_candidate(
+pub(crate) fn build_candidate(
     base_sequence: u64,
     profiles: Vec<ProfileRevisionV2>,
     canonical_map_bytes: Vec<u8>,
@@ -555,7 +612,7 @@ fn verify_candidate(candidate: &SignedUniverseCandidate) -> Result<()> {
     Ok(())
 }
 
-fn publish_candidate_files(
+pub(crate) fn publish_candidate_files(
     candidate_root: &Path,
     catalog_dir: &Path,
     candidate: &SignedUniverseCandidate,
@@ -611,7 +668,7 @@ fn publish_candidate_files(
     Ok(destination)
 }
 
-fn verify_published_bundle(
+pub(crate) fn verify_published_bundle(
     catalog_dir: &Path,
     expected: &RemiUniverseManifestV2,
     expected_sha256: &str,
@@ -715,13 +772,22 @@ fn activate_candidate(
         .context("universe sequence exceeds SQLite integer range")?;
     tx.execute(
         "INSERT INTO remi_universe_revisions (
-             manifest_sha256, sequence, metadata_root_sha256,
+             manifest_sha256, sequence, promotion_evidence_sha256,
+             conversion_crawl_sha256, metadata_root_sha256,
              canonical_map_sha256, canonical_map_size, targets_version,
              snapshot_version, timestamp_version, manifest_json, durable, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12)",
         params![
             &candidate.manifest_sha256,
             sequence,
+            inputs
+                .base_promotion_evidence_sha256
+                .as_deref()
+                .context("active universe has no promotion-evidence binding")?,
+            inputs
+                .base_conversion_crawl_sha256
+                .as_deref()
+                .context("active universe has no conversion-crawl binding")?,
             &candidate.manifest.metadata_root_sha256,
             &candidate.manifest.canonical_map.sha256,
             i64::try_from(candidate.manifest.canonical_map.size)
@@ -797,7 +863,7 @@ fn require_profile_inputs_unchanged(
     Ok(())
 }
 
-fn canonical_bytes(snapshot: &CanonicalMapSnapshot) -> Result<Vec<u8>> {
+pub(crate) fn canonical_bytes(snapshot: &CanonicalMapSnapshot) -> Result<Vec<u8>> {
     validate_canonical_map_snapshot(snapshot).map_err(anyhow::Error::from)?;
     canonical_json(snapshot, "canonical map")
 }
@@ -904,24 +970,48 @@ mod tests {
         }
 
         fn publish(&self) -> Result<UniversePublicationOutcome> {
-            publish_current_universe(
+            let outcome = publish_current_universe(
                 self.catalogs.db_path(),
                 self.catalogs.catalog_dir(),
                 &self.candidate_dir,
                 Some(&self.keys_root),
                 &self.database_writer,
-            )
+            )?;
+            if outcome == UniversePublicationOutcome::Unavailable {
+                publish_initial_universe_for_test(
+                    self.catalogs.db_path(),
+                    self.catalogs.catalog_dir(),
+                    &self.candidate_dir,
+                    &self.keys_root,
+                    &self.database_writer,
+                    None,
+                )
+            } else {
+                Ok(outcome)
+            }
         }
 
         fn publish_and_seed_serving_reader(&self) -> Result<UniversePublicationOutcome> {
-            publish_current_universe_with_authority(
+            let outcome = publish_current_universe_with_authority(
                 self.catalogs.db_path(),
                 self.catalogs.catalog_dir(),
                 &self.candidate_dir,
                 Some(&self.keys_root),
                 &self.database_writer,
                 Some(self.catalogs.authority()),
-            )
+            )?;
+            if outcome == UniversePublicationOutcome::Unavailable {
+                publish_initial_universe_for_test(
+                    self.catalogs.db_path(),
+                    self.catalogs.catalog_dir(),
+                    &self.candidate_dir,
+                    &self.keys_root,
+                    &self.database_writer,
+                    Some(self.catalogs.authority()),
+                )
+            } else {
+                Ok(outcome)
+            }
         }
 
         fn set_canonical_mapping(&self, canonical: &str, profile: &str, package: &str) {
@@ -978,7 +1068,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_binds_all_profiles_and_only_advances_on_authority_change() {
+    fn evidence_free_publication_refuses_profile_authority_change() {
         let fixture = PublicationFixture::new();
         let fedora_v1 = fixture.catalogs.activate(
             "fedora-44",
@@ -1069,15 +1159,15 @@ mod tests {
                 "fedora-bash-v2",
             )],
         );
-        let second = fixture.publish().expect("publish changed universe");
-        let UniversePublicationOutcome::Activated {
-            manifest_sha256: second_sha256,
-            sequence: 2,
-        } = second
-        else {
-            panic!("changed publication did not activate sequence 2");
-        };
-        assert_ne!(second_sha256, first_sha256);
+        let error = fixture
+            .publish()
+            .expect_err("evidence-free authority change must fail");
+        assert!(
+            format!("{error:#}").contains(
+                "evidence-free universe publication cannot change active profile authority"
+            ),
+            "{error:#}"
+        );
         assert_ne!(fedora_v2, fedora_v1);
         assert_eq!(
             conn.query_row(
@@ -1086,14 +1176,14 @@ mod tests {
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
-            second_sha256
+            first_sha256
         );
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM remi_universe_revisions", [], |row| {
                 row.get::<_, i64>(0)
             })
             .unwrap(),
-            2
+            1
         );
     }
 
@@ -1180,7 +1270,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_canonical_package_preserves_the_active_universe() {
+    fn evidence_free_canonical_change_preserves_the_active_universe() {
         let fixture = PublicationFixture::new();
         fixture.catalogs.activate(
             "fedora-44",
@@ -1207,10 +1297,10 @@ mod tests {
 
         let error = fixture
             .publish()
-            .expect_err("missing canonical package must block replacement");
+            .expect_err("evidence-free canonical authority change must fail");
         assert!(
             format!("{error:#}").contains(
-                "canonical candidate implementation 'shell' names exact package 'missing-shell' absent from profile 'fedora-44'"
+                "evidence-free universe publication cannot change active profile authority"
             ),
             "{error:#}"
         );

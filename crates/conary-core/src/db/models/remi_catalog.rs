@@ -24,7 +24,8 @@ use validation::{
 #[cfg(test)]
 use activation::activate_profile_revision_at;
 pub use activation::{
-    RemiProfileActivationOutcome, RemiProfileRevisionActivation, activate_profile_revision,
+    RemiProfileActivationOutcome, RemiProfileRevisionActivation,
+    publish_profile_candidate_in_transaction,
 };
 pub use gc::{
     RemiCatalogCollectionPlan, RemiCatalogCollectionResult, RemiCatalogDeletionIntent,

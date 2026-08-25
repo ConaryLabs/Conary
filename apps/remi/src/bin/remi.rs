@@ -35,6 +35,8 @@ enum Command {
     Prewarm(PrewarmArgs),
     /// Convert every exact package variant in every public profile.
     ConversionCrawl(ConversionCrawlArgs),
+    /// Atomically activate one completely proven public candidate universe.
+    PromotionActivate(PromotionActivateArgs),
     /// Record reproducible conversion latency and work evidence.
     ConversionBenchmark(ConversionBenchmarkArgs),
     /// Remi-owned trust admin commands.
@@ -207,6 +209,21 @@ struct ConversionCrawlArgs {
     /// Maximum number of conversions running concurrently; scope is unchanged.
     #[arg(long, default_value = "4")]
     concurrency: usize,
+}
+
+#[derive(Args)]
+struct PromotionActivateArgs {
+    /// Current Remi service configuration; the runtime must be stopped.
+    #[arg(long, default_value = "/etc/conary/remi.toml")]
+    config: PathBuf,
+
+    /// Canonical RemiPromotionEvidenceV1 artifact.
+    #[arg(long)]
+    promotion_evidence: PathBuf,
+
+    /// Exact complete RemiConversionCrawlV4 artifact bound by the evidence.
+    #[arg(long)]
+    conversion_crawl: PathBuf,
 }
 
 #[derive(Args)]
@@ -384,6 +401,7 @@ fn main() {
         Some(Command::IndexGen(args)) => run_index_gen_command(args),
         Some(Command::Prewarm(args)) => run_prewarm_command(args),
         Some(Command::ConversionCrawl(args)) => run_conversion_crawl_command(args),
+        Some(Command::PromotionActivate(args)) => run_promotion_activate_command(args),
         Some(Command::ConversionBenchmark(args)) => run_conversion_benchmark_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
         Some(Command::Deployment { command }) => run_deployment_command(command),
@@ -618,6 +636,20 @@ fn run_conversion_crawl_command(args: ConversionCrawlArgs) -> Result<()> {
             packages
         );
         println!("Evidence: {}", config.output_path.display());
+        Ok(())
+    })
+}
+
+fn run_promotion_activate_command(args: PromotionActivateArgs) -> Result<()> {
+    let config = RemiConfig::load(&args.config)?;
+    conary_bootstrap::run_with_runtime(move || async move {
+        let outcome = remi::server::run_promotion_activation_from_config(
+            &config,
+            args.promotion_evidence,
+            args.conversion_crawl,
+        )
+        .await?;
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
         Ok(())
     })
 }

@@ -46,6 +46,7 @@ mod negative_cache;
 pub mod popularity;
 mod prewarm;
 pub mod profile_catalog;
+mod promotion;
 mod promotion_evidence;
 pub mod publication;
 mod publication_scheduler;
@@ -90,6 +91,7 @@ pub use lite::{ProxyConfig, run_proxy};
 pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use negative_cache::NegativeCache;
 pub use prewarm::{PrewarmConfig, PrewarmFailure, PrewarmResult, run_prewarm};
+pub use promotion::{RemiPromotionActivationConfig, RemiPromotionActivationOutcome};
 pub use promotion_evidence::{
     REMI_PROMOTION_EVIDENCE_SCHEMA_V1, RemiPromotionCanonicalMapV1, RemiPromotionEvidenceConfig,
     RemiPromotionEvidenceV1, RemiPromotionProfileEvidenceInput, RemiPromotionProfileEvidenceV1,
@@ -438,6 +440,59 @@ fn create_runtime_storage_directories(remi_config: &RemiConfig) -> Result<()> {
 pub fn initialize_storage_directories(remi_config: &RemiConfig) -> Result<()> {
     let _runtime_lock = runtime_lock::RuntimeRootLock::acquire(remi_config.storage_root())?;
     create_runtime_storage_directories(remi_config)
+}
+
+/// Run one exclusive, evidence-consuming public promotion against a stopped
+/// Remi runtime root.
+pub async fn run_promotion_activation_from_config(
+    remi_config: &RemiConfig,
+    promotion_evidence_path: PathBuf,
+    conversion_crawl_path: PathBuf,
+) -> Result<RemiPromotionActivationOutcome> {
+    remi_config.validate()?;
+    let server_config = remi_config.to_server_config()?;
+    let _runtime_lock = prepare_runtime_storage(remi_config, &server_config)?;
+    let database_writer = database_writer::DatabaseWriter::default();
+    let catalog_authority = catalog_authority::CatalogAuthority::from_paths(
+        server_config.db_path.clone(),
+        server_config.catalog_dir.clone(),
+        database_writer.clone(),
+    );
+    let r2_store = if remi_config.r2.enabled {
+        let endpoint = remi_config
+            .r2
+            .endpoint
+            .as_ref()
+            .context("r2.endpoint is required when R2 authority is enabled")?;
+        Some(Arc::new(R2Store::new(&r2::R2Config {
+            endpoint: endpoint.clone(),
+            bucket: remi_config.r2.bucket.clone(),
+            prefix: remi_config.r2.prefix.clone(),
+            region: "auto".to_string(),
+        })?))
+    } else {
+        None
+    };
+    let repository_keys_dir = server_config
+        .release_publish
+        .repository_keys_dir
+        .clone()
+        .context("release_publish.repository_keys_dir is required for promotion")?;
+    promotion::activate_remi_promotion(
+        &RemiPromotionActivationConfig {
+            db_path: server_config.db_path,
+            catalog_dir: server_config.catalog_dir,
+            catalog_candidate_dir: server_config.catalog_candidate_dir,
+            chunk_dir: server_config.chunk_dir,
+            repository_keys_dir,
+            promotion_evidence_path,
+            conversion_crawl_path,
+        },
+        &database_writer,
+        &catalog_authority,
+        r2_store,
+    )
+    .await
 }
 
 /// Start the Remi server from a configuration file.
