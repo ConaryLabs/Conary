@@ -408,8 +408,8 @@ The command writes `RemiConversionCrawlV2`, a strict schema-2 JSON artifact
 binding the complete ordered public-profile set, each pinned profile revision,
 expected package counts, exact package identities, repository checksums,
 terminal states, success digests, typed `CcsArtifactReopenProofV1` evidence,
-and typed failure evidence. Missing,
-repeated, reordered, unattempted, or failed outcomes prevent success. The
+and typed failure evidence. Missing, repeated, reordered, unattempted, or
+failed outcomes prevent success. The
 writer syncs an atomic staged file, reopens the published bytes, rejects
 noncanonical or unknown input, and compares the complete reopened value before
 the command may report success. A structurally valid failure report is still
@@ -430,9 +430,6 @@ remi conversion-crawl \
   --repository-keys-dir /etc/conary/repository-keys \
   --output /var/lib/conary/evidence/initial-conversion-crawl.json
 ```
-
-The canonical artifact format is
-`docs/specs/remi-native-parity-oracle.md`.
 
 Clients enroll the universe metadata root independently of CCS package keys.
 Self-hosted `repo add` requires `--remi-metadata-root` from an independently
