@@ -2,6 +2,7 @@
 //! Strict full-universe conversion-crawl evidence.
 
 mod ccs_reopen;
+mod proof_reuse;
 mod target_preflight;
 
 use super::catalog_authority::{CatalogAuthority, PinnedProfileCatalog};
