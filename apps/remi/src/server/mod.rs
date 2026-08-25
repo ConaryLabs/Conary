@@ -90,8 +90,9 @@ pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use negative_cache::NegativeCache;
 pub use prewarm::{PrewarmConfig, PrewarmFailure, PrewarmResult, run_prewarm};
 pub use promotion_evidence::{
-    REMI_PROMOTION_EVIDENCE_SCHEMA_V1, RemiPromotionCanonicalMapV1, RemiPromotionEvidenceV1,
-    RemiPromotionProfileEvidenceV1,
+    REMI_PROMOTION_EVIDENCE_SCHEMA_V1, RemiPromotionCanonicalMapV1, RemiPromotionEvidenceConfig,
+    RemiPromotionEvidenceV1, RemiPromotionProfileEvidenceInput, RemiPromotionProfileEvidenceV1,
+    produce_remi_promotion_evidence, reopen_remi_promotion_evidence,
 };
 pub use r2::R2Store;
 pub use routes::{create_admin_router, create_external_admin_router, create_router};
