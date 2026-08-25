@@ -1,6 +1,7 @@
 // apps/remi/src/bin/remi.rs
 //! Standalone Remi package server binary.
 
+#[path = "remi/deployment_command.rs"]
 mod deployment_command;
 
 use anyhow::Result;
