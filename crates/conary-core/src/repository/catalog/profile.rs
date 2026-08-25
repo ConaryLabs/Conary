@@ -10,6 +10,7 @@ use super::{
 use crate::error::{Error, Result};
 use crate::repository::supported_profiles::ProfileSourceRole;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// One verified source selected explicitly for a profile revision.
 pub struct ProfileCatalogMemberInputV2<'a> {
@@ -107,13 +108,43 @@ pub fn write_profile_catalog_candidate(
     projection_version: u32,
     inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
 ) -> Result<ProfileRevisionV2> {
+    write_profile_catalog_candidate_inner(path.as_ref(), profile, projection_version, inputs, None)
+}
+
+/// Compose a profile candidate with typed SQLite finalization admission.
+pub fn write_profile_catalog_candidate_with_scratch_admission(
+    path: impl AsRef<std::path::Path>,
+    profile: impl Into<String>,
+    projection_version: u32,
+    inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
+    scratch_admission: Arc<dyn super::CatalogScratchAdmission>,
+) -> Result<ProfileRevisionV2> {
+    write_profile_catalog_candidate_inner(
+        path.as_ref(),
+        profile,
+        projection_version,
+        inputs,
+        Some(scratch_admission),
+    )
+}
+
+fn write_profile_catalog_candidate_inner(
+    path: &std::path::Path,
+    profile: impl Into<String>,
+    projection_version: u32,
+    inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
+    scratch_admission: Option<Arc<dyn super::CatalogScratchAdmission>>,
+) -> Result<ProfileRevisionV2> {
     let profile = profile.into();
-    let mut writer = CatalogCandidateWriter::create(
-        path,
-        CatalogScopeV1::Profile {
-            profile: profile.clone(),
-        },
-    )?;
+    let scope = CatalogScopeV1::Profile {
+        profile: profile.clone(),
+    };
+    let mut writer = match scratch_admission {
+        Some(admission) => {
+            CatalogCandidateWriter::create_with_scratch_admission(path, scope, admission)?
+        }
+        None => CatalogCandidateWriter::create(path, scope)?,
+    };
     let (members, evidence) = visit_profile_members(
         &profile,
         projection_version,

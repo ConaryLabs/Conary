@@ -143,6 +143,10 @@ pub enum Error {
     #[error(transparent)]
     Budget(#[from] crate::ccs::BudgetError),
 
+    /// Immutable catalog construction cannot reserve exact finalization space.
+    #[error(transparent)]
+    CatalogScratchCapacity(#[from] crate::repository::catalog::CatalogScratchCapacityError),
+
     /// Delta operation error
     #[error("Delta operation failed: {0}")]
     DeltaError(String),

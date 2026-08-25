@@ -39,7 +39,10 @@ mod remi;
 mod support;
 pub(in crate::repository) mod types;
 
-pub use immutable_catalog::{fetch_native_source_catalog, stream_native_source_catalog};
+pub use immutable_catalog::{
+    fetch_native_source_catalog, stream_native_source_catalog,
+    stream_native_source_catalog_with_scratch_admission,
+};
 pub use remi::{
     PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncCandidate, ProfileSyncFailureCategory,
     ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember, ProfileSyncRunRecovery,

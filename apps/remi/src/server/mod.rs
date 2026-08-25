@@ -25,6 +25,7 @@ mod cache;
 mod canonical_fetch;
 mod canonical_job;
 pub mod catalog_authority;
+mod catalog_capacity;
 pub mod catalog_gc;
 pub mod catalog_refresh;
 pub mod chunk_gc;
@@ -229,6 +230,7 @@ pub struct ServerState {
     pub(crate) catalog_authority: catalog_authority::CatalogAuthority,
     pub(crate) publication_coordinator: Arc<Mutex<()>>,
     pub(crate) catalog_gc_coordinator: Arc<Mutex<()>>,
+    pub(crate) catalog_scratch_coordinator: Arc<catalog_capacity::CatalogScratchCoordinator>,
     pub(crate) publication_readiness: readiness::PublicationReadiness,
     pub(crate) required_source_profiles: Vec<String>,
     pub job_manager: JobManager,
@@ -301,6 +303,8 @@ impl ServerState {
         );
         let publication_coordinator = Arc::new(Mutex::new(()));
         let catalog_gc_coordinator = Arc::new(Mutex::new(()));
+        let catalog_scratch_coordinator =
+            Arc::new(catalog_capacity::CatalogScratchCoordinator::default());
         let chunk_cache = ChunkCache::new(
             config.chunk_dir.clone(),
             config.cache_max_bytes,
@@ -347,6 +351,7 @@ impl ServerState {
             catalog_authority,
             publication_coordinator,
             catalog_gc_coordinator,
+            catalog_scratch_coordinator,
             publication_readiness: readiness::PublicationReadiness::default(),
             required_source_profiles: Vec::new(),
             job_manager,

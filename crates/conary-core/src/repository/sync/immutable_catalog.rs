@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::db::models::{
     AuthenticatedSnapshotIdentity, NativeSourceEcosystem, NativeSourceStream, Repository,
@@ -12,9 +13,10 @@ use crate::error::{Error, Result};
 use crate::repository::catalog::source::SourceCatalogAuthorityV1;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, SourceCatalogCandidateV1,
-    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
-    SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
+    CatalogPackageRecordV1, CatalogScopeV1, CatalogScratchAdmission, CatalogSourceEvidenceV1,
+    SourceCatalogCandidateV1, SourceEcosystemV1, SourceMetadataObjectRoleV1,
+    SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1, SourceStreamKindV1,
+    SourceStreamV1,
 };
 use crate::repository::parsers::{
     AuthenticatedMetadataObject, ChecksumType, PackageMetadata, RepositorySnapshotSink,
@@ -50,8 +52,48 @@ pub async fn stream_native_source_catalog(
     candidate_path: &Path,
     projection_cache_root: Option<&Path>,
 ) -> Result<SourceSnapshotV1> {
+    stream_native_source_catalog_inner(
+        repo,
+        keyring_dir,
+        candidate_path,
+        projection_cache_root,
+        None,
+    )
+    .await
+}
+
+/// Stream one source candidate with typed SQLite finalization admission.
+pub async fn stream_native_source_catalog_with_scratch_admission(
+    repo: &Repository,
+    keyring_dir: &Path,
+    candidate_path: &Path,
+    projection_cache_root: Option<&Path>,
+    scratch_admission: Arc<dyn CatalogScratchAdmission>,
+) -> Result<SourceSnapshotV1> {
+    stream_native_source_catalog_inner(
+        repo,
+        keyring_dir,
+        candidate_path,
+        projection_cache_root,
+        Some(scratch_admission),
+    )
+    .await
+}
+
+async fn stream_native_source_catalog_inner(
+    repo: &Repository,
+    keyring_dir: &Path,
+    candidate_path: &Path,
+    projection_cache_root: Option<&Path>,
+    scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
+) -> Result<SourceSnapshotV1> {
     let parser = prepare_repository_native_parser(repo, keyring_dir).await?;
-    let mut sink = NativeCatalogSnapshotSink::create(repo, candidate_path, projection_cache_root)?;
+    let mut sink = NativeCatalogSnapshotSink::create(
+        repo,
+        candidate_path,
+        projection_cache_root,
+        scratch_admission,
+    )?;
     let snapshot = parser.ingest_snapshot(&repo.url, &mut sink).await?;
     sink.finish(repo, snapshot)
 }
@@ -79,6 +121,7 @@ impl NativeCatalogSnapshotSink {
         repo: &Repository,
         candidate_path: &Path,
         projection_cache_root: Option<&Path>,
+        scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
     ) -> Result<Self> {
         repo.validate_stream_binding()?;
         let source_profile = repo.source_profile.clone().ok_or_else(|| {
@@ -109,7 +152,14 @@ impl NativeCatalogSnapshotSink {
             .prefix("native-objects-")
             .tempdir_in(candidate_parent)?;
         Ok(Self {
-            writer: CatalogCandidateWriter::create(candidate_path, scope)?,
+            writer: match scratch_admission {
+                Some(admission) => CatalogCandidateWriter::create_with_scratch_admission(
+                    candidate_path,
+                    scope,
+                    admission,
+                )?,
+                None => CatalogCandidateWriter::create(candidate_path, scope)?,
+            },
             repository_id: repo
                 .id
                 .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?,

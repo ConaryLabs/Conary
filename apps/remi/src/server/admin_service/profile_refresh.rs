@@ -19,6 +19,7 @@ use conary_core::repository::{
 use super::refresh::RepoRefreshResult;
 use super::{ServiceError, blocking_anyhow};
 use crate::server::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
+use crate::server::catalog_capacity::CatalogScratchCoordinator;
 use crate::server::catalog_refresh::{
     PublishedProfileCatalog, StagedProfileCatalog, cleanup_candidate_run, plan_profile_sources,
     publish_staged_profile_catalog, stage_profile_catalog,
@@ -33,6 +34,7 @@ struct RefreshRoots {
     projection_cache_dir: PathBuf,
     database_writer: DatabaseWriter,
     catalog_gc_coordinator: Arc<tokio::sync::Mutex<()>>,
+    catalog_scratch_coordinator: Arc<CatalogScratchCoordinator>,
 }
 
 pub(super) fn is_native_profile_repository(repository: &Repository) -> bool {
@@ -65,6 +67,7 @@ pub(super) async fn refresh_native_profile(
             projection_cache_dir: state.config.cache_dir.join("native-projections"),
             database_writer: state.database_writer.clone(),
             catalog_gc_coordinator: Arc::clone(&state.catalog_gc_coordinator),
+            catalog_scratch_coordinator: Arc::clone(&state.catalog_scratch_coordinator),
         }
     };
 
@@ -140,7 +143,7 @@ pub(super) async fn refresh_native_profile(
                 )
                 .await;
                 log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
-                let primary = ServiceError::Internal(format!("{error:#}"));
+                let primary = profile_stage_service_error(&error);
                 return match collect_catalog_garbage(&roots).await {
                     Ok(_) => Err(primary),
                     Err(cleanup) => Err(ServiceError::Internal(format!(
@@ -237,6 +240,16 @@ pub(super) async fn refresh_native_profile(
     Ok(results)
 }
 
+fn profile_stage_service_error(error: &anyhow::Error) -> ServiceError {
+    if let Some(conary_core::Error::CatalogScratchCapacity(capacity)) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<conary_core::Error>())
+    {
+        return ServiceError::StorageCapacity(capacity.clone());
+    }
+    ServiceError::Internal(format!("{error:#}"))
+}
+
 async fn stage_profile_catalog_with_heartbeat(
     roots: &RefreshRoots,
     run: &ProfileSyncRun,
@@ -251,6 +264,7 @@ async fn stage_profile_catalog_with_heartbeat(
         &roots.keyring_dir,
         &roots.catalog_candidate_dir,
         &roots.projection_cache_dir,
+        roots.catalog_scratch_coordinator.clone(),
     )
     .await;
     match staged {

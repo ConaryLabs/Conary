@@ -160,6 +160,19 @@ Concurrent profile refreshes share one narrow catalog-collection coordinator,
 so their plan, filesystem removal, and acknowledgement phases cannot consume
 the same deletion intent while source retrieval, parsing, and catalog
 construction remain parallel.
+Before each source or profile catalog enters SQLite compaction, the catalog
+writer commits its private logical state and derives the exact current database
+bytes from SQLite's positive `page_size` and `page_count`. SQLite finalization
+may require one additional database-sized allocation while the old file and
+compacting copy coexist. Remi reserves that amount against a process-local
+ledger keyed by the owning filesystem device, re-reading available space for
+every admission. Concurrent finalizers therefore cannot collectively reserve
+more than the filesystem reports available; the lease releases on success,
+error, cancellation unwind, or process restart. A one-byte-short refusal is a
+typed `storage_capacity` refresh failure before `VACUUM`, and candidate cleanup
+preserves the active revision. This finalization admission is independent of
+the serving readiness floor and does not yet estimate the earlier candidate,
+metadata-spool, cache-copy, or immutable-publication writes.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
@@ -179,6 +192,7 @@ typed retryable `REPOSITORY_NOT_READY` 503 response and creates no conversion
 job. Deploy verification and `scripts/remi-health.sh` assert `ready == true`
 from that endpoint; liveness alone is not deployment evidence. The free-space
 floor is `storage.readiness_min_free`, defaulting to 10 GiB.
+It is a serving-health threshold, not catalog-construction scratch admission.
 
 `apps/remi/src/deployment.rs` owns recoverable config/schema transitions and
 read-only deployment inspection. It snapshots a current database or retires an
@@ -898,6 +912,8 @@ Implementation ownership lives in child modules:
 
 - `catalog_refresh.rs`: private source/profile candidate construction, durable
   content-addressed registration, and fenced candidate inputs.
+- `catalog_capacity.rs`: filesystem-scoped SQLite finalization reservations and
+  typed capacity refusal.
 - `catalog_authority.rs` and `profile_catalog.rs`: active-pointer resolution,
   verified immutable readers, reader-lifetime pins, and serving projections.
 - `catalog_gc.rs`: exact active/current-candidate/work/reader/conversion

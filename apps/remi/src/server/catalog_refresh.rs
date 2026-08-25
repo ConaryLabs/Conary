@@ -5,13 +5,15 @@
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::Repository;
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, ProfileCatalogMemberInputV2, ProfileRevisionV2, SourceSnapshotV1,
-    publish_profile_catalog_bundle, publish_source_catalog_bundle, verify_source_catalog_bundle,
-    write_profile_catalog_candidate, write_profile_catalog_manifest, write_source_catalog_manifest,
+    CATALOG_FILE_NAME, CatalogScratchAdmission, ProfileCatalogMemberInputV2, ProfileRevisionV2,
+    SourceSnapshotV1, publish_profile_catalog_bundle, publish_source_catalog_bundle,
+    verify_source_catalog_bundle, write_profile_catalog_candidate_with_scratch_admission,
+    write_profile_catalog_manifest, write_source_catalog_manifest,
 };
 use conary_core::repository::supported_profiles::ProfileSourceRole;
 use futures::StreamExt;
@@ -217,6 +219,7 @@ pub async fn stage_profile_catalog(
     keyring_dir: &Path,
     catalog_candidate_root: &Path,
     projection_cache_root: &Path,
+    scratch_admission: Arc<dyn CatalogScratchAdmission>,
 ) -> Result<StagedProfileCatalog> {
     let plans = plan_profile_sources(profile, repositories)?;
     let candidate_run_dir = create_candidate_run_dir(catalog_candidate_root, run_id)?;
@@ -232,20 +235,23 @@ pub async fn stage_profile_catalog(
         |(plan, candidate_directory)| {
             let keyring_dir = keyring_dir.to_path_buf();
             let projection_cache_root = projection_cache_root.to_path_buf();
+            let scratch_admission = Arc::clone(&scratch_admission);
             async move {
-                let manifest = conary_core::repository::stream_native_source_catalog(
-                    &plan.repository,
-                    &keyring_dir,
-                    &candidate_directory.join(CATALOG_FILE_NAME),
-                    Some(&projection_cache_root),
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "fetch authenticated catalog source '{}'",
-                        plan.repository.name
+                let manifest =
+                    conary_core::repository::stream_native_source_catalog_with_scratch_admission(
+                        &plan.repository,
+                        &keyring_dir,
+                        &candidate_directory.join(CATALOG_FILE_NAME),
+                        Some(&projection_cache_root),
+                        scratch_admission,
                     )
-                })?;
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "fetch authenticated catalog source '{}'",
+                            plan.repository.name
+                        )
+                    })?;
                 write_source_catalog_manifest(&candidate_directory, &manifest)?;
                 verify_source_catalog_bundle(&candidate_directory, &manifest)?;
                 Ok::<_, anyhow::Error>(StagedSourceCatalog {
@@ -264,11 +270,12 @@ pub async fn stage_profile_catalog(
     while let Some(result) = fetches.next().await {
         fetched.push(result?);
     }
+    drop(fetches);
     fetched.sort_by_key(|source| source.ordinal);
 
     let profile = profile.to_string();
     tokio::task::spawn_blocking(move || {
-        stage_profile_candidate(&profile, fetched, candidate_run_dir)
+        stage_profile_candidate(&profile, fetched, candidate_run_dir, scratch_admission)
     })
     .await
     .context("profile catalog staging task panicked")?
@@ -278,6 +285,7 @@ fn stage_profile_candidate(
     profile: &str,
     staged_sources: Vec<StagedSourceCatalog>,
     candidate_run_dir: PathBuf,
+    scratch_admission: Arc<dyn CatalogScratchAdmission>,
 ) -> Result<StagedProfileCatalog> {
     let readers = staged_sources
         .iter()
@@ -297,11 +305,12 @@ fn stage_profile_candidate(
         .collect();
     let profile_candidate_directory = candidate_run_dir.join("profile");
     create_private_directory(&profile_candidate_directory, &candidate_run_dir)?;
-    let manifest = write_profile_catalog_candidate(
+    let manifest = write_profile_catalog_candidate_with_scratch_admission(
         profile_candidate_directory.join(CATALOG_FILE_NAME),
         profile,
         PROFILE_CATALOG_PROJECTION_VERSION,
         inputs,
+        scratch_admission,
     )?;
     manifest.validate_member_contract()?;
     write_profile_catalog_manifest(&profile_candidate_directory, &manifest)?;

@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
@@ -15,7 +16,7 @@ use super::store::{
 use super::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogBindingV1, CatalogPackageOriginV1,
     CatalogPackageRecordV1, CatalogProvideRecordV1, CatalogReader, CatalogScopeV1,
-    CatalogSourceEvidenceV1,
+    CatalogScratchAdmission, CatalogSourceEvidenceV1,
 };
 use crate::error::{Error, Result};
 
@@ -24,6 +25,7 @@ pub struct CatalogCandidateWriter {
     path: PathBuf,
     scope: CatalogScopeV1,
     connection: Option<Connection>,
+    scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
     complete: bool,
 }
 
@@ -36,18 +38,39 @@ pub(in crate::repository) struct CatalogProvideMerge {
 
 impl CatalogCandidateWriter {
     pub fn create(path: impl AsRef<Path>, scope: CatalogScopeV1) -> Result<Self> {
+        Self::create_inner(path.as_ref(), scope, None)
+    }
+
+    /// Create a writer whose final compaction requires a retained scratch lease.
+    pub fn create_with_scratch_admission(
+        path: impl AsRef<Path>,
+        scope: CatalogScopeV1,
+        scratch_admission: Arc<dyn CatalogScratchAdmission>,
+    ) -> Result<Self> {
+        Self::create_inner(path.as_ref(), scope, Some(scratch_admission))
+    }
+
+    fn create_inner(
+        path: &Path,
+        scope: CatalogScopeV1,
+        scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
+    ) -> Result<Self> {
         scope.validate()?;
-        let path = path.as_ref().to_path_buf();
+        let path = path.to_path_buf();
         validate_candidate_path(&path)?;
         create_private_file(&path)?;
-        let result = Self::open_created(path.clone(), scope);
+        let result = Self::open_created(path.clone(), scope, scratch_admission);
         if result.is_err() {
             remove_candidate_files(&path);
         }
         result
     }
 
-    fn open_created(path: PathBuf, scope: CatalogScopeV1) -> Result<Self> {
+    fn open_created(
+        path: PathBuf,
+        scope: CatalogScopeV1,
+        scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
+    ) -> Result<Self> {
         let connection = Connection::open_with_flags(
             &path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -68,6 +91,7 @@ impl CatalogCandidateWriter {
             path,
             scope,
             connection: Some(connection),
+            scratch_admission,
             complete: false,
         })
     }
@@ -294,7 +318,16 @@ impl CatalogCandidateWriter {
                 ],
             )?;
         }
-        connection.execute_batch("COMMIT; VACUUM;")?;
+        connection.execute_batch("COMMIT")?;
+        let page_size = read_positive_pragma(connection, "page_size")?;
+        let page_count = read_positive_pragma(connection, "page_count")?;
+        let scratch = super::CatalogFinalizationScratchV1::from_page_facts(page_size, page_count)?;
+        let _scratch_lease = self
+            .scratch_admission
+            .as_ref()
+            .map(|admission| admission.reserve_finalization(&self.path, scratch))
+            .transpose()?;
+        connection.execute_batch("VACUUM")?;
         let integrity: String =
             connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         if integrity != "ok" {
@@ -333,6 +366,14 @@ impl CatalogCandidateWriter {
     }
 }
 
+fn read_positive_pragma(connection: &Connection, pragma: &str) -> Result<u64> {
+    let value: i64 = connection.query_row(&format!("PRAGMA {pragma}"), [], |row| row.get(0))?;
+    u64::try_from(value)
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| Error::InitError(format!("catalog candidate has invalid {pragma} {value}")))
+}
+
 fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
     Ok(connection
         .query_row(
@@ -360,5 +401,116 @@ fn remove_candidate_files(path: &Path) {
     let _ = fs::remove_file(path);
     for suffix in ["-journal", "-wal", "-shm"] {
         let _ = fs::remove_file(sidecar_path(path, suffix));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::catalog::{
+        CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1, CatalogFinalizationScratchV1,
+        CatalogScratchCapacityError,
+    };
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RecordingAdmission {
+        requirement: Mutex<Option<CatalogFinalizationScratchV1>>,
+        lease_drops: Arc<AtomicUsize>,
+        refuse: bool,
+    }
+
+    struct RecordingLease(Arc<AtomicUsize>);
+
+    impl Drop for RecordingLease {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl CatalogScratchAdmission for RecordingAdmission {
+        fn reserve_finalization(
+            &self,
+            _candidate_path: &Path,
+            requirement: CatalogFinalizationScratchV1,
+        ) -> Result<Box<dyn Send>> {
+            *self.requirement.lock().unwrap() = Some(requirement);
+            if self.refuse {
+                return Err(CatalogScratchCapacityError {
+                    required_bytes: requirement.required_additional_bytes,
+                    available_bytes: requirement.required_additional_bytes - 1,
+                    reserved_bytes: 0,
+                }
+                .into());
+            }
+            Ok(Box::new(RecordingLease(Arc::clone(&self.lease_drops))))
+        }
+    }
+
+    fn scope() -> CatalogScopeV1 {
+        CatalogScopeV1::Source {
+            source_profile: "fedora-44".to_string(),
+            source_identity: "fedora-project".to_string(),
+            repository_identity: "fedora-everything-x86_64".to_string(),
+        }
+    }
+
+    fn evidence() -> Vec<CatalogSourceEvidenceV1> {
+        vec![CatalogSourceEvidenceV1::AuthenticatedObject {
+            role: crate::repository::catalog::SourceMetadataObjectRoleV1::RpmPrimary,
+            source_path: "repodata/primary.xml.gz".to_string(),
+            sha256: "a".repeat(64),
+            size: 1,
+        }]
+    }
+
+    #[test]
+    fn finalization_admits_exact_sqlite_page_facts_and_releases_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("catalog.sqlite3");
+        let lease_drops = Arc::new(AtomicUsize::new(0));
+        let admission = Arc::new(RecordingAdmission {
+            requirement: Mutex::new(None),
+            lease_drops: Arc::clone(&lease_drops),
+            refuse: false,
+        });
+        let writer = CatalogCandidateWriter::create_with_scratch_admission(
+            &path,
+            scope(),
+            admission.clone(),
+        )
+        .unwrap();
+        writer.finish(evidence()).unwrap();
+
+        let requirement = admission.requirement.lock().unwrap().unwrap();
+        assert_eq!(
+            requirement.schema_version,
+            CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1
+        );
+        assert_eq!(requirement.database_page_size, 4096);
+        assert!(requirement.database_page_count > 0);
+        assert_eq!(
+            requirement.required_additional_bytes,
+            requirement.database_page_size * requirement.database_page_count
+        );
+        assert_eq!(lease_drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn typed_refusal_precedes_vacuum_and_removes_private_candidate() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("catalog.sqlite3");
+        let admission = Arc::new(RecordingAdmission {
+            requirement: Mutex::new(None),
+            lease_drops: Arc::new(AtomicUsize::new(0)),
+            refuse: true,
+        });
+        let writer =
+            CatalogCandidateWriter::create_with_scratch_admission(&path, scope(), admission)
+                .unwrap();
+        let error = writer.finish(evidence()).unwrap_err();
+
+        assert!(matches!(error, Error::CatalogScratchCapacity(_)));
+        assert!(!path.exists());
     }
 }

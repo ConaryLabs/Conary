@@ -88,7 +88,8 @@ pub use sync::{
     complete_profile_sync_candidate, current_profile_sync_candidate, current_timestamp,
     fetch_native_source_catalog, heartbeat_profile_sync_run, needs_sync, parse_timestamp,
     ready_profile_sync_run, record_profile_sync_run_member, recover_expired_profile_sync_runs,
-    stream_native_source_catalog, sync_repository, sync_repository_from_db_path,
+    stream_native_source_catalog, stream_native_source_catalog_with_scratch_admission,
+    sync_repository, sync_repository_from_db_path,
 };
 pub use trust::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,
