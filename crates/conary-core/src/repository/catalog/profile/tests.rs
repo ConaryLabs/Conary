@@ -4,10 +4,11 @@ use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
     CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
-    CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProvideRecordV1,
-    CatalogScratchAdmission, CatalogScratchCapacityError, SOURCE_SNAPSHOT_SCHEMA_V1,
-    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
-    SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
+    CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProfileMemberScratchV1,
+    CatalogProvideRecordV1, CatalogScratchAdmission, CatalogScratchCapacityError,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1, SourceMetadataObjectRoleV1,
+    SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
+    write_catalog_candidate,
 };
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
@@ -496,6 +497,50 @@ fn profile_growth_lease_covers_replay_and_releases_before_finalization() {
     );
     assert!(admission.requirement.lock().unwrap().is_some());
     assert!(profile_path.exists());
+}
+
+#[test]
+fn profile_writer_rejects_database_growth_above_admitted_ceiling() {
+    let directory = tempfile::tempdir().unwrap();
+    let profile_path = directory.path().join("profile.sqlite");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let admission = Arc::new(ProfileAdmission {
+        requirement: Mutex::new(None),
+        events: Arc::clone(&events),
+        refuse_growth: false,
+    });
+    let requirement =
+        CatalogProfileCandidateScratchV1::from_members(vec![CatalogProfileMemberScratchV1 {
+            ordinal: 0,
+            catalog_bytes: 4096,
+            package_count: 0,
+        }])
+        .unwrap();
+    let writer = CatalogCandidateWriter::create_with_profile_scratch_admission(
+        &profile_path,
+        CatalogScopeV1::Profile {
+            profile: "fedora-44".to_string(),
+        },
+        admission,
+        requirement,
+    )
+    .unwrap();
+
+    let error = writer
+        .finish(vec![CatalogSourceEvidenceV1::SourceSnapshot {
+            member_ordinal: 0,
+            source_identity: "fedora-project".to_string(),
+            repository_identity: "fedora-everything-x86_64".to_string(),
+            source_snapshot_sha256: digest('a'),
+        }])
+        .unwrap_err();
+
+    assert!(error.to_string().contains("above its admitted"));
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec!["growth-reserve", "growth-drop"]
+    );
+    assert!(!profile_path.exists());
 }
 
 #[test]
