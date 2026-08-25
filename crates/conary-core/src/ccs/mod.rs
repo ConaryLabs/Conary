@@ -29,6 +29,7 @@ pub mod native_transaction;
 pub mod package;
 pub mod policy;
 pub mod signing;
+pub mod target_contract;
 pub mod transport;
 pub mod v3;
 pub mod verify;
@@ -66,6 +67,12 @@ pub use native_lifecycle::{
 pub use package::CcsPackage;
 pub use policy::{BuildPolicy, BuildPolicyConfig, PolicyAction, PolicyChain};
 pub use signing::SigningKeyPair;
+pub use target_contract::{
+    LinuxProcessCapabilityV1, STATIC_TARGET_COMPATIBILITY_PROOF_SCHEMA_V1,
+    StaticTargetCapabilityV1, StaticTargetCompatibilityError, StaticTargetCompatibilityProofV1,
+    TARGET_CAPABILITY_CONTRACT_SCHEMA_V1, TargetCapabilityContractV1, TargetProfileV1,
+    supported_target_contracts,
+};
 pub use transport::{
     CCS_TRANSPORT_SCHEMA_V1, CcsTransportEnvelopeV1, CcsTransportObjectV1, PreparedCcsTransport,
 };

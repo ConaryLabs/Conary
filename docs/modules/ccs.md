@@ -281,6 +281,34 @@ tmpfiles, sysctl, and ldconfig interfaces; the remaining capability families
 stay typed implementation work rather than distro-name fallbacks. Distro names
 do not select pairwise converters, compatibility profiles, or string gates.
 
+`crates/conary-core/src/ccs/target_contract.rs` owns the static publication
+counterpart to that live inventory. `TargetCapabilityContractV1` declares the
+exact supported Fedora 44, Ubuntu 26.04 LTS, and Arch target identities, while
+compatibility behavior comes only from each contract's typed fields: target
+machine architecture, init interface and exact systemd operations, CCS and
+capability-declaration schema epochs, native lifecycle schema/revision and
+source engines, lifecycle interfaces, and the closed Linux process-capability
+vocabulary. The current public targets are
+x86_64 systemd systems and carry equivalent capability data; their identities
+provide exact proof attribution rather than selecting source-format behavior.
+
+Static CCS preflight checks the authenticated v3 authority's architecture,
+resolves exact syscall names against the concrete target machine ABI even for
+source-native `noarch`, `all`, or `any` packages, verifies native lifecycle
+schema and engine support, and derives required service-manager, sysusers,
+tmpfiles, sysctl, ldconfig, sandboxed-lifecycle, file-capability, and repository
+enrollment interfaces, plus the selected-root alternatives interface. It also
+proves every requested Linux process capability against the target's exact
+typed set. The resulting
+`StaticTargetCompatibilityProofV1` binds the deterministic target-contract
+SHA-256 and canonical required sets.
+
+This proof is deliberately not a synthetic `HostCapabilityInventory`.
+Selected-root interpreter availability, payload-dependent paths, actual
+executable identity, functional handshakes, and running-manager state remain
+install-transaction preflight facts. Static publication cannot truthfully
+claim them without an exact selected root and live target.
+
 The adopted-package entrypoint is
 `apps/conary/src/commands/adopt/convert.rs`. It does not reconstruct a package
 from live files or installed database metadata. It re-resolves the exact

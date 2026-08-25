@@ -404,22 +404,26 @@ identity, foreign-conversion boundary, source digest, and CCS digest back to
 the conversion result. Producer-time verification cannot substitute for this
 post-persistence proof.
 
-The command writes `RemiConversionCrawlV2`, a strict schema-2 JSON artifact
+The command writes `RemiConversionCrawlV3`, a strict schema-3 JSON artifact
 binding the complete ordered public-profile set, each pinned profile revision,
 expected package counts, exact package identities, repository checksums,
 terminal states, success digests, typed `CcsArtifactReopenProofV1` evidence,
-and typed failure evidence. Missing, repeated, reordered, unattempted, or
-failed outcomes prevent success. The
+typed all-target compatibility evidence, and typed failure evidence. After the
+independent CCS reopen, every successful outcome is statically preflighted
+against the exact ordered Fedora 44, Ubuntu 26.04 LTS, and Arch target
+contracts. Each `CcsTargetCompatibilityProofV1` binds the exact CCS SHA-256,
+target-contract SHA-256, and artifact-required interface and Linux process
+capability sets. Missing, repeated, reordered, contract-drifted, unattempted,
+or failed outcomes prevent success. The
 writer syncs an atomic staged file, reopens the published bytes, rejects
 noncanonical or unknown input, and compares the complete reopened value before
 the command may report success. A structurally valid failure report is still
 published for diagnosis, then the command exits unsuccessfully.
 
 The crawl currently consumes activated immutable catalogs; it does not promote
-a candidate. All-target static capability preflight, exact-key incremental
-proof reuse, canonical-contract candidate validation, and final
-catalog/CAS/signed-metadata durability reopen remain separate Slice 6 gates
-under #517.
+a candidate. Exact-key incremental proof reuse, canonical-contract candidate
+validation, and final catalog/CAS/signed-metadata durability reopen remain
+separate Slice 6 gates under #517.
 
 ```text
 remi conversion-crawl \
