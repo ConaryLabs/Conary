@@ -5,13 +5,14 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::repository::catalog::{
-    CATALOG_CONTENT_SCHEMA_V1, CATALOG_FILE_NAME, CatalogBindingV1, CatalogReader,
-    CatalogSourceEvidenceV1,
+    CATALOG_CONTENT_SCHEMA_V1, CATALOG_FILE_NAME, CatalogBindingV1, CatalogCopyScratchV1,
+    CatalogReader, CatalogScratchAdmission, CatalogSourceEvidenceV1,
 };
 use crate::repository::parsers::{
     AuthenticatedMetadataObject, AuthenticatedSnapshotIdentity,
@@ -44,10 +45,27 @@ struct ProjectionCacheManifestV1 {
 pub(super) struct ProjectionCache {
     root: PathBuf,
     stream_binding_sha256: String,
+    scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
 }
 
 impl ProjectionCache {
     pub(super) fn open(root: &Path, stream_binding_sha256: &str) -> Result<Self> {
+        Self::open_inner(root, stream_binding_sha256, None)
+    }
+
+    pub(super) fn open_with_scratch_admission(
+        root: &Path,
+        stream_binding_sha256: &str,
+        scratch_admission: Arc<dyn CatalogScratchAdmission>,
+    ) -> Result<Self> {
+        Self::open_inner(root, stream_binding_sha256, Some(scratch_admission))
+    }
+
+    fn open_inner(
+        root: &Path,
+        stream_binding_sha256: &str,
+        scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
+    ) -> Result<Self> {
         if stream_binding_sha256.len() != 64
             || !stream_binding_sha256
                 .bytes()
@@ -62,6 +80,7 @@ impl ProjectionCache {
         Ok(Self {
             root: root.to_path_buf(),
             stream_binding_sha256: stream_binding_sha256.to_string(),
+            scratch_admission,
         })
     }
 
@@ -99,6 +118,38 @@ impl ProjectionCache {
             return Ok(());
         }
 
+        let candidate_metadata = fs::symlink_metadata(candidate_path)?;
+        if candidate_metadata.file_type().is_symlink()
+            || !candidate_metadata.file_type().is_file()
+            || candidate_metadata.len() != catalog.artifact.size
+        {
+            return Err(Error::ConflictError(
+                "native projection cache candidate does not match its exact catalog byte binding"
+                    .to_string(),
+            ));
+        }
+        let manifest = ProjectionCacheManifestV1 {
+            key: key.clone(),
+            catalog: catalog.clone(),
+        };
+        let manifest_bytes = crate::json::canonical_json(&manifest).map_err(Error::ConfigError)?;
+        let manifest_size = u64::try_from(manifest_bytes.len()).map_err(|_| {
+            Error::IoError("native projection cache manifest exceeds byte range".to_string())
+        })?;
+        if manifest_size > MAX_MANIFEST_SIZE {
+            return Err(Error::ConfigError(format!(
+                "native projection cache manifest requires {manifest_size} bytes, exceeding the \
+                 {MAX_MANIFEST_SIZE}-byte bound"
+            )));
+        }
+        let copy_requirement =
+            CatalogCopyScratchV1::from_exact_bytes(catalog.artifact.size, manifest_size)?;
+        let _scratch_lease = self
+            .scratch_admission
+            .as_ref()
+            .map(|admission| admission.reserve_copy(&self.root, copy_requirement))
+            .transpose()?;
+
         let stage = self
             .root
             .join(format!(".candidate-{}", uuid::Uuid::new_v4()));
@@ -109,20 +160,18 @@ impl ProjectionCache {
             set_private_file_permissions(&target)?;
             File::open(&target)?.sync_all()?;
 
-            let manifest = ProjectionCacheManifestV1 {
-                key: key.clone(),
-                catalog: catalog.clone(),
-            };
-            let bytes = crate::json::canonical_json(&manifest).map_err(Error::ConfigError)?;
             let manifest_path = stage.join(MANIFEST_FILE_NAME);
             let mut file = private_new_file(&manifest_path)?;
-            file.write_all(&bytes)?;
+            file.write_all(&manifest_bytes)?;
             file.sync_all()?;
             File::open(&stage)?.sync_all()?;
 
             match fs::rename(&stage, &entry) {
                 Ok(()) => {
                     File::open(&self.root)?.sync_all()?;
+                    if let Err(error) = self.lookup_exact(&entry, &key) {
+                        return Err(cleanup_failed_publication(&self.root, &entry, error));
+                    }
                     Ok(())
                 }
                 Err(error)
@@ -231,6 +280,17 @@ impl ProjectionCache {
     }
 }
 
+fn cleanup_failed_publication(root: &Path, entry: &Path, error: Error) -> Error {
+    match remove_exact_entry(root, entry) {
+        Ok(()) => error,
+        Err(cleanup_error) => Error::IoError(format!(
+            "native projection cache publication failed after creating {}; cleanup also failed \
+             ({cleanup_error}): {error}",
+            entry.display()
+        )),
+    }
+}
+
 fn require_direct_child(root: &Path, entry: &Path) -> Result<()> {
     if entry.parent() != Some(root) {
         return Err(Error::InvalidPath(format!(
@@ -300,8 +360,60 @@ fn set_private_file_permissions(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::repository::catalog::{
-        CatalogCandidateWriter, CatalogScopeV1, SourceMetadataObjectRoleV1,
+        CatalogCandidateWriter, CatalogFinalizationScratchV1, CatalogScopeV1,
+        CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
     };
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RecordingAdmission {
+        copies: Mutex<Vec<CatalogCopyScratchV1>>,
+        lease_drops: Arc<AtomicUsize>,
+        refuse: bool,
+    }
+
+    struct RecordingLease(Arc<AtomicUsize>);
+
+    impl Drop for RecordingLease {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl CatalogScratchAdmission for RecordingAdmission {
+        fn reserve_finalization(
+            &self,
+            _candidate_path: &Path,
+            _requirement: CatalogFinalizationScratchV1,
+        ) -> Result<Box<dyn Send>> {
+            panic!("projection cache must not request finalization admission")
+        }
+
+        fn reserve_copy(
+            &self,
+            _destination_root: &Path,
+            requirement: CatalogCopyScratchV1,
+        ) -> Result<Box<dyn Send>> {
+            self.copies.lock().unwrap().push(requirement);
+            if self.refuse {
+                return Err(CatalogScratchCapacityError {
+                    required_bytes: requirement.required_additional_bytes,
+                    available_bytes: requirement.required_additional_bytes - 1,
+                    reserved_bytes: 0,
+                }
+                .into());
+            }
+            Ok(Box::new(RecordingLease(Arc::clone(&self.lease_drops))))
+        }
+    }
+
+    fn recording_admission(refuse: bool) -> Arc<RecordingAdmission> {
+        Arc::new(RecordingAdmission {
+            copies: Mutex::new(Vec::new()),
+            lease_drops: Arc::new(AtomicUsize::new(0)),
+            refuse,
+        })
+    }
 
     struct Fixture {
         _root: tempfile::TempDir,
@@ -368,6 +480,75 @@ mod tests {
             .expect("exact cache key should hit");
         assert_eq!(reader.binding(), &fixture.binding);
         assert!(reader.packages().unwrap().is_empty());
+    }
+
+    #[test]
+    fn copy_admission_uses_exact_bytes_and_existing_hit_writes_nothing() {
+        let fixture = fixture();
+        let admission = recording_admission(false);
+        let cache = ProjectionCache::open_with_scratch_admission(
+            &fixture.cache.root,
+            &"a".repeat(64),
+            admission.clone(),
+        )
+        .unwrap();
+        cache
+            .publish(
+                &fixture.snapshot,
+                &fixture.objects,
+                &fixture.binding,
+                &fixture.candidate,
+            )
+            .unwrap();
+
+        let copies = admission.copies.lock().unwrap();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(copies[0].catalog_bytes, fixture.binding.artifact.size);
+        assert!(copies[0].manifest_bytes > 0);
+        assert_eq!(
+            copies[0].required_additional_bytes,
+            copies[0].catalog_bytes + copies[0].manifest_bytes
+        );
+        drop(copies);
+        assert_eq!(admission.lease_drops.load(Ordering::SeqCst), 1);
+
+        cache
+            .publish(
+                &fixture.snapshot,
+                &fixture.objects,
+                &fixture.binding,
+                &fixture.candidate,
+            )
+            .unwrap();
+        assert_eq!(admission.copies.lock().unwrap().len(), 1);
+        assert_eq!(admission.lease_drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn one_byte_short_refusal_precedes_projection_cache_mutation() {
+        let fixture = fixture();
+        let admission = recording_admission(true);
+        let cache = ProjectionCache::open_with_scratch_admission(
+            &fixture.cache.root,
+            &"a".repeat(64),
+            admission.clone(),
+        )
+        .unwrap();
+        let error = cache
+            .publish(
+                &fixture.snapshot,
+                &fixture.objects,
+                &fixture.binding,
+                &fixture.candidate,
+            )
+            .unwrap_err();
+        let Error::CatalogScratchCapacity(error) = error else {
+            panic!("expected typed catalog capacity refusal");
+        };
+        assert_eq!(error.available_bytes + 1, error.required_bytes);
+        assert_eq!(admission.copies.lock().unwrap().len(), 1);
+        assert_eq!(admission.lease_drops.load(Ordering::SeqCst), 0);
+        assert_eq!(fs::read_dir(&fixture.cache.root).unwrap().count(), 0);
     }
 
     #[test]
