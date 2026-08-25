@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 61
-summary: Document evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 62
+summary: Document the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -505,6 +505,52 @@ parent directory, independently reopens the plain file, and requires exact
 value equality before success. This proof does not advance any active pointer;
 activation must additionally prove that every referenced catalog, CAS, and
 signed metadata object is durable and successfully reopened.
+
+### Promotion Proof Operator
+
+`remi promotion-prove` is the stopped-runtime operator boundary that makes the
+library evidence owners usable without ad hoc glue. It takes the normal
+exclusive runtime-root lock and requires exact ordered Fedora 44, Ubuntu 26.04,
+and Arch bindings for the candidate revision, package-oracle directory,
+native-resolution directory, and explicit native target architecture. The
+independent native package-manager oracle producers remain separate tools;
+this command neither invokes a native package manager nor invents native
+facts.
+
+For every selected revision, the command reopens the registered durable
+profile catalog without consulting an active pointer, produces the complete
+Conary empty-state candidate-resolution bundle, and independently reopens and
+compares it with the supplied native resolution oracle. It then loads the
+canonical map from the same stopped runtime database and produces the final
+`RemiPromotionEvidenceV1` against the exact complete conversion crawl.
+
+All candidate-resolution directories and `promotion.json` are written below
+one mode-private staged directory on the destination filesystem. The command
+synchronizes and reopens every output, atomically renames that directory to the
+requested new path, synchronizes its parent, and reopens the published result
+before reporting the evidence digest. It does not advance profile or universe
+pointers. A later `promotion-activate` invocation independently reopens the
+proof again, so a failed or externally corrupted operator output cannot become
+publication authority.
+
+```text
+remi promotion-prove \
+  --config /etc/conary/remi.toml \
+  --candidate fedora-44=<revision> \
+  --candidate ubuntu-26.04=<revision> \
+  --candidate arch=<revision> \
+  --package-oracle fedora-44=<directory> \
+  --package-oracle ubuntu-26.04=<directory> \
+  --package-oracle arch=<directory> \
+  --native-resolution fedora-44=<directory> \
+  --native-resolution ubuntu-26.04=<directory> \
+  --native-resolution arch=<directory> \
+  --architecture fedora-44=x86_64 \
+  --architecture ubuntu-26.04=amd64 \
+  --architecture arch=x86_64 \
+  --conversion-crawl <crawl.json> \
+  --output-dir <new-private-evidence-directory>
+```
 
 ### Atomic Promotion Activation
 

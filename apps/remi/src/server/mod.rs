@@ -48,6 +48,7 @@ mod prewarm;
 pub mod profile_catalog;
 mod promotion;
 mod promotion_evidence;
+mod promotion_proof;
 pub mod publication;
 mod publication_scheduler;
 pub mod r2;
@@ -96,6 +97,9 @@ pub use promotion_evidence::{
     REMI_PROMOTION_EVIDENCE_SCHEMA_V1, RemiPromotionCanonicalMapV1, RemiPromotionEvidenceConfig,
     RemiPromotionEvidenceV1, RemiPromotionProfileEvidenceInput, RemiPromotionProfileEvidenceV1,
     produce_remi_promotion_evidence, reopen_remi_promotion_evidence,
+};
+pub use promotion_proof::{
+    RemiPromotionProofConfig, RemiPromotionProofOutcome, RemiPromotionProofProfileInput,
 };
 pub use r2::R2Store;
 pub use routes::{create_admin_router, create_external_admin_router, create_router};
@@ -423,6 +427,33 @@ fn prepare_runtime_storage(
     Ok(runtime_lock)
 }
 
+fn acquire_existing_runtime_storage(
+    remi_config: &RemiConfig,
+    server_config: &ServerConfig,
+) -> Result<runtime_lock::RuntimeRootLock> {
+    let locked_db_path = remi_config.storage_root().join("metadata/conary.db");
+    if server_config.db_path != locked_db_path {
+        anyhow::bail!(
+            "Remi runtime database {} is outside the locked storage-root authority {}",
+            server_config.db_path.display(),
+            locked_db_path.display()
+        );
+    }
+    let runtime_lock = runtime_lock::RuntimeRootLock::acquire(remi_config.storage_root())?;
+    let metadata = std::fs::symlink_metadata(&server_config.db_path).with_context(|| {
+        format!(
+            "inspect existing Remi database {}",
+            server_config.db_path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "Remi promotion proof requires an existing plain runtime database"
+    );
+    let _conn = conary_core::db::open(&server_config.db_path)?;
+    Ok(runtime_lock)
+}
+
 fn create_runtime_storage_directories(remi_config: &RemiConfig) -> Result<()> {
     for dir in remi_config.storage_dirs() {
         if !dir.exists() {
@@ -493,6 +524,35 @@ pub async fn run_promotion_activation_from_config(
         r2_store,
     )
     .await
+}
+
+/// Produce exact candidate-resolution and promotion evidence under the normal
+/// exclusive runtime-root authority.
+pub fn run_promotion_proof_from_config(
+    remi_config: &RemiConfig,
+    conversion_crawl_path: PathBuf,
+    output_dir: PathBuf,
+    profiles: Vec<RemiPromotionProofProfileInput>,
+) -> Result<RemiPromotionProofOutcome> {
+    remi_config.validate()?;
+    let server_config = remi_config.to_server_config()?;
+    let _runtime_lock = acquire_existing_runtime_storage(remi_config, &server_config)?;
+    let database_writer = database_writer::DatabaseWriter::default();
+    let catalog_authority = catalog_authority::CatalogAuthority::from_paths(
+        server_config.db_path.clone(),
+        server_config.catalog_dir.clone(),
+        database_writer,
+    );
+    promotion_proof::produce_remi_promotion_proof(
+        &RemiPromotionProofConfig {
+            db_path: server_config.db_path,
+            catalog_dir: server_config.catalog_dir,
+            conversion_crawl_path,
+            output_dir,
+            profiles,
+        },
+        &catalog_authority,
+    )
 }
 
 /// Start the Remi server from a configuration file.

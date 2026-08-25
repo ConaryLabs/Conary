@@ -411,7 +411,7 @@ fn validate_sha256(value: &str, field: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
 
     use conary_core::canonical::{
@@ -453,7 +453,7 @@ mod tests {
         }
     }
 
-    fn architecture(profile: &str) -> &'static str {
+    pub(crate) fn architecture(profile: &str) -> &'static str {
         if profile == "ubuntu-26.04" {
             "amd64"
         } else {
@@ -492,7 +492,7 @@ mod tests {
         }
     }
 
-    fn write_package_oracle(
+    pub(crate) fn write_package_oracle(
         revision: &ProfileRevisionV2,
         packages: &[CatalogPackageRecordV1],
     ) -> tempfile::TempDir {
@@ -520,7 +520,7 @@ mod tests {
         directory
     }
 
-    fn write_resolution(
+    pub(crate) fn write_resolution(
         revision: &ProfileRevisionV2,
         package_oracle_dir: &Path,
         packages: &[CatalogPackageRecordV1],
@@ -634,7 +634,7 @@ mod tests {
         proof
     }
 
-    fn outcome(
+    pub(crate) fn outcome(
         package: &CatalogPackageRecordV1,
         revision_sha256: &str,
     ) -> ConversionCrawlPackageOutcomeV4 {

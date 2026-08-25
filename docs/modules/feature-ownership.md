@@ -1158,6 +1158,8 @@ release uploads, and static test fixtures through Remi.
 `apps/remi/src/server/native_publish/`;
 `apps/remi/src/server/native_publish/verify.rs`;
 `apps/remi/src/server/publication.rs`;
+`apps/remi/src/server/promotion_proof.rs`;
+`apps/remi/src/server/promotion_evidence.rs`;
 `apps/remi/src/server/conversion.rs`;
 `apps/remi/src/server/conversion/types.rs`;
 `apps/remi/src/server/conversion/workflow.rs`;

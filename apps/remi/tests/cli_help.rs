@@ -99,3 +99,28 @@ fn promotion_activation_accepts_only_complete_evidence_inputs() {
         );
     }
 }
+
+#[test]
+fn promotion_proof_requires_every_exact_ordered_evidence_binding() {
+    let output = run_remi(&["promotion-prove", "--help"]);
+
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for required in [
+        "--config",
+        "--candidate",
+        "--package-oracle",
+        "--native-resolution",
+        "--architecture",
+        "--conversion-crawl",
+        "--output-dir",
+    ] {
+        assert!(stdout.contains(required), "missing {required}: {stdout}");
+    }
+    for forbidden in ["--distro", "--exclude", "--skip", "--dry-run"] {
+        assert!(
+            !stdout.contains(forbidden),
+            "forbidden {forbidden}: {stdout}"
+        );
+    }
+}
