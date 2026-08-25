@@ -4,7 +4,7 @@
 //!
 //! This is the serving-side owner for profile package metadata. It deliberately
 //! accepts a [`PinnedProfileCatalog`] instead of opening SQLite itself, so every
-//! read remains bound to the reader pin and exact activated revision held by
+//! read remains bound to the reader pin and exact selected revision held by
 //! that handle.
 
 use anyhow::{Context, Result};

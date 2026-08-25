@@ -50,6 +50,8 @@ pub struct ConversionCrawlConfig {
     pub repository_keys_dir: PathBuf,
     pub output_path: PathBuf,
     pub concurrency: usize,
+    /// Exact ordered revision for every declared public profile.
+    pub candidates: Vec<ProfileRevisionSelection>,
 }
 
 struct ProfileCrawlPlan {
@@ -71,9 +73,13 @@ pub async fn run_conversion_crawl(config: &ConversionCrawlConfig) -> Result<Remi
         database_writer.clone(),
     );
     let plan_authority = authority.clone();
-    let plans = tokio::task::spawn_blocking(move || build_crawl_plans(&plan_authority))
-        .await
-        .map_err(|error| anyhow::anyhow!("conversion crawl planning task panicked: {error}"))??;
+    let candidates = config.candidates.clone();
+    let plans =
+        tokio::task::spawn_blocking(move || build_crawl_plans(&plan_authority, &candidates))
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("conversion crawl planning task panicked: {error}")
+            })??;
     let service = ConversionService::new(
         config.chunk_dir.clone(),
         config.cache_dir.clone(),
@@ -108,16 +114,44 @@ pub async fn run_conversion_crawl(config: &ConversionCrawlConfig) -> Result<Remi
     Ok(report)
 }
 
-fn build_crawl_plans(authority: &CatalogAuthority) -> Result<Vec<ProfileCrawlPlan>> {
-    conary_core::repository::supported_profiles::public_profiles()
+fn build_crawl_plans(
+    authority: &CatalogAuthority,
+    candidates: &[ProfileRevisionSelection],
+) -> Result<Vec<ProfileCrawlPlan>> {
+    let public_profiles = conary_core::repository::supported_profiles::public_profiles();
+    ensure!(
+        candidates.len() == public_profiles.len(),
+        "conversion crawl requires exactly {} ordered public profile candidates",
+        public_profiles.len()
+    );
+    public_profiles
         .iter()
-        .map(|profile| {
+        .zip(candidates)
+        .map(|(profile, selection)| {
+            ensure!(
+                selection.source_profile == profile.id(),
+                "conversion crawl candidate at '{}' must be profile '{}'",
+                selection.source_profile,
+                profile.id()
+            );
+            validate_sha256(
+                &selection.profile_revision_sha256,
+                "conversion crawl candidate profile revision",
+            )?;
             let pin = authority
-                .open_active_profile(profile.id())
+                .open_selected_profile(selection)
                 .with_context(|| {
-                    format!("pin public profile '{}' for conversion crawl", profile.id())
+                    format!(
+                        "pin public profile '{}' candidate revision {} for conversion crawl",
+                        profile.id(),
+                        selection.profile_revision_sha256
+                    )
                 })?;
-            let selection = pin.selection().clone();
+            ensure!(
+                pin.selection() == selection,
+                "pinned candidate selection changed while planning profile '{}'",
+                profile.id()
+            );
             let packages = ProfileCatalog::new(&pin)
                 .package_records()
                 .with_context(|| {
@@ -140,7 +174,7 @@ fn build_crawl_plans(authority: &CatalogAuthority) -> Result<Vec<ProfileCrawlPla
             );
             Ok(ProfileCrawlPlan {
                 route: profile.remi_route_slug().to_string(),
-                selection,
+                selection: selection.clone(),
                 packages,
                 _pin: pin,
             })

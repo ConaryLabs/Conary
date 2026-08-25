@@ -61,6 +61,7 @@ fn conversion_crawl_has_no_package_exclusion_or_sampling_controls() {
         "--chunk-dir",
         "--cache-dir",
         "--repository-keys-dir",
+        "--candidate",
         "--output",
         "--concurrency",
     ] {

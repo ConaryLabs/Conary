@@ -226,7 +226,7 @@ impl CatalogAuthority {
                     verify_profile_catalog_bundle(&resolved.bundle_path, &resolved.manifest)
                         .with_context(|| {
                             format!(
-                                "verify active profile catalog bundle {}",
+                                "verify selected profile catalog bundle {}",
                                 resolved.bundle_path.display()
                             )
                         })?,
@@ -650,10 +650,10 @@ fn resolve_profile_selection(
         &selection.source_profile,
         &selection.profile_revision_sha256,
     )
-    .context("resolve active profile catalog resource")?
+    .context("resolve selected profile catalog resource")?
     .ok_or_else(|| {
         anyhow::anyhow!(
-            "active profile '{}' revision {} has no catalog resource",
+            "selected profile '{}' revision {} has no catalog resource",
             selection.source_profile,
             selection.profile_revision_sha256
         )
@@ -661,7 +661,7 @@ fn resolve_profile_selection(
 
     if resource.kind != RemiCatalogResourceKind::ProfileRevision {
         bail!(
-            "active profile '{}' revision {} has resource kind {:?}",
+            "selected profile '{}' revision {} has resource kind {:?}",
             selection.source_profile,
             selection.profile_revision_sha256,
             resource.kind
@@ -669,20 +669,20 @@ fn resolve_profile_selection(
     }
     if !resource.durable {
         bail!(
-            "active profile '{}' revision {} is not durable",
+            "selected profile '{}' revision {} is not durable",
             selection.source_profile,
             selection.profile_revision_sha256
         );
     }
     if resource.resource_sha256 != selection.profile_revision_sha256 {
         bail!(
-            "active profile '{}' pointer and resource revision digests disagree",
+            "selected profile '{}' and resource revision digests disagree",
             selection.source_profile
         );
     }
     if resource.source_profile != selection.source_profile {
         bail!(
-            "active profile revision {} belongs to '{}' instead of '{}'",
+            "selected profile revision {} belongs to '{}' instead of '{}'",
             selection.profile_revision_sha256,
             resource.source_profile,
             selection.source_profile
@@ -690,10 +690,10 @@ fn resolve_profile_selection(
     }
 
     let manifest = deserialize_profile_revision(&resource)
-        .context("deserialize active profile revision manifest")?;
+        .context("deserialize selected profile revision manifest")?;
     if manifest.profile != selection.source_profile {
         bail!(
-            "active profile revision {} names '{}' instead of '{}'",
+            "selected profile revision {} names '{}' instead of '{}'",
             selection.profile_revision_sha256,
             manifest.profile,
             selection.source_profile
@@ -702,18 +702,18 @@ fn resolve_profile_selection(
 
     let manifest_digest = manifest
         .manifest_sha256()
-        .context("compute active profile revision digest")?;
+        .context("compute selected profile revision digest")?;
     if manifest_digest != selection.profile_revision_sha256
         || manifest_digest != resource.resource_sha256
     {
         bail!(
-            "active profile '{}' manifest and resource digests disagree",
+            "selected profile '{}' manifest and resource digests disagree",
             selection.source_profile
         );
     }
     if resource.artifact_sha256 != manifest.catalog.sha256 {
         bail!(
-            "active profile '{}' resource and manifest artifact digests disagree",
+            "selected profile '{}' resource and manifest artifact digests disagree",
             selection.source_profile
         );
     }
@@ -721,13 +721,13 @@ fn resolve_profile_selection(
         .context("profile catalog artifact size exceeds SQLite integer range")?;
     if resource.artifact_size != manifest_artifact_size {
         bail!(
-            "active profile '{}' resource and manifest artifact sizes disagree",
+            "selected profile '{}' resource and manifest artifact sizes disagree",
             selection.source_profile
         );
     }
     if resource.logical_digest_sha256 != manifest.logical_digest_sha256 {
         bail!(
-            "active profile '{}' resource and manifest logical digests disagree",
+            "selected profile '{}' resource and manifest logical digests disagree",
             selection.source_profile
         );
     }

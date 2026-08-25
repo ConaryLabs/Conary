@@ -69,6 +69,7 @@ pub(crate) use analytics::AnalyticsRecorder;
 pub use bloom::{BloomStats, ChunkBloomFilter};
 pub use bounded_cache::{BoundedCache, BoundedCacheReport};
 pub use cache::ChunkCache;
+pub use catalog_authority::ProfileRevisionSelection;
 pub use config::RemiConfig;
 pub use conversion::{
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkSample,
