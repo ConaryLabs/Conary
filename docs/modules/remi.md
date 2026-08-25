@@ -391,10 +391,15 @@ control.
 Each catalog record is selected by its exact package-key SHA-256 rather than
 the request-facing name/version/architecture tuple. This preserves distinct
 release and origin variants and rejects package-key rebinding. Every record is
-passed through the pinned conversion path. The initial crawl accepts only a
-fresh cold conversion carrying exact source-artifact and CCS SHA-256 evidence;
-an existing hot result fails until the separate exact-key proof-reuse contract
-exists.
+passed through the pinned conversion path unless an artifact-level proof has
+the exact current reuse key. `ConversionProofKeyV1` binds the source profile,
+package key and exact package identity, source-artifact SHA-256, converter
+schema and package version, CCS schema, targets signing-key SHA-256, and the
+exact ordered supported target identities and contract SHA-256 values. A key
+miss validates the artifact afresh. An exact hit hashes the stored CCS,
+revalidates the canonical proof, transport and foreign-conversion boundary,
+then creates the later revision's own converted row and durable profile pin.
+It does not download or convert the unchanged artifact again.
 
 After persistence, the crawl independently reopens each exact `.ccs` path
 under the source profile's targets trust anchor. The second verification reads
@@ -404,26 +409,28 @@ identity, foreign-conversion boundary, source digest, and CCS digest back to
 the conversion result. Producer-time verification cannot substitute for this
 post-persistence proof.
 
-The command writes `RemiConversionCrawlV3`, a strict schema-3 JSON artifact
+The command writes `RemiConversionCrawlV4`, a strict schema-4 JSON artifact
 binding the complete ordered public-profile set, each pinned profile revision,
 expected package counts, exact package identities, repository checksums,
-terminal states, success digests, typed `CcsArtifactReopenProofV1` evidence,
-typed all-target compatibility evidence, and typed failure evidence. After the
-independent CCS reopen, every successful outcome is statically preflighted
-against the exact ordered Fedora 44, Ubuntu 26.04 LTS, and Arch target
-contracts. Each `CcsTargetCompatibilityProofV1` binds the exact CCS SHA-256,
-target-contract SHA-256, and artifact-required interface and Linux process
-capability sets. Missing, repeated, reordered, contract-drifted, unattempted,
-or failed outcomes prevent success. The
-writer syncs an atomic staged file, reopens the published bytes, rejects
-noncanonical or unknown input, and compares the complete reopened value before
-the command may report success. A structurally valid failure report is still
-published for diagnosis, then the command exits unsuccessfully.
+terminal states, typed failure evidence, and one exact `ConversionProofV1`
+with a `validated` or `reused` disposition for every success. The proof binds
+its key, CCS SHA-256, `CcsArtifactReopenProofV1`, validation-origin profile
+revision, and complete ordered `CcsTargetCompatibilityProofV1` set. A reused
+disposition is valid only when that validation-origin revision differs from
+the report's current revision; flipping a current validation to invented reuse
+fails report reopen. Missing, repeated, reordered, contract-drifted,
+unattempted, corrupt, or failed outcomes prevent success. The proof ledger and
+per-revision bindings are one schema-51 database authority and publish
+atomically. The writer syncs an atomic staged report, reopens the published
+bytes, rejects noncanonical or unknown input, and compares the complete
+reopened value before the command may report success. A structurally valid
+failure report is still published for diagnosis, then the command exits
+unsuccessfully.
 
 The crawl currently consumes activated immutable catalogs; it does not promote
-a candidate. Exact-key incremental proof reuse, canonical-contract candidate
-validation, and final catalog/CAS/signed-metadata durability reopen remain
-separate Slice 6 gates under #517.
+a candidate. Canonical-contract candidate validation and final
+catalog/CAS/signed-metadata durability reopen remain separate Slice 6 gates
+under #517.
 
 ```text
 remi conversion-crawl \
@@ -779,6 +786,15 @@ Implementation ownership lives in child modules:
   persistence, and missing-only optional R2 write-through.
 - `conversion/persistence.rs`: converted-package rows, cache-hit
   reconstruction, current-summary validation, and ready-result construction.
+- `conversion_crawl.rs`: bounded full-profile orchestration and canonical
+  report publication; report types and validation live in
+  `conversion_crawl/report.rs`.
+- `conversion_crawl/proof_reuse.rs`: exact proof-key construction, durable
+  artifact-level proof ledger, per-revision bindings, changed-artifact
+  validation, and cross-revision reuse.
+- `conversion_crawl/ccs_reopen.rs` and
+  `conversion_crawl/target_preflight.rs`: independent persisted CCS reopen and
+  exact ordered supported-target compatibility proof.
 - `conversion/recipe.rs`: recipe URL fetch, DNS/IP validation, SSRF refusal,
   and server-side recipe builds.
 - `conversion/test_support.rs`: conversion-owned test DB, repository package,

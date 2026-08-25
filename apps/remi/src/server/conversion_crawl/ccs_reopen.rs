@@ -126,6 +126,10 @@ impl CcsArtifactReopener {
         })
     }
 
+    pub(super) fn signer_public_key_sha256(&self) -> &str {
+        &self.signer_public_key_sha256
+    }
+
     #[cfg(test)]
     fn for_public_key(public_key: String) -> Self {
         let decoded =

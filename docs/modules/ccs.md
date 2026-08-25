@@ -303,6 +303,12 @@ typed set. The resulting
 `StaticTargetCompatibilityProofV1` binds the deterministic target-contract
 SHA-256 and canonical required sets.
 
+Remi's full-universe crawl includes those exact ordered target identities and
+digests in `ConversionProofKeyV1` together with source-artifact SHA-256,
+converter schema/version, CCS schema, source profile/package identity, and the
+targets signing-key digest. A target-contract or converter change therefore
+cannot reuse older artifact proof under a merely similar package identity.
+
 This proof is deliberately not a synthetic `HostCapabilityInventory`.
 Selected-root interpreter availability, payload-dependent paths, actual
 executable identity, functional handshakes, and running-manager state remain
