@@ -23,23 +23,76 @@ pub struct CatalogFinalizationScratchV1 {
     pub database_page_size: u64,
     /// Positive SQLite page count read from the same committed candidate.
     pub database_page_count: u64,
-    /// One complete additional database allocation required by `VACUUM`.
+    /// Exact committed database bytes before compaction.
+    pub database_bytes: u64,
+    /// Conservative temporary-database allocation used by `VACUUM`.
+    pub temporary_copy_bytes: u64,
+    /// Conservative rollback-journal allocation while copying back.
+    pub rollback_journal_bytes: u64,
+    /// Sum of the two transient allocations required by `VACUUM`.
     pub required_additional_bytes: u64,
 }
 
 impl CatalogFinalizationScratchV1 {
-    pub(super) fn from_page_facts(page_size: u64, page_count: u64) -> Result<Self> {
-        let required_additional_bytes = page_size.checked_mul(page_count).ok_or_else(|| {
+    /// Derive SQLite's documented worst-case free-space requirement from
+    /// positive page facts read after committing the private candidate.
+    pub fn from_page_facts(page_size: u64, page_count: u64) -> Result<Self> {
+        if page_size == 0 || page_count == 0 {
+            return Err(crate::Error::ConfigError(
+                "catalog finalization requires positive SQLite page facts".to_string(),
+            ));
+        }
+        let database_bytes = page_size.checked_mul(page_count).ok_or_else(|| {
             crate::Error::IoError(
                 "catalog finalization scratch-space arithmetic overflow".to_string(),
             )
         })?;
-        Ok(Self {
+        let required_additional_bytes = database_bytes.checked_mul(2).ok_or_else(|| {
+            crate::Error::IoError(
+                "catalog finalization scratch-space arithmetic overflow".to_string(),
+            )
+        })?;
+        let requirement = Self {
             schema_version: CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1,
             database_page_size: page_size,
             database_page_count: page_count,
+            database_bytes,
+            temporary_copy_bytes: database_bytes,
+            rollback_journal_bytes: database_bytes,
             required_additional_bytes,
-        })
+        };
+        requirement.validate()?;
+        Ok(requirement)
+    }
+
+    /// Reject contradictory or superseded scratch evidence.
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1
+            || self.database_page_size == 0
+            || self.database_page_count == 0
+        {
+            return Err(crate::Error::ConfigError(
+                "catalog finalization scratch evidence has invalid schema or page facts"
+                    .to_string(),
+            ));
+        }
+        let expected_database = self
+            .database_page_size
+            .checked_mul(self.database_page_count);
+        let expected_required = self
+            .temporary_copy_bytes
+            .checked_add(self.rollback_journal_bytes);
+        if expected_database != Some(self.database_bytes)
+            || self.temporary_copy_bytes != self.database_bytes
+            || self.rollback_journal_bytes != self.database_bytes
+            || expected_required != Some(self.required_additional_bytes)
+        {
+            return Err(crate::Error::ConfigError(
+                "catalog finalization scratch evidence contradicts its SQLite page facts"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 

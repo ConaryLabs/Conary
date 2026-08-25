@@ -66,6 +66,7 @@ impl CatalogScratchAdmission for CatalogScratchCoordinator {
         candidate_path: &Path,
         requirement: CatalogFinalizationScratchV1,
     ) -> conary_core::Result<Box<dyn Send>> {
+        requirement.validate()?;
         let parent = candidate_path.parent().ok_or_else(|| {
             conary_core::Error::InvalidPath(
                 "catalog candidate has no parent for scratch admission".to_string(),
@@ -81,7 +82,7 @@ impl CatalogScratchAdmission for CatalogScratchCoordinator {
         let reserved_bytes = state.by_filesystem.get(&filesystem).copied().unwrap_or(0);
         let total = reserved_bytes
             .checked_add(requirement.required_additional_bytes)
-            .ok_or_else(|| CatalogScratchCapacityError {
+            .ok_or(CatalogScratchCapacityError {
                 required_bytes: requirement.required_additional_bytes,
                 available_bytes,
                 reserved_bytes,
@@ -161,14 +162,8 @@ mod tests {
         }
     }
 
-    fn requirement(bytes: u64) -> CatalogFinalizationScratchV1 {
-        CatalogFinalizationScratchV1 {
-            schema_version:
-                conary_core::repository::catalog::CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1,
-            database_page_size: 1,
-            database_page_count: bytes,
-            required_additional_bytes: bytes,
-        }
+    fn requirement(database_bytes: u64) -> CatalogFinalizationScratchV1 {
+        CatalogFinalizationScratchV1::from_page_facts(1, database_bytes).unwrap()
     }
 
     fn candidate(root: &Path) -> PathBuf {
@@ -185,21 +180,21 @@ mod tests {
     #[test]
     fn exact_bound_succeeds_and_one_byte_short_is_typed() {
         let root = tempfile::tempdir().unwrap();
-        let probe = Arc::new(MutableProbe::new(4096));
+        let probe = Arc::new(MutableProbe::new(8192));
         let coordinator = CatalogScratchCoordinator::with_probe(probe.clone());
         let lease = coordinator
             .reserve_finalization(&candidate(root.path()), requirement(4096))
             .unwrap();
         drop(lease);
 
-        probe.set(4095);
+        probe.set(8191);
         let error =
             refused(coordinator.reserve_finalization(&candidate(root.path()), requirement(4096)));
         let conary_core::Error::CatalogScratchCapacity(error) = error else {
             panic!("expected typed catalog capacity refusal");
         };
-        assert_eq!(error.required_bytes, 4096);
-        assert_eq!(error.available_bytes, 4095);
+        assert_eq!(error.required_bytes, 8192);
+        assert_eq!(error.available_bytes, 8191);
         assert_eq!(error.reserved_bytes, 0);
     }
 
@@ -208,10 +203,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let coordinator = CatalogScratchCoordinator::with_probe(Arc::new(MutableProbe::new(100)));
         let first = coordinator
-            .reserve_finalization(&candidate(root.path()), requirement(60))
+            .reserve_finalization(&candidate(root.path()), requirement(30))
             .unwrap();
         let error =
-            refused(coordinator.reserve_finalization(&candidate(root.path()), requirement(41)));
+            refused(coordinator.reserve_finalization(&candidate(root.path()), requirement(21)));
         let conary_core::Error::CatalogScratchCapacity(error) = error else {
             panic!("expected typed catalog capacity refusal");
         };
@@ -219,7 +214,7 @@ mod tests {
 
         drop(first);
         coordinator
-            .reserve_finalization(&candidate(root.path()), requirement(100))
+            .reserve_finalization(&candidate(root.path()), requirement(50))
             .unwrap();
     }
 
@@ -229,19 +224,19 @@ mod tests {
         let probe = Arc::new(MutableProbe::new(100));
         let coordinator = CatalogScratchCoordinator::with_probe(probe.clone());
         let first = coordinator
-            .reserve_finalization(&candidate(root.path()), requirement(40))
+            .reserve_finalization(&candidate(root.path()), requirement(20))
             .unwrap();
         probe.set(69);
         assert!(
             coordinator
-                .reserve_finalization(&candidate(root.path()), requirement(30))
+                .reserve_finalization(&candidate(root.path()), requirement(15))
                 .is_err()
         );
         drop(first);
 
         let restarted = CatalogScratchCoordinator::with_probe(probe);
         restarted
-            .reserve_finalization(&candidate(root.path()), requirement(69))
+            .reserve_finalization(&candidate(root.path()), requirement(34))
             .unwrap();
     }
 }

@@ -490,8 +490,17 @@ mod tests {
         assert_eq!(requirement.database_page_size, 4096);
         assert!(requirement.database_page_count > 0);
         assert_eq!(
-            requirement.required_additional_bytes,
+            requirement.database_bytes,
             requirement.database_page_size * requirement.database_page_count
+        );
+        assert_eq!(requirement.temporary_copy_bytes, requirement.database_bytes);
+        assert_eq!(
+            requirement.rollback_journal_bytes,
+            requirement.database_bytes
+        );
+        assert_eq!(
+            requirement.required_additional_bytes,
+            requirement.database_bytes * 2
         );
         assert_eq!(lease_drops.load(Ordering::SeqCst), 1);
     }
