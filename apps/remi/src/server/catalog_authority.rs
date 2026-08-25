@@ -138,8 +138,9 @@ impl CatalogAuthority {
         })
     }
 
-    /// Inspect one exact registered revision without granting it active authority.
-    pub(crate) fn inspect_selected_profile(
+    /// Independently reopen one exact registered revision without granting it
+    /// active authority.
+    pub(crate) fn verify_selected_profile(
         &self,
         selection: &ProfileRevisionSelection,
     ) -> Result<SelectedProfileInspection> {
@@ -152,9 +153,9 @@ impl CatalogAuthority {
             )
         })?;
         let resolved = resolve_profile_selection(&conn, &self.catalog_dir, selection.clone())?;
-        inspect_resolved_profile_files(&resolved)?;
+        let verified = open_resolved_profile(resolved)?;
         Ok(SelectedProfileInspection {
-            manifest: resolved.manifest,
+            manifest: verified.manifest().clone(),
         })
     }
 

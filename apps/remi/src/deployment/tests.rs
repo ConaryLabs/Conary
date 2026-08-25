@@ -201,6 +201,22 @@ fn private_candidate_population_comes_from_the_exact_current_candidate() {
             .unwrap()
             .is_none()
     );
+
+    let catalog_path = fixture
+        .catalog_dir()
+        .join("profiles/fedora-44")
+        .join(&revision)
+        .join(conary_core::repository::catalog::CATALOG_FILE_NAME);
+    let mut bytes = fs::read(&catalog_path).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
+    fs::write(&catalog_path, bytes).unwrap();
+    let error = inspect_deployment_candidates(&conn, fixture.authority(), &configured)
+        .expect_err("same-size candidate catalog tamper must fail");
+    assert!(
+        format!("{error:#}").contains("inspect private immutable profile"),
+        "unexpected candidate-tamper error: {error:#}"
+    );
 }
 
 #[test]

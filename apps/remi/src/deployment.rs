@@ -449,7 +449,7 @@ fn inspect_deployment_candidates(
             profile_revision_sha256: candidate.profile_revision_sha256.clone(),
         };
         let inspection = authority
-            .inspect_selected_profile(&selection)
+            .verify_selected_profile(&selection)
             .with_context(|| format!("inspect private immutable profile '{profile}'"))?;
         inspection
             .manifest
