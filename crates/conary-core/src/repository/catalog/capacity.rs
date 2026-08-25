@@ -36,6 +36,8 @@ pub struct CatalogFinalizationScratchV1 {
 impl CatalogFinalizationScratchV1 {
     /// Derive SQLite's documented worst-case free-space requirement from
     /// positive page facts read after committing the private candidate.
+    ///
+    /// <https://www.sqlite.org/lang_vacuum.html#how_vacuum_works>
     pub fn from_page_facts(page_size: u64, page_count: u64) -> Result<Self> {
         if page_size == 0 || page_count == 0 {
             return Err(crate::Error::ConfigError(

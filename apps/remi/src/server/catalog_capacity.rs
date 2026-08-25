@@ -15,7 +15,7 @@ enum FilesystemIdentity {
     #[cfg(unix)]
     Device(u64),
     #[cfg(not(unix))]
-    Root(PathBuf),
+    Root(std::path::PathBuf),
 }
 
 trait AvailableSpaceProbe: Send + Sync {

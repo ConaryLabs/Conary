@@ -165,15 +165,15 @@ writer commits its private logical state and derives the exact current database
 bytes from SQLite's positive `page_size` and `page_count`. SQLite finalization
 may require two additional database-sized allocations while its temporary copy
 and rollback journal coexist with the original. Remi reserves that documented
-worst case against a process-local
-ledger keyed by the owning filesystem device, re-reading available space for
-every admission. Concurrent finalizers therefore cannot collectively reserve
-more than the filesystem reports available; the lease releases on success,
-error, cancellation unwind, or process restart. A one-byte-short refusal is a
-typed `storage_capacity` refresh failure before `VACUUM`, and candidate cleanup
-preserves the active revision. This finalization admission is independent of
-the serving readiness floor and does not yet estimate the earlier candidate,
-metadata-spool, cache-copy, or immutable-publication writes.
+worst case against a process-local ledger keyed by the owning filesystem
+device, re-reading available space for every admission. Concurrent finalizers
+therefore cannot collectively reserve more than the filesystem reports
+available; the lease releases on success, error, cancellation unwind, or
+process restart. A one-byte-short refusal is a typed `storage_capacity` refresh
+failure before `VACUUM`, and candidate cleanup preserves the active revision.
+This finalization admission is independent of the serving readiness floor and
+does not yet estimate the earlier candidate, metadata-spool, cache-copy, or
+immutable-publication writes.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
