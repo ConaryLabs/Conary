@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 60
-summary: Document durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 61
+summary: Document evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -221,10 +221,11 @@ There is no warm-up timer or blind retry; a later cycle occurs at the configured
 interval, an overdue canonical deadline is serviced immediately after the
 current refresh, and each deadline resets only after its owning attempt
 completes. Repository refresh entrypoints never publish endpoint universes.
-The Slice 6 promotion owner must later consume exact completed candidates and
-their reopened proof before it may activate profiles or signed universe
-metadata, so no partial candidate set becomes public merely because an admin or
-background refresh completed.
+The one-shot promotion owner consumes the canonical promotion evidence and
+complete crawl, reopens their exact candidates or already-active revisions,
+and alone may change the public profile set and signed universe. No partial
+candidate set becomes public merely because an admin or background refresh
+completed.
 
 Eligible exact-profile prewarm jobs run concurrently under the configured
 conversion bound shared with request-driven conversions. Each profile preserves
@@ -279,14 +280,19 @@ time, expiry, and the dedicated metadata-root digest. The universe
 objects; extra, missing, repeated, reordered, mixed, wrong-sized, or
 wrong-schema authority fails before activation.
 
-Publication writes and synchronizes every referenced object and the signed
+Promotion writes and synchronizes every referenced object and the signed
 `root`/`targets`/`snapshot`/`timestamp` metadata beneath one immutable bundle,
-reopens the complete bundle, then advances `remi_active_universe_revision` in
-one short transaction. A publication fault, stale base pointer, or damaged
-active bundle leaves the previous universe selected. An unchanged authority is
-reused until either its manifest or timestamp enters the six-hour renewal
-window; renewal advances the sequence and refreshes signed freshness rather
-than serving authority near expiry.
+reopens the complete bundle, then uses one immediate transaction to publish
+every selected candidate run, advance every changed public-profile pointer,
+insert the evidence-bound universe revision, and advance
+`remi_active_universe_revision`. Schema 53 stores the exact canonical
+`RemiPromotionEvidenceV1` and `RemiConversionCrawlV4` digests on that universe
+revision. A catalog, proof, CAS, signed-metadata, fence, canonical-map,
+transaction, or reopen fault leaves the complete previous public state
+selected. Exact replay returns the already-active revision. The background
+publisher cannot create an initial universe or change profile or canonical
+authority without promotion evidence; it may only renew signed freshness for
+the exact active authority after revalidating its durable bindings.
 
 Canonical-map schema validity is insufficient publication evidence. Before a
 new universe is signed, Remi independently reopens every exact public profile
@@ -443,7 +449,7 @@ disposition is valid only when that validation-origin revision differs from
 the report's current revision; flipping a current validation to invented reuse
 fails report reopen. Missing, repeated, reordered, contract-drifted,
 unattempted, corrupt, or failed outcomes prevent success. The proof ledger and
-per-revision bindings are one schema-52 database authority and publish
+per-revision bindings are one schema-53 database authority and publish
 atomically. The writer syncs an atomic staged report, reopens the published
 bytes, rejects noncanonical or unknown input, and compares the complete
 reopened value before the command may report success. A structurally valid
@@ -451,9 +457,9 @@ failure report is still published for diagnosis, then the command exits
 unsuccessfully.
 
 The crawl validates registered immutable candidates; it does not activate
-them. The promotion-evidence contract consumes its complete report. Final
-pointer activation and catalog/CAS/signed-metadata durability reopen remain a
-separate Slice 6 gate under #517.
+them. The promotion-evidence contract consumes its complete report. Atomic
+promotion performs the later catalog, proof-bound CCS, CAS, and signed-metadata
+durability reopen before any pointer can move.
 
 ```text
 remi conversion-crawl \
@@ -499,6 +505,34 @@ parent directory, independently reopens the plain file, and requires exact
 value equality before success. This proof does not advance any active pointer;
 activation must additionally prove that every referenced catalog, CAS, and
 signed metadata object is durable and successfully reopened.
+
+### Atomic Promotion Activation
+
+`remi promotion-activate --config <remi.toml> --promotion-evidence
+<promotion.json> --conversion-crawl <crawl.json>` is the sole public-set
+activation entry point. It takes the normal exclusive runtime-root lock, opens
+the canonical evidence and crawl as plain canonical files, requires their
+digests and ordered public profiles to agree, and resolves each profile as
+either the exact current fenced private candidate or the exact already-active
+revision. A successor candidate fences stale evidence; candidate-tier profiles
+cannot enter the evidence contract.
+
+Every selected profile and source catalog is independently reopened from its
+registered immutable bundle. Each successful crawl row must resolve one exact
+conversion row, revision pin, reusable-proof ledger row, and canonical stored
+CCS transport; the CCS bytes and foreign-conversion identity are revalidated.
+The union of transport objects is kept in a private disk-backed spool. Every
+object is fetched again from configured R2, or from the local CAS when R2 is
+absent, and must match its exact size and SHA-256.
+
+Only after those checks does promotion construct the next signed universe,
+durably publish all six metadata and content files, and independently reopen
+the complete bundle. Its final immediate SQLite transaction rechecks the base
+universe, canonical map, current candidate fences, exact ordered run members,
+registered catalog identities, and resulting complete active-profile set. It
+then publishes all changed runs and advances all profile and universe pointers
+together. Database rollback preserves every prior pointer and leaves all
+candidate runs private if any final check fails.
 
 Clients enroll the universe metadata root independently of CCS package keys.
 Self-hosted `repo add` requires `--remi-metadata-root` from an independently

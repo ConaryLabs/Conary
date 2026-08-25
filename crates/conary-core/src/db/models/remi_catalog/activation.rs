@@ -10,8 +10,9 @@ use crate::db::models::remi_catalog::validation::{
     validate_identity, validate_sha256, validate_uuid,
 };
 use crate::error::{Error, Result};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
-use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 /// The exact proof required before moving a profile pointer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,21 +62,19 @@ pub enum RemiProfileActivationOutcome {
     AlreadyActive(RemiActiveProfileRevision),
 }
 
-/// Prove the exact current completed candidate and durable catalog metadata,
-/// then move one profile pointer under a single immediate SQLite transaction.
-pub fn activate_profile_revision(
-    conn: &Connection,
+/// Prove and publish one exact completed profile candidate inside the
+/// caller-owned promotion transaction.
+///
+/// The caller must publish every required profile and the matching universe
+/// pointer before committing. There is deliberately no standalone public
+/// pointer-mutation entry point.
+pub fn publish_profile_candidate_in_transaction(
+    tx: &Transaction<'_>,
     request: &RemiProfileRevisionActivation,
+    now: i64,
 ) -> Result<RemiProfileActivationOutcome> {
     request.validate()?;
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    // Read the lease clock only after acquiring the writer lock. A timestamp
-    // captured while waiting could already be expired when the transaction
-    // finally obtains activation authority.
-    let now = current_unix_seconds()?;
-    let outcome = activate_profile_revision_in_transaction(&tx, request, now)?;
-    tx.commit()?;
-    Ok(outcome)
+    activate_profile_revision_in_transaction(tx, request, now)
 }
 
 #[cfg(test)]
@@ -84,9 +83,8 @@ pub(super) fn activate_profile_revision_at(
     request: &RemiProfileRevisionActivation,
     now: i64,
 ) -> Result<RemiProfileActivationOutcome> {
-    request.validate()?;
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    let outcome = activate_profile_revision_in_transaction(&tx, request, now)?;
+    let outcome = publish_profile_candidate_in_transaction(&tx, request, now)?;
     tx.commit()?;
     Ok(outcome)
 }
@@ -488,13 +486,4 @@ impl RemiActiveProfileRevision {
             .optional()
             .map_err(Into::into)
     }
-}
-
-fn current_unix_seconds() -> Result<i64> {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| Error::InternalError(format!("system time precedes Unix epoch: {error}")))?
-        .as_secs();
-    i64::try_from(seconds)
-        .map_err(|_| Error::InternalError("system time exceeds SQLite integer range".to_string()))
 }

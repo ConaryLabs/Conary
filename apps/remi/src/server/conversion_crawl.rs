@@ -17,6 +17,9 @@ use ccs_reopen::CcsArtifactReopener;
 use conary_core::corpus::ConversionFailure;
 use conary_core::repository::catalog::CatalogPackageRecordV1;
 use futures::StreamExt;
+#[cfg(test)]
+pub(crate) use proof_reuse::ConversionProofStore;
+pub(crate) use proof_reuse::reopen_promotion_binding;
 pub use proof_reuse::{
     CONVERSION_PROOF_KEY_SCHEMA_V1, CONVERSION_PROOF_SCHEMA_V1, ConversionProofDispositionV1,
     ConversionProofKeyV1, ConversionProofTargetContractV1, ConversionProofV1,
@@ -34,11 +37,11 @@ pub use target_preflight::{
     CCS_TARGET_COMPATIBILITY_PROOF_SCHEMA_V1, CcsTargetCompatibilityProofV1,
 };
 
-struct ReopenedCcsArtifactEvidence {
-    source_artifact_sha256: String,
-    ccs_sha256: String,
-    reopen_proof: CcsArtifactReopenProofV1,
-    target_compatibility_proofs: Vec<CcsTargetCompatibilityProofV1>,
+pub(crate) struct ReopenedCcsArtifactEvidence {
+    pub(crate) source_artifact_sha256: String,
+    pub(crate) ccs_sha256: String,
+    pub(crate) reopen_proof: CcsArtifactReopenProofV1,
+    pub(crate) target_compatibility_proofs: Vec<CcsTargetCompatibilityProofV1>,
 }
 
 #[derive(Debug, Clone)]
@@ -325,6 +328,24 @@ pub fn write_and_reopen_conversion_crawl(
         "reopened conversion crawl evidence differs from the written report"
     );
     Ok(reopened)
+}
+
+/// Canonically reopen one complete conversion crawl from a plain durable file.
+pub fn reopen_conversion_crawl(path: &Path) -> Result<(RemiConversionCrawlV4, Vec<u8>)> {
+    let metadata = fs::symlink_metadata(path).context("inspect conversion crawl evidence")?;
+    ensure!(
+        metadata.file_type().is_file(),
+        "conversion crawl evidence is not a plain file"
+    );
+    let bytes = fs::read(path).context("read conversion crawl evidence")?;
+    let report: RemiConversionCrawlV4 =
+        serde_json::from_slice(&bytes).context("parse conversion crawl evidence")?;
+    report.validate_complete()?;
+    ensure!(
+        serde_json::to_vec(&report).context("serialize conversion crawl evidence")? == bytes,
+        "conversion crawl evidence is not canonical"
+    );
+    Ok((report, bytes))
 }
 
 pub(super) fn validate_sha256(value: &str, field: &str) -> Result<()> {

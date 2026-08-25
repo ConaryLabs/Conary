@@ -266,13 +266,14 @@ and message. It does not synthesize an exit-code or stderr column absent from
 `ScriptletFailureOutcome`; `conary system history` is the read surface.
 Security-policy and boot-runtime requests also retain the exact invoked path,
 canonical path, and executable SHA-256 observed inside that selected root.
-Current-only database schema revision 52 retains the tagged
+Current-only database schema revision 53 retains the tagged
 systemd/OpenRC/SELinux/AppArmor and boot-runtime mutation union, durable
 repository synchronization fencing, and exact profile-revision conversion
 pins, artifact-level Remi conversion proof, and per-revision proof bindings
 while separating durable successful Remi refresh candidates from public
-profile activation. Earlier databases must be rebuilt; no compatibility
-decoder or migration exists.
+profile activation and binding each activated Remi universe to the exact
+promotion-evidence and complete-crawl digests it consumed. Earlier databases
+must be rebuilt; no compatibility decoder or migration exists.
 Every generation build projects all eligible requests through that
 generation's applied-changeset high-water mark into
 `generation_activation_intents`. Thus a request projected onto generation N

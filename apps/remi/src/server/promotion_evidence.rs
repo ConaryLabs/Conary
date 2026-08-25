@@ -16,7 +16,7 @@ use conary_core::repository::catalog::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::conversion_crawl::{ConversionCrawlProfileV4, RemiConversionCrawlV4};
+use super::conversion_crawl::{ConversionCrawlProfileV4, reopen_conversion_crawl};
 use super::universe_validation::validate_canonical_candidate;
 
 pub const REMI_PROMOTION_EVIDENCE_SCHEMA_V1: u32 = 1;
@@ -350,18 +350,6 @@ fn package_identity_order(
             &right.architecture,
             &right.package_key_sha256,
         ))
-}
-
-fn reopen_conversion_crawl(path: &Path) -> Result<(RemiConversionCrawlV4, Vec<u8>)> {
-    let bytes = read_plain_file(path, "conversion crawl")?;
-    let report: RemiConversionCrawlV4 =
-        serde_json::from_slice(&bytes).context("parse promotion conversion crawl")?;
-    report.validate_complete()?;
-    ensure!(
-        serde_json::to_vec(&report).context("serialize promotion conversion crawl")? == bytes,
-        "promotion conversion crawl is not canonical"
-    );
-    Ok((report, bytes))
 }
 
 fn write_and_reopen_promotion_evidence(

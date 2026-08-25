@@ -78,7 +78,7 @@ impl ActiveCatalogFixture {
         fencing_epoch: i64,
         packages: Vec<CatalogPackageRecordV1>,
     ) -> String {
-        self.publish_revision(profile, fencing_epoch, packages, true)
+        self.publish_revision(profile, fencing_epoch, packages, true, false)
     }
 
     pub(crate) fn register(
@@ -87,7 +87,16 @@ impl ActiveCatalogFixture {
         fencing_epoch: i64,
         packages: Vec<CatalogPackageRecordV1>,
     ) -> String {
-        self.publish_revision(profile, fencing_epoch, packages, false)
+        self.publish_revision(profile, fencing_epoch, packages, false, false)
+    }
+
+    pub(crate) fn candidate(
+        &self,
+        profile: &str,
+        fencing_epoch: i64,
+        packages: Vec<CatalogPackageRecordV1>,
+    ) -> String {
+        self.publish_revision(profile, fencing_epoch, packages, false, true)
     }
 
     fn publish_revision(
@@ -96,6 +105,7 @@ impl ActiveCatalogFixture {
         fencing_epoch: i64,
         packages: Vec<CatalogPackageRecordV1>,
         activate: bool,
+        candidate: bool,
     ) -> String {
         let (parser_config, trust_policy, ecosystem, evidence_role) =
             source_fixture_authority(profile);
@@ -306,74 +316,66 @@ impl ActiveCatalogFixture {
         )
         .expect("profile fixture JSON is UTF-8");
         let conn = self.connection();
-        // Conversion lookup is allowed to consult exactly one operational
-        // repository row for prepared key-material naming.  Keep that row
-        // deliberately package-free: package authority remains in the
-        // immutable source/profile catalog bundles above.
+        // Operational rows bind refresh ownership and prepared key material;
+        // package authority remains in the immutable bundles above.
         let (ecosystem, version_scheme, package_format) = match ecosystem {
             SourceEcosystemV1::Rpm => ("rpm", "rpm", "rpm"),
             SourceEcosystemV1::Deb => ("deb", "debian", "deb"),
             SourceEcosystemV1::Alpm => ("alpm", "arch", "arch"),
             SourceEcosystemV1::Eopkg => ("eopkg", "eopkg", "eopkg"),
         };
-        let primary_member = manifest
-            .members
-            .first()
-            .expect("fixture profile has a member");
-        let primary_source_manifest = &source_manifests
-            .first()
-            .expect("fixture profile has a source manifest")
-            .1;
-        conn.execute(
-            "INSERT OR IGNORE INTO repository_source_policies (
-                 source_identity, scope_kind, scope_identity, ecosystem,
-                 version_scheme, stream_kind, stream_identity, update_mode
-             ) VALUES (?1, 'repository', ?2, ?3, ?4, 'release', 'stable', 'follow')",
-            rusqlite::params![
-                primary_member.source_identity,
-                primary_member.repository_identity,
-                ecosystem,
-                version_scheme,
-            ],
-        )
-        .expect("insert fixture source policy");
-        let source_policy_id = conn
-            .query_row(
-                "SELECT id FROM repository_source_policies
-                 WHERE source_identity = ?1 AND scope_kind = 'repository'
-                   AND scope_identity = ?2",
+        for (member, (_, source_manifest)) in manifest.members.iter().zip(&source_manifests) {
+            conn.execute(
+                "INSERT OR IGNORE INTO repository_source_policies (
+                     source_identity, scope_kind, scope_identity, ecosystem,
+                     version_scheme, stream_kind, stream_identity, update_mode
+                 ) VALUES (?1, 'repository', ?2, ?3, ?4, 'release', 'stable', 'follow')",
                 rusqlite::params![
-                    primary_member.source_identity,
-                    primary_member.repository_identity
+                    member.source_identity,
+                    member.repository_identity,
+                    ecosystem,
+                    version_scheme,
                 ],
-                |row| row.get::<_, i64>(0),
             )
-            .expect("resolve fixture source policy");
-        let parser_config_json =
-            serde_json::to_string(&primary_source_manifest.provenance.parser_config)
-                .expect("serialize fixture parser configuration");
-        let trust_policy_json =
-            serde_json::to_string(&primary_source_manifest.provenance.trust_policy)
+            .expect("insert fixture source policy");
+            let source_policy_id = conn
+                .query_row(
+                    "SELECT id FROM repository_source_policies
+                     WHERE source_identity = ?1 AND scope_kind = 'repository'
+                       AND scope_identity = ?2",
+                    rusqlite::params![member.source_identity, member.repository_identity],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("resolve fixture source policy");
+            let parser_config_json =
+                serde_json::to_string(&source_manifest.provenance.parser_config)
+                    .expect("serialize fixture parser configuration");
+            let trust_policy_json = serde_json::to_string(&source_manifest.provenance.trust_policy)
                 .expect("serialize fixture trust policy");
-        conn.execute(
-            "INSERT OR IGNORE INTO repositories (
-                 name, url, source_profile, trust_policy_json, package_format,
-                 parser_config_json, source_policy_id, repository_identity,
-                 stream_binding_sha256
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![
-                format!("fixture-key-material-{profile}"),
-                format!("https://example.invalid/{profile}/metadata"),
-                profile,
-                trust_policy_json,
-                package_format,
-                parser_config_json,
-                source_policy_id,
-                primary_member.repository_identity,
-                primary_source_manifest.stream_binding_sha256,
-            ],
-        )
-        .expect("insert fixture key-material repository row");
+            conn.execute(
+                "INSERT OR IGNORE INTO repositories (
+                     name, url, enabled, priority, profile_member_role,
+                     profile_member_required, source_profile, trust_policy_json,
+                     package_format, parser_config_json, source_policy_id,
+                     repository_identity, stream_binding_sha256
+                 ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    format!("fixture-{profile}-{}", member.repository_identity),
+                    &source_manifest.provenance.metadata_url,
+                    i64::from(member.precedence),
+                    member.role.as_str(),
+                    member.required,
+                    profile,
+                    trust_policy_json,
+                    package_format,
+                    parser_config_json,
+                    source_policy_id,
+                    member.repository_identity,
+                    source_manifest.stream_binding_sha256,
+                ],
+            )
+            .expect("insert fixture repository row");
+        }
         for (source_snapshot_sha256, source_manifest) in &source_manifests {
             let source_manifest_json = String::from_utf8(
                 conary_core::json::canonical_json(source_manifest)
@@ -462,6 +464,64 @@ impl ActiveCatalogFixture {
                 ],
             )
             .expect("activate profile revision");
+        } else if candidate {
+            let run_id = uuid::Uuid::new_v4().to_string();
+            let owner_instance_uuid = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "INSERT INTO repository_sync_runs (
+                     run_id, source_profile, owner_instance_uuid, fencing_epoch,
+                     input_profile_digest, candidate_profile_digest, state,
+                     started_at, heartbeat_at, lease_expires_at, finished_at
+                 ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, 'candidate', ?4, ?4, ?4, ?4)",
+                rusqlite::params![
+                    run_id,
+                    profile,
+                    owner_instance_uuid,
+                    fencing_epoch,
+                    profile_revision_sha256,
+                ],
+            )
+            .expect("insert candidate run");
+            conn.execute(
+                "INSERT INTO repository_sync_scopes (
+                     source_profile, fencing_epoch, current_run_id
+                 ) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(source_profile) DO UPDATE SET
+                     fencing_epoch = excluded.fencing_epoch,
+                     current_run_id = excluded.current_run_id",
+                rusqlite::params![profile, fencing_epoch, run_id],
+            )
+            .expect("select fixture candidate run");
+            for member in &manifest.members {
+                let repository_id = conn
+                    .query_row(
+                        "SELECT id FROM repositories
+                         WHERE source_profile = ?1 AND repository_identity = ?2",
+                        rusqlite::params![profile, member.repository_identity],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("resolve fixture run member repository");
+                conn.execute(
+                    "INSERT INTO repository_sync_run_members (
+                         run_id, ordinal, repository_id, source_identity,
+                         repository_identity, stream_kind, stream_identity, role,
+                         precedence, required, input_source_snapshot_sha256,
+                         candidate_source_snapshot_sha256
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, 'release', 'stable', ?6, ?7, ?8, NULL, ?9)",
+                    rusqlite::params![
+                        run_id,
+                        i64::from(member.ordinal),
+                        repository_id,
+                        member.source_identity,
+                        member.repository_identity,
+                        member.role.as_str(),
+                        i64::from(member.precedence),
+                        member.required,
+                        member.source_snapshot_sha256,
+                    ],
+                )
+                .expect("insert fixture run member");
+            }
         }
         profile_revision_sha256
     }

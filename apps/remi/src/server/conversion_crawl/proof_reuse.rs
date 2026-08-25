@@ -228,7 +228,7 @@ impl ConversionProofV1 {
 }
 
 #[derive(Clone)]
-pub(super) struct ConversionProofStore {
+pub(crate) struct ConversionProofStore {
     db_path: PathBuf,
     database_writer: DatabaseWriter,
 }
@@ -243,7 +243,7 @@ struct StoredConversionProof {
 }
 
 impl ConversionProofStore {
-    pub(super) fn new(db_path: PathBuf, database_writer: DatabaseWriter) -> Self {
+    pub(crate) fn new(db_path: PathBuf, database_writer: DatabaseWriter) -> Self {
         Self {
             db_path,
             database_writer,
@@ -332,7 +332,7 @@ impl ConversionProofStore {
         Ok(Some(proof))
     }
 
-    fn publish(
+    pub(crate) fn publish(
         &self,
         package: &CatalogPackageRecordV1,
         profile_revision_sha256: &str,
@@ -419,6 +419,70 @@ impl ConversionProofStore {
         })?;
         Ok(proof)
     }
+}
+
+/// Reopen the exact durable database and CCS binding consumed by promotion.
+///
+/// This deliberately revalidates the stored CCS bytes after the crawl rather
+/// than treating the crawl report as a lease on mutable filesystem state.
+pub(crate) fn reopen_promotion_binding(
+    conn: &rusqlite::Connection,
+    profile_revision_sha256: &str,
+    repository_checksum: &str,
+    expected: &ConversionProofV1,
+) -> Result<CcsTransportEnvelopeV1> {
+    validate_sha256(
+        profile_revision_sha256,
+        "promotion binding profile revision",
+    )?;
+    expected.validate_current()?;
+    ensure!(
+        expected.key.source_artifact_sha256
+            == exact_prefixed_sha256(repository_checksum, "promotion source artifact")?,
+        "promotion conversion proof source artifact differs from the crawl"
+    );
+    let converted = ConvertedPackage::find_repository_by_checksum(
+        conn,
+        profile_revision_sha256,
+        repository_checksum,
+    )?
+    .context("promotion package has no exact candidate-revision conversion binding")?;
+    let converted_id = converted
+        .id
+        .context("promotion conversion row has no durable identity")?;
+    ConvertedPackage::require_conversion_pin(conn, converted_id)?;
+    let bound_key = conn
+        .query_row(
+            "SELECT proof_key_sha256 FROM remi_conversion_proof_bindings
+             WHERE converted_package_id = ?1",
+            [converted_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .context("promotion conversion row has no exact proof binding")?;
+    ensure!(
+        bound_key == expected.proof_key_sha256,
+        "promotion conversion row is bound to a different exact proof"
+    );
+    let stored = load_stored_proof(conn, &bound_key)?
+        .context("promotion proof binding has no durable proof row")?;
+    stored.validate_bytes()?;
+    ensure!(
+        stored.proof == *expected,
+        "promotion proof binding differs from the complete crawl evidence"
+    );
+    let artifact = converted.repository_artifact()?;
+    ensure!(
+        artifact.source_profile == expected.key.source_profile
+            && artifact.package_name == expected.key.package_name
+            && artifact.package_version == expected.key.package_version
+            && Some(artifact.package_architecture) == expected.key.package_architecture.as_deref()
+            && artifact.content_hash == format!("sha256:{}", expected.ccs_sha256)
+            && artifact.transport == stored.transport
+            && Path::new(artifact.ccs_path) == stored.ccs_path,
+        "promotion conversion row differs from its exact proof authority"
+    );
+    Ok(stored.transport)
 }
 
 pub(super) async fn validate_or_reuse(

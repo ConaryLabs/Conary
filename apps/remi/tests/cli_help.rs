@@ -82,3 +82,20 @@ fn conversion_crawl_has_no_package_exclusion_or_sampling_controls() {
         );
     }
 }
+
+#[test]
+fn promotion_activation_accepts_only_complete_evidence_inputs() {
+    let output = run_remi(&["promotion-activate", "--help"]);
+
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for required in ["--config", "--promotion-evidence", "--conversion-crawl"] {
+        assert!(stdout.contains(required), "missing {required}: {stdout}");
+    }
+    for forbidden in ["--candidate", "--profile", "--distro", "--exclude"] {
+        assert!(
+            !stdout.contains(forbidden),
+            "forbidden {forbidden}: {stdout}"
+        );
+    }
+}
