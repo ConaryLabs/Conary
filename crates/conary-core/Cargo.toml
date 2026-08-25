@@ -194,6 +194,11 @@ name = "conary-debian-oracle"
 path = "src/bin/conary-debian-oracle.rs"
 required-features = ["native-debian-oracle"]
 
+[[bin]]
+name = "conary-debian-resolution-oracle"
+path = "src/bin/conary-debian-resolution-oracle.rs"
+required-features = ["native-debian-oracle"]
+
 [[bench]]
 name = "erofs_build"
 harness = false

@@ -197,7 +197,7 @@ jobs:
       - name: Test the apt-pkg parity producer
         run: cargo test -p conary-core --features native-debian-oracle repository::catalog::parity::debian --verbose
       - name: Lint the apt-pkg parity producer
-        run: cargo clippy -p conary-core --features native-debian-oracle --lib --bin conary-debian-oracle -- -D warnings
+        run: cargo clippy -p conary-core --features native-debian-oracle --lib --bin conary-debian-oracle --bin conary-debian-resolution-oracle -- -D warnings
 
   generation-db-reflink:
     name: generation-db-reflink
