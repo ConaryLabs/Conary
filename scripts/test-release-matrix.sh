@@ -1165,6 +1165,21 @@ test_check_release_matrix_requires_hosted_alpm_parity_producer() {
     done
 }
 
+test_check_release_matrix_requires_resilient_alpm_archive_downloads() {
+    local repo
+    local workflow
+
+    for workflow in pr-gate.yml merge-validation.yml; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/.github/workflows/$workflow" \
+            "          sed -i '/^\[options\]/a DisableDownloadTimeout' /etc/pacman.conf" \
+            '          true'
+
+        assert_check_release_matrix_fails "$repo" "hosted"
+    done
+}
+
 test_check_release_matrix_requires_hosted_rpm_parity_producer() {
     local repo
     local workflow
@@ -1175,6 +1190,21 @@ test_check_release_matrix_requires_hosted_rpm_parity_producer() {
             "$repo/.github/workflows/$workflow" \
             '        run: cargo test -p conary-core --features native-rpm-oracle repository::catalog::parity::rpm --verbose' \
             '        run: echo "RPM producer proof removed"'
+
+        assert_check_release_matrix_fails "$repo" "hosted"
+    done
+}
+
+test_check_release_matrix_requires_hosted_debian_parity_producer() {
+    local repo
+    local workflow
+
+    for workflow in pr-gate.yml merge-validation.yml; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/.github/workflows/$workflow" \
+            '        run: cargo test -p conary-core --features native-debian-oracle repository::catalog::parity::debian --verbose' \
+            '        run: echo "Debian producer proof removed"'
 
         assert_check_release_matrix_fails "$repo" "hosted"
     done
@@ -1475,7 +1505,9 @@ main() {
         test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane
         test_check_release_matrix_rejects_unproven_namespace_action
         test_check_release_matrix_requires_hosted_alpm_parity_producer
+        test_check_release_matrix_requires_resilient_alpm_archive_downloads
         test_check_release_matrix_requires_hosted_rpm_parity_producer
+        test_check_release_matrix_requires_hosted_debian_parity_producer
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion

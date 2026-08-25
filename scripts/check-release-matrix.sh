@@ -31,6 +31,7 @@ ccs_build_script="packaging/ccs/build.sh"
 
 fedora_release_image='registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb'
 ubuntu_release_image='docker.io/library/ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb'
+debian_parity_image='docker.io/library/ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03'
 arch_release_image='docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433'
 arch_archive_pattern='https://archive\.archlinux\.org/repos/2026/08/02/\$repo/os/\$arch'
 rustup_init_url='https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init'
@@ -290,12 +291,15 @@ namespace_before_tests_pattern='uses: \./\.github/actions/setup-exact-ownership-
 require_job_match "$pr_workflow" workspace-tests "$namespace_before_tests_pattern" 'PR workspace tests exact ownership setup order'
 require_job_match "$merge_workflow" workspace-tests "$namespace_before_tests_pattern" 'merge workspace tests exact ownership setup order'
 require_job_match "$release_build" workspace-validation "$namespace_before_tests_pattern" 'release workspace validation exact ownership setup order'
-alpm_parity_pattern="${arch_release_image}[\s\S]*${arch_archive_pattern}[\s\S]*rustup default 1\.98\.0[\s\S]*cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose[\s\S]*cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle --bin conary-alpm-resolution-oracle -- -D warnings"
+alpm_parity_pattern="${arch_release_image}[\s\S]*DisableDownloadTimeout[\s\S]*${arch_archive_pattern}[\s\S]*rustup default 1\.98\.0[\s\S]*cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose[\s\S]*cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle --bin conary-alpm-resolution-oracle -- -D warnings"
 require_job_match "$pr_workflow" alpm-parity-producer "$alpm_parity_pattern" 'hosted PR ALPM parity producer proof'
 require_job_match "$merge_workflow" alpm-parity-producer "$alpm_parity_pattern" 'hosted merge ALPM parity producer proof'
 rpm_parity_pattern="${fedora_release_image}[\s\S]*libsolv-devel-0\.7\.36-2\.fc44\.x86_64[\s\S]*rustup-init -y --default-toolchain 1\.98\.0 --profile minimal[\s\S]*rustup.*component add clippy[\s\S]*cargo test -p conary-core --features native-rpm-oracle repository::catalog::parity::rpm --verbose[\s\S]*cargo clippy -p conary-core --features native-rpm-oracle --lib --bin conary-rpm-oracle --bin conary-rpm-resolution-oracle -- -D warnings"
 require_job_match "$pr_workflow" rpm-parity-producer "$rpm_parity_pattern" 'hosted PR RPM parity producer proof'
 require_job_match "$merge_workflow" rpm-parity-producer "$rpm_parity_pattern" 'hosted merge RPM parity producer proof'
+debian_parity_pattern="${debian_parity_image}[\s\S]*libapt-pkg-dev=3\.2\.0[\s\S]*rustup default 1\.98\.0[\s\S]*rustup component add clippy[\s\S]*cargo test -p conary-core --features native-debian-oracle repository::catalog::parity::debian --verbose[\s\S]*cargo clippy -p conary-core --features native-debian-oracle --lib --bin conary-debian-oracle -- -D warnings"
+require_job_match "$pr_workflow" debian-parity-producer "$debian_parity_pattern" 'hosted PR Debian parity producer proof'
+require_job_match "$merge_workflow" debian-parity-producer "$debian_parity_pattern" 'hosted merge Debian parity producer proof'
 require_match "$release_build" 'build-ccs:[\s\S]*needs: \[prepare, workspace-validation\]' 'ccs build should need workspace validation'
 require_match "$release_build" 'build-remi:[\s\S]*needs: \[prepare, workspace-validation\]' 'remi build should need workspace validation'
 require_job_match "$release_build" bundle-suite 'needs:[\s\S]*bundle-conary[\s\S]*build-remi[\s\S]*build-conaryd[\s\S]*build-conary-test' 'suite publication must wait for every product bundle'

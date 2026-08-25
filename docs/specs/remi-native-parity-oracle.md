@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
-last_updated: 2026-08-23
-revision: 4
+last_updated: 2026-08-25
+revision: 5
 status: active
 ---
 
@@ -109,6 +109,42 @@ cargo run -p conary-core --features native-rpm-oracle \
   --source-snapshot fedora-source.json \
   --primary primary.xml.gz --filelists filelists.xml.zst \
   --output rpm-oracle
+```
+
+Debian package-fact evidence is produced only with the explicit
+`native-debian-oracle` feature and exact apt-pkg 3.2.0 from the pinned Ubuntu
+26.04 image. Ordinary Conary and Remi builds do not acquire an apt-pkg
+dependency. Each ordered profile member supplies one `SourceSnapshotV1` and
+exactly one local object bound as `DebianPackages`. The producer copies the
+compressed object to private staging, verifies its exact authenticated size
+and SHA-256, and then independently reopens the staged bytes through apt-pkg's
+compression, strict deb822, and dependency-expression APIs. It does not invoke
+`apt`, `apt-get`, `dpkg`, their databases, the Conary Debian parser, a Conary
+catalog, or operational repository SQLite.
+
+Every deb822 stanza becomes one native row before profile deduplication. The
+producer projects exact package/version/architecture and `Multi-Arch`
+identity, payload location/SHA-256/size, package and declared providers,
+comma-separated groups and alternatives, architecture qualifiers, required
+and pre-required relations, recommends, suggests, enhances, conflicts,
+breaks, and replacements. Empty, malformed, repeated-authority, or unsupported
+native shapes fail the complete input. apt-pkg process globals remain behind
+one ownership lock for the complete native handle lifetime. Exact-identity
+duplicates use the same fact equality, precedence, bounded SQLite spool,
+canonical write, and complete independent reopen contract as the ALPM and RPM
+producers.
+
+Build and invoke the host-linked Debian helper explicitly:
+
+```bash
+cargo run -p conary-core --features native-debian-oracle \
+  --bin conary-debian-oracle -- \
+  --profile-manifest profile.json \
+  --source-snapshot ubuntu-main-source.json \
+  --packages main-Packages.xz \
+  --source-snapshot ubuntu-updates-source.json \
+  --packages updates-Packages.xz \
+  --output debian-oracle
 ```
 
 ## Dependency resolution evidence
@@ -218,9 +254,8 @@ source package manager executable.
 ## Separate Slice 6 owners
 
 The shared resolver artifact and comparator do not produce native evidence.
-ALPM and RPM now have pinned native solver helpers. Debian package-fact and
-solver production remains a separate owner and must derive rows from the named
-native library over the exact package universe. Complete conversion crawling,
-conversion-proof reuse, independent CCS reopen and target preflight, and final
-Remi promotion after durable object reopen remain separate authority boundaries
-under #517.
+ALPM and RPM now have pinned native solver helpers. Debian now has pinned
+package-fact production; Debian solver production remains a separate
+resolver-owned boundary. Complete conversion crawling, conversion-proof reuse,
+independent CCS reopen and target preflight, and final Remi promotion after
+durable object reopen remain separate authority boundaries under #517.

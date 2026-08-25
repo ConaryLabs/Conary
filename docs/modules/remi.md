@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-23
-revision: 52
-summary: Document Remi native full-catalog and resolution parity artifacts, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+last_updated: 2026-08-25
+revision: 53
+summary: Document pinned ALPM, RPM, and Debian native full-catalog package-fact parity, ALPM and RPM resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -331,6 +331,20 @@ producer uses the shared bounded spool, canonical writer, and independent
 complete bundle reopener and reads neither the Conary catalog nor the Fedora
 parser's projected packages.
 
+The explicit `native-debian-oracle` feature links a narrow private C++ shim to
+exact apt-pkg 3.2.0 in the pinned Ubuntu 26.04 image. For each ordered member it
+requires exactly one authenticated `DebianPackages` object, rehashes the exact
+compressed bytes, and reopens every deb822 stanza and dependency expression
+through apt-pkg. It projects package variants and `Multi-Arch`, payload
+authority, declared providers, grouped alternatives and architecture
+qualifiers, required and weak relations, conflicts, breaks, and replacements.
+Repeated authority fields, malformed or unsupported relations, missing
+payload facts, and contradictory exact identities fail the complete input.
+apt-pkg's process-global state is serialized for the native handle lifetime.
+The producer invokes no apt/dpkg executable or database and reads neither the
+Conary catalog nor the Conary Debian parser. It uses the shared bounded spool,
+canonical writer, and independent complete bundle reopener.
+
 The hosted `phase4-native-pm-parity` jobs remain deterministic one-package
 lifecycle and CLI release tests. They do not satisfy this complete-candidate
 contract.
@@ -357,9 +371,10 @@ as native repository priority, excludes weak relations, and reopens complete
 filelists for typed file-provider resolution. Both bind closures and missing
 groups back to exact package-oracle authority, reject
 architecture/conflict/identity drift, write the canonical resolution bundle,
-and fully reopen it before success. Debian package-fact and solver production,
-the complete conversion crawl, proof reuse and target preflight, and Remi
-promotion wiring remain later independent evidence paths.
+and fully reopen it before success. Debian package-fact production is now
+implemented; Debian solver production, the complete conversion crawl, proof
+reuse and target preflight, and Remi promotion wiring remain later independent
+evidence paths.
 
 The canonical artifact format is
 `docs/specs/remi-native-parity-oracle.md`.
