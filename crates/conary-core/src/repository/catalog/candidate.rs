@@ -776,6 +776,14 @@ mod tests {
             )
             .unwrap()
         );
+
+        writer.finish(evidence()).unwrap();
+        let reopened = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        assert!(!table_exists(&reopened, "catalog_ingest_arch_fragments").unwrap());
     }
 
     #[test]
