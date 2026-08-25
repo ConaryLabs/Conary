@@ -20,6 +20,7 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::RepositoryRequirementExpression;
+use crate::repository::parsers::{ArchPackageFragmentKind, ArchPackageRecord};
 
 /// Private catalog writer that retains one normalized package at a time.
 pub struct CatalogCandidateWriter {
@@ -316,6 +317,87 @@ impl CatalogCandidateWriter {
         Ok(())
     }
 
+    pub(in crate::repository) fn stage_arch_package_fragment(
+        &self,
+        directory: String,
+        kind: ArchPackageFragmentKind,
+        content: String,
+    ) -> Result<()> {
+        if directory.is_empty() {
+            return Err(Error::ParseError(
+                "Arch repository package directory is empty".to_string(),
+            ));
+        }
+        let connection = self.connection()?;
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS catalog_ingest_arch_fragments (
+                 directory TEXT PRIMARY KEY,
+                 desc TEXT,
+                 depends TEXT,
+                 CHECK (desc IS NOT NULL OR depends IS NOT NULL)
+             ) STRICT, WITHOUT ROWID;",
+        )?;
+        let (field, label) = match kind {
+            ArchPackageFragmentKind::Desc => ("desc", "desc"),
+            ArchPackageFragmentKind::Depends => ("depends", "depends"),
+        };
+        let changed = connection.execute(
+            &format!(
+                "INSERT INTO catalog_ingest_arch_fragments (directory, {field}) VALUES (?1, ?2)
+                 ON CONFLICT(directory) DO UPDATE SET {field} = excluded.{field}
+                 WHERE catalog_ingest_arch_fragments.{field} IS NULL"
+            ),
+            params![directory, content],
+        )?;
+        if changed != 1 {
+            return Err(Error::ParseError(format!(
+                "Arch repository repeats {label} metadata for {directory}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(in crate::repository) fn take_arch_package_record(
+        &self,
+    ) -> Result<Option<ArchPackageRecord>> {
+        let connection = self.connection()?;
+        if !table_exists(connection, "catalog_ingest_arch_fragments")? {
+            return Ok(None);
+        }
+        let record = connection
+            .query_row(
+                "SELECT directory, desc, depends FROM catalog_ingest_arch_fragments
+                 ORDER BY directory LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((directory, desc, depends)) = record else {
+            connection.execute_batch("DROP TABLE catalog_ingest_arch_fragments")?;
+            return Ok(None);
+        };
+        let desc = desc.ok_or_else(|| {
+            Error::ParseError(format!(
+                "Arch repository has depends metadata without desc metadata for {directory}"
+            ))
+        })?;
+        connection.execute(
+            "DELETE FROM catalog_ingest_arch_fragments WHERE directory = ?1",
+            [&directory],
+        )?;
+        Ok(Some(ArchPackageRecord {
+            directory,
+            desc,
+            depends,
+        }))
+    }
+
     /// Bind exact source evidence, calculate the canonical logical identity by
     /// ordered iteration, and reopen the resulting artifact before returning.
     pub fn finish(
@@ -336,6 +418,11 @@ impl CatalogCandidateWriter {
             }
             self.connection()?
                 .execute_batch("DROP TABLE catalog_ingest_join_marks")?;
+        }
+        if table_exists(self.connection()?, "catalog_ingest_arch_fragments")? {
+            return Err(Error::ConflictError(
+                "catalog candidate has unfinished Arch package fragments".to_string(),
+            ));
         }
         self.connection()?.execute_batch("COMMIT")?;
 
@@ -645,6 +732,105 @@ mod tests {
         assert!(message.contains("consumer 1-1"), "{message}");
         assert!(message.contains("/usr/lib/missing"), "{message}");
         assert!(message.contains("no filelists record"), "{message}");
+    }
+
+    #[test]
+    fn arch_fragments_pair_canonically_inside_the_candidate() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("catalog.sqlite3");
+        let writer = CatalogCandidateWriter::create(&path, scope()).unwrap();
+        writer
+            .stage_arch_package_fragment(
+                "zeta-2-1".to_string(),
+                ArchPackageFragmentKind::Depends,
+                "%DEPENDS%\nlibc\n".to_string(),
+            )
+            .unwrap();
+        writer
+            .stage_arch_package_fragment(
+                "alpha-1-1".to_string(),
+                ArchPackageFragmentKind::Desc,
+                "%NAME%\nalpha\n".to_string(),
+            )
+            .unwrap();
+        writer
+            .stage_arch_package_fragment(
+                "zeta-2-1".to_string(),
+                ArchPackageFragmentKind::Desc,
+                "%NAME%\nzeta\n".to_string(),
+            )
+            .unwrap();
+
+        let alpha = writer.take_arch_package_record().unwrap().unwrap();
+        assert_eq!(alpha.directory, "alpha-1-1");
+        assert_eq!(alpha.desc, "%NAME%\nalpha\n");
+        assert_eq!(alpha.depends, None);
+        let zeta = writer.take_arch_package_record().unwrap().unwrap();
+        assert_eq!(zeta.directory, "zeta-2-1");
+        assert_eq!(zeta.depends.as_deref(), Some("%DEPENDS%\nlibc\n"));
+        assert_eq!(writer.take_arch_package_record().unwrap(), None);
+        assert!(
+            !table_exists(
+                writer.connection().unwrap(),
+                "catalog_ingest_arch_fragments"
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn arch_fragment_duplicates_orphans_and_unfinished_state_fail_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let duplicate_path = root.path().join("duplicate.sqlite3");
+        let duplicate = CatalogCandidateWriter::create(&duplicate_path, scope()).unwrap();
+        duplicate
+            .stage_arch_package_fragment(
+                "pkg".to_string(),
+                ArchPackageFragmentKind::Desc,
+                "first".to_string(),
+            )
+            .unwrap();
+        let duplicate_error = duplicate
+            .stage_arch_package_fragment(
+                "pkg".to_string(),
+                ArchPackageFragmentKind::Desc,
+                "second".to_string(),
+            )
+            .unwrap_err();
+        assert!(
+            duplicate_error
+                .to_string()
+                .contains("repeats desc metadata")
+        );
+
+        let orphan_path = root.path().join("orphan.sqlite3");
+        let orphan = CatalogCandidateWriter::create(&orphan_path, scope()).unwrap();
+        orphan
+            .stage_arch_package_fragment(
+                "pkg".to_string(),
+                ArchPackageFragmentKind::Depends,
+                "depends".to_string(),
+            )
+            .unwrap();
+        let orphan_error = orphan.take_arch_package_record().unwrap_err();
+        assert!(orphan_error.to_string().contains("without desc metadata"));
+
+        let unfinished_path = root.path().join("unfinished.sqlite3");
+        let unfinished = CatalogCandidateWriter::create(&unfinished_path, scope()).unwrap();
+        unfinished
+            .stage_arch_package_fragment(
+                "pkg".to_string(),
+                ArchPackageFragmentKind::Desc,
+                "desc".to_string(),
+            )
+            .unwrap();
+        let unfinished_error = unfinished.finish(evidence()).unwrap_err();
+        assert!(
+            unfinished_error
+                .to_string()
+                .contains("unfinished Arch package fragments")
+        );
+        assert!(!unfinished_path.exists());
     }
 
     #[test]

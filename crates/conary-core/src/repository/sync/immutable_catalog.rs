@@ -19,8 +19,9 @@ use crate::repository::catalog::{
     SourceStreamV1,
 };
 use crate::repository::parsers::{
-    AuthenticatedMetadataObject, ChecksumType, PackageMetadata, RepositorySnapshotSink,
-    SnapshotPackageIdentity, SnapshotPackageJoin, SnapshotProvideUpdate,
+    ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject, ChecksumType,
+    PackageMetadata, RepositorySnapshotSink, SnapshotPackageIdentity, SnapshotPackageJoin,
+    SnapshotProvideUpdate,
 };
 
 use super::types::{RepositorySyncSnapshot, SyncedPackageRow};
@@ -305,6 +306,20 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             self.origin.clone(),
         )?;
         self.writer.package(record)
+    }
+
+    fn stage_arch_package_fragment(
+        &mut self,
+        directory: String,
+        kind: ArchPackageFragmentKind,
+        content: String,
+    ) -> Result<()> {
+        self.writer
+            .stage_arch_package_fragment(directory, kind, content)
+    }
+
+    fn take_arch_package_record(&mut self) -> Result<Option<ArchPackageRecord>> {
+        self.writer.take_arch_package_record()
     }
 
     fn extend_package_provides(
