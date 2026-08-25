@@ -75,9 +75,11 @@ pub use conversion::{
 };
 pub use conversion_crawl::{
     CCS_ARTIFACT_REOPEN_PROOF_SCHEMA_V1, CCS_TARGET_COMPATIBILITY_PROOF_SCHEMA_V1,
-    CcsArtifactReopenProofV1, CcsTargetCompatibilityProofV1, ConversionCrawlConfig,
-    ConversionCrawlFailureV3, ConversionCrawlOutcomeStateV3, ConversionCrawlPackageOutcomeV3,
-    ConversionCrawlProfileV3, REMI_CONVERSION_CRAWL_SCHEMA_V3, RemiConversionCrawlV3,
+    CONVERSION_PROOF_KEY_SCHEMA_V1, CONVERSION_PROOF_SCHEMA_V1, CcsArtifactReopenProofV1,
+    CcsTargetCompatibilityProofV1, ConversionCrawlConfig, ConversionCrawlFailureV4,
+    ConversionCrawlOutcomeStateV4, ConversionCrawlPackageOutcomeV4, ConversionCrawlProfileV4,
+    ConversionProofDispositionV1, ConversionProofKeyV1, ConversionProofTargetContractV1,
+    ConversionProofV1, REMI_CONVERSION_CRAWL_SCHEMA_V4, RemiConversionCrawlV4,
     run_conversion_crawl, write_and_reopen_conversion_crawl,
 };
 pub use index_gen::{IndexGenConfig, IndexGenResult, generate_indices};

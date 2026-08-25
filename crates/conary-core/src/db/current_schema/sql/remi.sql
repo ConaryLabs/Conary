@@ -157,3 +157,35 @@ CREATE INDEX idx_converted_packages_identity_arch
             ON converted_packages(profile_revision_sha256, package_name, package_version, package_architecture);
 CREATE INDEX idx_converted_packages_scriptlet_fidelity
             ON converted_packages(scriptlet_fidelity);
+CREATE TABLE remi_conversion_proofs (
+            proof_key_sha256 TEXT PRIMARY KEY CHECK(
+                length(proof_key_sha256) = 64
+                AND proof_key_sha256 NOT GLOB '*[^0-9a-f]*'
+            ),
+            proof_json TEXT NOT NULL CHECK(
+                json_valid(proof_json)
+                AND json_type(proof_json) = 'object'
+            ),
+            original_format TEXT NOT NULL CHECK(
+                original_format IN ('rpm', 'deb', 'arch', 'eopkg')
+            ),
+            transport_json TEXT NOT NULL CHECK(
+                json_valid(transport_json)
+                AND json_type(transport_json) = 'object'
+            ),
+            total_size INTEGER NOT NULL CHECK(total_size >= 0),
+            ccs_path TEXT NOT NULL CHECK(length(ccs_path) > 0),
+            scriptlet_summary_json TEXT NOT NULL CHECK(
+                json_valid(scriptlet_summary_json)
+                AND json_type(scriptlet_summary_json) = 'object'
+            ),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+CREATE TABLE remi_conversion_proof_bindings (
+            converted_package_id INTEGER PRIMARY KEY
+                REFERENCES converted_packages(id) ON DELETE CASCADE,
+            proof_key_sha256 TEXT NOT NULL
+                REFERENCES remi_conversion_proofs(proof_key_sha256) ON DELETE RESTRICT
+        );
+CREATE INDEX idx_remi_conversion_proof_bindings_key
+            ON remi_conversion_proof_bindings(proof_key_sha256);
