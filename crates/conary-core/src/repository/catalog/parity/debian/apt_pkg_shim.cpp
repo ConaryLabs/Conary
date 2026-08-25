@@ -1,19 +1,29 @@
 // crates/conary-core/src/repository/catalog/parity/debian/apt_pkg_shim.cpp
 
 #include <apt-pkg/configuration.h>
+#include <apt-pkg/algorithms.h>
+#include <apt-pkg/depcache.h>
 #include <apt-pkg/deblistparser.h>
 #include <apt-pkg/error.h>
 #include <apt-pkg/fileutl.h>
 #include <apt-pkg/init.h>
+#include <apt-pkg/mmap.h>
 #include <apt-pkg/pkgcache.h>
+#include <apt-pkg/pkgcachegen.h>
+#include <apt-pkg/pkgsystem.h>
+#include <apt-pkg/sourcelist.h>
 #include <apt-pkg/tagfile.h>
+#include <apt-pkg/version.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <iterator>
+#include <limits>
 #include <memory>
+#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -82,6 +92,122 @@ struct Package {
 
 struct Handle {
     std::vector<Package> packages;
+    std::string error;
+};
+
+struct NativeIdentity {
+    std::string name;
+    std::string version;
+    std::string architecture;
+};
+
+struct MissingRequirement {
+    NativeIdentity requiring;
+    int kind = 0;
+    std::string native_text;
+};
+
+class ProfilePolicy final : public pkgDepCache::Policy {
+  public:
+    ProfilePolicy(pkgCache &cache, std::map<std::string, signed short> file_priorities)
+        : cache_(cache), file_priorities_(std::move(file_priorities)) {
+        for (pkgCache::PkgIterator package = cache_.PkgBegin(); !package.end(); ++package) {
+            for (pkgCache::VerIterator version = package.VersionList(); !version.end(); ++version) {
+                signed short const priority = file_priority(version);
+                if (priority > 0) {
+                    version->Priority = static_cast<map_number_t>(30001 - priority);
+                }
+            }
+        }
+    }
+
+    pkgCache::VerIterator GetCandidateVer(pkgCache::PkgIterator const &package) override {
+        pkgCache::VerIterator selected;
+        signed short selected_priority = 0;
+        for (pkgCache::VerIterator version = package.VersionList(); !version.end(); ++version) {
+            signed short const priority = GetPriority(version);
+            if (priority <= 0) {
+                continue;
+            }
+            if (selected.end() || priority > selected_priority ||
+                (priority == selected_priority && cache_.VS->CmpVersion(version.VerStr(), selected.VerStr()) > 0)) {
+                selected = version;
+                selected_priority = priority;
+            }
+        }
+        return selected;
+    }
+
+    signed short GetPriority(pkgCache::PkgIterator const &package) override {
+        pkgCache::VerIterator candidate = GetCandidateVer(package);
+        return candidate.end() ? 0 : GetPriority(candidate);
+    }
+
+    signed short GetPriority(pkgCache::VerIterator const &version,
+                             bool /*consider_files*/ = true) override {
+        return file_priority(version);
+    }
+
+  private:
+    signed short file_priority(pkgCache::VerIterator const &version) const {
+        signed short priority = 0;
+        for (pkgCache::VerFileIterator file = version.FileList(); !file.end(); ++file) {
+            char const *name = file.File().FileName();
+            if (name == nullptr) {
+                continue;
+            }
+            auto const found = file_priorities_.find(name);
+            if (found != file_priorities_.end()) {
+                priority = std::max(priority, found->second);
+            }
+        }
+        return priority;
+    }
+
+    pkgCache &cache_;
+    std::map<std::string, signed short> file_priorities_;
+};
+
+class EvidenceDepCache final : public pkgDepCache {
+  public:
+    EvidenceDepCache(pkgCache *cache, Policy *policy) : pkgDepCache(cache, policy) {}
+
+    void allow_exact_root(pkgCache::PkgIterator const &root) {
+        exact_root_id_ = root->ID;
+        allow_root_ = true;
+    }
+
+    void retain_failed_exact_root(pkgCache::VerIterator root) {
+        pkgDepCache::StateCache &state = (*this)[root.ParentPkg()];
+        state.CandidateVer = root.operator->();
+        state.InstallVer = root.operator->();
+        state.Mode = ModeInstall;
+        state.Status = 2;
+        state.iFlags |= Protected;
+        Update(nullptr);
+    }
+
+    bool IsInstallOk(pkgCache::PkgIterator const &package, bool auto_install = true,
+                     unsigned long depth = 0, bool from_user = true) override {
+        if (allow_root_ && package->ID == exact_root_id_) {
+            return true;
+        }
+        return pkgDepCache::IsInstallOk(package, auto_install, depth, from_user);
+    }
+
+  private:
+    map_id_t exact_root_id_ = 0;
+    bool allow_root_ = false;
+};
+
+struct ResolutionHandle {
+    std::unique_ptr<MMap> map;
+    std::unique_ptr<pkgCache> cache;
+    std::unique_ptr<ProfilePolicy> policy;
+    std::vector<Package> packages;
+    std::string architecture;
+    std::vector<NativeIdentity> closure;
+    std::vector<MissingRequirement> missing;
     std::string error;
 };
 
@@ -348,6 +474,276 @@ Provide const *provide_at(Handle const *handle, std::size_t package_index,
     return &package->provides[provide_index];
 }
 
+Package const *find_source_package(ResolutionHandle const &handle,
+                                   pkgCache::VerIterator const &version) {
+    std::string const name = version.ParentPkg().Name();
+    for (Package const &package : handle.packages) {
+        if (package.name == name && package.version == version.VerStr() &&
+            package.architecture == version.Arch()) {
+            return &package;
+        }
+    }
+    return nullptr;
+}
+
+RelationGroup const *strong_group_at(Package const &package, int kind, std::size_t ordinal) {
+    std::size_t current = 0;
+    for (RelationGroup const &group : package.relations) {
+        if (group.kind != kind) {
+            continue;
+        }
+        if (current == ordinal) {
+            return &group;
+        }
+        ++current;
+    }
+    return nullptr;
+}
+
+bool configure_resolution(std::string const &architecture) {
+    if (!pkgInitConfig(*_config)) {
+        return false;
+    }
+    _config->Set("APT::Architecture", architecture);
+    _config->Set("APT::Architectures", architecture);
+    _config->Set("APT::Install-Recommends", "false");
+    _config->Set("APT::Install-Suggests", "false");
+    _config->Set("APT::Solver", "internal");
+    _config->Set("Dir::State::status", "/dev/null");
+    _config->Set("Dir::Etc::sourcelist", "/dev/null");
+    _config->Set("Dir::Etc::sourceparts", "/dev/null");
+    _config->Set("Dir::Cache::pkgcache", "/dev/null");
+    _config->Set("Dir::Cache::srcpkgcache", "/dev/null");
+    return pkgInitSystem(*_config, _system);
+}
+
+bool load_resolution(ResolutionHandle &handle, char const *const *paths, std::size_t path_count) {
+    if (paths == nullptr || path_count == 0 ||
+        path_count > std::numeric_limits<map_number_t>::max()) {
+        handle.error =
+            "Debian resolution requires between 1 and 255 ordered Packages objects";
+        return false;
+    }
+    if (!configure_resolution(handle.architecture)) {
+        std::string pending = apt_errors();
+        handle.error = pending.empty() ? "initialize apt-pkg resolution configuration" : pending;
+        return false;
+    }
+
+    pkgSourceList sources;
+    std::map<std::string, signed short> priorities;
+    for (std::size_t ordinal = 0; ordinal < path_count; ++ordinal) {
+        char const *path = paths[ordinal];
+        if (path == nullptr || *path == '\0') {
+            handle.error = "Debian Packages path is empty";
+            return false;
+        }
+        Handle parsed;
+        if (!load(parsed, path)) {
+            handle.error = parsed.error;
+            return false;
+        }
+        handle.packages.insert(handle.packages.end(),
+                               std::make_move_iterator(parsed.packages.begin()),
+                               std::make_move_iterator(parsed.packages.end()));
+        if (!sources.AddVolatileFile(path)) {
+            handle.error = "apt-pkg rejected authenticated Debian Packages object " +
+                           std::string(path);
+            return false;
+        }
+        priorities.emplace(path, static_cast<signed short>(30000 - ordinal));
+    }
+
+    MMap *map = nullptr;
+    if (!pkgCacheGenerator::MakeStatusCache(sources, nullptr, &map, true) || map == nullptr) {
+        std::string pending = apt_errors();
+        handle.error = pending.empty() ? "build apt-pkg package cache" : pending;
+        return false;
+    }
+    handle.map.reset(map);
+    handle.cache = std::make_unique<pkgCache>(handle.map.get());
+    if (_error->PendingError()) {
+        handle.error = apt_errors();
+        return false;
+    }
+    handle.policy = std::make_unique<ProfilePolicy>(*handle.cache, std::move(priorities));
+    return true;
+}
+
+pkgCache::VerIterator find_exact_version(ResolutionHandle &handle, std::string const &name,
+                                         std::string const &version,
+                                         std::string const &architecture) {
+    pkgCache::VerIterator selected;
+    for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
+        if (name != package.Name()) {
+            continue;
+        }
+        for (pkgCache::VerIterator candidate = package.VersionList(); !candidate.end(); ++candidate) {
+            if (version == candidate.VerStr() && architecture == candidate.Arch()) {
+                if (!selected.end()) {
+                    throw std::runtime_error("apt-pkg cache contains ambiguous exact Debian root " +
+                                             name + ":" + architecture + "=" + version);
+                }
+                selected = candidate;
+            }
+        }
+    }
+    return selected;
+}
+
+bool collect_resolution(ResolutionHandle &handle, pkgDepCache &dependency_cache,
+                        pkgCache::VerIterator const &root, bool marked, bool resolved) {
+    bool root_selected = false;
+    for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
+        if (!dependency_cache[package].Install()) {
+            continue;
+        }
+        pkgCache::VerIterator version = dependency_cache[package].InstVerIter(*handle.cache);
+        if (version.end()) {
+            handle.error = "apt-pkg selected an installed package without a version";
+            return false;
+        }
+        if (version == root) {
+            root_selected = true;
+        }
+        Package const *source = find_source_package(handle, version);
+        if (source == nullptr) {
+            handle.error = "apt-pkg selected a package absent from authenticated Packages inputs: " +
+                           package.FullName(false) + "=" + version.VerStr();
+            return false;
+        }
+        handle.closure.push_back({source->name, source->version, source->architecture});
+
+        std::size_t depends_ordinal = 0;
+        std::size_t pre_depends_ordinal = 0;
+        for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
+            pkgCache::DepIterator start;
+            pkgCache::DepIterator end;
+            cursor.GlobOr(start, end);
+            cursor = end;
+            ++cursor;
+
+            int kind = 0;
+            std::size_t ordinal = 0;
+            if (end->Type == pkgCache::Dep::PreDepends) {
+                kind = PRE_DEPENDS;
+                ordinal = pre_depends_ordinal++;
+            } else if (end->Type == pkgCache::Dep::Depends) {
+                kind = DEPENDS;
+                ordinal = depends_ordinal++;
+            }
+            bool const satisfied =
+                (dependency_cache[end] & pkgDepCache::DepGInstall) == pkgDepCache::DepGInstall;
+            if (satisfied) {
+                continue;
+            }
+            if (kind == 0 && !end.IsCritical()) {
+                continue;
+            }
+            if (kind == 0 || end.IsNegative()) {
+                handle.error = "apt-pkg found a conflict or unexpected critical dependency for " +
+                               package.FullName(false) + "=" + version.VerStr();
+                return false;
+            }
+            bool has_native_target = false;
+            for (pkgCache::DepIterator atom = start;; ++atom) {
+                std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
+                if (targets[0] != nullptr) {
+                    has_native_target = true;
+                    break;
+                }
+                if (atom == end) {
+                    break;
+                }
+            }
+            if (has_native_target) {
+                handle.error = "apt-pkg could not satisfy a required group with available native "
+                               "targets for " +
+                               package.FullName(false) + "=" + version.VerStr();
+                return false;
+            }
+            RelationGroup const *group = strong_group_at(*source, kind, ordinal);
+            if (group == nullptr) {
+                handle.error = "apt-pkg unsatisfied dependency does not bind an exact source group for " +
+                               package.FullName(false) + "=" + version.VerStr();
+                return false;
+            }
+            handle.missing.push_back({
+                {source->name, source->version, source->architecture}, kind, group->native_text});
+        }
+    }
+    if (!root_selected) {
+        handle.error = "apt-pkg did not retain protected exact root " +
+                       root.ParentPkg().FullName(false) + "=" + root.VerStr() + " [" +
+                       root.Arch() + "]";
+        return false;
+    }
+    if (!handle.missing.empty()) {
+        return true;
+    }
+    if (!marked || !resolved || dependency_cache.BrokenCount() != 0) {
+        handle.error = "apt-pkg could not resolve the exact root without a typed missing requirement";
+        return false;
+    }
+    return true;
+}
+
+bool resolve(ResolutionHandle &handle, char const *name, char const *version,
+             char const *architecture) {
+    handle.closure.clear();
+    handle.missing.clear();
+    handle.error.clear();
+    if (name == nullptr || version == nullptr || architecture == nullptr || *name == '\0' ||
+        *version == '\0' || *architecture == '\0') {
+        handle.error = "Debian exact root identity is incomplete";
+        return false;
+    }
+    if (handle.architecture != architecture && std::string(architecture) != "all") {
+        handle.error = "Debian exact root has incompatible target architecture";
+        return false;
+    }
+    pkgCache::VerIterator root =
+        find_exact_version(handle, name, version, architecture);
+    if (root.end()) {
+        handle.error = "Debian exact root is absent from the apt-pkg cache";
+        return false;
+    }
+
+    EvidenceDepCache dependency_cache(handle.cache.get(), handle.policy.get());
+    if (!dependency_cache.Init(nullptr)) {
+        handle.error = apt_errors();
+        return false;
+    }
+    dependency_cache.SetCandidateVersion(root);
+    bool const marked = dependency_cache.MarkInstall(root.ParentPkg(), true, 0, true, true);
+    if (!dependency_cache[root.ParentPkg()].Install()) {
+        dependency_cache.allow_exact_root(root.ParentPkg());
+        if (!dependency_cache.MarkInstall(root.ParentPkg(), false, 0, true, false)) {
+            dependency_cache.retain_failed_exact_root(root);
+        }
+    }
+    bool const provisional = collect_resolution(
+        handle, dependency_cache, root, marked, marked && dependency_cache.BrokenCount() == 0);
+    if (provisional && !handle.missing.empty()) {
+        apt_errors();
+        return true;
+    }
+    handle.closure.clear();
+    handle.missing.clear();
+    handle.error.clear();
+    pkgProblemResolver resolver(&dependency_cache);
+    resolver.Protect(root.ParentPkg());
+    bool const resolved = resolver.Resolve(false, nullptr);
+    std::string const solver_errors = apt_errors();
+    if (!collect_resolution(handle, dependency_cache, root, marked, resolved)) {
+        if (!solver_errors.empty()) {
+            handle.error.append(": ").append(solver_errors);
+        }
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 extern "C" {
@@ -475,6 +871,116 @@ int conary_apt_relation_atom_architecture_qualifier(void const *opaque,
     Atom const *atom = atom_at(static_cast<Handle const *>(opaque), package_index, group_index,
                                atom_index);
     return atom == nullptr ? -1 : atom->architecture_qualifier;
+}
+
+void *conary_apt_resolution_open(char const *const *paths, std::size_t path_count,
+                                 char const *architecture) {
+    last_error.clear();
+    try {
+        if (architecture == nullptr || *architecture == '\0') {
+            last_error = "Debian target architecture is empty";
+            return nullptr;
+        }
+        std::unique_ptr<ResolutionHandle> handle = std::make_unique<ResolutionHandle>();
+        handle->architecture = architecture;
+        if (!load_resolution(*handle, paths, path_count)) {
+            last_error = handle->error;
+            return nullptr;
+        }
+        return handle.release();
+    } catch (std::exception const &error) {
+        last_error = error.what();
+        std::string pending = apt_errors();
+        if (!pending.empty()) {
+            last_error.append(": ").append(pending);
+        }
+        return nullptr;
+    } catch (...) {
+        last_error = "unknown exception while building apt-pkg resolution cache";
+        return nullptr;
+    }
+}
+
+void conary_apt_resolution_free(void *opaque) {
+    delete static_cast<ResolutionHandle *>(opaque);
+}
+
+int conary_apt_resolution_resolve(void *opaque, char const *name, char const *version,
+                                  char const *architecture) {
+    auto *handle = static_cast<ResolutionHandle *>(opaque);
+    if (handle == nullptr) {
+        return 0;
+    }
+    try {
+        return resolve(*handle, name, version, architecture) ? 1 : 0;
+    } catch (std::exception const &error) {
+        handle->error = error.what();
+        std::string pending = apt_errors();
+        if (!pending.empty()) {
+            handle->error.append(": ").append(pending);
+        }
+        return 0;
+    } catch (...) {
+        handle->error = "unknown exception from apt-pkg Debian resolution";
+        return 0;
+    }
+}
+
+char const *conary_apt_resolution_error(void const *opaque) {
+    auto const *handle = static_cast<ResolutionHandle const *>(opaque);
+    return handle == nullptr ? nullptr : handle->error.c_str();
+}
+
+std::size_t conary_apt_resolution_closure_count(void const *opaque) {
+    auto const *handle = static_cast<ResolutionHandle const *>(opaque);
+    return handle == nullptr ? 0 : handle->closure.size();
+}
+
+NativeIdentity const *closure_at(ResolutionHandle const *handle, std::size_t index) {
+    return handle == nullptr || index >= handle->closure.size() ? nullptr : &handle->closure[index];
+}
+
+#define RESOLUTION_CLOSURE_GETTER(name, member)                                      \
+    char const *name(void const *opaque, std::size_t index) {                        \
+        NativeIdentity const *identity =                                             \
+            closure_at(static_cast<ResolutionHandle const *>(opaque), index);        \
+        return identity == nullptr ? nullptr : identity->member.c_str();              \
+    }
+
+RESOLUTION_CLOSURE_GETTER(conary_apt_resolution_closure_name, name)
+RESOLUTION_CLOSURE_GETTER(conary_apt_resolution_closure_version, version)
+RESOLUTION_CLOSURE_GETTER(conary_apt_resolution_closure_architecture, architecture)
+
+std::size_t conary_apt_resolution_missing_count(void const *opaque) {
+    auto const *handle = static_cast<ResolutionHandle const *>(opaque);
+    return handle == nullptr ? 0 : handle->missing.size();
+}
+
+MissingRequirement const *missing_at(ResolutionHandle const *handle, std::size_t index) {
+    return handle == nullptr || index >= handle->missing.size() ? nullptr : &handle->missing[index];
+}
+
+#define RESOLUTION_MISSING_IDENTITY_GETTER(name, member)                             \
+    char const *name(void const *opaque, std::size_t index) {                        \
+        MissingRequirement const *missing =                                          \
+            missing_at(static_cast<ResolutionHandle const *>(opaque), index);        \
+        return missing == nullptr ? nullptr : missing->requiring.member.c_str();      \
+    }
+
+RESOLUTION_MISSING_IDENTITY_GETTER(conary_apt_resolution_missing_name, name)
+RESOLUTION_MISSING_IDENTITY_GETTER(conary_apt_resolution_missing_version, version)
+RESOLUTION_MISSING_IDENTITY_GETTER(conary_apt_resolution_missing_architecture, architecture)
+
+int conary_apt_resolution_missing_kind(void const *opaque, std::size_t index) {
+    MissingRequirement const *missing =
+        missing_at(static_cast<ResolutionHandle const *>(opaque), index);
+    return missing == nullptr ? 0 : missing->kind;
+}
+
+char const *conary_apt_resolution_missing_native_text(void const *opaque, std::size_t index) {
+    MissingRequirement const *missing =
+        missing_at(static_cast<ResolutionHandle const *>(opaque), index);
+    return missing == nullptr ? nullptr : missing->native_text.c_str();
 }
 
 }  // extern "C"

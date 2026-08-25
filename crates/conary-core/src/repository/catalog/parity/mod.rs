@@ -32,7 +32,8 @@ pub use rpm::{
 
 #[cfg(feature = "native-debian-oracle")]
 pub use debian::{
-    DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DebianParityMemberInput, produce_debian_parity_oracle,
+    DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1,
+    DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
 };
 
 pub use compare::{

@@ -1210,6 +1210,21 @@ test_check_release_matrix_requires_hosted_debian_parity_producer() {
     done
 }
 
+test_check_release_matrix_requires_hosted_debian_resolution_binary() {
+    local repo
+    local workflow
+
+    for workflow in pr-gate.yml merge-validation.yml; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/.github/workflows/$workflow" \
+            ' --bin conary-debian-resolution-oracle' \
+            ''
+
+        assert_check_release_matrix_fails "$repo" "hosted"
+    done
+}
+
 test_check_release_matrix_rejects_namespace_setup_after_workspace_tests() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1508,6 +1523,7 @@ main() {
         test_check_release_matrix_requires_resilient_alpm_archive_downloads
         test_check_release_matrix_requires_hosted_rpm_parity_producer
         test_check_release_matrix_requires_hosted_debian_parity_producer
+        test_check_release_matrix_requires_hosted_debian_resolution_binary
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion

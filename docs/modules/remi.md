@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 53
-summary: Document pinned ALPM, RPM, and Debian native full-catalog package-fact parity, ALPM and RPM resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 54
+summary: Document pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -361,20 +361,22 @@ authority plus a bounded merge walk for complete root coverage. Comparison
 retains one native/candidate root pair and reports typed root, outcome, closure,
 or unresolved-set drift.
 
-ALPM and RPM have implemented native solver producers. Each independently
+ALPM, RPM, and Debian have implemented native solver producers. Each independently
 reopens and freshly reproduces the bound package oracle from the exact
 authenticated native metadata before solving every package as an exact root
 against empty installed state. The ALPM producer records prepared libalpm
 transaction packages and typed missing-dependency records. The RPM producer
 uses exact libsolv transaction and problem-rule IDs, applies profile precedence
 as native repository priority, excludes weak relations, and reopens complete
-filelists for typed file-provider resolution. Both bind closures and missing
-groups back to exact package-oracle authority, reject
-architecture/conflict/identity drift, write the canonical resolution bundle,
-and fully reopen it before success. Debian package-fact production is now
-implemented; Debian solver production, the complete conversion crawl, proof
-reuse and target preflight, and Remi promotion wiring remain later independent
-evidence paths.
+filelists for typed file-provider resolution. The Debian producer uses private
+volatile apt-pkg source indexes and empty installed state, projects profile
+order into candidate and provider priority, records exact native transactions,
+and retains only required or pre-required groups that have no native target as
+typed unresolved evidence. All three bind closures and missing groups back to
+exact package-oracle authority, reject architecture/conflict/identity or input
+drift, write the canonical resolution bundle, and fully reopen it before
+success. The complete conversion crawl, proof reuse and target preflight, and
+Remi promotion wiring remain later independent evidence paths.
 
 The canonical artifact format is
 `docs/specs/remi-native-parity-oracle.md`.

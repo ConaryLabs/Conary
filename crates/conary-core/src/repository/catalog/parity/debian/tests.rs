@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2,
-    SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
+    CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1, PROFILE_REVISION_SCHEMA_V2,
+    ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1,
+    SourceStreamV1, native_requirement_group_sha256, verify_native_parity_oracle_bundle,
+    verify_native_resolution_oracle_bundle,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::{OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy};
@@ -77,6 +79,33 @@ fn write_packages(
     .unwrap();
     fs::write(&path, compressed).unwrap();
     path
+}
+
+fn write_resolution_packages(directory: &Path, repository: &str, packages: &str) -> PathBuf {
+    let path = directory.join(format!("{repository}-Packages.zst"));
+    let compressed = zstd::stream::encode_all(packages.as_bytes(), 1).unwrap();
+    fs::write(&path, compressed).unwrap();
+    path
+}
+
+fn resolution_stanza(
+    name: &str,
+    version: &str,
+    architecture: &str,
+    checksum: char,
+    relations: &str,
+) -> String {
+    format!(
+        "Package: {name}\n\
+         Version: {version}\n\
+         Architecture: {architecture}\n\
+         Filename: pool/main/{name}_{version}_{architecture}.deb\n\
+         Size: 42\n\
+         SHA256: {}\n\
+         {relations}\
+         Description: {name}\n\n",
+        digest(checksum)
+    )
 }
 
 fn source_snapshot(repository: &str, packages: &Path) -> SourceSnapshotV1 {
@@ -444,4 +473,218 @@ fn apt_pkg_rejects_malformed_relation_without_dropping_the_stanza() {
     .unwrap();
     let error = AptPackages::open(&packages_path).unwrap_err();
     assert!(error.to_string().contains("rejected Debian relation field"));
+}
+
+#[test]
+fn resolution_producer_emits_native_precedence_closures_and_typed_missing_groups() {
+    let directory = tempfile::tempdir().unwrap();
+    let high_packages = [
+        resolution_stanza(
+            "application",
+            "1.0-1",
+            "amd64",
+            'a',
+            "Pre-Depends: setup\nDepends: virtual-provider, helper (>= 2), choice-a | choice-b\nRecommends: weak-only\n",
+        ),
+        resolution_stanza(
+            "provider-high",
+            "1.0-1",
+            "amd64",
+            'b',
+            "Provides: virtual-provider\n",
+        ),
+        resolution_stanza(
+            "helper",
+            "2.0-1",
+            "amd64",
+            'c',
+            "Depends: leaf\n",
+        ),
+        resolution_stanza("leaf", "1.0-1", "amd64", 'd', ""),
+        resolution_stanza("choice-b", "1.0-1", "amd64", 'e', ""),
+        resolution_stanza("setup", "1.0-1", "all", 'f', ""),
+        resolution_stanza("weak-only", "1.0-1", "amd64", '1', ""),
+        resolution_stanza(
+            "missing-root",
+            "1.0-1",
+            "amd64",
+            '2',
+            "Depends: absent-provider (>= 1)\n",
+        ),
+    ]
+    .concat();
+    let low_packages = [
+        resolution_stanza(
+            "provider-low",
+            "9.0-1",
+            "amd64",
+            '3',
+            "Provides: virtual-provider\n",
+        ),
+        resolution_stanza("helper", "9.0-1", "amd64", '4', ""),
+    ]
+    .concat();
+    let packages = vec![
+        write_resolution_packages(directory.path(), "ubuntu-high", &high_packages),
+        write_resolution_packages(directory.path(), "ubuntu-low", &low_packages),
+    ];
+    let snapshots = packages
+        .iter()
+        .zip(["ubuntu-high", "ubuntu-low"])
+        .map(|(packages, repository)| source_snapshot(repository, packages))
+        .collect::<Vec<_>>();
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 10;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+    let resolution_output = directory.path().join("resolution-oracle");
+
+    let manifest = produce_debian_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &resolution_output,
+    )
+    .unwrap();
+
+    assert_eq!(manifest.implementation.name, "apt-pkg");
+    assert_eq!(manifest.implementation.version, "3.2.0");
+    assert_eq!(manifest.artifact.counts.roots, 10);
+    assert_eq!(manifest.artifact.counts.resolved_roots, 9);
+    assert_eq!(manifest.artifact.counts.unresolved_roots, 1);
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut oracle_packages = Vec::new();
+    package_reader
+        .for_each_package(|package| {
+            oracle_packages.push(package);
+            Ok(())
+        })
+        .unwrap();
+    let package_key = |name: &str, version: Option<&str>| {
+        oracle_packages
+            .iter()
+            .find(|package| {
+                package.name == name && version.is_none_or(|version| package.version == version)
+            })
+            .unwrap()
+            .package_key_sha256
+            .clone()
+    };
+    let application_key = package_key("application", None);
+    let missing_key = package_key("missing-root", None);
+    let resolution_reader =
+        verify_native_resolution_oracle_bundle(&resolution_output, &profile, &package_reader)
+            .unwrap();
+    let mut application_outcome = None;
+    let mut missing_outcome = None;
+    resolution_reader
+        .for_each_root(|root| {
+            if root.root_package_key_sha256 == application_key {
+                application_outcome = Some(root.outcome.clone());
+            }
+            if root.root_package_key_sha256 == missing_key {
+                missing_outcome = Some(root.outcome);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let NativeResolutionOutcomeV1::Resolved {
+        closure_package_keys_sha256,
+    } = application_outcome.unwrap()
+    else {
+        panic!("application must resolve");
+    };
+    let closure = closure_package_keys_sha256
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    for (name, expected) in [
+        ("application", package_key("application", None)),
+        ("provider-high", package_key("provider-high", None)),
+        ("helper", package_key("helper", Some("2.0-1"))),
+        ("leaf", package_key("leaf", None)),
+        ("choice-b", package_key("choice-b", None)),
+        ("setup", package_key("setup", None)),
+    ] {
+        assert!(
+            closure.contains(&expected),
+            "missing closure package {name}"
+        );
+    }
+    assert_eq!(closure.len(), 6);
+    assert!(!closure.contains(&package_key("provider-low", None)));
+    assert!(!closure.contains(&package_key("helper", Some("9.0-1"))));
+    assert!(!closure.contains(&package_key("weak-only", None)));
+
+    let missing_package = oracle_packages
+        .iter()
+        .find(|package| package.name == "missing-root")
+        .unwrap();
+    let missing_group = missing_package
+        .requirement_groups
+        .iter()
+        .find(|group| group.kind == "depends")
+        .unwrap();
+    let NativeResolutionOutcomeV1::Unresolved { dependencies } = missing_outcome.unwrap() else {
+        panic!("missing-root must remain unresolved");
+    };
+    assert_eq!(dependencies.len(), 1);
+    assert_eq!(dependencies[0].requiring_package_key_sha256, missing_key);
+    assert_eq!(
+        dependencies[0].requirement_group_sha256,
+        native_requirement_group_sha256(missing_group).unwrap()
+    );
+}
+
+#[test]
+fn resolution_producer_rejects_conflicts_and_incompatible_roots() {
+    let directory = tempfile::tempdir().unwrap();
+    let conflict_packages = [
+        resolution_stanza(
+            "conflict-root",
+            "1.0-1",
+            "amd64",
+            'a',
+            "Depends: blocker\nConflicts: blocker\n",
+        ),
+        resolution_stanza("blocker", "1.0-1", "amd64", 'b', ""),
+    ]
+    .concat();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &conflict_packages,
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 2;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+
+    let conflict = produce_debian_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("conflict-resolution"),
+    )
+    .unwrap_err();
+    assert!(matches!(conflict, Error::ConflictError(_)));
+
+    let architecture = produce_debian_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "arm64",
+        &directory.path().join("architecture-resolution"),
+    )
+    .unwrap_err();
+    assert!(matches!(architecture, Error::ConflictError(_)));
+    assert!(
+        architecture
+            .to_string()
+            .contains("incompatible target architecture")
+    );
 }

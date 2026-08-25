@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-08-25
-revision: 5
+revision: 6
 status: active
 ---
 
@@ -251,11 +251,47 @@ Success has the same complete per-root and independent reopen meaning as the
 ALPM producer. Neither native helper reads Conary catalog rows or invokes a
 source package manager executable.
 
+Debian resolution evidence is produced by the same explicit
+`native-debian-oracle` feature and exact apt-pkg 3.2.0 runtime as the Debian
+package-fact oracle. The resolver independently reopens the supplied package
+bundle, freshly reproduces its entire manifest from the authenticated
+`Packages` objects, and loads private volatile apt-pkg source indexes for the
+target architecture. It uses an empty status file and never reads an installed
+package database.
+
+Profile member order is projected into apt-pkg candidate policy and native
+provider priority. Every exact package-oracle key binds through a private
+disk-backed index to one exact native package version and becomes a root.
+Required and pre-required groups participate in resolution; weak groups do
+not. Successful native transactions become exact closure package keys. A
+required group with no native target becomes an exact requiring-package key
+and canonical required-group digest. Available but unsatisfied targets,
+architecture rejection, conflicts, non-installable roots, native identity
+ambiguity, unsupported profile cardinality, and input or package-oracle drift
+fail the complete crawl. Diagnostic strings never establish an outcome.
+
+Invoke the resolver helper with the exact Debian package bundle produced
+above:
+
+```bash
+cargo run -p conary-core --features native-debian-oracle \
+  --bin conary-debian-resolution-oracle -- \
+  --profile-manifest profile.json \
+  --source-snapshot ubuntu-main-source.json --packages main-Packages.xz \
+  --source-snapshot ubuntu-updates-source.json --packages updates-Packages.xz \
+  --package-oracle debian-oracle \
+  --architecture amd64 \
+  --output debian-resolution-oracle
+```
+
+Success has the same complete per-root and independent reopen meaning as the
+ALPM and RPM producers. The helper invokes no `apt`, `apt-get`, or `dpkg`
+executable and reads neither their databases nor Conary catalog rows.
+
 ## Separate Slice 6 owners
 
 The shared resolver artifact and comparator do not produce native evidence.
-ALPM and RPM now have pinned native solver helpers. Debian now has pinned
-package-fact production; Debian solver production remains a separate
-resolver-owned boundary. Complete conversion crawling, conversion-proof reuse,
-independent CCS reopen and target preflight, and final Remi promotion after
-durable object reopen remain separate authority boundaries under #517.
+ALPM, RPM, and Debian now have pinned native solver helpers. Complete
+conversion crawling, conversion-proof reuse, independent CCS reopen and target
+preflight, and final Remi promotion after durable object reopen remain separate
+authority boundaries under #517.
