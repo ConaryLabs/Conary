@@ -189,6 +189,28 @@ impl CatalogAuthority {
         self.open_pinned_resolution(pin_id, resolved)
     }
 
+    /// Reopen an exact registered revision without a durable reader pin.
+    ///
+    /// The caller must hold the exclusive canonical runtime-root lock for the
+    /// complete lifetime of the returned reader. This is the stopped-runtime
+    /// proof path; background GC therefore cannot race this immutable bundle.
+    pub(crate) fn open_selected_profile_exclusively(
+        &self,
+        selection: &ProfileRevisionSelection,
+    ) -> Result<PinnedProfileCatalog> {
+        let conn = open_runtime_db(&self.db_path).with_context(|| {
+            format!(
+                "open Remi operational database for exclusive profile '{}' revision {}",
+                selection.source_profile, selection.profile_revision_sha256
+            )
+        })?;
+        open_resolved_profile(resolve_profile_selection(
+            &conn,
+            &self.catalog_dir,
+            selection.clone(),
+        )?)
+    }
+
     fn open_pinned_resolution(
         &self,
         pin_id: String,
@@ -772,7 +794,6 @@ fn insert_reader_pin(
     Ok(())
 }
 
-#[cfg(test)]
 fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfileCatalog> {
     let ResolvedProfileCatalog {
         selection,

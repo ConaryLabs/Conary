@@ -5,8 +5,8 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use remi::server::{
     ConversionCrawlConfig, IndexGenConfig, PrewarmConfig, ProfileRevisionSelection, ProxyConfig,
-    RemiConfig, generate_indices, run_conversion_crawl, run_prewarm, run_proxy,
-    run_server_from_config,
+    RemiConfig, RemiPromotionProofProfileInput, generate_indices, run_conversion_crawl,
+    run_prewarm, run_proxy, run_server_from_config,
 };
 use remi::trust;
 use std::path::PathBuf;
@@ -37,6 +37,8 @@ enum Command {
     ConversionCrawl(ConversionCrawlArgs),
     /// Atomically activate one completely proven public candidate universe.
     PromotionActivate(PromotionActivateArgs),
+    /// Produce complete Conary resolution and final promotion evidence.
+    PromotionProve(PromotionProveArgs),
     /// Record reproducible conversion latency and work evidence.
     ConversionBenchmark(ConversionBenchmarkArgs),
     /// Remi-owned trust admin commands.
@@ -227,6 +229,49 @@ struct PromotionActivateArgs {
 }
 
 #[derive(Args)]
+struct PromotionProveArgs {
+    /// Current Remi service configuration; the runtime must be stopped.
+    #[arg(long, default_value = "/etc/conary/remi.toml")]
+    config: PathBuf,
+
+    /// Exact public candidate as PROFILE=REVISION; repeat in canonical order.
+    #[arg(long = "candidate", required = true, value_parser = parse_candidate)]
+    candidates: Vec<ProfileRevisionSelection>,
+
+    /// Package oracle directory as PROFILE=PATH; repeat in canonical order.
+    #[arg(long = "package-oracle", required = true, value_parser = parse_profile_path)]
+    package_oracles: Vec<ProfilePathBinding>,
+
+    /// Native resolution directory as PROFILE=PATH; repeat in canonical order.
+    #[arg(long = "native-resolution", required = true, value_parser = parse_profile_path)]
+    native_resolutions: Vec<ProfilePathBinding>,
+
+    /// Native target architecture as PROFILE=ARCH; repeat in canonical order.
+    #[arg(long = "architecture", required = true, value_parser = parse_profile_value)]
+    architectures: Vec<ProfileValueBinding>,
+
+    /// Exact complete RemiConversionCrawlV4 artifact.
+    #[arg(long)]
+    conversion_crawl: PathBuf,
+
+    /// New private directory receiving candidate resolution and promotion proof.
+    #[arg(long)]
+    output_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct ProfilePathBinding {
+    profile: String,
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct ProfileValueBinding {
+    profile: String,
+    value: String,
+}
+
+#[derive(Args)]
 struct ConversionBenchmarkArgs {
     /// Database path
     #[arg(long, default_value = "/var/lib/conary/conary.db")]
@@ -402,6 +447,7 @@ fn main() {
         Some(Command::Prewarm(args)) => run_prewarm_command(args),
         Some(Command::ConversionCrawl(args)) => run_conversion_crawl_command(args),
         Some(Command::PromotionActivate(args)) => run_promotion_activate_command(args),
+        Some(Command::PromotionProve(args)) => run_promotion_prove_command(args),
         Some(Command::ConversionBenchmark(args)) => run_conversion_benchmark_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
         Some(Command::Deployment { command }) => run_deployment_command(command),
@@ -654,6 +700,80 @@ fn run_promotion_activate_command(args: PromotionActivateArgs) -> Result<()> {
     })
 }
 
+fn run_promotion_prove_command(args: PromotionProveArgs) -> Result<()> {
+    let config = RemiConfig::load(&args.config)?;
+    let profiles = combine_promotion_proof_bindings(
+        args.candidates,
+        args.package_oracles,
+        args.native_resolutions,
+        args.architectures,
+    )?;
+    let outcome = remi::server::run_promotion_proof_from_config(
+        &config,
+        args.conversion_crawl,
+        args.output_dir,
+        profiles,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&outcome)?);
+    Ok(())
+}
+
+fn combine_promotion_proof_bindings(
+    candidates: Vec<ProfileRevisionSelection>,
+    package_oracles: Vec<ProfilePathBinding>,
+    native_resolutions: Vec<ProfilePathBinding>,
+    architectures: Vec<ProfileValueBinding>,
+) -> Result<Vec<RemiPromotionProofProfileInput>> {
+    let count = candidates.len();
+    anyhow::ensure!(
+        package_oracles.len() == count
+            && native_resolutions.len() == count
+            && architectures.len() == count,
+        "promotion-proof binding counts differ"
+    );
+    candidates
+        .into_iter()
+        .zip(package_oracles)
+        .zip(native_resolutions)
+        .zip(architectures)
+        .map(|(((selection, package), native), architecture)| {
+            anyhow::ensure!(
+                selection.source_profile == package.profile
+                    && selection.source_profile == native.profile
+                    && selection.source_profile == architecture.profile,
+                "promotion-proof bindings are reordered or name different profiles"
+            );
+            Ok(RemiPromotionProofProfileInput {
+                selection,
+                package_oracle_dir: package.path,
+                native_resolution_dir: native.path,
+                architecture: architecture.value,
+            })
+        })
+        .collect()
+}
+
+fn parse_profile_path(value: &str) -> std::result::Result<ProfilePathBinding, String> {
+    let binding = parse_profile_value(value)?;
+    Ok(ProfilePathBinding {
+        profile: binding.profile,
+        path: PathBuf::from(binding.value),
+    })
+}
+
+fn parse_profile_value(value: &str) -> std::result::Result<ProfileValueBinding, String> {
+    let (profile, value) = value
+        .split_once('=')
+        .ok_or_else(|| "binding must be PROFILE=VALUE".to_string())?;
+    if profile.is_empty() || value.is_empty() {
+        return Err("binding profile and value must not be empty".to_string());
+    }
+    Ok(ProfileValueBinding {
+        profile: profile.to_string(),
+        value: value.to_string(),
+    })
+}
+
 fn parse_candidate(value: &str) -> std::result::Result<ProfileRevisionSelection, String> {
     let (source_profile, profile_revision_sha256) = value
         .split_once('=')
@@ -879,6 +999,30 @@ root = "{storage_root}"
         assert!(
             parse_candidate("=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn promotion_proof_bindings_reject_cross_profile_reordering() {
+        let candidates = vec![ProfileRevisionSelection {
+            source_profile: "fedora-44".to_string(),
+            profile_revision_sha256: "a".repeat(64),
+        }];
+        let package = vec![ProfilePathBinding {
+            profile: "ubuntu-26.04".to_string(),
+            path: PathBuf::from("package"),
+        }];
+        let native = vec![ProfilePathBinding {
+            profile: "fedora-44".to_string(),
+            path: PathBuf::from("native"),
+        }];
+        let architectures = vec![ProfileValueBinding {
+            profile: "fedora-44".to_string(),
+            value: "x86_64".to_string(),
+        }];
+
+        assert!(
+            combine_promotion_proof_bindings(candidates, package, native, architectures).is_err()
         );
     }
 }
