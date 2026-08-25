@@ -195,10 +195,17 @@ the repository sink. The immutable sink walks its private catalog transaction
 one typed requirement at a time; the compatibility sink checks its collected
 projection. No second SQLite audit database or other parser work file is
 created for those duplicated facts.
+Arch repository databases may publish each package's desc and depends records
+out of order. The parser stages those exact fragments in a strict transient
+table inside the private catalog candidate transaction, rejects duplicate and
+orphan fragments, replays complete pairs in source-directory order, and drops
+the table before finalization. The compatibility sink performs the same typed
+pairing in its existing in-memory state. No separate Arch SQLite spool or
+sidecar is created; its pages remain in the candidate high-water mark consumed
+by finalization admission.
 These construction admissions are independent of the serving readiness floor
-and do not yet estimate initial source/profile candidate growth, Arch/eopkg
-downloads whose authenticated roots do not publish a byte length, or the Arch
-pairing spool.
+and do not yet estimate initial source/profile candidate growth or Arch/eopkg
+downloads whose authenticated roots do not publish a byte length.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;

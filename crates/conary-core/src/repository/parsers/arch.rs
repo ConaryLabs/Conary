@@ -5,11 +5,10 @@
 //! Parses Arch Linux .db.tar.gz files which contain package metadata
 //! in a custom text format with %FIELD% markers.
 
-mod spool;
-
 use super::{
-    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
-    ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
+    ArchPackageFragmentKind, AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole,
+    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
@@ -425,8 +424,6 @@ impl RepositoryParser for ArchParser {
             &format!("Arch repository database {}", database_file.display()),
         )?;
         let mut archive = Archive::new(decoder);
-        let spool = spool::ArchPackageSpool::create(&work_directory.join("arch-records.sqlite"))?;
-
         for entry in archive.entries()? {
             let mut entry = entry
                 .map_err(|e| Error::ParseError(format!("Failed to read tarball entry: {}", e)))?;
@@ -447,21 +444,37 @@ impl RepositoryParser for ArchParser {
                     entry.read_to_string(&mut content).map_err(|e| {
                         Error::ParseError(format!("Failed to read desc file: {}", e))
                     })?;
-                    spool.desc(&dir_key, content)?;
+                    sink.stage_arch_package_fragment(
+                        dir_key,
+                        ArchPackageFragmentKind::Desc,
+                        content,
+                    )?;
                 } else if path_str.ends_with("/depends") {
                     let mut content = String::new();
                     entry.read_to_string(&mut content).map_err(|e| {
                         Error::ParseError(format!("Failed to read depends file: {}", e))
                     })?;
-                    spool.depends(&dir_key, content)?;
+                    sink.stage_arch_package_fragment(
+                        dir_key,
+                        ArchPackageFragmentKind::Depends,
+                        content,
+                    )?;
                 }
             }
         }
 
-        let package_count = spool.finish(|_directory, desc_content, depends_content| {
-            let desc_fields = self.parse_desc_file(desc_content)?;
-            sink.package(self.package_from_fields(repo_url, &desc_fields, depends_content)?)
-        })?;
+        let mut package_count = 0_u64;
+        while let Some(record) = sink.take_arch_package_record()? {
+            let desc_fields = self.parse_desc_file(&record.desc)?;
+            sink.package(self.package_from_fields(
+                repo_url,
+                &desc_fields,
+                record.depends.as_deref(),
+            )?)?;
+            package_count = package_count.checked_add(1).ok_or_else(|| {
+                Error::ParseError("Arch repository package count exceeds u64".to_string())
+            })?;
+        }
 
         sink.authenticated_object(database_object)?;
         info!("Parsed {} packages from Arch repository", package_count);

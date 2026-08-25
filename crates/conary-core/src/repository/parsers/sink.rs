@@ -49,6 +49,27 @@ pub struct SnapshotProvideUpdate {
     pub already_known: usize,
 }
 
+/// One source-native fragment in an Arch repository database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchPackageFragmentKind {
+    Desc,
+    Depends,
+}
+
+/// One exact paired Arch package record, replayed in source-directory order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchPackageRecord {
+    pub directory: String,
+    pub desc: String,
+    pub depends: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct ArchPackageFragments {
+    desc: Option<String>,
+    depends: Option<String>,
+}
+
 /// Parser-to-storage contract for one authenticated native repository snapshot.
 ///
 /// Implementations may persist each package immediately. Parsers must not infer
@@ -83,6 +104,18 @@ pub trait RepositorySnapshotSink {
     /// Admit one complete native package projection.
     fn package(&mut self, package: PackageMetadata) -> Result<()>;
 
+    /// Retain one exact out-of-order ALPM database fragment without creating
+    /// a second parser database.
+    fn stage_arch_package_fragment(
+        &mut self,
+        directory: String,
+        kind: ArchPackageFragmentKind,
+        content: String,
+    ) -> Result<()>;
+
+    /// Take the next complete ALPM record in exact directory order.
+    fn take_arch_package_record(&mut self) -> Result<Option<ArchPackageRecord>>;
+
     /// Merge child-projected provides into one exact previously admitted
     /// package identity and mark that package as covered by `join`.
     fn extend_package_provides(
@@ -109,6 +142,7 @@ pub(crate) struct CollectingRepositorySnapshotSink {
     object_roles: BTreeSet<String>,
     work_directory: tempfile::TempDir,
     join_marks: BTreeMap<SnapshotPackageJoin, BTreeSet<usize>>,
+    arch_package_fragments: BTreeMap<String, ArchPackageFragments>,
 }
 
 impl CollectingRepositorySnapshotSink {
@@ -121,6 +155,7 @@ impl CollectingRepositorySnapshotSink {
                 .prefix("conary-native-ingest-")
                 .tempdir()?,
             join_marks: BTreeMap::new(),
+            arch_package_fragments: BTreeMap::new(),
         })
     }
 }
@@ -151,6 +186,50 @@ impl RepositorySnapshotSink for CollectingRepositorySnapshotSink {
     fn package(&mut self, package: PackageMetadata) -> Result<()> {
         self.packages.push(package);
         Ok(())
+    }
+
+    fn stage_arch_package_fragment(
+        &mut self,
+        directory: String,
+        kind: ArchPackageFragmentKind,
+        content: String,
+    ) -> Result<()> {
+        if directory.is_empty() {
+            return Err(Error::ParseError(
+                "Arch repository package directory is empty".to_string(),
+            ));
+        }
+        let fragments = self
+            .arch_package_fragments
+            .entry(directory.clone())
+            .or_default();
+        let (slot, label) = match kind {
+            ArchPackageFragmentKind::Desc => (&mut fragments.desc, "desc"),
+            ArchPackageFragmentKind::Depends => (&mut fragments.depends, "depends"),
+        };
+        if slot.is_some() {
+            return Err(Error::ParseError(format!(
+                "Arch repository repeats {label} metadata for {directory}"
+            )));
+        }
+        *slot = Some(content);
+        Ok(())
+    }
+
+    fn take_arch_package_record(&mut self) -> Result<Option<ArchPackageRecord>> {
+        let Some((directory, fragments)) = self.arch_package_fragments.pop_first() else {
+            return Ok(None);
+        };
+        let desc = fragments.desc.ok_or_else(|| {
+            Error::ParseError(format!(
+                "Arch repository has depends metadata without desc metadata for {directory}"
+            ))
+        })?;
+        Ok(Some(ArchPackageRecord {
+            directory,
+            desc,
+            depends: fragments.depends,
+        }))
     }
 
     fn extend_package_provides(
@@ -274,5 +353,45 @@ impl CollectingRepositorySnapshotSink {
                 .then_with(|| left.source_path.cmp(&right.source_path))
         });
         (self.packages, self.authenticated_objects)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compatibility_arch_pairing_is_canonical_and_creates_no_work_file() {
+        let mut sink = CollectingRepositorySnapshotSink::create().unwrap();
+        let work_directory = sink.work_directory().to_path_buf();
+        sink.stage_arch_package_fragment(
+            "zeta".to_string(),
+            ArchPackageFragmentKind::Depends,
+            "zeta depends".to_string(),
+        )
+        .unwrap();
+        sink.stage_arch_package_fragment(
+            "alpha".to_string(),
+            ArchPackageFragmentKind::Desc,
+            "alpha desc".to_string(),
+        )
+        .unwrap();
+        sink.stage_arch_package_fragment(
+            "zeta".to_string(),
+            ArchPackageFragmentKind::Desc,
+            "zeta desc".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            sink.take_arch_package_record().unwrap().unwrap().directory,
+            "alpha"
+        );
+        assert_eq!(
+            sink.take_arch_package_record().unwrap().unwrap().directory,
+            "zeta"
+        );
+        assert_eq!(sink.take_arch_package_record().unwrap(), None);
+        assert_eq!(std::fs::read_dir(work_directory).unwrap().count(), 0);
     }
 }
