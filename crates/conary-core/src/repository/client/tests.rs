@@ -1,6 +1,38 @@
 // conary-core/src/repository/client/tests.rs
 
 use super::*;
+use std::sync::Mutex;
+
+struct CumulativeStreamAdmission {
+    remaining: Mutex<u64>,
+    admitted: Mutex<u64>,
+}
+
+impl CumulativeStreamAdmission {
+    fn new(available: u64) -> Self {
+        Self {
+            remaining: Mutex::new(available),
+            admitted: Mutex::new(0),
+        }
+    }
+}
+
+impl CatalogMetadataStreamAdmission for CumulativeStreamAdmission {
+    fn reserve_next(&self, additional_bytes: u64) -> Result<Box<dyn Send>> {
+        let mut remaining = self.remaining.lock().unwrap();
+        if additional_bytes > *remaining {
+            return Err(crate::repository::catalog::CatalogScratchCapacityError {
+                required_bytes: additional_bytes,
+                available_bytes: *remaining,
+                reserved_bytes: 0,
+            }
+            .into());
+        }
+        *remaining -= additional_bytes;
+        *self.admitted.lock().unwrap() += additional_bytes;
+        Ok(Box::new(()))
+    }
+}
 
 #[test]
 fn test_retry_policy_default() {
@@ -283,6 +315,71 @@ async fn test_download_file_requests_identity_encoding() {
         request.contains("accept-encoding: identity"),
         "file download request did not force identity encoding:\n{request}"
     );
+}
+
+#[tokio::test]
+async fn unknown_length_download_admits_every_byte_before_writing() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nsigned")
+                .await
+                .unwrap();
+        }
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let client = RepositoryClient::new()
+        .unwrap()
+        .with_retry_policy(RetryConfig {
+            max_attempts: 1,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter_factor: 0.0,
+        });
+    let exact_path = root.path().join("exact-index");
+    let exact = CumulativeStreamAdmission::new(6);
+    let identity = client
+        .download_file_with_identity_admission(&format!("http://{addr}/exact"), &exact_path, &exact)
+        .await
+        .unwrap();
+    assert_eq!(identity.size, 6);
+    assert_eq!(*exact.admitted.lock().unwrap(), 6);
+    assert_eq!(std::fs::read(&exact_path).unwrap(), b"signed");
+
+    let short_path = root.path().join("short-index");
+    let short = CumulativeStreamAdmission::new(5);
+    let error = client
+        .download_file_with_identity_admission(&format!("http://{addr}/short"), &short_path, &short)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::CatalogScratchCapacity(_)));
+    assert!(!short_path.exists());
+    assert!(
+        std::fs::metadata(short_path.with_extension("tmp"))
+            .unwrap()
+            .len()
+            <= 5
+    );
+    server.await.unwrap();
 }
 
 #[tokio::test]

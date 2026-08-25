@@ -15,11 +15,11 @@ pub mod fedora;
 mod sink;
 mod snapshot;
 
-pub(crate) use sink::CollectingRepositorySnapshotSink;
 pub use sink::{
     ArchPackageFragmentKind, ArchPackageRecord, REPOSITORY_SNAPSHOT_PROJECTION_VERSION,
     RepositorySnapshotSink, SnapshotPackageIdentity, SnapshotPackageJoin, SnapshotProvideUpdate,
 };
+pub(crate) use sink::{CollectingRepositorySnapshotSink, validation_only_metadata_stream};
 pub use snapshot::{
     AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
 };

@@ -548,9 +548,9 @@ mod tests {
     use super::*;
     use crate::repository::catalog::{
         CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
-        CatalogMetadataScratchV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
-        CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
-        CatalogScratchCapacityError,
+        CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
+        CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogProvideRecordV1,
+        CatalogRequirementAtomV1, CatalogRequirementGroupV1, CatalogScratchCapacityError,
     };
     use crate::repository::dependency_model::{
         ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryRequirementClause,
@@ -581,6 +581,14 @@ mod tests {
             _requirement: CatalogMetadataScratchV1,
         ) -> Result<Box<dyn Send>> {
             panic!("candidate writer must not request metadata admission")
+        }
+
+        fn stream_metadata(
+            &self,
+            _work_directory: &Path,
+            _requirement: CatalogMetadataStreamScratchV1,
+        ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+            panic!("candidate writer must not request streamed metadata admission")
         }
 
         fn reserve_finalization(

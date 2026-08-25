@@ -361,7 +361,8 @@ mod tests {
     use super::*;
     use crate::repository::catalog::{
         CatalogCandidateWriter, CatalogFinalizationScratchV1, CatalogMetadataScratchV1,
-        CatalogScopeV1, CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
+        CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1, CatalogScopeV1,
+        CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
     };
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -387,6 +388,14 @@ mod tests {
             _requirement: CatalogMetadataScratchV1,
         ) -> Result<Box<dyn Send>> {
             panic!("projection cache must not request metadata admission")
+        }
+
+        fn stream_metadata(
+            &self,
+            _work_directory: &Path,
+            _requirement: CatalogMetadataStreamScratchV1,
+        ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+            panic!("projection cache must not request streamed metadata admission")
         }
 
         fn reserve_finalization(

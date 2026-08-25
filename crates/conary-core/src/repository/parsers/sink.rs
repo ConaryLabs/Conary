@@ -10,7 +10,9 @@ use crate::error::{Error, Result};
 use super::{
     AuthenticatedMetadataObject, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
 };
-use crate::repository::catalog::CatalogMetadataScratchV1;
+use crate::repository::catalog::{
+    CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
+};
 use crate::repository::dependency_model::RepositoryProvide;
 use crate::repository::dependency_model::{RepositoryCapabilityKind, RepositoryRequirementKind};
 
@@ -70,6 +72,26 @@ struct ArchPackageFragments {
     depends: Option<String>,
 }
 
+struct ValidationOnlyMetadataStreamAdmission;
+
+impl CatalogMetadataStreamAdmission for ValidationOnlyMetadataStreamAdmission {
+    fn reserve_next(&self, additional_bytes: u64) -> Result<Box<dyn Send>> {
+        if additional_bytes == 0 {
+            return Err(Error::ConfigError(
+                "catalog metadata stream chunk admission requires positive bytes".to_string(),
+            ));
+        }
+        Ok(Box::new(()))
+    }
+}
+
+pub(crate) fn validation_only_metadata_stream(
+    requirement: CatalogMetadataStreamScratchV1,
+) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+    requirement.validate()?;
+    Ok(Box::new(ValidationOnlyMetadataStreamAdmission))
+}
+
 /// Parser-to-storage contract for one authenticated native repository snapshot.
 ///
 /// Implementations may persist each package immediately. Parsers must not infer
@@ -87,6 +109,13 @@ pub trait RepositorySnapshotSink {
         &mut self,
         requirement: CatalogMetadataScratchV1,
     ) -> Result<()>;
+
+    /// Admit each exact response chunk before staging metadata whose signed
+    /// authority does not publish a byte length.
+    fn streamed_authenticated_metadata(
+        &mut self,
+        requirement: CatalogMetadataStreamScratchV1,
+    ) -> Result<Box<dyn CatalogMetadataStreamAdmission>>;
 
     /// Record one authenticated child object consumed by the projection.
     fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()>;
@@ -170,6 +199,13 @@ impl RepositorySnapshotSink for CollectingRepositorySnapshotSink {
         requirement: CatalogMetadataScratchV1,
     ) -> Result<()> {
         requirement.validate()
+    }
+
+    fn streamed_authenticated_metadata(
+        &mut self,
+        requirement: CatalogMetadataStreamScratchV1,
+    ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+        validation_only_metadata_stream(requirement)
     }
 
     fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()> {

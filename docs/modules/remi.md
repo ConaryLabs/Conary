@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 62
-summary: Document the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 63
+summary: Document typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -203,9 +203,20 @@ the table before finalization. The compatibility sink performs the same typed
 pairing in its existing in-memory state. No separate Arch SQLite spool or
 sidecar is created; its pages remain in the candidate high-water mark consumed
 by finalization admission.
+Arch database signatures and eopkg index digest sidecars authenticate exact
+completed bytes but publish no signed size before download. Each parser binds a
+typed stream subject to the exact metadata role and repository-relative source
+path, then uses the download client's explicit admitted-identity path. The
+shared filesystem coordinator measures current free space and reserves every
+positive response chunk before its run-local write. That permit remains live
+across the write and is released only after the allocation is materialized, so
+filesystem free-space accounting owns completed chunks while the process
+ledger fences concurrent pending writes. A one-byte-short refusal is the same
+typed catalog-capacity failure as other construction admission and no
+unadmitted byte reaches the staged file. Error, cancellation, and normal sink
+drop remove the private work directory.
 These construction admissions are independent of the serving readiness floor
-and do not yet estimate initial source/profile candidate growth or Arch/eopkg
-downloads whose authenticated roots do not publish a byte length.
+and do not yet estimate initial source/profile candidate growth.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;

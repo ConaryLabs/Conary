@@ -9,6 +9,7 @@ use super::{
 use crate::error::{Error, Result};
 use crate::packages::eopkg::xml;
 use crate::repository::RepositoryClient;
+use crate::repository::catalog::CatalogMetadataStreamScratchV1;
 use crate::repository::dependency_model::{
     CapabilityProvenance, ProvideArchitectureQualifier, RepositoryDependencyFlavor,
     RepositoryProvide, RepositoryRequirementKind,
@@ -59,8 +60,17 @@ impl RepositoryParser for EopkgParser {
         let digest_bytes = client.download_to_bytes(&digest_url).await?;
         let enrolled_digest = parse_sha256_sidecar(&digest_bytes)?;
         let index_path = sink.work_directory().join("eopkg-index.xml.xz");
+        let scratch_admission =
+            sink.streamed_authenticated_metadata(CatalogMetadataStreamScratchV1::new(
+                AuthenticatedMetadataObjectRole::EopkgIndex,
+                "eopkg-index.xml.xz",
+            )?)?;
         let download = client
-            .download_file_with_identity(&index_url, &index_path)
+            .download_file_with_identity_admission(
+                &index_url,
+                &index_path,
+                scratch_admission.as_ref(),
+            )
             .await?;
         let index_object = super::AuthenticatedMetadataObject {
             role: AuthenticatedMetadataObjectRole::EopkgIndex,
