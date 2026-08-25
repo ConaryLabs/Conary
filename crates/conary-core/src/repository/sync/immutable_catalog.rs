@@ -12,11 +12,11 @@ use crate::db::models::{
 use crate::error::{Error, Result};
 use crate::repository::catalog::source::SourceCatalogAuthorityV1;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogScopeV1, CatalogScratchAdmission, CatalogSourceEvidenceV1,
-    SourceCatalogCandidateV1, SourceEcosystemV1, SourceMetadataObjectRoleV1,
-    SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1, SourceStreamKindV1,
-    SourceStreamV1,
+    CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogMetadataStreamAdmission,
+    CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogScopeV1,
+    CatalogScratchAdmission, CatalogSourceEvidenceV1, SourceCatalogCandidateV1, SourceEcosystemV1,
+    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
+    SourceStreamKindV1, SourceStreamV1,
 };
 use crate::repository::parsers::{
     ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject, ChecksumType,
@@ -255,6 +255,17 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             self.work_leases.push(lease);
         }
         Ok(())
+    }
+
+    fn streamed_authenticated_metadata(
+        &mut self,
+        requirement: CatalogMetadataStreamScratchV1,
+    ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+        requirement.validate()?;
+        match &self.scratch_admission {
+            Some(admission) => admission.stream_metadata(self.work_directory.path(), requirement),
+            None => crate::repository::parsers::validation_only_metadata_stream(requirement),
+        }
     }
 
     fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()> {

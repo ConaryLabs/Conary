@@ -7,6 +7,7 @@
 
 use crate::compression::{CompressionFormat, decompress_metadata, decompress_metadata_auto};
 use crate::error::{Error, Result};
+use crate::repository::catalog::CatalogMetadataStreamAdmission;
 use crate::repository::error_helpers::ResultExt;
 use crate::repository::error_helpers::http_client_builder_error_message;
 use indicatif::ProgressBar;
@@ -333,6 +334,7 @@ struct ResponseStreamOptions<'a> {
     progress_bar: Option<&'a ProgressBar>,
     display_name: &'a str,
     max_size: Option<u64>,
+    scratch_admission: Option<&'a dyn CatalogMetadataStreamAdmission>,
     inactivity_timeout: Duration,
 }
 
@@ -382,6 +384,14 @@ async fn stream_response_to_file(
                 options.max_size.expect("checked maximum")
             )));
         }
+        let _scratch_permit = options
+            .scratch_admission
+            .map(|admission| {
+                admission.reserve_next(u64::try_from(chunk.len()).map_err(|_| {
+                    Error::DownloadError("response chunk length exceeds u64".to_string())
+                })?)
+            })
+            .transpose()?;
         file.write_all(&chunk).io_context("write download data")?;
         hasher.update(&chunk);
         downloaded = next_size;
@@ -661,7 +671,7 @@ impl RepositoryClient {
 
     /// Download a file to the specified path with retry support
     pub async fn download_file(&self, url: &str, dest_path: &Path) -> Result<()> {
-        self.download_file_internal(url, dest_path, "", None, None)
+        self.download_file_internal(url, dest_path, "", None, None, None)
             .await
             .map(|_| ())
     }
@@ -672,7 +682,7 @@ impl RepositoryClient {
         dest_path: &Path,
         max_size: Option<u64>,
     ) -> Result<()> {
-        self.download_file_internal(url, dest_path, "", None, max_size)
+        self.download_file_internal(url, dest_path, "", None, max_size, None)
             .await
             .map(|_| ())
     }
@@ -683,7 +693,19 @@ impl RepositoryClient {
         url: &str,
         dest_path: &Path,
     ) -> Result<DownloadedFileIdentity> {
-        self.download_file_internal(url, dest_path, "", None, None)
+        self.download_file_internal(url, dest_path, "", None, None, None)
+            .await
+    }
+
+    /// Download metadata while admitting each exact served chunk before its
+    /// run-local filesystem write.
+    pub(crate) async fn download_file_with_identity_admission(
+        &self,
+        url: &str,
+        dest_path: &Path,
+        scratch_admission: &dyn CatalogMetadataStreamAdmission,
+    ) -> Result<DownloadedFileIdentity> {
+        self.download_file_internal(url, dest_path, "", None, None, Some(scratch_admission))
             .await
     }
 
@@ -694,7 +716,7 @@ impl RepositoryClient {
         dest_path: &Path,
         max_size: u64,
     ) -> Result<DownloadedFileIdentity> {
-        self.download_file_internal(url, dest_path, "", None, Some(max_size))
+        self.download_file_internal(url, dest_path, "", None, Some(max_size), None)
             .await
     }
 
@@ -712,7 +734,7 @@ impl RepositoryClient {
         display_name: &str,
         progress_bar: Option<&ProgressBar>,
     ) -> Result<()> {
-        self.download_file_internal(url, dest_path, display_name, progress_bar, None)
+        self.download_file_internal(url, dest_path, display_name, progress_bar, None, None)
             .await
             .map(|_| ())
     }
@@ -724,6 +746,7 @@ impl RepositoryClient {
         display_name: &str,
         progress_bar: Option<&ProgressBar>,
         max_size: Option<u64>,
+        scratch_admission: Option<&dyn CatalogMetadataStreamAdmission>,
     ) -> Result<DownloadedFileIdentity> {
         validate_url_scheme(url)?;
         info!("Downloading {} to {}", url, dest_path.display());
@@ -893,6 +916,7 @@ impl RepositoryClient {
                             progress_bar,
                             display_name,
                             max_size,
+                            scratch_admission,
                             inactivity_timeout: self.timeouts.download,
                         },
                     )

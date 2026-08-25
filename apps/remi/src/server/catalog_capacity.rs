@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use conary_core::repository::catalog::{
     CatalogCopyScratchV1, CatalogFinalizationScratchV1, CatalogMetadataScratchV1,
-    CatalogScratchAdmission, CatalogScratchCapacityError,
+    CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1, CatalogScratchAdmission,
+    CatalogScratchCapacityError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -71,6 +72,20 @@ impl CatalogScratchAdmission for CatalogScratchCoordinator {
         self.reserve_on_filesystem(work_directory, requirement.required_additional_bytes)
     }
 
+    fn stream_metadata(
+        &self,
+        work_directory: &Path,
+        requirement: CatalogMetadataStreamScratchV1,
+    ) -> conary_core::Result<Box<dyn CatalogMetadataStreamAdmission>> {
+        requirement.validate()?;
+        filesystem_identity(work_directory)?;
+        Ok(Box::new(CatalogMetadataStreamCoordinator {
+            path: work_directory.to_path_buf(),
+            probe: Arc::clone(&self.probe),
+            state: Arc::clone(&self.state),
+        }))
+    }
+
     fn reserve_finalization(
         &self,
         candidate_path: &Path,
@@ -101,38 +116,67 @@ impl CatalogScratchCoordinator {
         path: &Path,
         required_bytes: u64,
     ) -> conary_core::Result<Box<dyn Send>> {
-        let filesystem = filesystem_identity(path)?;
-        let available_bytes = self.probe.available_space(path)?;
-        let mut state = self.state.lock().map_err(|_| {
-            conary_core::Error::InternalError(
-                "catalog scratch reservation ledger is poisoned".to_string(),
-            )
-        })?;
-        let reserved_bytes = state.by_filesystem.get(&filesystem).copied().unwrap_or(0);
-        let total =
-            reserved_bytes
-                .checked_add(required_bytes)
-                .ok_or(CatalogScratchCapacityError {
-                    required_bytes,
-                    available_bytes,
-                    reserved_bytes,
-                })?;
-        if total > available_bytes {
-            return Err(CatalogScratchCapacityError {
-                required_bytes,
-                available_bytes,
-                reserved_bytes,
-            }
-            .into());
-        }
-        state.by_filesystem.insert(filesystem.clone(), total);
-        drop(state);
-        Ok(Box::new(CatalogScratchLease {
-            filesystem,
-            bytes: required_bytes,
-            state: Arc::clone(&self.state),
-        }))
+        reserve_exact_bytes(&self.probe, &self.state, path, required_bytes)
     }
+}
+
+struct CatalogMetadataStreamCoordinator {
+    path: std::path::PathBuf,
+    probe: Arc<dyn AvailableSpaceProbe>,
+    state: Arc<Mutex<ReservationState>>,
+}
+
+impl CatalogMetadataStreamAdmission for CatalogMetadataStreamCoordinator {
+    fn reserve_next(&self, additional_bytes: u64) -> conary_core::Result<Box<dyn Send>> {
+        if additional_bytes == 0 {
+            return Err(conary_core::Error::ConfigError(
+                "catalog metadata stream chunk admission requires positive bytes".to_string(),
+            ));
+        }
+        reserve_exact_bytes(&self.probe, &self.state, &self.path, additional_bytes)
+    }
+}
+
+fn reserve_exact_bytes(
+    probe: &Arc<dyn AvailableSpaceProbe>,
+    state: &Arc<Mutex<ReservationState>>,
+    path: &Path,
+    required_bytes: u64,
+) -> conary_core::Result<Box<dyn Send>> {
+    let filesystem = filesystem_identity(path)?;
+    let available_bytes = probe.available_space(path)?;
+    let mut state_guard = state.lock().map_err(|_| {
+        conary_core::Error::InternalError(
+            "catalog scratch reservation ledger is poisoned".to_string(),
+        )
+    })?;
+    let reserved_bytes = state_guard
+        .by_filesystem
+        .get(&filesystem)
+        .copied()
+        .unwrap_or(0);
+    let total = reserved_bytes
+        .checked_add(required_bytes)
+        .ok_or(CatalogScratchCapacityError {
+            required_bytes,
+            available_bytes,
+            reserved_bytes,
+        })?;
+    if total > available_bytes {
+        return Err(CatalogScratchCapacityError {
+            required_bytes,
+            available_bytes,
+            reserved_bytes,
+        }
+        .into());
+    }
+    state_guard.by_filesystem.insert(filesystem.clone(), total);
+    drop(state_guard);
+    Ok(Box::new(CatalogScratchLease {
+        filesystem,
+        bytes: required_bytes,
+        state: Arc::clone(state),
+    }))
 }
 
 struct CatalogScratchLease {
@@ -212,6 +256,11 @@ mod tests {
         .unwrap()
     }
 
+    fn stream_requirement() -> CatalogMetadataStreamScratchV1 {
+        CatalogMetadataStreamScratchV1::new(SourceMetadataObjectRoleV1::ArchDatabase, "core.db")
+            .unwrap()
+    }
+
     fn candidate(root: &Path) -> PathBuf {
         root.join("candidate.sqlite3")
     }
@@ -263,6 +312,35 @@ mod tests {
         assert_eq!(error.available_bytes, 4095);
         assert_eq!(error.reserved_bytes, 0);
         assert!(root.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn streamed_chunk_exact_bound_and_concurrent_permit_are_typed() {
+        let root = tempfile::tempdir().unwrap();
+        let probe = Arc::new(MutableProbe::new(4096));
+        let coordinator = CatalogScratchCoordinator::with_probe(probe.clone());
+        let stream = coordinator
+            .stream_metadata(root.path(), stream_requirement())
+            .unwrap();
+        let permit = stream.reserve_next(4096).unwrap();
+
+        let error = refused(stream.reserve_next(1));
+        let conary_core::Error::CatalogScratchCapacity(error) = error else {
+            panic!("expected typed catalog capacity refusal");
+        };
+        assert_eq!(error.required_bytes, 1);
+        assert_eq!(error.available_bytes, 4096);
+        assert_eq!(error.reserved_bytes, 4096);
+
+        drop(permit);
+        probe.set(4095);
+        let error = refused(stream.reserve_next(4096));
+        let conary_core::Error::CatalogScratchCapacity(error) = error else {
+            panic!("expected typed catalog capacity refusal");
+        };
+        assert_eq!(error.required_bytes, 4096);
+        assert_eq!(error.available_bytes, 4095);
+        assert_eq!(error.reserved_bytes, 0);
     }
 
     #[test]

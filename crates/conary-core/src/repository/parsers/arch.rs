@@ -11,6 +11,7 @@ use super::{
     RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
+use crate::repository::catalog::{CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
     RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
@@ -55,6 +56,7 @@ impl ArchParser {
         &self,
         repo_url: &str,
         work_directory: &std::path::Path,
+        scratch_admission: &dyn CatalogMetadataStreamAdmission,
     ) -> Result<(
         std::path::PathBuf,
         AuthenticatedSnapshotIdentity,
@@ -66,7 +68,7 @@ impl ArchParser {
         let client = RepositoryClient::new()?;
         let database_file = work_directory.join("arch-database");
         let download = client
-            .download_file_with_identity(&db_url, &database_file)
+            .download_file_with_identity_admission(&db_url, &database_file, scratch_admission)
             .await?;
         let signature_url = format!("{db_url}.sig");
         let requirement = match self.trust.policy() {
@@ -413,8 +415,15 @@ impl RepositoryParser for ArchParser {
         info!("Syncing Arch Linux repository: {}", self.repo_name);
 
         let work_directory = sink.work_directory().to_path_buf();
-        let (database_file, snapshot, database_object) =
-            self.download_database(repo_url, &work_directory).await?;
+        let database_path = format!("{}.db", self.repo_name);
+        let scratch_admission =
+            sink.streamed_authenticated_metadata(CatalogMetadataStreamScratchV1::new(
+                AuthenticatedMetadataObjectRole::ArchDatabase,
+                database_path,
+            )?)?;
+        let (database_file, snapshot, database_object) = self
+            .download_database(repo_url, &work_directory, scratch_admission.as_ref())
+            .await?;
         if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&database_object))? {
             info!("Reused cached Arch repository projection");
             return Ok(snapshot);

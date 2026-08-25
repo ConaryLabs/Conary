@@ -4,8 +4,9 @@ use super::*;
 use crate::db::models::{RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode};
 use crate::repository::catalog::{
     CatalogCopyScratchV1, CatalogFinalizationScratchV1, CatalogMetadataObjectScratchV1,
-    CatalogMetadataScratchV1, CatalogPackageOriginV1, CatalogScopeV1, CatalogScratchAdmission,
-    CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1, write_catalog_candidate,
+    CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
+    CatalogPackageOriginV1, CatalogScopeV1, CatalogScratchAdmission, CatalogSourceEvidenceV1,
+    SourceMetadataObjectRoleV1, write_catalog_candidate,
 };
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::parsers::PackageMetadata;
@@ -19,10 +20,21 @@ use std::sync::{Arc, Mutex};
 
 struct RecordingAdmission {
     metadata: Mutex<Vec<CatalogMetadataScratchV1>>,
+    streams: Mutex<Vec<CatalogMetadataStreamScratchV1>>,
+    stream_chunks: Arc<Mutex<Vec<u64>>>,
     lease_drops: Arc<AtomicUsize>,
 }
 
 struct RecordingLease(Arc<AtomicUsize>);
+
+struct RecordingStreamAdmission(Arc<Mutex<Vec<u64>>>);
+
+impl CatalogMetadataStreamAdmission for RecordingStreamAdmission {
+    fn reserve_next(&self, additional_bytes: u64) -> Result<Box<dyn Send>> {
+        self.0.lock().unwrap().push(additional_bytes);
+        Ok(Box::new(()))
+    }
+}
 
 impl Drop for RecordingLease {
     fn drop(&mut self) {
@@ -38,6 +50,17 @@ impl CatalogScratchAdmission for RecordingAdmission {
     ) -> Result<Box<dyn Send>> {
         self.metadata.lock().unwrap().push(requirement);
         Ok(Box::new(RecordingLease(Arc::clone(&self.lease_drops))))
+    }
+
+    fn stream_metadata(
+        &self,
+        _work_directory: &Path,
+        requirement: CatalogMetadataStreamScratchV1,
+    ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+        self.streams.lock().unwrap().push(requirement);
+        Ok(Box::new(RecordingStreamAdmission(Arc::clone(
+            &self.stream_chunks,
+        ))))
     }
 
     fn reserve_finalization(
@@ -136,6 +159,8 @@ fn immutable_sink_retains_metadata_lease_until_work_files_are_removed() {
     let lease_drops = Arc::new(AtomicUsize::new(0));
     let admission = Arc::new(RecordingAdmission {
         metadata: Mutex::new(Vec::new()),
+        streams: Mutex::new(Vec::new()),
+        stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::clone(&lease_drops),
     });
     let mut sink =
@@ -162,6 +187,32 @@ fn immutable_sink_retains_metadata_lease_until_work_files_are_removed() {
     drop(sink);
     assert!(!work_directory.exists());
     assert_eq!(lease_drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn immutable_sink_routes_unknown_length_metadata_to_stream_admission() {
+    let root = tempfile::tempdir().unwrap();
+    let candidate = root.path().join("catalog.sqlite");
+    let admission = Arc::new(RecordingAdmission {
+        metadata: Mutex::new(Vec::new()),
+        streams: Mutex::new(Vec::new()),
+        stream_chunks: Arc::new(Mutex::new(Vec::new())),
+        lease_drops: Arc::new(AtomicUsize::new(0)),
+    });
+    let mut sink =
+        NativeCatalogSnapshotSink::create(&repository(), &candidate, None, Some(admission.clone()))
+            .unwrap();
+    let requirement =
+        CatalogMetadataStreamScratchV1::new(SourceMetadataObjectRoleV1::ArchDatabase, "core.db")
+            .unwrap();
+
+    let stream = sink
+        .streamed_authenticated_metadata(requirement.clone())
+        .unwrap();
+    let permit = stream.reserve_next(2048).unwrap();
+    assert_eq!(admission.streams.lock().unwrap().as_slice(), &[requirement]);
+    assert_eq!(admission.stream_chunks.lock().unwrap().as_slice(), &[2048]);
+    drop(permit);
 }
 
 #[test]

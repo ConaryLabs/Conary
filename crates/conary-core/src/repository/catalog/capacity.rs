@@ -21,6 +21,51 @@ pub const CATALOG_COPY_SCRATCH_SCHEMA_V1: u32 = 1;
 /// Current schema for exact authenticated-metadata staging evidence.
 pub const CATALOG_METADATA_SCRATCH_SCHEMA_V1: u32 = 1;
 
+/// Current schema for metadata whose exact size is admitted while streaming.
+pub const CATALOG_METADATA_STREAM_SCRATCH_SCHEMA_V1: u32 = 1;
+
+/// One authenticated metadata stream whose exact served size is learned only
+/// as bytes arrive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogMetadataStreamScratchV1 {
+    /// Contract schema version.
+    pub schema_version: u32,
+    /// Typed metadata role authenticated after the complete stream arrives.
+    pub role: SourceMetadataObjectRoleV1,
+    /// Repository-relative source path bound into the resulting evidence.
+    pub source_path: String,
+}
+
+impl CatalogMetadataStreamScratchV1 {
+    /// Bind one exact role and path before any response bytes are staged.
+    pub fn new(role: SourceMetadataObjectRoleV1, source_path: impl Into<String>) -> Result<Self> {
+        let requirement = Self {
+            schema_version: CATALOG_METADATA_STREAM_SCRATCH_SCHEMA_V1,
+            role,
+            source_path: source_path.into(),
+        };
+        requirement.validate()?;
+        Ok(requirement)
+    }
+
+    /// Keep streaming admission confined to the two metadata authorities that
+    /// do not publish a signed byte length before download.
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != CATALOG_METADATA_STREAM_SCRATCH_SCHEMA_V1
+            || !matches!(
+                self.role,
+                SourceMetadataObjectRoleV1::ArchDatabase | SourceMetadataObjectRoleV1::EopkgIndex
+            )
+        {
+            return Err(crate::Error::ConfigError(
+                "catalog metadata stream scratch evidence has invalid schema or role".to_string(),
+            ));
+        }
+        validate_relative_source_path(&self.source_path)
+    }
+}
+
 /// One authenticated child object whose signed bytes coexist in run-local
 /// storage while a native repository projection is built.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,6 +309,14 @@ pub struct CatalogScratchCapacityError {
     pub reserved_bytes: u64,
 }
 
+/// Filesystem admission for one metadata stream. Each returned permit covers
+/// one exact response chunk until that chunk has been written to run-local
+/// storage and the filesystem reports the materialized allocation itself.
+pub trait CatalogMetadataStreamAdmission: Send + Sync {
+    /// Reserve the next positive response-chunk allocation before its write.
+    fn reserve_next(&self, additional_bytes: u64) -> Result<Box<dyn Send>>;
+}
+
 /// Process owner that admits an exact catalog scratch requirement. A returned
 /// lease retains its reservation until the owning operation completes or aborts.
 pub trait CatalogScratchAdmission: Send + Sync {
@@ -274,6 +327,13 @@ pub trait CatalogScratchAdmission: Send + Sync {
         work_directory: &Path,
         requirement: CatalogMetadataScratchV1,
     ) -> Result<Box<dyn Send>>;
+
+    /// Create a chunk admission owner for metadata without a signed length.
+    fn stream_metadata(
+        &self,
+        work_directory: &Path,
+        requirement: CatalogMetadataStreamScratchV1,
+    ) -> Result<Box<dyn CatalogMetadataStreamAdmission>>;
 
     /// Reserve the exact additional bytes and retain them in the returned lease.
     fn reserve_finalization(
@@ -370,6 +430,36 @@ mod tests {
         .unwrap();
         contradictory.required_additional_bytes += 1;
         assert!(contradictory.validate().is_err());
+    }
+
+    #[test]
+    fn stream_requirement_accepts_only_unknown_length_metadata_roles() {
+        let arch = CatalogMetadataStreamScratchV1::new(
+            SourceMetadataObjectRoleV1::ArchDatabase,
+            "core.db",
+        )
+        .unwrap();
+        arch.validate().unwrap();
+        CatalogMetadataStreamScratchV1::new(
+            SourceMetadataObjectRoleV1::EopkgIndex,
+            "eopkg-index.xml.xz",
+        )
+        .unwrap();
+
+        assert!(
+            CatalogMetadataStreamScratchV1::new(
+                SourceMetadataObjectRoleV1::RpmPrimary,
+                "repodata/primary.xml.zst",
+            )
+            .is_err()
+        );
+        assert!(
+            CatalogMetadataStreamScratchV1::new(
+                SourceMetadataObjectRoleV1::ArchDatabase,
+                "../core.db",
+            )
+            .is_err()
+        );
     }
 
     #[test]
