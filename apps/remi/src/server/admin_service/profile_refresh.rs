@@ -12,13 +12,13 @@ use conary_core::repository::{
     PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncFailureCategory, ProfileSyncFailureStage,
     ProfileSyncRun, ProfileSyncRunMember, RepositoryFormat, abort_profile_sync_run,
     acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run_with_members,
-    complete_profile_sync_candidate, heartbeat_profile_sync_run, ready_profile_sync_run,
-    record_profile_sync_run_member,
+    complete_profile_sync_candidate, current_profile_sync_candidate, heartbeat_profile_sync_run,
+    ready_profile_sync_run, record_profile_sync_run_member,
 };
 
 use super::refresh::RepoRefreshResult;
 use super::{ServiceError, blocking_anyhow};
-use crate::server::catalog_authority::CatalogAuthority;
+use crate::server::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
 use crate::server::catalog_refresh::{
     PublishedProfileCatalog, StagedProfileCatalog, cleanup_candidate_run, plan_profile_sources,
     publish_staged_profile_catalog, stage_profile_catalog,
@@ -74,7 +74,7 @@ pub(super) async fn refresh_native_profile(
         && repositories
             .iter()
             .all(|repository| !conary_core::repository::needs_sync(repository))
-        && active_catalog_matches_plan(&roots, &source_profile, &plans).await
+        && current_catalog_matches_plan(&roots, &source_profile, &plans).await
     {
         return Ok(repositories
             .into_iter()
@@ -345,7 +345,7 @@ fn profile_refresh_results(
         .collect()
 }
 
-async fn active_catalog_matches_plan(
+async fn current_catalog_matches_plan(
     roots: &RefreshRoots,
     source_profile: &str,
     plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
@@ -355,15 +355,26 @@ async fn active_catalog_matches_plan(
         &roots.catalog_dir,
         roots.database_writer.clone(),
     );
+    let db_path = roots.db_path.clone();
     let source_profile = source_profile.to_string();
     let plans = plans.to_vec();
     tokio::task::spawn_blocking(move || {
+        let conn = conary_core::db::open_fast(&db_path)?;
+        if let Some(candidate) = current_profile_sync_candidate(&conn, &source_profile)? {
+            let selection = ProfileRevisionSelection {
+                source_profile: candidate.source_profile,
+                profile_revision_sha256: candidate.profile_revision_sha256,
+            };
+            return authority
+                .open_selected_profile(&selection)
+                .map(|catalog| profile_members_match_plan(&catalog.manifest().members, &plans));
+        }
         authority
             .inspect_active_profile(&source_profile)
-            .is_ok_and(|catalog| profile_members_match_plan(&catalog.manifest.members, &plans))
+            .map(|catalog| profile_members_match_plan(&catalog.manifest.members, &plans))
     })
     .await
-    .unwrap_or(false)
+    .is_ok_and(|result| result.unwrap_or(false))
 }
 
 pub(super) fn profile_members_match_plan(
@@ -591,35 +602,49 @@ async fn finalize_profile(
                     unix_seconds()?,
                 )?;
                 complete_profile_sync_candidate(&conn, &run)?;
-                let completed_at = conary_core::repository::current_timestamp();
-                for repository_id in repository_ids {
-                    let (input, candidate) = conn.query_row(
-                        "SELECT input_source_snapshot_sha256, candidate_source_snapshot_sha256
-                     FROM repository_sync_run_members
-                     WHERE run_id = ?1 AND repository_id = ?2",
-                        rusqlite::params![&run.run_id, repository_id],
-                        |row| {
-                            Ok((
-                                row.get::<_, Option<String>>(0)?,
-                                row.get::<_, Option<String>>(1)?,
-                            ))
-                        },
-                    )?;
-                    let changed = source_snapshot_changed(input.as_deref(), candidate.as_deref())?;
-                    conn.execute(
-                        "UPDATE repositories
-                     SET last_checked_at = ?1,
-                         last_changed_at = CASE WHEN ?2 THEN ?1 ELSE last_changed_at END,
-                         last_validated_at = ?1
-                     WHERE id = ?3",
-                        rusqlite::params![&completed_at, changed, repository_id],
-                    )?;
-                }
+                record_candidate_timestamps(
+                    &conn,
+                    &run.run_id,
+                    &repository_ids,
+                    &conary_core::repository::current_timestamp(),
+                )?;
                 Ok::<(), conary_core::Error>(())
             })
             .map_err(anyhow::Error::from)
     })
     .await
+}
+
+fn record_candidate_timestamps(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    repository_ids: &[i64],
+    completed_at: &str,
+) -> conary_core::Result<()> {
+    for repository_id in repository_ids {
+        let (input, candidate) = conn.query_row(
+            "SELECT input_source_snapshot_sha256, candidate_source_snapshot_sha256
+             FROM repository_sync_run_members
+             WHERE run_id = ?1 AND repository_id = ?2",
+            rusqlite::params![run_id, repository_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )?;
+        let changed = source_snapshot_changed(input.as_deref(), candidate.as_deref())?;
+        conn.execute(
+            "UPDATE repositories
+             SET last_checked_at = ?1,
+                 last_changed_at = CASE WHEN ?2 THEN ?1 ELSE last_changed_at END,
+                 last_validated_at = ?1
+             WHERE id = ?3",
+            rusqlite::params![completed_at, changed, repository_id],
+        )?;
+    }
+    Ok(())
 }
 
 async fn load_run_input_members(
@@ -745,7 +770,7 @@ fn source_snapshot_changed(
 ) -> conary_core::Result<bool> {
     let candidate = candidate.ok_or_else(|| {
         conary_core::Error::ConflictError(
-            "profile activation has no candidate source snapshot identity".to_string(),
+            "profile refresh has no candidate source snapshot identity".to_string(),
         )
     })?;
     Ok(input != Some(candidate))
@@ -753,7 +778,8 @@ fn source_snapshot_changed(
 
 #[cfg(test)]
 mod timestamp_tests {
-    use super::source_snapshot_changed;
+    use super::{record_candidate_timestamps, source_snapshot_changed};
+    use conary_core::db::models::Repository;
 
     #[test]
     fn timestamp_change_authority_distinguishes_noop_change_and_missing_candidate() {
@@ -764,5 +790,76 @@ mod timestamp_tests {
         assert!(source_snapshot_changed(Some(&digest), Some(&changed)).unwrap());
         assert!(source_snapshot_changed(None, Some(&digest)).unwrap());
         assert!(source_snapshot_changed(Some(&digest), None).is_err());
+    }
+
+    #[test]
+    fn candidate_timestamps_never_claim_publication() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conary_core::db::schema::ensure_current(&conn).unwrap();
+        let mut repository =
+            Repository::new("fixture".to_string(), "https://fixture.test".to_string());
+        repository.source_profile = Some("fedora-44".to_string());
+        repository.id = Some(repository.insert(&conn).unwrap());
+        let repository_id = repository.id.unwrap();
+        conn.execute(
+            "UPDATE repositories SET last_published_at = 'prior-publication'
+             WHERE id = ?1",
+            [repository_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO repository_sync_runs (
+                 run_id, source_profile, owner_instance_uuid, fencing_epoch,
+                 state, started_at, heartbeat_at, lease_expires_at
+             ) VALUES (
+                 '00000000-0000-4000-8000-000000000001', 'fedora-44',
+                 '00000000-0000-4000-8000-000000000002', 1,
+                 'fetching_objects', 1, 1, 2
+             )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO repository_sync_run_members (
+                 run_id, ordinal, repository_id, source_identity,
+                 repository_identity, stream_kind, stream_identity, role,
+                 precedence, required, input_source_snapshot_sha256,
+                 candidate_source_snapshot_sha256
+             ) VALUES (
+                 '00000000-0000-4000-8000-000000000001', 0, ?1,
+                 'fixture-source', 'fixture-repository', 'release', '44',
+                 'base', 0, 1, ?2, ?3
+             )",
+            rusqlite::params![repository_id, "a".repeat(64), "b".repeat(64)],
+        )
+        .unwrap();
+
+        record_candidate_timestamps(
+            &conn,
+            "00000000-0000-4000-8000-000000000001",
+            &[repository_id],
+            "candidate-complete",
+        )
+        .unwrap();
+        let timestamps = conn
+            .query_row(
+                "SELECT last_checked_at, last_changed_at, last_validated_at,
+                        last_published_at
+                 FROM repositories WHERE id = ?1",
+                [repository_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(timestamps.0.as_deref(), Some("candidate-complete"));
+        assert_eq!(timestamps.1.as_deref(), Some("candidate-complete"));
+        assert_eq!(timestamps.2.as_deref(), Some("candidate-complete"));
+        assert_eq!(timestamps.3.as_deref(), Some("prior-publication"));
     }
 }

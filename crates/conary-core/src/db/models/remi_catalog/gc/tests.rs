@@ -148,6 +148,27 @@ fn insert_run_member(
     .unwrap();
 }
 
+fn select_current_candidate(conn: &Connection, run_id: &str) {
+    conn.execute(
+        "UPDATE repository_sync_runs
+         SET state = 'candidate'
+         WHERE run_id = ?1 AND state = 'published'",
+        [run_id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO repository_sync_scopes (
+             source_profile, fencing_epoch, current_run_id
+         ) SELECT source_profile, fencing_epoch, run_id
+           FROM repository_sync_runs WHERE run_id = ?1
+         ON CONFLICT(source_profile) DO UPDATE SET
+             fencing_epoch = excluded.fencing_epoch,
+             current_run_id = excluded.current_run_id",
+        [run_id],
+    )
+    .unwrap();
+}
+
 fn activate(conn: &Connection, profile: char, run_id: &str) {
     conn.execute(
         "INSERT INTO remi_active_profile_revisions (
@@ -280,6 +301,67 @@ fn live_run_profile_and_member_inputs_candidates_are_roots() {
     assert!(plan.run_candidates.iter().any(|candidate| {
         candidate.run_id == "10000000-0000-4000-8000-000000000003" && !candidate.nonterminal
     }));
+}
+
+#[test]
+fn only_the_exact_current_completed_candidate_is_a_collection_root() {
+    let conn = setup();
+    install_profile(&conn, 'c', &['t']);
+    let stale_unrooted_plan = plan_catalog_collection(&conn).unwrap();
+    assert_eq!(stale_unrooted_plan.unreachable_profile_resources.len(), 1);
+    assert_eq!(stale_unrooted_plan.unreachable_source_resources.len(), 1);
+    let first_run = "10000000-0000-4000-8000-000000000031";
+    insert_run(&conn, first_run, None, Some('c'), Some(200));
+    insert_run_member(&conn, first_run, 0, None, Some('t'));
+    select_current_candidate(&conn, first_run);
+
+    let stale_delete = delete_catalog_collection(&conn, &stale_unrooted_plan).unwrap();
+    assert!(stale_delete.deleted_profile_resources.is_empty());
+    assert!(stale_delete.deleted_source_resources.is_empty());
+
+    let first = plan_catalog_collection(&conn).unwrap();
+    assert!(
+        first
+            .reachability
+            .contains_profile_revision(&resource_digest('c'))
+    );
+    assert!(
+        first
+            .reachability
+            .contains_source_snapshot(&resource_digest('t'))
+    );
+    assert!(first.unreachable_profile_resources.is_empty());
+    assert!(first.unreachable_source_resources.is_empty());
+
+    install_profile(&conn, 'd', &['u']);
+    let second_run = "10000000-0000-4000-8000-000000000032";
+    insert_run(&conn, second_run, None, Some('d'), Some(300));
+    insert_run_member(&conn, second_run, 0, None, Some('u'));
+    select_current_candidate(&conn, second_run);
+
+    let second = plan_catalog_collection(&conn).unwrap();
+    assert!(
+        second
+            .reachability
+            .contains_profile_revision(&resource_digest('d'))
+    );
+    assert!(
+        second
+            .reachability
+            .contains_source_snapshot(&resource_digest('u'))
+    );
+    assert!(
+        second
+            .unreachable_profile_resources
+            .iter()
+            .any(|resource| { resource.resource_sha256 == resource_digest('c') })
+    );
+    assert!(
+        second
+            .unreachable_source_resources
+            .iter()
+            .any(|resource| { resource.resource_sha256 == resource_digest('t') })
+    );
 }
 
 #[test]

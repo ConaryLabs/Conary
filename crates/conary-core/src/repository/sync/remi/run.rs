@@ -12,9 +12,13 @@ use crate::repository::supported_profiles::ProfileSourceRole;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod candidate;
 mod contract;
 mod recovery;
 
+pub use candidate::{
+    ProfileSyncCandidate, complete_profile_sync_candidate, current_profile_sync_candidate,
+};
 use contract::{
     is_terminal_state, validate_digest, validate_member, validate_profile, validate_uuid,
 };
@@ -43,24 +47,12 @@ pub struct ProfileSyncRun {
     pub source_profile: String,
     pub owner_instance_uuid: String,
     pub fencing_epoch: i64,
-    /// Exact abandoned runs whose private candidate paths require idempotent
-    /// recovery. The list comes from durable run state, never path discovery.
+    /// Exact terminal runs whose private staging paths require idempotent
+    /// cleanup. The list comes from durable run state, never path discovery.
     pub recovery_run_ids: Vec<String>,
 }
 
 pub type RemiSyncRun = ProfileSyncRun;
-
-/// The exact completed private candidate currently selected for one source
-/// profile. This is promotion input, never serving authority.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileSyncCandidate {
-    pub source_profile: String,
-    pub profile_revision_sha256: String,
-    pub run_id: String,
-    pub owner_instance_uuid: String,
-    pub fencing_epoch: i64,
-    pub completed_at: i64,
-}
 
 /// Exact ordered member binding recorded by a profile refresh.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,90 +514,6 @@ pub fn ready_profile_sync_run(
     Ok(())
 }
 
-/// Complete the exact current ready run as a durable private candidate.
-///
-/// The caller must first durably publish, independently reopen, and register
-/// the immutable profile revision named by the run. This transition ends the
-/// refresh lease without advancing any active pointer.
-pub fn complete_profile_sync_candidate(
-    conn: &Connection,
-    run: &RemiSyncRun,
-) -> Result<ProfileSyncCandidate> {
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    let now = unix_seconds()?;
-    require_owned_run(&tx, run, "ready_to_publish", "", "", now)?;
-    let updated = tx.execute(
-        "UPDATE repository_sync_runs
-         SET state = 'candidate', heartbeat_at = ?1, lease_expires_at = ?1,
-             finished_at = ?1
-         WHERE run_id = ?2
-           AND source_profile = ?3
-           AND owner_instance_uuid = ?4
-           AND fencing_epoch = ?5
-           AND state = 'ready_to_publish'
-           AND candidate_profile_digest IS NOT NULL
-           AND lease_expires_at > ?1",
-        params![
-            now,
-            &run.run_id,
-            &run.source_profile,
-            &run.owner_instance_uuid,
-            run.fencing_epoch,
-        ],
-    )?;
-    if updated != 1 {
-        return Err(fenced_error(run, "candidate completion was rejected"));
-    }
-    let candidate = current_profile_sync_candidate_in_transaction(&tx, &run.source_profile)?
-        .ok_or_else(|| {
-            Error::InternalError(format!(
-                "profile {} completed candidate disappeared",
-                run.source_profile
-            ))
-        })?;
-    tx.commit()?;
-    Ok(candidate)
-}
-
-/// Resolve the exact current durable private candidate for one profile.
-pub fn current_profile_sync_candidate(
-    conn: &Connection,
-    source_profile: &str,
-) -> Result<Option<ProfileSyncCandidate>> {
-    validate_profile(source_profile)?;
-    current_profile_sync_candidate_in_transaction(conn, source_profile)
-}
-
-fn current_profile_sync_candidate_in_transaction(
-    conn: &Connection,
-    source_profile: &str,
-) -> Result<Option<ProfileSyncCandidate>> {
-    conn.query_row(
-        "SELECT run.source_profile, run.candidate_profile_digest, run.run_id,
-                run.owner_instance_uuid, run.fencing_epoch, run.finished_at
-         FROM repository_sync_scopes scope
-         JOIN repository_sync_runs run
-           ON run.run_id = scope.current_run_id
-          AND run.source_profile = scope.source_profile
-          AND run.fencing_epoch = scope.fencing_epoch
-         WHERE scope.source_profile = ?1
-           AND run.state = 'candidate'",
-        [source_profile],
-        |row| {
-            Ok(ProfileSyncCandidate {
-                source_profile: row.get(0)?,
-                profile_revision_sha256: row.get(1)?,
-                run_id: row.get(2)?,
-                owner_instance_uuid: row.get(3)?,
-                fencing_epoch: row.get(4)?,
-                completed_at: row.get(5)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(Error::from)
-}
-
 /// Abort a profile run under its exact lease. No repository or package rows
 /// are deleted because this coordinator never owns candidate row storage.
 pub fn abort_profile_sync_run(
@@ -844,6 +752,33 @@ mod tests {
         }
     }
 
+    fn register_candidate_fixture(conn: &Connection, profile_digest: &str, source_digest: &str) {
+        for (resource_digest, kind) in [
+            (source_digest, "source_snapshot"),
+            (profile_digest, "profile_revision"),
+        ] {
+            conn.execute(
+                "INSERT INTO remi_catalog_resources (
+                     resource_sha256, resource_kind, source_profile,
+                     artifact_sha256, artifact_size, logical_digest_sha256,
+                     manifest_json, durable, created_at
+                 ) VALUES (?1, ?2, 'fedora-44', ?3, 1, ?4, '{}', 1, 1)",
+                params![resource_digest, kind, digest('c'), digest('d')],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO remi_profile_revision_members (
+                 profile_revision_sha256, ordinal, source_snapshot_sha256,
+                 source_identity, repository_identity, stream_kind,
+                 stream_identity, role, precedence, required
+             ) VALUES (?1, 0, ?2, 'source-0', 'repository-0', 'release',
+                       'fixture', 'base', 0, 1)",
+            params![profile_digest, source_digest],
+        )
+        .unwrap();
+    }
+
     fn run_state(conn: &Connection, run: &RemiSyncRun) -> String {
         conn.query_row(
             "SELECT state FROM repository_sync_runs WHERE run_id = ?1",
@@ -964,6 +899,96 @@ mod tests {
             .unwrap();
         assert_eq!(state, "ready_to_publish");
         assert_eq!(candidate, profile_digest);
+    }
+
+    #[test]
+    fn completed_candidate_is_terminal_restart_safe_and_exactly_superseded() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let repo = test_repo(&conn, "source", "fedora-44");
+        let now = unix_seconds().unwrap();
+        let first = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, now).unwrap();
+        let source_digest = digest('a');
+        record_profile_sync_run_member(
+            &conn,
+            &first,
+            &member(repo.id.unwrap(), 0, Some(&source_digest)),
+        )
+        .unwrap();
+        let profile_digest = digest('b');
+        ready_profile_sync_run(&conn, &first, &profile_digest).unwrap();
+        let error = complete_profile_sync_candidate(&conn, &first).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("lacks durable registered metadata")
+        );
+        assert_eq!(run_state(&conn, &first), "ready_to_publish");
+        register_candidate_fixture(&conn, &profile_digest, &source_digest);
+        conn.execute(
+            "UPDATE repository_sync_run_members SET precedence = 1
+             WHERE run_id = ?1 AND ordinal = 0",
+            [&first.run_id],
+        )
+        .unwrap();
+        let error = complete_profile_sync_candidate(&conn, &first).unwrap_err();
+        assert!(error.to_string().contains("exact ordered member set"));
+        assert_eq!(run_state(&conn, &first), "ready_to_publish");
+        conn.execute(
+            "UPDATE repository_sync_run_members SET precedence = 0
+             WHERE run_id = ?1 AND ordinal = 0",
+            [&first.run_id],
+        )
+        .unwrap();
+
+        let completed = complete_profile_sync_candidate(&conn, &first).unwrap();
+        assert_eq!(completed.source_profile, "fedora-44");
+        assert_eq!(completed.profile_revision_sha256, profile_digest);
+        assert_eq!(completed.run_id, first.run_id);
+        assert_eq!(completed.owner_instance_uuid, OWNER_ONE);
+        assert_eq!(completed.fencing_epoch, 1);
+        assert_eq!(run_state(&conn, &first), "candidate");
+        for table in [
+            "remi_active_profile_revisions",
+            "remi_active_universe_revision",
+        ] {
+            assert_eq!(
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+                0,
+                "candidate completion changed public authority in {table}"
+            );
+        }
+        assert_eq!(
+            current_profile_sync_candidate(&conn, "fedora-44").unwrap(),
+            Some(completed.clone())
+        );
+
+        let recovery = recover_expired_profile_sync_runs_at(
+            &conn,
+            completed.completed_at + REMI_SYNC_LEASE_SECONDS,
+        )
+        .unwrap();
+        assert_eq!(run_state(&conn, &first), "candidate");
+        assert_eq!(recovery[0].run_id, first.run_id);
+
+        let second = begin_profile_sync_run_at(
+            &conn,
+            "fedora-44",
+            None,
+            OWNER_TWO,
+            completed.completed_at + REMI_SYNC_LEASE_SECONDS,
+        )
+        .unwrap();
+        assert_eq!(second.fencing_epoch, 2);
+        assert!(
+            current_profile_sync_candidate(&conn, "fedora-44")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(run_state(&conn, &first), "candidate");
     }
 
     #[test]
