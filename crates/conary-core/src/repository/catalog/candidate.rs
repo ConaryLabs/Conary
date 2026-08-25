@@ -19,6 +19,7 @@ use super::{
     CatalogScratchAdmission, CatalogSourceEvidenceV1,
 };
 use crate::error::{Error, Result};
+use crate::repository::dependency_model::RepositoryRequirementExpression;
 
 /// Private catalog writer that retains one normalized package at a time.
 pub struct CatalogCandidateWriter {
@@ -264,6 +265,57 @@ impl CatalogCandidateWriter {
         Ok(())
     }
 
+    /// Audit RPM path requirements against the exact primary.xml projection
+    /// already retained by this candidate transaction.
+    pub(in crate::repository) fn validate_rpm_primary_file_requirements(
+        &self,
+        repo_url: &str,
+    ) -> Result<()> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT package.name, package.version, requirement.expression_json
+             FROM catalog_requirement_groups AS requirement
+             JOIN catalog_packages AS package
+               ON package.package_key_sha256 = requirement.package_key_sha256
+             WHERE requirement.kind IN ('depends', 'pre_depends')
+               AND EXISTS (
+                   SELECT 1 FROM catalog_requirement_atoms AS atom
+                   WHERE atom.package_key_sha256 = requirement.package_key_sha256
+                     AND atom.group_ordinal = requirement.ordinal
+                     AND substr(atom.capability, 1, 1) = '/'
+               )
+             ORDER BY requirement.package_key_sha256, requirement.ordinal",
+        )?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(0)?;
+            let version: String = row.get(1)?;
+            let expression_json: String = row.get(2)?;
+            let expression: RepositoryRequirementExpression =
+                serde_json::from_str(&expression_json)?;
+            let mut provided = |path: &str| -> Result<bool> {
+                Ok(connection
+                    .query_row(
+                        "SELECT 1 FROM catalog_provides
+                         WHERE capability = ?1 AND kind = 'file'
+                         ORDER BY package_key_sha256, ordinal LIMIT 1",
+                        [path],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some())
+            };
+            crate::repository::parsers::fedora::audit::require_primary_file_providers(
+                repo_url,
+                &name,
+                &version,
+                &expression,
+                &mut provided,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Bind exact source evidence, calculate the canonical logical identity by
     /// ordered iteration, and reopen the resulting artifact before returning.
     pub fn finish(
@@ -409,8 +461,15 @@ mod tests {
     use super::*;
     use crate::repository::catalog::{
         CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
-        CatalogMetadataScratchV1, CatalogScratchCapacityError,
+        CatalogMetadataScratchV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
+        CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
+        CatalogScratchCapacityError,
     };
+    use crate::repository::dependency_model::{
+        ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryRequirementClause,
+    };
+    use crate::repository::dependency_source::{CapabilityProvenance, SourcePackageFormat};
+    use crate::repository::versioning::VersionScheme;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -478,6 +537,114 @@ mod tests {
             sha256: "a".repeat(64),
             size: 1,
         }]
+    }
+
+    fn rpm_package(
+        name: &str,
+        checksum: &str,
+        paths: &[&str],
+        required_path: Option<&str>,
+    ) -> CatalogPackageRecordV1 {
+        let mut provides = vec![CatalogProvideRecordV1 {
+            capability: name.to_string(),
+            version: Some("1-1".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            kind: "package".to_string(),
+            raw: None,
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::ExactIdentity,
+        }];
+        provides.extend(paths.iter().map(|path| CatalogProvideRecordV1 {
+            capability: (*path).to_string(),
+            version: None,
+            version_relation: None,
+            kind: "file".to_string(),
+            raw: None,
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDerivedFile {
+                format: SourcePackageFormat::Rpm,
+            },
+        }));
+        let requirement_groups = required_path
+            .map(|path| {
+                let clause = RepositoryRequirementClause::name_only(path.to_string());
+                vec![CatalogRequirementGroupV1 {
+                    kind: "depends".to_string(),
+                    behavior: "hard".to_string(),
+                    description: None,
+                    native_text: Some(path.to_string()),
+                    expression_json: serde_json::to_string(&RepositoryRequirementExpression::Atom(
+                        clause.clone(),
+                    ))
+                    .unwrap(),
+                    atoms: vec![CatalogRequirementAtomV1 {
+                        capability: path.to_string(),
+                        version_constraint: None,
+                        kind: "file".to_string(),
+                        dependency_type: "runtime".to_string(),
+                        raw: Some(path.to_string()),
+                    }],
+                }]
+            })
+            .unwrap_or_default();
+        CatalogPackageRecordV1 {
+            package_key_sha256: String::new(),
+            origin: CatalogPackageOriginV1::Source {
+                source_identity: "fedora-project".to_string(),
+                repository_identity: "fedora-everything-x86_64".to_string(),
+            },
+            source_profile: "fedora-44".to_string(),
+            name: name.to_string(),
+            version: "1-1".to_string(),
+            package_release: "1".to_string(),
+            architecture: Some("x86_64".to_string()),
+            debian_multi_arch: None,
+            description: None,
+            checksum: checksum.to_string(),
+            size: 1,
+            download_url: format!("https://repo.test/{name}.rpm"),
+            metadata: None,
+            is_security_update: false,
+            severity: None,
+            cve_ids: None,
+            advisory_id: None,
+            advisory_url: None,
+            version_scheme: VersionScheme::Rpm,
+            provides,
+            requirement_groups,
+        }
+    }
+
+    #[test]
+    fn rpm_primary_file_audit_reads_the_candidate_projection() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("catalog.sqlite3");
+        let mut writer = CatalogCandidateWriter::create(&path, scope()).unwrap();
+        writer
+            .package(rpm_package("provider", "a", &["/usr/bin/provided"], None))
+            .unwrap();
+        writer
+            .package(rpm_package("consumer", "b", &[], Some("/usr/bin/provided")))
+            .unwrap();
+
+        writer
+            .validate_rpm_primary_file_requirements("https://repo.test/fedora")
+            .unwrap();
+
+        let missing_path = root.path().join("missing.sqlite3");
+        let mut missing = CatalogCandidateWriter::create(&missing_path, scope()).unwrap();
+        missing
+            .package(rpm_package("consumer", "c", &[], Some("/usr/lib/missing")))
+            .unwrap();
+        let error = missing
+            .validate_rpm_primary_file_requirements("https://repo.test/fedora")
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("consumer 1-1"), "{message}");
+        assert!(message.contains("/usr/lib/missing"), "{message}");
+        assert!(message.contains("no filelists record"), "{message}");
     }
 
     #[test]

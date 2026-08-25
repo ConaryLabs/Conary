@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::db::models::Repository;
-use crate::repository::dependency_model::{CapabilityProvenance, SourcePackageFormat};
+use crate::repository::dependency_model::{
+    CapabilityProvenance, RepositoryCapabilityKind, RepositoryRequirementKind, SourcePackageFormat,
+};
 use crate::repository::parsers::fedora::tests::parser;
 
 const CONSUMER_PKGID: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -545,6 +547,20 @@ fn a_path_requirement_without_a_filelists_record_refuses_the_repository() {
         "{message}"
     );
     assert!(message.contains("filelists"), "{message}");
+}
+
+#[test]
+fn compatibility_audit_creates_no_parser_spool() {
+    let mut sink = crate::repository::parsers::CollectingRepositorySnapshotSink::create().unwrap();
+    let work_directory = sink.work_directory().to_path_buf();
+    for package in parse_primary() {
+        sink.package(package).unwrap();
+    }
+
+    sink.validate_rpm_primary_file_requirements("https://repo.test/fedora")
+        .unwrap_err();
+
+    assert_eq!(std::fs::read_dir(work_directory).unwrap().count(), 0);
 }
 
 #[test]
