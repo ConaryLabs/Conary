@@ -36,7 +36,7 @@ fn insert_repo_requirement_group(
     capability: &str,
     constraint: Option<&str>,
     native_text: Option<&str>,
-) {
+) -> i64 {
     let clause = match constraint {
         Some(constraint) => {
             RepositoryRequirementClause::versioned(capability.to_string(), constraint.to_string())
@@ -51,7 +51,7 @@ fn insert_repo_requirement_group(
         serde_json::to_string(&expression).unwrap(),
     );
     group.native_text = native_text.map(str::to_string);
-    group.insert(conn).unwrap();
+    let group_id = group.insert(conn).unwrap();
 
     RepositoryRequirement::new(
         repository_package_id,
@@ -64,6 +64,27 @@ fn insert_repo_requirement_group(
     )
     .insert(conn)
     .unwrap();
+    group_id
+}
+
+fn insert_rpm_repo_package(
+    conn: &Connection,
+    repository_id: i64,
+    name: &str,
+    version: &str,
+) -> i64 {
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        name.to_string(),
+        version.to_string(),
+        VersionScheme::Rpm,
+        format!("sha256:{name}-{version}"),
+        1,
+        format!("https://example.invalid/{name}-{version}.rpm"),
+    );
+    package.architecture = Some("x86_64".to_string());
+    package.source_profile = Some("fedora-44".to_string());
+    package.insert(conn).unwrap()
 }
 
 fn insert_typed_repo_requirement_group(
@@ -209,6 +230,74 @@ fn test_missing_dependency() {
 
     // Should have a conflict message since B can't be found
     assert!(result.conflict_message.is_some());
+}
+
+#[test]
+fn exact_repository_root_preserves_variant_identity() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.invalid/fedora".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let old_root = insert_rpm_repo_package(&conn, repository_id, "root", "1-1");
+    let new_root = insert_rpm_repo_package(&conn, repository_id, "root", "2-1");
+    let dependency = insert_rpm_repo_package(&conn, repository_id, "dependency", "1-1");
+    insert_repo_requirement_group(&conn, old_root, "dependency", None, Some("dependency"));
+
+    let result = solve_exact_repository_package_with_policy(
+        &conn,
+        old_root,
+        "x86_64",
+        &ResolutionPolicy::new().with_primary_source_identity("fedora-44"),
+    )
+    .unwrap();
+    let SatExactResolution::Resolved { install_order } = result else {
+        panic!("exact root unexpectedly unresolved");
+    };
+    let package_ids = install_order
+        .iter()
+        .map(|package| package.repo_package_id.unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(package_ids, BTreeSet::from([old_root, dependency]));
+    assert!(!package_ids.contains(&new_root));
+}
+
+#[test]
+fn exact_repository_root_returns_typed_missing_group() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.invalid/fedora".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let root = insert_rpm_repo_package(&conn, repository_id, "root", "1-1");
+    let group = insert_repo_requirement_group(
+        &conn,
+        root,
+        "missing",
+        Some(">= 2-1"),
+        Some("missing >= 2-1"),
+    );
+
+    let result = solve_exact_repository_package_with_policy(
+        &conn,
+        root,
+        "x86_64",
+        &ResolutionPolicy::new().with_primary_source_identity("fedora-44"),
+    )
+    .unwrap();
+    assert_eq!(
+        result,
+        SatExactResolution::Unresolved {
+            dependencies: vec![SatUnresolvedDependency {
+                repository_package_id: root,
+                repository_requirement_group_id: group,
+            }],
+        }
+    );
 }
 
 #[test]

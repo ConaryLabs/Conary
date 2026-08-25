@@ -19,7 +19,8 @@ use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, parse_
 use crate::resolver::identity::ProvidedCapability;
 
 use super::types::{
-    CapabilityExpression, ConaryConstraint, SolverDep, SolverExpression, SolverRelation,
+    CapabilityExpression, ConaryConstraint, RepositoryRequirementGroupIdentity, SolverDep,
+    SolverExpression, SolverRelation,
 };
 
 /// Load dependency requests for a repository package.
@@ -93,6 +94,15 @@ fn load_grouped_dependency_requests(
                 package_scheme,
                 package_architecture,
             )?,
+            requirement_group: Some(RepositoryRequirementGroupIdentity {
+                repository_package_id: group.repository_package_id,
+                repository_requirement_group_id: group.id.ok_or_else(|| {
+                    Error::MissingId(format!(
+                        "repository requirement group for package {} has no persisted ID",
+                        group.repository_package_id
+                    ))
+                })?,
+            }),
         });
     }
 
@@ -257,6 +267,7 @@ pub(super) fn relation_to_solver_dep(relation: &SolverRelation) -> Result<Solver
             &relation.relation.expression,
             relation.scheme,
         )?)),
+        requirement_group: None,
     })
 }
 
@@ -362,6 +373,7 @@ pub(super) fn load_installed_dependency_requests(
                     record.version_scheme,
                     package_architecture,
                 )?,
+                requirement_group: None,
             })
         })
         .collect()

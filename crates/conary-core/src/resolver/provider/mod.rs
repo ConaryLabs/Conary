@@ -8,6 +8,7 @@
 //!
 //! Solvables are `PackageIdentity` instances carrying full provenance.
 
+mod evidence;
 mod expression;
 mod loading;
 pub(crate) mod matching;
@@ -85,6 +86,9 @@ pub struct ConaryProvider<'db> {
     /// Exact SAT requirements compiled from native dependency expressions.
     pub(super) compiled_dependencies: HashMap<u32, Vec<ConditionalRequirement>>,
 
+    /// Exact persisted group behind each compiled positive version set.
+    compiled_requirement_groups: HashMap<(u32, u32), types::RepositoryRequirementGroupIdentity>,
+
     /// Boolean conditions referenced by compiled conditional requirements.
     pub(super) conditions: Vec<Condition>,
 
@@ -156,6 +160,7 @@ impl<'db> ConaryProvider<'db> {
             dependencies: HashMap::new(),
             relations: HashMap::new(),
             compiled_dependencies: HashMap::new(),
+            compiled_requirement_groups: HashMap::new(),
             conditions: Vec::new(),
             condition_cache: HashMap::new(),
             provider_expression_name_ids: HashSet::new(),
@@ -645,6 +650,7 @@ impl<'db> ConaryProvider<'db> {
                             expression.collect_names(known, &mut seen);
                         }
                         ConaryConstraint::RpmRuntime(_) => {}
+                        ConaryConstraint::ExactRepositoryPackage(_) => {}
                         ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. }
                             if !known.contains(atom.name.as_str()) =>
                         {
@@ -755,6 +761,9 @@ impl<'db> ConaryProvider<'db> {
         match constraint {
             ConaryConstraint::Requested(constraint) => {
                 self.intern_version_set(name_id, constraint.clone())?;
+            }
+            ConaryConstraint::ExactRepositoryPackage(_) => {
+                self.intern_conary_version_set(name_id, constraint.clone())?;
             }
             ConaryConstraint::Repository { .. } => {
                 self.intern_conary_version_set(name_id, constraint.clone())?;

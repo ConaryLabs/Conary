@@ -37,7 +37,9 @@ pub(crate) fn constraint_architecture_matches_package(
     };
     match constraint {
         ConaryConstraint::RpmRuntime(_) => false,
-        ConaryConstraint::Requested(_) | ConaryConstraint::ProviderExpression { .. } => {
+        ConaryConstraint::Requested(_)
+        | ConaryConstraint::ExactRepositoryPackage(_)
+        | ConaryConstraint::ProviderExpression { .. } => {
             PackageSelector::is_architecture_compatible(
                 package.version_scheme,
                 Some(package_architecture),
@@ -121,7 +123,9 @@ pub(crate) fn constraint_architecture_matches_provide(
             depending_architecture,
             native_architecture,
         ),
-        ConaryConstraint::Requested(_) | ConaryConstraint::ProviderExpression { .. } => {
+        ConaryConstraint::Requested(_)
+        | ConaryConstraint::ExactRepositoryPackage(_)
+        | ConaryConstraint::ProviderExpression { .. } => {
             provide_architecture_matches_native_target(
                 package.version_scheme,
                 package_architecture,
@@ -328,7 +332,9 @@ pub fn constraint_matches_package(
             }
             Ok(false)
         }
-        ConaryConstraint::RpmRuntime(_) | ConaryConstraint::ProviderExpression { .. } => Ok(false),
+        ConaryConstraint::ExactRepositoryPackage(_)
+        | ConaryConstraint::RpmRuntime(_)
+        | ConaryConstraint::ProviderExpression { .. } => Ok(false),
     }
 }
 
@@ -377,7 +383,9 @@ pub(crate) fn constraint_matches_provide(
                 reason: "a versioned provide must carry both relation and boundary".to_string(),
             }),
         },
-        ConaryConstraint::RpmRuntime(_) | ConaryConstraint::ProviderExpression { .. } => Ok(false),
+        ConaryConstraint::ExactRepositoryPackage(_)
+        | ConaryConstraint::RpmRuntime(_)
+        | ConaryConstraint::ProviderExpression { .. } => Ok(false),
     }
 }
 
@@ -465,12 +473,17 @@ pub(crate) fn constraint_matches_candidate(
             capability_kind, ..
         } => *capability_kind,
         ConaryConstraint::Requested(_)
+        | ConaryConstraint::ExactRepositoryPackage(_)
         | ConaryConstraint::RpmRuntime(_)
         | ConaryConstraint::ProviderExpression { .. } => None,
     };
 
     match constraint {
         ConaryConstraint::RpmRuntime(_) => Ok(false),
+        ConaryConstraint::ExactRepositoryPackage(expected) => Ok(package.repo_package_id
+            == Some(*expected)
+            && identity_name_matches
+            && constraint_architecture_matches_package(constraint, package, native_architecture)),
         ConaryConstraint::ProviderExpression { expression } => Ok(
             constraint_architecture_matches_package(constraint, package, native_architecture)
                 && provider_expression_matches_package(expression, package)?,

@@ -11,7 +11,11 @@ mod removal;
 
 use resolvo::{Problem, Solver, UnsolvableOrCancelled};
 use rusqlite::Connection;
+use std::collections::BTreeSet;
 use std::time::Duration;
+
+use petgraph::Direction;
+use petgraph::visit::EdgeRef;
 
 use crate::error::{Error, Result};
 use crate::packages::PackageFormat;
@@ -89,6 +93,24 @@ pub struct SatResolution {
     pub conflict_message: Option<String>,
 }
 
+/// One exact required group that has no candidate provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SatUnresolvedDependency {
+    pub repository_package_id: i64,
+    pub repository_requirement_group_id: i64,
+}
+
+/// Typed result for one exact repository-package root against empty state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SatExactResolution {
+    Resolved {
+        install_order: Vec<SatPackage>,
+    },
+    Unresolved {
+        dependencies: Vec<SatUnresolvedDependency>,
+    },
+}
+
 /// Solve an install request using the SAT solver with an explicit source-selection policy.
 pub fn solve_install_with_policy(
     conn: &Connection,
@@ -133,6 +155,100 @@ pub fn solve_install_with_policy(
                 install_order: Vec::new(),
                 remove_order: Vec::new(),
                 conflict_message: Some(message),
+            })
+        }
+        Err(UnsolvableOrCancelled::Cancelled(_)) => Err(Error::InitError(
+            "Dependency resolution was cancelled".to_string(),
+        )),
+    }
+}
+
+/// Resolve one exact persisted repository package for a target architecture.
+///
+/// Unlike the user-facing name/version request, this root constraint cannot
+/// select a different release, architecture, repository, or package variant.
+/// Missing positive dependency groups are returned as persisted typed
+/// authority; package conflicts and other solver failures remain hard errors.
+pub fn solve_exact_repository_package_with_policy(
+    conn: &Connection,
+    repository_package_id: i64,
+    architecture: &str,
+    policy: &ResolutionPolicy,
+) -> Result<SatExactResolution> {
+    let root = crate::db::models::RepositoryPackage::find_by_id(conn, repository_package_id)?
+        .ok_or_else(|| {
+            Error::NotFound(format!(
+                "repository package {repository_package_id} does not exist"
+            ))
+        })?;
+    policy
+        .validate_for_dependency_resolution()
+        .map_err(Error::ConfigError)?;
+
+    let requests = vec![(root.name.clone(), VersionConstraint::Any)];
+    let mut provider = install::build_provider_for_install(conn, &requests, policy)?;
+    provider.set_native_architecture(architecture);
+    let exact = provider.intern_exact_repository_package(&root.name, repository_package_id)?;
+    let problem = Problem::new().requirements(vec![exact.into()]);
+    let mut solver = Solver::new(provider);
+
+    match solver.solve(problem) {
+        Ok(solvable_ids) => {
+            let relation_plan =
+                relations::plan_selected_relations(solver.provider(), &solvable_ids)?;
+            if let Some(conflict) = relation_plan.conflict {
+                return Err(Error::ConflictError(format!(
+                    "exact repository package {repository_package_id} conflicts under empty installed state: {conflict}"
+                )));
+            }
+            if !relation_plan.removals.is_empty() {
+                return Err(Error::InternalError(format!(
+                    "exact repository package {repository_package_id} planned removals against empty installed state"
+                )));
+            }
+            Ok(SatExactResolution::Resolved {
+                install_order: install::collect_install_order(solver.provider(), &solvable_ids),
+            })
+        }
+        Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
+            let graph = conflict.graph(&solver);
+            let Some(unresolved) = graph.unresolved_node else {
+                return Err(Error::ConflictError(format!(
+                    "exact repository package {repository_package_id} is unsatisfiable without a missing typed dependency: {}",
+                    conflict.display_user_friendly(&solver)
+                )));
+            };
+            let mut dependencies = BTreeSet::new();
+            for edge in graph.graph.edges_directed(unresolved, Direction::Incoming) {
+                let resolvo::conflict::ConflictEdge::Requires(requirement) = *edge.weight() else {
+                    return Err(Error::InternalError(
+                        "resolver unresolved sink has a non-requirement edge".to_string(),
+                    ));
+                };
+                let resolvo::conflict::ConflictNode::Solvable(requiring) =
+                    graph.graph[edge.source()]
+                else {
+                    return Err(Error::ConflictError(format!(
+                        "exact repository package {repository_package_id} root constraint has no eligible candidate for architecture '{architecture}'"
+                    )));
+                };
+                for group in solver
+                    .provider()
+                    .unresolved_requirement_groups(requiring, requirement)
+                {
+                    dependencies.insert(SatUnresolvedDependency {
+                        repository_package_id: group.repository_package_id,
+                        repository_requirement_group_id: group.repository_requirement_group_id,
+                    });
+                }
+            }
+            if dependencies.is_empty() {
+                return Err(Error::ConflictError(format!(
+                    "exact repository package {repository_package_id} is unresolved without a persisted required-group authority"
+                )));
+            }
+            Ok(SatExactResolution::Unresolved {
+                dependencies: dependencies.into_iter().collect(),
             })
         }
         Err(UnsolvableOrCancelled::Cancelled(_)) => Err(Error::InitError(
