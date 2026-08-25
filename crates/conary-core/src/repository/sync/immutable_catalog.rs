@@ -151,6 +151,21 @@ impl NativeCatalogSnapshotSink {
         let work_directory = tempfile::Builder::new()
             .prefix("native-objects-")
             .tempdir_in(candidate_parent)?;
+        let projection_cache = projection_cache_root
+            .map(|root| match scratch_admission.as_ref() {
+                Some(admission) => {
+                    super::projection_cache::ProjectionCache::open_with_scratch_admission(
+                        root,
+                        repo.stream_binding_sha256.as_deref().expect("validated"),
+                        Arc::clone(admission),
+                    )
+                }
+                None => super::projection_cache::ProjectionCache::open(
+                    root,
+                    repo.stream_binding_sha256.as_deref().expect("validated"),
+                ),
+            })
+            .transpose()?;
         Ok(Self {
             writer: match scratch_admission {
                 Some(admission) => CatalogCandidateWriter::create_with_scratch_admission(
@@ -173,14 +188,7 @@ impl NativeCatalogSnapshotSink {
             authenticated_objects: BTreeMap::new(),
             work_directory,
             candidate_path: candidate_path.to_path_buf(),
-            projection_cache: projection_cache_root
-                .map(|root| {
-                    super::projection_cache::ProjectionCache::open(
-                        root,
-                        repo.stream_binding_sha256.as_deref().expect("validated"),
-                    )
-                })
-                .transpose()?,
+            projection_cache,
             cache_inputs: None,
             cache_hit: false,
         })

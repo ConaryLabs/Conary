@@ -408,7 +408,7 @@ fn remove_candidate_files(path: &Path) {
 mod tests {
     use super::*;
     use crate::repository::catalog::{
-        CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1, CatalogFinalizationScratchV1,
+        CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
         CatalogScratchCapacityError,
     };
     use std::sync::Mutex;
@@ -444,6 +444,14 @@ mod tests {
                 .into());
             }
             Ok(Box::new(RecordingLease(Arc::clone(&self.lease_drops))))
+        }
+
+        fn reserve_copy(
+            &self,
+            _destination_root: &Path,
+            _requirement: CatalogCopyScratchV1,
+        ) -> Result<Box<dyn Send>> {
+            panic!("candidate writer must not request a catalog-copy reservation")
         }
     }
 

@@ -171,9 +171,18 @@ therefore cannot collectively reserve more than the filesystem reports
 available; the lease releases on success, error, cancellation unwind, or
 process restart. A one-byte-short refusal is a typed `storage_capacity` refresh
 failure before `VACUUM`, and candidate cleanup preserves the active revision.
-This finalization admission is independent of the serving readiness floor and
-does not yet estimate the earlier candidate, metadata-spool, cache-copy, or
-immutable-publication writes.
+When a newly finalized source catalog has no exact projection-cache entry, the
+cache derives another typed requirement from the verified catalog artifact size
+and the exact canonical cache-manifest bytes. It reserves those bytes on the
+cache filesystem through the same ledger before creating a private stage, then
+retains the lease through copy, file and directory synchronization, atomic
+rename, and independent reopen. A current exact cache hit writes and reserves
+nothing. Refusal is typed and leaves no cache candidate. Immutable source and
+profile publication itself moves verified candidates by same-filesystem atomic
+rename, so it creates no second catalog-file copy.
+These construction admissions are independent of the serving readiness floor
+and do not yet estimate initial source/profile candidate growth or authenticated
+metadata and parser spools.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
@@ -913,8 +922,8 @@ Implementation ownership lives in child modules:
 
 - `catalog_refresh.rs`: private source/profile candidate construction, durable
   content-addressed registration, and fenced candidate inputs.
-- `catalog_capacity.rs`: filesystem-scoped SQLite finalization reservations and
-  typed capacity refusal.
+- `catalog_capacity.rs`: shared filesystem-scoped catalog finalization and
+  projection-copy reservations with typed capacity refusal.
 - `catalog_authority.rs` and `profile_catalog.rs`: active-pointer resolution,
   verified immutable readers, reader-lifetime pins, and serving projections.
 - `catalog_gc.rs`: exact active/current-candidate/work/reader/conversion
