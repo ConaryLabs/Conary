@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 57
-summary: Document complete Conary candidate resolution evidence and independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 58
+summary: Document exact candidate promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -384,8 +384,8 @@ exact native comparison. Exact root constraints cannot substitute a different
 version, release, architecture, repository, or variant; optional and build
 groups remain excluded from the positive solve. Initial conversion crawling,
 exact proof reuse, independent CCS reopen, and target preflight retain their
-own evidence contracts. Remi promotion wiring remains the next authority
-boundary.
+own evidence contracts. The promotion-evidence producer below binds all of
+these independently reopened records to the same exact candidates.
 
 ### Initial Full-Universe Conversion Crawl
 
@@ -437,9 +437,9 @@ failure report is still published for diagnosis, then the command exits
 unsuccessfully.
 
 The crawl currently consumes activated immutable catalogs; it does not promote
-a candidate. Canonical-contract candidate validation and final
-catalog/CAS/signed-metadata durability reopen remain separate Slice 6 gates
-under #517.
+a candidate. The promotion-evidence contract consumes its complete report.
+Final pointer activation and catalog/CAS/signed-metadata durability reopen
+remain a separate Slice 6 gate under #517.
 
 ```text
 remi conversion-crawl \
@@ -450,6 +450,38 @@ remi conversion-crawl \
   --repository-keys-dir /etc/conary/repository-keys \
   --output /var/lib/conary/evidence/initial-conversion-crawl.json
 ```
+
+### Exact Candidate Promotion Evidence
+
+`RemiPromotionEvidenceV1` is the single promotion-proof authority for one
+exact ordered public candidate set. Its producer accepts exactly the declared
+Fedora 44, Ubuntu 26.04, and Arch `ProfileRevisionV2` values in public-contract
+order; missing, repeated, reordered, foreign, or candidate-tier profiles fail
+before evidence generation. Solus cannot enter this record before an explicit
+support-tier promotion changes the public contract.
+
+For each profile, the producer independently reopens the immutable catalog,
+the pinned native package-fact oracle, and both the native and Conary
+resolution bundles. It recomputes package-fact and resolution comparison
+records rather than accepting caller-supplied comparison claims. It also
+canonically reopens the complete `RemiConversionCrawlV4` artifact and walks its
+ordered outcomes against the candidate catalog, requiring exact revision,
+count, package key, name, version, release, architecture, and repository
+checksum equality. The crawl's own strict reopen proves every package
+succeeded with a current exact proof key, independently reopened CCS artifact,
+and complete supported-target preflight set.
+
+Canonical-map validation runs against these same reopened candidate catalogs,
+so an implementation name cannot be justified by another revision or a
+serving cache. The resulting canonical schema-1 artifact binds the complete
+crawl digest, canonical-map digest/revision/count, every profile revision and
+catalog digest/size, the package-oracle manifest digest, and both resolution
+manifest digests through the recomputed comparisons. The writer stages and
+synchronizes canonical bytes, atomically publishes them, synchronizes the
+parent directory, independently reopens the plain file, and requires exact
+value equality before success. This proof does not advance any active pointer;
+activation must additionally prove that every referenced catalog, CAS, and
+signed metadata object is durable and successfully reopened.
 
 Clients enroll the universe metadata root independently of CCS package keys.
 Self-hosted `repo add` requires `--remi-metadata-root` from an independently

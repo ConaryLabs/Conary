@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-08-25
-revision: 7
+revision: 8
 status: active
 ---
 
@@ -324,9 +324,11 @@ package-fact, or binding mismatch fails closed.
 
 ## Separate Slice 6 owners
 
-ALPM, RPM, and Debian own independent pinned native evidence. Conary now owns
-the complete candidate crawl, durable reopen, and exact comparison. Initial
+ALPM, RPM, and Debian own independent pinned native evidence. Conary owns the
+complete candidate crawl, durable reopen, and exact comparison. Initial
 conversion crawling, exact proof reuse, independent CCS reopen, and target
-preflight remain separate evidence owners already consumed by later promotion.
-Final Remi promotion must still bind all of those records and wait for durable
-catalog, CAS, and signed metadata reopen under #517.
+preflight remain separate evidence owners. `RemiPromotionEvidenceV1`
+independently reopens their artifacts, recomputes both parity comparisons, and
+binds them with the complete crawl and canonical-map validation to the same
+exact ordered public candidate set. Final pointer activation must still wait
+for durable catalog, CAS, and signed metadata reopen under #517.
