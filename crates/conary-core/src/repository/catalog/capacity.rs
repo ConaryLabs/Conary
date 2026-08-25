@@ -24,6 +24,12 @@ pub const CATALOG_METADATA_SCRATCH_SCHEMA_V1: u32 = 1;
 /// Current schema for metadata whose exact size is admitted while streaming.
 pub const CATALOG_METADATA_STREAM_SCRATCH_SCHEMA_V1: u32 = 1;
 
+/// Current schema for profile-candidate construction admission.
+pub const CATALOG_PROFILE_CANDIDATE_SCRATCH_SCHEMA_V1: u32 = 1;
+
+/// SQLite page size fixed by the immutable catalog schema.
+pub const CATALOG_SQLITE_PAGE_SIZE_V1: u64 = 4096;
+
 /// One authenticated metadata stream whose exact served size is learned only
 /// as bytes arrive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +69,195 @@ impl CatalogMetadataStreamScratchV1 {
             ));
         }
         validate_relative_source_path(&self.source_path)
+    }
+}
+
+/// Exact immutable source-catalog facts consumed by one profile member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogProfileMemberScratchV1 {
+    /// Canonical profile member ordinal.
+    pub ordinal: u32,
+    /// Exact independently verified source-catalog artifact bytes.
+    pub catalog_bytes: u64,
+    /// Exact package count bound by the source snapshot.
+    pub package_count: u64,
+}
+
+/// Conservative pre-write allocation for one profile-catalog candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogProfileCandidateScratchV1 {
+    /// Contract schema version.
+    pub schema_version: u32,
+    /// Page size fixed by the immutable catalog schema.
+    pub page_size: u64,
+    /// Exact ordered source members consumed by the profile.
+    pub members: Vec<CatalogProfileMemberScratchV1>,
+    /// Sum of exact verified source-catalog artifact bytes.
+    pub input_catalog_bytes: u64,
+    /// Sum of exact input package counts before profile deduplication.
+    pub input_package_count: u64,
+    /// Baseline destination payload allocation supplied by the input catalogs.
+    pub destination_payload_bytes: u64,
+    /// Separate full source-byte budget for arbitrary destination B-tree repacking.
+    pub btree_rewrite_bytes: u64,
+    /// One page per source package for the expanded profile-origin row.
+    pub profile_origin_bytes: u64,
+    /// Complete database-file ceiling before final compaction.
+    pub candidate_database_bytes: u64,
+    /// Full source-byte ceiling for the new database's rollback journal.
+    pub rollback_journal_bytes: u64,
+    /// Sum of every candidate-construction allocation above.
+    pub required_additional_bytes: u64,
+}
+
+impl CatalogProfileCandidateScratchV1 {
+    /// Derive the complete profile construction bound from exact source artifacts.
+    pub fn from_members(mut members: Vec<CatalogProfileMemberScratchV1>) -> Result<Self> {
+        members.sort_by_key(|member| member.ordinal);
+        let input_catalog_bytes = members.iter().try_fold(0_u64, |total, member| {
+            total.checked_add(member.catalog_bytes).ok_or_else(|| {
+                crate::Error::IoError(
+                    "profile candidate scratch-space arithmetic overflow".to_string(),
+                )
+            })
+        })?;
+        let input_package_count = members.iter().try_fold(0_u64, |total, member| {
+            total.checked_add(member.package_count).ok_or_else(|| {
+                crate::Error::IoError(
+                    "profile candidate package-count arithmetic overflow".to_string(),
+                )
+            })
+        })?;
+        let profile_origin_bytes = input_package_count
+            .checked_mul(CATALOG_SQLITE_PAGE_SIZE_V1)
+            .ok_or_else(|| {
+                crate::Error::IoError(
+                    "profile candidate scratch-space arithmetic overflow".to_string(),
+                )
+            })?;
+        let candidate_database_bytes = input_catalog_bytes
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(profile_origin_bytes))
+            .ok_or_else(|| {
+                crate::Error::IoError(
+                    "profile candidate scratch-space arithmetic overflow".to_string(),
+                )
+            })?;
+        let required_additional_bytes = candidate_database_bytes
+            .checked_add(input_catalog_bytes)
+            .ok_or_else(|| {
+            crate::Error::IoError("profile candidate scratch-space arithmetic overflow".to_string())
+        })?;
+        let requirement = Self {
+            schema_version: CATALOG_PROFILE_CANDIDATE_SCRATCH_SCHEMA_V1,
+            page_size: CATALOG_SQLITE_PAGE_SIZE_V1,
+            members,
+            input_catalog_bytes,
+            input_package_count,
+            destination_payload_bytes: input_catalog_bytes,
+            btree_rewrite_bytes: input_catalog_bytes,
+            profile_origin_bytes,
+            candidate_database_bytes,
+            rollback_journal_bytes: input_catalog_bytes,
+            required_additional_bytes,
+        };
+        requirement.validate()?;
+        Ok(requirement)
+    }
+
+    /// Reject incomplete, noncanonical, non-page-aligned, or contradictory facts.
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != CATALOG_PROFILE_CANDIDATE_SCRATCH_SCHEMA_V1
+            || self.page_size != CATALOG_SQLITE_PAGE_SIZE_V1
+            || self.members.is_empty()
+        {
+            return Err(crate::Error::ConfigError(
+                "profile candidate scratch evidence has invalid schema or no members".to_string(),
+            ));
+        }
+        for (index, member) in self.members.iter().enumerate() {
+            let expected_ordinal = u32::try_from(index).map_err(|_| {
+                crate::Error::ConfigError(
+                    "profile candidate scratch evidence has too many members".to_string(),
+                )
+            })?;
+            if member.ordinal != expected_ordinal
+                || member.catalog_bytes == 0
+                || member.catalog_bytes % self.page_size != 0
+            {
+                return Err(crate::Error::ConfigError(
+                    "profile candidate scratch member facts are noncanonical".to_string(),
+                ));
+            }
+        }
+        let canonical = Self::from_members_unchecked(self.members.clone())?;
+        if canonical.input_catalog_bytes != self.input_catalog_bytes
+            || canonical.input_package_count != self.input_package_count
+            || canonical.destination_payload_bytes != self.destination_payload_bytes
+            || canonical.btree_rewrite_bytes != self.btree_rewrite_bytes
+            || canonical.profile_origin_bytes != self.profile_origin_bytes
+            || canonical.candidate_database_bytes != self.candidate_database_bytes
+            || canonical.rollback_journal_bytes != self.rollback_journal_bytes
+            || canonical.required_additional_bytes != self.required_additional_bytes
+        {
+            return Err(crate::Error::ConfigError(
+                "profile candidate scratch evidence contradicts its source catalog facts"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn from_members_unchecked(members: Vec<CatalogProfileMemberScratchV1>) -> Result<Self> {
+        let input_catalog_bytes = members.iter().try_fold(0_u64, |total, member| {
+            total.checked_add(member.catalog_bytes).ok_or_else(|| {
+                crate::Error::IoError(
+                    "profile candidate scratch-space arithmetic overflow".to_string(),
+                )
+            })
+        })?;
+        let input_package_count = members.iter().try_fold(0_u64, |total, member| {
+            total.checked_add(member.package_count).ok_or_else(|| {
+                crate::Error::IoError(
+                    "profile candidate package-count arithmetic overflow".to_string(),
+                )
+            })
+        })?;
+        let profile_origin_bytes = input_package_count
+            .checked_mul(CATALOG_SQLITE_PAGE_SIZE_V1)
+            .ok_or_else(|| {
+                crate::Error::IoError(
+                    "profile candidate scratch-space arithmetic overflow".to_string(),
+                )
+            })?;
+        let candidate_database_bytes = input_catalog_bytes
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(profile_origin_bytes))
+            .ok_or_else(|| {
+                crate::Error::IoError(
+                    "profile candidate scratch-space arithmetic overflow".to_string(),
+                )
+            })?;
+        let required_additional_bytes = candidate_database_bytes
+            .checked_add(input_catalog_bytes)
+            .ok_or_else(|| {
+            crate::Error::IoError("profile candidate scratch-space arithmetic overflow".to_string())
+        })?;
+        Ok(Self {
+            schema_version: CATALOG_PROFILE_CANDIDATE_SCRATCH_SCHEMA_V1,
+            page_size: CATALOG_SQLITE_PAGE_SIZE_V1,
+            members,
+            input_catalog_bytes,
+            input_package_count,
+            destination_payload_bytes: input_catalog_bytes,
+            btree_rewrite_bytes: input_catalog_bytes,
+            profile_origin_bytes,
+            candidate_database_bytes,
+            rollback_journal_bytes: input_catalog_bytes,
+            required_additional_bytes,
+        })
     }
 }
 
@@ -320,6 +515,13 @@ pub trait CatalogMetadataStreamAdmission: Send + Sync {
 /// Process owner that admits an exact catalog scratch requirement. A returned
 /// lease retains its reservation until the owning operation completes or aborts.
 pub trait CatalogScratchAdmission: Send + Sync {
+    /// Reserve complete profile-candidate growth before its private file exists.
+    fn reserve_profile_candidate(
+        &self,
+        candidate_path: &Path,
+        requirement: CatalogProfileCandidateScratchV1,
+    ) -> Result<Box<dyn Send>>;
+
     /// Reserve authenticated native metadata bytes at the existing run-local
     /// work directory until the sink removes those files.
     fn reserve_metadata(
@@ -354,6 +556,52 @@ pub trait CatalogScratchAdmission: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn profile_member(
+        ordinal: u32,
+        catalog_pages: u64,
+        package_count: u64,
+    ) -> CatalogProfileMemberScratchV1 {
+        CatalogProfileMemberScratchV1 {
+            ordinal,
+            catalog_bytes: catalog_pages * CATALOG_SQLITE_PAGE_SIZE_V1,
+            package_count,
+        }
+    }
+
+    #[test]
+    fn profile_candidate_requirement_is_structural_canonical_and_exact() {
+        let requirement = CatalogProfileCandidateScratchV1::from_members(vec![
+            profile_member(1, 2, 3),
+            profile_member(0, 1, 2),
+        ])
+        .unwrap();
+
+        assert_eq!(requirement.members[0].ordinal, 0);
+        assert_eq!(requirement.input_catalog_bytes, 3 * 4096);
+        assert_eq!(requirement.input_package_count, 5);
+        assert_eq!(requirement.destination_payload_bytes, 3 * 4096);
+        assert_eq!(requirement.btree_rewrite_bytes, 3 * 4096);
+        assert_eq!(requirement.profile_origin_bytes, 5 * 4096);
+        assert_eq!(requirement.candidate_database_bytes, 11 * 4096);
+        assert_eq!(requirement.rollback_journal_bytes, 3 * 4096);
+        assert_eq!(requirement.required_additional_bytes, 14 * 4096);
+
+        let mut contradictory = requirement.clone();
+        contradictory.profile_origin_bytes += 1;
+        assert!(contradictory.validate().is_err());
+        assert!(
+            CatalogProfileCandidateScratchV1::from_members(vec![profile_member(1, 1, 1)]).is_err()
+        );
+        assert!(
+            CatalogProfileCandidateScratchV1::from_members(vec![CatalogProfileMemberScratchV1 {
+                ordinal: 0,
+                catalog_bytes: 4095,
+                package_count: 1,
+            },])
+            .is_err()
+        );
+    }
 
     fn object(
         role: SourceMetadataObjectRoleV1,

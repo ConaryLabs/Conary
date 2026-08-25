@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 63
-summary: Document typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 64
+summary: Document complete pre-write profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -160,6 +160,19 @@ Concurrent profile refreshes share one narrow catalog-collection coordinator,
 so their plan, filesystem removal, and acknowledgement phases cannot consume
 the same deletion intent while source retrieval, parsing, and catalog
 construction remain parallel.
+Before a profile candidate file exists, core independently validates every
+reopened source reader against its exact snapshot manifest and derives one
+canonical `CatalogProfileCandidateScratchV1` from the ordered member facts.
+The requirement allocates the exact input catalog bytes once for destination
+payload, once for arbitrary B-tree repacking, one fixed 4096-byte catalog page
+for each input package's expanded profile-origin row, and the full input bytes
+for the rollback-journal ceiling. Remi reserves that complete sum on the
+candidate filesystem through the shared device ledger before file creation.
+The lease remains live through member replay and committed catalog metadata and
+evidence. After synchronizing the candidate file and parent, the writer proves
+the actual pre-compaction database is within the separately recorded database
+ceiling, releases the growth lease, and asks for the page-derived finalization
+lease below. A one-byte-short refusal leaves no profile candidate file.
 Before each source or profile catalog enters SQLite compaction, the catalog
 writer commits its private logical state and derives the exact current database
 bytes from SQLite's positive `page_size` and `page_count`. SQLite finalization
@@ -215,8 +228,9 @@ ledger fences concurrent pending writes. A one-byte-short refusal is the same
 typed catalog-capacity failure as other construction admission and no
 unadmitted byte reaches the staged file. Error, cancellation, and normal sink
 drop remove the private work directory.
-These construction admissions are independent of the serving readiness floor
-and do not yet estimate initial source/profile candidate growth.
+These construction admissions are independent of the serving readiness floor.
+Initial native source-candidate growth still requires its separate pre-write
+contract; profile-candidate growth is fully admitted before member replay.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;
@@ -956,8 +970,9 @@ Implementation ownership lives in child modules:
 
 - `catalog_refresh.rs`: private source/profile candidate construction, durable
   content-addressed registration, and fenced candidate inputs.
-- `catalog_capacity.rs`: shared filesystem-scoped metadata, catalog
-  finalization, and projection-copy reservations with typed capacity refusal.
+- `catalog_capacity.rs`: shared filesystem-scoped metadata, profile-candidate
+  growth, catalog finalization, and projection-copy reservations with typed
+  capacity refusal.
 - `catalog_authority.rs` and `profile_catalog.rs`: active-pointer resolution,
   verified immutable readers, reader-lifetime pins, and serving projections.
 - `catalog_gc.rs`: exact active/current-candidate/work/reader/conversion
