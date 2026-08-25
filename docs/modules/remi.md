@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 56
-summary: Document independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 57
+summary: Document complete Conary candidate resolution evidence and independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -375,8 +375,17 @@ and retains only required or pre-required groups that have no native target as
 typed unresolved evidence. All three bind closures and missing groups back to
 exact package-oracle authority, reject architecture/conflict/identity or input
 drift, write the canonical resolution bundle, and fully reopen it before
-success. The complete conversion crawl, proof reuse and target preflight, and
-Remi promotion wiring remain later independent evidence paths.
+success. Conary separately replays the exact verified profile catalog into a
+private temporary resolver projection, resolves every exact package key
+against empty installed state for the oracle's target architecture, maps
+successful closures and typed missing groups back to package-oracle authority,
+writes and independently reopens its complete candidate bundle, and requires
+exact native comparison. Exact root constraints cannot substitute a different
+version, release, architecture, repository, or variant; optional and build
+groups remain excluded from the positive solve. Initial conversion crawling,
+exact proof reuse, independent CCS reopen, and target preflight retain their
+own evidence contracts. Remi promotion wiring remains the next authority
+boundary.
 
 ### Initial Full-Universe Conversion Crawl
 

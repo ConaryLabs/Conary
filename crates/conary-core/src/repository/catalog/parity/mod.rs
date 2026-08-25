@@ -2,6 +2,7 @@
 
 //! Strict native full-catalog parity oracle artifacts and comparison.
 
+mod candidate_resolution;
 mod compare;
 mod contract;
 mod io;
@@ -36,6 +37,10 @@ pub use debian::{
     DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
 };
 
+pub use candidate_resolution::{
+    CONARY_RESOLUTION_PROJECTION_SCHEMA_V1, ConaryResolutionCandidateV1,
+    produce_conary_resolution_candidate,
+};
 pub use compare::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NativeParityComparisonError, NativeParityComparisonV1,
     NativeParityFactV1, NativeParityMismatchV1, NativeParityPackageIdentityV1,

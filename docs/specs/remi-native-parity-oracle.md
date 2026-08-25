@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-08-25
-revision: 6
+revision: 7
 status: active
 ---
 
@@ -288,10 +288,45 @@ Success has the same complete per-root and independent reopen meaning as the
 ALPM and RPM producers. The helper invokes no `apt`, `apt-get`, or `dpkg`
 executable and reads neither their databases nor Conary catalog rows.
 
+## Conary candidate resolution evidence
+
+`produce_conary_resolution_candidate` is the candidate-side owner. It first
+independently reopens the exact package and native-resolution oracle bundles,
+requires the verified profile catalog to match every package-oracle fact, and
+requires the native oracle to use schema 1's exact target policy. It cannot
+resolve an unproved catalog or silently substitute another architecture.
+
+The producer replays the catalog into a private temporary current-schema
+resolver database. Two private mapping tables retain exact catalog package
+keys and canonical requirement-group digests beside their temporary persisted
+IDs. This database is evidence-generation machinery, never package or
+publication authority. Every package-oracle key becomes an exact persisted-ID
+root constraint, so another version, release, architecture, or repository
+variant cannot stand in for it. The existing typed Conary SAT provider owns
+native version, architecture, provider, Boolean grouped-requirement, and
+negative-relation semantics. Optional and build groups remain outside the
+positive solve.
+
+Successful SAT selections map back to a strictly ordered set of catalog
+package keys. An unsatisfiable dependency maps Resolvo's typed conflict graph
+back to the exact persisted required or pre-required group; diagnostic text is
+never parsed. Architecture rejection, package conflict, a missing mapping, an
+untyped unsatisfiable result, or any selected identity outside the catalog is
+a hard crawl failure rather than an unresolved row.
+
+The producer writes one complete `NativeResolutionOracleV1` bundle using the
+`conary-sat` implementation identity and projection schema 1, durably closes
+it, independently reopens and cross-checks every package and group reference,
+and compares it with the pinned native bundle. Success therefore proves one
+canonical outcome for every exact catalog variant and returns the exact
+candidate/native comparison record. A closure, unresolved-set, policy, root,
+package-fact, or binding mismatch fails closed.
+
 ## Separate Slice 6 owners
 
-The shared resolver artifact and comparator do not produce native evidence.
-ALPM, RPM, and Debian now have pinned native solver helpers. Complete
-conversion crawling, conversion-proof reuse, independent CCS reopen and target
-preflight, and final Remi promotion after durable object reopen remain separate
-authority boundaries under #517.
+ALPM, RPM, and Debian own independent pinned native evidence. Conary now owns
+the complete candidate crawl, durable reopen, and exact comparison. Initial
+conversion crawling, exact proof reuse, independent CCS reopen, and target
+preflight remain separate evidence owners already consumed by later promotion.
+Final Remi promotion must still bind all of those records and wait for durable
+catalog, CAS, and signed metadata reopen under #517.

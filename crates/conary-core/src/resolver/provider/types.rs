@@ -20,6 +20,8 @@ use crate::version::VersionConstraint;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConaryConstraint {
     Requested(VersionConstraint),
+    /// Select one exact persisted repository package as a solver root.
+    ExactRepositoryPackage(i64),
     Repository {
         scheme: VersionScheme,
         constraint: RepoVersionConstraint,
@@ -215,6 +217,14 @@ impl CapabilityExpression {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SolverDep {
     pub expression: SolverExpression,
+    pub requirement_group: Option<RepositoryRequirementGroupIdentity>,
+}
+
+/// Persisted authority for one repository requirement group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RepositoryRequirementGroupIdentity {
+    pub repository_package_id: i64,
+    pub repository_requirement_group_id: i64,
 }
 
 /// Exact transaction relation attached to a solver candidate.
@@ -228,6 +238,7 @@ impl SolverDep {
     pub fn single(name: String, constraint: ConaryConstraint) -> Self {
         Self {
             expression: SolverExpression::atom(name, constraint),
+            requirement_group: None,
         }
     }
 
@@ -247,6 +258,7 @@ impl fmt::Display for ConaryConstraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Requested(constraint) => write!(f, "{}", constraint),
+            Self::ExactRepositoryPackage(id) => write!(f, "repository package {id}"),
             Self::Repository {
                 raw, constraint, ..
             } => {

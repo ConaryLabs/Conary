@@ -76,6 +76,7 @@ rayon.workspace = true
 
 # SAT-based dependency resolver
 resolvo = "0.12.0"
+petgraph.workspace = true
 
 # Progress bars for downloads
 indicatif.workspace = true

@@ -1137,6 +1137,7 @@ dependencies = [
  "nix",
  "num-traits",
  "pem",
+ "petgraph",
  "pkg-config",
  "quick-xml",
  "rand 0.10.1",

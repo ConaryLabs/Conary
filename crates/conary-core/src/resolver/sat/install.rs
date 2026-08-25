@@ -88,6 +88,7 @@ fn requirement_names(expressions: &[SolverExpression]) -> HashSet<String> {
                     expression.collect_names(&known, &mut names);
                 }
                 ConaryConstraint::RpmRuntime(_) => {}
+                ConaryConstraint::ExactRepositoryPackage(_) => {}
                 ConaryConstraint::Requested(_) | ConaryConstraint::Repository { .. } => {
                     names.insert(atom.name.clone());
                 }

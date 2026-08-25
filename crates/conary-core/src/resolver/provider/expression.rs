@@ -33,11 +33,15 @@ impl ConaryProvider<'_> {
     pub(super) fn compile_dependency_requirements(&mut self) -> Result<()> {
         let dependencies = std::mem::take(&mut self.dependencies);
         self.compiled_dependencies.clear();
+        self.compiled_requirement_groups.clear();
 
         for (solvable, deps) in &dependencies {
             let mut requirements = Vec::new();
             for dep in deps {
-                requirements.extend(self.compile_expression(&dep.expression)?);
+                requirements.extend(self.compile_expression(
+                    &dep.expression,
+                    dep.requirement_group.map(|group| (*solvable, group)),
+                )?);
             }
             self.compiled_dependencies.insert(*solvable, requirements);
         }
@@ -52,7 +56,7 @@ impl ConaryProvider<'_> {
     ) -> Result<Vec<ConditionalRequirement>> {
         let requirements = expressions
             .iter()
-            .map(|expression| self.compile_expression(expression))
+            .map(|expression| self.compile_expression(expression, None))
             .collect::<Result<Vec<_>>>()
             .map(|requirements| requirements.into_iter().flatten().collect())?;
         self.validate_solver_invariants()?;
@@ -62,6 +66,7 @@ impl ConaryProvider<'_> {
     fn compile_expression(
         &mut self,
         expression: &SolverExpression,
+        provenance: Option<(u32, super::types::RepositoryRequirementGroupIdentity)>,
     ) -> Result<Vec<ConditionalRequirement>> {
         let normal = to_normal_form(expression, false);
         let clauses = to_cnf(&normal);
@@ -71,7 +76,7 @@ impl ConaryProvider<'_> {
             let Some(clause) = normalize_clause(clause) else {
                 continue;
             };
-            if let Some(requirement) = self.compile_clause(&clause)? {
+            if let Some(requirement) = self.compile_clause(&clause, provenance)? {
                 requirements.push(requirement);
             }
         }
@@ -79,7 +84,11 @@ impl ConaryProvider<'_> {
         Ok(requirements)
     }
 
-    fn compile_clause(&mut self, clause: &[Literal]) -> Result<Option<ConditionalRequirement>> {
+    fn compile_clause(
+        &mut self,
+        clause: &[Literal],
+        provenance: Option<(u32, super::types::RepositoryRequirementGroupIdentity)>,
+    ) -> Result<Option<ConditionalRequirement>> {
         let mut positive = Vec::new();
         let mut negative = Vec::new();
 
@@ -125,6 +134,23 @@ impl ConaryProvider<'_> {
                 Requirement::Union(union)
             }
         };
+
+        if let Some((solvable, group)) = provenance {
+            for version_set in &positive {
+                self.compiled_requirement_groups
+                    .entry((solvable, version_set.0))
+                    .or_default()
+                    .insert(group);
+            }
+            if positive.is_empty()
+                && let Requirement::Single(version_set) = requirement
+            {
+                self.compiled_requirement_groups
+                    .entry((solvable, version_set.0))
+                    .or_default()
+                    .insert(group);
+            }
+        }
 
         let condition = self.intern_conjunction(&negative)?;
         Ok(Some(ConditionalRequirement {
