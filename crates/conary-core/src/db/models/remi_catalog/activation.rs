@@ -61,8 +61,8 @@ pub enum RemiProfileActivationOutcome {
     AlreadyActive(RemiActiveProfileRevision),
 }
 
-/// Prove the exact current run owner and durable catalog metadata, then move
-/// one profile pointer under a single immediate SQLite transaction.
+/// Prove the exact current completed candidate and durable catalog metadata,
+/// then move one profile pointer under a single immediate SQLite transaction.
 pub fn activate_profile_revision(
     conn: &Connection,
     request: &RemiProfileRevisionActivation,
@@ -189,14 +189,12 @@ fn activate_profile_revision_in_transaction(
                AND run.source_profile = ?2
                AND run.owner_instance_uuid = ?3
                AND run.fencing_epoch = ?4
-               AND (run.state = 'published'
-                    OR (run.state = 'ready_to_publish' AND run.lease_expires_at > ?5))",
+               AND run.state IN ('candidate', 'published')",
             params![
                 &request.run_id,
                 &request.source_profile,
                 &request.owner_instance_uuid,
                 request.fencing_epoch,
-                now,
             ],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
         )
@@ -243,7 +241,7 @@ fn activate_profile_revision_in_transaction(
         }
     }
 
-    if run_state != "ready_to_publish" {
+    if run_state != "candidate" {
         return Err(Error::ConflictError(format!(
             "profile {} run {} is already published without its active pointer",
             request.source_profile, request.run_id
@@ -253,15 +251,14 @@ fn activate_profile_revision_in_transaction(
     let published_at = now;
     let published = tx.execute(
         "UPDATE repository_sync_runs
-         SET state = 'published', heartbeat_at = ?1, lease_expires_at = ?1,
-             finished_at = ?1
+         SET state = 'published', heartbeat_at = ?1, lease_expires_at = ?1
          WHERE run_id = ?2
            AND source_profile = ?3
            AND owner_instance_uuid = ?4
            AND fencing_epoch = ?5
-           AND state = 'ready_to_publish'
+           AND state = 'candidate'
            AND candidate_profile_digest = ?6
-           AND lease_expires_at > ?1",
+           AND finished_at IS NOT NULL",
         params![
             published_at,
             &request.run_id,

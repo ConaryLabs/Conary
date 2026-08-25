@@ -22,10 +22,10 @@ use crate::error::Error;
 /// The exact profile and source digests retained by current operational roots.
 ///
 /// Profile roots are the active pointers, every signed durable universe,
-/// every profile-revision pin, and the input/candidate profile digests of
-/// nonterminal refresh runs. Source roots additionally include those run
-/// members' input/candidate snapshots and all source snapshots named by a
-/// reachable profile revision.
+/// every profile-revision pin, the input/candidate profile digests of
+/// nonterminal refresh runs, and the exact current completed candidate.
+/// Source roots additionally include live run members, current candidate
+/// members, and all source snapshots named by a reachable profile revision.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RemiCatalogReachabilitySnapshot {
     /// Profile revision manifest digests retained by exact authority.
@@ -251,6 +251,16 @@ pub fn delete_catalog_collection(
                    WHERE run.finished_at IS NULL
                      AND (run.input_profile_digest = ?1
                           OR run.candidate_profile_digest = ?1)
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM repository_sync_runs run
+                   JOIN repository_sync_scopes scope
+                     ON scope.source_profile = run.source_profile
+                    AND scope.current_run_id = run.run_id
+                    AND scope.fencing_epoch = run.fencing_epoch
+                   WHERE run.state = 'candidate'
+                     AND run.candidate_profile_digest = ?1
                )",
             params![
                 &resource.resource_sha256,
@@ -304,6 +314,18 @@ pub fn delete_catalog_collection(
                    WHERE run.finished_at IS NULL
                      AND (member.input_source_snapshot_sha256 = ?1
                           OR member.candidate_source_snapshot_sha256 = ?1)
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM repository_sync_runs run
+                   JOIN repository_sync_scopes scope
+                     ON scope.source_profile = run.source_profile
+                    AND scope.current_run_id = run.run_id
+                    AND scope.fencing_epoch = run.fencing_epoch
+                   JOIN repository_sync_run_members member
+                     ON member.run_id = run.run_id
+                   WHERE run.state = 'candidate'
+                     AND member.candidate_source_snapshot_sha256 = ?1
                )",
             params![
                 &resource.resource_sha256,
@@ -549,6 +571,25 @@ fn load_profile_roots(
             "live run candidate profile revision",
         )?;
     }
+
+    let mut candidates = conn.prepare(
+        "SELECT run.candidate_profile_digest
+         FROM repository_sync_scopes scope
+         JOIN repository_sync_runs run
+           ON run.run_id = scope.current_run_id
+          AND run.source_profile = scope.source_profile
+          AND run.fencing_epoch = scope.fencing_epoch
+         WHERE run.state = 'candidate'
+         ORDER BY run.source_profile",
+    )?;
+    let candidate_rows = candidates.query_map([], |row| row.get::<_, String>(0))?;
+    for row in candidate_rows {
+        insert_profile_digest(
+            reachability,
+            &row?,
+            "current private candidate profile revision",
+        )?;
+    }
     Ok(())
 }
 
@@ -581,6 +622,27 @@ fn load_source_run_roots(
             reachability,
             candidate.as_deref(),
             "live run candidate source snapshot",
+        )?;
+    }
+
+    let mut candidates = conn.prepare(
+        "SELECT member.candidate_source_snapshot_sha256
+         FROM repository_sync_scopes scope
+         JOIN repository_sync_runs run
+           ON run.run_id = scope.current_run_id
+          AND run.source_profile = scope.source_profile
+          AND run.fencing_epoch = scope.fencing_epoch
+         JOIN repository_sync_run_members member ON member.run_id = run.run_id
+         WHERE run.state = 'candidate'
+           AND member.candidate_source_snapshot_sha256 IS NOT NULL
+         ORDER BY run.source_profile, member.ordinal",
+    )?;
+    let candidate_rows = candidates.query_map([], |row| row.get::<_, String>(0))?;
+    for row in candidate_rows {
+        insert_source_digest(
+            reachability,
+            &row?,
+            "current private candidate source snapshot",
         )?;
     }
     Ok(())

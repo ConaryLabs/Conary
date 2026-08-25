@@ -1,21 +1,19 @@
 // apps/remi/src/server/admin_service/profile_refresh.rs
 
-//! Profile-scoped immutable native catalog refresh and activation.
+//! Profile-scoped immutable native catalog refresh and candidate completion.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use conary_core::db::models::{
-    RemiActiveProfileRevision, RemiProfileRevisionActivation, RemiProfileRevisionMember,
-    Repository, activate_profile_revision,
-};
+use conary_core::db::models::{RemiActiveProfileRevision, RemiProfileRevisionMember, Repository};
 use conary_core::repository::catalog::{ProfileSourceMemberV2, SourceStreamKindV1};
 use conary_core::repository::{
     PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncFailureCategory, ProfileSyncFailureStage,
     ProfileSyncRun, ProfileSyncRunMember, RepositoryFormat, abort_profile_sync_run,
     acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run_with_members,
-    heartbeat_profile_sync_run, ready_profile_sync_run, record_profile_sync_run_member,
+    complete_profile_sync_candidate, heartbeat_profile_sync_run, ready_profile_sync_run,
+    record_profile_sync_run_member,
 };
 
 use super::refresh::RepoRefreshResult;
@@ -233,7 +231,7 @@ pub(super) async fn refresh_native_profile(
     log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
 
     if let Err(error) = collect_catalog_garbage(&roots).await {
-        tracing::error!(%error, "profile activated but exact catalog collection failed");
+        tracing::error!(%error, "profile candidate completed but exact catalog collection failed");
     }
 
     Ok(results)
@@ -574,20 +572,6 @@ async fn finalize_profile(
         .map(|source| source.manifest.clone())
         .collect::<Vec<_>>();
     let profile_manifest = published.manifest.clone();
-    let profile_digest = profile_manifest
-        .manifest_sha256()
-        .map_err(ServiceError::from)?;
-    let activation = RemiProfileRevisionActivation {
-        source_profile: published.profile.clone(),
-        profile_revision_sha256: profile_digest.clone(),
-        artifact_sha256: profile_manifest.catalog.sha256.clone(),
-        artifact_size: i64::try_from(profile_manifest.catalog.size)
-            .map_err(|_| ServiceError::Internal("profile artifact size exceeds i64".to_string()))?,
-        logical_digest_sha256: profile_manifest.logical_digest_sha256.clone(),
-        run_id: run.run_id.clone(),
-        owner_instance_uuid: run.owner_instance_uuid.clone(),
-        fencing_epoch: run.fencing_epoch,
-    };
     let repository_ids = plans
         .iter()
         .map(|plan| {
@@ -606,7 +590,7 @@ async fn finalize_profile(
                     &profile_manifest,
                     unix_seconds()?,
                 )?;
-                activate_profile_revision(&conn, &activation)?;
+                complete_profile_sync_candidate(&conn, &run)?;
                 let completed_at = conary_core::repository::current_timestamp();
                 for repository_id in repository_ids {
                     let (input, candidate) = conn.query_row(
@@ -626,8 +610,7 @@ async fn finalize_profile(
                         "UPDATE repositories
                      SET last_checked_at = ?1,
                          last_changed_at = CASE WHEN ?2 THEN ?1 ELSE last_changed_at END,
-                         last_validated_at = ?1,
-                         last_published_at = CASE WHEN ?2 THEN ?1 ELSE last_published_at END
+                         last_validated_at = ?1
                      WHERE id = ?3",
                         rusqlite::params![&completed_at, changed, repository_id],
                     )?;

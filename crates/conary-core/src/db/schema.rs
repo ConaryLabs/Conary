@@ -12,7 +12,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 51 of the current-only schema epoch.
+/// Revision 52 of the current-only schema epoch.
 ///
 /// Revision 45 makes registered Remi profile membership immutable and journals
 /// exact catalog filesystem deletions before resource metadata disappears.
@@ -26,9 +26,11 @@ use tracing::info;
 /// Revision 50 hard-cuts exact ordered public profile membership.
 /// Revision 51 adds artifact-level conversion proof and per-revision binding
 /// authority for exact-key reuse.
+/// Revision 52 separates a durable successful private profile candidate from
+/// public profile activation and universe publication.
 /// Earlier pre-alpha databases must be rebuilt; no compatibility migration is
 /// provided.
-pub const SCHEMA_VERSION: i32 = 51;
+pub const SCHEMA_VERSION: i32 = 52;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 

@@ -50,6 +50,18 @@ pub struct ProfileSyncRun {
 
 pub type RemiSyncRun = ProfileSyncRun;
 
+/// The exact completed private candidate currently selected for one source
+/// profile. This is promotion input, never serving authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileSyncCandidate {
+    pub source_profile: String,
+    pub profile_revision_sha256: String,
+    pub run_id: String,
+    pub owner_instance_uuid: String,
+    pub fencing_epoch: i64,
+    pub completed_at: i64,
+}
+
 /// Exact ordered member binding recorded by a profile refresh.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSyncRunMember {
@@ -510,6 +522,90 @@ pub fn ready_profile_sync_run(
     Ok(())
 }
 
+/// Complete the exact current ready run as a durable private candidate.
+///
+/// The caller must first durably publish, independently reopen, and register
+/// the immutable profile revision named by the run. This transition ends the
+/// refresh lease without advancing any active pointer.
+pub fn complete_profile_sync_candidate(
+    conn: &Connection,
+    run: &RemiSyncRun,
+) -> Result<ProfileSyncCandidate> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let now = unix_seconds()?;
+    require_owned_run(&tx, run, "ready_to_publish", "", "", now)?;
+    let updated = tx.execute(
+        "UPDATE repository_sync_runs
+         SET state = 'candidate', heartbeat_at = ?1, lease_expires_at = ?1,
+             finished_at = ?1
+         WHERE run_id = ?2
+           AND source_profile = ?3
+           AND owner_instance_uuid = ?4
+           AND fencing_epoch = ?5
+           AND state = 'ready_to_publish'
+           AND candidate_profile_digest IS NOT NULL
+           AND lease_expires_at > ?1",
+        params![
+            now,
+            &run.run_id,
+            &run.source_profile,
+            &run.owner_instance_uuid,
+            run.fencing_epoch,
+        ],
+    )?;
+    if updated != 1 {
+        return Err(fenced_error(run, "candidate completion was rejected"));
+    }
+    let candidate = current_profile_sync_candidate_in_transaction(&tx, &run.source_profile)?
+        .ok_or_else(|| {
+            Error::InternalError(format!(
+                "profile {} completed candidate disappeared",
+                run.source_profile
+            ))
+        })?;
+    tx.commit()?;
+    Ok(candidate)
+}
+
+/// Resolve the exact current durable private candidate for one profile.
+pub fn current_profile_sync_candidate(
+    conn: &Connection,
+    source_profile: &str,
+) -> Result<Option<ProfileSyncCandidate>> {
+    validate_profile(source_profile)?;
+    current_profile_sync_candidate_in_transaction(conn, source_profile)
+}
+
+fn current_profile_sync_candidate_in_transaction(
+    conn: &Connection,
+    source_profile: &str,
+) -> Result<Option<ProfileSyncCandidate>> {
+    conn.query_row(
+        "SELECT run.source_profile, run.candidate_profile_digest, run.run_id,
+                run.owner_instance_uuid, run.fencing_epoch, run.finished_at
+         FROM repository_sync_scopes scope
+         JOIN repository_sync_runs run
+           ON run.run_id = scope.current_run_id
+          AND run.source_profile = scope.source_profile
+          AND run.fencing_epoch = scope.fencing_epoch
+         WHERE scope.source_profile = ?1
+           AND run.state = 'candidate'",
+        [source_profile],
+        |row| {
+            Ok(ProfileSyncCandidate {
+                source_profile: row.get(0)?,
+                profile_revision_sha256: row.get(1)?,
+                run_id: row.get(2)?,
+                owner_instance_uuid: row.get(3)?,
+                fencing_epoch: row.get(4)?,
+                completed_at: row.get(5)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Error::from)
+}
+
 /// Abort a profile run under its exact lease. No repository or package rows
 /// are deleted because this coordinator never owns candidate row storage.
 pub fn abort_profile_sync_run(
@@ -552,7 +648,7 @@ pub fn abort_profile_sync_run(
            AND source_profile = ?6
            AND owner_instance_uuid = ?7
            AND fencing_epoch = ?8
-           AND state NOT IN ('published', 'failed', 'abandoned')
+           AND state NOT IN ('candidate', 'published', 'failed', 'abandoned')
            AND lease_expires_at > ?1",
         params![
             now,
