@@ -1,11 +1,14 @@
 // apps/remi/src/server/conversion_crawl.rs
 //! Strict full-universe conversion-crawl evidence.
 
+mod ccs_reopen;
+
 use super::catalog_authority::{CatalogAuthority, PinnedProfileCatalog};
 use super::conversion::ConversionService;
 use super::database_writer::DatabaseWriter;
 use super::profile_catalog::ProfileCatalog;
 use anyhow::{Context, Result, bail, ensure};
+use ccs_reopen::CcsArtifactReopener;
 use conary_core::corpus::{ConversionFailure, FailureKind};
 use conary_core::db::models::RemiActiveProfileRevision;
 use conary_core::repository::catalog::CatalogPackageRecordV1;
@@ -17,23 +20,62 @@ use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const REMI_CONVERSION_CRAWL_SCHEMA_V1: u32 = 1;
+pub const REMI_CONVERSION_CRAWL_SCHEMA_V2: u32 = 2;
+pub const CCS_ARTIFACT_REOPEN_PROOF_SCHEMA_V1: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum ConversionCrawlOutcomeStateV1 {
+pub enum ConversionCrawlOutcomeStateV2 {
     Succeeded,
     Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConversionCrawlFailureV1 {
+pub struct ConversionCrawlFailureV2 {
     pub kind: FailureKind,
     pub incident_id: Option<String>,
 }
 
-impl From<ConversionFailure> for ConversionCrawlFailureV1 {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CcsArtifactReopenProofV1 {
+    pub schema_version: u32,
+    pub ccs_format_version: u16,
+    pub foreign_conversion_boundary_schema_version: u32,
+    pub signer_public_key_sha256: String,
+    pub transport_sha256: String,
+    pub verified_files: u64,
+    pub verified_objects: u64,
+}
+
+impl CcsArtifactReopenProofV1 {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == CCS_ARTIFACT_REOPEN_PROOF_SCHEMA_V1,
+            "unsupported CCS artifact reopen proof schema {}",
+            self.schema_version
+        );
+        ensure!(
+            self.ccs_format_version == conary_core::ccs::v3::FORMAT_VERSION_V3,
+            "unsupported reopened CCS format version {}",
+            self.ccs_format_version
+        );
+        ensure!(
+            self.foreign_conversion_boundary_schema_version
+                == conary_core::ccs::attestation::FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1,
+            "unsupported reopened foreign conversion boundary schema {}",
+            self.foreign_conversion_boundary_schema_version
+        );
+        validate_sha256(
+            &self.signer_public_key_sha256,
+            "reopened CCS signer public key",
+        )?;
+        validate_sha256(&self.transport_sha256, "reopened CCS transport")
+    }
+}
+
+impl From<ConversionFailure> for ConversionCrawlFailureV2 {
     fn from(failure: ConversionFailure) -> Self {
         let kind = failure.kind();
         let incident_id = match failure {
@@ -46,39 +88,40 @@ impl From<ConversionFailure> for ConversionCrawlFailureV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConversionCrawlPackageOutcomeV1 {
+pub struct ConversionCrawlPackageOutcomeV2 {
     pub package_key_sha256: String,
     pub name: String,
     pub version: String,
     pub package_release: String,
     pub architecture: Option<String>,
     pub repository_checksum: String,
-    pub state: ConversionCrawlOutcomeStateV1,
+    pub state: ConversionCrawlOutcomeStateV2,
     pub source_artifact_sha256: Option<String>,
     pub ccs_sha256: Option<String>,
-    pub failure: Option<ConversionCrawlFailureV1>,
+    pub ccs_reopen_proof: Option<CcsArtifactReopenProofV1>,
+    pub failure: Option<ConversionCrawlFailureV2>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConversionCrawlProfileV1 {
+pub struct ConversionCrawlProfileV2 {
     pub profile: String,
     pub profile_revision_sha256: String,
     pub expected_packages: u64,
-    pub outcomes: Vec<ConversionCrawlPackageOutcomeV1>,
+    pub outcomes: Vec<ConversionCrawlPackageOutcomeV2>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RemiConversionCrawlV1 {
+pub struct RemiConversionCrawlV2 {
     pub schema_version: u32,
-    pub profiles: Vec<ConversionCrawlProfileV1>,
+    pub profiles: Vec<ConversionCrawlProfileV2>,
 }
 
-impl RemiConversionCrawlV1 {
+impl RemiConversionCrawlV2 {
     pub fn validate_structure(&self) -> Result<()> {
         ensure!(
-            self.schema_version == REMI_CONVERSION_CRAWL_SCHEMA_V1,
+            self.schema_version == REMI_CONVERSION_CRAWL_SCHEMA_V2,
             "unsupported Remi conversion crawl schema {}",
             self.schema_version
         );
@@ -142,7 +185,7 @@ impl RemiConversionCrawlV1 {
                     "conversion crawl package identity is incomplete"
                 );
                 match outcome.state {
-                    ConversionCrawlOutcomeStateV1::Succeeded => {
+                    ConversionCrawlOutcomeStateV2::Succeeded => {
                         let source =
                             outcome.source_artifact_sha256.as_deref().ok_or_else(|| {
                                 anyhow::anyhow!(
@@ -154,12 +197,21 @@ impl RemiConversionCrawlV1 {
                         })?;
                         validate_sha256(source, "conversion crawl source artifact")?;
                         validate_sha256(ccs, "conversion crawl CCS")?;
+                        outcome
+                            .ccs_reopen_proof
+                            .as_ref()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "successful crawl outcome has no CCS artifact reopen proof"
+                                )
+                            })?
+                            .validate()?;
                         ensure!(
                             outcome.failure.is_none(),
                             "successful crawl outcome carries failure evidence"
                         );
                     }
-                    ConversionCrawlOutcomeStateV1::Failed => {
+                    ConversionCrawlOutcomeStateV2::Failed => {
                         let failure = outcome.failure.as_ref().ok_or_else(|| {
                             anyhow::anyhow!("failed crawl outcome has no typed failure evidence")
                         })?;
@@ -170,8 +222,9 @@ impl RemiConversionCrawlV1 {
                         );
                         ensure!(
                             outcome.source_artifact_sha256.is_none()
-                                && outcome.ccs_sha256.is_none(),
-                            "failed crawl outcome carries success digests"
+                                && outcome.ccs_sha256.is_none()
+                                && outcome.ccs_reopen_proof.is_none(),
+                            "failed crawl outcome carries success evidence"
                         );
                     }
                 }
@@ -187,7 +240,7 @@ impl RemiConversionCrawlV1 {
             profile
                 .outcomes
                 .iter()
-                .any(|outcome| outcome.state == ConversionCrawlOutcomeStateV1::Failed)
+                .any(|outcome| outcome.state == ConversionCrawlOutcomeStateV2::Failed)
         }) {
             bail!("conversion crawl contains failed package outcomes");
         }
@@ -213,7 +266,7 @@ struct ProfileCrawlPlan {
     _pin: PinnedProfileCatalog,
 }
 
-pub async fn run_conversion_crawl(config: &ConversionCrawlConfig) -> Result<RemiConversionCrawlV1> {
+pub async fn run_conversion_crawl(config: &ConversionCrawlConfig) -> Result<RemiConversionCrawlV2> {
     ensure!(
         config.concurrency > 0,
         "conversion crawl concurrency must be greater than zero"
@@ -238,10 +291,18 @@ pub async fn run_conversion_crawl(config: &ConversionCrawlConfig) -> Result<Remi
 
     let mut profiles = Vec::with_capacity(plans.len());
     for plan in plans {
-        profiles.push(run_profile_crawl(&service, plan, config.concurrency).await?);
+        profiles.push(
+            run_profile_crawl(
+                &service,
+                plan,
+                &config.repository_keys_dir,
+                config.concurrency,
+            )
+            .await?,
+        );
     }
-    let report = RemiConversionCrawlV1 {
-        schema_version: REMI_CONVERSION_CRAWL_SCHEMA_V1,
+    let report = RemiConversionCrawlV2 {
+        schema_version: REMI_CONVERSION_CRAWL_SCHEMA_V2,
         profiles,
     };
     write_and_reopen_conversion_crawl(&config.output_path, &report)?;
@@ -292,24 +353,32 @@ fn build_crawl_plans(authority: &CatalogAuthority) -> Result<Vec<ProfileCrawlPla
 async fn run_profile_crawl(
     service: &ConversionService,
     plan: ProfileCrawlPlan,
+    repository_keys_dir: &Path,
     concurrency: usize,
-) -> Result<ConversionCrawlProfileV1> {
+) -> Result<ConversionCrawlProfileV2> {
     let expected_packages =
         u64::try_from(plan.packages.len()).context("conversion crawl package count exceeds u64")?;
     let route = plan.route.clone();
     let selection = plan.selection.clone();
-    let outcomes = crawl_packages(plan.packages, concurrency, move |package| {
-        let service = service.clone();
-        let route = route.clone();
-        let selection = selection.clone();
-        async move {
-            service
-                .convert_catalog_package_from_selection_async(&route, package, selection)
-                .await
-        }
-    })
+    let reopener =
+        CcsArtifactReopener::for_profile(repository_keys_dir, &plan.selection.source_profile)?;
+    let outcomes = crawl_packages(
+        plan.packages,
+        concurrency,
+        move |package| {
+            let service = service.clone();
+            let route = route.clone();
+            let selection = selection.clone();
+            async move {
+                service
+                    .convert_catalog_package_from_selection_async(&route, package, selection)
+                    .await
+            }
+        },
+        move |package, result| reopener.reopen(package, result),
+    )
     .await;
-    Ok(ConversionCrawlProfileV1 {
+    Ok(ConversionCrawlProfileV2 {
         profile: plan.selection.source_profile,
         profile_revision_sha256: plan.selection.profile_revision_sha256,
         expected_packages,
@@ -317,20 +386,27 @@ async fn run_profile_crawl(
     })
 }
 
-async fn crawl_packages<F, Fut>(
+async fn crawl_packages<F, Fut, R>(
     packages: Vec<CatalogPackageRecordV1>,
     concurrency: usize,
     convert: F,
-) -> Vec<ConversionCrawlPackageOutcomeV1>
+    reopen: R,
+) -> Vec<ConversionCrawlPackageOutcomeV2>
 where
     F: Fn(CatalogPackageRecordV1) -> Fut + Clone,
     Fut: Future<Output = Result<super::ServerConversionResult>>,
+    R: Fn(
+            &CatalogPackageRecordV1,
+            &super::ServerConversionResult,
+        ) -> Result<(String, String, CcsArtifactReopenProofV1)>
+        + Clone,
 {
     futures::stream::iter(packages.into_iter().map(|package| {
         let convert = convert.clone();
+        let reopen = reopen.clone();
         async move {
             let result = convert(package.clone()).await;
-            package_outcome(package, result)
+            package_outcome(package, result, reopen)
         }
     }))
     .buffered(concurrency)
@@ -338,12 +414,19 @@ where
     .await
 }
 
-fn package_outcome(
+fn package_outcome<R>(
     package: CatalogPackageRecordV1,
     result: Result<super::ServerConversionResult>,
-) -> ConversionCrawlPackageOutcomeV1 {
-    let identity =
-        |state, source_artifact_sha256, ccs_sha256, failure| ConversionCrawlPackageOutcomeV1 {
+    reopen: R,
+) -> ConversionCrawlPackageOutcomeV2
+where
+    R: FnOnce(
+        &CatalogPackageRecordV1,
+        &super::ServerConversionResult,
+    ) -> Result<(String, String, CcsArtifactReopenProofV1)>,
+{
+    let identity = |state, source_artifact_sha256, ccs_sha256, ccs_reopen_proof, failure| {
+        ConversionCrawlPackageOutcomeV2 {
             package_key_sha256: package.package_key_sha256.clone(),
             name: package.name.clone(),
             version: package.version.clone(),
@@ -353,11 +436,14 @@ fn package_outcome(
             state,
             source_artifact_sha256,
             ccs_sha256,
+            ccs_reopen_proof,
             failure,
-        };
+        }
+    };
     match result {
         Ok(result) if result.cache_state != "cold" => identity(
-            ConversionCrawlOutcomeStateV1::Failed,
+            ConversionCrawlOutcomeStateV2::Failed,
+            None,
             None,
             None,
             Some(
@@ -367,22 +453,25 @@ fn package_outcome(
                 .into(),
             ),
         ),
-        Ok(result) => match conversion_success_digests(&package, result) {
-            Ok((source, ccs)) => identity(
-                ConversionCrawlOutcomeStateV1::Succeeded,
+        Ok(result) => match reopen(&package, &result) {
+            Ok((source, ccs, proof)) => identity(
+                ConversionCrawlOutcomeStateV2::Succeeded,
                 Some(source),
                 Some(ccs),
+                Some(proof),
                 None,
             ),
             Err(error) => identity(
-                ConversionCrawlOutcomeStateV1::Failed,
+                ConversionCrawlOutcomeStateV2::Failed,
+                None,
                 None,
                 None,
                 Some(ConversionFailure::classify(&error).into()),
             ),
         },
         Err(error) => identity(
-            ConversionCrawlOutcomeStateV1::Failed,
+            ConversionCrawlOutcomeStateV2::Failed,
+            None,
             None,
             None,
             Some(ConversionFailure::classify(&error).into()),
@@ -390,37 +479,7 @@ fn package_outcome(
     }
 }
 
-fn conversion_success_digests(
-    package: &CatalogPackageRecordV1,
-    result: super::ServerConversionResult,
-) -> Result<(String, String)> {
-    ensure!(
-        result.name == package.name
-            && result.version == package.version
-            && result.source_profile.as_deref() == Some(package.source_profile.as_str()),
-        "conversion result identity differs from the exact catalog package"
-    );
-    let boundary_json = result
-        .transport
-        .foreign_conversion_boundary_json
-        .as_deref()
-        .context("converted CCS transport has no foreign conversion boundary")?;
-    let boundary: conary_core::ccs::attestation::ForeignConversionBoundary =
-        serde_json::from_str(boundary_json)
-            .context("parse converted CCS foreign conversion boundary")?;
-    ensure!(
-        boundary.output_identity.package_name == package.name
-            && boundary.output_identity.package_version == package.version
-            && boundary.output_identity.package_release == package.package_release
-            && boundary.output_identity.architecture == package.architecture,
-        "converted CCS boundary identity differs from the exact catalog package"
-    );
-    let source = exact_prefixed_sha256(&boundary.source_checksum, "source artifact")?;
-    let ccs = exact_prefixed_sha256(&result.content_hash, "converted CCS")?;
-    Ok((source.to_string(), ccs.to_string()))
-}
-
-fn exact_prefixed_sha256<'a>(value: &'a str, field: &str) -> Result<&'a str> {
+pub(super) fn exact_prefixed_sha256<'a>(value: &'a str, field: &str) -> Result<&'a str> {
     let digest = value
         .strip_prefix("sha256:")
         .with_context(|| format!("{field} digest is not SHA-256"))?;
@@ -430,8 +489,8 @@ fn exact_prefixed_sha256<'a>(value: &'a str, field: &str) -> Result<&'a str> {
 
 pub fn write_and_reopen_conversion_crawl(
     path: &Path,
-    report: &RemiConversionCrawlV1,
-) -> Result<RemiConversionCrawlV1> {
+    report: &RemiConversionCrawlV2,
+) -> Result<RemiConversionCrawlV2> {
     report.validate_structure()?;
     let parent = path
         .parent()
@@ -461,7 +520,7 @@ pub fn write_and_reopen_conversion_crawl(
         reopened_bytes == canonical,
         "reopened conversion crawl evidence is not canonical"
     );
-    let reopened: RemiConversionCrawlV1 = serde_json::from_slice(&reopened_bytes)
+    let reopened: RemiConversionCrawlV2 = serde_json::from_slice(&reopened_bytes)
         .context("parse reopened conversion crawl evidence")?;
     reopened.validate_structure()?;
     ensure!(
@@ -492,27 +551,40 @@ mod tests {
         BuildOutputIdentity, FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1, ForeignConversionBoundary,
     };
 
-    fn success_outcome(name: &str, marker: &str) -> ConversionCrawlPackageOutcomeV1 {
-        ConversionCrawlPackageOutcomeV1 {
+    fn success_outcome(name: &str, marker: &str) -> ConversionCrawlPackageOutcomeV2 {
+        ConversionCrawlPackageOutcomeV2 {
             package_key_sha256: conary_core::hash::sha256(format!("key-{marker}").as_bytes()),
             name: name.to_string(),
             version: "1.0".to_string(),
             package_release: "1".to_string(),
             architecture: Some("x86_64".to_string()),
             repository_checksum: format!("sha256:{}", "a".repeat(64)),
-            state: ConversionCrawlOutcomeStateV1::Succeeded,
+            state: ConversionCrawlOutcomeStateV2::Succeeded,
             source_artifact_sha256: Some("b".repeat(64)),
             ccs_sha256: Some("c".repeat(64)),
+            ccs_reopen_proof: Some(reopen_proof()),
             failure: None,
         }
     }
 
-    fn valid_report() -> RemiConversionCrawlV1 {
-        RemiConversionCrawlV1 {
-            schema_version: REMI_CONVERSION_CRAWL_SCHEMA_V1,
+    fn reopen_proof() -> CcsArtifactReopenProofV1 {
+        CcsArtifactReopenProofV1 {
+            schema_version: CCS_ARTIFACT_REOPEN_PROOF_SCHEMA_V1,
+            ccs_format_version: conary_core::ccs::v3::FORMAT_VERSION_V3,
+            foreign_conversion_boundary_schema_version: FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1,
+            signer_public_key_sha256: "3".repeat(64),
+            transport_sha256: "4".repeat(64),
+            verified_files: 1,
+            verified_objects: 1,
+        }
+    }
+
+    fn valid_report() -> RemiConversionCrawlV2 {
+        RemiConversionCrawlV2 {
+            schema_version: REMI_CONVERSION_CRAWL_SCHEMA_V2,
             profiles: conary_core::repository::supported_profiles::public_profiles()
                 .iter()
-                .map(|profile| ConversionCrawlProfileV1 {
+                .map(|profile| ConversionCrawlProfileV2 {
                     profile: profile.id().to_string(),
                     profile_revision_sha256: conary_core::hash::sha256(profile.id().as_bytes()),
                     expected_packages: 1,
@@ -574,6 +646,36 @@ mod tests {
         }
     }
 
+    fn synthetic_reopen(
+        package: &CatalogPackageRecordV1,
+        result: &super::super::ServerConversionResult,
+    ) -> Result<(String, String, CcsArtifactReopenProofV1)> {
+        ensure!(
+            result.name == package.name
+                && result.version == package.version
+                && result.source_profile.as_deref() == Some(package.source_profile.as_str()),
+            "conversion result identity differs from the exact catalog package"
+        );
+        let boundary_json = result
+            .transport
+            .foreign_conversion_boundary_json
+            .as_deref()
+            .context("converted CCS transport has no foreign conversion boundary")?;
+        let boundary: ForeignConversionBoundary = serde_json::from_str(boundary_json)?;
+        ensure!(
+            boundary.output_identity.package_name == package.name
+                && boundary.output_identity.package_version == package.version
+                && boundary.output_identity.package_release == package.package_release
+                && boundary.output_identity.architecture == package.architecture,
+            "converted CCS boundary identity differs from the exact catalog package"
+        );
+        Ok((
+            exact_prefixed_sha256(&boundary.source_checksum, "source artifact")?.to_string(),
+            exact_prefixed_sha256(&result.content_hash, "converted CCS")?.to_string(),
+            reopen_proof(),
+        ))
+    }
+
     #[test]
     fn crawl_contract_requires_every_ordered_public_profile() {
         let report = valid_report();
@@ -602,6 +704,14 @@ mod tests {
         missing.profiles[0].expected_packages = 2;
         assert!(missing.validate_structure().is_err());
 
+        let mut superseded = valid_report();
+        superseded.schema_version = 1;
+        assert!(superseded.validate_structure().is_err());
+
+        let mut missing_reopen = valid_report();
+        missing_reopen.profiles[0].outcomes[0].ccs_reopen_proof = None;
+        assert!(missing_reopen.validate_structure().is_err());
+
         let mut repeated = valid_report();
         let duplicate = repeated.profiles[0].outcomes[0].clone();
         repeated.profiles[0].outcomes.push(duplicate);
@@ -618,10 +728,11 @@ mod tests {
 
         let mut failed = valid_report();
         let outcome = &mut failed.profiles[0].outcomes[0];
-        outcome.state = ConversionCrawlOutcomeStateV1::Failed;
+        outcome.state = ConversionCrawlOutcomeStateV2::Failed;
         outcome.source_artifact_sha256 = None;
         outcome.ccs_sha256 = None;
-        outcome.failure = Some(ConversionCrawlFailureV1 {
+        outcome.ccs_reopen_proof = None;
+        outcome.failure = Some(ConversionCrawlFailureV2 {
             kind: FailureKind::Publication,
             incident_id: None,
         });
@@ -645,25 +756,29 @@ mod tests {
             .as_object_mut()
             .expect("crawl object")
             .insert("unexpected".to_string(), serde_json::json!(true));
-        assert!(serde_json::from_value::<RemiConversionCrawlV1>(value).is_err());
+        assert!(serde_json::from_value::<RemiConversionCrawlV2>(value).is_err());
     }
 
     #[test]
     fn crawl_success_requires_fresh_cold_conversion_digests() {
         let package = package("fedora-44", "demo", "1.0", "1", Some("x86_64"), 42, "demo");
-        let cold = package_outcome(package.clone(), Ok(conversion_result(&package, "cold")));
-        assert_eq!(cold.state, ConversionCrawlOutcomeStateV1::Succeeded);
+        let cold = package_outcome(
+            package.clone(),
+            Ok(conversion_result(&package, "cold")),
+            synthetic_reopen,
+        );
+        assert_eq!(cold.state, ConversionCrawlOutcomeStateV2::Succeeded);
         assert_eq!(cold.source_artifact_sha256, Some("d".repeat(64)));
         assert_eq!(cold.ccs_sha256, Some("2".repeat(64)));
 
         let mut wrong_identity = conversion_result(&package, "cold");
         wrong_identity.name = "other".to_string();
-        let wrong = package_outcome(package.clone(), Ok(wrong_identity));
-        assert_eq!(wrong.state, ConversionCrawlOutcomeStateV1::Failed);
+        let wrong = package_outcome(package.clone(), Ok(wrong_identity), synthetic_reopen);
+        assert_eq!(wrong.state, ConversionCrawlOutcomeStateV2::Failed);
 
         let hot_result = conversion_result(&package, "hot");
-        let hot = package_outcome(package, Ok(hot_result));
-        assert_eq!(hot.state, ConversionCrawlOutcomeStateV1::Failed);
+        let hot = package_outcome(package, Ok(hot_result), synthetic_reopen);
+        assert_eq!(hot.state, ConversionCrawlOutcomeStateV2::Failed);
         assert_eq!(
             hot.failure.expect("typed hot-cache failure").kind,
             FailureKind::Publication
@@ -688,23 +803,28 @@ mod tests {
             String,
             usize,
         >::new()));
-        let outcomes = crawl_packages(vec![first, second], 2, {
-            let attempts = std::sync::Arc::clone(&attempts);
-            move |package| {
+        let outcomes = crawl_packages(
+            vec![first, second],
+            2,
+            {
                 let attempts = std::sync::Arc::clone(&attempts);
-                async move {
-                    *attempts
-                        .lock()
-                        .expect("attempt counter")
-                        .entry(package.package_key_sha256.clone())
-                        .or_default() += 1;
-                    if package.name == "alpha" {
-                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                move |package| {
+                    let attempts = std::sync::Arc::clone(&attempts);
+                    async move {
+                        *attempts
+                            .lock()
+                            .expect("attempt counter")
+                            .entry(package.package_key_sha256.clone())
+                            .or_default() += 1;
+                        if package.name == "alpha" {
+                            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        }
+                        Ok(conversion_result(&package, "cold"))
                     }
-                    Ok(conversion_result(&package, "cold"))
                 }
-            }
-        })
+            },
+            synthetic_reopen,
+        )
         .await;
 
         assert_eq!(
@@ -726,7 +846,7 @@ mod tests {
         assert!(
             outcomes
                 .iter()
-                .all(|outcome| outcome.state == ConversionCrawlOutcomeStateV1::Succeeded)
+                .all(|outcome| outcome.state == ConversionCrawlOutcomeStateV2::Succeeded)
         );
     }
 

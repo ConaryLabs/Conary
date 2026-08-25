@@ -74,9 +74,10 @@ pub use conversion::{
     ConversionBenchmarkSampleClass, ConversionService, ServerConversionResult,
 };
 pub use conversion_crawl::{
-    ConversionCrawlConfig, ConversionCrawlFailureV1, ConversionCrawlOutcomeStateV1,
-    ConversionCrawlPackageOutcomeV1, ConversionCrawlProfileV1, REMI_CONVERSION_CRAWL_SCHEMA_V1,
-    RemiConversionCrawlV1, run_conversion_crawl, write_and_reopen_conversion_crawl,
+    CCS_ARTIFACT_REOPEN_PROOF_SCHEMA_V1, CcsArtifactReopenProofV1, ConversionCrawlConfig,
+    ConversionCrawlFailureV2, ConversionCrawlOutcomeStateV2, ConversionCrawlPackageOutcomeV2,
+    ConversionCrawlProfileV2, REMI_CONVERSION_CRAWL_SCHEMA_V2, RemiConversionCrawlV2,
+    run_conversion_crawl, write_and_reopen_conversion_crawl,
 };
 pub use index_gen::{IndexGenConfig, IndexGenResult, generate_indices};
 pub use jobs::{ConversionJob, JobManager, JobStatus};

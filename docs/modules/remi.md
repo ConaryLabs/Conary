@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 55
-summary: Document the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 56
+summary: Document independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -396,21 +396,30 @@ fresh cold conversion carrying exact source-artifact and CCS SHA-256 evidence;
 an existing hot result fails until the separate exact-key proof-reuse contract
 exists.
 
-The command writes `RemiConversionCrawlV1`, a strict schema-1 JSON artifact
+After persistence, the crawl independently reopens each exact `.ccs` path
+under the source profile's targets trust anchor. The second verification reads
+the persisted bytes, rechecks the complete signed authority and every payload
+object, reproduces the transport envelope, and binds format, signer, catalog
+identity, foreign-conversion boundary, source digest, and CCS digest back to
+the conversion result. Producer-time verification cannot substitute for this
+post-persistence proof.
+
+The command writes `RemiConversionCrawlV2`, a strict schema-2 JSON artifact
 binding the complete ordered public-profile set, each pinned profile revision,
 expected package counts, exact package identities, repository checksums,
-terminal states, success digests, and typed failure evidence. Missing,
-repeated, reordered, unattempted, or failed outcomes prevent success. The
+terminal states, success digests, typed `CcsArtifactReopenProofV1` evidence,
+and typed failure evidence. Missing, repeated, reordered, unattempted, or
+failed outcomes prevent success. The
 writer syncs an atomic staged file, reopens the published bytes, rejects
 noncanonical or unknown input, and compares the complete reopened value before
 the command may report success. A structurally valid failure report is still
 published for diagnosis, then the command exits unsuccessfully.
 
 The crawl currently consumes activated immutable catalogs; it does not promote
-a candidate. Independent reopening of every produced CCS, all-target static
-capability preflight, exact-key incremental proof reuse, canonical-contract
-candidate validation, and final catalog/CAS/signed-metadata durability reopen
-remain separate Slice 6 gates under #517.
+a candidate. All-target static capability preflight, exact-key incremental
+proof reuse, canonical-contract candidate validation, and final
+catalog/CAS/signed-metadata durability reopen remain separate Slice 6 gates
+under #517.
 
 ```text
 remi conversion-crawl \
@@ -421,9 +430,6 @@ remi conversion-crawl \
   --repository-keys-dir /etc/conary/repository-keys \
   --output /var/lib/conary/evidence/initial-conversion-crawl.json
 ```
-
-The canonical artifact format is
-`docs/specs/remi-native-parity-oracle.md`.
 
 Clients enroll the universe metadata root independently of CCS package keys.
 Self-hosted `repo add` requires `--remi-metadata-root` from an independently
