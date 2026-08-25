@@ -4,8 +4,8 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use remi::server::{
-    IndexGenConfig, PrewarmConfig, ProxyConfig, RemiConfig, generate_indices, run_prewarm,
-    run_proxy, run_server_from_config,
+    ConversionCrawlConfig, IndexGenConfig, PrewarmConfig, ProxyConfig, RemiConfig,
+    generate_indices, run_conversion_crawl, run_prewarm, run_proxy, run_server_from_config,
 };
 use remi::trust;
 use std::path::PathBuf;
@@ -32,6 +32,8 @@ enum Command {
     IndexGen(IndexGenArgs),
     /// Pre-warm the chunk cache by converting popular packages.
     Prewarm(PrewarmArgs),
+    /// Convert every exact package variant in every public profile.
+    ConversionCrawl(ConversionCrawlArgs),
     /// Record reproducible conversion latency and work evidence.
     ConversionBenchmark(ConversionBenchmarkArgs),
     /// Remi-owned trust admin commands.
@@ -164,6 +166,37 @@ struct PrewarmArgs {
     /// Show what would be converted without actually converting
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(Args)]
+struct ConversionCrawlArgs {
+    /// Database containing exact active profile pointers and repository keys.
+    #[arg(long, default_value = "/var/lib/conary/conary.db")]
+    db: PathBuf,
+
+    /// Root containing immutable activated source and profile catalogs.
+    #[arg(long, default_value = "/var/lib/conary/data/catalogs")]
+    catalog_dir: PathBuf,
+
+    /// Path to chunk storage directory.
+    #[arg(long, default_value = "/var/lib/conary/data/chunks")]
+    chunk_dir: PathBuf,
+
+    /// Path to cache and conversion scratch storage.
+    #[arg(long, default_value = "/var/lib/conary/data/cache")]
+    cache_dir: PathBuf,
+
+    /// Directory containing exact per-profile TUF signing authority.
+    #[arg(long)]
+    repository_keys_dir: PathBuf,
+
+    /// Canonical crawl evidence output path.
+    #[arg(long)]
+    output: PathBuf,
+
+    /// Maximum number of conversions running concurrently; scope is unchanged.
+    #[arg(long, default_value = "4")]
+    concurrency: usize,
 }
 
 #[derive(Args)]
@@ -340,6 +373,7 @@ fn main() {
         Some(Command::Proxy(args)) => run_proxy_command(args),
         Some(Command::IndexGen(args)) => run_index_gen_command(args),
         Some(Command::Prewarm(args)) => run_prewarm_command(args),
+        Some(Command::ConversionCrawl(args)) => run_conversion_crawl_command(args),
         Some(Command::ConversionBenchmark(args)) => run_conversion_benchmark_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
         Some(Command::Deployment { command }) => run_deployment_command(command),
@@ -546,6 +580,33 @@ fn run_prewarm_command(args: PrewarmArgs) -> Result<()> {
             }
         }
 
+        Ok(())
+    })
+}
+
+fn run_conversion_crawl_command(args: ConversionCrawlArgs) -> Result<()> {
+    let config = ConversionCrawlConfig {
+        db_path: args.db,
+        catalog_dir: args.catalog_dir,
+        chunk_dir: args.chunk_dir,
+        cache_dir: args.cache_dir,
+        repository_keys_dir: args.repository_keys_dir,
+        output_path: args.output,
+        concurrency: args.concurrency,
+    };
+    conary_bootstrap::run_with_runtime(move || async move {
+        let report = run_conversion_crawl(&config).await?;
+        let packages = report
+            .profiles
+            .iter()
+            .map(|profile| profile.expected_packages)
+            .sum::<u64>();
+        println!(
+            "Conversion crawl complete: {} public profiles, {} exact packages",
+            report.profiles.len(),
+            packages
+        );
+        println!("Evidence: {}", config.output_path.display());
         Ok(())
     })
 }

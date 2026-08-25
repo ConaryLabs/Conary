@@ -4,7 +4,7 @@
 use super::ConversionService;
 use crate::server::catalog_authority::PinnedProfileCatalog;
 use crate::server::profile_catalog::ProfileCatalog;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use conary_core::db::models::{RemiActiveProfileRevision, Repository, RepositoryPackage};
 use conary_core::repository::catalog::{
     CatalogPackageOriginV1, CatalogPackageRecordV1, SourceSnapshotV1,
@@ -163,6 +163,64 @@ impl ConversionService {
         .map_err(|e| anyhow!("selected package lookup task panicked: {e}"))?
     }
 
+    pub(super) async fn find_exact_package_for_selected_revision_async(
+        &self,
+        selection: RemiActiveProfileRevision,
+        expected: CatalogPackageRecordV1,
+    ) -> Result<PinnedConversionSource> {
+        let service = self.clone();
+        tokio::task::spawn_blocking(move || {
+            service.find_exact_catalog_package(&selection, expected)
+        })
+        .await
+        .map_err(|e| anyhow!("exact selected package lookup task panicked: {e}"))?
+    }
+
+    fn find_exact_catalog_package(
+        &self,
+        selection: &RemiActiveProfileRevision,
+        expected: CatalogPackageRecordV1,
+    ) -> Result<PinnedConversionSource> {
+        let profile = conary_core::repository::supported_profiles::profile_by_public_id(
+            &selection.source_profile,
+        )
+        .ok_or_else(|| anyhow!("unsupported public profile: {}", selection.source_profile))?;
+        let catalog_authority = self.catalog_authority.as_ref().ok_or_else(|| {
+            anyhow!("repository conversion requires an immutable profile catalog authority")
+        })?;
+        let catalog = catalog_authority
+            .open_selected_profile(selection)
+            .with_context(|| {
+                format!(
+                    "open selected catalog for profile '{}' revision {}",
+                    profile.id(),
+                    selection.profile_revision_sha256
+                )
+            })?;
+        let candidates =
+            ProfileCatalog::new(&catalog).find_package_records_by_name(&expected.name)?;
+        let package = select_exact_catalog_package(profile.id(), expected, candidates)?;
+        let minimum_size = u64::try_from(REMI_SPARSE_MIN_PACKAGE_SIZE)
+            .context("Remi minimum downloadable package size is negative")?;
+        ensure!(
+            package.size >= minimum_size,
+            "exact catalog package {} is not a downloadable source artifact",
+            package.package_key_sha256
+        );
+        let source_snapshot = catalog_authority.source_snapshot_for_package(&catalog, &package)?;
+        let (repository_id, repository_key_name) =
+            lookup_repository_key_material(&self.db_path, profile.id(), &package.origin)?;
+        let repo_pkg = repository_package_from_catalog(&package, repository_id)?;
+        Ok(PinnedConversionSource {
+            catalog,
+            package,
+            source_snapshot,
+            repo_pkg,
+            repository_id,
+            repository_key_name,
+        })
+    }
+
     fn find_catalog_package(
         &self,
         distro: &str,
@@ -234,6 +292,29 @@ impl ConversionService {
             .await?;
         Ok((source, path))
     }
+}
+
+fn select_exact_catalog_package(
+    profile: &str,
+    expected: CatalogPackageRecordV1,
+    candidates: Vec<CatalogPackageRecordV1>,
+) -> Result<CatalogPackageRecordV1> {
+    let package = candidates
+        .into_iter()
+        .find(|candidate| candidate.package_key_sha256 == expected.package_key_sha256)
+        .ok_or_else(|| {
+            anyhow!(
+                "exact catalog package key {} is absent from selected profile '{}'",
+                expected.package_key_sha256,
+                profile
+            )
+        })?;
+    ensure!(
+        package == expected,
+        "exact catalog package key {} was rebound to different package authority",
+        expected.package_key_sha256
+    );
+    Ok(package)
 }
 
 fn select_catalog_package(
@@ -497,6 +578,34 @@ mod tests {
             selected.checksum,
             conary_core::hash::sha256(b"downloadable")
         );
+    }
+
+    #[test]
+    fn exact_catalog_lookup_uses_package_key_across_release_variants() {
+        let mut first = package("1.0", Some("x86_64"), "first");
+        first.package_release = "1.fc44".to_string();
+        first.package_key_sha256 = "1".repeat(64);
+        let mut second = package("1.0", Some("x86_64"), "second");
+        second.package_release = "2.fc44".to_string();
+        second.package_key_sha256 = "2".repeat(64);
+
+        let selected =
+            select_exact_catalog_package("fedora-44", second.clone(), vec![first, second])
+                .expect("package key selects the exact release variant");
+        assert_eq!(selected.package_release, "2.fc44");
+        assert_eq!(selected.package_key_sha256, "2".repeat(64));
+    }
+
+    #[test]
+    fn exact_catalog_lookup_rejects_package_key_rebinding() {
+        let mut expected = package("1.0", Some("x86_64"), "expected");
+        expected.package_key_sha256 = "3".repeat(64);
+        let mut rebound = expected.clone();
+        rebound.package_release = "conflicting".to_string();
+
+        let error = select_exact_catalog_package("fedora-44", expected, vec![rebound])
+            .expect_err("one key cannot name different catalog authority");
+        assert!(error.to_string().contains("rebound"));
     }
 
     #[tokio::test]
