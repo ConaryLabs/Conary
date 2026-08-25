@@ -186,6 +186,12 @@ impl ConversionFailure {
                     return classified;
                 }
             }
+            if let Some(target) = cause.downcast_ref::<crate::ccs::StaticTargetCompatibilityError>()
+            {
+                return ConversionFailure::UnsupportedSemantic {
+                    detail: target.to_string(),
+                };
+            }
         }
 
         // Nothing in the chain carries a category. Record the chain's concrete
@@ -317,6 +323,20 @@ mod tests {
             ConversionFailure::classify(&wrapped).kind(),
             FailureKind::Trust,
             "context layers must not hide the originating authority"
+        );
+    }
+
+    #[test]
+    fn static_target_compatibility_is_a_typed_unsupported_semantic() {
+        let error = anyhow::Error::from(crate::ccs::StaticTargetCompatibilityError::Architecture {
+            package: Some("aarch64".to_string()),
+            target: "x86_64".to_string(),
+        })
+        .context("preflight independently reopened CCS");
+
+        assert_eq!(
+            ConversionFailure::classify(&error).kind(),
+            FailureKind::UnsupportedSemantic
         );
     }
 

@@ -285,9 +285,10 @@ do not select pairwise converters, compatibility profiles, or string gates.
 counterpart to that live inventory. `TargetCapabilityContractV1` declares the
 exact supported Fedora 44, Ubuntu 26.04 LTS, and Arch target identities, while
 compatibility behavior comes only from each contract's typed fields: target
-machine architecture, CCS and capability-declaration schema epochs, native
-lifecycle schema/revision and source engines, lifecycle interfaces, and the
-closed Linux process-capability vocabulary. The current public targets are
+machine architecture, init interface and exact systemd operations, CCS and
+capability-declaration schema epochs, native lifecycle schema/revision and
+source engines, lifecycle interfaces, and the closed Linux process-capability
+vocabulary. The current public targets are
 x86_64 systemd systems and carry equivalent capability data; their identities
 provide exact proof attribution rather than selecting source-format behavior.
 
@@ -296,8 +297,9 @@ resolves exact syscall names against the concrete target machine ABI even for
 source-native `noarch`, `all`, or `any` packages, verifies native lifecycle
 schema and engine support, and derives required service-manager, sysusers,
 tmpfiles, sysctl, ldconfig, sandboxed-lifecycle, file-capability, and repository
-enrollment interfaces. It also proves every requested Linux process capability
-against the target's exact typed set. The resulting
+enrollment interfaces, plus the selected-root alternatives interface. It also
+proves every requested Linux process capability against the target's exact
+typed set. The resulting
 `StaticTargetCompatibilityProofV1` binds the deterministic target-contract
 SHA-256 and canonical required sets.
 

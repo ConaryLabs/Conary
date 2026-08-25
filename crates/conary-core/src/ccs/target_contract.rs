@@ -5,11 +5,12 @@
 //! capability. They deliberately do not impersonate [`super::HostCapabilityInventory`],
 //! which remains live-host authority for executable identity and handshakes.
 
+use crate::ccs::hooks::{InitSystemCapability, SystemdOperation};
 use crate::ccs::native_lifecycle::{
     NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeLifecycleEntryKind,
     SourceFormat,
 };
-use crate::ccs::v3::schema::LifecycleAuthorityV3;
+use crate::ccs::v3::schema::{LifecycleAuthorityV3, LifecycleServiceActionV3};
 use crate::ccs::v3::{AuthorityDocumentV3, FORMAT_VERSION_V3};
 use crate::repository::selector::PackageSelector;
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,7 @@ pub enum StaticTargetCapabilityV1 {
     Tmpfiles,
     Sysctl,
     Ldconfig,
+    Alternatives,
     SandboxedLifecycle,
     LinuxFileCapabilities,
     RepositoryEnrollment,
@@ -77,6 +79,8 @@ pub struct TargetCapabilityContractV1 {
     pub schema_version: u32,
     pub target_profile: TargetProfileV1,
     pub machine_architecture: String,
+    pub init_system: InitSystemCapability,
+    pub systemd_operations: Vec<SystemdOperation>,
     pub ccs_format_version: u16,
     pub capability_declaration_schema_version: u32,
     pub native_lifecycle_contracts: Vec<NativeLifecycleTargetContractV1>,
@@ -92,6 +96,7 @@ pub struct StaticTargetCompatibilityProofV1 {
     pub target_profile: TargetProfileV1,
     pub target_contract_sha256: String,
     pub required_capabilities: Vec<StaticTargetCapabilityV1>,
+    pub required_systemd_operations: Vec<SystemdOperation>,
     pub required_linux_process_capabilities: Vec<LinuxProcessCapabilityV1>,
 }
 
@@ -120,6 +125,17 @@ impl StaticTargetCompatibilityProofV1 {
             .any(|required| !contract.capabilities.contains(required))
         {
             return Err("static target proof requires an undeclared target capability".to_string());
+        }
+        validate_canonical_systemd_operations(
+            &self.required_systemd_operations,
+            "static target proof",
+        )?;
+        if self
+            .required_systemd_operations
+            .iter()
+            .any(|required| !contract.systemd_operations.contains(required))
+        {
+            return Err("static target proof requires an undeclared systemd operation".to_string());
         }
         linux_capability::validate_canonical(
             &self.required_linux_process_capabilities,
@@ -152,6 +168,12 @@ impl TargetCapabilityContractV1 {
                 self.machine_architecture
             ));
         }
+        if self.init_system != InitSystemCapability::Systemd {
+            return Err(
+                "supported target contract requires the systemd init interface".to_string(),
+            );
+        }
+        validate_canonical_systemd_operations(&self.systemd_operations, "target contract")?;
         if self.ccs_format_version != FORMAT_VERSION_V3 {
             return Err(format!(
                 "unsupported target CCS format version {}",
@@ -247,6 +269,19 @@ impl TargetCapabilityContractV1 {
                 });
             }
         }
+        let required_systemd_operations = required_systemd_operations(authority);
+        if !required_systemd_operations.is_empty()
+            && self.init_system != InitSystemCapability::Systemd
+        {
+            return Err(StaticTargetCompatibilityError::MissingSystemdManager);
+        }
+        for operation in &required_systemd_operations {
+            if !self.systemd_operations.contains(operation) {
+                return Err(StaticTargetCompatibilityError::MissingSystemdOperation {
+                    operation: *operation,
+                });
+            }
+        }
         let required_linux_process_capabilities = authority
             .execution_capabilities
             .as_ref()
@@ -282,6 +317,7 @@ impl TargetCapabilityContractV1 {
                 .sha256()
                 .map_err(StaticTargetCompatibilityError::InvalidContract)?,
             required_capabilities: required,
+            required_systemd_operations,
             required_linux_process_capabilities,
         };
         proof
@@ -314,6 +350,10 @@ pub enum StaticTargetCompatibilityError {
     MissingCapability {
         capability: StaticTargetCapabilityV1,
     },
+    #[error("target contract does not provide a systemd service manager")]
+    MissingSystemdManager,
+    #[error("target contract does not provide required systemd operation {operation:?}")]
+    MissingSystemdOperation { operation: SystemdOperation },
     #[error(
         "Linux process capability declaration is outside the typed target contract: {capability}"
     )]
@@ -347,6 +387,8 @@ fn canonical_contract(target_profile: TargetProfileV1) -> TargetCapabilityContra
         schema_version: TARGET_CAPABILITY_CONTRACT_SCHEMA_V1,
         target_profile,
         machine_architecture: "x86_64".to_string(),
+        init_system: InitSystemCapability::Systemd,
+        systemd_operations: all_systemd_operations(),
         ccs_format_version: FORMAT_VERSION_V3,
         capability_declaration_schema_version: crate::capability::CAPABILITY_SCHEMA_VERSION,
         native_lifecycle_contracts: [
@@ -375,6 +417,7 @@ fn all_static_capabilities() -> Vec<StaticTargetCapabilityV1> {
         StaticTargetCapabilityV1::Tmpfiles,
         StaticTargetCapabilityV1::Sysctl,
         StaticTargetCapabilityV1::Ldconfig,
+        StaticTargetCapabilityV1::Alternatives,
         StaticTargetCapabilityV1::SandboxedLifecycle,
         StaticTargetCapabilityV1::LinuxFileCapabilities,
         StaticTargetCapabilityV1::RepositoryEnrollment,
@@ -398,6 +441,9 @@ fn required_capabilities(
     }
     if !lifecycle.sysctl.is_empty() {
         required.insert(StaticTargetCapabilityV1::Sysctl);
+    }
+    if !lifecycle.alternatives.is_empty() {
+        required.insert(StaticTargetCapabilityV1::Alternatives);
     }
     if lifecycle.post_install.is_some() || lifecycle.pre_remove.is_some() {
         required.insert(StaticTargetCapabilityV1::SandboxedLifecycle);
@@ -448,6 +494,60 @@ fn required_capabilities(
         }
     }
     Ok(required.into_iter().collect())
+}
+
+fn required_systemd_operations(authority: &AuthorityDocumentV3) -> Vec<SystemdOperation> {
+    let mut required = BTreeSet::new();
+    for service in &authority.lifecycle.services {
+        match service.action {
+            LifecycleServiceActionV3::Enable => {
+                required.insert(SystemdOperation::OfflineEnable);
+            }
+            LifecycleServiceActionV3::Disable => {
+                required.insert(SystemdOperation::OfflineDisable);
+            }
+            LifecycleServiceActionV3::Start
+            | LifecycleServiceActionV3::Stop
+            | LifecycleServiceActionV3::Reload
+            | LifecycleServiceActionV3::Restart
+            | LifecycleServiceActionV3::TryRestart
+            | LifecycleServiceActionV3::ReloadOrRestart
+            | LifecycleServiceActionV3::ReloadOrTryRestart => {}
+        }
+    }
+    for unit in &authority.lifecycle.systemd {
+        required.insert(if unit.enable {
+            SystemdOperation::OfflineEnable
+        } else {
+            SystemdOperation::OfflineDisable
+        });
+    }
+    required.into_iter().collect()
+}
+
+fn all_systemd_operations() -> Vec<SystemdOperation> {
+    vec![
+        SystemdOperation::Enable,
+        SystemdOperation::Disable,
+        SystemdOperation::Start,
+        SystemdOperation::Stop,
+        SystemdOperation::Restart,
+        SystemdOperation::DaemonReload,
+        SystemdOperation::OfflineEnable,
+        SystemdOperation::OfflineDisable,
+    ]
+}
+
+fn validate_canonical_systemd_operations(
+    operations: &[SystemdOperation],
+    owner: &str,
+) -> Result<(), String> {
+    if operations.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(format!(
+            "{owner} systemd operations are repeated or not canonically ordered"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_canonical_capabilities(
@@ -549,6 +649,10 @@ mod tests {
                 proof.required_linux_process_capabilities,
                 vec![LinuxProcessCapabilityV1::Bpf]
             );
+            assert_eq!(
+                proof.required_systemd_operations,
+                vec![SystemdOperation::OfflineEnable]
+            );
         }
     }
 
@@ -591,6 +695,17 @@ mod tests {
             drifted.preflight_authority(&requires_systemd),
             Err(StaticTargetCompatibilityError::MissingCapability {
                 capability: StaticTargetCapabilityV1::SystemdServiceManager
+            })
+        ));
+
+        let mut no_offline_enable = contract.clone();
+        no_offline_enable
+            .systemd_operations
+            .retain(|operation| *operation != SystemdOperation::OfflineEnable);
+        assert!(matches!(
+            no_offline_enable.preflight_authority(&requires_systemd),
+            Err(StaticTargetCompatibilityError::MissingSystemdOperation {
+                operation: SystemdOperation::OfflineEnable
             })
         ));
 

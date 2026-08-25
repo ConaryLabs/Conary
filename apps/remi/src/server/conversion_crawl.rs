@@ -618,6 +618,7 @@ mod tests {
                     target_profile: contract.target_profile,
                     target_contract_sha256: contract.sha256().expect("target contract digest"),
                     required_capabilities: Vec::new(),
+                    required_systemd_operations: Vec::new(),
                     required_linux_process_capabilities: Vec::new(),
                 },
             })
