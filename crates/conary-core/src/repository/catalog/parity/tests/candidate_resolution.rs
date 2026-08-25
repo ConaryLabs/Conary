@@ -5,8 +5,14 @@ use std::fs;
 
 use super::*;
 
-fn candidate_fixture() -> CandidateFixture {
-    let ecosystem = NativeParityEcosystemV1::Rpm;
+fn architecture(ecosystem: NativeParityEcosystemV1) -> &'static str {
+    match ecosystem {
+        NativeParityEcosystemV1::Rpm | NativeParityEcosystemV1::Alpm => "x86_64",
+        NativeParityEcosystemV1::Debian => "amd64",
+    }
+}
+
+fn candidate_fixture(ecosystem: NativeParityEcosystemV1) -> CandidateFixture {
     let directory = tempfile::tempdir().unwrap();
     let members = members(ecosystem);
     let scope = CatalogScopeV1::Profile {
@@ -21,12 +27,26 @@ fn candidate_fixture() -> CandidateFixture {
             source_snapshot_sha256: member.source_snapshot_sha256.clone(),
         })
         .collect();
-    let mut dependency = package(ecosystem, &members, "dependency", "x86_64", 0, 'c');
+    let mut dependency = package(
+        ecosystem,
+        &members,
+        "dependency",
+        architecture(ecosystem),
+        0,
+        'c',
+    );
     dependency.requirement_groups.clear();
     dependency.provides[0].version = Some("1.0-1".to_string());
     dependency.provides[0].version_relation =
         Some(crate::repository::dependency_model::ProvideVersionRelation::Equal);
-    let mut resolved = package(ecosystem, &members, "resolved", "x86_64", 1, 'd');
+    let mut resolved = package(
+        ecosystem,
+        &members,
+        "resolved",
+        architecture(ecosystem),
+        1,
+        'd',
+    );
     let versioned = RepositoryRequirementClause::versioned(
         "virtual-dependency".to_string(),
         ">= 1.0-1".to_string(),
@@ -52,7 +72,14 @@ fn candidate_fixture() -> CandidateFixture {
         requirement("optional", "absent-optional"),
         requirement("build", "absent-build"),
     ];
-    let mut unresolved = package(ecosystem, &members, "unresolved", "x86_64", 1, 'e');
+    let mut unresolved = package(
+        ecosystem,
+        &members,
+        "unresolved",
+        architecture(ecosystem),
+        1,
+        'e',
+    );
     unresolved.requirement_groups = vec![requirement("pre_depends", "absent")];
     let content =
         CatalogContentV1::new(scope, evidence, vec![dependency, resolved, unresolved]).unwrap();
@@ -130,6 +157,7 @@ fn expected_roots(candidate: &CandidateFixture) -> Vec<NativeResolutionRootV1> {
 fn write_native_resolution(
     candidate: &CandidateFixture,
     package_oracle: &OracleFixture,
+    ecosystem: NativeParityEcosystemV1,
     roots: &[NativeResolutionRootV1],
 ) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
@@ -138,13 +166,18 @@ fn write_native_resolution(
         &candidate.profile,
         package_oracle.reader.manifest(),
         NativeParityImplementationV1 {
-            ecosystem: NativeParityEcosystemV1::Rpm,
-            name: "libsolv".to_string(),
+            ecosystem,
+            name: match ecosystem {
+                NativeParityEcosystemV1::Rpm => "libsolv",
+                NativeParityEcosystemV1::Debian => "apt-pkg",
+                NativeParityEcosystemV1::Alpm => "libalpm",
+            }
+            .to_string(),
             version: "fixture-1.0".to_string(),
             projection_schema: 1,
         },
         NativeResolutionPolicyV1 {
-            architecture: "x86_64".to_string(),
+            architecture: architecture(ecosystem).to_string(),
             installed_state: NativeResolutionInstalledStateV1::Empty,
             roots: NativeResolutionRootPolicyV1::EveryExactPackage,
             positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
@@ -168,40 +201,50 @@ fn write_native_resolution(
 
 #[test]
 fn complete_candidate_crawl_reopens_and_matches_native_resolution() {
-    let candidate = candidate_fixture();
-    let package_oracle = oracle(&candidate, NativeParityEcosystemV1::Rpm, rows(&candidate));
-    let roots = expected_roots(&candidate);
-    let native = write_native_resolution(&candidate, &package_oracle, &roots);
-    let output_parent = tempfile::tempdir().unwrap();
-    let output = output_parent.path().join("candidate-resolution");
+    for ecosystem in [
+        NativeParityEcosystemV1::Rpm,
+        NativeParityEcosystemV1::Debian,
+        NativeParityEcosystemV1::Alpm,
+    ] {
+        let candidate = candidate_fixture(ecosystem);
+        let package_oracle = oracle(&candidate, ecosystem, rows(&candidate));
+        let roots = expected_roots(&candidate);
+        let native = write_native_resolution(&candidate, &package_oracle, ecosystem, &roots);
+        let output_parent = tempfile::tempdir().unwrap();
+        let output = output_parent.path().join("candidate-resolution");
 
-    let produced = produce_conary_resolution_candidate(
-        &candidate.profile,
-        &candidate.reader,
-        package_oracle._directory.path(),
-        native.path(),
-        "x86_64",
-        &output,
-    )
-    .unwrap();
+        let produced = produce_conary_resolution_candidate(
+            &candidate.profile,
+            &candidate.reader,
+            package_oracle._directory.path(),
+            native.path(),
+            architecture(ecosystem),
+            &output,
+        )
+        .unwrap();
 
-    assert_eq!(produced.manifest.artifact.counts.roots, 3);
-    assert_eq!(produced.manifest.artifact.counts.resolved_roots, 2);
-    assert_eq!(produced.manifest.artifact.counts.unresolved_roots, 1);
-    assert_eq!(
-        produced.comparison.counts,
-        produced.manifest.artifact.counts
-    );
-    let reopened =
-        verify_native_resolution_oracle_bundle(&output, &candidate.profile, &package_oracle.reader)
-            .unwrap();
-    assert_eq!(reopened.manifest(), &produced.manifest);
+        assert_eq!(produced.manifest.artifact.counts.roots, 3);
+        assert_eq!(produced.manifest.artifact.counts.resolved_roots, 2);
+        assert_eq!(produced.manifest.artifact.counts.unresolved_roots, 1);
+        assert_eq!(
+            produced.comparison.counts,
+            produced.manifest.artifact.counts
+        );
+        let reopened = verify_native_resolution_oracle_bundle(
+            &output,
+            &candidate.profile,
+            &package_oracle.reader,
+        )
+        .unwrap();
+        assert_eq!(reopened.manifest(), &produced.manifest);
+    }
 }
 
 #[test]
 fn candidate_crawl_rejects_native_closure_drift() {
-    let candidate = candidate_fixture();
-    let package_oracle = oracle(&candidate, NativeParityEcosystemV1::Rpm, rows(&candidate));
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let candidate = candidate_fixture(ecosystem);
+    let package_oracle = oracle(&candidate, ecosystem, rows(&candidate));
     let mut roots = expected_roots(&candidate);
     let resolved = roots
         .iter_mut()
@@ -221,7 +264,7 @@ fn candidate_crawl_rejects_native_closure_drift() {
         unreachable!()
     };
     closure_package_keys_sha256.retain(|key| key == &resolved.root_package_key_sha256);
-    let native = write_native_resolution(&candidate, &package_oracle, &roots);
+    let native = write_native_resolution(&candidate, &package_oracle, ecosystem, &roots);
     let output_parent = tempfile::tempdir().unwrap();
     let output = output_parent.path().join("candidate-resolution");
 
