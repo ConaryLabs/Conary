@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 64
-summary: Document complete pre-write profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 65
+summary: Document complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -209,7 +209,10 @@ one typed requirement at a time; the compatibility sink checks its collected
 projection. No second SQLite audit database or other parser work file is
 created for those duplicated facts.
 Arch repository databases may publish each package's desc and depends records
-out of order. The parser stages those exact fragments in a strict transient
+out of order. Before candidate creation, its read-only pass accounts for each
+exact raw fragment, each desc projection, and every separately published
+depends relation group without assuming archive order. After growth admission,
+the replay stages those exact fragments in a strict transient
 table inside the private catalog candidate transaction, rejects duplicate and
 orphan fragments, replays complete pairs in source-directory order, and drops
 the table before finalization. The compatibility sink performs the same typed
@@ -229,8 +232,22 @@ typed catalog-capacity failure as other construction admission and no
 unadmitted byte reaches the staged file. Error, cancellation, and normal sink
 drop remove the private work directory.
 These construction admissions are independent of the serving readiness floor.
-Initial native source-candidate growth still requires its separate pre-write
-contract; profile-candidate growth is fully admitted before member replay.
+Before a fresh native source candidate file exists, Fedora, Debian, Arch, and
+eopkg parsers make a bounded read-only pass over the already authenticated
+metadata. The immutable sink canonicalizes the same normalized package facts
+used by replay and includes Fedora filelist provides plus Arch separately
+ordered requirement groups. `CatalogSourceCandidateScratchV1` allocates those
+exact canonical projection bytes once for destination payload and once for
+B-tree repacking, the fixed schema roots and one 4096-byte page per package,
+and a full candidate-database rollback-journal ceiling. On an exact projection
+cache hit, the independently reopened artifact bytes and its bound package
+count replace that parser preflight. Remi reserves the complete sum through the
+shared candidate-filesystem ledger before the writer creates SQLite. The lease
+survives replay and committed metadata/evidence; after file and parent sync the
+writer proves the actual database remains below the admitted ceiling, releases
+the growth lease, and only then requests page-derived finalization scratch. A
+one-byte-short refusal leaves no native candidate file. Profile candidates use
+the corresponding ordered-member contract described above.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;

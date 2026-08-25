@@ -950,6 +950,36 @@ impl RepositoryParser for FedoraParser {
         // Parse primary.xml one package at a time.
         let compressed = common::metadata_file_is_compressed(&primary_path)?;
         let open_size = repomd.primary.authenticated_open_size(compressed)?;
+        if sink.requires_source_candidate_preflight() {
+            let decoder = common::open_metadata_decoder(
+                &primary_path,
+                &format!("RPM primary metadata {primary_url}"),
+            )?;
+            let mut reader = std::io::BufReader::with_capacity(
+                256 * 1024,
+                common::AuthenticatedLengthReader::new(decoder, open_size, "RPM primary metadata"),
+            );
+            self.parse_primary_reader(&mut reader, repo_url, |package| {
+                sink.preflight_package(package)
+            })?;
+            let decoded = reader.get_ref().read_bytes();
+            if decoded != open_size {
+                return Err(Error::GpgVerificationFailed(format!(
+                    "signed repomd.xml authenticates primary metadata as {open_size} decompressed bytes but {primary_url} decoded to {decoded} bytes"
+                )));
+            }
+            if let Some((filelists_url, filelists_path, _, filelists_open_size)) =
+                &filelists_download
+            {
+                filelists::ingest_verified_filelists_into(
+                    sink,
+                    filelists_path,
+                    *filelists_open_size,
+                    filelists_url,
+                )?;
+            }
+            sink.begin_source_candidate()?;
+        }
         let package_count = {
             let decoder = common::open_metadata_decoder(
                 &primary_path,

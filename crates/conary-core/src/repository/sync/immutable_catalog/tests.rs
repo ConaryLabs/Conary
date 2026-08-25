@@ -5,8 +5,9 @@ use crate::db::models::{RepositoryPolicyScope, RepositorySourcePolicy, Repositor
 use crate::repository::catalog::{
     CatalogCopyScratchV1, CatalogFinalizationScratchV1, CatalogMetadataObjectScratchV1,
     CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
-    CatalogPackageOriginV1, CatalogScopeV1, CatalogScratchAdmission, CatalogSourceEvidenceV1,
-    SourceMetadataObjectRoleV1, write_catalog_candidate,
+    CatalogPackageOriginV1, CatalogScopeV1, CatalogScratchAdmission, CatalogScratchCapacityError,
+    CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1,
+    write_catalog_candidate,
 };
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::parsers::PackageMetadata;
@@ -19,10 +20,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 struct RecordingAdmission {
+    source_candidates: Mutex<Vec<CatalogSourceCandidateScratchV1>>,
+    finalizations: Mutex<Vec<CatalogFinalizationScratchV1>>,
     metadata: Mutex<Vec<CatalogMetadataScratchV1>>,
     streams: Mutex<Vec<CatalogMetadataStreamScratchV1>>,
     stream_chunks: Arc<Mutex<Vec<u64>>>,
     lease_drops: Arc<AtomicUsize>,
+    refuse_source: bool,
 }
 
 struct RecordingLease(Arc<AtomicUsize>);
@@ -43,6 +47,23 @@ impl Drop for RecordingLease {
 }
 
 impl CatalogScratchAdmission for RecordingAdmission {
+    fn reserve_source_candidate(
+        &self,
+        _candidate_path: &Path,
+        requirement: CatalogSourceCandidateScratchV1,
+    ) -> Result<Box<dyn Send>> {
+        self.source_candidates.lock().unwrap().push(requirement);
+        if self.refuse_source {
+            return Err(CatalogScratchCapacityError {
+                required_bytes: requirement.required_additional_bytes,
+                available_bytes: requirement.required_additional_bytes - 1,
+                reserved_bytes: 0,
+            }
+            .into());
+        }
+        Ok(Box::new(RecordingLease(Arc::clone(&self.lease_drops))))
+    }
+
     fn reserve_profile_candidate(
         &self,
         _candidate_path: &Path,
@@ -74,9 +95,10 @@ impl CatalogScratchAdmission for RecordingAdmission {
     fn reserve_finalization(
         &self,
         _candidate_path: &Path,
-        _requirement: CatalogFinalizationScratchV1,
+        requirement: CatalogFinalizationScratchV1,
     ) -> Result<Box<dyn Send>> {
-        panic!("metadata lease test must not finalize a catalog")
+        self.finalizations.lock().unwrap().push(requirement);
+        Ok(Box::new(RecordingLease(Arc::clone(&self.lease_drops))))
     }
 
     fn reserve_copy(
@@ -166,10 +188,13 @@ fn immutable_sink_retains_metadata_lease_until_work_files_are_removed() {
     let candidate = root.path().join("catalog.sqlite");
     let lease_drops = Arc::new(AtomicUsize::new(0));
     let admission = Arc::new(RecordingAdmission {
+        source_candidates: Mutex::new(Vec::new()),
+        finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::clone(&lease_drops),
+        refuse_source: false,
     });
     let mut sink =
         NativeCatalogSnapshotSink::create(&repository(), &candidate, None, Some(admission.clone()))
@@ -202,10 +227,13 @@ fn immutable_sink_routes_unknown_length_metadata_to_stream_admission() {
     let root = tempfile::tempdir().unwrap();
     let candidate = root.path().join("catalog.sqlite");
     let admission = Arc::new(RecordingAdmission {
+        source_candidates: Mutex::new(Vec::new()),
+        finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::new(AtomicUsize::new(0)),
+        refuse_source: false,
     });
     let mut sink =
         NativeCatalogSnapshotSink::create(&repository(), &candidate, None, Some(admission.clone()))
@@ -221,6 +249,160 @@ fn immutable_sink_routes_unknown_length_metadata_to_stream_admission() {
     assert_eq!(admission.streams.lock().unwrap().as_slice(), &[requirement]);
     assert_eq!(admission.stream_chunks.lock().unwrap().as_slice(), &[2048]);
     drop(permit);
+}
+
+#[test]
+fn native_candidate_admission_precedes_file_creation_and_refusal_leaves_no_file() {
+    let root = tempfile::tempdir().unwrap();
+    let candidate = root.path().join("catalog.sqlite");
+    let admission = Arc::new(RecordingAdmission {
+        source_candidates: Mutex::new(Vec::new()),
+        finalizations: Mutex::new(Vec::new()),
+        metadata: Mutex::new(Vec::new()),
+        streams: Mutex::new(Vec::new()),
+        stream_chunks: Arc::new(Mutex::new(Vec::new())),
+        lease_drops: Arc::new(AtomicUsize::new(0)),
+        refuse_source: false,
+    });
+    let repository = repository();
+    let mut sink =
+        NativeCatalogSnapshotSink::create(&repository, &candidate, None, Some(admission.clone()))
+            .unwrap();
+    let package = PackageMetadata::new(
+        "bash".to_string(),
+        "5.2.37-1".to_string(),
+        "c".repeat(64),
+        4096,
+        "packages/bash.rpm".to_string(),
+        RepositoryDependencyFlavor::Rpm,
+        VersionScheme::Rpm,
+    );
+
+    sink.preflight_package(package.clone()).unwrap();
+    let transient_fragment = "x".repeat(128 * 1024);
+    sink.preflight_arch_package_fragment(
+        "bash-5.2.37-1",
+        ArchPackageFragmentKind::Desc,
+        &transient_fragment,
+    )
+    .unwrap();
+    assert!(!candidate.exists());
+    sink.begin_source_candidate().unwrap();
+    assert!(candidate.exists());
+    let requirement = admission.source_candidates.lock().unwrap()[0];
+    assert_eq!(requirement.package_count, 1);
+    assert!(requirement.canonical_projection_bytes > transient_fragment.len() as u64);
+    sink.stage_arch_package_fragment(
+        "bash-5.2.37-1".to_string(),
+        ArchPackageFragmentKind::Desc,
+        transient_fragment,
+    )
+    .unwrap();
+    assert!(sink.take_arch_package_record().unwrap().is_some());
+    assert!(sink.take_arch_package_record().unwrap().is_none());
+    sink.package(package).unwrap();
+    sink.authenticated_object(AuthenticatedMetadataObject {
+        role: SourceMetadataObjectRoleV1::RpmPrimary,
+        source_path: "repodata/primary.xml.gz".to_string(),
+        sha256: "a".repeat(64),
+        size: 1,
+    })
+    .unwrap();
+    sink.finish(
+        &repository,
+        AuthenticatedSnapshotIdentity::for_bytes(b"signed repomd"),
+    )
+    .unwrap();
+    assert!(candidate.exists());
+    assert_eq!(admission.finalizations.lock().unwrap().len(), 1);
+
+    let refusing = Arc::new(RecordingAdmission {
+        source_candidates: Mutex::new(Vec::new()),
+        finalizations: Mutex::new(Vec::new()),
+        metadata: Mutex::new(Vec::new()),
+        streams: Mutex::new(Vec::new()),
+        stream_chunks: Arc::new(Mutex::new(Vec::new())),
+        lease_drops: Arc::new(AtomicUsize::new(0)),
+        refuse_source: true,
+    });
+    let refused_candidate = root.path().join("refused.sqlite");
+    let mut sink =
+        NativeCatalogSnapshotSink::create(&repository, &refused_candidate, None, Some(refusing))
+            .unwrap();
+    sink.preflight_package(PackageMetadata::new(
+        "bash".to_string(),
+        "5.2.37-1".to_string(),
+        "c".repeat(64),
+        4096,
+        "packages/bash.rpm".to_string(),
+        RepositoryDependencyFlavor::Rpm,
+        VersionScheme::Rpm,
+    ))
+    .unwrap();
+    let error = sink.begin_source_candidate().unwrap_err();
+    assert!(matches!(error, Error::CatalogScratchCapacity(_)), "{error}");
+    assert!(!refused_candidate.exists());
+}
+
+#[test]
+fn cache_hit_admits_from_the_exact_reopened_catalog_before_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let repository = repository();
+    let snapshot = AuthenticatedSnapshotIdentity::for_bytes(b"signed repomd cache revision");
+    let object = authenticated_object();
+    let source = source_catalog_candidate(
+        &repository,
+        vec![package(&repository)],
+        snapshot.clone(),
+        vec![object.clone()],
+    )
+    .unwrap();
+    let cached_candidate = root.path().join("cached-source.sqlite");
+    let cached_binding = write_catalog_candidate(&cached_candidate, source.content()).unwrap();
+    let cache_root = root.path().join("cache");
+    super::super::projection_cache::ProjectionCache::open(
+        &cache_root,
+        repository.stream_binding_sha256.as_deref().unwrap(),
+    )
+    .unwrap()
+    .publish(
+        &snapshot,
+        std::slice::from_ref(&object),
+        &cached_binding,
+        &cached_candidate,
+    )
+    .unwrap();
+
+    let admission = Arc::new(RecordingAdmission {
+        source_candidates: Mutex::new(Vec::new()),
+        finalizations: Mutex::new(Vec::new()),
+        metadata: Mutex::new(Vec::new()),
+        streams: Mutex::new(Vec::new()),
+        stream_chunks: Arc::new(Mutex::new(Vec::new())),
+        lease_drops: Arc::new(AtomicUsize::new(0)),
+        refuse_source: false,
+    });
+    let candidate = root.path().join("cache-hit.sqlite");
+    let mut sink = NativeCatalogSnapshotSink::create(
+        &repository,
+        &candidate,
+        Some(&cache_root),
+        Some(admission.clone()),
+    )
+    .unwrap();
+
+    assert!(
+        sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&object))
+            .unwrap()
+    );
+    let requirement = admission.source_candidates.lock().unwrap()[0];
+    assert_eq!(
+        requirement.canonical_projection_bytes,
+        cached_binding.artifact.size
+    );
+    assert_eq!(requirement.package_count, cached_binding.counts.packages);
+    sink.finish(&repository, snapshot).unwrap();
+    assert!(candidate.exists());
 }
 
 #[test]

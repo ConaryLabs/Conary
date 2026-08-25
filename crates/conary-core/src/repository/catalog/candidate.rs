@@ -11,16 +11,20 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use super::store::{
     CATALOG_APPLICATION_ID, CATALOG_SCHEMA, canonical_json_string, checked_i64, checked_ordinal,
     create_private_file, digest_catalog_connection, hash_file, insert_package, package_by_key,
-    replace_package_provides, sidecar_path, sync_parent, validate_candidate_path,
+    replace_package_provides, sync_parent, validate_candidate_path,
 };
 use super::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogBindingV1, CatalogPackageOriginV1,
     CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProvideRecordV1,
-    CatalogReader, CatalogScopeV1, CatalogScratchAdmission, CatalogSourceEvidenceV1,
+    CatalogReader, CatalogScopeV1, CatalogScratchAdmission, CatalogSourceCandidateScratchV1,
+    CatalogSourceEvidenceV1,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::RepositoryRequirementExpression;
 use crate::repository::parsers::{ArchPackageFragmentKind, ArchPackageRecord};
+
+mod lifecycle;
+use lifecycle::{read_positive_pragma, remove_candidate_files, table_exists};
 
 /// Private catalog writer that retains one normalized package at a time.
 pub struct CatalogCandidateWriter {
@@ -28,8 +32,8 @@ pub struct CatalogCandidateWriter {
     scope: CatalogScopeV1,
     connection: Option<Connection>,
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
-    profile_growth_lease: Option<Box<dyn Send>>,
-    profile_database_bytes_bound: Option<u64>,
+    growth_lease: Option<Box<dyn Send>>,
+    database_bytes_bound: Option<u64>,
     complete: bool,
 }
 
@@ -78,12 +82,36 @@ impl CatalogCandidateWriter {
         )
     }
 
+    /// Create a native source writer only after its complete construction bound is reserved.
+    pub fn create_with_source_scratch_admission(
+        path: impl AsRef<Path>,
+        scope: CatalogScopeV1,
+        scratch_admission: Arc<dyn CatalogScratchAdmission>,
+        requirement: CatalogSourceCandidateScratchV1,
+    ) -> Result<Self> {
+        if !matches!(scope, CatalogScopeV1::Source { .. }) {
+            return Err(Error::ConfigError(
+                "source candidate scratch admission requires source scope".to_string(),
+            ));
+        }
+        requirement.validate()?;
+        let database_bytes_bound = requirement.candidate_database_bytes;
+        let lease = scratch_admission.reserve_source_candidate(path.as_ref(), requirement)?;
+        Self::create_inner(
+            path.as_ref(),
+            scope,
+            Some(scratch_admission),
+            Some(lease),
+            Some(database_bytes_bound),
+        )
+    }
+
     fn create_inner(
         path: &Path,
         scope: CatalogScopeV1,
         scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
-        profile_growth_lease: Option<Box<dyn Send>>,
-        profile_database_bytes_bound: Option<u64>,
+        growth_lease: Option<Box<dyn Send>>,
+        database_bytes_bound: Option<u64>,
     ) -> Result<Self> {
         scope.validate()?;
         let path = path.to_path_buf();
@@ -93,8 +121,8 @@ impl CatalogCandidateWriter {
             path.clone(),
             scope,
             scratch_admission,
-            profile_growth_lease,
-            profile_database_bytes_bound,
+            growth_lease,
+            database_bytes_bound,
         );
         if result.is_err() {
             remove_candidate_files(&path);
@@ -106,8 +134,8 @@ impl CatalogCandidateWriter {
         path: PathBuf,
         scope: CatalogScopeV1,
         scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
-        profile_growth_lease: Option<Box<dyn Send>>,
-        profile_database_bytes_bound: Option<u64>,
+        growth_lease: Option<Box<dyn Send>>,
+        database_bytes_bound: Option<u64>,
     ) -> Result<Self> {
         let connection = Connection::open_with_flags(
             &path,
@@ -130,8 +158,8 @@ impl CatalogCandidateWriter {
             scope,
             connection: Some(connection),
             scratch_admission,
-            profile_growth_lease,
-            profile_database_bytes_bound,
+            growth_lease,
+            database_bytes_bound,
             complete: false,
         })
     }
@@ -498,22 +526,22 @@ impl CatalogCandidateWriter {
             }
             connection.execute_batch("COMMIT")?;
         }
-        if self.profile_growth_lease.is_some() {
+        if self.growth_lease.is_some() {
             std::fs::File::open(&self.path)?.sync_all()?;
             sync_parent(&self.path)?;
             let candidate_bytes = std::fs::metadata(&self.path)?.len();
-            let database_bytes_bound = self.profile_database_bytes_bound.ok_or_else(|| {
+            let database_bytes_bound = self.database_bytes_bound.ok_or_else(|| {
                 Error::InternalError(
-                    "profile candidate growth lease has no database byte bound".to_string(),
+                    "catalog candidate growth lease has no database byte bound".to_string(),
                 )
             })?;
             if candidate_bytes > database_bytes_bound {
                 return Err(Error::InternalError(format!(
-                    "profile candidate used {candidate_bytes} database bytes above its admitted {database_bytes_bound}-byte bound"
+                    "catalog candidate used {candidate_bytes} database bytes above its admitted {database_bytes_bound}-byte bound"
                 )));
             }
-            drop(self.profile_growth_lease.take());
-            self.profile_database_bytes_bound = None;
+            drop(self.growth_lease.take());
+            self.database_bytes_bound = None;
         }
         let connection = self.connection()?;
         let page_size = read_positive_pragma(connection, "page_size")?;
@@ -563,25 +591,6 @@ impl CatalogCandidateWriter {
     }
 }
 
-fn read_positive_pragma(connection: &Connection, pragma: &str) -> Result<u64> {
-    let value: i64 = connection.query_row(&format!("PRAGMA {pragma}"), [], |row| row.get(0))?;
-    u64::try_from(value)
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| Error::InitError(format!("catalog candidate has invalid {pragma} {value}")))
-}
-
-fn table_exists(connection: &Connection, table: &str) -> Result<bool> {
-    Ok(connection
-        .query_row(
-            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1",
-            [table],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some())
-}
-
 impl Drop for CatalogCandidateWriter {
     fn drop(&mut self) {
         if self.complete {
@@ -591,13 +600,6 @@ impl Drop for CatalogCandidateWriter {
             let _ = connection.close();
         }
         remove_candidate_files(&self.path);
-    }
-}
-
-fn remove_candidate_files(path: &Path) {
-    let _ = fs::remove_file(path);
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let _ = fs::remove_file(sidecar_path(path, suffix));
     }
 }
 
@@ -634,6 +636,14 @@ mod tests {
     }
 
     impl CatalogScratchAdmission for RecordingAdmission {
+        fn reserve_source_candidate(
+            &self,
+            _candidate_path: &Path,
+            _requirement: CatalogSourceCandidateScratchV1,
+        ) -> Result<Box<dyn Send>> {
+            panic!("finalization-only writer must not request source growth admission")
+        }
+
         fn reserve_profile_candidate(
             &self,
             _candidate_path: &Path,

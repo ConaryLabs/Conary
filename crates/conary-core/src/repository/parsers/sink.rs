@@ -13,8 +13,8 @@ use super::{
 use crate::repository::catalog::{
     CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
 };
-use crate::repository::dependency_model::RepositoryProvide;
 use crate::repository::dependency_model::{RepositoryCapabilityKind, RepositoryRequirementKind};
+use crate::repository::dependency_model::{RepositoryProvide, RepositoryRequirementGroup};
 
 /// Normalized parser projection and sink schema version used in cache keys.
 pub const REPOSITORY_SNAPSHOT_PROJECTION_VERSION: u32 = 1;
@@ -128,6 +128,44 @@ pub trait RepositorySnapshotSink {
         _objects: &[AuthenticatedMetadataObject],
     ) -> Result<bool> {
         Ok(false)
+    }
+
+    /// Whether this sink must prove and reserve native candidate growth before writes.
+    fn requires_source_candidate_preflight(&self) -> bool {
+        false
+    }
+
+    /// Observe one normalized package during the read-only capacity preflight.
+    fn preflight_package(&mut self, _package: PackageMetadata) -> Result<()> {
+        Ok(())
+    }
+
+    /// Observe child-projected provides not carried by the primary package record.
+    fn preflight_package_provides(&mut self, _provides: Vec<RepositoryProvide>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Observe relation groups carried by a separately ordered native fragment.
+    fn preflight_requirement_groups(
+        &mut self,
+        _groups: Vec<RepositoryRequirementGroup>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Observe one exact out-of-order ALPM fragment retained during replay.
+    fn preflight_arch_package_fragment(
+        &mut self,
+        _directory: &str,
+        _kind: ArchPackageFragmentKind,
+        _content: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Reserve the complete preflight bound and create the private source candidate.
+    fn begin_source_candidate(&mut self) -> Result<()> {
+        Ok(())
     }
 
     /// Admit one complete native package projection.
