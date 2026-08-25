@@ -48,6 +48,40 @@ fn snapshot_identity_owns_the_authenticated_repomd_bytes() {
     );
 }
 
+#[test]
+fn signed_child_sizes_form_one_exact_metadata_reservation() {
+    let repomd = RepoMdIndex {
+        primary: RepoMdRecord {
+            document: RepoMdDocument::Primary,
+            href: "repodata/primary.xml.zst".to_string(),
+            sha256: "a".repeat(64),
+            size: 1024,
+            open_size: Some(8192),
+        },
+        filelists: Some(RepoMdRecord {
+            document: RepoMdDocument::Filelists,
+            href: "repodata/filelists.xml.zst".to_string(),
+            sha256: "b".repeat(64),
+            size: 3072,
+            open_size: Some(16384),
+        }),
+    };
+
+    let requirement = authenticated_metadata_scratch(&repomd).unwrap();
+    assert_eq!(requirement.required_additional_bytes, 4096);
+    assert_eq!(requirement.objects.len(), 2);
+    assert_eq!(
+        requirement.objects[0].role,
+        AuthenticatedMetadataObjectRole::RpmPrimary
+    );
+    assert_eq!(requirement.objects[0].size, 1024);
+    assert_eq!(
+        requirement.objects[1].role,
+        AuthenticatedMetadataObjectRole::RpmFilelists
+    );
+    assert_eq!(requirement.objects[1].size, 3072);
+}
+
 fn primary_package_with_format(format_body: &str) -> String {
     format!(
         r#"

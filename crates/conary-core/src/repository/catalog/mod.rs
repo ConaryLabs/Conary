@@ -21,8 +21,10 @@ pub use bundle::{
 };
 pub use candidate::CatalogCandidateWriter;
 pub use capacity::{
-    CATALOG_COPY_SCRATCH_SCHEMA_V1, CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1, CatalogCopyScratchV1,
-    CatalogFinalizationScratchV1, CatalogScratchAdmission, CatalogScratchCapacityError,
+    CATALOG_COPY_SCRATCH_SCHEMA_V1, CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1,
+    CATALOG_METADATA_SCRATCH_SCHEMA_V1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
+    CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1, CatalogScratchAdmission,
+    CatalogScratchCapacityError,
 };
 pub use contract::{
     CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,

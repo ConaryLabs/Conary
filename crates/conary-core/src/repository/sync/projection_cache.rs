@@ -360,8 +360,8 @@ fn set_private_file_permissions(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::repository::catalog::{
-        CatalogCandidateWriter, CatalogFinalizationScratchV1, CatalogScopeV1,
-        CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
+        CatalogCandidateWriter, CatalogFinalizationScratchV1, CatalogMetadataScratchV1,
+        CatalogScopeV1, CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
     };
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -381,6 +381,14 @@ mod tests {
     }
 
     impl CatalogScratchAdmission for RecordingAdmission {
+        fn reserve_metadata(
+            &self,
+            _work_directory: &Path,
+            _requirement: CatalogMetadataScratchV1,
+        ) -> Result<Box<dyn Send>> {
+            panic!("projection cache must not request metadata admission")
+        }
+
         fn reserve_finalization(
             &self,
             _candidate_path: &Path,

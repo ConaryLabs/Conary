@@ -409,7 +409,7 @@ mod tests {
     use super::*;
     use crate::repository::catalog::{
         CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
-        CatalogScratchCapacityError,
+        CatalogMetadataScratchV1, CatalogScratchCapacityError,
     };
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -429,6 +429,14 @@ mod tests {
     }
 
     impl CatalogScratchAdmission for RecordingAdmission {
+        fn reserve_metadata(
+            &self,
+            _work_directory: &Path,
+            _requirement: CatalogMetadataScratchV1,
+        ) -> Result<Box<dyn Send>> {
+            panic!("candidate writer must not request metadata admission")
+        }
+
         fn reserve_finalization(
             &self,
             _candidate_path: &Path,

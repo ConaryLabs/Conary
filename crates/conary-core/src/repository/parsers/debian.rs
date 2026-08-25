@@ -13,6 +13,7 @@ use super::{
     ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
+use crate::repository::catalog::{CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
     DebianMultiArch, RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
@@ -63,10 +64,10 @@ impl DebianParser {
 
     /// Download and authenticate the selected Packages object into private
     /// run-local storage.
-    async fn download_packages_file(
+    async fn download_packages_file<S: RepositorySnapshotSink + Send>(
         &self,
         repo_url: &str,
-        work_directory: &std::path::Path,
+        sink: &mut S,
     ) -> Result<(
         std::path::PathBuf,
         AuthenticatedSnapshotIdentity,
@@ -79,6 +80,10 @@ impl DebianParser {
         let release = self.download_authenticated_release(repo_url).await?;
         let snapshot = authenticated_release_snapshot(&release);
         let authenticated = parse_release_sha256_entry(&release, &release_path)?;
+        sink.reserve_authenticated_metadata(authenticated_packages_scratch(
+            &release_path,
+            &authenticated,
+        )?)?;
         let packages_url = format!(
             "{}/dists/{}/{}",
             repo_url.trim_end_matches('/'),
@@ -89,9 +94,9 @@ impl DebianParser {
         debug!("Downloading Debian Packages file from: {}", packages_url);
 
         let client = RepositoryClient::new()?;
-        let packages_path = work_directory.join("debian-packages");
+        let packages_path = sink.work_directory().join("debian-packages");
         let download = client
-            .download_file_with_identity(&packages_url, &packages_path)
+            .download_file_with_identity_limit(&packages_url, &packages_path, authenticated.size)
             .await?;
         let packages_object = AuthenticatedMetadataObject {
             role: AuthenticatedMetadataObjectRole::DebianPackages,
@@ -389,6 +394,17 @@ struct ReleaseSha256Entry {
     size: u64,
 }
 
+fn authenticated_packages_scratch(
+    release_path: &str,
+    authenticated: &ReleaseSha256Entry,
+) -> Result<CatalogMetadataScratchV1> {
+    CatalogMetadataScratchV1::from_signed_objects(vec![CatalogMetadataObjectScratchV1 {
+        role: AuthenticatedMetadataObjectRole::DebianPackages,
+        source_path: release_path.to_string(),
+        size: authenticated.size,
+    }])
+}
+
 fn parse_release_sha256_entry(release: &[u8], target: &str) -> Result<ReleaseSha256Entry> {
     let release = std::str::from_utf8(release)
         .map_err(|error| Error::ParseError(format!("Debian Release is not UTF-8: {error}")))?;
@@ -474,10 +490,8 @@ impl RepositoryParser for DebianParser {
             self.distribution, self.component, self.architecture
         );
 
-        let work_directory = sink.work_directory().to_path_buf();
-        let (packages_path, snapshot, packages_object) = self
-            .download_packages_file(repo_url, &work_directory)
-            .await?;
+        let (packages_path, snapshot, packages_object) =
+            self.download_packages_file(repo_url, sink).await?;
         if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&packages_object))? {
             info!("Reused cached Debian repository projection");
             return Ok(snapshot);
@@ -973,6 +987,27 @@ mod tests {
         assert_ne!(
             authenticated_release_snapshot(release),
             AuthenticatedSnapshotIdentity::for_bytes(b"armored InRelease envelope")
+        );
+    }
+
+    #[test]
+    fn signed_packages_size_forms_one_exact_metadata_reservation() {
+        let entry = ReleaseSha256Entry {
+            sha256: "a".repeat(64),
+            size: 8192,
+        };
+        let requirement =
+            authenticated_packages_scratch("main/binary-amd64/Packages.gz", &entry).unwrap();
+
+        assert_eq!(requirement.required_additional_bytes, 8192);
+        assert_eq!(requirement.objects.len(), 1);
+        assert_eq!(
+            requirement.objects[0].role,
+            AuthenticatedMetadataObjectRole::DebianPackages
+        );
+        assert_eq!(
+            requirement.objects[0].source_path,
+            "main/binary-amd64/Packages.gz"
         );
     }
 }

@@ -18,6 +18,7 @@ use super::{
     ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
+use crate::repository::catalog::{CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
     RepositoryDependencyFlavor, RepositoryRequirementGroup, RepositoryRequirementKind,
@@ -49,6 +50,22 @@ use repomd::{RepoMdDocument, RepoMdIndex, RepoMdRecord};
 
 fn authenticated_repomd_snapshot(bytes: &[u8]) -> AuthenticatedSnapshotIdentity {
     AuthenticatedSnapshotIdentity::for_bytes(bytes)
+}
+
+fn authenticated_metadata_scratch(repomd: &RepoMdIndex) -> Result<CatalogMetadataScratchV1> {
+    let mut objects = vec![CatalogMetadataObjectScratchV1 {
+        role: AuthenticatedMetadataObjectRole::RpmPrimary,
+        source_path: repomd.primary.href.clone(),
+        size: repomd.primary.size,
+    }];
+    if let Some(filelists) = &repomd.filelists {
+        objects.push(CatalogMetadataObjectScratchV1 {
+            role: AuthenticatedMetadataObjectRole::RpmFilelists,
+            source_path: filelists.href.clone(),
+            size: filelists.size,
+        });
+    }
+    CatalogMetadataScratchV1::from_signed_objects(objects)
 }
 
 /// Fedora/RPM repository parser
@@ -190,7 +207,7 @@ impl FedoraParser {
         let client = RepositoryClient::new()?;
         let path = work_directory.join(file_name);
         let identity = client
-            .download_file_with_identity(&document_url, &path)
+            .download_file_with_identity_limit(&document_url, &path, record.size)
             .await?;
         record.verify_served_download(&identity)?;
         Ok((document_url, path, identity))
@@ -894,6 +911,7 @@ impl RepositoryParser for FedoraParser {
 
         // Admit the signed repomd.xml records Conary reads.
         let (repomd, snapshot) = self.fetch_repomd_index(repo_url).await?;
+        sink.reserve_authenticated_metadata(authenticated_metadata_scratch(&repomd)?)?;
 
         // Authenticate every distribution-sized child before cache lookup or parsing.
         let (primary_url, primary_path, primary_object) = self
