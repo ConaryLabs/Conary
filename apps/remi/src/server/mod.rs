@@ -46,6 +46,7 @@ mod negative_cache;
 pub mod popularity;
 mod prewarm;
 pub mod profile_catalog;
+mod promotion_evidence;
 pub mod publication;
 mod publication_scheduler;
 pub mod r2;
@@ -88,6 +89,10 @@ pub use lite::{ProxyConfig, run_proxy};
 pub use metrics::{MetricsSnapshot, ServerMetrics};
 pub use negative_cache::NegativeCache;
 pub use prewarm::{PrewarmConfig, PrewarmFailure, PrewarmResult, run_prewarm};
+pub use promotion_evidence::{
+    REMI_PROMOTION_EVIDENCE_SCHEMA_V1, RemiPromotionCanonicalMapV1, RemiPromotionEvidenceV1,
+    RemiPromotionProfileEvidenceV1,
+};
 pub use r2::R2Store;
 pub use routes::{create_admin_router, create_external_admin_router, create_router};
 pub use search::SearchEngine;
