@@ -382,6 +382,14 @@ mod tests {
     }
 
     impl CatalogScratchAdmission for RecordingAdmission {
+        fn reserve_profile_candidate(
+            &self,
+            _candidate_path: &Path,
+            _requirement: crate::repository::catalog::CatalogProfileCandidateScratchV1,
+        ) -> Result<Box<dyn Send>> {
+            panic!("projection cache must not request profile growth admission")
+        }
+
         fn reserve_metadata(
             &self,
             _work_directory: &Path,

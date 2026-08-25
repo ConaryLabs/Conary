@@ -2,15 +2,97 @@
 
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogPackageRecordV1, CatalogProvideRecordV1, SOURCE_SNAPSHOT_SCHEMA_V1,
-    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
-    SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
+    CatalogArtifactV1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
+    CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
+    CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProfileMemberScratchV1,
+    CatalogProvideRecordV1, CatalogScratchAdmission, CatalogScratchCapacityError,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1, SourceMetadataObjectRoleV1,
+    SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
+    write_catalog_candidate,
 };
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
 use std::io::{Read, Write};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+struct ProfileAdmission {
+    requirement: Mutex<Option<CatalogProfileCandidateScratchV1>>,
+    events: Arc<Mutex<Vec<&'static str>>>,
+    refuse_growth: bool,
+}
+
+struct EventLease {
+    events: Arc<Mutex<Vec<&'static str>>>,
+    event: &'static str,
+}
+
+impl Drop for EventLease {
+    fn drop(&mut self) {
+        self.events.lock().unwrap().push(self.event);
+    }
+}
+
+impl CatalogScratchAdmission for ProfileAdmission {
+    fn reserve_profile_candidate(
+        &self,
+        _candidate_path: &Path,
+        requirement: CatalogProfileCandidateScratchV1,
+    ) -> Result<Box<dyn Send>> {
+        self.events.lock().unwrap().push("growth-reserve");
+        *self.requirement.lock().unwrap() = Some(requirement.clone());
+        if self.refuse_growth {
+            return Err(CatalogScratchCapacityError {
+                required_bytes: requirement.required_additional_bytes,
+                available_bytes: requirement.required_additional_bytes - 1,
+                reserved_bytes: 0,
+            }
+            .into());
+        }
+        Ok(Box::new(EventLease {
+            events: Arc::clone(&self.events),
+            event: "growth-drop",
+        }))
+    }
+
+    fn reserve_metadata(
+        &self,
+        _work_directory: &Path,
+        _requirement: CatalogMetadataScratchV1,
+    ) -> Result<Box<dyn Send>> {
+        panic!("profile writer must not request metadata admission")
+    }
+
+    fn stream_metadata(
+        &self,
+        _work_directory: &Path,
+        _requirement: CatalogMetadataStreamScratchV1,
+    ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+        panic!("profile writer must not request streamed metadata admission")
+    }
+
+    fn reserve_finalization(
+        &self,
+        _candidate_path: &Path,
+        _requirement: CatalogFinalizationScratchV1,
+    ) -> Result<Box<dyn Send>> {
+        self.events.lock().unwrap().push("finalization-reserve");
+        Ok(Box::new(EventLease {
+            events: Arc::clone(&self.events),
+            event: "finalization-drop",
+        }))
+    }
+
+    fn reserve_copy(
+        &self,
+        _destination_root: &Path,
+        _requirement: CatalogCopyScratchV1,
+    ) -> Result<Box<dyn Send>> {
+        panic!("profile writer must not request catalog-copy admission")
+    }
+}
 
 fn digest(byte: char) -> String {
     byte.to_string().repeat(64)
@@ -262,6 +344,203 @@ fn profile_streaming_composition_deduplicates_identical_package_origins() {
         packages[0].download_url,
         "https://updates.example.test/shared.rpm"
     );
+}
+
+#[test]
+fn profile_growth_refusal_precedes_candidate_creation_by_one_byte() {
+    let directory = tempfile::tempdir().unwrap();
+    let source_path = directory.path().join("source.sqlite");
+    let source_binding = write_catalog_candidate(
+        &source_path,
+        &source_content("fedora-everything-x86_64", "bash", 'a'),
+    )
+    .unwrap();
+    let source_manifest = source_manifest("fedora-everything-x86_64", 'a', &source_binding);
+    let source_reader = CatalogReader::open_verified(&source_path, &source_binding).unwrap();
+    let profile_path = directory.path().join("profile.sqlite");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let admission = Arc::new(ProfileAdmission {
+        requirement: Mutex::new(None),
+        events: Arc::clone(&events),
+        refuse_growth: true,
+    });
+
+    let error = write_profile_catalog_candidate_with_scratch_admission(
+        &profile_path,
+        "fedora-44",
+        2,
+        vec![ProfileCatalogMemberInputV2 {
+            ordinal: 0,
+            role: ProfileSourceRole::Base,
+            precedence: 10,
+            required: true,
+            manifest: &source_manifest,
+            reader: &source_reader,
+        }],
+        admission.clone(),
+    )
+    .unwrap_err();
+
+    let requirement = admission.requirement.lock().unwrap().clone().unwrap();
+    let Error::CatalogScratchCapacity(capacity) = error else {
+        panic!("expected typed profile growth refusal");
+    };
+    assert_eq!(
+        capacity.required_bytes,
+        requirement.required_additional_bytes
+    );
+    assert_eq!(capacity.available_bytes, capacity.required_bytes - 1);
+    assert_eq!(requirement.members.len(), 1);
+    assert_eq!(
+        requirement.members[0].catalog_bytes,
+        source_binding.artifact.size
+    );
+    assert_eq!(requirement.input_package_count, 1);
+    assert_eq!(
+        requirement.candidate_database_bytes,
+        source_binding.artifact.size * 2 + 4096
+    );
+    assert_eq!(
+        requirement.required_additional_bytes,
+        source_binding.artifact.size * 3 + 4096
+    );
+    assert_eq!(*events.lock().unwrap(), vec!["growth-reserve"]);
+    assert!(!profile_path.exists());
+}
+
+#[test]
+fn profile_growth_facts_require_exact_reopened_source_before_admission() {
+    let directory = tempfile::tempdir().unwrap();
+    let source_path = directory.path().join("source.sqlite");
+    let source_binding = write_catalog_candidate(
+        &source_path,
+        &source_content("fedora-everything-x86_64", "bash", 'a'),
+    )
+    .unwrap();
+    let mut source_manifest = source_manifest("fedora-everything-x86_64", 'a', &source_binding);
+    source_manifest.catalog.size += 4096;
+    let source_reader = CatalogReader::open_verified(&source_path, &source_binding).unwrap();
+    let profile_path = directory.path().join("profile.sqlite");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let admission = Arc::new(ProfileAdmission {
+        requirement: Mutex::new(None),
+        events: Arc::clone(&events),
+        refuse_growth: false,
+    });
+
+    let error = write_profile_catalog_candidate_with_scratch_admission(
+        &profile_path,
+        "fedora-44",
+        2,
+        vec![ProfileCatalogMemberInputV2 {
+            ordinal: 0,
+            role: ProfileSourceRole::Base,
+            precedence: 10,
+            required: true,
+            manifest: &source_manifest,
+            reader: &source_reader,
+        }],
+        admission.clone(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(admission.requirement.lock().unwrap().is_none());
+    assert!(events.lock().unwrap().is_empty());
+    assert!(!profile_path.exists());
+}
+
+#[test]
+fn profile_growth_lease_covers_replay_and_releases_before_finalization() {
+    let directory = tempfile::tempdir().unwrap();
+    let source_path = directory.path().join("source.sqlite");
+    let source_binding = write_catalog_candidate(
+        &source_path,
+        &source_content("fedora-everything-x86_64", "bash", 'a'),
+    )
+    .unwrap();
+    let source_manifest = source_manifest("fedora-everything-x86_64", 'a', &source_binding);
+    let source_reader = CatalogReader::open_verified(&source_path, &source_binding).unwrap();
+    let profile_path = directory.path().join("profile.sqlite");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let admission = Arc::new(ProfileAdmission {
+        requirement: Mutex::new(None),
+        events: Arc::clone(&events),
+        refuse_growth: false,
+    });
+
+    let revision = write_profile_catalog_candidate_with_scratch_admission(
+        &profile_path,
+        "fedora-44",
+        2,
+        vec![ProfileCatalogMemberInputV2 {
+            ordinal: 0,
+            role: ProfileSourceRole::Base,
+            precedence: 10,
+            required: true,
+            manifest: &source_manifest,
+            reader: &source_reader,
+        }],
+        admission.clone(),
+    )
+    .unwrap();
+
+    assert_eq!(revision.counts.packages, 1);
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec![
+            "growth-reserve",
+            "growth-drop",
+            "finalization-reserve",
+            "finalization-drop"
+        ]
+    );
+    assert!(admission.requirement.lock().unwrap().is_some());
+    assert!(profile_path.exists());
+}
+
+#[test]
+fn profile_writer_rejects_database_growth_above_admitted_ceiling() {
+    let directory = tempfile::tempdir().unwrap();
+    let profile_path = directory.path().join("profile.sqlite");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let admission = Arc::new(ProfileAdmission {
+        requirement: Mutex::new(None),
+        events: Arc::clone(&events),
+        refuse_growth: false,
+    });
+    let requirement =
+        CatalogProfileCandidateScratchV1::from_members(vec![CatalogProfileMemberScratchV1 {
+            ordinal: 0,
+            catalog_bytes: 4096,
+            package_count: 0,
+        }])
+        .unwrap();
+    let writer = CatalogCandidateWriter::create_with_profile_scratch_admission(
+        &profile_path,
+        CatalogScopeV1::Profile {
+            profile: "fedora-44".to_string(),
+        },
+        admission,
+        requirement,
+    )
+    .unwrap();
+
+    let error = writer
+        .finish(vec![CatalogSourceEvidenceV1::SourceSnapshot {
+            member_ordinal: 0,
+            source_identity: "fedora-project".to_string(),
+            repository_identity: "fedora-everything-x86_64".to_string(),
+            source_snapshot_sha256: digest('a'),
+        }])
+        .unwrap_err();
+
+    assert!(error.to_string().contains("above its admitted"));
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec!["growth-reserve", "growth-drop"]
+    );
+    assert!(!profile_path.exists());
 }
 
 #[test]

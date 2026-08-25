@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use conary_core::repository::catalog::{
     CatalogCopyScratchV1, CatalogFinalizationScratchV1, CatalogMetadataScratchV1,
-    CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1, CatalogScratchAdmission,
-    CatalogScratchCapacityError,
+    CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
+    CatalogProfileCandidateScratchV1, CatalogScratchAdmission, CatalogScratchCapacityError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -63,6 +63,20 @@ impl CatalogScratchCoordinator {
 }
 
 impl CatalogScratchAdmission for CatalogScratchCoordinator {
+    fn reserve_profile_candidate(
+        &self,
+        candidate_path: &Path,
+        requirement: CatalogProfileCandidateScratchV1,
+    ) -> conary_core::Result<Box<dyn Send>> {
+        let parent = candidate_path.parent().ok_or_else(|| {
+            conary_core::Error::InvalidPath(
+                "profile catalog candidate has no parent for growth admission".to_string(),
+            )
+        })?;
+        requirement.validate()?;
+        self.reserve_on_filesystem(parent, requirement.required_additional_bytes)
+    }
+
     fn reserve_metadata(
         &self,
         work_directory: &Path,
@@ -216,7 +230,7 @@ fn filesystem_identity(path: &Path) -> conary_core::Result<FilesystemIdentity> {
 mod tests {
     use super::*;
     use conary_core::repository::catalog::{
-        CatalogMetadataObjectScratchV1, SourceMetadataObjectRoleV1,
+        CatalogMetadataObjectScratchV1, CatalogProfileMemberScratchV1, SourceMetadataObjectRoleV1,
     };
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -261,6 +275,15 @@ mod tests {
             .unwrap()
     }
 
+    fn profile_requirement() -> CatalogProfileCandidateScratchV1 {
+        CatalogProfileCandidateScratchV1::from_members(vec![CatalogProfileMemberScratchV1 {
+            ordinal: 0,
+            catalog_bytes: 4096,
+            package_count: 1,
+        }])
+        .unwrap()
+    }
+
     fn candidate(root: &Path) -> PathBuf {
         root.join("candidate.sqlite3")
     }
@@ -291,6 +314,54 @@ mod tests {
         assert_eq!(error.required_bytes, 8192);
         assert_eq!(error.available_bytes, 8191);
         assert_eq!(error.reserved_bytes, 0);
+    }
+
+    #[test]
+    fn profile_growth_exact_bound_and_shared_ledger_are_typed() {
+        let root = tempfile::tempdir().unwrap();
+        let profile_scratch = profile_requirement();
+        let probe = Arc::new(MutableProbe::new(profile_scratch.required_additional_bytes));
+        let coordinator = CatalogScratchCoordinator::with_probe(probe.clone());
+        let lease = coordinator
+            .reserve_profile_candidate(&candidate(root.path()), profile_scratch.clone())
+            .unwrap();
+        drop(lease);
+
+        probe.set(profile_scratch.required_additional_bytes - 1);
+        let error = refused(
+            coordinator.reserve_profile_candidate(&candidate(root.path()), profile_scratch.clone()),
+        );
+        let conary_core::Error::CatalogScratchCapacity(error) = error else {
+            panic!("expected typed profile growth refusal");
+        };
+        assert_eq!(
+            error.required_bytes,
+            profile_scratch.required_additional_bytes
+        );
+        assert_eq!(
+            error.available_bytes,
+            profile_scratch.required_additional_bytes - 1
+        );
+        assert_eq!(error.reserved_bytes, 0);
+
+        probe.set(profile_scratch.required_additional_bytes + 1);
+        let growth = coordinator
+            .reserve_profile_candidate(&candidate(root.path()), profile_scratch.clone())
+            .unwrap();
+        let error =
+            refused(coordinator.reserve_finalization(&candidate(root.path()), requirement(1)));
+        let conary_core::Error::CatalogScratchCapacity(error) = error else {
+            panic!("expected shared-ledger capacity refusal");
+        };
+        assert_eq!(error.required_bytes, 2);
+        assert_eq!(
+            error.reserved_bytes,
+            profile_scratch.required_additional_bytes
+        );
+        drop(growth);
+        coordinator
+            .reserve_finalization(&candidate(root.path()), requirement(1))
+            .unwrap();
     }
 
     #[test]

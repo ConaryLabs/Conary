@@ -4,8 +4,9 @@
 
 use super::{
     CatalogBindingV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1,
-    PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1,
+    CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProfileMemberScratchV1,
+    CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
+    ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1,
 };
 use crate::error::{Error, Result};
 use crate::repository::supported_profiles::ProfileSourceRole;
@@ -140,9 +141,12 @@ fn write_profile_catalog_candidate_inner(
         profile: profile.clone(),
     };
     let mut writer = match scratch_admission {
-        Some(admission) => {
-            CatalogCandidateWriter::create_with_scratch_admission(path, scope, admission)?
-        }
+        Some(admission) => CatalogCandidateWriter::create_with_profile_scratch_admission(
+            path,
+            scope,
+            admission,
+            profile_candidate_scratch(&inputs)?,
+        )?,
         None => CatalogCandidateWriter::create(path, scope)?,
     };
     let (members, evidence) = visit_profile_members(
@@ -161,6 +165,25 @@ fn write_profile_catalog_candidate_inner(
     )?;
     let binding = writer.finish(evidence)?;
     bind_profile_revision(profile, projection_version, members, &binding)
+}
+
+fn profile_candidate_scratch(
+    inputs: &[ProfileCatalogMemberInputV2<'_>],
+) -> Result<CatalogProfileCandidateScratchV1> {
+    for input in inputs {
+        input.manifest.validate()?;
+        require_reader_matches_source(input.reader, input.manifest)?;
+    }
+    CatalogProfileCandidateScratchV1::from_members(
+        inputs
+            .iter()
+            .map(|input| CatalogProfileMemberScratchV1 {
+                ordinal: input.ordinal,
+                catalog_bytes: input.manifest.catalog.size,
+                package_count: input.manifest.counts.packages,
+            })
+            .collect(),
+    )
 }
 
 fn visit_profile_packages(

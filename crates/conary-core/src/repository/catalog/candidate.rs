@@ -15,8 +15,8 @@ use super::store::{
 };
 use super::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogBindingV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogProvideRecordV1, CatalogReader, CatalogScopeV1,
-    CatalogScratchAdmission, CatalogSourceEvidenceV1,
+    CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProvideRecordV1,
+    CatalogReader, CatalogScopeV1, CatalogScratchAdmission, CatalogSourceEvidenceV1,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::RepositoryRequirementExpression;
@@ -28,6 +28,8 @@ pub struct CatalogCandidateWriter {
     scope: CatalogScopeV1,
     connection: Option<Connection>,
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
+    profile_growth_lease: Option<Box<dyn Send>>,
+    profile_database_bytes_bound: Option<u64>,
     complete: bool,
 }
 
@@ -40,7 +42,7 @@ pub(in crate::repository) struct CatalogProvideMerge {
 
 impl CatalogCandidateWriter {
     pub fn create(path: impl AsRef<Path>, scope: CatalogScopeV1) -> Result<Self> {
-        Self::create_inner(path.as_ref(), scope, None)
+        Self::create_inner(path.as_ref(), scope, None, None, None)
     }
 
     /// Create a writer whose final compaction requires a retained scratch lease.
@@ -49,19 +51,51 @@ impl CatalogCandidateWriter {
         scope: CatalogScopeV1,
         scratch_admission: Arc<dyn CatalogScratchAdmission>,
     ) -> Result<Self> {
-        Self::create_inner(path.as_ref(), scope, Some(scratch_admission))
+        Self::create_inner(path.as_ref(), scope, Some(scratch_admission), None, None)
+    }
+
+    /// Create a profile writer only after its complete construction bound is reserved.
+    pub fn create_with_profile_scratch_admission(
+        path: impl AsRef<Path>,
+        scope: CatalogScopeV1,
+        scratch_admission: Arc<dyn CatalogScratchAdmission>,
+        requirement: CatalogProfileCandidateScratchV1,
+    ) -> Result<Self> {
+        if !matches!(scope, CatalogScopeV1::Profile { .. }) {
+            return Err(Error::ConfigError(
+                "profile candidate scratch admission requires profile scope".to_string(),
+            ));
+        }
+        requirement.validate()?;
+        let database_bytes_bound = requirement.candidate_database_bytes;
+        let lease = scratch_admission.reserve_profile_candidate(path.as_ref(), requirement)?;
+        Self::create_inner(
+            path.as_ref(),
+            scope,
+            Some(scratch_admission),
+            Some(lease),
+            Some(database_bytes_bound),
+        )
     }
 
     fn create_inner(
         path: &Path,
         scope: CatalogScopeV1,
         scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
+        profile_growth_lease: Option<Box<dyn Send>>,
+        profile_database_bytes_bound: Option<u64>,
     ) -> Result<Self> {
         scope.validate()?;
         let path = path.to_path_buf();
         validate_candidate_path(&path)?;
         create_private_file(&path)?;
-        let result = Self::open_created(path.clone(), scope, scratch_admission);
+        let result = Self::open_created(
+            path.clone(),
+            scope,
+            scratch_admission,
+            profile_growth_lease,
+            profile_database_bytes_bound,
+        );
         if result.is_err() {
             remove_candidate_files(&path);
         }
@@ -72,6 +106,8 @@ impl CatalogCandidateWriter {
         path: PathBuf,
         scope: CatalogScopeV1,
         scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
+        profile_growth_lease: Option<Box<dyn Send>>,
+        profile_database_bytes_bound: Option<u64>,
     ) -> Result<Self> {
         let connection = Connection::open_with_flags(
             &path,
@@ -94,6 +130,8 @@ impl CatalogCandidateWriter {
             scope,
             connection: Some(connection),
             scratch_admission,
+            profile_growth_lease,
+            profile_database_bytes_bound,
             complete: false,
         })
     }
@@ -429,35 +467,55 @@ impl CatalogCandidateWriter {
         let (logical_digest_sha256, counts) =
             digest_catalog_connection(self.connection()?, &scope, &source_evidence)?;
 
-        let connection = self.connection()?;
-        connection.execute_batch("BEGIN IMMEDIATE")?;
-        connection.execute(
-            "INSERT INTO catalog_metadata (
-                 singleton, schema_version, scope_json, logical_digest_sha256,
-                 package_count, provide_count, requirement_group_count,
-                 requirement_atom_count, source_evidence_count
-             ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                i64::from(CATALOG_CONTENT_SCHEMA_V1),
-                canonical_json_string(&scope)?,
-                &logical_digest_sha256,
-                checked_i64(counts.packages, "package count")?,
-                checked_i64(counts.provides, "provide count")?,
-                checked_i64(counts.requirement_groups, "requirement group count")?,
-                checked_i64(counts.requirement_atoms, "requirement atom count")?,
-                checked_i64(counts.source_evidence, "source evidence count")?,
-            ],
-        )?;
-        for (ordinal, evidence) in source_evidence.iter().enumerate() {
+        {
+            let connection = self.connection()?;
+            connection.execute_batch("BEGIN IMMEDIATE")?;
             connection.execute(
-                "INSERT INTO catalog_source_evidence (ordinal, evidence_json) VALUES (?1, ?2)",
+                "INSERT INTO catalog_metadata (
+                     singleton, schema_version, scope_json, logical_digest_sha256,
+                     package_count, provide_count, requirement_group_count,
+                     requirement_atom_count, source_evidence_count
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
-                    checked_ordinal(ordinal, "source evidence")?,
-                    canonical_json_string(evidence)?,
+                    i64::from(CATALOG_CONTENT_SCHEMA_V1),
+                    canonical_json_string(&scope)?,
+                    &logical_digest_sha256,
+                    checked_i64(counts.packages, "package count")?,
+                    checked_i64(counts.provides, "provide count")?,
+                    checked_i64(counts.requirement_groups, "requirement group count")?,
+                    checked_i64(counts.requirement_atoms, "requirement atom count")?,
+                    checked_i64(counts.source_evidence, "source evidence count")?,
                 ],
             )?;
+            for (ordinal, evidence) in source_evidence.iter().enumerate() {
+                connection.execute(
+                    "INSERT INTO catalog_source_evidence (ordinal, evidence_json) VALUES (?1, ?2)",
+                    params![
+                        checked_ordinal(ordinal, "source evidence")?,
+                        canonical_json_string(evidence)?,
+                    ],
+                )?;
+            }
+            connection.execute_batch("COMMIT")?;
         }
-        connection.execute_batch("COMMIT")?;
+        if self.profile_growth_lease.is_some() {
+            std::fs::File::open(&self.path)?.sync_all()?;
+            sync_parent(&self.path)?;
+            let candidate_bytes = std::fs::metadata(&self.path)?.len();
+            let database_bytes_bound = self.profile_database_bytes_bound.ok_or_else(|| {
+                Error::InternalError(
+                    "profile candidate growth lease has no database byte bound".to_string(),
+                )
+            })?;
+            if candidate_bytes > database_bytes_bound {
+                return Err(Error::InternalError(format!(
+                    "profile candidate used {candidate_bytes} database bytes above its admitted {database_bytes_bound}-byte bound"
+                )));
+            }
+            drop(self.profile_growth_lease.take());
+            self.profile_database_bytes_bound = None;
+        }
+        let connection = self.connection()?;
         let page_size = read_positive_pragma(connection, "page_size")?;
         let page_count = read_positive_pragma(connection, "page_count")?;
         let scratch = super::CatalogFinalizationScratchV1::from_page_facts(page_size, page_count)?;
@@ -549,8 +607,9 @@ mod tests {
     use crate::repository::catalog::{
         CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
         CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
-        CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogProvideRecordV1,
-        CatalogRequirementAtomV1, CatalogRequirementGroupV1, CatalogScratchCapacityError,
+        CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogProfileCandidateScratchV1,
+        CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
+        CatalogScratchCapacityError,
     };
     use crate::repository::dependency_model::{
         ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryRequirementClause,
@@ -575,6 +634,14 @@ mod tests {
     }
 
     impl CatalogScratchAdmission for RecordingAdmission {
+        fn reserve_profile_candidate(
+            &self,
+            _candidate_path: &Path,
+            _requirement: CatalogProfileCandidateScratchV1,
+        ) -> Result<Box<dyn Send>> {
+            panic!("finalization-only writer must not request profile growth admission")
+        }
+
         fn reserve_metadata(
             &self,
             _work_directory: &Path,
