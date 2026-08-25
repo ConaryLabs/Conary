@@ -25,7 +25,7 @@ use validation::{
 use activation::activate_profile_revision_at;
 pub use activation::{
     RemiProfileActivationOutcome, RemiProfileRevisionActivation,
-    publish_profile_candidate_in_transaction,
+    publish_profile_candidate_in_transaction, verify_private_profile_candidate_authority,
 };
 pub use gc::{
     RemiCatalogCollectionPlan, RemiCatalogCollectionResult, RemiCatalogDeletionIntent,

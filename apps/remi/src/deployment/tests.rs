@@ -96,6 +96,8 @@ fn inspect_state_proves_exact_reconciled_source_authority() {
     assert_eq!(state.configured_profiles, 3);
     assert_eq!(state.populated_profiles, 0);
     assert_eq!(state.catalog_packages, 0);
+    assert_eq!(state.candidate_profiles, 0);
+    assert_eq!(state.candidate_catalog_packages, 0);
     assert_eq!(
         state.signing_profiles,
         vec!["arch", "fedora-44", "solus", "ubuntu-26.04"]
@@ -106,7 +108,7 @@ fn inspect_state_proves_exact_reconciled_source_authority() {
             .iter()
             .map(|profile| (profile.profile.as_str(), profile.configured_sources))
             .collect::<Vec<_>>(),
-        vec![("arch", 3), ("fedora-44", 2), ("ubuntu-26.04", 16)]
+        vec![("fedora-44", 2), ("ubuntu-26.04", 16), ("arch", 3)]
     );
     assert!(
         state
@@ -115,6 +117,7 @@ fn inspect_state_proves_exact_reconciled_source_authority() {
             .all(|profile| profile.profile_revision_sha256.is_none())
     );
     assert_eq!(state.universe, None);
+    assert!(!state.private_candidates_complete());
     assert!(!state.repopulation_complete());
     let json = serde_json::to_value(&state).unwrap();
     assert!(json.get("evidence_clusters").is_none());
@@ -146,7 +149,7 @@ fn deployment_population_comes_from_active_immutable_catalogs() {
             row.get(0)
         })
         .unwrap();
-    let configured = BTreeMap::from([("fedora-44".to_string(), 2)]);
+    let configured = vec![("fedora-44".to_string(), 2)];
 
     let profiles = inspect_deployment_profiles(&conn, fixture.authority(), &configured)
         .expect("inspect immutable deployment population");
@@ -159,6 +162,45 @@ fn deployment_population_comes_from_active_immutable_catalogs() {
     );
     assert_eq!(profiles[0].packages, 1);
     assert_eq!(profiles[0].converted_packages, 0);
+}
+
+#[test]
+fn private_candidate_population_comes_from_the_exact_current_candidate() {
+    use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
+
+    let fixture = ActiveCatalogFixture::new();
+    let revision = fixture.candidate(
+        "fedora-44",
+        1,
+        vec![package(
+            "fedora-44",
+            "bash",
+            "5.3",
+            "1",
+            Some("x86_64"),
+            42,
+            "deployment-candidate-bash",
+        )],
+    );
+    let conn = fixture.connection();
+    let configured = vec![("fedora-44".to_string(), 2)];
+
+    let candidates = inspect_deployment_candidates(&conn, fixture.authority(), &configured)
+        .expect("inspect exact private deployment candidate");
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(
+        candidates[0].profile_revision_sha256.as_deref(),
+        Some(revision.as_str())
+    );
+    assert!(candidates[0].run_id.is_some());
+    assert!(candidates[0].completed_at.is_some());
+    assert_eq!(candidates[0].packages, 1);
+    assert!(
+        conary_core::db::models::RemiActiveProfileRevision::find(&conn, "fedora-44")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -187,9 +229,19 @@ fn repopulation_requires_current_conversions_and_the_matching_signed_universe() 
         populated_profiles: 1,
         catalog_packages: 1,
         converted_packages: 1,
+        candidate_profiles: 0,
+        candidate_catalog_packages: 0,
         signing_profiles: vec!["fedora-44".to_string()],
         universe: Some(universe),
         profiles: vec![profile],
+        candidates: vec![DeploymentCandidateState {
+            profile: "fedora-44".to_string(),
+            configured_sources: 1,
+            profile_revision_sha256: None,
+            run_id: None,
+            completed_at: None,
+            packages: 0,
+        }],
     };
 
     assert!(state.repopulation_complete());
@@ -199,6 +251,47 @@ fn repopulation_requires_current_conversions_and_the_matching_signed_universe() 
         .expect("universe")
         .matches_active_profiles = false;
     assert!(!state.repopulation_complete());
+}
+
+#[test]
+fn private_candidate_completion_rejects_active_only_and_empty_catalogs() {
+    let mut state = DeploymentState {
+        schema_epoch: SCHEMA_EPOCH,
+        schema_revision: SCHEMA_VERSION,
+        configured_profiles: 1,
+        populated_profiles: 1,
+        catalog_packages: 1,
+        converted_packages: 1,
+        candidate_profiles: 0,
+        candidate_catalog_packages: 0,
+        signing_profiles: vec!["fedora-44".to_string()],
+        universe: None,
+        profiles: vec![DeploymentProfileState {
+            profile: "fedora-44".to_string(),
+            configured_sources: 1,
+            profile_revision_sha256: Some("a".repeat(64)),
+            packages: 1,
+            converted_packages: 1,
+        }],
+        candidates: vec![DeploymentCandidateState {
+            profile: "fedora-44".to_string(),
+            configured_sources: 1,
+            profile_revision_sha256: None,
+            run_id: None,
+            completed_at: None,
+            packages: 0,
+        }],
+    };
+
+    assert!(!state.private_candidates_complete());
+    state.candidate_profiles = 1;
+    state.candidates[0].profile_revision_sha256 = Some("b".repeat(64));
+    state.candidates[0].run_id = Some("run".to_string());
+    state.candidates[0].completed_at = Some(1);
+    assert!(!state.private_candidates_complete());
+    state.candidate_catalog_packages = 1;
+    state.candidates[0].packages = 1;
+    assert!(state.private_candidates_complete());
 }
 
 #[test]

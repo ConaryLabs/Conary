@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-21
-revision: 30
-summary: Non-secret infrastructure, agent operations, release and Remi deployment, and current remote development tooling
+last_updated: 2026-08-26
+revision: 31
+summary: Non-secret infrastructure, agent operations, release and typed Remi deployment completion, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -97,9 +97,9 @@ workflow.
   intermediate release uses `deploy-remi-candidate` instead. Its required
   full commit SHA must already be an ancestor of `origin/main`; the protected
   production environment builds that exact tree, records the binary digest,
-  and uses the same recoverable helper, source manifest, repopulation proof,
-  and public readiness checks. It creates no tag or release and is not a path
-  for deploying an unmerged pull-request head.
+  and uses the same recoverable helper and source manifest. Dispatch must choose
+  either `private-candidates` or `active-repopulation` completion. It creates no
+  tag or release and is not a path for deploying an unmerged pull-request head.
 - The candidate Remi binary owns config/schema preparation. It type-checks the
   current config and source manifest, installs exact parser authority,
   snapshots a current SQLite epoch or moves a retired epoch plus WAL/SHM into
@@ -125,14 +125,20 @@ workflow.
   symlinks, unexpected entries, and route-slug aliases fail before service
   activation. This directory is deliberately outside release rollback and
   deletion paths.
-- After health succeeds, the deployment job polls
-  `conary-remi-deploy inspect-remi --require-repopulated`. Success requires all
-  configured public profiles to have populated active immutable catalogs, a
-  complete signing role set, a fresh signed universe naming the exact same
+- After liveness succeeds, the deployment job polls the predicate selected by
+  its explicit completion mode. `private-candidates` calls
+  `conary-remi-deploy inspect-remi --require-private-candidates`; success means
+  every configured public profile has an exact current, durable, nonempty
+  private candidate whose immutable bundle and fenced repository bindings were
+  reopened and revalidated. It proves no active pointer and accepts structured
+  public readiness as either ready or intentionally unavailable.
+  `active-repopulation` calls `inspect-remi --require-repopulated` and requires
+  all configured public profiles to have populated active immutable catalogs,
+  a complete signing role set, a fresh signed universe naming the exact same
   profile revisions, and at least one validated converted artifact pinned to
-  every current revision. Mutable `repository_packages` rows are not
-  repopulation evidence; dispatch or a green health probe alone is not
-  deployment proof.
+  every current revision. Mutable `repository_packages` rows are not evidence
+  for either mode; dispatch or a green liveness probe alone is not deployment
+  proof.
 - Production R2 inventory and backfill use the manually dispatched
   `remi-r2-durability` workflow after its exact `commit_sha` is merged into
   `main` and deployed. The protected job enters through the normal Remi SSH

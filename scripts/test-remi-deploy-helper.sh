@@ -108,6 +108,24 @@ fi
 if [[ "\${1:-}" == "deployment" && "\${2:-}" == "rollback" ]]; then
     exit 0
 fi
+if [[ "\${1:-}" == "deployment" && "\${2:-}" == "inspect" ]]; then
+    shift 2
+    config=""
+    args=("\$@")
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in
+            --config)
+                config="\$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    printf '%s\n' "\${args[@]}" >"\${config}.inspect-args"
+    exit 0
+fi
 exit 2
 EOF
     chmod 0755 "$candidate"
@@ -348,6 +366,15 @@ test_deploy_remi_uses_candidate_owned_transition() {
 
     test "$("$fake_root/usr/local/bin/remi" --version)" = "remi 0.8.1"
     test "$(cat "$fake_root/conary/repository-keys/preserved")" = "stable-authority"
+
+    run_helper "$fake_root" inspect-remi --require-private-candidates
+    grep -Fx -- "--require-private-candidates" \
+        "$fake_root/etc/conary/remi.toml.inspect-args" >/dev/null
+    run_helper "$fake_root" inspect-remi --require-repopulated
+    grep -Fx -- "--require-repopulated" \
+        "$fake_root/etc/conary/remi.toml.inspect-args" >/dev/null
+    expect_fail "unknown Remi inspection requirement" \
+        run_helper "$fake_root" inspect-remi --require-something-vague
 }
 
 test_deploy_remi_rejects_malformed_authority_root() {

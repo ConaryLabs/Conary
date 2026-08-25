@@ -1,6 +1,8 @@
 // apps/remi/src/bin/remi.rs
 //! Standalone Remi package server binary.
 
+mod deployment_command;
+
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use remi::server::{
@@ -49,7 +51,7 @@ enum Command {
     /// Prepare or roll back an atomic service deployment transition.
     Deployment {
         #[command(subcommand)]
-        command: DeploymentCommand,
+        command: deployment_command::Command,
     },
 }
 
@@ -373,70 +375,6 @@ struct TrustRotateKeyArgs {
     db: String,
 }
 
-#[derive(Subcommand)]
-enum DeploymentCommand {
-    /// Initialize the dedicated universe keys and durable public metadata root.
-    InitializeUniverseAuthority(DeploymentUniverseAuthorityArgs),
-    /// Back up current state and prepare current config/schema authority.
-    Prepare(DeploymentPrepareArgs),
-    /// Restore a prepared deployment transition.
-    Rollback(DeploymentRollbackArgs),
-    /// Verify current schema, source authority, and repopulation state.
-    Inspect(DeploymentInspectArgs),
-}
-
-#[derive(Args)]
-struct DeploymentUniverseAuthorityArgs {
-    /// Durable exact-profile and universe signing authority root.
-    #[arg(long, default_value = "/conary/repository-keys")]
-    repository_keys_dir: PathBuf,
-}
-
-#[derive(Args)]
-struct DeploymentPrepareArgs {
-    /// Current Remi service configuration.
-    #[arg(long, default_value = "/etc/conary/remi.toml")]
-    config: PathBuf,
-
-    /// Staged typed repository manifest.
-    #[arg(long)]
-    repository_manifest: PathBuf,
-
-    /// Installed typed repository manifest path.
-    #[arg(long, default_value = "/etc/conary/remi-repositories.toml")]
-    repository_manifest_target: PathBuf,
-
-    /// Durable exact-profile repository signing authority.
-    #[arg(long, default_value = "/conary/repository-keys")]
-    repository_keys_dir: PathBuf,
-
-    /// Stable deployment identity used in the recoverable backup name.
-    #[arg(long)]
-    deployment_id: String,
-
-    /// Maximum concurrent package conversions.
-    #[arg(long)]
-    max_concurrent: usize,
-}
-
-#[derive(Args)]
-struct DeploymentRollbackArgs {
-    /// Transition manifest emitted by `deployment prepare`.
-    #[arg(long)]
-    manifest: PathBuf,
-}
-
-#[derive(Args)]
-struct DeploymentInspectArgs {
-    /// Current Remi service configuration.
-    #[arg(long, default_value = "/etc/conary/remi.toml")]
-    config: PathBuf,
-
-    /// Fail until every source has metadata and converted artifacts.
-    #[arg(long)]
-    require_repopulated: bool,
-}
-
 fn main() {
     conary_bootstrap::init_server_tracing();
 
@@ -450,7 +388,7 @@ fn main() {
         Some(Command::PromotionProve(args)) => run_promotion_prove_command(args),
         Some(Command::ConversionBenchmark(args)) => run_conversion_benchmark_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
-        Some(Command::Deployment { command }) => run_deployment_command(command),
+        Some(Command::Deployment { command }) => deployment_command::run(command),
         None => run_server_command(cli.serve),
     };
 
@@ -458,37 +396,6 @@ fn main() {
     if code != 0 {
         std::process::exit(code);
     }
-}
-
-fn run_deployment_command(command: DeploymentCommand) -> Result<()> {
-    match command {
-        DeploymentCommand::InitializeUniverseAuthority(args) => {
-            let root = remi::deployment::initialize_universe_authority(&args.repository_keys_dir)?;
-            println!("{}", root.display());
-        }
-        DeploymentCommand::Prepare(args) => {
-            let manifest = remi::deployment::prepare(&remi::deployment::PrepareOptions {
-                config_path: args.config,
-                repository_manifest_source: args.repository_manifest,
-                repository_manifest_target: args.repository_manifest_target,
-                repository_keys_dir: args.repository_keys_dir,
-                deployment_id: args.deployment_id,
-                max_concurrent: args.max_concurrent,
-            })?;
-            println!("{}", manifest.display());
-        }
-        DeploymentCommand::Rollback(args) => {
-            remi::deployment::rollback(&args.manifest)?;
-        }
-        DeploymentCommand::Inspect(args) => {
-            let state = remi::deployment::inspect_state(&args.config)?;
-            println!("{}", serde_json::to_string_pretty(&state)?);
-            if args.require_repopulated && !state.repopulation_complete() {
-                anyhow::bail!("Remi immutable profile universe and conversions are not populated");
-            }
-        }
-    }
-    Ok(())
 }
 
 fn report_top_level_error(err: &anyhow::Error) {
