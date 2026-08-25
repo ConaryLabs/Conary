@@ -13,6 +13,7 @@ use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::convert::{ConversionOptions, ConversionResult, NativePackageConverter};
 use conary_core::db::models::{RemiActiveProfileRevision, RepositoryPackage};
+use conary_core::repository::catalog::CatalogPackageRecordV1;
 use std::path::PathBuf;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -26,6 +27,15 @@ struct ParsedConversion {
     source: PinnedConversionSource,
     phase_timings: Vec<ConversionPhaseTiming>,
     skipped_phases: Vec<ConversionSkippedPhase>,
+}
+
+enum ConversionSourceSelection {
+    Active,
+    Pinned(RemiActiveProfileRevision),
+    Exact {
+        selection: RemiActiveProfileRevision,
+        package: Box<CatalogPackageRecordV1>,
+    },
 }
 
 impl ConversionService {
@@ -61,8 +71,14 @@ impl ConversionService {
         version: Option<&str>,
         architecture: Option<&str>,
     ) -> Result<super::ServerConversionResult> {
-        self.convert_package_with_selection_async(distro, package_name, version, architecture, None)
-            .await
+        self.convert_package_with_selection_async(
+            distro,
+            package_name,
+            version,
+            architecture,
+            ConversionSourceSelection::Active,
+        )
+        .await
     }
 
     pub(crate) async fn convert_package_from_selection_async(
@@ -78,7 +94,29 @@ impl ConversionService {
             package_name,
             version,
             architecture,
-            Some(selection),
+            ConversionSourceSelection::Pinned(selection),
+        )
+        .await
+    }
+
+    pub(crate) async fn convert_catalog_package_from_selection_async(
+        &self,
+        distro: &str,
+        package: CatalogPackageRecordV1,
+        selection: RemiActiveProfileRevision,
+    ) -> Result<super::ServerConversionResult> {
+        let name = package.name.clone();
+        let version = package.version.clone();
+        let architecture = package.architecture.clone();
+        self.convert_package_with_selection_async(
+            distro,
+            &name,
+            Some(&version),
+            architecture.as_deref(),
+            ConversionSourceSelection::Exact {
+                selection,
+                package: Box::new(package),
+            },
         )
         .await
     }
@@ -89,7 +127,7 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
-        selection: Option<RemiActiveProfileRevision>,
+        selection: ConversionSourceSelection,
     ) -> Result<super::ServerConversionResult> {
         let mut timing = ConversionTimingReport::new(distro, package_name, version);
         let result = self
@@ -132,7 +170,7 @@ impl ConversionService {
         package_name: &str,
         version: Option<&str>,
         architecture: Option<&str>,
-        selection: Option<RemiActiveProfileRevision>,
+        selection: ConversionSourceSelection,
         timing: &mut ConversionTimingReport,
     ) -> Result<super::ServerConversionResult> {
         info!(
@@ -143,7 +181,19 @@ impl ConversionService {
         let started = Instant::now();
         let source_feed = Self::public_feed_for_route(distro)?;
         let source = match selection {
-            Some(selection) => {
+            ConversionSourceSelection::Exact { selection, package } => {
+                if selection.source_profile != source_feed.id() {
+                    return Err(anyhow!(
+                        "selected catalog profile '{}' does not match route '{}' profile '{}'",
+                        selection.source_profile,
+                        distro,
+                        source_feed.id()
+                    ));
+                }
+                self.find_exact_package_for_selected_revision_async(selection, *package)
+                    .await?
+            }
+            ConversionSourceSelection::Pinned(selection) => {
                 if selection.source_profile != source_feed.id() {
                     return Err(anyhow!(
                         "selected catalog profile '{}' does not match route '{}' profile '{}'",
@@ -160,7 +210,7 @@ impl ConversionService {
                 )
                 .await?
             }
-            None => {
+            ConversionSourceSelection::Active => {
                 self.find_package_for_conversion_async(
                     source_feed.id(),
                     package_name,

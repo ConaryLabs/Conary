@@ -30,6 +30,7 @@ pub mod catalog_refresh;
 pub mod chunk_gc;
 pub mod config;
 mod conversion;
+mod conversion_crawl;
 pub mod conversion_timing;
 mod database_writer;
 pub mod delta_manifests;
@@ -71,6 +72,11 @@ pub use config::RemiConfig;
 pub use conversion::{
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkSample,
     ConversionBenchmarkSampleClass, ConversionService, ServerConversionResult,
+};
+pub use conversion_crawl::{
+    ConversionCrawlConfig, ConversionCrawlFailureV1, ConversionCrawlOutcomeStateV1,
+    ConversionCrawlPackageOutcomeV1, ConversionCrawlProfileV1, REMI_CONVERSION_CRAWL_SCHEMA_V1,
+    RemiConversionCrawlV1, run_conversion_crawl, write_and_reopen_conversion_crawl,
 };
 pub use index_gen::{IndexGenConfig, IndexGenResult, generate_indices};
 pub use jobs::{ConversionJob, JobManager, JobStatus};

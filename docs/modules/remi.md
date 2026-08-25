@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-25
-revision: 54
-summary: Document pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 55
+summary: Document the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -377,6 +377,50 @@ exact package-oracle authority, reject architecture/conflict/identity or input
 drift, write the canonical resolution bundle, and fully reopen it before
 success. The complete conversion crawl, proof reuse and target preflight, and
 Remi promotion wiring remain later independent evidence paths.
+
+### Initial Full-Universe Conversion Crawl
+
+`remi conversion-crawl` is the strict initial-crawl owner. It derives its
+ordered scope directly from the typed public-profile catalog, opens and pins
+the exact active Fedora, Ubuntu, and Arch profile revisions before conversion,
+and enumerates every exact catalog variant in canonical order. Candidate-tier
+Solus cannot enter the scope. The command deliberately has no profile,
+package-count, popularity, regex, allowlist, dry-run, skip, or exclusion
+control.
+
+Each catalog record is selected by its exact package-key SHA-256 rather than
+the request-facing name/version/architecture tuple. This preserves distinct
+release and origin variants and rejects package-key rebinding. Every record is
+passed through the pinned conversion path. The initial crawl accepts only a
+fresh cold conversion carrying exact source-artifact and CCS SHA-256 evidence;
+an existing hot result fails until the separate exact-key proof-reuse contract
+exists.
+
+The command writes `RemiConversionCrawlV1`, a strict schema-1 JSON artifact
+binding the complete ordered public-profile set, each pinned profile revision,
+expected package counts, exact package identities, repository checksums,
+terminal states, success digests, and typed failure evidence. Missing,
+repeated, reordered, unattempted, or failed outcomes prevent success. The
+writer syncs an atomic staged file, reopens the published bytes, rejects
+noncanonical or unknown input, and compares the complete reopened value before
+the command may report success. A structurally valid failure report is still
+published for diagnosis, then the command exits unsuccessfully.
+
+The crawl currently consumes activated immutable catalogs; it does not promote
+a candidate. Independent reopening of every produced CCS, all-target static
+capability preflight, exact-key incremental proof reuse, canonical-contract
+candidate validation, and final catalog/CAS/signed-metadata durability reopen
+remain separate Slice 6 gates under #517.
+
+```text
+remi conversion-crawl \
+  --db /var/lib/conary/conary.db \
+  --catalog-dir /var/lib/conary/data/catalogs \
+  --chunk-dir /var/lib/conary/data/chunks \
+  --cache-dir /var/lib/conary/data/cache \
+  --repository-keys-dir /etc/conary/repository-keys \
+  --output /var/lib/conary/evidence/initial-conversion-crawl.json
+```
 
 The canonical artifact format is
 `docs/specs/remi-native-parity-oracle.md`.
