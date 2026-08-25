@@ -34,7 +34,7 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-mod audit;
+pub(in crate::repository) mod audit;
 mod filelists;
 mod files;
 mod metalink;
@@ -950,7 +950,7 @@ impl RepositoryParser for FedoraParser {
         // Parse primary.xml one package at a time.
         let compressed = common::metadata_file_is_compressed(&primary_path)?;
         let open_size = repomd.primary.authenticated_open_size(compressed)?;
-        let (package_count, audit) = {
+        let package_count = {
             let decoder = common::open_metadata_decoder(
                 &primary_path,
                 &format!("RPM primary metadata {primary_url}"),
@@ -959,24 +959,15 @@ impl RepositoryParser for FedoraParser {
                 256 * 1024,
                 common::AuthenticatedLengthReader::new(decoder, open_size, "RPM primary metadata"),
             );
-            let mut audit = repomd
-                .filelists
-                .is_none()
-                .then(|| audit::PrimaryFileAudit::create(sink.work_directory()))
-                .transpose()?;
-            let package_count = self.parse_primary_reader(&mut reader, repo_url, |package| {
-                if let Some(audit) = audit.as_mut() {
-                    audit.package(&package)?;
-                }
-                sink.package(package)
-            })?;
+            let package_count =
+                self.parse_primary_reader(&mut reader, repo_url, |package| sink.package(package))?;
             let decoded = reader.get_ref().read_bytes();
             if decoded != open_size {
                 return Err(Error::GpgVerificationFailed(format!(
                     "signed repomd.xml authenticates primary metadata as {open_size} decompressed bytes but {primary_url} decoded to {decoded} bytes"
                 )));
             }
-            (package_count, audit)
+            package_count
         };
         sink.authenticated_object(primary_object)?;
 
@@ -998,9 +989,7 @@ impl RepositoryParser for FedoraParser {
                 );
             }
             None => {
-                audit
-                    .expect("missing filelists creates a primary file audit")
-                    .finish(repo_url)?;
+                sink.validate_rpm_primary_file_requirements(repo_url)?;
             }
         }
 

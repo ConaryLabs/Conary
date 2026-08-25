@@ -44,10 +44,6 @@ use super::repomd::RepoMdDocument;
 use super::{local_tag_name, rpm_version_text};
 use crate::error::{Error, Result};
 #[cfg(test)]
-use crate::repository::dependency_model::{
-    RepositoryCapabilityKind, RepositoryRequirementExpression, RepositoryRequirementKind,
-};
-#[cfg(test)]
 use crate::repository::parsers::PackageMetadata;
 use crate::repository::parsers::{
     ChecksumType, RepositorySnapshotSink, SnapshotPackageIdentity, SnapshotPackageJoin,
@@ -468,138 +464,11 @@ pub(super) fn require_no_filelists_dependent_requirements(
     packages: &[PackageMetadata],
     repo_url: &str,
 ) -> Result<()> {
-    let mut provided_paths: HashSet<&str> = HashSet::new();
-    for package in packages {
-        provided_paths.extend(
-            package
-                .provides
-                .iter()
-                .filter(|provide| provide.kind == RepositoryCapabilityKind::File)
-                .map(|provide| provide.name.as_str()),
-        );
+    let mut sink = crate::repository::parsers::CollectingRepositorySnapshotSink::create()?;
+    for package in packages.iter().cloned() {
+        sink.package(package)?;
     }
-
-    for package in packages {
-        for group in &package.requirements {
-            // Only a positive dependency needs a provider. A conflict,
-            // obsoletion, or optional relation is satisfied by absence.
-            if !matches!(
-                group.kind,
-                RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends
-            ) {
-                continue;
-            }
-            if may_hold_without_filelists(&group.expression, &provided_paths) {
-                continue;
-            }
-
-            let paths = unprovidable_paths(&group.expression, &provided_paths).join("', '");
-            return Err(Error::ParseError(format!(
-                "repository {repo_url} package {} {} requires path '{paths}', but its signed \
-                 repomd.xml publishes no filelists record. primary.xml carries only the \
-                 generator-filtered file set, so this path has no repository provider. The \
-                 repository must publish filelists.xml.",
-                package.name, package.version
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-/// Whether a requirement expression can still be satisfied when every absolute
-/// path outside primary's filtered file set is known to have no provider.
-///
-/// The assignment is deliberately optimistic, because this rule must never
-/// refuse a repository that could resolve:
-///
-/// - an atom naming a path the filtered primary set does not provide can never
-///   hold, since a file dependency's only repository providers are package file
-///   records;
-/// - every other atom may hold;
-/// - no atom is *guaranteed* to hold, because a provider for it may simply be
-///   absent, so any condition may fail and a conditional requirement stays
-///   satisfiable through its else branch.
-///
-/// Repeated occurrences of one atom are evaluated independently. That can only
-/// make an expression look more satisfiable, so it can cost a refusal that was
-/// warranted but can never invent one that was not.
-#[cfg(test)]
-fn may_hold_without_filelists(
-    expression: &RepositoryRequirementExpression,
-    provided_paths: &HashSet<&str>,
-) -> bool {
-    match expression {
-        RepositoryRequirementExpression::Atom(clause) => {
-            !is_unprovidable_path(&clause.name, provided_paths)
-        }
-        RepositoryRequirementExpression::And(operands) => operands
-            .iter()
-            .all(|operand| may_hold_without_filelists(operand, provided_paths)),
-        RepositoryRequirementExpression::Or(operands) => operands
-            .iter()
-            .any(|operand| may_hold_without_filelists(operand, provided_paths)),
-        // `(A if B)` requires A when B holds, and takes its else branch
-        // otherwise. B may always fail, so an absent else branch leaves the
-        // requirement satisfiable.
-        RepositoryRequirementExpression::If {
-            requirement,
-            condition,
-            otherwise,
-        } => {
-            (may_hold_without_filelists(condition, provided_paths)
-                && may_hold_without_filelists(requirement, provided_paths))
-                || otherwise
-                    .as_deref()
-                    .is_none_or(|otherwise| may_hold_without_filelists(otherwise, provided_paths))
-        }
-        // `(A unless B)` requires A when B fails, and takes its else branch
-        // when B holds.
-        RepositoryRequirementExpression::Unless {
-            requirement,
-            condition,
-            otherwise,
-        } => {
-            may_hold_without_filelists(requirement, provided_paths)
-                || (may_hold_without_filelists(condition, provided_paths)
-                    && otherwise.as_deref().is_none_or(|otherwise| {
-                        may_hold_without_filelists(otherwise, provided_paths)
-                    }))
-        }
-        // `with` needs one provider satisfying both sides, so both must be
-        // satisfiable; `without` constrains which provider may be chosen, and
-        // that constraint is optimistically satisfiable.
-        RepositoryRequirementExpression::With { left, right } => {
-            may_hold_without_filelists(left, provided_paths)
-                && may_hold_without_filelists(right, provided_paths)
-        }
-        RepositoryRequirementExpression::Without { left, .. } => {
-            may_hold_without_filelists(left, provided_paths)
-        }
-    }
-}
-
-/// The path atoms of one expression that the filtered primary set cannot
-/// provide, in the order the source wrote them.
-#[cfg(test)]
-fn unprovidable_paths<'a>(
-    expression: &'a RepositoryRequirementExpression,
-    provided_paths: &HashSet<&str>,
-) -> Vec<&'a str> {
-    expression
-        .atoms()
-        .into_iter()
-        .map(|clause| clause.name.as_str())
-        .filter(|name| is_unprovidable_path(name, provided_paths))
-        .collect()
-}
-
-/// An RPM dependency name that starts with `/` is a dependency on a path
-/// rather than on a capability name, and the filtered primary file set is the
-/// only file authority a repository without `filelists.xml` publishes.
-#[cfg(test)]
-fn is_unprovidable_path(name: &str, provided_paths: &HashSet<&str>) -> bool {
-    name.starts_with('/') && !provided_paths.contains(name)
+    sink.validate_rpm_primary_file_requirements(repo_url)
 }
 
 #[cfg(test)]

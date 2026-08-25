@@ -189,10 +189,16 @@ through the same device ledger, and applies each signed size as the HTTP stream
 cap. The immutable sink retains that lease until its run-local work directory
 and every staged child file have been removed, including error and cancellation
 unwind. A typed refusal therefore precedes child-file creation.
+When an RPM repository omits filelists metadata, the parser audits every
+positive path requirement against the exact primary projection already held by
+the repository sink. The immutable sink walks its private catalog transaction
+one typed requirement at a time; the compatibility sink checks its collected
+projection. No second SQLite audit database or other parser work file is
+created for those duplicated facts.
 These construction admissions are independent of the serving readiness floor
 and do not yet estimate initial source/profile candidate growth, Arch/eopkg
-downloads whose authenticated roots do not publish a byte length, or parser
-SQLite/audit spools.
+downloads whose authenticated roots do not publish a byte length, or the Arch
+pairing spool.
 
 `apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
 unconditional liveness reply and proves only that the process is listening;

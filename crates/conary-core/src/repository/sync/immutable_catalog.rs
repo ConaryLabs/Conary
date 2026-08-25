@@ -348,6 +348,10 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
     fn finish_package_join(&mut self, join: SnapshotPackageJoin) -> Result<()> {
         self.writer.finish_package_join(join.as_str())
     }
+
+    fn validate_rpm_primary_file_requirements(&mut self, repo_url: &str) -> Result<()> {
+        self.writer.validate_rpm_primary_file_requirements(repo_url)
+    }
 }
 
 fn source_catalog_candidate(

@@ -2,7 +2,7 @@
 
 //! Versioned streaming output contract for authenticated repository parsers.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 use crate::error::{Error, Result};
@@ -12,6 +12,7 @@ use super::{
 };
 use crate::repository::catalog::CatalogMetadataScratchV1;
 use crate::repository::dependency_model::RepositoryProvide;
+use crate::repository::dependency_model::{RepositoryCapabilityKind, RepositoryRequirementKind};
 
 /// Normalized parser projection and sink schema version used in cache keys.
 pub const REPOSITORY_SNAPSHOT_PROJECTION_VERSION: u32 = 1;
@@ -93,6 +94,10 @@ pub trait RepositorySnapshotSink {
 
     /// Prove that a child join covered every admitted package exactly once.
     fn finish_package_join(&mut self, join: SnapshotPackageJoin) -> Result<()>;
+
+    /// Prove that every positive RPM path requirement has a provider when the
+    /// signed repository publishes no complete filelists object.
+    fn validate_rpm_primary_file_requirements(&mut self, repo_url: &str) -> Result<()>;
 }
 
 /// Compatibility sink for callers that still replace mutable local repository
@@ -227,6 +232,35 @@ impl RepositorySnapshotSink for CollectingRepositorySnapshotSink {
                 "signed filelists.xml publishes no file record for package {} {} (pkgid {})",
                 package.name, package.version, package.checksum
             )));
+        }
+        Ok(())
+    }
+
+    fn validate_rpm_primary_file_requirements(&mut self, repo_url: &str) -> Result<()> {
+        let provided_paths = self
+            .packages
+            .iter()
+            .flat_map(|package| &package.provides)
+            .filter(|provide| provide.kind == RepositoryCapabilityKind::File)
+            .map(|provide| provide.name.as_str())
+            .collect::<HashSet<_>>();
+        for package in &self.packages {
+            for group in &package.requirements {
+                if !matches!(
+                    group.kind,
+                    RepositoryRequirementKind::Depends | RepositoryRequirementKind::PreDepends
+                ) {
+                    continue;
+                }
+                let mut provided = |path: &str| Ok(provided_paths.contains(path));
+                super::fedora::audit::require_primary_file_providers(
+                    repo_url,
+                    &package.name,
+                    &package.version,
+                    &group.expression,
+                    &mut provided,
+                )?;
+            }
         }
         Ok(())
     }
