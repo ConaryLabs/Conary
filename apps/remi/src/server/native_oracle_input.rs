@@ -309,15 +309,9 @@ fn reject_host_local_strings(value: &serde_json::Value) -> Result<()> {
             if value.contains("://") {
                 let url = Url::parse(value)
                     .context("parse native-oracle input manifest URL for sanitation")?;
-                let public_domain = matches!(
-                    url.host(),
-                    Some(url::Host::Domain(domain))
-                        if !domain.eq_ignore_ascii_case("localhost")
-                            && !domain.to_ascii_lowercase().ends_with(".localhost")
-                );
                 ensure!(
                     url.scheme() == "https"
-                        && public_domain
+                        && has_public_host(&url)
                         && url.username().is_empty()
                         && url.password().is_none(),
                     "native-oracle input manifest contains a non-public or credential-bearing URL"
@@ -337,6 +331,32 @@ fn reject_host_local_strings(value: &serde_json::Value) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+fn has_public_host(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(domain)) => {
+            !domain.eq_ignore_ascii_case("localhost")
+                && !domain.to_ascii_lowercase().ends_with(".localhost")
+        }
+        Some(url::Host::Ipv4(address)) => {
+            !address.is_private()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_unspecified()
+                && !address.is_broadcast()
+                && !address.is_documentation()
+                && !address.is_multicast()
+        }
+        Some(url::Host::Ipv6(address)) => {
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && !address.is_unique_local()
+                && !address.is_unicast_link_local()
+                && !address.is_multicast()
+        }
+        None => false,
+    }
 }
 
 async fn publish_bundle(

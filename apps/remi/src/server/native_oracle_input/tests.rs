@@ -180,6 +180,9 @@ fn serialized_source_authority_must_be_public_and_credential_free() {
             .to_string()
             .contains("non-public or credential-bearing URL")
     );
+
+    source.provenance.content_url = Some("https://8.8.8.8/content".to_string());
+    require_public_snapshot(&source).unwrap();
 }
 
 #[tokio::test]
