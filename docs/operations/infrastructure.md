@@ -312,8 +312,12 @@ checkout.
 Claude Code Remote Control is directory-scoped rather than backed by a global
 project registry. Authenticate `dev` with a full-scope `claude.ai` subscription
 login, then run `claude` interactively once in each project root to accept the
-workspace trust gate. Install the tracked template and enable one named server
-instance per supported project:
+workspace trust gate. Before enabling the unattended services, run
+`claude remote-control` interactively in one trusted project and accept the
+one-time `Enable Remote Control?` account consent. A headless process can remain
+alive without registering a remote session while that consent is pending, so a
+healthy systemd process is not sufficient proof. Install the tracked template
+and enable one named server instance per supported project:
 
 ```bash
 runtime_dir="/run/user/$(id -u dev)"
@@ -332,9 +336,10 @@ sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user enable --now 
 Each instance uses Claude's worktree spawn mode so concurrent on-demand
 sessions do not edit the same checkout, with a four-session capacity per
 project. The pre-created session remains in the clean project root. Verify all
-three services are active and that `Remi Conary`, `Remi nomos`, and
-`Remi the-mortal-estate` appear in `claude.ai/code` before treating the remote
-workbench as recovered.
+three services are active, each project owns a fresh
+`~/.claude/projects/<project>/bridge-pointer.json`, and `Remi Conary`,
+`Remi nomos`, and `Remi the-mortal-estate` appear in `claude.ai/code` from a
+separate client before treating the remote workbench as recovered.
 
 Native Claude Code installations download updates in the background, but a new
 version takes effect only when the process next starts. A host reboot starts the
