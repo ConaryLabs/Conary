@@ -112,6 +112,18 @@ fn exact_private_candidates_are_required() {
 }
 
 #[test]
+fn candidate_supersession_fails_the_final_fence() {
+    let fixture = ActiveCatalogFixture::new();
+    let selections = fixture_selections(&fixture, true);
+    let initial = capture_current_candidates(fixture.db_path(), &selections).unwrap();
+    let mut changed = initial.clone();
+    changed[0].run_id = uuid::Uuid::new_v4().to_string();
+
+    let error = require_unchanged_candidates(&initial, &changed).unwrap_err();
+    assert!(error.to_string().contains("candidate set changed"));
+}
+
+#[test]
 fn solus_and_noncanonical_digests_cannot_enter_candidate_set() {
     let digest = "a".repeat(64);
     let mut candidates = conary_core::repository::supported_profiles::public_profiles()
@@ -212,6 +224,47 @@ fn extra_entry_fails_reopen() {
 
     let error = reopen_native_oracle_input_bundle(&root).unwrap_err();
     assert!(error.to_string().contains("incomplete or unexpected"));
+}
+
+#[test]
+fn unknown_manifest_field_fails_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let manifest = valid_manifest();
+    write_bundle(&root, &manifest);
+    let mut value = serde_json::to_value(&manifest).unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected".to_string(), serde_json::Value::Bool(true));
+    fs::write(
+        root.join(NATIVE_ORACLE_INPUT_MANIFEST_FILE),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+
+    let error = reopen_native_oracle_input_bundle(&root).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("parse native-oracle input manifest")
+    );
+}
+
+#[test]
+fn noncanonical_manifest_json_fails_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let manifest = valid_manifest();
+    write_bundle(&root, &manifest);
+    fs::write(
+        root.join(NATIVE_ORACLE_INPUT_MANIFEST_FILE),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let error = reopen_native_oracle_input_bundle(&root).unwrap_err();
+    assert!(error.to_string().contains("not canonical JSON"));
 }
 
 #[test]

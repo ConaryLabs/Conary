@@ -133,10 +133,7 @@ pub async fn materialize_native_oracle_inputs(
     );
 
     let final_candidates = capture_current_candidates(&config.db_path, &config.candidates)?;
-    ensure!(
-        final_candidates == initial_candidates,
-        "private candidate set changed during native-oracle input materialization"
-    );
+    require_unchanged_candidates(&initial_candidates, &final_candidates)?;
     drop(pins);
 
     let manifest_path = config.output_dir.join(NATIVE_ORACLE_INPUT_MANIFEST_FILE);
@@ -159,6 +156,17 @@ pub async fn materialize_native_oracle_inputs(
         objects: reopened.objects.len(),
         object_bytes,
     })
+}
+
+fn require_unchanged_candidates(
+    initial: &[conary_core::repository::ProfileSyncCandidate],
+    final_candidates: &[conary_core::repository::ProfileSyncCandidate],
+) -> Result<()> {
+    ensure!(
+        final_candidates == initial,
+        "private candidate set changed during native-oracle input materialization"
+    );
+    Ok(())
 }
 
 fn validate_candidate_selections(candidates: &[ProfileRevisionSelection]) -> Result<()> {
