@@ -114,11 +114,12 @@ jobs:
             "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha' '$remote_helper'"
           scp $ssh_opts "$BUNDLE" "${target}:${remote_bundle}"
           scp $ssh_opts deploy/remi-repositories.toml "${target}:${remote_repositories}"
+          set +e
           ssh $ssh_opts "$target" bash -s \
             "$VERSION" "$remote_bundle" "$remote_repositories" "$REMI_MAX_CONCURRENT" \
-            "$COMPLETION_MODE" <<'REMOTE_EOF'
+            "$COMPLETION_MODE" > remi-deployment-inspection.json <<'REMOTE_EOF'
             set -euo pipefail
-            sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$1" "$2" "$3" "$4"
+            sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$1" "$2" "$3" "$4" >&2
             case "$5" in
               private-candidates)
                 requirement=--require-private-candidates
@@ -134,16 +135,79 @@ jobs:
                 ;;
             esac
             for attempt in $(seq 1 120); do
-              if sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi "$requirement"; then
+              if inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy \
+                inspect-remi "$requirement" 2>&1)"; then
+                printf '%s\n' "$inspection"
                 exit 0
               fi
               echo "Remi ${description} are still incomplete (${attempt}/120)" >&2
-              sleep 30
+              if (( attempt < 120 )); then
+                sleep 30
+              fi
             done
             sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi
             echo "Remi did not complete ${description} within one hour" >&2
             exit 1
           REMOTE_EOF
+          deploy_status=$?
+          set -e
+          [[ -s remi-deployment-inspection.json \
+            && ! -L remi-deployment-inspection.json ]] || {
+              echo "deployment did not return a final typed inspection" >&2
+              exit 1
+          }
+          jq -e '
+            (.schema_epoch | type == "string")
+            and (.schema_revision | type == "number")
+            and (.configured_profiles | type == "number")
+            and (.candidate_profiles | type == "number")
+            and (.candidates | type == "array")
+            and all(.candidates[];
+              (.profile | type == "string")
+              and (.configured_sources | type == "number")
+              and (.packages | type == "number")
+              and (.latest_refresh == null or (
+                (.latest_refresh.run_id | type == "string")
+                and (.latest_refresh.fencing_epoch | type == "number")
+                and (.latest_refresh.state | type == "string")
+                and (.latest_refresh.run_members | type == "number")
+                and (.latest_refresh.candidate_members | type == "number")
+                and (.latest_refresh.redactions | type == "array")
+              ))
+            )
+          ' remi-deployment-inspection.json >/dev/null
+          if (( deploy_status != 0 )); then
+            echo "Remi deployment completion failed; final sanitized inspection retained" >&2
+            exit "$deploy_status"
+          fi
+      - name: Summarize final typed deployment inspection
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [[ -s remi-deployment-inspection.json \
+            && ! -L remi-deployment-inspection.json ]]; then
+            {
+              echo "### Final typed Remi inspection"
+              echo
+              jq -r '
+                .candidates[] |
+                "- \(.profile): candidate `\(.profile_revision_sha256 // "absent")`; "
+                + "packages \(.packages); latest refresh `\(.latest_refresh.state // "none")`; "
+                + "stage `\(.latest_refresh.failure_stage // "none")`; "
+                + "category `\(.latest_refresh.failure_category // "none")`; "
+                + "members \(.latest_refresh.candidate_members // 0)/\(.latest_refresh.run_members // 0); "
+                + "evidence `\(.latest_refresh.failure_evidence_sha256 // "none")`"
+              ' remi-deployment-inspection.json
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload final sanitized deployment inspection
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: remi-deployment-inspection-${{ github.run_id }}
+          path: remi-deployment-inspection.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Verify the selected Remi completion contract
         env:
           COMPLETION_MODE: ${{ github.event.inputs.completion_mode }}
