@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-23
-revision: 40
-summary: Map fixture ownership, including stable boot-tool interfaces, typed public and candidate profiles, attributable daily-driver same-name provides, configuration upgrade, payload topology, and cross-source lifecycle proof
+last_updated: 2026-08-27
+revision: 41
+summary: Map fixture ownership, including stable boot-tool interfaces, typed public and candidate profiles, attributable daily-driver same-name provides, configuration upgrade, payload topology, and snapshot-bound cross-source lifecycle proof
 ---
 
 # Test Fixtures And Proof Maps
@@ -459,7 +459,11 @@ Each fixture family should record:
   openSUSE Tumbleweed additionally run `rolling-derivative-acceptance`, which
   authenticates their first-party image identity, native package versions,
   repository declaration bytes, and signing roots before real pacman or Zypper
-  package adoption and exact repository takeover. `fedora44` is the existing
+  package adoption and exact repository takeover. The Tumbleweed fixture binds
+  its enabled OSS and non-OSS declarations to the official history snapshot
+  matching the pinned image `VERSION_ID`; Update and OpenH264 remain authentic
+  declarations but are disabled because they have no release-matched history
+  authority and are not inputs to the lifecycle proof. `fedora44` is the existing
   `conary-test` runner distro key; public CCS target IDs remain
   `fedora-44`, `ubuntu-26.04`, and `arch`; `solus` remains a separate candidate
   and conformance-fixture identity.
