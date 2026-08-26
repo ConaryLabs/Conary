@@ -1117,6 +1117,32 @@ test_check_release_matrix_rejects_private_mode_public_readiness_claim() {
         "candidate deploy mode-specific public readiness contract"
 }
 
+test_check_release_matrix_rejects_discarded_candidate_failure_inspection() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '            "$COMPLETION_MODE" > remi-deployment-inspection.json <<'\''REMOTE_EOF'\''' \
+        '            "$COMPLETION_MODE" > /dev/null <<'\''REMOTE_EOF'\'''
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy retains one validated final typed inspection"
+}
+
+test_check_release_matrix_rejects_missing_candidate_failure_artifact() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0' \
+        '        run: echo "deployment inspection upload removed"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy retains sanitized failure inspection artifact"
+}
+
 test_check_release_matrix_rejects_unverified_remi_suite_bundle() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1557,6 +1583,8 @@ main() {
         test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
         test_check_release_matrix_rejects_private_mode_public_readiness_claim
+        test_check_release_matrix_rejects_discarded_candidate_failure_inspection
+        test_check_release_matrix_rejects_missing_candidate_failure_artifact
         test_check_release_matrix_rejects_unverified_remi_suite_bundle
         test_check_release_matrix_rejects_merge_validation_production_probes
         test_check_release_matrix_rejects_missing_post_deploy_remi_readiness

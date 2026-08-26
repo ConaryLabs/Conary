@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-26
-revision: 67
-summary: Document exact private-candidate native-oracle input materialization, typed private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 68
+summary: Document exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -785,6 +785,15 @@ symlinked or incorrectly owned entries, unsafe modes, unexpected files, and
 route-slug directories fail deployment. `deployment inspect` independently
 validates that the manifest profiles and complete signing profiles agree.
 Signing authority lives outside binary/config rollback paths.
+
+The same inspection reports each configured public profile's exact latest
+refresh run by fencing epoch. Run state, timestamps, typed failure
+stage/category, and source-member progress come from the durable refresh
+coordinator tables. Free-form failure evidence remains bound by its SHA-256;
+only a bounded diagnostic copy processed through the diagnostics redaction
+authority is serialized. This state explains an absent private candidate but
+cannot substitute for the exact reopened candidate and repository bindings
+required by deployment completion.
 
 Conversion and recipe builds load `targets` by the persisted exact source
 profile. Public native-release and timestamp routes first resolve their route

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-26
-revision: 32
-summary: Non-secret infrastructure, agent operations, release, typed Remi deployment completion, exact native-oracle input export, and current remote development tooling
+revision: 33
+summary: Non-secret infrastructure, agent operations, release, typed and causally inspectable Remi deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -100,6 +100,15 @@ workflow.
   and uses the same recoverable helper and source manifest. Dispatch must choose
   either `private-candidates` or `active-repopulation` completion. It creates no
   tag or release and is not a path for deploying an unmerged pull-request head.
+- Candidate deployment retains exactly one final typed inspection instead of
+  emitting every incomplete poll. Each canonical public profile includes its
+  current candidate plus the exact latest fenced refresh run, typed state and
+  failure stage/category, member progress, raw-evidence SHA-256, and a bounded
+  redacted diagnostic copy. The protected job uploads that public-sanitized
+  JSON and writes a concise typed summary even when completion fails. It does
+  not expose service logs, generic shell access, credentials, bearer tokens,
+  private-key paths, or host-local paths, and diagnostics do not satisfy the
+  candidate publication predicate.
 - The candidate Remi binary owns config/schema preparation. It type-checks the
   current config and source manifest, installs exact parser authority,
   snapshots a current SQLite epoch or moves a retired epoch plus WAL/SHM into

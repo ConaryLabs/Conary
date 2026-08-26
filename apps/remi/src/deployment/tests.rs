@@ -196,6 +196,17 @@ fn private_candidate_population_comes_from_the_exact_current_candidate() {
     assert!(candidates[0].run_id.is_some());
     assert!(candidates[0].completed_at.is_some());
     assert_eq!(candidates[0].packages, 1);
+    let latest_refresh = candidates[0]
+        .latest_refresh
+        .as_ref()
+        .expect("candidate owns an exact latest refresh run");
+    assert_eq!(latest_refresh.state, DeploymentRefreshRunState::Candidate);
+    assert_eq!(latest_refresh.run_members, 2);
+    assert_eq!(latest_refresh.candidate_members, 2);
+    assert_eq!(
+        Some(latest_refresh.run_id.as_str()),
+        candidates[0].run_id.as_deref()
+    );
     assert!(
         conary_core::db::models::RemiActiveProfileRevision::find(&conn, "fedora-44")
             .unwrap()
@@ -257,6 +268,7 @@ fn repopulation_requires_current_conversions_and_the_matching_signed_universe() 
             run_id: None,
             completed_at: None,
             packages: 0,
+            latest_refresh: None,
         }],
     };
 
@@ -296,6 +308,7 @@ fn private_candidate_completion_rejects_active_only_and_empty_catalogs() {
             run_id: None,
             completed_at: None,
             packages: 0,
+            latest_refresh: None,
         }],
     };
 

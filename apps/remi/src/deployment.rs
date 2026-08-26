@@ -14,6 +14,12 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+mod refresh_diagnostics;
+pub use refresh_diagnostics::{
+    DeploymentProfileRefreshState, DeploymentRefreshFailureCategory, DeploymentRefreshFailureStage,
+    DeploymentRefreshRunState,
+};
+
 const TRANSITION_SCHEMA: u32 = 2;
 const DEFAULT_REPOSITORY_MANIFEST_TARGET: &str = "/etc/conary/remi-repositories.toml";
 const DEFAULT_REPOSITORY_KEYS_DIR: &str = "/conary/repository-keys";
@@ -51,6 +57,7 @@ pub struct DeploymentCandidateState {
     pub run_id: Option<String>,
     pub completed_at: Option<i64>,
     pub packages: u64,
+    pub latest_refresh: Option<DeploymentProfileRefreshState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -432,6 +439,7 @@ fn inspect_deployment_candidates(
 ) -> Result<Vec<DeploymentCandidateState>> {
     let mut candidates = Vec::with_capacity(configured.len());
     for (profile, configured_sources) in configured {
+        let latest_refresh = refresh_diagnostics::latest_profile_refresh(conn, profile)?;
         let candidate = conary_core::repository::current_profile_sync_candidate(conn, profile)?;
         let Some(candidate) = candidate else {
             candidates.push(DeploymentCandidateState {
@@ -441,6 +449,7 @@ fn inspect_deployment_candidates(
                 run_id: None,
                 completed_at: None,
                 packages: 0,
+                latest_refresh,
             });
             continue;
         };
@@ -479,6 +488,7 @@ fn inspect_deployment_candidates(
             run_id: Some(candidate.run_id),
             completed_at: Some(candidate.completed_at),
             packages: inspection.manifest.counts.packages,
+            latest_refresh,
         });
     }
     Ok(candidates)

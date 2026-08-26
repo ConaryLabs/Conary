@@ -44,22 +44,29 @@ pub fn redact_text(input: &str) -> RedactedText {
         redactions.push(RedactionMarker::new("text", "private-key-path"));
     }
 
-    if let Some(redacted) = redact_credentialed_url(&value) {
-        value = redacted;
+    let (redacted, credentialed_urls) = redact_credentialed_urls(&value);
+    value = redacted;
+    for _ in 0..credentialed_urls {
         redactions.push(RedactionMarker::new("text", "credentialed-url"));
     }
 
     for key in SECRET_KEYS {
         let marker = format!("{key}=");
-        if let Some(start) = value.to_ascii_uppercase().find(&marker) {
-            let key_start = start;
-            let value_start = start + marker.len();
+        let mut search_start = 0;
+        while let Some(relative_start) = value[search_start..].to_ascii_uppercase().find(&marker) {
+            let key_start = search_start + relative_start;
+            let value_start = key_start + marker.len();
+            if value[value_start..].starts_with("[REDACTED]") {
+                search_start = value_start + "[REDACTED]".len();
+                continue;
+            }
             let value_end = value[value_start..]
                 .find(|ch: char| ch.is_whitespace() || ch == '\'' || ch == '"')
                 .map(|offset| value_start + offset)
                 .unwrap_or_else(|| value.len());
             value.replace_range(key_start..value_end, &format!("{key}=[REDACTED]"));
             redactions.push(RedactionMarker::new("text", "secret-env-assignment"));
+            search_start = key_start + marker.len() + "[REDACTED]".len();
         }
     }
 
@@ -174,22 +181,28 @@ fn is_private_key_path(value: &str) -> bool {
             || token.contains("/private_key"))
 }
 
-fn redact_credentialed_url(value: &str) -> Option<String> {
-    let scheme_end = value.find("://")?;
-    let rest_start = scheme_end + 3;
-    let at = value[rest_start..].find('@')? + rest_start;
-    let slash = value[rest_start..]
-        .find('/')
-        .map(|offset| rest_start + offset)
-        .unwrap_or(value.len());
-    if at > slash || !value[rest_start..at].contains(':') {
-        return None;
+fn redact_credentialed_urls(value: &str) -> (String, usize) {
+    let mut value = value.to_string();
+    let mut search_start = 0;
+    let mut count = 0;
+    while let Some(relative_scheme) = value[search_start..].find("://") {
+        let rest_start = search_start + relative_scheme + 3;
+        let authority_end = value[rest_start..]
+            .find(|character: char| {
+                character.is_whitespace() || matches!(character, '/' | '?' | '#')
+            })
+            .map(|offset| rest_start + offset)
+            .unwrap_or(value.len());
+        let Some(relative_at) = value[rest_start..authority_end].find('@') else {
+            search_start = authority_end;
+            continue;
+        };
+        let at = rest_start + relative_at;
+        value.replace_range(rest_start..=at, "[REDACTED]@");
+        count += 1;
+        search_start = rest_start + "[REDACTED]@".len();
     }
-    Some(format!(
-        "{}[REDACTED]@{}",
-        &value[..rest_start],
-        &value[at + 1..]
-    ))
+    (value, count)
 }
 
 #[cfg(test)]
@@ -214,6 +227,27 @@ mod tests {
             "https://[REDACTED]@example.invalid/source.tar.gz"
         );
         assert_eq!(value.redactions[0].reason, "credentialed-url");
+    }
+
+    #[test]
+    fn redacts_every_credentialed_url_and_repeated_secret_assignment() {
+        let value = redact_text(
+            "https://one:secret@example.invalid/a TOKEN=first \
+             https://two:secret@example.invalid/b TOKEN=second",
+        );
+        for secret in ["one:secret", "two:secret", "first", "second"] {
+            assert!(!value.value.contains(secret));
+        }
+        assert_eq!(value.value.matches("https://[REDACTED]@").count(), 2);
+        assert_eq!(value.value.matches("TOKEN=[REDACTED]").count(), 2);
+        assert_eq!(
+            value
+                .redactions
+                .iter()
+                .filter(|marker| marker.reason == "credentialed-url")
+                .count(),
+            2
+        );
     }
 
     #[test]
