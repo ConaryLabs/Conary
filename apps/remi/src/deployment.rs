@@ -26,9 +26,12 @@ pub struct DeploymentState {
     pub populated_profiles: usize,
     pub catalog_packages: u64,
     pub converted_packages: i64,
+    pub candidate_profiles: usize,
+    pub candidate_catalog_packages: u64,
     pub signing_profiles: Vec<String>,
     pub universe: Option<DeploymentUniverseState>,
     pub profiles: Vec<DeploymentProfileState>,
+    pub candidates: Vec<DeploymentCandidateState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -38,6 +41,16 @@ pub struct DeploymentProfileState {
     pub profile_revision_sha256: Option<String>,
     pub packages: u64,
     pub converted_packages: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeploymentCandidateState {
+    pub profile: String,
+    pub configured_sources: usize,
+    pub profile_revision_sha256: Option<String>,
+    pub run_id: Option<String>,
+    pub completed_at: Option<i64>,
+    pub packages: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -53,6 +66,17 @@ pub struct DeploymentUniverseState {
 }
 
 impl DeploymentState {
+    #[must_use]
+    pub fn private_candidates_complete(&self) -> bool {
+        self.configured_profiles > 0
+            && self.candidate_profiles == self.configured_profiles
+            && self.candidate_catalog_packages > 0
+            && self.candidates.len() == self.configured_profiles
+            && self.candidates.iter().all(|candidate| {
+                candidate.profile_revision_sha256.is_some() && candidate.packages > 0
+            })
+    }
+
     #[must_use]
     pub fn repopulation_complete(&self) -> bool {
         self.configured_profiles > 0
@@ -279,7 +303,7 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
 
     let conn = conary_core::db::open_fast(&db_path)?;
     repository_manifest.verify_reconciled(&conn)?;
-    let configured = repository_manifest
+    let configured_counts = repository_manifest
         .repositories
         .iter()
         .filter(|definition| definition.enabled)
@@ -298,7 +322,19 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         &db_path,
         config.storage_root().join("catalogs"),
     );
+    let configured = conary_core::repository::supported_profiles::public_profiles()
+        .iter()
+        .filter_map(|profile| {
+            configured_counts
+                .get(profile.id())
+                .map(|count| (profile.id().to_string(), *count))
+        })
+        .collect::<Vec<_>>();
+    if configured.len() != configured_counts.len() {
+        bail!("configured public profile authority disagrees with the support contract");
+    }
     let profiles = inspect_deployment_profiles(&conn, &authority, &configured)?;
+    let candidates = inspect_deployment_candidates(&conn, &authority, &configured)?;
     let populated_profiles = profiles
         .iter()
         .filter(|profile| profile.packages > 0)
@@ -313,6 +349,15 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
             .checked_add(profile.converted_packages)
             .context("deployment converted package count overflow")
     })?;
+    let candidate_profiles = candidates
+        .iter()
+        .filter(|candidate| candidate.profile_revision_sha256.is_some())
+        .count();
+    let candidate_catalog_packages = candidates.iter().try_fold(0_u64, |total, candidate| {
+        total
+            .checked_add(candidate.packages)
+            .context("deployment candidate catalog package count overflow")
+    })?;
     let universe = inspect_active_universe(&conn, &profiles)?;
 
     Ok(DeploymentState {
@@ -322,16 +367,19 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         populated_profiles,
         catalog_packages,
         converted_packages,
+        candidate_profiles,
+        candidate_catalog_packages,
         signing_profiles,
         universe,
         profiles,
+        candidates,
     })
 }
 
 fn inspect_deployment_profiles(
     conn: &rusqlite::Connection,
     authority: &crate::server::catalog_authority::CatalogAuthority,
-    configured: &BTreeMap<String, usize>,
+    configured: &[(String, usize)],
 ) -> Result<Vec<DeploymentProfileState>> {
     let mut profiles = Vec::with_capacity(configured.len());
     for (profile, configured_sources) in configured {
@@ -375,6 +423,65 @@ fn inspect_deployment_profiles(
         });
     }
     Ok(profiles)
+}
+
+fn inspect_deployment_candidates(
+    conn: &rusqlite::Connection,
+    authority: &crate::server::catalog_authority::CatalogAuthority,
+    configured: &[(String, usize)],
+) -> Result<Vec<DeploymentCandidateState>> {
+    let mut candidates = Vec::with_capacity(configured.len());
+    for (profile, configured_sources) in configured {
+        let candidate = conary_core::repository::current_profile_sync_candidate(conn, profile)?;
+        let Some(candidate) = candidate else {
+            candidates.push(DeploymentCandidateState {
+                profile: profile.clone(),
+                configured_sources: *configured_sources,
+                profile_revision_sha256: None,
+                run_id: None,
+                completed_at: None,
+                packages: 0,
+            });
+            continue;
+        };
+        let selection = crate::server::catalog_authority::ProfileRevisionSelection {
+            source_profile: candidate.source_profile.clone(),
+            profile_revision_sha256: candidate.profile_revision_sha256.clone(),
+        };
+        let inspection = authority
+            .verify_selected_profile(&selection)
+            .with_context(|| format!("inspect private immutable profile '{profile}'"))?;
+        inspection
+            .manifest
+            .validate_member_contract()
+            .with_context(|| format!("validate private profile '{profile}' member contract"))?;
+        if inspection.manifest.members.len() != *configured_sources {
+            bail!(
+                "private profile '{profile}' does not match its exact configured source authority"
+            );
+        }
+        conary_core::db::models::verify_private_profile_candidate_authority(
+            conn,
+            profile,
+            &candidate.profile_revision_sha256,
+            &candidate.run_id,
+        )
+        .with_context(|| format!("verify private profile '{profile}' repository authority"))?;
+        if conary_core::repository::current_profile_sync_candidate(conn, profile)?.as_ref()
+            != Some(&candidate)
+        {
+            bail!("private profile '{profile}' changed during deployment inspection");
+        }
+        candidates.push(DeploymentCandidateState {
+            profile: profile.clone(),
+            configured_sources: *configured_sources,
+            profile_revision_sha256: Some(candidate.profile_revision_sha256),
+            run_id: Some(candidate.run_id),
+            completed_at: Some(candidate.completed_at),
+            packages: inspection.manifest.counts.packages,
+        });
+    }
+    Ok(candidates)
 }
 
 fn inspect_active_universe(

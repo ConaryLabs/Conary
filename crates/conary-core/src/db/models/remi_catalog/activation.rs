@@ -11,8 +11,8 @@ use crate::db::models::remi_catalog::validation::{
 };
 use crate::error::{Error, Result};
 #[cfg(test)]
-use rusqlite::{Connection, TransactionBehavior};
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::TransactionBehavior;
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 /// The exact proof required before moving a profile pointer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +75,23 @@ pub fn publish_profile_candidate_in_transaction(
 ) -> Result<RemiProfileActivationOutcome> {
     request.validate()?;
     activate_profile_revision_in_transaction(tx, request, now)
+}
+
+/// Re-prove that one private candidate still has its exact run members and
+/// current configured repository bindings, without advancing public state.
+pub fn verify_private_profile_candidate_authority(
+    conn: &Connection,
+    source_profile: &str,
+    profile_revision_sha256: &str,
+    run_id: &str,
+) -> Result<()> {
+    validate_identity(source_profile, "private candidate source profile")?;
+    validate_sha256(
+        profile_revision_sha256,
+        "private candidate profile revision SHA-256",
+    )?;
+    validate_uuid(run_id, "private candidate run ID")?;
+    verify_profile_run_members(conn, source_profile, profile_revision_sha256, run_id)
 }
 
 #[cfg(test)]
@@ -209,7 +226,12 @@ fn activate_profile_revision_in_transaction(
             request.source_profile, request.run_id
         )));
     }
-    verify_profile_run_members(tx, request)?;
+    verify_profile_run_members(
+        tx,
+        &request.source_profile,
+        &request.profile_revision_sha256,
+        &request.run_id,
+    )?;
 
     let current = RemiActiveProfileRevision::find_in_transaction(tx, &request.source_profile)?;
     if let Some(current) = current {
@@ -306,39 +328,41 @@ fn activate_profile_revision_in_transaction(
 }
 
 fn verify_profile_run_members(
-    tx: &Transaction<'_>,
-    request: &RemiProfileRevisionActivation,
+    conn: &Connection,
+    source_profile: &str,
+    profile_revision_sha256: &str,
+    run_id: &str,
 ) -> Result<()> {
-    let run_input_digest = tx.query_row(
+    let run_input_digest = conn.query_row(
         "SELECT input_profile_digest
          FROM repository_sync_runs
          WHERE run_id = ?1 AND source_profile = ?2",
-        params![&request.run_id, &request.source_profile],
+        params![run_id, source_profile],
         |row| row.get::<_, Option<String>>(0),
     )?;
-    let (profile_count, run_count): (i64, i64) = tx.query_row(
+    let (profile_count, run_count): (i64, i64) = conn.query_row(
         "SELECT
             (SELECT COUNT(*) FROM remi_profile_revision_members
              WHERE profile_revision_sha256 = ?1),
             (SELECT COUNT(*) FROM repository_sync_run_members WHERE run_id = ?2)",
-        params![&request.profile_revision_sha256, &request.run_id],
+        params![profile_revision_sha256, run_id],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     if profile_count == 0 || profile_count != run_count {
         return Err(Error::ConflictError(format!(
             "profile {} revision {} does not have the exact run member set",
-            request.source_profile, request.profile_revision_sha256
+            source_profile, profile_revision_sha256
         )));
     }
 
-    let mut statement = tx.prepare(
+    let mut statement = conn.prepare(
         "SELECT ordinal, repository_id, source_identity, repository_identity,
                 stream_kind, stream_identity, role, precedence, required,
                 input_source_snapshot_sha256, candidate_source_snapshot_sha256
          FROM repository_sync_run_members
          WHERE run_id = ?1 ORDER BY ordinal",
     )?;
-    let mut rows = statement.query([&request.run_id])?;
+    let mut rows = statement.query([run_id])?;
     let mut seen = 0_i64;
     while let Some(row) = rows.next()? {
         let ordinal = row.get::<_, i64>(0)?;
@@ -353,17 +377,17 @@ fn verify_profile_run_members(
         let input_source_snapshot = row.get::<_, Option<String>>(9)?;
         let candidate_source_snapshot = row.get::<_, Option<String>>(10)?;
 
-        let profile_member = tx
+        let profile_member = conn
             .query_row(
                 &format!("SELECT {MEMBER_COLUMNS} FROM remi_profile_revision_members WHERE profile_revision_sha256 = ?1 AND ordinal = ?2"),
-                params![&request.profile_revision_sha256, ordinal],
+                params![profile_revision_sha256, ordinal],
                 RemiProfileRevisionMember::from_row,
             )
             .optional()?;
         let Some(profile_member) = profile_member else {
             return Err(Error::ConflictError(format!(
                 "profile {} run {} is missing member ordinal {}",
-                request.source_profile, request.run_id, ordinal
+                source_profile, run_id, ordinal
             )));
         };
         if profile_member.source_identity != source_identity
@@ -378,12 +402,12 @@ fn verify_profile_run_members(
         {
             return Err(Error::ConflictError(format!(
                 "profile {} run {} member ordinal {} disagrees with candidate revision",
-                request.source_profile, request.run_id, ordinal
+                source_profile, run_id, ordinal
             )));
         }
 
         if let Some(input_digest) = run_input_digest.as_deref() {
-            let input_member = tx
+            let input_member = conn
                 .query_row(
                     &format!("SELECT {MEMBER_COLUMNS} FROM remi_profile_revision_members WHERE profile_revision_sha256 = ?1 AND repository_identity = ?2"),
                     params![input_digest, &repository_identity],
@@ -398,18 +422,18 @@ fn verify_profile_run_members(
                 _ => {
                     return Err(Error::ConflictError(format!(
                         "profile {} run {} member ordinal {} disagrees with input revision",
-                        request.source_profile, request.run_id, ordinal
+                        source_profile, run_id, ordinal
                     )));
                 }
             }
         } else if input_source_snapshot.is_some() {
             return Err(Error::ConflictError(format!(
                 "profile {} run {} carries an input source snapshot without an input profile",
-                request.source_profile, request.run_id
+                source_profile, run_id
             )));
         }
 
-        let repository = tx
+        let repository = conn
             .query_row(
                 "SELECT source_profile, repository_identity, profile_member_role,
                         profile_member_required, priority, enabled
@@ -438,10 +462,10 @@ fn verify_profile_run_members(
         else {
             return Err(Error::ConflictError(format!(
                 "profile {} run {} member ordinal {} references a missing repository",
-                request.source_profile, request.run_id, ordinal
+                source_profile, run_id, ordinal
             )));
         };
-        if repository_profile.as_deref() != Some(request.source_profile.as_str())
+        if repository_profile.as_deref() != Some(source_profile)
             || actual_repository_identity.as_deref() != Some(repository_identity.as_str())
             || actual_role.as_deref() != Some(role.as_str())
             || actual_required != required
@@ -450,8 +474,8 @@ fn verify_profile_run_members(
         {
             return Err(Error::ConflictError(format!(
                 "profile {} run {} member ordinal {} repository binding changed: expected identity={} role={} required={} precedence={} enabled=true, found profile={:?} identity={:?} role={:?} required={} precedence={} enabled={}",
-                request.source_profile,
-                request.run_id,
+                source_profile,
+                run_id,
                 ordinal,
                 repository_identity,
                 role,
@@ -470,7 +494,7 @@ fn verify_profile_run_members(
     if seen != profile_count {
         return Err(Error::ConflictError(format!(
             "profile {} run {} has noncanonical ordered members",
-            request.source_profile, request.run_id
+            source_profile, run_id
         )));
     }
     Ok(())

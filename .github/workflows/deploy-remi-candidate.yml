@@ -7,6 +7,13 @@ on:
         description: Exact commit already merged into main to deploy.
         required: true
         type: string
+      completion_mode:
+        description: Exact deployment state that this run must prove.
+        required: true
+        type: choice
+        options:
+          - private-candidates
+          - active-repopulation
 
 permissions:
   contents: read
@@ -72,6 +79,7 @@ jobs:
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
           REMI_MAX_CONCURRENT: 32
+          COMPLETION_MODE: ${{ github.event.inputs.completion_mode }}
         shell: bash
         run: |
           set -euo pipefail
@@ -79,6 +87,13 @@ jobs:
             echo "REMI_SSH_KEY is required" >&2
             exit 1
           }
+          case "$COMPLETION_MODE" in
+            private-candidates|active-repopulation) ;;
+            *)
+              echo "unsupported completion_mode: $COMPLETION_MODE" >&2
+              exit 1
+              ;;
+          esac
 
           target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
           mkdir -p ~/.ssh
@@ -100,33 +115,61 @@ jobs:
           scp $ssh_opts "$BUNDLE" "${target}:${remote_bundle}"
           scp $ssh_opts deploy/remi-repositories.toml "${target}:${remote_repositories}"
           ssh $ssh_opts "$target" bash -s \
-            "$VERSION" "$remote_bundle" "$remote_repositories" "$REMI_MAX_CONCURRENT" <<'REMOTE_EOF'
+            "$VERSION" "$remote_bundle" "$remote_repositories" "$REMI_MAX_CONCURRENT" \
+            "$COMPLETION_MODE" <<'REMOTE_EOF'
             set -euo pipefail
             sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$1" "$2" "$3" "$4"
+            case "$5" in
+              private-candidates)
+                requirement=--require-private-candidates
+                description="private profile candidates"
+                ;;
+              active-repopulation)
+                requirement=--require-repopulated
+                description="active profile universe and conversions"
+                ;;
+              *)
+                echo "unsupported completion mode: $5" >&2
+                exit 1
+                ;;
+            esac
             for attempt in $(seq 1 120); do
-              if sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi --require-repopulated; then
+              if sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi "$requirement"; then
                 exit 0
               fi
-              echo "Remi repopulation is still in progress (${attempt}/120)" >&2
+              echo "Remi ${description} are still incomplete (${attempt}/120)" >&2
               sleep 30
             done
             sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi
-            echo "Remi did not repopulate source and conversion state within one hour" >&2
+            echo "Remi did not complete ${description} within one hour" >&2
             exit 1
           REMOTE_EOF
-      - name: Verify public Remi readiness
+      - name: Verify the selected Remi completion contract
+        env:
+          COMPLETION_MODE: ${{ github.event.inputs.completion_mode }}
         shell: bash
         run: |
           set -euo pipefail
           curl -fsS https://remi.conary.io/health >/dev/null
-          body="$(curl -fsS --max-time 30 https://remi.conary.io/health/ready)"
-          echo "$body"
-          jq -e '.ready == true' <<<"$body" >/dev/null
+          if [[ "$COMPLETION_MODE" == "active-repopulation" ]]; then
+            body="$(curl -fsS --max-time 30 https://remi.conary.io/health/ready)"
+            echo "$body"
+            jq -e '.ready == true' <<<"$body" >/dev/null
+          else
+            ready_body="$(mktemp)"
+            trap 'rm -f "$ready_body"' EXIT
+            ready_status="$(curl -sS --max-time 30 -o "$ready_body" -w '%{http_code}' \
+              https://remi.conary.io/health/ready)"
+            [[ "$ready_status" == "200" || "$ready_status" == "503" ]]
+            jq -e '.ready | type == "boolean"' "$ready_body" >/dev/null
+            cat "$ready_body"
+          fi
       - name: Record exact candidate evidence
         env:
           CANDIDATE_SHA: ${{ github.event.inputs.commit_sha }}
           VERSION: ${{ steps.bundle.outputs.version }}
           BINARY_SHA256: ${{ steps.bundle.outputs.binary_sha256 }}
+          COMPLETION_MODE: ${{ github.event.inputs.completion_mode }}
         shell: bash
         run: |
           {
@@ -135,5 +178,6 @@ jobs:
             echo "- commit: \`$CANDIDATE_SHA\`"
             echo "- binary version: \`$VERSION\`"
             echo "- binary SHA-256: \`$BINARY_SHA256\`"
+            echo "- completion mode: \`$COMPLETION_MODE\`"
             echo "- release/tag created: no"
           } >> "$GITHUB_STEP_SUMMARY"

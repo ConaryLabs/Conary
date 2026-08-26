@@ -7,6 +7,7 @@ cd "$repo_root"
 workspace_manifest="Cargo.toml"
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
+candidate_deploy_workflow=".github/workflows/deploy-remi-candidate.yml"
 artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
 merge_workflow=".github/workflows/merge-validation.yml"
 pr_workflow=".github/workflows/pr-gate.yml"
@@ -381,6 +382,9 @@ require_job_match "$deploy_workflow" deploy-conary 'sha256sum -c SHA256SUMS[\s\S
 require_job_match "$deploy_workflow" prove-conary-release-artifacts 'needs: \[resolve, deploy-conary\][\s\S]*needs\.deploy-conary\.result == '\''success'\''[\s\S]*uses: \./\.github/workflows/release-artifact-proof\.yml[\s\S]*tag_name: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}' 'live Conary deployment must hand the serialized tag to published-artifact proof'
 require_job_match "$deploy_workflow" deploy-remi 'name: Deploy remi bundle[\s\S]*name: Verify remi health[\s\S]*curl -fsS https://remi\.conary\.io/health >/dev/null[\s\S]*name: Verify remi readiness[\s\S]*body=\$\(curl -fsS --max-time 30 https://remi\.conary\.io/health/ready\)[\s\S]*jq -e '\''\.ready == true'\''' 'exact post-deploy Remi liveness and structured readiness proof'
 require_job_match "$deploy_workflow" deploy-remi 'bundle_dir="source-artifacts/\$\{BUNDLE_NAME\}"[\s\S]*sha256sum -c SHA256SUMS[\s\S]*bundle="\$\{bundle_dir\}/remi-\$\{VERSION\}-linux-x64\.tar\.gz"' 'Remi deployment must verify the complete suite checksums before staging its bundle'
+require_match "$candidate_deploy_workflow" 'completion_mode:\n[[:space:]]+description: Exact deployment state that this run must prove\.\n[[:space:]]+required: true\n[[:space:]]+type: choice\n[[:space:]]+options:\n[[:space:]]+- private-candidates\n[[:space:]]+- active-repopulation' 'candidate deploy explicit typed completion mode'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'private-candidates\)[\s\S]*requirement=--require-private-candidates[\s\S]*active-repopulation\)[\s\S]*requirement=--require-repopulated[\s\S]*inspect-remi "\$requirement"' 'candidate deploy mode-specific typed inspection predicate'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'if \[\[ "\$COMPLETION_MODE" == "active-repopulation" \]\]; then[\s\S]*\.ready == true[\s\S]*ready_status=.*curl[\s\S]*"200" \|\| "\$ready_status" == "503"[\s\S]*\.ready \| type == "boolean"' 'candidate deploy mode-specific public readiness contract'
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'obsolete public verify URL'
 forbid_match "$deploy_workflow" '24273700060' 'retired one-time conaryd bootstrap exception'
 forbid_match "$deploy_workflow" 'deploy_asset_ref' 'retired bootstrap-only deploy asset ref'

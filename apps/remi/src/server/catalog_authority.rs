@@ -77,6 +77,12 @@ pub(crate) struct ActiveProfileInspection {
     pub(crate) manifest: ProfileRevisionV2,
 }
 
+/// Bounded, read-only facts about one exact durable immutable profile catalog.
+#[derive(Debug, Clone)]
+pub(crate) struct SelectedProfileInspection {
+    pub(crate) manifest: ProfileRevisionV2,
+}
+
 impl CatalogAuthority {
     /// Build an authority from explicit roots. This is useful for narrowly
     /// scoped owners and keeps path derivation in one place.
@@ -129,6 +135,27 @@ impl CatalogAuthority {
         Ok(ActiveProfileInspection {
             pointer,
             manifest: resolved.manifest,
+        })
+    }
+
+    /// Independently reopen one exact registered revision without granting it
+    /// active authority.
+    pub(crate) fn verify_selected_profile(
+        &self,
+        selection: &ProfileRevisionSelection,
+    ) -> Result<SelectedProfileInspection> {
+        let flags =
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(&self.db_path, flags).with_context(|| {
+            format!(
+                "open Remi operational database to inspect profile '{}' revision {}",
+                selection.source_profile, selection.profile_revision_sha256
+            )
+        })?;
+        let resolved = resolve_profile_selection(&conn, &self.catalog_dir, selection.clone())?;
+        let verified = open_resolved_profile(resolved)?;
+        Ok(SelectedProfileInspection {
+            manifest: verified.manifest().clone(),
         })
     }
 

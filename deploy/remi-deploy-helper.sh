@@ -21,7 +21,7 @@ usage:
   conary-remi-deploy deploy-site <site|web> <staging-dir>
   conary-remi-deploy publish-test-artifact <filename> <sha256> <staged-file>
   conary-remi-deploy install-helper <sha256> <helper>
-  conary-remi-deploy inspect-remi [--require-repopulated]
+  conary-remi-deploy inspect-remi [--require-private-candidates|--require-repopulated]
   conary-remi-deploy verify-access
 USAGE
     exit 2
@@ -430,7 +430,8 @@ install_helper() {
 
 inspect_remi() {
     local requirement="${1:-}"
-    [[ -z "$requirement" || "$requirement" == "--require-repopulated" ]] ||
+    [[ -z "$requirement" || "$requirement" == "--require-private-candidates" || \
+        "$requirement" == "--require-repopulated" ]] ||
         die "invalid inspect-remi option: $requirement"
     local bin
     bin="$(root_path /usr/local/bin/remi)"

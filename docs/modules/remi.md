@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-25
-revision: 65
-summary: Document complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+last_updated: 2026-08-26
+revision: 66
+summary: Document typed private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -288,12 +288,19 @@ backup, config, repository-manifest, or database mutation, and records the
 canonical root in transition-manifest schema 2. Rollback reads that typed root
 and acquires the same lock before restoring any target. The superseded manifest
 shape has no compatibility reader. Deployment inspection remains read-only
-evidence and never establishes quiescence or mutation ownership. Its
-population report is profile-scoped: it reads package counts from each active
-immutable profile manifest, counts only conversions pinned to that active
-revision, and requires the fresh signed universe to name the exact same
-ordered revision set. Retired mutable Remi package rows are not deployment
-evidence.
+evidence and never establishes quiescence or mutation ownership. It reports
+active and private-candidate state separately in canonical public-profile
+order. `--require-private-candidates` requires one exact current, durable,
+nonempty candidate for every public profile, reopens each strict immutable
+manifest and two-file bundle, validates its typed member contract, and
+re-proves its fenced run members against the current repository bindings. An
+active-only profile, superseded run, candidate-tier profile, changed binding,
+missing bundle, or empty catalog cannot satisfy that predicate.
+`--require-repopulated` remains the post-promotion contract: it reads package
+counts from each active immutable profile manifest, counts only conversions
+pinned to that active revision, and requires the fresh signed universe to name
+the exact same ordered revision set. Retired mutable Remi package rows are not
+deployment evidence, and neither predicate grants publication authority.
 
 `apps/remi/src/server/publication_scheduler.rs` owns startup publication order
 and both periodic clocks; one process-local publication coordinator also

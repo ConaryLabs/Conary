@@ -273,6 +273,7 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/scripts/release-matrix.sh" "$repo/scripts/release-matrix.sh"
     cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
+    cp "$REPO_ROOT/.github/workflows/deploy-remi-candidate.yml" "$repo/.github/workflows/deploy-remi-candidate.yml"
     cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
     cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
@@ -1077,6 +1078,45 @@ test_check_release_matrix_rejects_rehearsal_artifact_promotion() {
     assert_check_release_matrix_fails "$repo" "manual deployment must not promote rehearsal artifacts"
 }
 
+test_check_release_matrix_rejects_ambiguous_candidate_completion_mode() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '          - private-candidates' \
+        '          - candidate-ish'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy explicit typed completion mode"
+}
+
+test_check_release_matrix_rejects_wrong_candidate_inspection_predicate() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '                requirement=--require-private-candidates' \
+        '                requirement=--require-repopulated'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy mode-specific typed inspection predicate"
+}
+
+test_check_release_matrix_rejects_private_mode_public_readiness_claim() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '          if [[ "$COMPLETION_MODE" == "active-repopulation" ]]; then' \
+        '          if true; then'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy mode-specific public readiness contract"
+}
+
 test_check_release_matrix_rejects_unverified_remi_suite_bundle() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1514,6 +1554,9 @@ main() {
         test_check_release_matrix_rejects_mutable_artifact_proof
         test_check_release_matrix_rejects_moving_artifact_proof_toolchain
         test_check_release_matrix_rejects_rehearsal_artifact_promotion
+        test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
+        test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
+        test_check_release_matrix_rejects_private_mode_public_readiness_claim
         test_check_release_matrix_rejects_unverified_remi_suite_bundle
         test_check_release_matrix_rejects_merge_validation_production_probes
         test_check_release_matrix_rejects_missing_post_deploy_remi_readiness
