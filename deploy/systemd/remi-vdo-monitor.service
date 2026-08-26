@@ -1,0 +1,7 @@
+[Unit]
+Description=Check authoritative Remi VDO physical usage
+ConditionPathExists=/dev/vgdata/data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/remi-vdo-monitor
