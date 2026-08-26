@@ -72,11 +72,13 @@ test -x /root/.oldroot/nfs/install/installimage
 ```
 
 Copy `deploy/hetzner/remi-installimage.conf` to
-`/root/.oldroot/nfs/install/configs/remi-ubuntu-2604`, compare it byte-for-byte
-with the reviewed source, and run:
+`/root/remi-ubuntu-2604.conf`, compare it byte-for-byte with the reviewed
+source, and pass that absolute path to installimage. Hetzner's shared
+`install/configs` directory is read-only; `-c` accepts an absolute local path.
+Run:
 
 ```bash
-/root/.oldroot/nfs/install/installimage -a -c remi-ubuntu-2604
+/root/.oldroot/nfs/install/installimage -a -c /root/remi-ubuntu-2604.conf
 ```
 
 The fixed-size partition declarations deliberately leave the tail of each disk
