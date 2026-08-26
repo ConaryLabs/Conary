@@ -285,7 +285,11 @@ manager so the idempotent upstream bootstrap runs at every boot:
 ```bash
 runtime_dir="/run/user/$(id -u dev)"
 sudo install -d -o dev -g dev -m 0755 \
-  /data/dev/home/.config/systemd/user/default.target.wants
+  /data/dev/home/.config/systemd/user/default.target.wants \
+  /data/dev/home/.local/libexec
+sudo install -o dev -g dev -m 0755 \
+  deploy/hetzner/codex-app-server-reconcile.sh \
+  /data/dev/home/.local/libexec/codex-app-server-reconcile
 sudo install -o dev -g dev -m 0644 \
   deploy/systemd/codex-app-server-bootstrap.service \
   /data/dev/home/.config/systemd/user/codex-app-server-bootstrap.service
@@ -293,6 +297,20 @@ sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user daemon-reload
 sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" \
   systemctl --user enable --now codex-app-server-bootstrap.service
 ```
+
+The preflight reconciles PID records left across a host reboot against both the
+live PID and its recorded process start time. It removes only stale records,
+preserves matching live processes, and rejects malformed state rather than
+guessing. This is required because Codex 0.149.1 otherwise fails bootstrap on a
+previous-boot PID record instead of repairing it. The unit retries after a
+failed reconciliation/start so a process-exit race cannot strand Remote
+Control until the next reboot.
+
+The upstream defect and deterministic reboot evidence are tracked in
+[`openai/codex#35295`](https://github.com/openai/codex/issues/35295). Remove the
+preflight only after the installed Codex release reconciles both absent and
+start-time-mismatched PID records itself and that behavior passes the reboot
+gate.
 
 `loginctl enable-linger dev` is part of the baseline above and is required for
 the user manager to start without an interactive login. After a host reboot,

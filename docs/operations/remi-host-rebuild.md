@@ -153,9 +153,11 @@ It owns the single-account tmux entrypoints for the clean Conary, Nomos, and
 The Mortal Estate checkouts; do not recreate project-specific login users
 merely to recover their old session names.
 
-Enable `deploy/systemd/codex-app-server-bootstrap.service` in `dev`'s lingering
-user manager after Codex authentication. Its boot-time upstream bootstrap is
-the authority for restoring the pid-backed app-server, updater, and Remote
+Install `deploy/hetzner/codex-app-server-reconcile.sh` as
+`dev`'s `~/.local/libexec/codex-app-server-reconcile`, then enable
+`deploy/systemd/codex-app-server-bootstrap.service` in `dev`'s lingering user
+manager after Codex authentication. Its boot-time stale-PID reconciliation and
+upstream bootstrap restore the pid-backed app-server, updater, and Remote
 connection after a host reboot.
 
 After full-scope Claude authentication, accept the interactive workspace-trust
