@@ -272,7 +272,8 @@ mod tests {
              ('newer', 'fedora-44', 2, 'abandoned', 20, 21, 22,
               'publishing', 'internal',
               'failed at /conary/private https://user:pass@example.invalid/source \
-Bearer abc.def /home/dev/.ssh/id_ed25519 TOKEN=secret')",
+https://second:secret@example.invalid/source Bearer abc.def \
+/home/dev/.ssh/id_ed25519 TOKEN=secret TOKEN=second')",
             [],
         )
         .unwrap();
@@ -299,9 +300,11 @@ Bearer abc.def /home/dev/.ssh/id_ed25519 TOKEN=secret')",
         let diagnostic = state.failure_diagnostic.unwrap();
         assert!(!diagnostic.contains("/conary/private"));
         assert!(!diagnostic.contains("user:pass"));
+        assert!(!diagnostic.contains("second:secret"));
         assert!(!diagnostic.contains("abc.def"));
         assert!(!diagnostic.contains("id_ed25519"));
         assert!(!diagnostic.contains("secret"));
+        assert!(!diagnostic.contains("TOKEN=second"));
         assert!(diagnostic.contains("[REDACTED-PATH]"));
         assert!(diagnostic.contains("https://[REDACTED]@example.invalid/source"));
         assert!(diagnostic.contains("Bearer [REDACTED]"));
