@@ -309,6 +309,39 @@ client. The rpm-rs fork remains a pinned Conary dependency while its upstream
 work is pending, but it is not a Remi development project or persistent
 checkout.
 
+Claude Code Remote Control is directory-scoped rather than backed by a global
+project registry. Authenticate `dev` with a full-scope `claude.ai` subscription
+login, then run `claude` interactively once in each project root to accept the
+workspace trust gate. Install the tracked template and enable one named server
+instance per supported project:
+
+```bash
+runtime_dir="/run/user/$(id -u dev)"
+sudo install -d -o dev -g dev -m 0755 \
+  /data/dev/home/.config/systemd/user/default.target.wants
+sudo install -o dev -g dev -m 0644 \
+  deploy/systemd/claude-remote-control@.service \
+  /data/dev/home/.config/systemd/user/claude-remote-control@.service
+sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user daemon-reload
+sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user enable --now \
+  claude-remote-control@Conary.service \
+  claude-remote-control@nomos.service \
+  claude-remote-control@the-mortal-estate.service
+```
+
+Each instance uses Claude's worktree spawn mode so concurrent on-demand
+sessions do not edit the same checkout, with a four-session capacity per
+project. The pre-created session remains in the clean project root. Verify all
+three services are active and that `Remi Conary`, `Remi nomos`, and
+`Remi the-mortal-estate` appear in `claude.ai/code` before treating the remote
+workbench as recovered.
+
+Native Claude Code installations download updates in the background, but a new
+version takes effect only when the process next starts. A host reboot starts the
+template instances from the current binary. To apply an update sooner, finish
+or detach active Remote Control work and explicitly restart the three service
+instances; do not interrupt active sessions from an automatic update hook.
+
 The durable interactive entry point is a `dev` wrapper in
 `/data/dev/home/.local/bin/dev`. It should attach to a selected project tmux
 session under `/data/dev/src`, creating the session when absent.

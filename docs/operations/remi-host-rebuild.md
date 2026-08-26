@@ -158,6 +158,12 @@ user manager after Codex authentication. Its boot-time upstream bootstrap is
 the authority for restoring the pid-backed app-server, updater, and Remote
 connection after a host reboot.
 
+After full-scope Claude authentication and one interactive workspace-trust
+acceptance in each supported project, enable the Conary, Nomos, and The Mortal
+Estate instances of `deploy/systemd/claude-remote-control@.service`. Each
+directory-scoped server uses isolated worktree spawning and is restored by
+`dev`'s lingering user manager after a host reboot.
+
 Disable password SSH authentication and direct root SSH after verifying a fresh
 `peter` login and `sudo -n true`. Verify `dev` through a fresh login rather than
 only through `sudo -u dev`.
