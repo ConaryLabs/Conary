@@ -487,9 +487,24 @@ jobs:
             head_ref="${GITHUB_SHA}"
           fi
 
-          report=$(gh api \
-            -H "Accept: application/vnd.github+json" \
-            "repos/${GITHUB_REPOSITORY}/dependency-graph/compare/${base_ref}...${head_ref}")
+          error_log="$(mktemp)"
+          trap 'rm -f "$error_log"' EXIT
+          report=""
+          for attempt in 1 2 3 4; do
+            if report="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/dependency-graph/compare/${base_ref}...${head_ref}" \
+              2>"$error_log")"; then
+              break
+            fi
+            if (( attempt == 4 )); then
+              echo "Dependency review could not obtain its authoritative report:" >&2
+              cat "$error_log" >&2
+              exit 1
+            fi
+            echo "Dependency review API request failed (${attempt}/4); retrying" >&2
+            sleep "$((attempt * 5))"
+          done
 
           violations=$(jq '
             [

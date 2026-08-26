@@ -1276,6 +1276,17 @@ test_check_release_matrix_requires_rpm_parity_completion_budget() {
     done
 }
 
+test_check_release_matrix_requires_bounded_dependency_review_retry() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/pr-gate.yml" \
+        '          for attempt in 1 2 3 4; do' \
+        '          for attempt in 1; do'
+
+    assert_check_release_matrix_fails "$repo" "dependency review API retry"
+}
+
 test_check_release_matrix_requires_hosted_debian_parity_producer() {
     local repo
     local workflow
@@ -1609,6 +1620,7 @@ main() {
         test_check_release_matrix_requires_resilient_alpm_archive_downloads
         test_check_release_matrix_requires_hosted_rpm_parity_producer
         test_check_release_matrix_requires_rpm_parity_completion_budget
+        test_check_release_matrix_requires_bounded_dependency_review_retry
         test_check_release_matrix_requires_hosted_debian_parity_producer
         test_check_release_matrix_requires_hosted_debian_resolution_binary
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
