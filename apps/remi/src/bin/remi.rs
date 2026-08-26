@@ -3,6 +3,8 @@
 
 #[path = "remi/deployment_command.rs"]
 mod deployment_command;
+#[path = "remi/native_oracle_input_command.rs"]
+mod native_oracle_input_command;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
@@ -42,6 +44,8 @@ enum Command {
     PromotionActivate(PromotionActivateArgs),
     /// Produce complete Conary resolution and final promotion evidence.
     PromotionProve(PromotionProveArgs),
+    /// Materialize exact native metadata for the ordered private candidates.
+    NativeOracleInput(native_oracle_input_command::CommandArgs),
     /// Record reproducible conversion latency and work evidence.
     ConversionBenchmark(ConversionBenchmarkArgs),
     /// Remi-owned trust admin commands.
@@ -387,6 +391,7 @@ fn main() {
         Some(Command::ConversionCrawl(args)) => run_conversion_crawl_command(args),
         Some(Command::PromotionActivate(args)) => run_promotion_activate_command(args),
         Some(Command::PromotionProve(args)) => run_promotion_prove_command(args),
+        Some(Command::NativeOracleInput(args)) => native_oracle_input_command::run(args),
         Some(Command::ConversionBenchmark(args)) => run_conversion_benchmark_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
         Some(Command::Deployment { command }) => deployment_command::run(command),
@@ -682,7 +687,9 @@ fn parse_profile_value(value: &str) -> std::result::Result<ProfileValueBinding, 
     })
 }
 
-fn parse_candidate(value: &str) -> std::result::Result<ProfileRevisionSelection, String> {
+pub(crate) fn parse_candidate(
+    value: &str,
+) -> std::result::Result<ProfileRevisionSelection, String> {
     let (source_profile, profile_revision_sha256) = value
         .split_once('=')
         .ok_or_else(|| "candidate must be PROFILE=SHA256".to_string())?;

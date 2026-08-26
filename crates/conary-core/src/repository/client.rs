@@ -710,7 +710,10 @@ impl RepositoryClient {
     }
 
     /// Download while hashing and reject a stream larger than its authority.
-    pub(crate) async fn download_file_with_identity_limit(
+    ///
+    /// Callers that already hold an exact metadata-object size use this before
+    /// comparing the returned digest and size with that typed authority.
+    pub async fn download_file_with_identity_limit(
         &self,
         url: &str,
         dest_path: &Path,

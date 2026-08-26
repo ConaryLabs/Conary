@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-26
-revision: 31
-summary: Non-secret infrastructure, agent operations, release and typed Remi deployment completion, and current remote development tooling
+revision: 32
+summary: Non-secret infrastructure, agent operations, release, typed Remi deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -139,6 +139,15 @@ workflow.
   every current revision. Mutable `repository_packages` rows are not evidence
   for either mode; dispatch or a green liveness probe alone is not deployment
   proof.
+- Exact production native-oracle inputs use the root-owned helper operation
+  `export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256>
+  <arch-sha256>`. The helper fixes canonical public-profile order, invokes the
+  typed `remi native-oracle-input` command as the service user, retains the
+  durable independently reopened directory below
+  `/conary/evidence/native-oracle-inputs/`, and stages a mode-0600 transport tar
+  under `/tmp` for the authenticated caller. It grants no generic path,
+  candidate-tier profile, native comparison, conversion, proof, activation, or
+  pointer-mutation authority.
 - Production R2 inventory and backfill use the manually dispatched
   `remi-r2-durability` workflow after its exact `commit_sha` is merged into
   `main` and deployed. The protected job enters through the normal Remi SSH

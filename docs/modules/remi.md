@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-26
-revision: 66
-summary: Document typed private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 67
+summary: Document exact private-candidate native-oracle input materialization, typed private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -401,6 +401,42 @@ not create a replacement universe bundle, and preserves the prior active
 pointer. This gate is structurally bounded to one verified reader per public
 profile plus scalar implementation facts; it does not materialize a
 distribution-sized package-name set.
+
+### Native Oracle Input Materialization
+
+`remi native-oracle-input` is the read-only handoff from exact production
+private candidates to the pinned native package-manager producers. It requires
+exact `PROFILE=SHA256` bindings in canonical Fedora 44, Ubuntu 26.04, and Arch
+order. Before network or output mutation it reproves each current fenced run,
+opens a durable reader pin on every exact immutable profile, and independently
+reopens every ordered source snapshot catalog. Active-only revisions,
+candidate-tier Solus, missing or reordered profiles, and noncanonical digests
+fail closed.
+
+Refresh intentionally retains normalized immutable source catalogs rather than
+the parser's temporary native metadata files. The materializer therefore
+resolves each authenticated object from its `SourceSnapshotV1` HTTPS authority,
+streams no more than the declared size, and requires the exact SHA-256 and size.
+`NativeOracleInputSetV1` schema 1 binds the complete profile revisions, ordered
+source manifests, and digest-sorted deduplicated object inventory. Its atomic
+directory contains canonical `manifest.json` and exact digest-named files under
+`objects/`. The independent reopener rejects unknown or missing entries,
+symlinks, noncanonical JSON, size drift, and byte tamper. A final fenced
+candidate recheck must match the initial candidate records before success.
+
+This bundle supplies input bytes only. It does not produce or compare
+`NativeParityOracleV1` or `NativeResolutionOracleV1`, run conversion, or grant
+publication authority.
+
+```text
+remi native-oracle-input \
+  --db /conary/metadata/conary.db \
+  --catalog-dir /conary/catalogs \
+  --candidate fedora-44=<profile-revision-sha256> \
+  --candidate ubuntu-26.04=<profile-revision-sha256> \
+  --candidate arch=<profile-revision-sha256> \
+  --output-dir /conary/evidence/native-oracle-inputs/<new-export-id>
+```
 
 ### Native Full-Catalog Parity Artifact
 

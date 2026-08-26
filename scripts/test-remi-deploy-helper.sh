@@ -126,6 +126,27 @@ if [[ "\${1:-}" == "deployment" && "\${2:-}" == "inspect" ]]; then
     printf '%s\n' "\${args[@]}" >"\${config}.inspect-args"
     exit 0
 fi
+if [[ "\${1:-}" == "native-oracle-input" ]]; then
+    shift
+    output_dir=""
+    args=("\$@")
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in
+            --output-dir)
+                output_dir="\$2"
+                shift 2
+                ;;
+            *)
+                shift
+                [[ \$# -gt 0 ]] && shift
+                ;;
+        esac
+    done
+    [[ -n "\$output_dir" && ! -e "\$output_dir" ]]
+    mkdir "\$output_dir"
+    printf '%s\n' "\${args[@]}" >"\${output_dir}/command-args"
+    exit 0
+fi
 exit 2
 EOF
     chmod 0755 "$candidate"
@@ -399,6 +420,43 @@ test_deploy_remi_rejects_malformed_authority_root() {
     test ! -e "$fake_root/usr/local/bin/remi"
 }
 
+test_export_native_oracle_inputs_uses_exact_public_candidates() {
+    local fake_root="${tmpdir}/root-native-input"
+    local bundle="${tmpdir}/remi-native-input.tar.gz"
+    local repositories="${tmpdir}/repositories-native-input.toml"
+    local export_id="slice6-$$"
+    local fedora_sha ubuntu_sha arch_sha transport unpacked
+    fedora_sha="$(printf 'a%.0s' {1..64})"
+    ubuntu_sha="$(printf 'b%.0s' {1..64})"
+    arch_sha="$(printf 'c%.0s' {1..64})"
+    transport="/tmp/remi-native-oracle-input-${export_id}.tar"
+    unpacked="${tmpdir}/native-input-unpacked"
+    write_config "$fake_root"
+    mkdir -p "$fake_root/usr/local/bin"
+    make_fake_remi_bundle "$bundle" 0.8.0
+    printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
+    run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+
+    run_helper "$fake_root" export-native-oracle-inputs \
+        "$export_id" "$fedora_sha" "$ubuntu_sha" "$arch_sha"
+    test -f "$transport"
+    mkdir "$unpacked"
+    tar -xf "$transport" -C "$unpacked"
+    grep -Fx -- "fedora-44=${fedora_sha}" \
+        "$unpacked/$export_id/command-args" >/dev/null
+    grep -Fx -- "ubuntu-26.04=${ubuntu_sha}" \
+        "$unpacked/$export_id/command-args" >/dev/null
+    grep -Fx -- "arch=${arch_sha}" \
+        "$unpacked/$export_id/command-args" >/dev/null
+    expect_fail "repeated native-oracle export" \
+        run_helper "$fake_root" export-native-oracle-inputs \
+        "$export_id" "$fedora_sha" "$ubuntu_sha" "$arch_sha"
+    expect_fail "uppercase native-oracle candidate digest" \
+        run_helper "$fake_root" export-native-oracle-inputs \
+        "${export_id}-upper" "${fedora_sha^^}" "$ubuntu_sha" "$arch_sha"
+    rm -f "$transport"
+}
+
 test_install_helper_requires_exact_digest() {
     local fake_root="${tmpdir}/root-helper"
     local staged="${tmpdir}/staged-helper"
@@ -430,6 +488,7 @@ main() {
     test_publish_test_artifact_rejects_unverified_or_mutating_inputs
     test_deploy_remi_uses_candidate_owned_transition
     test_deploy_remi_rejects_malformed_authority_root
+    test_export_native_oracle_inputs_uses_exact_public_candidates
     test_install_helper_requires_exact_digest
 
     echo "remi deploy helper smoke passed"
