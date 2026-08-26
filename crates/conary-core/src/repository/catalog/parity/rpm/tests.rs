@@ -274,7 +274,7 @@ fn fixture(
     </rpm:requires>
     <rpm:recommends><rpm:entry name="recommended"/></rpm:recommends>
     <rpm:suggests><rpm:entry name="suggested"/></rpm:suggests>
-    <rpm:supplements><rpm:entry name="(alpha if desktop)"/></rpm:supplements>
+    <rpm:supplements><rpm:entry name="(alpha unless desktop)"/></rpm:supplements>
     <rpm:enhances><rpm:entry name="enhanced"/></rpm:enhances>
     <rpm:conflicts><rpm:entry name="old-alpha" flags="LT" epoch="0" ver="1" rel="0"/></rpm:conflicts>
     <rpm:obsoletes><rpm:entry name="older-alpha"/></rpm:obsoletes>
