@@ -257,6 +257,7 @@ fn repopulation_requires_current_conversions_and_the_matching_signed_universe() 
             run_id: None,
             completed_at: None,
             packages: 0,
+            latest_refresh: None,
         }],
     };
 
@@ -296,6 +297,7 @@ fn private_candidate_completion_rejects_active_only_and_empty_catalogs() {
             run_id: None,
             completed_at: None,
             packages: 0,
+            latest_refresh: None,
         }],
     };
 
