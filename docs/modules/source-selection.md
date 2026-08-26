@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-23
-revision: 51
+last_updated: 2026-08-26
+revision: 52
 summary: Document typed profile support tiers and complete membership, signed Remi universe and canonical-map authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
@@ -422,10 +422,14 @@ together.
 
 `crates/conary-core/src/repository/parsers/{debian,fedora,arch}.rs` owns the
 three metadata chains. Fedora metalink identity parsing is isolated in
-`parsers/fedora/metalink.rs`. `repository/download.rs` owns the terminal
-package checks. Missing keys, a missing required signature, an unsupported
-hash, duplicate authority records, invalid certification thresholds, or any
-identity mismatch fail closed and remove a partially downloaded package.
+`parsers/fedora/metalink.rs`. It admits the current size and SHA-256 only from
+their exact Metalink v3 namespace positions under the one `repomd.xml` file;
+the typed MirrorManager `alternates` extension is historical evidence and
+cannot establish or replace current authority. `repository/download.rs` owns
+the terminal package checks. Missing keys, a missing required signature, an
+unsupported hash, duplicate authority records, invalid certification
+thresholds, or any identity mismatch fail closed and remove a partially
+downloaded package.
 
 The Arch repository parser and direct package parser share
 `repository/package_relation.rs` as the ALPM relation authority. Runtime
