@@ -301,10 +301,29 @@ fn require_public_snapshot(source: &SourceSnapshotV1) -> Result<()> {
 
 fn reject_host_local_strings(value: &serde_json::Value) -> Result<()> {
     match value {
-        serde_json::Value::String(value) => ensure!(
-            !value.starts_with('/') && !value.starts_with("file://"),
-            "native-oracle input manifest contains a host-local path"
-        ),
+        serde_json::Value::String(value) => {
+            ensure!(
+                !value.starts_with('/') && !value.starts_with("file://"),
+                "native-oracle input manifest contains a host-local path"
+            );
+            if value.contains("://") {
+                let url = Url::parse(value)
+                    .context("parse native-oracle input manifest URL for sanitation")?;
+                let public_domain = matches!(
+                    url.host(),
+                    Some(url::Host::Domain(domain))
+                        if !domain.eq_ignore_ascii_case("localhost")
+                            && !domain.to_ascii_lowercase().ends_with(".localhost")
+                );
+                ensure!(
+                    url.scheme() == "https"
+                        && public_domain
+                        && url.username().is_empty()
+                        && url.password().is_none(),
+                    "native-oracle input manifest contains a non-public or credential-bearing URL"
+                );
+            }
+        }
         serde_json::Value::Array(values) => {
             for value in values {
                 reject_host_local_strings(value)?;

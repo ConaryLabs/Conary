@@ -152,6 +152,36 @@ fn solus_and_noncanonical_digests_cannot_enter_candidate_set() {
     );
 }
 
+#[test]
+fn serialized_source_authority_must_be_public_and_credential_free() {
+    let manifest = valid_manifest();
+    let mut source = manifest.profiles[0].sources[0].clone();
+    source.provenance.content_url = Some("http://packages.example.test/content".to_string());
+    assert!(
+        require_public_snapshot(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("non-public or credential-bearing URL")
+    );
+
+    source.provenance.content_url =
+        Some("https://operator:secret@packages.example.test/content".to_string());
+    assert!(
+        require_public_snapshot(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("non-public or credential-bearing URL")
+    );
+
+    source.provenance.content_url = Some("https://127.0.0.1/content".to_string());
+    assert!(
+        require_public_snapshot(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("non-public or credential-bearing URL")
+    );
+}
+
 #[tokio::test]
 async fn publisher_bounds_download_and_reopens_persisted_bytes() {
     let temp = tempfile::tempdir().unwrap();
