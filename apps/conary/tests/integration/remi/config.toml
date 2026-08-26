@@ -134,11 +134,11 @@ identity_packages = [
 ]
 repository_declarations = [
     { path = "/etc/zypp/repos.d/repo-debug.repo", sha256 = "a634cb148a3e870c6fa86735e41ce36ae9be7970c73c3a8d14cec1a9e7093865", fingerprints = [] },
-    { path = "/etc/zypp/repos.d/repo-non-oss.repo", sha256 = "593619efa17fb8b0e69bdb3f5000327faa92e91d104ef741b14e2991003e6ebc", fingerprints = [] },
-    { path = "/etc/zypp/repos.d/repo-openh264.repo", sha256 = "76c43eb1357746bf9214c4101c49db437b394b245103d90e1b97ccb4a5320ebd", fingerprints = [] },
-    { path = "/etc/zypp/repos.d/repo-oss.repo", sha256 = "2530d649a42c140f7ec0d16edb4538494d66de01ad3eabe2f884ac08eb928f2c", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-non-oss.repo", sha256 = "7f49b5b18873f4b12e734454a1e1abee47790b8dc06b7fa7e3dd0fda7212da80", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-openh264.repo", sha256 = "bf901fbf5492544bc22f008a4e2589c71cd575bf06733e3a89dd7c9bac1a062b", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-oss.repo", sha256 = "0e3bd029ed70e151e4c9240c21f608b8fb3c56f5a128883b5592cb21e48c8392", fingerprints = [] },
     { path = "/etc/zypp/repos.d/repo-source.repo", sha256 = "2dddf51cd4a794237599512cbf33c522e9a86c5248660e02f0f7a5b9f5962e98", fingerprints = [] },
-    { path = "/etc/zypp/repos.d/repo-update.repo", sha256 = "d3bbf288d0abee4e53c20514ba0c61d1f42d512d5c49fd6878a13cd52b734277", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-update.repo", sha256 = "570792fd9fd4e19400501a100cf31352f05f0d593981034e6d5597d02247b53a", fingerprints = [] },
 ]
 signing_roots = [
     { path = "/usr/lib/rpm/gnupg/keys/gpg-pubkey-09d9ea69-68595a8c.asc", sha256 = "dece9365f3c78139c0aa6df9c263db2fe7898526162af8d1c1a68cd46136d30c", fingerprints = ["1C59D66FCD52563A16933DBCFEC28EAF09D9EA69"] },

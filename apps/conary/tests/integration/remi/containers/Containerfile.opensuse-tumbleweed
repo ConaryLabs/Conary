@@ -6,11 +6,23 @@ FROM ${BASE_IMAGE}
 
 ARG INSTALL_MODE=binary
 
-RUN cp -a /etc/zypp/repos.d /tmp/zypp-repos.d.pinned \
+RUN sed -i \
+        's#^baseurl=http://download.opensuse.org/tumbleweed/repo/non-oss/$#baseurl=https://downloadcontent.opensuse.org/history/20260821/tumbleweed/repo/non-oss/#' \
+        /etc/zypp/repos.d/repo-non-oss.repo \
     && sed -i \
-        -e 's#http://download.opensuse.org/#https://downloadcontent.opensuse.org/#g' \
-        -e 's#https://download.opensuse.org/#https://downloadcontent.opensuse.org/#g' \
-        /etc/zypp/repos.d/*.repo \
+        's#^baseurl=http://download.opensuse.org/tumbleweed/repo/oss/$#baseurl=https://downloadcontent.opensuse.org/history/20260821/tumbleweed/repo/oss/#' \
+        /etc/zypp/repos.d/repo-oss.repo \
+    && sed -i 's/^enabled=1$/enabled=0/' \
+        /etc/zypp/repos.d/repo-openh264.repo \
+        /etc/zypp/repos.d/repo-update.repo \
+    && grep -Fx \
+        'baseurl=https://downloadcontent.opensuse.org/history/20260821/tumbleweed/repo/non-oss/' \
+        /etc/zypp/repos.d/repo-non-oss.repo \
+    && grep -Fx \
+        'baseurl=https://downloadcontent.opensuse.org/history/20260821/tumbleweed/repo/oss/' \
+        /etc/zypp/repos.d/repo-oss.repo \
+    && grep -Fx 'enabled=0' /etc/zypp/repos.d/repo-openh264.repo \
+    && grep -Fx 'enabled=0' /etc/zypp/repos.d/repo-update.repo \
     && zypper --non-interactive install --no-recommends \
         ca-certificates \
         diffutils \
@@ -20,9 +32,7 @@ RUN cp -a /etc/zypp/repos.d /tmp/zypp-repos.d.pinned \
         python3 \
         shadow \
         sqlite3 \
-    && zypper clean --all \
-    && cp -a /tmp/zypp-repos.d.pinned/. /etc/zypp/repos.d/ \
-    && rm -rf /tmp/zypp-repos.d.pinned
+    && zypper clean --all
 
 COPY conary* /tmp/install/
 

@@ -156,24 +156,64 @@ fn rolling_takeover_helper_uses_typed_configuration_not_distro_names() {
 }
 
 #[test]
-fn tumbleweed_image_build_avoids_mirror_skew_without_rewriting_repository_authority() {
+fn tumbleweed_image_and_enabled_repositories_share_one_snapshot() {
+    let config = shipped_config();
+    let root = config.distros["opensuse-tumbleweed"]
+        .target_root
+        .as_ref()
+        .expect("Tumbleweed target root");
     let path = integration_root().join("containers/Containerfile.opensuse-tumbleweed");
     let source = std::fs::read_to_string(&path).expect("read Tumbleweed Containerfile");
-    let backup = source
-        .find("cp -a /etc/zypp/repos.d /tmp/zypp-repos.d.pinned")
-        .expect("repository declaration backup");
-    let origin = source
-        .find("https://downloadcontent.opensuse.org/")
-        .expect("official openSUSE origin");
+    let snapshot = format!(
+        "https://downloadcontent.opensuse.org/history/{}/tumbleweed/repo/",
+        root.expected_os_release.version_id
+    );
+    let non_oss = source
+        .find(&format!("{snapshot}non-oss/"))
+        .expect("release-matched non-OSS snapshot");
+    let oss = source
+        .find(&format!("{snapshot}oss/"))
+        .expect("release-matched OSS snapshot");
+    let disable_openh264 = source
+        .find("/etc/zypp/repos.d/repo-openh264.repo")
+        .expect("OpenH264 disablement");
+    let disable_update = source
+        .find("/etc/zypp/repos.d/repo-update.repo")
+        .expect("Update disablement");
     let install = source
         .find("zypper --non-interactive install --no-recommends")
         .expect("build dependency transaction");
-    let restore = source
-        .find("cp -a /tmp/zypp-repos.d.pinned/. /etc/zypp/repos.d/")
-        .expect("repository declaration restoration");
 
-    assert!(backup < origin && origin < install && install < restore);
-    assert!(source[restore..].contains("rm -rf /tmp/zypp-repos.d.pinned"));
+    assert!(non_oss < install && oss < install);
+    assert!(disable_openh264 < install && disable_update < install);
+    assert!(!source.contains("/tmp/zypp-repos.d.pinned"));
+
+    let expected_declarations = [
+        (
+            "/etc/zypp/repos.d/repo-non-oss.repo",
+            "7f49b5b18873f4b12e734454a1e1abee47790b8dc06b7fa7e3dd0fda7212da80",
+        ),
+        (
+            "/etc/zypp/repos.d/repo-openh264.repo",
+            "bf901fbf5492544bc22f008a4e2589c71cd575bf06733e3a89dd7c9bac1a062b",
+        ),
+        (
+            "/etc/zypp/repos.d/repo-oss.repo",
+            "0e3bd029ed70e151e4c9240c21f608b8fb3c56f5a128883b5592cb21e48c8392",
+        ),
+        (
+            "/etc/zypp/repos.d/repo-update.repo",
+            "570792fd9fd4e19400501a100cf31352f05f0d593981034e6d5597d02247b53a",
+        ),
+    ];
+    for (path, sha256) in expected_declarations {
+        let declaration = root
+            .repository_declarations
+            .iter()
+            .find(|declaration| declaration.path == path)
+            .unwrap_or_else(|| panic!("missing Tumbleweed declaration {path}"));
+        assert_eq!(declaration.sha256, sha256);
+    }
 }
 
 #[test]
