@@ -1,0 +1,15 @@
+[Unit]
+Description=Bootstrap the managed Codex app-server daemon
+Documentation=https://developers.openai.com/codex/app-server
+
+[Service]
+Type=oneshot
+ExecStartPre=%h/.local/libexec/codex-app-server-reconcile
+ExecStart=%h/.codex/packages/standalone/current/codex app-server daemon bootstrap --remote-control
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=2min
+
+[Install]
+WantedBy=default.target

@@ -166,9 +166,9 @@ expect_fail() {
     local description="$1"
     shift
 
-    local output status
+    local status
     set +e
-    output="$("$@" 2>&1)"
+    "$@" >/dev/null 2>&1
     status=$?
     set -e
 
@@ -372,6 +372,7 @@ test_deploy_remi_uses_candidate_owned_transition() {
     test "$(cat "$fake_root/etc/conary/remi.toml.repository-keys-path")" = \
         "$fake_root/conary/repository-keys"
     test "$(stat -c '%a' "$fake_root/conary/repository-keys")" = "700"
+    test "$(stat -c '%a' "$fake_root/conary/metadata")" = "750"
     test -f "$fake_root/conary/.remi-runtime.lock"
     test ! -L "$fake_root/conary/.remi-runtime.lock"
     test "$(stat -c '%a' "$fake_root/conary/.remi-runtime.lock")" = "600"
@@ -475,6 +476,15 @@ test_install_helper_requires_exact_digest() {
         "$staged"
 }
 
+test_verify_access_does_not_require_a_running_service() {
+    local fake_root="${tmpdir}/root-verify-access"
+
+    expect_fail "deploy access without Remi configuration" \
+        run_helper "$fake_root" verify-access
+    write_config "$fake_root"
+    run_helper "$fake_root" verify-access
+}
+
 main() {
     test_deploy_conary_accepts_verified_release
     test_deploy_conary_rejects_checksum_mismatch
@@ -490,6 +500,7 @@ main() {
     test_deploy_remi_rejects_malformed_authority_root
     test_export_native_oracle_inputs_uses_exact_public_candidates
     test_install_helper_requires_exact_digest
+    test_verify_access_does_not_require_a_running_service
 
     echo "remi deploy helper smoke passed"
 }

@@ -1,0 +1,17 @@
+[Unit]
+Description=Claude Code Remote Control for %i
+Documentation=https://code.claude.com/docs/en/remote-control
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# Keep the escaped instance name: %I decodes hyphens as path separators.
+WorkingDirectory=/data/dev/src/%i
+ExecStart=%h/.local/bin/claude remote-control --name "Remi %i" --spawn=worktree --capacity=4
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=default.target
