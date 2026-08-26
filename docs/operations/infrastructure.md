@@ -278,6 +278,28 @@ codex remote-control start --json
 codex app-server daemon version
 ```
 
+The upstream pid-backed daemon and updater survive logout but not a host reboot.
+Install `deploy/systemd/codex-app-server-bootstrap.service` into `dev`'s user
+manager so the idempotent upstream bootstrap runs at every boot:
+
+```bash
+runtime_dir="/run/user/$(id -u dev)"
+sudo install -d -o dev -g dev -m 0755 \
+  /data/dev/home/.config/systemd/user/default.target.wants
+sudo install -o dev -g dev -m 0644 \
+  deploy/systemd/codex-app-server-bootstrap.service \
+  /data/dev/home/.config/systemd/user/codex-app-server-bootstrap.service
+sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user daemon-reload
+sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" \
+  systemctl --user enable --now codex-app-server-bootstrap.service
+```
+
+`loginctl enable-linger dev` is part of the baseline above and is required for
+the user manager to start without an interactive login. After a host reboot,
+verify the unit is active, both managed Codex processes are owned by `dev`'s
+user manager, and `codex remote-control start --json` reports `connected`
+before treating Remote as recovered.
+
 Register the clean Conary, Nomos, and The Mortal Estate checkout roots as Codex
 projects through the running app-server's experimental project API. Project
 registration is explicit; do not create dummy model turns merely to seed recent
