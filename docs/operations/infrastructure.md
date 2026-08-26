@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-26
-revision: 33
+revision: 34
 summary: Non-secret infrastructure, agent operations, release, typed and causally inspectable Remi deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
@@ -11,11 +11,11 @@ summary: Non-secret infrastructure, agent operations, release, typed and causall
 - Remi is the production package service behind `https://remi.conary.io`.
 - Direct SSH access for the Remi host uses `ssh.conary.io`, not the proxied
   public HTTPS hostnames.
-- Remi currently runs Arch Linux on the Hetzner origin. Host-level
-  package-manager notes should assume `pacman` unless a future migration
-  updates this document. The Remi host OS is independent of the public client
-  distro support matrix, which is Fedora 44, Ubuntu 26.04 LTS, and Arch Linux
-  for the limited preview.
+- Remi runs Ubuntu 26.04 LTS on the Hetzner origin. The host OS is independent
+  of the public client distro support matrix, which is Fedora 44, Ubuntu 26.04
+  LTS, and Arch Linux for the limited preview. The destructive host procedure,
+  storage contract, recovery boundary, and completion proof live in
+  [`remi-host-rebuild.md`](remi-host-rebuild.md).
 - Forge remote validation and Forge-local staging deployment are decommissioned.
   The old VPS runner did not expose `/dev/kvm`, and no replacement Forge host
   or conary-test deployment path is supported.
@@ -227,27 +227,29 @@ workflow.
 
 #### Remi Remote Development Workbench
 
-The Remi host may also carry an isolated development workbench for Conary, but
-that workbench is not part of the production service contract. Keep development
-state under `/conary/dev`, use the unprivileged `conary-dev` account for
-day-to-day work, and keep production service paths such as `/conary/web`,
-`/conary/site`, `/conary/releases`, and systemd-owned Remi state out of dev
-workflows.
+The Remi host may also carry an isolated multi-project development workbench,
+but that workbench is not part of the production service contract. Use the
+unprivileged `dev` account for all interactive development. Keep production
+service paths such as `/conary/web`, `/conary/site`, `/conary/releases`, and
+systemd-owned Remi state out of development workflows. `conary` remains the
+dedicated non-login service identity; do not recreate the retired
+`conary-dev` or `signed-dev` interactive accounts.
 
 When rebuilding the workbench from a privileged Remi shell, the non-secret
 baseline is:
 
 ```bash
-sudo pacman -S --needed base-devel git rustup clang mold nodejs npm fd github-cli bubblewrap tmux mosh
-sudo useradd -m -d /conary/dev/home/conary-dev -s /bin/bash conary-dev
-sudo install -d -o conary-dev -g conary-dev /conary/dev/src
-sudo install -d -o conary-dev -g conary-dev /conary/dev/cache/cargo /conary/dev/cache/rustup /conary/dev/cache/npm /conary/dev/cache/target
-sudo loginctl enable-linger conary-dev
+sudo apt-get update
+sudo apt-get install -y build-essential git clang mold nodejs npm fd-find gh bubblewrap tmux mosh
+sudo useradd -m -d /data/dev/home -s /bin/bash dev
+sudo install -d -o dev -g dev /data/dev/src
+sudo install -d -o dev -g dev /data/dev/cache/cargo /data/dev/cache/rustup /data/dev/cache/npm /data/dev/cache/target
+sudo loginctl enable-linger dev
 ```
 
-After the account exists, clone the repository as `conary-dev` into
-`/conary/dev/src/Conary`, set `CARGO_HOME`, `RUSTUP_HOME`, npm cache, and target
-cache paths under `/conary/dev/cache`, install Rust through rustup, and install
+After the account exists, clone repositories as `dev` under `/data/dev/src`,
+set `CARGO_HOME`, `RUSTUP_HOME`, npm cache, and target cache paths under
+`/data/dev/cache`, install Rust through rustup, and install
 the assistant CLIs without version pinning:
 
 ```bash
@@ -265,11 +267,11 @@ lives in `.agents/rules/conary.md` and routes back to the shared `AGENTS.md`
 contract.
 
 The durable interactive entry point is a `dev` wrapper in
-`/conary/dev/home/conary-dev/.local/bin/dev`. It should attach to a tmux session
-named `conary` in `/conary/dev/src/Conary`, creating the session when absent.
+`/data/dev/home/.local/bin/dev`. It should attach to a selected project tmux
+session under `/data/dev/src`, creating the session when absent.
 Install `/usr/local/bin/dev` as a root-owned symlink or wrapper only after the
 user-owned script exists. Enable tmux history and mouse support in the
-`conary-dev` home directory rather than relying on workstation defaults.
+`dev` home directory rather than relying on workstation defaults.
 
 Use `ssh.conary.io` for SSH transport. Workstation-specific aliases such as
 `remi-dev`, `remi-work`, or mosh wrappers belong in the ignored
@@ -278,7 +280,7 @@ tokens, recent-session history, or assistant cache directories. It is fine to
 copy minimal assistant auth/config after reviewing it, but do not copy local
 conversation history or package build artifacts wholesale. The remote Codex
 GitHub MCP token, when present, belongs in a private env file such as
-`/conary/dev/home/conary-dev/.config/codex/env`; Cloudflare MCP login remains an
+`/data/dev/home/.config/codex/env`; Cloudflare MCP login remains an
 interactive `codex mcp login cloudflare-api` step unless a future tracked helper
 defines a safer bootstrap.
 
