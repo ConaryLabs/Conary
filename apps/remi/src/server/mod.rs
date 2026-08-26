@@ -42,6 +42,7 @@ mod jobs;
 pub mod lite;
 pub mod mcp;
 pub mod metrics;
+mod native_oracle_input;
 pub mod native_publish;
 mod negative_cache;
 pub mod popularity;
@@ -91,6 +92,12 @@ pub use index_gen::{IndexGenConfig, IndexGenResult, generate_indices};
 pub use jobs::{ConversionJob, JobManager, JobStatus};
 pub use lite::{ProxyConfig, run_proxy};
 pub use metrics::{MetricsSnapshot, ServerMetrics};
+pub use native_oracle_input::{
+    NATIVE_ORACLE_INPUT_MANIFEST_FILE, NATIVE_ORACLE_INPUT_OBJECT_DIRECTORY,
+    NATIVE_ORACLE_INPUT_SCHEMA_V1, NativeOracleInputConfig, NativeOracleInputObjectV1,
+    NativeOracleInputOutcome, NativeOracleInputProfileV1, NativeOracleInputSetV1,
+    materialize_native_oracle_inputs, reopen_native_oracle_input_bundle,
+};
 pub use negative_cache::NegativeCache;
 pub use prewarm::{PrewarmConfig, PrewarmFailure, PrewarmResult, run_prewarm};
 pub use promotion::{RemiPromotionActivationConfig, RemiPromotionActivationOutcome};

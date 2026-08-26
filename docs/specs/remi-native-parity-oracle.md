@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
-last_updated: 2026-08-25
-revision: 9
+last_updated: 2026-08-26
+revision: 10
 status: active
 ---
 
@@ -15,6 +15,23 @@ exact `ProfileRevisionV2`. It is distinct from the hosted
 `phase4-native-pm-parity` suite: that suite proves deterministic one-package
 lifecycle and CLI behavior, while this contract covers every package admitted
 to one immutable profile candidate.
+
+## Exact input handoff
+
+The production native producers consume `NativeOracleInputSetV1`, not mutable
+mirror state or Conary's normalized catalog bytes. The strict schema-1 bundle
+binds the canonical ordered Fedora 44, Ubuntu 26.04, and Arch private candidate
+revisions, every ordered `SourceSnapshotV1`, and the digest-sorted union of
+their authenticated native metadata objects. Each object is refetched from the
+snapshot's public HTTPS authority with its declared size as a hard upper bound,
+then accepted only when its exact SHA-256 and size match.
+
+The writer publishes canonical `manifest.json` plus digest-named files beneath
+one exact `objects/` directory, synchronizes and atomically renames the complete
+bundle, then independently reopens every byte. Extra or missing entries,
+symlinks, noncanonical JSON, object tamper, and candidate supersession fail the
+operation. The bundle is an input carrier only; the pinned ALPM, libsolv, or
+apt-pkg implementation remains the sole native fact and resolution authority.
 
 `NativeParityOracleV1` is the sole parity manifest authority. It binds the
 exact profile revision digest, profile logical digest, ordered source members,

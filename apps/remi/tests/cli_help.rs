@@ -124,3 +124,27 @@ fn promotion_proof_requires_every_exact_ordered_evidence_binding() {
         );
     }
 }
+
+#[test]
+fn native_oracle_input_accepts_only_exact_candidate_and_output_bindings() {
+    let output = run_remi(&["native-oracle-input", "--help"]);
+
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for required in ["--db", "--catalog-dir", "--candidate", "--output-dir"] {
+        assert!(stdout.contains(required), "missing {required}: {stdout}");
+    }
+    for forbidden in [
+        "--distro",
+        "--profile",
+        "--exclude",
+        "--skip",
+        "--dry-run",
+        "--max-packages",
+    ] {
+        assert!(
+            !stdout.contains(forbidden),
+            "forbidden {forbidden}: {stdout}"
+        );
+    }
+}

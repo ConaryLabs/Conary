@@ -22,6 +22,7 @@ usage:
   conary-remi-deploy publish-test-artifact <filename> <sha256> <staged-file>
   conary-remi-deploy install-helper <sha256> <helper>
   conary-remi-deploy inspect-remi [--require-private-candidates|--require-repopulated]
+  conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
   conary-remi-deploy verify-access
 USAGE
     exit 2
@@ -70,6 +71,12 @@ validate_artifact_filename() {
     local filename="$1"
     [[ "$filename" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]] ||
         die "invalid test-artifact filename: $filename"
+}
+
+validate_export_id() {
+    local export_id="$1"
+    [[ "$export_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] ||
+        die "invalid native-oracle export identity: $export_id"
 }
 
 real_tmp_path() {
@@ -443,6 +450,59 @@ inspect_remi() {
     "$bin" "${args[@]}"
 }
 
+export_native_oracle_inputs() {
+    local export_id="$1"
+    local fedora_sha256="$2"
+    local ubuntu_sha256="$3"
+    local arch_sha256="$4"
+    validate_export_id "$export_id"
+    validate_sha256 "$fedora_sha256"
+    validate_sha256 "$ubuntu_sha256"
+    validate_sha256 "$arch_sha256"
+
+    local bin conary_root evidence_root output transport transport_next
+    bin="$(root_path /usr/local/bin/remi)"
+    [[ -f "$bin" && ! -L "$bin" ]] || die "Remi binary is not a plain file: $bin"
+    conary_root="$(root_path /conary)"
+    evidence_root="$(root_path /conary/evidence/native-oracle-inputs)"
+    output="${evidence_root}/${export_id}"
+    transport="/tmp/remi-native-oracle-input-${export_id}.tar"
+    transport_next="${transport}.next.$$"
+    install_owned_dir 0750 "$conary_root" "$(root_path /conary/evidence)" "$evidence_root"
+    [[ ! -e "$output" && ! -L "$output" ]] ||
+        die "native-oracle export already exists: $output"
+    [[ ! -e "$transport" && ! -L "$transport" ]] ||
+        die "native-oracle transport already exists: $transport"
+
+    local command=(
+        "$bin" native-oracle-input
+        --db "$(root_path /conary/metadata/conary.db)"
+        --catalog-dir "$(root_path /conary/catalogs)"
+        --candidate "fedora-44=${fedora_sha256}"
+        --candidate "ubuntu-26.04=${ubuntu_sha256}"
+        --candidate "arch=${arch_sha256}"
+        --output-dir "$output"
+    )
+    if [[ -z "$ROOT" ]]; then
+        runuser -u conary -- "${command[@]}"
+    else
+        "${command[@]}"
+    fi
+    [[ -d "$output" && ! -L "$output" ]] ||
+        die "native-oracle exporter did not publish its exact output"
+
+    trap 'rm -f "$transport_next"' RETURN
+    tar -cf "$transport_next" -C "$evidence_root" "$export_id"
+    chmod 0600 "$transport_next"
+    if [[ -z "$ROOT" ]]; then
+        chown "${SUDO_UID:-0}:${SUDO_GID:-0}" "$transport_next"
+    fi
+    mv "$transport_next" "$transport"
+    trap - RETURN
+    printf 'Native oracle inputs: export=%s transport=%s sha256=%s\n' \
+        "$export_id" "$transport" "$(sha256sum "$transport" | cut -d ' ' -f 1)"
+}
+
 verify_access() {
     [[ "$(id -u)" == "0" ]] || die "helper must run as root"
     [[ -f "$(root_path /etc/conary/remi.toml)" ]] || die "missing /etc/conary/remi.toml"
@@ -473,6 +533,10 @@ case "${1:-}" in
     inspect-remi)
         [[ $# -le 2 ]] || usage
         inspect_remi "${2:-}"
+        ;;
+    export-native-oracle-inputs)
+        [[ $# -eq 5 ]] || usage
+        export_native_oracle_inputs "$2" "$3" "$4" "$5"
         ;;
     verify-access)
         [[ $# -eq 1 ]] || usage
