@@ -479,13 +479,12 @@ fn validate_manifest(manifest: &NativeOracleInputSetV1) -> Result<()> {
                 member.ordinal
             );
             for object in &source.authenticated_objects {
-                match expected_objects.insert(object.sha256.clone(), object.size) {
-                    Some(size) => ensure!(
+                if let Some(size) = expected_objects.insert(object.sha256.clone(), object.size) {
+                    ensure!(
                         size == object.size,
                         "native metadata digest {} has conflicting sizes",
                         object.sha256
-                    ),
-                    None => {}
+                    );
                 }
             }
         }
