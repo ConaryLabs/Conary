@@ -11,16 +11,16 @@ case "$project" in
         checkout="Conary"
         session="conary"
         ;;
-    rpm-rs)
-        checkout="rpm-rs"
-        session="rpm-rs"
+    nomos)
+        checkout="nomos"
+        session="nomos"
         ;;
-    signed-world)
-        checkout="signed-world"
-        session="signed-world"
+    the-mortal-estate)
+        checkout="the-mortal-estate"
+        session="the-mortal-estate"
         ;;
     *)
-        printf 'usage: dev [conary|rpm-rs|signed-world]\n' >&2
+        printf 'usage: dev [conary|nomos|the-mortal-estate]\n' >&2
         exit 2
         ;;
 esac

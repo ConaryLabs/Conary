@@ -243,7 +243,7 @@ baseline is:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential git clang mold nodejs npm fd-find gh bubblewrap tmux mosh
+sudo apt-get install -y build-essential git clang mold nodejs npm fd-find ripgrep gh bubblewrap tmux mosh
 sudo useradd -m -d /data/dev/home -s /bin/bash dev
 sudo install -d -o dev -g dev /data/dev/src
 sudo install -d -o dev -g dev /data/dev/cache/cargo /data/dev/cache/rustup /data/dev/cache/npm /data/dev/cache/target
@@ -268,6 +268,24 @@ interactively, and verify it with `agy --version`; do not add a second Google
 CLI compatibility path to the repository. Workspace guidance for Antigravity
 lives in `.agents/rules/conary.md` and routes back to the shared `AGENTS.md`
 contract.
+
+After Codex authentication, bootstrap its managed app-server for durable remote
+control and automatic CLI updates:
+
+```bash
+codex app-server daemon bootstrap --remote-control
+codex remote-control start --json
+codex app-server daemon version
+```
+
+Register the clean Conary, Nomos, and The Mortal Estate checkout roots as Codex
+projects through the running app-server's experimental project API. Project
+registration is explicit; do not create dummy model turns merely to seed recent
+working directories. Pair trusted clients with a short-lived
+`codex remote-control pair` code and verify the project list from the paired
+client. The rpm-rs fork remains a pinned Conary dependency while its upstream
+work is pending, but it is not a Remi development project or persistent
+checkout.
 
 The durable interactive entry point is a `dev` wrapper in
 `/data/dev/home/.local/bin/dev`. It should attach to a selected project tmux

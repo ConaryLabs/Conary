@@ -149,9 +149,9 @@ sites, releases, and service runtime state owned by `conary:conary`; development
 checkouts and caches are owned by `dev:dev`.
 
 Install `deploy/hetzner/remi-dev-session.sh` as `dev`'s `~/.local/bin/dev`.
-It owns the single-account tmux entrypoints for the clean Conary, rpm-rs, and
-Signed World checkouts; do not recreate project-specific login users merely to
-recover their old session names.
+It owns the single-account tmux entrypoints for the clean Conary, Nomos, and
+The Mortal Estate checkouts; do not recreate project-specific login users
+merely to recover their old session names.
 
 Disable password SSH authentication and direct root SSH after verifying a fresh
 `peter` login and `sudo -n true`. Verify `dev` through a fresh login rather than
