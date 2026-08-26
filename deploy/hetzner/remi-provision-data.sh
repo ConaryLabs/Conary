@@ -238,6 +238,9 @@ EOF
     data_uuid="$(blkid -s UUID -o value "/dev/$DATA_VG/$VDO_LV")"
     [[ -n "$data_uuid" ]] || die "unable to read XFS UUID"
 
+    sed -i -E \
+        '\%^[^#]+[[:space:]]+/[[:space:]]+ext4[[:space:]]+% s/[[:space:]]0[[:space:]]+0$/ 0 1/' \
+        /etc/fstab
     install -d -o root -g root -m 0755 /data /work /conary
     {
         printf 'UUID=%s /data xfs defaults,noatime 0 2\n' "$data_uuid"
@@ -255,6 +258,7 @@ EOF
     printf '/swapfile none swap sw 0 0\n' >> /etc/fstab
     swapon /swapfile
 
+    systemctl daemon-reload
     findmnt --verify --verbose
     install_monitoring "$source_dir"
 

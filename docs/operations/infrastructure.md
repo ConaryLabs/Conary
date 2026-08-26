@@ -189,7 +189,10 @@ workflow.
   installs `deploy/sudoers/remi` to `/etc/sudoers.d/remi`, and validates the
   sudoers file with `visudo -cf`.
 - After bootstrap, `ssh peter@ssh.conary.io 'sudo -n /usr/local/sbin/conary-remi-deploy verify-access'`
-  should succeed without prompting for a password.
+  should succeed without prompting for a password. This operation verifies
+  root execution and the installed Remi configuration only; it deliberately
+  works before the first Remi binary or service start so a clean host does not
+  have a circular bootstrap dependency.
 - `scripts/rebuild-remi.sh` is retired for production deploys. It now fails
   closed and points operators back to the GitHub release/deploy flow and the
   root-owned helper.

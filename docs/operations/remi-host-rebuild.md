@@ -139,11 +139,19 @@ The rebuilt host has three human/service boundaries:
 - `peter`: administrator with key-only SSH and passwordless sudo
 - `dev`: the sole interactive development account
 - `conary`: non-login service account for Remi and production-owned paths
+- `conary-web`: traversal-only system group containing `conary` and Ubuntu's
+  `www-data`; `/conary` remains mode 0750 with this group while sensitive
+  children retain their stricter `conary:conary` modes
 
 Do not recreate `conary-dev` or `signed-dev`. Merge reviewed configuration into
 `dev` selectively. Keep production repository state, signing material, static
 sites, releases, and service runtime state owned by `conary:conary`; development
 checkouts and caches are owned by `dev:dev`.
+
+Install `deploy/hetzner/remi-dev-session.sh` as `dev`'s `~/.local/bin/dev`.
+It owns the single-account tmux entrypoints for the clean Conary, rpm-rs, and
+Signed World checkouts; do not recreate project-specific login users merely to
+recover their old session names.
 
 Disable password SSH authentication and direct root SSH after verifying a fresh
 `peter` login and `sudo -n true`. Verify `dev` through a fresh login rather than
@@ -160,10 +168,16 @@ Restore and verify, in order:
 
 1. repository signing authority and Remi configuration
 2. Remi database/state required for the intended repository epoch
-3. nginx configuration, static sites, certificates, and renewal hooks
+3. certificates and renewal hooks, followed by the tracked Ubuntu nginx map
+   and origin vhost in `deploy/nginx/`
 4. tracked systemd units and the root-owned deploy helper/sudo policy
 5. development authentication/configuration selected for `dev`
 6. current unpinned developer tools and the repository-owned Rust toolchain
+
+Restart nginx after adding `www-data` to `conary-web` so its workers acquire
+the supplementary group. Verify the worker's effective groups and prove both
+the public site and branded 404 response; a successful `nginx -t` does not
+prove filesystem traversal.
 
 ## Completion proof
 

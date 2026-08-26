@@ -239,7 +239,7 @@ deploy_remi() {
 
     runtime_root="$(root_path /conary)"
     runtime_lock="${runtime_root}/.remi-runtime.lock"
-    install_owned_dir 0750 "$runtime_root"
+    install_owned_dir 0750 "$runtime_root" "${runtime_root}/metadata"
     ensure_runtime_lock_file "$runtime_lock"
     repository_keys_dir="${runtime_root}/repository-keys"
     ensure_repository_keys_root "$repository_keys_dir"
@@ -262,7 +262,9 @@ deploy_remi() {
             --deployment-id "remi-${version}" \
             --max-concurrent "$max_concurrent"
     )"; then
-        [[ "$SKIP_RESTART" == "1" ]] || systemctl start remi || true
+        if [[ "$had_previous" == true && "$SKIP_RESTART" != "1" ]]; then
+            systemctl start remi || true
+        fi
         die "failed to prepare Remi deployment transition"
     fi
     [[ "$transition_manifest" == /* && -f "$transition_manifest" && ! -L "$transition_manifest" ]] || {
@@ -508,9 +510,8 @@ export_native_oracle_inputs() {
 }
 
 verify_access() {
-    [[ "$(id -u)" == "0" ]] || die "helper must run as root"
+    [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
     [[ -f "$(root_path /etc/conary/remi.toml)" ]] || die "missing /etc/conary/remi.toml"
-    [[ "$SKIP_RESTART" == "1" ]] || systemctl status --no-pager remi >/dev/null
 }
 
 case "${1:-}" in
