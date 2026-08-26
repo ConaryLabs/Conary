@@ -40,6 +40,7 @@ pub struct NativeOracleInputSetV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeOracleInputProfileV1 {
+    pub profile_revision_sha256: String,
     pub revision: ProfileRevisionV2,
     pub sources: Vec<SourceSnapshotV1>,
 }
@@ -110,6 +111,7 @@ pub async fn materialize_native_oracle_inputs(
             );
         }
         profiles.push(NativeOracleInputProfileV1 {
+            profile_revision_sha256: selection.profile_revision_sha256.clone(),
             revision: pin.manifest().clone(),
             sources,
         });
@@ -452,6 +454,11 @@ fn validate_manifest(manifest: &NativeOracleInputSetV1) -> Result<()> {
             .revision
             .validate_member_contract()
             .context("validate native-oracle profile revision")?;
+        ensure!(
+            profile.profile_revision_sha256 == profile.revision.manifest_sha256()?,
+            "native-oracle profile '{}' revision digest drifted",
+            profile.revision.profile
+        );
         ensure!(
             profile.sources.len() == profile.revision.members.len(),
             "native-oracle profile '{}' source count drifted",

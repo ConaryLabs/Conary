@@ -39,7 +39,12 @@ fn valid_manifest() -> NativeOracleInputSetV1 {
             member.source_snapshot_sha256 = source.manifest_sha256().expect("hash source manifest");
             sources.push(source);
         }
-        profiles.push(NativeOracleInputProfileV1 { revision, sources });
+        let profile_revision_sha256 = revision.manifest_sha256().expect("hash profile revision");
+        profiles.push(NativeOracleInputProfileV1 {
+            profile_revision_sha256,
+            revision,
+            sources,
+        });
     }
     NativeOracleInputSetV1 {
         schema_version: NATIVE_ORACLE_INPUT_SCHEMA_V1,
@@ -219,6 +224,18 @@ fn reordered_profiles_fail_reopen() {
 
     let error = reopen_native_oracle_input_bundle(&root).unwrap_err();
     assert!(error.to_string().contains("at this ordinal"));
+}
+
+#[test]
+fn explicit_profile_revision_digest_drift_fails_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let mut manifest = valid_manifest();
+    manifest.profiles[0].profile_revision_sha256 = "f".repeat(64);
+    write_bundle(&root, &manifest);
+
+    let error = reopen_native_oracle_input_bundle(&root).unwrap_err();
+    assert!(error.to_string().contains("revision digest drifted"));
 }
 
 #[cfg(unix)]
