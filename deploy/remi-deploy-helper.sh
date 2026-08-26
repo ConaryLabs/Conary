@@ -467,7 +467,7 @@ export_native_oracle_inputs() {
     evidence_root="$(root_path /conary/evidence/native-oracle-inputs)"
     output="${evidence_root}/${export_id}"
     transport="/tmp/remi-native-oracle-input-${export_id}.tar"
-    transport_next="${transport}.next.$$"
+    transport_next=""
     install_owned_dir 0750 "$conary_root" "$(root_path /conary/evidence)" "$evidence_root"
     [[ ! -e "$output" && ! -L "$output" ]] ||
         die "native-oracle export already exists: $output"
@@ -491,14 +491,18 @@ export_native_oracle_inputs() {
     [[ -d "$output" && ! -L "$output" ]] ||
         die "native-oracle exporter did not publish its exact output"
 
-    trap 'rm -f "$transport_next"' RETURN
+    transport_next="$(mktemp "/tmp/remi-native-oracle-input-${export_id}.XXXXXX")"
+    trap 'rm -f "$transport_next"' EXIT
     tar -cf "$transport_next" -C "$evidence_root" "$export_id"
     chmod 0600 "$transport_next"
     if [[ -z "$ROOT" ]]; then
         chown "${SUDO_UID:-0}:${SUDO_GID:-0}" "$transport_next"
     fi
-    mv "$transport_next" "$transport"
-    trap - RETURN
+    if ! ln "$transport_next" "$transport"; then
+        die "native-oracle transport target appeared during publication: $transport"
+    fi
+    rm -f "$transport_next"
+    trap - EXIT
     printf 'Native oracle inputs: export=%s transport=%s sha256=%s\n' \
         "$export_id" "$transport" "$(sha256sum "$transport" | cut -d ' ' -f 1)"
 }
