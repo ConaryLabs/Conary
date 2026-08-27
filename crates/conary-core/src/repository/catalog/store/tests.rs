@@ -283,6 +283,28 @@ fn reader_name_page_order_is_deterministic_for_repeated_reads() {
 }
 
 #[test]
+fn logical_digest_rejects_relations_without_a_package() {
+    let connection = Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys = OFF;")
+        .unwrap();
+    connection.execute_batch(CATALOG_SCHEMA).unwrap();
+    let missing_package_key = "b".repeat(64);
+    let mut orphan = package("orphan", "orphan");
+    let provide = orphan.provides.remove(0);
+    insert_provide(&connection, &missing_package_key, 0, &provide).unwrap();
+
+    let error = digest_catalog_connection(&connection, &source_scope(), &evidence())
+        .err()
+        .expect("orphan relation must fail logical verification");
+    assert!(
+        error
+            .to_string()
+            .contains("provide row references missing package")
+    );
+}
+
+#[test]
 fn logical_digest_streams_high_cardinality_package_relations() {
     const CHILD_ENV: &str = "CONARY_CATALOG_HIGH_CARDINALITY_CHILD";
     if std::env::var_os(CHILD_ENV).is_none() {
