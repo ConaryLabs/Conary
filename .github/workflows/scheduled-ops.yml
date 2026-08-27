@@ -84,6 +84,6 @@ jobs:
 
             scripts/local-qemu-validation.sh
 
-          Re-enable remote validation after a new KVM-capable self-hosted runner
-          is registered with the forge-trusted label.
+          Re-enable remote validation only through a separately reviewed
+          KVM-capable trusted-runner workflow.
           EOF
