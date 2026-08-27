@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-27
-revision: 39
-summary: Non-secret infrastructure, agent operations, release, trusted Remi CI benchmark capacity, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
+revision: 40
+summary: Non-secret infrastructure, agent operations, release, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -19,66 +19,11 @@ summary: Non-secret infrastructure, agent operations, release, trusted Remi CI b
 - Forge remote validation and Forge-local staging deployment are decommissioned.
   The old VPS runner did not expose `/dev/kvm`, and no replacement Forge host
   or conary-test deployment path is supported.
-- The production Remi host may also supply the manually dispatched,
-  non-required `remi-ci-benchmark` capacity lane. This is not a restoration of
-  Forge deployment authority and is not release evidence.
 - Hosted CI keeps Remi health/audit/build/list checks active. QEMU release
   evidence comes from `scripts/local-qemu-validation.sh` on a local
   development machine with `/dev/kvm`.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
   ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
-
-### Trusted Remi CI Benchmark Capacity
-
-`.github/workflows/remi-ci-benchmark.yml` benchmarks only an exact commit
-already merged into `main`. It has no automatic pull-request or push trigger,
-receives no repository or environment secrets, and selects the restricted
-`remi-ci-trusted` label. Public fork code must never reach this persistent
-runner. GitHub Actions remains the control plane; the host supplies execution
-capacity only.
-
-The runner uses a dedicated unprivileged `conary-ci` identity with no
-non-interactive sudo, production deployment or signing variables, readable
-production authority roots, or root-equivalent Docker group membership.
-Container work uses the identity's rootless Podman socket. The preflight
-requires the workspace Rust toolchain, `sccache`, at least 12 visible logical
-CPUs, at least 48 GiB of physical memory, and no inherited cgroup `cpu.max` or
-`memory.max` ceiling.
-
-Ubuntu's host-wide AppArmor restriction on unprivileged user namespaces stays
-enabled. The installer loads a `default_allow` profile attached to the exact
-runner listener executable and grants only that trusted process tree the
-`userns` permission needed by exact ownership tests. The runner remains without
-sudo. Rust test phases run through `podman unshare`: inner root maps to
-`conary-ci`, while the remaining IDs map to its subordinate UID/GID ranges.
-Preflight proves that this boundary can materialize numeric UID/GID 1001 before
-a benchmark consumes build time, matching hosted container-root ownership
-semantics without granting host root.
-
-Bootstrap the Ubuntu host with a one-time repository registration token piped
-directly into `deploy/setup-remi-ci-runner.sh --registration-token-stdin`.
-That installer verifies the pinned GitHub runner archive, provisions Rust
-1.98.0, installs rootless Podman and KVM dependencies, installs the scoped
-AppArmor profile, and installs the
-`github-actions-remi-ci-runner.service` unit. Re-run it with `--verify-only`
-to audit the installed boundary without changing it.
-The unit launches the pinned runner's `runsvc.sh` service wrapper so systemd's
-stop signal is forwarded to the listener and maintenance restarts do not wait
-for the five-minute forced-stop timeout. Reinstallation refuses while a worker
-job is active, drains the complete old service cgroup before replacing the
-unit, allows up to ten seconds for the replacement listener to appear, and
-audits that exactly one service-mode listener remains. Multiple listeners fail
-immediately; a missing listener fails when the bounded startup interval
-expires. This prevents an interactive-wrapper migration from leaving an
-orphaned second listener without racing normal service startup.
-
-Only one benchmark job runs at a time. That job sets Cargo, Rust tests, Make,
-and CMake parallelism to all logical CPUs visible through `nproc`; the runner
-service must not set `CPUQuota=` or `MemoryMax=`. Image and suite work runs up
-to eight independent container phases concurrently so non-compiler phases can
-also occupy the host. Each cold or warm run retains machine-readable phase
-timings plus the capacity it observed. These results are comparison evidence
-for issue #620, not a required status check.
 
 ## Agent Operations And MCP
 

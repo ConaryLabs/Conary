@@ -37,8 +37,6 @@ jobs:
         run: bash scripts/check-github-action-runtimes.sh
       - name: Test GitHub Actions runtime policy checker
         run: bash scripts/test-github-action-runtimes.sh
-      - name: Test trusted Remi CI benchmark contract
-        run: bash scripts/test-remi-ci-benchmark.sh
 
   release-matrix-policy:
     name: release-matrix-policy
@@ -247,8 +245,7 @@ jobs:
       - name: Explain paused remote validation
         run: |
           cat <<'EOF'
-          Forge-backed container and QEMU validation is retired. The trusted
-          Remi benchmark remains manual and non-required while issue #620
-          measures it. Use scripts/local-qemu-validation.sh on a local
-          KVM-capable machine for the current QEMU release gate.
+          Forge-backed container and QEMU validation is retired. GitHub-hosted
+          CI remains authoritative. Use scripts/local-qemu-validation.sh on a
+          local KVM-capable machine for the current QEMU release gate.
           EOF
