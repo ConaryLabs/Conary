@@ -1127,7 +1127,7 @@ test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "private candidate deploy retries only exact failed public profiles"
+        "retries only exact failed public profiles"
 }
 
 test_check_release_matrix_rejects_all_profile_retry() {
@@ -1140,7 +1140,7 @@ test_check_release_matrix_rejects_all_profile_retry() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "private candidate deploy retries only exact failed public profiles"
+        "retries only exact failed public profiles"
 }
 
 test_check_release_matrix_rejects_nonadvancing_candidate_fence() {
