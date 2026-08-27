@@ -21,7 +21,8 @@ fail() {
 
 write_config() {
     local fake_root="$1"
-    mkdir -p "$fake_root/etc/conary"
+    mkdir -p "$fake_root/etc/conary" "$fake_root/conary"
+    chmod 0750 "$fake_root/conary"
     cat >"$fake_root/etc/conary/remi.toml" <<'TOML'
 [server]
 bind = "127.0.0.1:8080"
@@ -159,6 +160,18 @@ run_helper() {
 
     CONARY_REMI_DEPLOY_ROOT="$fake_root" \
     CONARY_REMI_DEPLOY_SKIP_RESTART=1 \
+        bash "$helper" "$@"
+}
+
+run_helper_with_ingress() {
+    local fake_root="$1"
+    shift
+
+    CONARY_REMI_DEPLOY_ROOT="$fake_root" \
+    CONARY_REMI_DEPLOY_SKIP_RESTART=1 \
+    CONARY_REMI_DEPLOY_SITE_HOME_URL="file://${fake_root}/conary/site/index.html" \
+    CONARY_REMI_DEPLOY_SITE_INSTALLER_URL="file://${fake_root}/conary/site/install-conary-preview.sh" \
+    CONARY_REMI_DEPLOY_SITE_ORIGIN_RESOLVE='' \
         bash "$helper" "$@"
 }
 
@@ -399,6 +412,43 @@ test_deploy_remi_uses_candidate_owned_transition() {
         run_helper "$fake_root" inspect-remi --require-something-vague
 }
 
+test_shared_conary_root_is_preserved_and_drift_fails_closed() {
+    local fake_root="${tmpdir}/root-shared-contract"
+    local before after
+    write_config "$fake_root"
+    before="$(stat -c '%u:%g:%a' "$fake_root/conary")"
+
+    run_helper "$fake_root" verify-access
+    after="$(stat -c '%u:%g:%a' "$fake_root/conary")"
+    test "$after" = "$before"
+
+    chmod 0755 "$fake_root/conary"
+    expect_fail "shared Conary root mode drift" run_helper "$fake_root" verify-access
+    test "$(stat -c '%a' "$fake_root/conary")" = "755"
+
+    chmod 0750 "$fake_root/conary"
+    mv "$fake_root/conary" "$fake_root/conary-real"
+    ln -s "$fake_root/conary-real" "$fake_root/conary"
+    expect_fail "symlinked shared Conary root" run_helper "$fake_root" verify-access
+}
+
+test_verify_ingress_requires_exact_deployed_bytes() {
+    local fake_root="${tmpdir}/root-ingress"
+    write_config "$fake_root"
+    mkdir -p "$fake_root/conary/site"
+    printf '<!doctype html><title>Conary</title>\n' >"$fake_root/conary/site/index.html"
+    printf '#!/usr/bin/env bash\n' >"$fake_root/conary/site/install-conary-preview.sh"
+
+    run_helper_with_ingress "$fake_root" verify-ingress
+
+    CONARY_REMI_DEPLOY_ROOT="$fake_root" \
+    CONARY_REMI_DEPLOY_SKIP_RESTART=1 \
+    CONARY_REMI_DEPLOY_SITE_HOME_URL="file://${fake_root}/conary/site/index.html" \
+    CONARY_REMI_DEPLOY_SITE_INSTALLER_URL="file://${fake_root}/conary/site/index.html" \
+    CONARY_REMI_DEPLOY_SITE_ORIGIN_RESOLVE='' \
+        expect_fail "installer byte mismatch" bash "$helper" verify-ingress
+}
+
 test_deploy_remi_rejects_malformed_authority_root() {
     local fake_root="${tmpdir}/root-remi-malformed"
     local bundle="${tmpdir}/remi-malformed.tar.gz"
@@ -497,6 +547,8 @@ main() {
     test_publish_test_artifact_is_verified_atomic_and_idempotent
     test_publish_test_artifact_rejects_unverified_or_mutating_inputs
     test_deploy_remi_uses_candidate_owned_transition
+    test_shared_conary_root_is_preserved_and_drift_fails_closed
+    test_verify_ingress_requires_exact_deployed_bytes
     test_deploy_remi_rejects_malformed_authority_root
     test_export_native_oracle_inputs_uses_exact_public_candidates
     test_install_helper_requires_exact_digest

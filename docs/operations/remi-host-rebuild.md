@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-26
-revision: 1
-summary: Destructive Remi origin rebuild, recovery, and storage verification procedure
+last_updated: 2026-08-27
+revision: 2
+summary: Destructive Remi origin rebuild, recovery, storage, and shared-ingress verification procedure
 ---
 
 # Remi Host Rebuild
@@ -195,6 +195,14 @@ Restart nginx after adding `www-data` to `conary-web` so its workers acquire
 the supplementary group. Verify the worker's effective groups and prove both
 the public site and branded 404 response; a successful `nginx -t` does not
 prove filesystem traversal.
+
+The deploy helper treats `/conary` as a pre-provisioned shared parent, not as a
+Remi-owned runtime directory. `verify-access` fails before deployment unless it
+is exactly `conary:conary-web` mode 0750, while service-owned children retain
+their narrower `conary:conary` identities. Every protected Remi deployment
+also runs `verify-ingress` before declaring completion; it compares the origin
+and public homepage and installer responses byte-for-byte with the deployed
+static files.
 
 ## Completion proof
 

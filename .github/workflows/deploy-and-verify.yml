@@ -716,11 +716,13 @@ jobs:
             max_concurrent="$4"
             sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi \
               "$VERSION" "$remote_bundle" "$remote_repositories" "$max_concurrent"
+            sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress
 
             for attempt in $(seq 1 120); do
               if sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi \
                 --require-repopulated
               then
+                sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress
                 exit 0
               fi
               echo "Remi repopulation is still in progress (${attempt}/120)" >&2

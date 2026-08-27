@@ -120,6 +120,7 @@ jobs:
             "$COMPLETION_MODE" > remi-deployment-inspection.json <<'REMOTE_EOF'
             set -euo pipefail
             sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$1" "$2" "$3" "$4" >&2
+            sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress >&2
             case "$5" in
               private-candidates)
                 requirement=--require-private-candidates
@@ -137,6 +138,7 @@ jobs:
             for attempt in $(seq 1 120); do
               if inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy \
                 inspect-remi "$requirement" 2>&1)"; then
+                sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress >&2
                 printf '%s\n' "$inspection"
                 exit 0
               fi
