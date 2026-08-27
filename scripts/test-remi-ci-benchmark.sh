@@ -136,9 +136,16 @@ rg -q 'host-wide AppArmor unprivileged user-namespace restriction is disabled' "
     fail "installer does not reject a disabled host-wide user-namespace restriction"
 rg -q 'chown 1001:1001' scripts/remi-ci-runner-preflight.sh ||
     fail "runner preflight does not prove subordinate numeric ownership"
+rg -Fq 'mktemp -d "${cache_root}/preflight-userns.XXXXXX"' \
+    scripts/remi-ci-runner-preflight.sh ||
+    fail "runner preflight probe is not shared across private mount namespaces"
 rg -q 'rootless Podman user namespace cannot represent numeric UID/GID 1001' \
     scripts/remi-ci-runner-preflight.sh ||
     fail "runner preflight numeric-ownership failure is not typed"
+rg -q '^[[:space:]]*id: benchmark$' "$workflow" ||
+    fail "benchmark step has no stable outcome identity"
+rg -Fq "if: \${{ always() && steps.benchmark.outcome != 'skipped' }}" "$workflow" ||
+    fail "artifact upload does not distinguish skipped and attempted benchmarks"
 rg -q '__RUNNER_LISTENER__ flags=\(default_allow\)' "$apparmor_profile" ||
     fail "AppArmor profile is not attached to only the runner listener"
 rg -q '^[[:space:]]*userns,$' "$apparmor_profile" ||

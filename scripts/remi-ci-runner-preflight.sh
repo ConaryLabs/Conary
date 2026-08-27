@@ -75,8 +75,9 @@ check_cgroup_v2_limits() {
 }
 
 check_test_user_namespace() {
+    local cache_root="$1"
     local probe_root status_code
-    probe_root="$(mktemp -d)"
+    probe_root="$(mktemp -d "${cache_root}/preflight-userns.XXXXXX")"
     status_code=0
     podman unshare sh -ceu '
         test "$(id -u)" -eq 0
@@ -121,9 +122,14 @@ done
 for command in cargo git jq mktemp podman rg rustc sccache stat; do
     require_cmd "$command"
 done
+cache_root="${CONARY_CI_CACHE_ROOT:-${HOME}/.cache/conary-ci}"
+[[ "$cache_root" == /* ]] || fail "CONARY_CI_CACHE_ROOT must be absolute"
+mkdir -p "$cache_root"
+[[ -d "$cache_root" && -w "$cache_root" ]] ||
+    fail "runner cache root is not a writable directory: ${cache_root}"
 cargo fmt --version >/dev/null
 cargo clippy --version >/dev/null
-check_test_user_namespace
+check_test_user_namespace "$cache_root"
 
 minimum_logical_cpus="${CONARY_CI_MIN_LOGICAL_CPUS:-12}"
 minimum_memory_gib="${CONARY_CI_MIN_MEMORY_GIB:-48}"
@@ -153,12 +159,6 @@ workspace_rust_version="$(
 [[ -n "$workspace_rust_version" ]] || fail "workspace Rust version is missing"
 [[ "$(rustc --version)" == "rustc ${workspace_rust_version} "* ]] ||
     fail "rustc does not match workspace version ${workspace_rust_version}"
-
-cache_root="${CONARY_CI_CACHE_ROOT:-${HOME}/.cache/conary-ci}"
-[[ "$cache_root" == /* ]] || fail "CONARY_CI_CACHE_ROOT must be absolute"
-mkdir -p "$cache_root"
-[[ -d "$cache_root" && -w "$cache_root" ]] ||
-    fail "runner cache root is not a writable directory: ${cache_root}"
 
 if [[ "$MODE" == "container" || "$MODE" == "qemu" ]]; then
     for command in curl file gperf make musl-gcc podman rustup sha256sum tar; do

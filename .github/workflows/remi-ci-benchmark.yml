@@ -51,6 +51,7 @@ jobs:
           git merge-base --is-ancestor "$EXPECTED_COMMIT" origin/main
           bash scripts/remi-ci-runner-preflight.sh --mode rust
       - name: Run consolidated benchmark
+        id: benchmark
         shell: bash
         env:
           BENCHMARK_COMMIT: ${{ inputs.commit_sha }}
@@ -89,7 +90,7 @@ jobs:
             "- passed: `" + (.passed | tostring) + "`"
           ' "$EVIDENCE_PATH" >> "$GITHUB_STEP_SUMMARY"
       - name: Retain benchmark evidence
-        if: ${{ always() }}
+        if: ${{ always() && steps.benchmark.outcome != 'skipped' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: remi-ci-benchmark-${{ github.run_id }}-${{ github.run_attempt }}

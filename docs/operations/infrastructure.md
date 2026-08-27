@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-27
-revision: 39
+revision: 40
 summary: Non-secret infrastructure, agent operations, release, trusted Remi CI benchmark capacity, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
@@ -53,7 +53,9 @@ sudo. Rust test phases run through `podman unshare`: inner root maps to
 `conary-ci`, while the remaining IDs map to its subordinate UID/GID ranges.
 Preflight proves that this boundary can materialize numeric UID/GID 1001 before
 a benchmark consumes build time, matching hosted container-root ownership
-semantics without granting host root.
+semantics without granting host root. Its temporary ownership probe lives below
+the dedicated runner cache shared with Podman's mount namespace; the systemd
+unit keeps `PrivateTmp=true`.
 
 Bootstrap the Ubuntu host with a one-time repository registration token piped
 directly into `deploy/setup-remi-ci-runner.sh --registration-token-stdin`.
