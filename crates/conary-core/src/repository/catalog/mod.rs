@@ -79,7 +79,7 @@ pub use profile::{
 pub use record::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, CatalogScopeV1,
-    CatalogSourceEvidenceV1,
+    CatalogSourceEvidenceV1, DebianSourcePocketV1,
 };
 pub use source::{SOURCE_CATALOG_PROJECTION_VERSION_V1, SourceCatalogCandidateV1};
 pub use store::{

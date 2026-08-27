@@ -71,12 +71,13 @@ impl CatalogReader {
         destination_key: &str,
         package: &super::super::CatalogPackageRecordV1,
     ) -> Result<()> {
+        let selected = destination.query_row(
+            &format!("{SELECT_PACKAGES} WHERE package_key_sha256 = ?1"),
+            [destination_key],
+            package_from_row,
+        )?;
+        let mut matches = selected.same_profile_base(package)?;
         for sql in [
-            "SELECT source_profile, name, version, package_release, architecture,
-                    debian_multi_arch, description, checksum, size, metadata,
-                    is_security_update, severity, cve_ids, advisory_id, advisory_url,
-                    version_scheme
-             FROM catalog_packages WHERE package_key_sha256 = ?1",
             "SELECT ordinal, capability, version, version_relation, kind, raw,
                     version_scheme, architecture_qualifier_json, provenance_json
              FROM catalog_provides WHERE package_key_sha256 = ?1 ORDER BY ordinal",
@@ -88,37 +89,39 @@ impl CatalogReader {
              FROM catalog_requirement_atoms
              WHERE package_key_sha256 = ?1 ORDER BY group_ordinal, ordinal",
         ] {
-            if !ordered_rows_match(
+            matches &= ordered_rows_match(
                 &self.connection,
                 source_key,
                 destination,
                 destination_key,
                 sql,
-            )? {
-                let selected_origin = destination.query_row(
-                    "SELECT repository_identity FROM catalog_packages
-                     WHERE package_key_sha256 = ?1",
-                    [destination_key],
-                    |row| row.get::<_, String>(0),
-                )?;
-                let duplicate_origin = match &package.origin {
-                    CatalogPackageOriginV1::Profile {
-                        repository_identity,
-                        ..
-                    } => repository_identity.as_str(),
-                    CatalogPackageOriginV1::Source { .. } => "source catalog",
-                };
-                return Err(Error::ConflictError(format!(
-                    "profile package identity {} {}-{} {:?} disagrees between repositories '{}' \
-                     and '{}'",
-                    package.name,
-                    package.version,
-                    package.package_release,
-                    package.architecture,
-                    selected_origin,
-                    duplicate_origin
-                )));
-            }
+            )?;
+        }
+        if !matches {
+            let selected_origin = match &selected.origin {
+                CatalogPackageOriginV1::Profile {
+                    repository_identity,
+                    ..
+                } => repository_identity.as_str(),
+                CatalogPackageOriginV1::Source { .. } => "source catalog",
+            };
+            let duplicate_origin = match &package.origin {
+                CatalogPackageOriginV1::Profile {
+                    repository_identity,
+                    ..
+                } => repository_identity.as_str(),
+                CatalogPackageOriginV1::Source { .. } => "source catalog",
+            };
+            return Err(Error::ConflictError(format!(
+                "profile package identity {} {}-{} {:?} disagrees between repositories '{}' \
+                 and '{}'",
+                package.name,
+                package.version,
+                package.package_release,
+                package.architecture,
+                selected_origin,
+                duplicate_origin
+            )));
         }
         Ok(())
     }

@@ -100,7 +100,7 @@ pub fn produce_debian_parity_oracle(
                             row.package_key_sha256
                         ))
                     })?;
-                if !selected.has_same_profile_facts(&row) {
+                if !selected.has_same_profile_facts(&row)? {
                     return Err(Error::ConflictError(format!(
                         "Debian profile '{}' has contradictory package identity {} {} {:?}",
                         profile.profile, row.name, row.version, row.architecture

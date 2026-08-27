@@ -166,7 +166,7 @@ impl RepositoryParserConfig {
     }
 }
 
-fn validate_source_identifier(value: &str, label: &str) -> Result<()> {
+pub(in crate::repository) fn validate_source_identifier(value: &str, label: &str) -> Result<()> {
     if value.is_empty()
         || value.len() > 128
         || !value

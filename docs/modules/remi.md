@@ -83,11 +83,15 @@ profile composition retains the member with the exact higher declared
 precedence. Public member precedences are unique, so no repository identity or
 incidental order breaks a tie. The origins collapse only when payload digest and
 every source-independent semantic and relation row agree; any disagreement is
-a typed conflict and the candidate cannot publish. After request constraints
-establish eligibility, every distinct native variant remains available for
-native version comparison. Member precedence never hides a different version,
-release, or architecture. Member order, repository names, and catalog insertion
-order never select a package.
+a typed conflict and the candidate cannot publish. Debian `distribution` and
+`component` remain typed, inspectable source-pocket provenance on the selected
+record rather than package semantics, so the same authenticated artifact may
+collapse across security and updates pockets without discarding where the
+higher-precedence copy came from. After request constraints establish
+eligibility, every distinct native variant remains available for native version
+comparison. Member precedence never hides a different version, release, or
+architecture. Member order, repository names, and catalog insertion order never
+select a package.
 
 `RepositorySnapshotSink` schema 1 is the only native parser output contract.
 Fedora primary/filelists XML, Debian Packages stanzas, ALPM archive records,
