@@ -23,6 +23,20 @@ const PUBLIC_KEY_MODE: u32 = 0o644;
 const UNIVERSE_AUTHORITY_DIRECTORY: &str = "universe";
 const UNIVERSE_ROOT_METADATA_FILE: &str = "root.json";
 
+#[cfg(test)]
+pub(crate) fn save_fixture_key_pair(
+    key: &SigningKeyPair,
+    private: &Path,
+    public: &Path,
+) -> Result<()> {
+    key.save_to_files(private, public)
+        .map_err(anyhow::Error::from)
+        .context("write repository signing fixture")?;
+    fs::set_permissions(private, fs::Permissions::from_mode(PRIVATE_KEY_MODE))?;
+    fs::set_permissions(public, fs::Permissions::from_mode(PUBLIC_KEY_MODE))?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RepositorySigningRole {
     Targets,

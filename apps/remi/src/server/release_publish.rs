@@ -703,13 +703,13 @@ mod tests {
         std::fs::set_permissions(keys_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::set_permissions(&distro_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         for role in roles {
-            SigningKeyPair::generate()
-                .with_key_id(role)
-                .save_to_files(
-                    &distro_dir.join(format!("{role}.private")),
-                    &distro_dir.join(format!("{role}.public")),
-                )
-                .unwrap();
+            let key = SigningKeyPair::generate().with_key_id(role);
+            crate::server::signing_authority::save_fixture_key_pair(
+                &key,
+                &distro_dir.join(format!("{role}.private")),
+                &distro_dir.join(format!("{role}.public")),
+            )
+            .unwrap();
         }
     }
 
