@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-16
-revision: 55
-summary: Document attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
+last_updated: 2026-08-27
+revision: 56
+summary: Document attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, native lifecycle gates, and the trusted Remi CI benchmark lane
 ---
 
 # Integration Testing
@@ -1150,7 +1150,7 @@ the WAL. Wiring the streaming path is tracked in issue #354.
 
 Trusted integration validation belongs to GitHub Actions, with any runner used
 as execution capacity rather than as an independent control plane. The PR gate
-runs the focused native cross-source lifecycle on hosted Docker across all six
+runs the focused native cross-source lifecycle on hosted Docker across all eight
 distro images and the derivative-specific APT gate on Mint and Pop!_OS. The
 rest of the TOML inventory still requires a local or
 hosted container/QEMU-capable runner; do not describe a normal PR or merge run
@@ -1159,10 +1159,22 @@ the specific workflow run.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused six-distro native lifecycle matrix and authentic derivative APT proof |
+| `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused eight-distro native lifecycle matrix and authentic derivative APT proof |
 | `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation for `conary`, `remi`, `conaryd`, and `conary-test` |
+| `remi-ci-benchmark` | Manual dispatch only | Non-required cold/warm timing evidence for one exact commit already merged into `main` on the restricted Remi runner |
 | `release-artifact-proof` | Conary deployment + manual dispatch | Install each published native package and run the three-distro Cartesian lifecycle with those exact bytes |
 | `scheduled-ops` | Nightly/scheduled + manual dispatch | Deep validation, health checks, and scheduled operational audits |
+
+The Remi benchmark consolidates the four Rust gates and 29 container phases so
+the static binary, integration harness, images, Cargo artifacts, registry
+state, and `sccache` objects can be reused on the same machine. One run occupies
+the runner at a time and gives that run all 12 visible logical CPUs, with no
+cgroup CPU or memory ceiling. It runs up to eight independent container phases
+concurrently after the shared builds. The workflow records the actual CPU,
+memory, build and container parallelism, cache disposition, total duration, and
+per-phase duration in its retained JSON evidence. It cannot run fork or
+unmerged pull-request code and it does not replace any required hosted check
+while issue #620 measures the cold and warm results against the hosted baseline.
 
 `conary-test deploy status` is internal infrastructure state, not a product
 release identity. Operators should read it as local checkout and managed-rollout

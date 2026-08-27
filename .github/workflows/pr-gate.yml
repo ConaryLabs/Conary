@@ -31,6 +31,8 @@ jobs:
         run: bash scripts/check-github-action-runtimes.sh
       - name: Test GitHub Actions runtime policy checker
         run: bash scripts/test-github-action-runtimes.sh
+      - name: Test trusted Remi CI benchmark contract
+        run: bash scripts/test-remi-ci-benchmark.sh
 
   release-matrix-policy:
     name: release-matrix-policy

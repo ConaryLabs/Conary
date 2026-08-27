@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-26
-revision: 34
-summary: Non-secret infrastructure, agent operations, release, typed and causally inspectable Remi deployment completion, exact native-oracle input export, and current remote development tooling
+last_updated: 2026-08-27
+revision: 35
+summary: Non-secret infrastructure, agent operations, release, trusted Remi CI benchmark capacity, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -19,11 +19,46 @@ summary: Non-secret infrastructure, agent operations, release, typed and causall
 - Forge remote validation and Forge-local staging deployment are decommissioned.
   The old VPS runner did not expose `/dev/kvm`, and no replacement Forge host
   or conary-test deployment path is supported.
+- The production Remi host may also supply the manually dispatched,
+  non-required `remi-ci-benchmark` capacity lane. This is not a restoration of
+  Forge deployment authority and is not release evidence.
 - Hosted CI keeps Remi health/audit/build/list checks active. QEMU release
   evidence comes from `scripts/local-qemu-validation.sh` on a local
   development machine with `/dev/kvm`.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
   ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
+
+### Trusted Remi CI Benchmark Capacity
+
+`.github/workflows/remi-ci-benchmark.yml` benchmarks only an exact commit
+already merged into `main`. It has no automatic pull-request or push trigger,
+receives no repository or environment secrets, and selects the restricted
+`remi-ci-trusted` label. Public fork code must never reach this persistent
+runner. GitHub Actions remains the control plane; the host supplies execution
+capacity only.
+
+The runner uses a dedicated unprivileged `conary-ci` identity with no
+non-interactive sudo, production deployment or signing variables, readable
+production authority roots, or root-equivalent Docker group membership.
+Container work uses the identity's rootless Podman socket. The preflight
+requires the workspace Rust toolchain, `sccache`, at least 12 visible logical
+CPUs, at least 48 GiB of physical memory, and no inherited cgroup `cpu.max` or
+`memory.max` ceiling.
+
+Bootstrap the Ubuntu host with a one-time repository registration token piped
+directly into `deploy/setup-remi-ci-runner.sh --registration-token-stdin`.
+That installer verifies the pinned GitHub runner archive, provisions Rust
+1.98.0, installs rootless Podman and KVM dependencies, and installs the
+`github-actions-remi-ci-runner.service` unit. Re-run it with `--verify-only`
+to audit the installed boundary without changing it.
+
+Only one benchmark job runs at a time. That job sets Cargo, Rust tests, Make,
+and CMake parallelism to all logical CPUs visible through `nproc`; the runner
+service must not set `CPUQuota=` or `MemoryMax=`. Image and suite work runs up
+to eight independent container phases concurrently so non-compiler phases can
+also occupy the host. Each cold or warm run retains machine-readable phase
+timings plus the capacity it observed. These results are comparison evidence
+for issue #620, not a required status check.
 
 ## Agent Operations And MCP
 
