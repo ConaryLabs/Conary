@@ -26,7 +26,7 @@ jobs:
   deploy-remi-candidate:
     name: deploy-remi-candidate
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 300
     environment: production
     steps:
       - name: Check out exact candidate
@@ -187,18 +187,20 @@ jobs:
                 set -e
                 if (( refresh_status != 0 )) || ! jq -e '
                   .force == true
+                  and .profile == null
                   and (.synced | type == "number")
                   and (.skipped | type == "number")
                   and (.failed | type == "number")
                   and (.results | type == "array")
                   and (.failures | type == "array")
                   and .failed == (.failures | length)
-                  and (
-                    (.status == "complete" and .failed == 0)
-                    or (.status == "partial"
-                      and .failed > 0
-                      and all(.failures[]; .source_profile == "solus"))
-                  )
+                  and ((.status == "complete" and .failed == 0)
+                    or (.status == "partial" and .failed > 0))
+                  and all(.failures[];
+                    .source_profile == "fedora-44"
+                    or .source_profile == "ubuntu-26.04"
+                    or .source_profile == "arch"
+                    or .source_profile == "solus")
                 ' <<<"$refresh" >/dev/null; then
                   echo "post-deploy forced candidate refresh failed" >&2
                   jq -c '{status, force, synced, skipped, failed}' \
@@ -209,6 +211,44 @@ jobs:
                 fi
                 jq -c '{status, force, synced, skipped, failed}' \
                   <<<"$refresh" >&2
+                mapfile -t retry_profiles < <(jq -r '
+                  [.failures[].source_profile
+                    | select(. != "solus")]
+                  | unique[]
+                ' <<<"$refresh")
+                for profile in "${retry_profiles[@]}"; do
+                  case "$profile" in
+                    fedora-44|ubuntu-26.04|arch) ;;
+                    *)
+                      echo "refresh returned an unsupported retry profile: $profile" >&2
+                      exit 1
+                      ;;
+                  esac
+                  echo "retrying only failed profile ${profile}" >&2
+                  set +e
+                  scoped_refresh="$(curl --fail-with-body --silent --show-error \
+                    --connect-timeout 30 --max-time 7200 --request POST \
+                    "http://127.0.0.1:8081/v1/admin/refresh?force=true&profile=${profile}")"
+                  scoped_status=$?
+                  set -e
+                  if (( scoped_status != 0 )) || ! jq -e --arg profile "$profile" '
+                    .force == true
+                    and .profile == $profile
+                    and .status == "complete"
+                    and .failed == 0
+                    and (.results | length) > 0
+                    and all(.results[]; .source_profile == $profile)
+                  ' <<<"$scoped_refresh" >/dev/null; then
+                    echo "profile-scoped candidate retry failed for ${profile}" >&2
+                    jq -c '{status, force, profile, synced, skipped, failed}' \
+                      <<<"$scoped_refresh" >&2 || true
+                    sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi \
+                      | emit_inspection
+                    exit 1
+                  fi
+                  jq -c '{status, force, profile, synced, skipped, failed}' \
+                    <<<"$scoped_refresh" >&2
+                done
                 if ! inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy \
                   inspect-remi "$requirement" 2>&1)"; then
                   sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi \

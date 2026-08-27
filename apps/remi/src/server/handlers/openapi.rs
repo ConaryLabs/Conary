@@ -304,13 +304,22 @@ pub async fn openapi_spec() -> Response {
                     "description": "Synchronously refreshes every configured upstream and returns typed per-source outcomes. Successful sources commit independently; one failed source does not discard other results. A complete refresh returns 200, a mixed result returns 207, and an all-failed refresh returns 502.",
                     "tags": ["repos"],
                     "security": [{ "bearerAuth": [] }],
-                    "parameters": [{
-                        "name": "force",
-                        "in": "query",
-                        "required": false,
-                        "schema": { "type": "boolean", "default": false },
-                        "description": "Refresh sources even when their metadata is still current"
-                    }],
+                    "parameters": [
+                        {
+                            "name": "force",
+                            "in": "query",
+                            "required": false,
+                            "schema": { "type": "boolean", "default": false },
+                            "description": "Refresh sources even when their metadata is still current"
+                        },
+                        {
+                            "name": "profile",
+                            "in": "query",
+                            "required": false,
+                            "schema": { "type": "string" },
+                            "description": "Retry only this exact configured native source profile; omitted means every configured source"
+                        }
+                    ],
                     "responses": {
                         "200": { "description": "Every configured source completed or was current" },
                         "207": { "description": "Some sources completed and some failed; the body contains both outcome sets" },

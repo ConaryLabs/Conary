@@ -9,7 +9,7 @@ use super::ServiceError;
 
 mod operations;
 pub(crate) use operations::refresh_repositories_uncoordinated;
-pub use operations::{refresh_repositories, sync_repo};
+pub use operations::{refresh_profile_repositories, refresh_repositories, sync_repo};
 
 /// Result of one successful repository metadata refresh.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -215,6 +215,50 @@ mod tests {
                     RepositoryPolicyScope::repository(identity).unwrap(),
                     NativeSourceEcosystem::Rpm,
                     NativeSourceStream::release("44").unwrap(),
+                    RepositoryUpdateMode::Follow,
+                )
+                .unwrap(),
+                identity,
+                None,
+            )
+            .unwrap();
+        repository
+    }
+
+    fn native_debian_repository(name: &str, identity: &str) -> conary_core::db::models::Repository {
+        let metadata_url = format!("https://127.0.0.1:9/{identity}");
+        let mut repository =
+            conary_core::db::models::Repository::new(name.to_string(), metadata_url);
+        repository.source_profile = Some("ubuntu-26.04".to_string());
+        repository.priority = 100;
+        repository.profile_member_role =
+            Some(conary_core::repository::supported_profiles::ProfileSourceRole::Base);
+        repository.profile_member_required = true;
+        repository
+            .set_parser_config(RepositoryParserConfig::Deb {
+                distribution: "resolute".to_string(),
+                component: "main".to_string(),
+                architecture: "amd64".to_string(),
+            })
+            .unwrap();
+        repository
+            .set_trust_policy(RepositoryTrustPolicy::Debian {
+                release_keys: vec![
+                    OpenPgpTrustRoot::new(
+                        "https://example.test/ubuntu.gpg".to_string(),
+                        "B".repeat(40),
+                    )
+                    .unwrap(),
+                ],
+            })
+            .unwrap();
+        repository
+            .set_native_source_policy(
+                RepositorySourcePolicy::new(
+                    "ubuntu",
+                    RepositoryPolicyScope::repository(identity).unwrap(),
+                    NativeSourceEcosystem::Deb,
+                    NativeSourceStream::release("resolute").unwrap(),
                     RepositoryUpdateMode::Follow,
                 )
                 .unwrap(),
@@ -519,6 +563,75 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn exact_profile_retry_starts_no_unrelated_profile_run() {
+        let temp = tempfile::tempdir().expect("create tempdir");
+        let db_path = temp.path().join("metadata/conary.db");
+        let chunk_dir = temp.path().join("chunks");
+        let cache_dir = temp.path().join("cache");
+        for directory in [db_path.parent().unwrap(), &chunk_dir, &cache_dir] {
+            std::fs::create_dir_all(directory).expect("create fixture directory");
+        }
+        conary_core::db::init(&db_path).expect("initialize operational database");
+        {
+            let conn = conary_core::db::open_fast(&db_path).expect("open operational database");
+            native_repository("fedora", "fedora-44-everything-x86_64")
+                .insert(&conn)
+                .expect("insert Fedora member");
+            native_debian_repository("ubuntu", "ubuntu-resolute-main-amd64")
+                .insert(&conn)
+                .expect("insert Ubuntu member");
+        }
+        let state = Arc::new(RwLock::new(
+            crate::server::ServerState::new(crate::server::ServerConfig {
+                db_path: db_path.clone(),
+                chunk_dir,
+                cache_dir,
+                ..Default::default()
+            })
+            .expect("build server state"),
+        ));
+
+        let first = super::super::refresh_repositories(&state, true)
+            .await
+            .expect("collect initial failures");
+        assert_eq!(first.state(), RepoRefreshBatchState::Failed);
+        let before = profile_run_counts(&db_path);
+        assert_eq!(before.get("fedora-44"), Some(&1));
+        assert_eq!(before.get("ubuntu-26.04"), Some(&1));
+
+        let retry = super::super::refresh_profile_repositories(&state, "fedora-44", true)
+            .await
+            .expect("retry exact Fedora profile");
+        assert_eq!(retry.state(), RepoRefreshBatchState::Failed);
+        assert!(
+            retry
+                .failures
+                .iter()
+                .all(|failure| failure.source_profile.as_deref() == Some("fedora-44"))
+        );
+        let after = profile_run_counts(&db_path);
+        assert_eq!(after.get("fedora-44"), Some(&2));
+        assert_eq!(after.get("ubuntu-26.04"), Some(&1));
+    }
+
+    fn profile_run_counts(db_path: &std::path::Path) -> std::collections::BTreeMap<String, i64> {
+        let conn = conary_core::db::open_fast(db_path).expect("open operational database");
+        let mut statement = conn
+            .prepare(
+                "SELECT source_profile, COUNT(*)
+                 FROM repository_sync_runs
+                 GROUP BY source_profile
+                 ORDER BY source_profile",
+            )
+            .expect("prepare profile run counts");
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query profile run counts")
+            .collect::<rusqlite::Result<_>>()
+            .expect("collect profile run counts")
     }
 
     #[tokio::test]

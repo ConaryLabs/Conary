@@ -168,6 +168,28 @@ pub async fn refresh_repositories(
 ) -> Result<RepoRefreshBatch, ServiceError> {
     let _publication_guard = publication::guard(state).await;
     let result = refresh_repositories_uncoordinated(state, force).await;
+    record_repository_readiness(state, &result).await;
+    result
+}
+
+/// Synchronize only one exact configured native source profile.
+///
+/// This is the retry boundary for a partial all-profile ceremony. It never
+/// refreshes legacy repositories, deactivates another profile, or upgrades the
+/// global publication-readiness phase from a profile-local result.
+pub async fn refresh_profile_repositories(
+    state: &Arc<RwLock<ServerState>>,
+    source_profile: &str,
+    force: bool,
+) -> Result<RepoRefreshBatch, ServiceError> {
+    let _publication_guard = publication::guard(state).await;
+    refresh_repositories_scoped_uncoordinated(state, force, Some(source_profile)).await
+}
+
+async fn record_repository_readiness(
+    state: &Arc<RwLock<ServerState>>,
+    result: &Result<RepoRefreshBatch, ServiceError>,
+) {
     let outcome = match result.as_ref().map(RepoRefreshBatch::state) {
         Ok(RepoRefreshBatchState::Complete) => {
             crate::server::readiness::PublicationPhaseState::Complete
@@ -185,7 +207,6 @@ pub async fn refresh_repositories(
         .await
         .publication_readiness
         .record_repository(outcome);
-    result
 }
 
 /// Synchronize enabled repositories while the caller owns the complete
@@ -193,6 +214,14 @@ pub async fn refresh_repositories(
 pub(crate) async fn refresh_repositories_uncoordinated(
     state: &Arc<RwLock<ServerState>>,
     force: bool,
+) -> Result<RepoRefreshBatch, ServiceError> {
+    refresh_repositories_scoped_uncoordinated(state, force, None).await
+}
+
+async fn refresh_repositories_scoped_uncoordinated(
+    state: &Arc<RwLock<ServerState>>,
+    force: bool,
+    requested_profile: Option<&str>,
 ) -> Result<RepoRefreshBatch, ServiceError> {
     let db = db_path(state).await;
     let database_writer = state.read().await.database_writer.clone();
@@ -226,17 +255,32 @@ pub(crate) async fn refresh_repositories_uncoordinated(
             legacy_repositories.push(repository);
         }
     }
-    let empty_active_profiles = active_profiles
-        .into_iter()
-        .map(|active| active.source_profile)
-        .filter(|profile| !native_profiles.contains_key(profile))
-        .collect::<Vec<_>>();
+    let empty_active_profiles = if requested_profile.is_none() {
+        active_profiles
+            .into_iter()
+            .map(|active| active.source_profile)
+            .filter(|profile| !native_profiles.contains_key(profile))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     deactivate_profiles_without_enabled_members(
         db.clone(),
         database_writer.clone(),
         empty_active_profiles,
     )
     .await?;
+
+    if let Some(requested_profile) = requested_profile {
+        let repositories = native_profiles.remove(requested_profile).ok_or_else(|| {
+            ServiceError::NotFound(format!(
+                "native source profile '{requested_profile}' is not configured"
+            ))
+        })?;
+        native_profiles.clear();
+        native_profiles.insert(requested_profile.to_string(), repositories);
+        legacy_repositories.clear();
+    }
 
     let profile_jobs = native_profiles
         .into_iter()
