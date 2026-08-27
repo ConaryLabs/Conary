@@ -10,9 +10,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::Repository;
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, CatalogScratchAdmission, ProfileCatalogMemberInputV2, ProfileRevisionV2,
-    SourceSnapshotV1, publish_profile_catalog_bundle, publish_source_catalog_bundle,
-    verify_source_catalog_bundle, write_profile_catalog_candidate_with_scratch_admission,
+    CATALOG_FILE_NAME, CatalogReader, CatalogScratchAdmission, ProfileCatalogMemberInputV2,
+    ProfileRevisionV2, SourceSnapshotV1, publish_profile_catalog_bundle,
+    publish_source_catalog_bundle, write_profile_catalog_candidate_with_scratch_admission,
     write_profile_catalog_manifest, write_source_catalog_manifest,
 };
 use conary_core::repository::supported_profiles::ProfileSourceRole;
@@ -49,6 +49,14 @@ pub struct StagedSourceCatalog {
     pub required: bool,
     pub manifest: SourceSnapshotV1,
     pub path: PathBuf,
+}
+
+/// A private source candidate paired with the reader that proved its manifest
+/// binding. The reader is consumed by profile composition before the durable
+/// publication boundary independently verifies the complete bundle again.
+struct VerifiedStagedSourceCatalog {
+    staged: StagedSourceCatalog,
+    reader: CatalogReader,
 }
 
 /// Complete verified filesystem candidate before immutable publication begins.
@@ -252,15 +260,17 @@ pub async fn stage_profile_catalog(
                             plan.repository.name
                         )
                     })?;
-                write_source_catalog_manifest(&candidate_directory, &manifest)?;
-                verify_source_catalog_bundle(&candidate_directory, &manifest)?;
-                Ok::<_, anyhow::Error>(StagedSourceCatalog {
-                    ordinal: plan.ordinal,
-                    role: plan.role,
-                    precedence: plan.precedence,
-                    required: plan.required,
-                    manifest,
-                    path: candidate_directory,
+                let reader = write_source_catalog_manifest(&candidate_directory, &manifest)?;
+                Ok::<_, anyhow::Error>(VerifiedStagedSourceCatalog {
+                    staged: StagedSourceCatalog {
+                        ordinal: plan.ordinal,
+                        role: plan.role,
+                        precedence: plan.precedence,
+                        required: plan.required,
+                        manifest,
+                        path: candidate_directory,
+                    },
+                    reader,
                 })
             }
         },
@@ -271,7 +281,7 @@ pub async fn stage_profile_catalog(
         fetched.push(result?);
     }
     drop(fetches);
-    fetched.sort_by_key(|source| source.ordinal);
+    fetched.sort_by_key(|source| source.staged.ordinal);
 
     let profile = profile.to_string();
     tokio::task::spawn_blocking(move || {
@@ -283,24 +293,19 @@ pub async fn stage_profile_catalog(
 
 fn stage_profile_candidate(
     profile: &str,
-    staged_sources: Vec<StagedSourceCatalog>,
+    staged_sources: Vec<VerifiedStagedSourceCatalog>,
     candidate_run_dir: PathBuf,
     scratch_admission: Arc<dyn CatalogScratchAdmission>,
 ) -> Result<StagedProfileCatalog> {
-    let readers = staged_sources
-        .iter()
-        .map(|source| verify_source_catalog_bundle(&source.path, &source.manifest))
-        .collect::<conary_core::Result<Vec<_>>>()?;
     let inputs = staged_sources
         .iter()
-        .zip(&readers)
-        .map(|(source, reader)| ProfileCatalogMemberInputV2 {
-            ordinal: source.ordinal,
-            role: source.role,
-            precedence: source.precedence,
-            required: source.required,
-            manifest: &source.manifest,
-            reader,
+        .map(|source| ProfileCatalogMemberInputV2 {
+            ordinal: source.staged.ordinal,
+            role: source.staged.role,
+            precedence: source.staged.precedence,
+            required: source.staged.required,
+            manifest: &source.staged.manifest,
+            reader: &source.reader,
         })
         .collect();
     let profile_candidate_directory = candidate_run_dir.join("profile");
@@ -314,10 +319,11 @@ fn stage_profile_candidate(
     )?;
     manifest.validate_member_contract()?;
     write_profile_catalog_manifest(&profile_candidate_directory, &manifest)?;
-    conary_core::repository::catalog::verify_profile_catalog_bundle(
-        &profile_candidate_directory,
-        &manifest,
-    )?;
+
+    let staged_sources = staged_sources
+        .into_iter()
+        .map(|source| source.staged)
+        .collect();
 
     Ok(StagedProfileCatalog {
         profile: profile.to_string(),

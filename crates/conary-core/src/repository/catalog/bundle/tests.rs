@@ -170,7 +170,11 @@ fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
         write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
     let manifest = source_manifest(&binding);
     retain_source_object(&candidate, &manifest.authenticated_objects[0]);
-    write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    let staged_reader = write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    assert_eq!(
+        staged_reader.binding().artifact.sha256,
+        manifest.catalog.sha256
+    );
     verify_source_catalog_bundle(&candidate, &manifest).unwrap();
 
     let expected_identity = manifest.manifest_sha256().unwrap();
@@ -181,6 +185,21 @@ fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
     assert_eq!(published.file_name().unwrap(), expected_identity.as_str());
     assert!(!candidate.exists());
     verify_source_catalog_bundle(&published, &manifest).unwrap();
+}
+
+#[test]
+fn source_manifest_finalization_rejects_unowned_candidate_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("source");
+    fs::create_dir(&candidate).unwrap();
+    let binding =
+        write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
+    let manifest = source_manifest(&binding);
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
+    fs::write(candidate.join("unowned.tmp"), b"not part of the bundle").unwrap();
+
+    let error = write_source_catalog_manifest(&candidate, &manifest).unwrap_err();
+    assert!(error.to_string().contains("incomplete or unexpected"));
 }
 
 #[test]
