@@ -185,6 +185,19 @@ fn serialized_source_authority_must_be_public_and_credential_free() {
     require_public_snapshot(&source).unwrap();
 }
 
+#[test]
+fn repository_relative_debian_object_path_resolves_without_reconstruction() {
+    let manifest = valid_manifest();
+    let mut source = manifest.profiles[1].sources[0].clone();
+    source.provenance.metadata_url = "https://archive.ubuntu.com/ubuntu".to_string();
+    let source_path = "dists/resolute/multiverse/binary-amd64/Packages.gz";
+
+    assert_eq!(
+        source_object_url(&source, source_path).unwrap(),
+        "https://archive.ubuntu.com/ubuntu/dists/resolute/multiverse/binary-amd64/Packages.gz"
+    );
+}
+
 #[tokio::test]
 async fn publisher_bounds_download_and_reopens_persisted_bytes() {
     let temp = tempfile::tempdir().unwrap();

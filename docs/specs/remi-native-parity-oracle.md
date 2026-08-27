@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
-last_updated: 2026-08-26
-revision: 10
+last_updated: 2026-08-27
+revision: 11
 status: active
 ---
 
@@ -23,8 +23,13 @@ mirror state or Conary's normalized catalog bytes. The strict schema-1 bundle
 binds the canonical ordered Fedora 44, Ubuntu 26.04, and Arch private candidate
 revisions, every ordered `SourceSnapshotV1`, and the digest-sorted union of
 their authenticated native metadata objects. Each object is refetched from the
-snapshot's public HTTPS authority with its declared size as a hard upper bound,
-then accepted only when its exact SHA-256 and size match.
+snapshot's public HTTPS authority using its exact repository-relative
+`source_path`, with its declared size as a hard upper bound, then accepted only
+when its exact SHA-256 and size match. Debian Release member names remain
+distribution-relative for signed SHA-256 lookup, while the persisted object
+path includes the exact `dists/<distribution>/` prefix needed to reopen that
+same authenticated object from the repository origin. The exporter never
+reconstructs a missing prefix from current parser configuration.
 
 The writer publishes canonical `manifest.json` plus digest-named files beneath
 one exact `objects/` directory, synchronizes and atomically renames the complete
