@@ -8,7 +8,6 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
-use conary_core::repository::RepositoryClient;
 use conary_core::repository::catalog::{ProfileRevisionV2, SourceSnapshotV1};
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -62,9 +61,9 @@ pub struct NativeOracleInputOutcome {
     pub object_bytes: u64,
 }
 
-struct ObjectFetch {
+struct ObjectSource {
     object: NativeOracleInputObjectV1,
-    url: String,
+    path: PathBuf,
 }
 
 /// Materialize exact native metadata for the current ordered private candidates.
@@ -81,6 +80,7 @@ pub async fn materialize_native_oracle_inputs(
     let authority = CatalogAuthority::for_inspection(&config.db_path, &config.catalog_dir);
     let mut pins = Vec::with_capacity(config.candidates.len());
     let mut profiles = Vec::with_capacity(config.candidates.len());
+    let mut object_sources = BTreeMap::<String, ObjectSource>::new();
     for selection in &config.candidates {
         let pin = authority
             .open_selected_profile(selection)
@@ -99,16 +99,28 @@ pub async fn materialize_native_oracle_inputs(
             .context("validate native-oracle input profile member contract")?;
         let mut sources = Vec::with_capacity(pin.manifest().members.len());
         for member in &pin.manifest().members {
-            sources.push(
-                authority
-                    .source_snapshot_for_member(&pin, member.ordinal)
-                    .with_context(|| {
-                        format!(
-                            "reopen native-oracle source '{}' member {}",
-                            selection.source_profile, member.ordinal
-                        )
-                    })?,
-            );
+            let source = authority
+                .source_bundle_for_member(&pin, member.ordinal)
+                .with_context(|| {
+                    format!(
+                        "reopen native-oracle source '{}' member {}",
+                        selection.source_profile, member.ordinal
+                    )
+                })?;
+            for object in &source.manifest.authenticated_objects {
+                let path = conary_core::repository::catalog::source_metadata_object_path(
+                    &source.bundle_path,
+                    object,
+                )
+                .with_context(|| {
+                    format!(
+                        "reopen retained native metadata object {} for '{}' member {}",
+                        object.sha256, selection.source_profile, member.ordinal
+                    )
+                })?;
+                insert_object_source(&mut object_sources, object, path)?;
+            }
+            sources.push(source.manifest);
         }
         profiles.push(NativeOracleInputProfileV1 {
             profile_revision_sha256: selection.profile_revision_sha256.clone(),
@@ -118,14 +130,21 @@ pub async fn materialize_native_oracle_inputs(
         pins.push(pin);
     }
 
-    let (objects, fetches) = collect_objects(&profiles)?;
+    let objects = object_sources
+        .values()
+        .map(|source| source.object.clone())
+        .collect();
     let manifest = NativeOracleInputSetV1 {
         schema_version: NATIVE_ORACLE_INPUT_SCHEMA_V1,
         profiles,
         objects,
     };
     validate_manifest(&manifest)?;
-    publish_bundle(&config.output_dir, &manifest, fetches).await?;
+    publish_bundle(
+        &config.output_dir,
+        &manifest,
+        object_sources.into_values().collect(),
+    )?;
     let reopened = reopen_native_oracle_input_bundle(&config.output_dir)?;
     ensure!(
         reopened == manifest,
@@ -229,69 +248,32 @@ fn capture_current_candidates(
         .collect()
 }
 
-fn collect_objects(
-    profiles: &[NativeOracleInputProfileV1],
-) -> Result<(Vec<NativeOracleInputObjectV1>, Vec<ObjectFetch>)> {
-    let mut by_digest = BTreeMap::<String, ObjectFetch>::new();
-    for profile in profiles {
-        for source in &profile.sources {
-            require_public_snapshot(source)?;
-            for object in &source.authenticated_objects {
-                let input = NativeOracleInputObjectV1 {
-                    sha256: object.sha256.clone(),
-                    size: object.size,
-                };
-                let url = source_object_url(source, &object.source_path)?;
-                match by_digest.get(&input.sha256) {
-                    Some(existing) => ensure!(
-                        existing.object.size == input.size,
-                        "native metadata digest {} has conflicting sizes",
-                        input.sha256
-                    ),
-                    None => {
-                        by_digest.insert(input.sha256.clone(), ObjectFetch { object: input, url });
-                    }
-                }
-            }
+fn insert_object_source(
+    objects: &mut BTreeMap<String, ObjectSource>,
+    object: &conary_core::repository::catalog::SourceMetadataObjectV1,
+    path: PathBuf,
+) -> Result<()> {
+    let input = NativeOracleInputObjectV1 {
+        sha256: object.sha256.clone(),
+        size: object.size,
+    };
+    match objects.get(&input.sha256) {
+        Some(existing) => ensure!(
+            existing.object.size == input.size,
+            "native metadata digest {} has conflicting sizes",
+            input.sha256
+        ),
+        None => {
+            objects.insert(
+                input.sha256.clone(),
+                ObjectSource {
+                    object: input,
+                    path,
+                },
+            );
         }
     }
-    ensure!(
-        !by_digest.is_empty(),
-        "native-oracle input set contains no authenticated metadata objects"
-    );
-    let objects = by_digest
-        .values()
-        .map(|fetch| fetch.object.clone())
-        .collect();
-    let fetches = by_digest.into_values().collect();
-    Ok((objects, fetches))
-}
-
-fn source_object_url(source: &SourceSnapshotV1, source_path: &str) -> Result<String> {
-    let mut base =
-        Url::parse(&source.provenance.metadata_url).context("parse native metadata base URL")?;
-    ensure!(
-        base.scheme() == "https" && base.host_str().is_some(),
-        "native metadata base URL must use public HTTPS authority"
-    );
-    ensure!(
-        base.username().is_empty() && base.password().is_none(),
-        "native metadata base URL must not contain credentials"
-    );
-    if !base.path().ends_with('/') {
-        let path = format!("{}/", base.path());
-        base.set_path(&path);
-    }
-    let resolved = base
-        .join(source_path)
-        .context("resolve authenticated native metadata object URL")?;
-    ensure!(
-        resolved.scheme() == "https"
-            && resolved.host_str() == base.host_str()
-            && resolved.port_or_known_default() == base.port_or_known_default(),
-        "native metadata object escaped its public HTTPS origin"
-    );
-    Ok(resolved.into())
+    Ok(())
 }
 
 fn require_public_snapshot(source: &SourceSnapshotV1) -> Result<()> {
@@ -359,10 +341,10 @@ fn has_public_host(url: &Url) -> bool {
     }
 }
 
-async fn publish_bundle(
+fn publish_bundle(
     output_dir: &Path,
     manifest: &NativeOracleInputSetV1,
-    fetches: Vec<ObjectFetch>,
+    sources: Vec<ObjectSource>,
 ) -> Result<()> {
     let parent = output_parent(output_dir)?;
     match fs::symlink_metadata(output_dir) {
@@ -381,18 +363,30 @@ async fn publish_bundle(
     fs::create_dir(&objects_dir).context("create native-oracle object directory")?;
     fs::set_permissions(&objects_dir, fs::Permissions::from_mode(0o700))?;
 
-    let client = RepositoryClient::new().context("create native metadata client")?;
-    for fetch in fetches {
-        let path = objects_dir.join(&fetch.object.sha256);
-        let identity = client
-            .download_file_with_identity_limit(&fetch.url, &path, fetch.object.size)
-            .await
-            .with_context(|| format!("download native metadata object {}", fetch.object.sha256))?;
+    for source in sources {
+        let path = objects_dir.join(&source.object.sha256);
+        fs::copy(&source.path, &path).with_context(|| {
+            format!(
+                "copy retained native metadata object {}",
+                source.object.sha256
+            )
+        })?;
+        let metadata = fs::symlink_metadata(&path)?;
         ensure!(
-            identity.sha256 == fetch.object.sha256 && identity.size == fetch.object.size,
+            metadata.file_type().is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.len() == source.object.size,
             "native metadata object {} identity drifted",
-            fetch.object.sha256
+            source.object.sha256
         );
+        conary_core::hash::verify_file_sha256(&path, &source.object.sha256)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| {
+                format!(
+                    "verify copied native metadata object {}",
+                    source.object.sha256
+                )
+            })?;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         File::open(&path)?.sync_all()?;
     }

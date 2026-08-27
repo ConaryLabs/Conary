@@ -11,6 +11,7 @@ use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
 
 pub const SOURCE_SNAPSHOT_SCHEMA_V1: u32 = 1;
+pub const SOURCE_CATALOG_PROJECTION_VERSION_V2: u32 = 2;
 pub const PROFILE_REVISION_SCHEMA_V2: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,10 +161,11 @@ impl SourceSnapshotV1 {
             "source snapshot stream binding",
         )?;
         validate_identity(&self.stream.identity, "source snapshot stream identity")?;
-        if self.parser_projection_version == 0 {
-            return Err(Error::ConfigError(
-                "source snapshot parser projection version must be positive".to_string(),
-            ));
+        if self.parser_projection_version != SOURCE_CATALOG_PROJECTION_VERSION_V2 {
+            return Err(Error::ConfigError(format!(
+                "source snapshot parser projection version {} is unsupported; expected {}",
+                self.parser_projection_version, SOURCE_CATALOG_PROJECTION_VERSION_V2
+            )));
         }
         validate_sha256(
             &self.provenance.parser_config_sha256,
@@ -494,7 +496,7 @@ mod tests {
                 identity: "44".to_string(),
             },
             stream_binding_sha256: digest('a'),
-            parser_projection_version: 1,
+            parser_projection_version: SOURCE_CATALOG_PROJECTION_VERSION_V2,
             provenance: SourceProvenanceV1 {
                 ecosystem: SourceEcosystemV1::Rpm,
                 metadata_url: "https://example.test/repository".to_string(),

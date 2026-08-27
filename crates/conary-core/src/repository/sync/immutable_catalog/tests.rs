@@ -174,12 +174,17 @@ fn package(repository: &Repository) -> SyncedPackageRow {
 }
 
 fn authenticated_object() -> SourceMetadataObjectV1 {
+    let bytes = authenticated_object_bytes();
     SourceMetadataObjectV1 {
         role: SourceMetadataObjectRoleV1::RpmPrimary,
         source_path: "repodata/primary.xml.zst".to_string(),
-        sha256: "d".repeat(64),
-        size: 2048,
+        sha256: crate::hash::sha256(&bytes),
+        size: bytes.len() as u64,
     }
+}
+
+fn authenticated_object_bytes() -> Vec<u8> {
+    vec![b'x'; 2048]
 }
 
 #[test]
@@ -301,12 +306,18 @@ fn native_candidate_admission_precedes_file_creation_and_refusal_leaves_no_file(
     assert!(sink.take_arch_package_record().unwrap().is_some());
     assert!(sink.take_arch_package_record().unwrap().is_none());
     sink.package(package).unwrap();
-    sink.authenticated_object(AuthenticatedMetadataObject {
-        role: SourceMetadataObjectRoleV1::RpmPrimary,
-        source_path: "repodata/primary.xml.gz".to_string(),
-        sha256: "a".repeat(64),
-        size: 1,
-    })
+    let authenticated_bytes = b"x";
+    let authenticated_path = sink.work_directory.path().join("rpm-primary");
+    std::fs::write(&authenticated_path, authenticated_bytes).unwrap();
+    sink.authenticated_object(
+        AuthenticatedMetadataObject {
+            role: SourceMetadataObjectRoleV1::RpmPrimary,
+            source_path: "repodata/primary.xml.gz".to_string(),
+            sha256: crate::hash::sha256(authenticated_bytes),
+            size: authenticated_bytes.len() as u64,
+        },
+        &authenticated_path,
+    )
     .unwrap();
     sink.finish(
         &repository,
@@ -401,8 +412,21 @@ fn cache_hit_admits_from_the_exact_reopened_catalog_before_replay() {
         cached_binding.artifact.size
     );
     assert_eq!(requirement.package_count, cached_binding.counts.packages);
+    let object_path = sink.work_directory.path().join("rpm-primary");
+    std::fs::write(&object_path, authenticated_object_bytes()).unwrap();
+    sink.authenticated_object(object.clone(), &object_path)
+        .unwrap();
     sink.finish(&repository, snapshot).unwrap();
     assert!(candidate.exists());
+    let retained = candidate
+        .parent()
+        .unwrap()
+        .join(crate::repository::catalog::SOURCE_METADATA_DIRECTORY_NAME)
+        .join(&object.sha256);
+    assert_eq!(
+        std::fs::read(retained).unwrap(),
+        authenticated_object_bytes()
+    );
 }
 
 #[test]
@@ -429,8 +453,8 @@ fn exact_native_evidence_becomes_a_bound_source_snapshot_without_operational_ids
         vec![CatalogSourceEvidenceV1::AuthenticatedObject {
             role: SourceMetadataObjectRoleV1::RpmPrimary,
             source_path: "repodata/primary.xml.zst".to_string(),
-            sha256: "d".repeat(64),
-            size: 2048,
+            sha256: authenticated_object().sha256,
+            size: authenticated_object().size,
         }]
     );
     assert!(matches!(

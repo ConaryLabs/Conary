@@ -12,10 +12,12 @@ mod record;
 pub(in crate::repository) mod source;
 mod store;
 
+pub(in crate::repository) use bundle::retain_source_metadata_object;
 pub use bundle::{
     CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, PublishedCatalogBundle,
-    publish_profile_catalog_bundle, publish_profile_catalog_bundle_with_provenance,
-    publish_source_catalog_bundle, publish_source_catalog_bundle_with_provenance,
+    SOURCE_METADATA_DIRECTORY_NAME, publish_profile_catalog_bundle,
+    publish_profile_catalog_bundle_with_provenance, publish_source_catalog_bundle,
+    publish_source_catalog_bundle_with_provenance, source_metadata_object_path,
     verify_profile_catalog_bundle, verify_source_catalog_bundle, write_profile_catalog_manifest,
     write_source_catalog_manifest,
 };
@@ -32,9 +34,9 @@ pub use capacity::{
 };
 pub use contract::{
     CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,
-    ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
-    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
-    SourceStreamKindV1, SourceStreamV1,
+    ProfileSourceMemberV2, SOURCE_CATALOG_PROJECTION_VERSION_V2, SOURCE_SNAPSHOT_SCHEMA_V1,
+    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
+    SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
 };
 #[cfg(feature = "native-alpm-oracle")]
 pub use parity::{
@@ -81,7 +83,7 @@ pub use record::{
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, CatalogScopeV1,
     CatalogSourceEvidenceV1, DebianSourcePocketV1,
 };
-pub use source::{SOURCE_CATALOG_PROJECTION_VERSION_V1, SourceCatalogCandidateV1};
+pub use source::SourceCatalogCandidateV1;
 pub use store::{
     CatalogBindingV1, CatalogPackageNamePageV1, CatalogReader, write_catalog_candidate,
 };

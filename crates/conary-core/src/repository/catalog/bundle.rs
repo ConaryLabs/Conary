@@ -2,6 +2,7 @@
 
 //! Durable candidate manifests and atomic immutable catalog publication.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use crate::error::{Error, Result};
 
 pub const CATALOG_FILE_NAME: &str = "catalog.sqlite";
 pub const CATALOG_MANIFEST_FILE_NAME: &str = "manifest.json";
+pub const SOURCE_METADATA_DIRECTORY_NAME: &str = "native-metadata";
 
 /// The durable filesystem result of publishing one immutable catalog bundle.
 ///
@@ -41,6 +43,7 @@ pub fn write_source_catalog_manifest(
 ) -> Result<()> {
     manifest.validate()?;
     verify_source_catalog_binding(candidate_directory.as_ref(), manifest)?;
+    verify_source_metadata_directory(candidate_directory.as_ref(), manifest)?;
     write_manifest(candidate_directory.as_ref(), manifest)
 }
 
@@ -58,9 +61,11 @@ pub fn verify_source_catalog_bundle(
     expected: &SourceSnapshotV1,
 ) -> Result<CatalogReader> {
     expected.validate()?;
-    verify_exact_directory(directory.as_ref())?;
+    verify_exact_source_directory(directory.as_ref())?;
     verify_manifest_file(directory.as_ref(), expected)?;
-    verify_source_catalog_binding(directory.as_ref(), expected)
+    let reader = verify_source_catalog_binding(directory.as_ref(), expected)?;
+    verify_source_metadata_directory(directory.as_ref(), expected)?;
+    Ok(reader)
 }
 
 pub fn verify_profile_catalog_bundle(
@@ -68,9 +73,71 @@ pub fn verify_profile_catalog_bundle(
     expected: &ProfileRevisionV2,
 ) -> Result<CatalogReader> {
     expected.validate()?;
-    verify_exact_directory(directory.as_ref())?;
+    verify_exact_profile_directory(directory.as_ref())?;
     verify_manifest_file(directory.as_ref(), expected)?;
     verify_profile_catalog_binding(directory.as_ref(), expected)
+}
+
+/// Move one exact parser-authenticated object into its source candidate.
+///
+/// The parser supplies the verified run-local file explicitly. Storage never
+/// derives a filename from ecosystem, role, repository name, or URL.
+pub(in crate::repository) fn retain_source_metadata_object(
+    candidate_directory: &Path,
+    work_directory: &Path,
+    source: &Path,
+    object: &super::SourceMetadataObjectV1,
+) -> Result<()> {
+    require_real_directory(candidate_directory)?;
+    require_real_directory(work_directory)?;
+    validate_metadata_digest(&object.sha256)?;
+    if source.parent() != Some(work_directory) {
+        return Err(Error::InvalidPath(format!(
+            "authenticated metadata object {} is not a direct child of parser work directory {}",
+            source.display(),
+            work_directory.display()
+        )));
+    }
+    verify_metadata_object_file(source, object, false)?;
+
+    let metadata_directory = ensure_private_metadata_directory(candidate_directory)?;
+    let destination = metadata_directory.join(&object.sha256);
+    match fs::symlink_metadata(&destination) {
+        Ok(_) => {
+            verify_metadata_object_file(&destination, object, true)?;
+            fs::remove_file(source)?;
+            sync_directory(work_directory)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            require_same_filesystem(source, &metadata_directory)?;
+            fs::rename(source, &destination).map_err(|error| {
+                Error::IoError(format!(
+                    "retain authenticated metadata {} as {}: {error}",
+                    source.display(),
+                    destination.display()
+                ))
+            })?;
+            set_private_file_permissions(&destination)?;
+            File::open(&destination)?.sync_all()?;
+            sync_directory(work_directory)?;
+            sync_directory(&metadata_directory)?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+/// Resolve and revalidate one exact retained native metadata object.
+pub fn source_metadata_object_path(
+    source_bundle: impl AsRef<Path>,
+    object: &super::SourceMetadataObjectV1,
+) -> Result<PathBuf> {
+    validate_metadata_digest(&object.sha256)?;
+    let metadata_directory = source_bundle.as_ref().join(SOURCE_METADATA_DIRECTORY_NAME);
+    require_private_metadata_directory(&metadata_directory)?;
+    let path = metadata_directory.join(&object.sha256);
+    verify_metadata_object_file(&path, object, true)?;
+    Ok(path)
 }
 
 pub fn publish_source_catalog_bundle(
@@ -314,24 +381,168 @@ fn cleanup_failed_publication(destination: &Path, publication_error: Error) -> E
     }
 }
 
-fn verify_exact_directory(directory: &Path) -> Result<()> {
+fn verify_exact_source_directory(directory: &Path) -> Result<()> {
+    verify_exact_directory_entries(
+        directory,
+        &[
+            CATALOG_FILE_NAME,
+            CATALOG_MANIFEST_FILE_NAME,
+            SOURCE_METADATA_DIRECTORY_NAME,
+        ],
+        "source catalog bundle",
+    )
+}
+
+fn verify_exact_profile_directory(directory: &Path) -> Result<()> {
+    verify_exact_directory_entries(
+        directory,
+        &[CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME],
+        "profile catalog bundle",
+    )
+}
+
+fn verify_exact_directory_entries(directory: &Path, expected: &[&str], label: &str) -> Result<()> {
     require_real_directory(directory)?;
     let mut names = fs::read_dir(directory)?
         .map(|entry| entry.map(|entry| entry.file_name()).map_err(Error::from))
         .collect::<Result<Vec<_>>>()?;
     names.sort();
-    let mut expected = vec![
-        std::ffi::OsString::from(CATALOG_FILE_NAME),
-        std::ffi::OsString::from(CATALOG_MANIFEST_FILE_NAME),
-    ];
+    let mut expected = expected
+        .iter()
+        .map(|name| std::ffi::OsString::from(*name))
+        .collect::<Vec<_>>();
     expected.sort();
     if names != expected {
         return Err(Error::ConflictError(format!(
-            "catalog bundle {} must contain exactly {} and {}",
-            directory.display(),
-            CATALOG_FILE_NAME,
-            CATALOG_MANIFEST_FILE_NAME
+            "{label} {} has incomplete or unexpected entries",
+            directory.display()
         )));
+    }
+    Ok(())
+}
+
+fn verify_source_metadata_directory(directory: &Path, manifest: &SourceSnapshotV1) -> Result<()> {
+    let metadata_directory = directory.join(SOURCE_METADATA_DIRECTORY_NAME);
+    require_private_metadata_directory(&metadata_directory)?;
+
+    let mut expected = BTreeMap::<String, u64>::new();
+    for object in &manifest.authenticated_objects {
+        if let Some(size) = expected.insert(object.sha256.clone(), object.size)
+            && size != object.size
+        {
+            return Err(Error::ConflictError(format!(
+                "authenticated metadata digest {} has conflicting sizes",
+                object.sha256
+            )));
+        }
+    }
+    let mut actual = fs::read_dir(&metadata_directory)?
+        .map(|entry| entry.map(|entry| entry.file_name()).map_err(Error::from))
+        .collect::<Result<Vec<_>>>()?;
+    actual.sort();
+    let expected_names = expected
+        .keys()
+        .map(|name| std::ffi::OsString::from(name.as_str()))
+        .collect::<Vec<_>>();
+    if actual != expected_names {
+        return Err(Error::ConflictError(format!(
+            "source metadata directory {} has incomplete or unexpected entries",
+            metadata_directory.display()
+        )));
+    }
+    for object in &manifest.authenticated_objects {
+        source_metadata_object_path(directory, object)?;
+    }
+    Ok(())
+}
+
+fn ensure_private_metadata_directory(candidate_directory: &Path) -> Result<PathBuf> {
+    let path = candidate_directory.join(SOURCE_METADATA_DIRECTORY_NAME);
+    match fs::create_dir(&path) {
+        Ok(()) => {
+            set_private_directory_permissions(&path)?;
+            sync_directory(candidate_directory)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    require_private_metadata_directory(&path)?;
+    Ok(path)
+}
+
+fn require_private_metadata_directory(path: &Path) -> Result<()> {
+    require_real_directory(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if fs::metadata(path)?.permissions().mode() & 0o077 != 0 {
+            return Err(Error::InvalidPath(format!(
+                "source metadata directory {} must not grant group or other access",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn verify_metadata_object_file(
+    path: &Path,
+    object: &super::SourceMetadataObjectV1,
+    require_private_permissions: bool,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.len() != object.size
+    {
+        return Err(Error::InvalidPath(format!(
+            "authenticated metadata object {} has the wrong file type or size",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if require_private_permissions && metadata.permissions().mode() & 0o077 != 0 {
+            return Err(Error::InvalidPath(format!(
+                "authenticated metadata object {} must not grant group or other access",
+                path.display()
+            )));
+        }
+    }
+    crate::hash::verify_file_sha256(path, &object.sha256).map_err(|error| Error::ChecksumMismatch {
+        expected: error.expected,
+        actual: error.actual,
+    })
+}
+
+fn set_private_directory_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn set_private_file_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+fn validate_metadata_digest(value: &str) -> Result<()> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(Error::ConfigError(
+            "authenticated metadata object requires a lowercase SHA-256 digest".to_string(),
+        ));
     }
     Ok(())
 }

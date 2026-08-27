@@ -307,7 +307,8 @@ mod tests {
                 identity: "44".to_string(),
             },
             stream_binding_sha256: digest('a'),
-            parser_projection_version: 1,
+            parser_projection_version:
+                crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
             provenance: SourceProvenanceV1 {
                 ecosystem: SourceEcosystemV1::Rpm,
                 metadata_url: "https://example.test/repository".to_string(),
