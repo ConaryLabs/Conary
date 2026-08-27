@@ -347,14 +347,24 @@ run_suite() {
     fi
 }
 
+run_rust_tests_as_root() {
+    # Match hosted container-root semantics without granting host root: Podman
+    # maps inner root to conary-ci and the remaining IDs to its subordinate
+    # UID/GID ranges, so signed numeric ownership remains representable.
+    podman unshare "$@"
+}
+
 sccache --start-server >/dev/null
 sccache --zero-stats >/dev/null
 
 if [[ "$SCOPE" == "rust" || "$SCOPE" == "full" ]]; then
     run_phase rust-clippy cargo clippy --workspace --all-targets -- -D warnings
-    run_phase workspace-tests cargo test --workspace --exclude conary-test --verbose
-    run_phase conary-test-crate cargo test -p conary-test --verbose
-    run_phase workspace-doctests cargo test --doc --workspace --verbose
+    run_phase workspace-tests run_rust_tests_as_root \
+        cargo test --workspace --exclude conary-test --verbose
+    run_phase conary-test-crate run_rust_tests_as_root \
+        cargo test -p conary-test --verbose
+    run_phase workspace-doctests run_rust_tests_as_root \
+        cargo test --doc --workspace --verbose
 fi
 
 if [[ "$SCOPE" == "integration" || "$SCOPE" == "full" ]]; then

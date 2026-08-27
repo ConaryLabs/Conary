@@ -72,6 +72,12 @@ rg -q 'export CARGO_BUILD_JOBS="\$logical_cpus"' scripts/remi-ci-benchmark.sh ||
     fail "Cargo builds do not receive all runner CPUs"
 rg -q 'export RUST_TEST_THREADS="\$logical_cpus"' scripts/remi-ci-benchmark.sh ||
     fail "Rust tests do not receive all runner CPUs"
+rg -q 'podman unshare "\$@"' scripts/remi-ci-benchmark.sh ||
+    fail "Rust tests do not use the rootless Podman user namespace"
+for phase in workspace-tests conary-test-crate workspace-doctests; do
+    rg -q "run_phase ${phase} run_rust_tests_as_root" scripts/remi-ci-benchmark.sh ||
+        fail "${phase} does not match hosted root semantics"
+done
 rg -q 'integration_parallel_jobs="\$logical_cpus"' scripts/remi-ci-benchmark.sh ||
     fail "container phase concurrency does not start from all runner CPUs"
 rg -q 'queue_phase "build-image-\$\{distro\}"' scripts/remi-ci-benchmark.sh ||
@@ -128,9 +134,11 @@ rg -q 'apparmor_restrict_unprivileged_userns' "$installer" ||
     fail "installer does not inspect the host-wide user-namespace restriction"
 rg -q 'host-wide AppArmor unprivileged user-namespace restriction is disabled' "$installer" ||
     fail "installer does not reject a disabled host-wide user-namespace restriction"
-rg -q 'unshare --user --map-root-user --mount --propagation private /bin/true' \
+rg -q 'chown 1001:1001' scripts/remi-ci-runner-preflight.sh ||
+    fail "runner preflight does not prove subordinate numeric ownership"
+rg -q 'rootless Podman user namespace cannot represent numeric UID/GID 1001' \
     scripts/remi-ci-runner-preflight.sh ||
-    fail "runner preflight does not prove exact ownership-test namespaces"
+    fail "runner preflight numeric-ownership failure is not typed"
 rg -q '__RUNNER_LISTENER__ flags=\(default_allow\)' "$apparmor_profile" ||
     fail "AppArmor profile is not attached to only the runner listener"
 rg -q '^[[:space:]]*userns,$' "$apparmor_profile" ||
