@@ -89,7 +89,7 @@ if [[ "$MODE" == "install" ]]; then
         fail "registration token has an unexpected format"
 fi
 
-os_id="$(awk -F= '$1 == "ID" { gsub(/\"/, "", $2); print $2 }' /etc/os-release)"
+os_id="$(awk -F= '$1 == "ID" { gsub(/"/, "", $2); print $2 }' /etc/os-release)"
 [[ "$os_id" == "ubuntu" ]] || fail "this installer supports only the Ubuntu Remi host"
 [[ -f "$SERVICE_TEMPLATE" ]] || fail "service template is missing: ${SERVICE_TEMPLATE}"
 
@@ -227,8 +227,8 @@ verify_setup() {
     [[ "$(run_as_runner nproc)" -ge 12 ]] || fail "runner sees fewer than 12 logical CPUs"
     [[ "$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)" -ge $((48 * 1024 * 1024)) ]] ||
         fail "host exposes less than 48 GiB of memory"
-    run_as_runner test -r /dev/kvm
-    run_as_runner test -w /dev/kvm
+    run_as_runner bash -c '[[ -r /dev/kvm && -w /dev/kvm ]]' ||
+        fail "/dev/kvm is not readable and writable by the runner identity"
     run_as_runner test -S "$podman_socket"
     run_as_runner rustc --version | grep -Fq "rustc ${RUST_VERSION} "
     run_as_runner cargo clippy --version >/dev/null

@@ -100,6 +100,8 @@ rg -q 'CPUQuotaPerSecUSec.*infinity' "$installer" ||
     fail "installer does not verify an uncapped runner CPU allocation"
 rg -q 'MemoryMax.*infinity' "$installer" ||
     fail "installer does not verify an uncapped runner memory allocation"
+rg -q "run_as_runner bash -c '\[\[ -r /dev/kvm && -w /dev/kvm \]\]'" "$installer" ||
+    fail "installer does not verify KVM access through the runner's shell identity"
 if rg -q '^(CPUQuota|MemoryMax)=' "$service"; then
     fail "runner service template must not impose CPU or memory ceilings"
 fi
