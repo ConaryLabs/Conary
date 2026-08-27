@@ -1114,7 +1114,7 @@ test_check_release_matrix_rejects_unforced_post_deploy_candidates() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "private candidate deploy forces a bounded post-transition public refresh"
+        "private candidate deploy forces one bounded post-transition refresh"
 }
 
 test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority() {
