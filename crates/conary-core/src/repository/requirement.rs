@@ -53,6 +53,33 @@ pub fn parse_native_requirement(
             super::package_relation::parse_inline_atom(native_text, scheme)?,
         ),
     };
+    build_positive_requirement(kind, scheme, native_text, expression)
+}
+
+/// Parse an authenticated RPM source requirement before it enters canonical
+/// repository authority. This is the sole boundary that accepts RPM's empty
+/// serialized epoch spelling.
+pub(crate) fn parse_source_rpm_requirement(
+    kind: RepositoryRequirementKind,
+    native_text: &str,
+) -> Result<RepositoryRequirementGroup, String> {
+    if kind.is_negative_relation() {
+        return Err(format!("{kind:?} is not a positive package requirement"));
+    }
+    let native_text = native_text.trim();
+    if native_text.is_empty() {
+        return Err("package requirement is empty".to_string());
+    }
+    let expression = super::rpm_dependency::parse_source_rpm_dependency(kind, native_text)?;
+    build_positive_requirement(kind, VersionScheme::Rpm, native_text, expression)
+}
+
+fn build_positive_requirement(
+    kind: RepositoryRequirementKind,
+    scheme: VersionScheme,
+    native_text: &str,
+    expression: RepositoryRequirementExpression,
+) -> Result<RepositoryRequirementGroup, String> {
     let alternatives = expression.atoms().into_iter().cloned().collect::<Vec<_>>();
     let first = alternatives
         .first()
@@ -205,6 +232,95 @@ mod tests {
         group.alternatives = alternatives;
 
         validate_requirement_group(&group, VersionScheme::Rpm).unwrap();
+    }
+
+    #[test]
+    fn source_rpm_empty_epochs_canonicalize_inside_nested_rich_atoms() {
+        let exact = "(nvidia-query-resource-opengl-libs(x86-32) = :1.0.0-23.fc44 if libGL(x86-32))";
+        let requirement =
+            parse_source_rpm_requirement(RepositoryRequirementKind::Suggests, exact).unwrap();
+        assert_eq!(requirement.native_text.as_deref(), Some(exact));
+        assert_eq!(
+            requirement
+                .alternatives
+                .iter()
+                .map(|clause| (clause.name.as_str(), clause.version_constraint.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "nvidia-query-resource-opengl-libs(x86-32)",
+                    Some("= 1.0.0-23.fc44")
+                ),
+                ("libGL(x86-32)", None),
+            ]
+        );
+        assert!(matches!(
+            requirement.expression,
+            RepositoryRequirementExpression::If { .. }
+        ));
+
+        let nested = parse_source_rpm_requirement(
+            RepositoryRequirementKind::Depends,
+            "((a = :1-1 and b = 0:1-1) if c = 2:1-1)",
+        )
+        .unwrap();
+        assert_eq!(
+            nested
+                .alternatives
+                .iter()
+                .map(|clause| clause.version_constraint.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("= 1-1"), Some("= 0:1-1"), Some("= 2:1-1")]
+        );
+    }
+
+    #[test]
+    fn source_rpm_epoch_decoding_keeps_canonical_and_source_grammars_separate() {
+        for malformed in [
+            "pkg = :",
+            "pkg = ::1",
+            "pkg = :1:2",
+            "pkg = nondecimal:1",
+            "(pkg = :1 if)",
+        ] {
+            assert!(
+                parse_source_rpm_requirement(RepositoryRequirementKind::Depends, malformed)
+                    .is_err(),
+                "{malformed} must fail closed"
+            );
+        }
+        for canonical_input in ["pkg = :1", "(pkg = :1 if condition)"] {
+            assert!(
+                parse_native_requirement(
+                    RepositoryRequirementKind::Depends,
+                    VersionScheme::Rpm,
+                    canonical_input,
+                )
+                .is_err(),
+                "canonical input must reject RPM source spelling: {canonical_input}"
+            );
+        }
+
+        let omitted = super::parse_repo_constraint(VersionScheme::Rpm, "= 1-1").unwrap();
+        let explicit_zero = super::parse_repo_constraint(VersionScheme::Rpm, "= 0:1-1").unwrap();
+        for candidate in ["1-1", "0:1-1"] {
+            assert!(
+                crate::repository::versioning::repo_version_satisfies(
+                    VersionScheme::Rpm,
+                    candidate,
+                    &omitted,
+                )
+                .unwrap()
+            );
+            assert!(
+                crate::repository::versioning::repo_version_satisfies(
+                    VersionScheme::Rpm,
+                    candidate,
+                    &explicit_zero,
+                )
+                .unwrap()
+            );
+        }
     }
 
     #[test]

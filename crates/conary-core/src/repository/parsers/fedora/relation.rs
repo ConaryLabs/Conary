@@ -124,7 +124,8 @@ pub(super) fn rpm_constraint_native_text(
     let evr = rpm_evr_native_text(name, Some(flags), epoch, version, release)?;
     Ok(format!(
         "{operator} {}",
-        crate::packages::rpm::canonicalize_rpm_evr(&evr)
+        crate::repository::rpm_dependency::canonicalize_source_rpm_evr(&evr)
+            .map_err(Error::ParseError)?
     ))
 }
 
@@ -208,7 +209,7 @@ pub(super) fn rpm_weak_require_to_group(
         )));
     }
     let native_text = rpm_relation_native_text(name, flags, epoch, version, release)?;
-    crate::repository::requirement::parse_native_requirement(kind, VersionScheme::Rpm, &native_text)
+    crate::repository::requirement::parse_source_rpm_requirement(kind, &native_text)
         .map_err(Error::ParseError)
 }
 

@@ -288,7 +288,7 @@ fn primary_xml_preserves_every_rpm_weak_relation_kind() {
         <rpm:entry name="recommended-provider" flags="GE" epoch="0" ver="2" rel="1"/>
       </rpm:recommends>
       <rpm:suggests>
-        <rpm:entry name="suggested-provider"/>
+        <rpm:entry name="(nvidia-query-resource-opengl-libs(x86-32) = :1.0.0-23.fc44 if libGL(x86-32))"/>
       </rpm:suggests>
       <rpm:supplements>
         <rpm:entry name="((xorg-x11-server-Xorg and emacs) unless emacs-nw)"/>
@@ -316,7 +316,9 @@ fn primary_xml_preserves_every_rpm_weak_relation_kind() {
             ),
             (
                 RepositoryRequirementKind::Suggests,
-                Some("suggested-provider"),
+                Some(
+                    "(nvidia-query-resource-opengl-libs(x86-32) = :1.0.0-23.fc44 if libGL(x86-32))"
+                ),
             ),
             (
                 RepositoryRequirementKind::Supplements,
@@ -328,6 +330,19 @@ fn primary_xml_preserves_every_rpm_weak_relation_kind() {
             ),
         ]
     );
+    let suggests = packages[0]
+        .requirements
+        .iter()
+        .find(|requirement| requirement.kind == RepositoryRequirementKind::Suggests)
+        .unwrap();
+    assert_eq!(
+        suggests.alternatives[0].version_constraint.as_deref(),
+        Some("= 1.0.0-23.fc44")
+    );
+    assert!(matches!(
+        suggests.expression,
+        crate::repository::dependency_model::RepositoryRequirementExpression::If { .. }
+    ));
 }
 
 #[test]
