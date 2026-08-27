@@ -55,16 +55,7 @@ fn conversion_crawl_has_no_package_exclusion_or_sampling_controls() {
 
     assert!(output.status.success(), "{}", output_text(&output));
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for required in [
-        "--db",
-        "--catalog-dir",
-        "--chunk-dir",
-        "--cache-dir",
-        "--repository-keys-dir",
-        "--candidate",
-        "--output",
-        "--concurrency",
-    ] {
+    for required in ["--config", "--candidate", "--output", "--concurrency"] {
         assert!(stdout.contains(required), "missing {required}: {stdout}");
     }
     for forbidden in [
@@ -75,6 +66,11 @@ fn conversion_crawl_has_no_package_exclusion_or_sampling_controls() {
         "--popularity-file",
         "--dry-run",
         "--exclude",
+        "--db",
+        "--catalog-dir",
+        "--chunk-dir",
+        "--cache-dir",
+        "--repository-keys-dir",
     ] {
         assert!(
             !stdout.contains(forbidden),

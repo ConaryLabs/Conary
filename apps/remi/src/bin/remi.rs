@@ -9,8 +9,8 @@ mod native_oracle_input_command;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use remi::server::{
-    ConversionCrawlConfig, IndexGenConfig, PrewarmConfig, ProfileRevisionSelection, ProxyConfig,
-    RemiConfig, RemiPromotionProofProfileInput, generate_indices, run_conversion_crawl,
+    IndexGenConfig, PrewarmConfig, ProfileRevisionSelection, ProxyConfig, RemiConfig,
+    RemiPromotionProofProfileInput, generate_indices, run_conversion_crawl_from_config,
     run_prewarm, run_proxy, run_server_from_config,
 };
 use remi::trust;
@@ -182,25 +182,9 @@ struct PrewarmArgs {
 
 #[derive(Args)]
 struct ConversionCrawlArgs {
-    /// Database containing durable registered profile revisions and repository keys.
-    #[arg(long, default_value = "/var/lib/conary/conary.db")]
-    db: PathBuf,
-
-    /// Root containing immutable source and profile catalogs.
-    #[arg(long, default_value = "/var/lib/conary/data/catalogs")]
-    catalog_dir: PathBuf,
-
-    /// Path to chunk storage directory.
-    #[arg(long, default_value = "/var/lib/conary/data/chunks")]
-    chunk_dir: PathBuf,
-
-    /// Path to cache and conversion scratch storage.
-    #[arg(long, default_value = "/var/lib/conary/data/cache")]
-    cache_dir: PathBuf,
-
-    /// Directory containing exact per-profile TUF signing authority.
-    #[arg(long)]
-    repository_keys_dir: PathBuf,
+    /// Current Remi service configuration; the runtime must be stopped.
+    #[arg(long, default_value = "/etc/conary/remi.toml")]
+    config: PathBuf,
 
     /// Exact public candidate as PROFILE=REVISION; repeat in canonical order.
     #[arg(
@@ -572,18 +556,16 @@ fn run_prewarm_command(args: PrewarmArgs) -> Result<()> {
 }
 
 fn run_conversion_crawl_command(args: ConversionCrawlArgs) -> Result<()> {
-    let config = ConversionCrawlConfig {
-        db_path: args.db,
-        catalog_dir: args.catalog_dir,
-        chunk_dir: args.chunk_dir,
-        cache_dir: args.cache_dir,
-        repository_keys_dir: args.repository_keys_dir,
-        output_path: args.output,
-        concurrency: args.concurrency,
-        candidates: args.candidates,
-    };
+    let config = RemiConfig::load(&args.config)?;
+    let output = args.output;
     conary_bootstrap::run_with_runtime(move || async move {
-        let report = run_conversion_crawl(&config).await?;
+        let report = run_conversion_crawl_from_config(
+            &config,
+            args.candidates,
+            output.clone(),
+            args.concurrency,
+        )
+        .await?;
         let packages = report
             .profiles
             .iter()
@@ -594,7 +576,7 @@ fn run_conversion_crawl_command(args: ConversionCrawlArgs) -> Result<()> {
             report.profiles.len(),
             packages
         );
-        println!("Evidence: {}", config.output_path.display());
+        println!("Evidence: {}", output.display());
         Ok(())
     })
 }

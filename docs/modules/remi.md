@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-26
-revision: 68
-summary: Document exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, exact candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+last_updated: 2026-08-27
+revision: 69
+summary: Document exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -553,6 +553,21 @@ bindings fail closed. The command deliberately has no package-count,
 popularity, regex, allowlist, dry-run, skip, exclusion, or per-profile scope
 control.
 
+The shipped operator loads the deployed `RemiConfig` and takes the same
+exclusive runtime-root lock as the service for the complete crawl. A live
+server therefore fails before output or conversion mutation, and its refresh
+scheduler cannot supersede the selected candidates mid-ceremony. Database,
+catalog, chunk, cache, and repository-key paths come only from that config;
+callers cannot compose a second storage authority from raw path flags.
+
+When the deployed config enables R2, the operator initializes and probes that
+exact store before attempting a package, attaches it to the conversion
+service, and retains the configured bounded local-cache owner. Every newly
+produced CCS transport reaches R2 before its conversion row and reusable proof
+can commit. A failed durable write is a failed package outcome and prevents a
+complete crawl. Local-only durability remains available only when the deployed
+config explicitly disables R2.
+
 Each catalog record is selected by its exact package-key SHA-256 rather than
 the request-facing name/version/architecture tuple. This preserves distinct
 release and origin variants and rejects package-key rebinding. Every record is
@@ -599,15 +614,11 @@ durability reopen before any pointer can move.
 
 ```text
 remi conversion-crawl \
-  --db /var/lib/conary/conary.db \
-  --catalog-dir /var/lib/conary/data/catalogs \
-  --chunk-dir /var/lib/conary/data/chunks \
-  --cache-dir /var/lib/conary/data/cache \
-  --repository-keys-dir /etc/conary/repository-keys \
+  --config /etc/conary/remi.toml \
   --candidate fedora-44=<profile-revision-sha256> \
   --candidate ubuntu-26.04=<profile-revision-sha256> \
   --candidate arch=<profile-revision-sha256> \
-  --output /var/lib/conary/evidence/initial-conversion-crawl.json
+  --output /conary/evidence/initial-conversion-crawl.json
 ```
 
 ### Exact Candidate Promotion Evidence
@@ -1101,6 +1112,8 @@ Implementation ownership lives in child modules:
 - `conversion_crawl.rs`: bounded full-profile orchestration and canonical
   report publication; report types and validation live in
   `conversion_crawl/report.rs`.
+- `conversion_crawl/operator.rs`: stopped-runtime config, durable-store probe,
+  and bounded-cache wiring for the shipped full-universe crawl command.
 - `conversion_crawl/proof_reuse.rs`: exact proof-key construction, durable
   artifact-level proof ledger, per-revision bindings, changed-artifact
   validation, and cross-revision reuse.

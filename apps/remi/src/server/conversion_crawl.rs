@@ -2,6 +2,7 @@
 //! Strict full-universe conversion-crawl evidence.
 
 mod ccs_reopen;
+mod operator;
 mod proof_reuse;
 mod report;
 mod target_preflight;
@@ -17,6 +18,7 @@ use ccs_reopen::CcsArtifactReopener;
 use conary_core::corpus::ConversionFailure;
 use conary_core::repository::catalog::CatalogPackageRecordV1;
 use futures::StreamExt;
+pub use operator::run_conversion_crawl_from_config;
 #[cfg(test)]
 pub(crate) use proof_reuse::ConversionProofStore;
 pub(crate) use proof_reuse::reopen_promotion_binding;
@@ -33,6 +35,7 @@ use std::fs;
 use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 pub use target_preflight::{
     CCS_TARGET_COMPATIBILITY_PROOF_SCHEMA_V1, CcsTargetCompatibilityProofV1,
 };
@@ -45,16 +48,16 @@ pub(crate) struct ReopenedCcsArtifactEvidence {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConversionCrawlConfig {
-    pub db_path: PathBuf,
-    pub catalog_dir: PathBuf,
-    pub chunk_dir: PathBuf,
-    pub cache_dir: PathBuf,
-    pub repository_keys_dir: PathBuf,
-    pub output_path: PathBuf,
-    pub concurrency: usize,
+struct ConversionCrawlConfig {
+    db_path: PathBuf,
+    catalog_dir: PathBuf,
+    chunk_dir: PathBuf,
+    cache_dir: PathBuf,
+    repository_keys_dir: PathBuf,
+    output_path: PathBuf,
+    concurrency: usize,
     /// Exact ordered revision for every declared public profile.
-    pub candidates: Vec<ProfileRevisionSelection>,
+    candidates: Vec<ProfileRevisionSelection>,
 }
 
 struct ProfileCrawlPlan {
@@ -64,7 +67,11 @@ struct ProfileCrawlPlan {
     _pin: PinnedProfileCatalog,
 }
 
-pub async fn run_conversion_crawl(config: &ConversionCrawlConfig) -> Result<RemiConversionCrawlV4> {
+async fn run_conversion_crawl(
+    config: &ConversionCrawlConfig,
+    r2_store: Option<Arc<super::R2Store>>,
+    bounded_cache: super::BoundedCache,
+) -> Result<RemiConversionCrawlV4> {
     ensure!(
         config.concurrency > 0,
         "conversion crawl concurrency must be greater than zero"
@@ -87,10 +94,11 @@ pub async fn run_conversion_crawl(config: &ConversionCrawlConfig) -> Result<Remi
         config.chunk_dir.clone(),
         config.cache_dir.clone(),
         config.db_path.clone(),
-        None,
+        r2_store,
     )
     .with_catalog_authority(authority)
     .with_database_writer(database_writer.clone())
+    .with_bounded_cache(bounded_cache)
     .with_repository_keys_dir(Some(config.repository_keys_dir.clone()));
     let proof_store =
         proof_reuse::ConversionProofStore::new(config.db_path.clone(), database_writer);
