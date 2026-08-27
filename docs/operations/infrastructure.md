@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-27
-revision: 38
+revision: 39
 summary: Non-secret infrastructure, agent operations, release, trusted Remi CI benchmark capacity, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
@@ -63,8 +63,11 @@ The unit launches the pinned runner's `runsvc.sh` service wrapper so systemd's
 stop signal is forwarded to the listener and maintenance restarts do not wait
 for the five-minute forced-stop timeout. Reinstallation refuses while a worker
 job is active, drains the complete old service cgroup before replacing the
-unit, and audits that exactly one service-mode listener remains. This prevents
-an interactive-wrapper migration from leaving an orphaned second listener.
+unit, allows up to ten seconds for the replacement listener to appear, and
+audits that exactly one service-mode listener remains. Multiple listeners fail
+immediately; a missing listener fails when the bounded startup interval
+expires. This prevents an interactive-wrapper migration from leaving an
+orphaned second listener without racing normal service startup.
 
 Only one benchmark job runs at a time. That job sets Cargo, Rust tests, Make,
 and CMake parallelism to all logical CPUs visible through `nproc`; the runner

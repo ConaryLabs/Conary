@@ -259,9 +259,33 @@ install_service() {
     systemctl start "$SERVICE_NAME"
 }
 
+wait_for_service_listener() {
+    local listener_path="$1"
+    local attempt
+    local -a listener_pids
+
+    for ((attempt = 0; attempt < 40; attempt++)); do
+        mapfile -t listener_pids < <(
+            pgrep -u "$RUNNER_USER" -f "^${listener_path} run --startuptype service$"
+        )
+        case "${#listener_pids[@]}" in
+            1)
+                printf '%s\n' "${listener_pids[0]}"
+                return
+                ;;
+            0)
+                sleep 0.25
+                ;;
+            *)
+                fail "runner must have exactly one service-mode listener; found ${#listener_pids[@]}"
+                ;;
+        esac
+    done
+    fail "runner service-mode listener did not appear within 10 seconds"
+}
+
 verify_setup() {
     local listener_path listener_pid listener_profile
-    local -a listener_pids
     require_cmd systemctl
     require_cmd runuser
     require_cmd aa-exec
@@ -294,12 +318,7 @@ verify_setup() {
         [[ "$(< /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == "1" ]] ||
             fail "host-wide AppArmor unprivileged user-namespace restriction is disabled"
     fi
-    mapfile -t listener_pids < <(
-        pgrep -u "$RUNNER_USER" -f "^${listener_path} run --startuptype service$"
-    )
-    [[ "${#listener_pids[@]}" -eq 1 ]] ||
-        fail "runner must have exactly one service-mode listener; found ${#listener_pids[@]}"
-    listener_pid="${listener_pids[0]}"
+    listener_pid="$(wait_for_service_listener "$listener_path")"
     listener_profile="$(< "/proc/${listener_pid}/attr/current")"
     [[ "$listener_profile" == "${listener_path} (unconfined)" ]] ||
         fail "runner listener is outside its AppArmor profile: ${listener_profile}"
