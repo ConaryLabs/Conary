@@ -1,3 +1,5 @@
+import launchStatus from '../../../docs/roadmaps/launch-status.json';
+
 export type PreviewTarget = {
 	id: 'fedora' | 'ubuntu' | 'arch';
 	name: string;
@@ -6,8 +8,8 @@ export type PreviewTarget = {
 	installCommand: string;
 };
 
-const version = '0.16.1';
-const tag = `v${version}`;
+const version = launchStatus.published_release.version;
+const tag = launchStatus.published_release.tag;
 const releaseUrl = `https://github.com/ConaryLabs/Conary/releases/tag/${tag}`;
 const downloadBaseUrl = `https://github.com/ConaryLabs/Conary/releases/download/${tag}`;
 const matrixUrl =
@@ -19,9 +21,9 @@ export const previewRelease = {
 	releaseUrl,
 	downloadBaseUrl,
 	matrixUrl,
-	testerAuthority: 'paused',
-	testerAuthorityReason:
-		`${tag} is published and artifact-verified, but the external tester pin remains paused until the #110 ordinary-package corpus gate passes.`,
+	testerAuthority: launchStatus.tester_authority.state,
+	testerAuthorityReason: launchStatus.tester_authority.reason,
+	announcementClaim: launchStatus.announcement_claim,
 	testerGuideUrl:
 		'https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md',
 	feedbackUrl: 'https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md',

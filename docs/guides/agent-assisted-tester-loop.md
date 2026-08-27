@@ -1,8 +1,8 @@
 ---
-last_updated: 2026-08-19
-revision: 16
+last_updated: 2026-08-27
+revision: 17
 status: paused
-summary: Preserve the v0.16.1 tester-loop shape while execution waits for the ordinary-package corpus gate
+summary: Preserve the v0.16.1 tester-loop shape while signed-universe, daily-driver, and synchronized-release gates complete
 ---
 
 # Agent-Assisted Tester Loop
@@ -17,9 +17,10 @@ first on an irreplaceable daily driver.
 
 **Do not run this guide while its frontmatter status is `paused`.** Its
 `v0.16.1` commands match the current immutable, independently verified suite,
-but release proof does not satisfy #110's ordinary-package corpus gate and the
-suite is not yet pinned tester authority. Resume only after that separate gate
-passes, this guide names an exact tester release, and the
+and W7's ordinary-package gate has passed. The suite still predates the current
+signed-universe client protocol and is not pinned tester authority. Resume only
+after the canonical [launch status](../roadmaps/launch-status.json) assigns an
+exact tester release, this guide names that same release, and the
 [current release artifact matrix](https://github.com/ConaryLabs/Conary/blob/main/docs/operations/release-artifact-matrix.md)
 still records that tag as published and independently verified.
 

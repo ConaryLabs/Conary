@@ -114,6 +114,7 @@ EOF
 
 Conary is still early. Expect failures.
 Use a VM or disposable host first.
+Conary Preview is a rollback-first package bridge.
 The primary adoption path is cross-distro package installation.
 The source package format defines the package ABI.
 If a package install fails, capture the command, distro, package name, Conary version, and refusal text.
@@ -126,7 +127,7 @@ Inspect the latest immutable GitHub release.
 | --- | --- | --- |
 | Development head | Root [`Cargo.toml`](Cargo.toml) `[workspace.package]` version | Repository source authority |
 | Latest published, artifact-verified release | [Latest immutable GitHub release](https://github.com/ConaryLabs/Conary/releases/latest) | [Release artifact matrix](docs/operations/release-artifact-matrix.md) |
-| Current external tester pin | **None** | Paused until the corpus gate completes |
+| Current external tester pin | **None** | See [launch status](docs/roadmaps/launch-status.json) |
 EOF
 
     cat > "$root/SECURITY.md" <<'EOF'
@@ -164,15 +165,50 @@ The 2026-07-31 Group O QEMU run is dated local evidence.
 The 2026-07-31 Group P QEMU run is dated local evidence.
 The current milestone is the first external tester loop.
 See the [detailed development roadmap](docs/roadmaps/development-roadmap.md).
+See the [machine-readable launch status](docs/roadmaps/launch-status.json).
 EOF
 
     cat > "$root/docs/roadmaps/development-roadmap.md" <<'EOF'
 # Development Roadmap
 
 The first external tester milestone is the current product milestone.
+W7.5 Signed Universe And Launch Gate requires zero exclusions.
 Remote Forge validation and conary-test deployment are decommissioned.
 The 2026-07-31 Group O QEMU run is dated local evidence.
 The 2026-07-31 Group P QEMU run is dated local evidence.
+EOF
+
+    cat > "$root/docs/roadmaps/launch-status.json" <<'EOF'
+{
+  "schema_version": 1,
+  "last_updated": "2026-08-27",
+  "current_milestone": "first_external_tester_loop",
+  "published_release": {
+    "version": "0.10.1",
+    "tag": "v0.10.1",
+    "tester_authority": false
+  },
+  "tester_authority": {
+    "state": "unassigned",
+    "reason": "The launch gates remain open.",
+    "blocking_issues": [638, 598, 122, 534, 132, 642, 643, 639, 121, 149]
+  },
+  "gates": {
+    "ordinary_package_journey": {"state": "passed", "issue": 110},
+    "public_ingress": {"state": "passed", "issue": 637},
+    "public_read_surfaces": {"state": "blocked", "issue": 638},
+    "public_universe": {"state": "blocked", "issue": 598, "promotion_threshold": "zero_exclusions"},
+    "daily_driver_floor": {"state": "blocked", "issues": [122, 534, 132, 642, 643]},
+    "synchronized_release": {"state": "blocked", "issue": 639},
+    "launch_proof": {"state": "blocked", "issues": [121, 149]},
+    "external_outreach": {"state": "not_started", "issue": 48, "broad_outreach_requires_guided_completions": 5}
+  },
+  "guided_pilot": {"state": "not_started", "completed": 0, "target": 5, "target_live_interventions_by_fifth": 0},
+  "tester_milestone": {"completed": 0, "target": 10},
+  "supported_hosts": ["fedora-44-x86_64", "ubuntu-26.04-x86_64", "arch-x86_64"],
+  "announcement_claim": "Conary Preview is a rollback-first package bridge.",
+  "full_system_claim": {"state": "unproven", "issue": 272}
+}
 EOF
 
     cat > "$root/docs/roadmaps/external-tester-milestone.md" <<'EOF'
@@ -226,11 +262,15 @@ EOF
 EOF
 
     cat > "$root/site/src/lib/preview-release.ts" <<'EOF'
-const version = '0.10.1';
+import launchStatus from '../../../docs/roadmaps/launch-status.json';
+
+const version = launchStatus.published_release.version;
+const tag = launchStatus.published_release.tag;
 
 export const previewRelease = {
     version,
-    tag: `v${version}`,
+    tag,
+    testerAuthorityReason: launchStatus.tester_authority.reason,
     asset: `conary-${version}.ccs`,
 };
 EOF
@@ -484,6 +524,33 @@ expect_unassigned_outreach_pass() {
     rm -rf "$tmp"
 }
 
+expect_assigned_launch_status_pass() {
+    local tmp status next
+    tmp="$(mktemp -d)"
+    make_good_repo "$tmp"
+    status="$tmp/docs/roadmaps/launch-status.json"
+    next="${status}.next"
+    jq '
+        .published_release.tester_authority = true
+        | .tester_authority.state = "assigned"
+        | .tester_authority.reason = "This exact release is assigned tester authority."
+        | .tester_authority.blocking_issues = []
+        | .gates.public_read_surfaces.state = "passed"
+        | .gates.public_universe.state = "passed"
+        | .gates.daily_driver_floor.state = "passed"
+        | .gates.synchronized_release.state = "passed"
+        | .gates.launch_proof.state = "passed"
+    ' "$status" > "$next"
+    mv "$next" "$status"
+    stage_fixture "$tmp"
+    run_truth "$tmp" > "$tmp/out" 2>&1 || {
+        cat "$tmp/out" >&2
+        rm -rf "$tmp"
+        fail "expected launch-status-only tester assignment to pass"
+    }
+    rm -rf "$tmp"
+}
+
 expect_failure() {
     local name="$1"
     local mutator="$2"
@@ -638,11 +705,16 @@ break_system_init_profile() {
 }
 
 break_site_release_version() {
-    sed -i "s/const version = '0.10.1'/const version = '0.9.2'/" "$1/site/src/lib/preview-release.ts"
+    sed -i "s/launchStatus.published_release.version/'0.9.2'/" "$1/site/src/lib/preview-release.ts"
 }
 
 break_site_release_version_duplication() {
-    sed -i 's/tag: `v${version}`/tag: '\''v0.10.1'\''/' "$1/site/src/lib/preview-release.ts"
+    sed -i "s/const tag = launchStatus.published_release.tag;/const tag = 'v0.10.1';/" "$1/site/src/lib/preview-release.ts"
+}
+
+break_launch_status_contract() {
+    sed -i 's/"promotion_threshold": "zero_exclusions"/"promotion_threshold": "typed_failures"/' \
+        "$1/docs/roadmaps/launch-status.json"
 }
 
 break_site_generation_apply_intent() {
@@ -746,6 +818,7 @@ break_assistant_context_budget() {
 
 expect_pass
 expect_unassigned_outreach_pass
+expect_assigned_launch_status_pass
 expect_failure "schema drift" break_schema_version 'schema.*68.*SCHEMA_VERSION.*69'
 expect_failure "unknown CLI command reference" break_cli_command_reference 'unknown conary root command'
 expect_failure "retired command doc" break_retired_command_doc 'retired command'
@@ -774,8 +847,9 @@ expect_failure "unlisted Cargo patch" break_uninventoried_cargo_patch 'unlisted 
 expect_failure "unlisted git dependency" break_uninventoried_git_dependency 'unlisted Cargo divergence.*workspace\.dependencies.*unlisted'
 expect_failure "missing third-party inventory" break_third_party_inventory 'cannot read divergence inventory'
 expect_failure "system init source independence" break_system_init_profile 'system init depend on a host distro profile'
-expect_failure "site release version drift" break_site_release_version 'stale conary release reference'
+expect_failure "site release version drift" break_site_release_version 'derived published-release version'
 expect_failure "site release version duplication" break_site_release_version_duplication 'duplicates the site published-release version'
+expect_failure "launch status contract drift" break_launch_status_contract 'malformed or drifted launch-status contract'
 expect_failure "site generation apply intent" break_site_generation_apply_intent 'generation build apply-intent example'
 expect_failure "site federation boundary" break_site_federation_boundary 'federation preview-boundary caveat'
 expect_failure "package index every-operation claim" break_package_index_every_operation_claim 'public frontend every-operation generation/integrity claim'

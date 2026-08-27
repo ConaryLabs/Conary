@@ -1362,7 +1362,7 @@ test_check_release_matrix_rejects_missing_tester_authority_boundary() {
         'Publication and released-package proof do not make' \
         'Publication proves all tester readiness and makes'
 
-    assert_check_release_matrix_fails "$repo" "release notes must keep publication separate from tester authority"
+    assert_check_release_matrix_fails "$repo" "release notes must derive tester authority from versioned launch status"
 }
 
 test_check_release_matrix_rejects_missing_signer_trust_match() {

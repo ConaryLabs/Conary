@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | Development head | Root [`Cargo.toml`](Cargo.toml) `[workspace.package]` version | Repository source authority |
 | Latest published, artifact-verified release | [Latest immutable GitHub release](https://github.com/ConaryLabs/Conary/releases/latest) | [Release artifact matrix](docs/operations/release-artifact-matrix.md) |
-| Current external tester pin | **None** | Paused until [#110](https://github.com/ConaryLabs/Conary/issues/110) completes |
+| Current external tester pin | **None** | W7 passed; assignment waits for the signed public universe, daily-driver floor, synchronized release, and launch proof in [launch status](docs/roadmaps/launch-status.json) |
 
 Conary is a cross-distro package manager for Linux, written in Rust. It
 installs RPM, DEB, Arch, and native CCS packages on Fedora, Ubuntu, and Arch
@@ -41,6 +41,10 @@ endorsed by, or maintained by rPath, SAS, or the original Conary developers.
 
 Conary is still early. Expect failures.
 
+Conary Preview is a rollback-first package bridge for installing proven RPM,
+DEB, and Arch packages across Fedora, Ubuntu, and Arch. It is not yet a
+full-system replacement for apt, dnf, or pacman.
+
 Use a VM or disposable host first. The current public preview is useful for
 testing cross-distro package installation, Remi conversion, exact transaction
 history, removal, and self-update. Adoption is the secondary migration lane for
@@ -65,11 +69,14 @@ attach only a reviewed support bundle.
 The [latest immutable GitHub release](https://github.com/ConaryLabs/Conary/releases/latest)
 is the current artifact-verified synchronized suite. The
 [release artifact matrix](docs/operations/release-artifact-matrix.md) records
-its exact tag, complete asset set, deployments, and three-distro
-released-package proof. Broad external testing remains paused until #110's
-ordinary-package corpus gate passes, so the release is not yet the pinned
-tester authority. If you inspect it now, install it only on a VM or
-non-critical host and do not treat the result as an outreach completion.
+its exact tag, complete asset set, historical deployments, and three-distro
+released-package proof. W7's ordinary-package gate passed, but broad external
+testing remains paused while the signed public universe, daily-driver floor,
+a new synchronized public release, and performance/usefulness proof remain
+open. The machine-readable
+[launch status](docs/roadmaps/launch-status.json) owns those gates. If you
+inspect the current release now, use only a VM or non-critical host and do not
+treat the result as an outreach completion.
 
 After an exact release is pinned and the tester guide is resumed, choose a
 source whose package format differs from the host and run the complete bounded
@@ -131,8 +138,9 @@ first when the command supports it.
 - Immutable EROFS/composefs generations on hosts with the needed kernel and
   tooling.
 - Raw, qcow2, and x86_64 UEFI ISO generation export for validation workflows.
-- Remi on-demand conversion, package search, sparse metadata, and public
-  release/self-update serving.
+- Remi authenticated source ingestion, conversion, immutable-catalog, signing,
+  and atomic-activation machinery. The first complete signed public universe
+  remains blocked on [#598](https://github.com/ConaryLabs/Conary/issues/598).
 
 ## What Will Break
 
@@ -258,12 +266,13 @@ cargo fmt --check
 
 ## Remi
 
-Remi is Conary's public on-demand conversion service at
-[remi.conary.io](https://remi.conary.io). It converts supported Fedora,
-Ubuntu, and Arch packages into CCS artifacts, serves public release metadata,
-and validates the exact source-format lifecycle contract carried by each
-converted artifact. There is no operator-review lane between conversion and
-serving.
+Remi is Conary's conversion and signed-package-universe service at
+[remi.conary.io](https://remi.conary.io). It authenticates supported Fedora,
+Ubuntu, and Arch sources, converts their packages into CCS artifacts, and
+validates the exact source-format lifecycle contract carried by each converted
+artifact. Its first complete immutable public-universe activation is the
+current #598 gate; a liveness response alone is not package-serving readiness.
+There is no operator-review lane between conversion and serving.
 
 Remi public serving is intentionally conservative while the scriptlet adapter
 surface matures. A package may fail even when the upstream package exists and
