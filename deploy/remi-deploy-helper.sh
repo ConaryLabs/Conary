@@ -7,6 +7,9 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 ROOT="${CONARY_REMI_DEPLOY_ROOT:-}"
 SKIP_RESTART="${CONARY_REMI_DEPLOY_SKIP_RESTART:-0}"
 HEALTH_URL="${CONARY_REMI_DEPLOY_HEALTH_URL:-http://localhost:8081/health}"
+SITE_HOME_URL="${CONARY_REMI_DEPLOY_SITE_HOME_URL:-https://conary.io/}"
+SITE_INSTALLER_URL="${CONARY_REMI_DEPLOY_SITE_INSTALLER_URL:-https://conary.io/install-conary-preview.sh}"
+SITE_ORIGIN_RESOLVE="${CONARY_REMI_DEPLOY_SITE_ORIGIN_RESOLVE:-conary.io:443:127.0.0.1}"
 
 die() {
     echo "remi deploy helper: $*" >&2
@@ -23,6 +26,7 @@ usage:
   conary-remi-deploy install-helper <sha256> <helper>
   conary-remi-deploy inspect-remi [--require-private-candidates|--require-repopulated]
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
+  conary-remi-deploy verify-ingress
   conary-remi-deploy verify-access
 USAGE
     exit 2
@@ -104,6 +108,78 @@ install_owned_file() {
     install -m "$mode" "${owners[@]}" "$src" "$dest"
 }
 
+require_shared_conary_root() {
+    local path
+    path="$(root_path /conary)"
+    [[ -d "$path" && ! -L "$path" ]] ||
+        die "shared Conary root must be a plain pre-provisioned directory: $path"
+
+    local observed_mode
+    observed_mode="$(stat -c '%a' "$path")"
+    [[ "$observed_mode" == "750" ]] ||
+        die "shared Conary root must have mode 0750, found ${observed_mode}: $path"
+
+    local expected_uid expected_gid expected_identity observed_identity
+    if [[ -z "$ROOT" ]]; then
+        expected_uid="$(id -u conary)" || die "missing conary service account"
+        expected_gid="$(getent group conary-web | cut -d: -f3)"
+        [[ -n "$expected_gid" ]] || die "missing conary-web traversal group"
+        expected_identity="conary:conary-web"
+    else
+        expected_uid="$(id -u)"
+        expected_gid="$(id -g)"
+        expected_identity="$(id -un):$(id -gn)"
+    fi
+    observed_identity="$(stat -c '%u:%g' "$path")"
+    [[ "$observed_identity" == "${expected_uid}:${expected_gid}" ]] ||
+        die "shared Conary root must be owned by ${expected_identity}, found ${observed_identity}: $path"
+}
+
+probe_exact_ingress_bytes() {
+    local description="$1"
+    local url="$2"
+    local expected="$3"
+    local resolve="${4:-}"
+    local args=(
+        --fail
+        --silent
+        --show-error
+        --location
+        --max-time 30
+        --retry 3
+        --retry-delay 2
+    )
+    if [[ -n "$resolve" ]]; then
+        args+=(--resolve "$resolve")
+    fi
+    if ! curl "${args[@]}" "$url" | cmp -s - "$expected"; then
+        die "${description} did not serve the exact deployed bytes: $url"
+    fi
+}
+
+verify_ingress() {
+    [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
+    require_shared_conary_root
+
+    local site_root home installer
+    site_root="$(root_path /conary/site)"
+    home="${site_root}/index.html"
+    installer="${site_root}/install-conary-preview.sh"
+    [[ -f "$home" && ! -L "$home" ]] ||
+        die "deployed site homepage is not a plain file: $home"
+    [[ -f "$installer" && ! -L "$installer" ]] ||
+        die "deployed preview installer is not a plain file: $installer"
+
+    if [[ -n "$SITE_ORIGIN_RESOLVE" ]]; then
+        probe_exact_ingress_bytes "origin homepage" "$SITE_HOME_URL" "$home" \
+            "$SITE_ORIGIN_RESOLVE"
+        probe_exact_ingress_bytes "origin preview installer" "$SITE_INSTALLER_URL" \
+            "$installer" "$SITE_ORIGIN_RESOLVE"
+    fi
+    probe_exact_ingress_bytes "public homepage" "$SITE_HOME_URL" "$home"
+    probe_exact_ingress_bytes "public preview installer" "$SITE_INSTALLER_URL" "$installer"
+}
+
 ensure_repository_keys_root() {
     local path="$1"
     if [[ -e "$path" || -L "$path" ]]; then
@@ -156,13 +232,13 @@ deploy_conary() {
     staging="$(real_tmp_path "$2")"
     [[ -d "$staging" && ! -L "$staging" ]] || die "staging path is not a plain directory: $staging"
 
-    local conary_root releases_root release_dir self_update_dir
-    conary_root="$(root_path /conary)"
+    local releases_root release_dir self_update_dir
     releases_root="$(root_path /conary/releases)"
     release_dir="$(root_path "/conary/releases/${version}")"
     self_update_dir="$(root_path /conary/self-update)"
 
-    install_owned_dir 0750 "$conary_root" "$releases_root" "$release_dir" "$self_update_dir"
+    require_shared_conary_root
+    install_owned_dir 0750 "$releases_root" "$release_dir" "$self_update_dir"
 
     shopt -s nullglob
     local files=("$staging"/*)
@@ -239,7 +315,8 @@ deploy_remi() {
 
     runtime_root="$(root_path /conary)"
     runtime_lock="${runtime_root}/.remi-runtime.lock"
-    install_owned_dir 0750 "$runtime_root" "${runtime_root}/metadata"
+    require_shared_conary_root
+    install_owned_dir 0750 "${runtime_root}/metadata"
     ensure_runtime_lock_file "$runtime_lock"
     repository_keys_dir="${runtime_root}/repository-keys"
     ensure_repository_keys_root "$repository_keys_dir"
@@ -313,14 +390,13 @@ deploy_site() {
     [[ -f "${staging}/index.html" && ! -L "${staging}/index.html" ]] ||
         die "staging directory is missing plain index.html: $staging"
 
-    local conary_root parent target tmp backup
-    conary_root="$(root_path /conary)"
+    local parent target tmp backup
     target="$(root_path "/conary/${site_target}")"
     parent="$(dirname "$target")"
     tmp="$(root_path "/conary/.${site_target}.next.$$")"
     backup="$(root_path "/conary/.${site_target}.previous.$$")"
 
-    install_owned_dir 0750 "$conary_root"
+    require_shared_conary_root
     rm -rf "$tmp" "$backup"
     mkdir -p "$tmp"
 
@@ -366,7 +442,7 @@ publish_test_artifact() {
     [[ -f "$source" && ! -L "$source" ]] ||
         die "test-artifact source is not a plain file: $source"
 
-    local size actual_sha conary_root artifact_root target next
+    local size actual_sha artifact_root target next
     size="$(stat -c '%s' "$source")"
     (( size > 0 )) || die "test artifact must not be empty"
     (( size <= 8 * 1024 * 1024 * 1024 )) ||
@@ -374,11 +450,10 @@ publish_test_artifact() {
     actual_sha="$(sha256sum "$source" | cut -d ' ' -f 1)"
     [[ "$actual_sha" == "$expected_sha" ]] || die "test-artifact SHA-256 mismatch"
 
-    conary_root="$(root_path /conary)"
     artifact_root="$(root_path /conary/test-artifacts)"
     target="${artifact_root}/${filename}"
     next="${artifact_root}/.${filename}.next.$$"
-    install_owned_dir 0750 "$conary_root"
+    require_shared_conary_root
     if [[ -e "$artifact_root" || -L "$artifact_root" ]]; then
         [[ -d "$artifact_root" && ! -L "$artifact_root" ]] ||
             die "test-artifact root is not a plain directory: $artifact_root"
@@ -462,15 +537,15 @@ export_native_oracle_inputs() {
     validate_sha256 "$ubuntu_sha256"
     validate_sha256 "$arch_sha256"
 
-    local bin conary_root evidence_root output transport transport_next
+    local bin evidence_root output transport transport_next
     bin="$(root_path /usr/local/bin/remi)"
     [[ -f "$bin" && ! -L "$bin" ]] || die "Remi binary is not a plain file: $bin"
-    conary_root="$(root_path /conary)"
     evidence_root="$(root_path /conary/evidence/native-oracle-inputs)"
     output="${evidence_root}/${export_id}"
     transport="/tmp/remi-native-oracle-input-${export_id}.tar"
     transport_next=""
-    install_owned_dir 0750 "$conary_root" "$(root_path /conary/evidence)" "$evidence_root"
+    require_shared_conary_root
+    install_owned_dir 0750 "$(root_path /conary/evidence)" "$evidence_root"
     [[ ! -e "$output" && ! -L "$output" ]] ||
         die "native-oracle export already exists: $output"
     [[ ! -e "$transport" && ! -L "$transport" ]] ||
@@ -511,6 +586,7 @@ export_native_oracle_inputs() {
 
 verify_access() {
     [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
+    require_shared_conary_root
     [[ -f "$(root_path /etc/conary/remi.toml)" ]] || die "missing /etc/conary/remi.toml"
 }
 
@@ -542,6 +618,10 @@ case "${1:-}" in
     export-native-oracle-inputs)
         [[ $# -eq 5 ]] || usage
         export_native_oracle_inputs "$2" "$3" "$4" "$5"
+        ;;
+    verify-ingress)
+        [[ $# -eq 1 ]] || usage
+        verify_ingress
         ;;
     verify-access)
         [[ $# -eq 1 ]] || usage
