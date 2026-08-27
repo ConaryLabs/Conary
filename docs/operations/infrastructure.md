@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-27
-revision: 35
+revision: 36
 summary: Non-secret infrastructure, agent operations, release, trusted Remi CI benchmark capacity, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
@@ -45,10 +45,18 @@ requires the workspace Rust toolchain, `sccache`, at least 12 visible logical
 CPUs, at least 48 GiB of physical memory, and no inherited cgroup `cpu.max` or
 `memory.max` ceiling.
 
+Ubuntu's host-wide AppArmor restriction on unprivileged user namespaces stays
+enabled. The installer loads a `default_allow` profile attached to the exact
+runner listener executable and grants only that trusted process tree the
+`userns` permission needed by exact ownership tests. The runner remains without
+sudo, and preflight proves that a user-plus-mount namespace works before a
+benchmark consumes build time.
+
 Bootstrap the Ubuntu host with a one-time repository registration token piped
 directly into `deploy/setup-remi-ci-runner.sh --registration-token-stdin`.
 That installer verifies the pinned GitHub runner archive, provisions Rust
-1.98.0, installs rootless Podman and KVM dependencies, and installs the
+1.98.0, installs rootless Podman and KVM dependencies, installs the scoped
+AppArmor profile, and installs the
 `github-actions-remi-ci-runner.service` unit. Re-run it with `--verify-only`
 to audit the installed boundary without changing it.
 

@@ -1,0 +1,11 @@
+# deploy/apparmor/conary-ci-runner -- Scope user namespaces to the trusted CI runner.
+abi <abi/5.0>,
+include <tunables/global>
+
+# The runner is otherwise intentionally unconfined. This profile preserves that
+# boundary while allowing its process tree to create the user and mount
+# namespaces required by exact ownership tests. Ubuntu's host-wide unprivileged
+# user-namespace restriction remains enabled for processes outside this tree.
+__RUNNER_LISTENER__ flags=(default_allow) {
+    userns,
+}
