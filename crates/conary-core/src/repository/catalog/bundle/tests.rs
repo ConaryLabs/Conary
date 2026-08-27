@@ -170,7 +170,11 @@ fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
         write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
     let manifest = source_manifest(&binding);
     retain_source_object(&candidate, &manifest.authenticated_objects[0]);
-    write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    let staged_reader = write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    assert_eq!(
+        staged_reader.binding().artifact.sha256,
+        manifest.catalog.sha256
+    );
     verify_source_catalog_bundle(&candidate, &manifest).unwrap();
 
     let expected_identity = manifest.manifest_sha256().unwrap();
@@ -181,6 +185,23 @@ fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
     assert_eq!(published.file_name().unwrap(), expected_identity.as_str());
     assert!(!candidate.exists());
     verify_source_catalog_bundle(&published, &manifest).unwrap();
+}
+
+#[test]
+fn source_manifest_finalization_rejects_unowned_candidate_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("source");
+    fs::create_dir(&candidate).unwrap();
+    let binding =
+        write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
+    let manifest = source_manifest(&binding);
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
+    fs::write(candidate.join("unowned.tmp"), b"not part of the bundle").unwrap();
+
+    let error = write_source_catalog_manifest(&candidate, &manifest)
+        .err()
+        .expect("unowned candidate entry must fail manifest finalization");
+    assert!(error.to_string().contains("incomplete or unexpected"));
 }
 
 #[test]
@@ -419,7 +440,9 @@ fn legacy_source_projection_cannot_claim_retained_metadata_authority() {
     manifest.parser_projection_version = 1;
     retain_source_object(&candidate, &manifest.authenticated_objects[0]);
 
-    let error = write_source_catalog_manifest(&candidate, &manifest).unwrap_err();
+    let error = write_source_catalog_manifest(&candidate, &manifest)
+        .err()
+        .expect("legacy projection must fail manifest finalization");
     assert!(
         error
             .to_string()
@@ -473,7 +496,9 @@ fn profile_bundle_rejects_mixed_member_evidence() {
         logical_digest_sha256: binding.logical_digest_sha256,
         counts: binding.counts,
     };
-    let error = write_profile_catalog_manifest(&candidate, &manifest).unwrap_err();
+    let error = write_profile_catalog_manifest(&candidate, &manifest)
+        .err()
+        .expect("mixed profile evidence must fail manifest finalization");
     assert!(error.to_string().contains("members do not match"));
     assert!(!candidate.join(CATALOG_MANIFEST_FILE_NAME).exists());
 }

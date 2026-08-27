@@ -37,23 +37,41 @@ impl PublishedCatalogBundle {
     }
 }
 
+/// Finalize a private source bundle and return the reader that proved its
+/// catalog binding for immediate private-stage composition.
+///
+/// Durable publication independently reopens the complete bundle before and
+/// after its atomic rename.
 pub fn write_source_catalog_manifest(
     candidate_directory: impl AsRef<Path>,
     manifest: &SourceSnapshotV1,
-) -> Result<()> {
+) -> Result<CatalogReader> {
+    let candidate_directory = candidate_directory.as_ref();
     manifest.validate()?;
-    verify_source_catalog_binding(candidate_directory.as_ref(), manifest)?;
-    verify_source_metadata_directory(candidate_directory.as_ref(), manifest)?;
-    write_manifest(candidate_directory.as_ref(), manifest)
+    let reader = verify_source_catalog_binding(candidate_directory, manifest)?;
+    verify_source_metadata_directory(candidate_directory, manifest)?;
+    write_manifest(candidate_directory, manifest)?;
+    verify_exact_source_directory(candidate_directory)?;
+    verify_manifest_file(candidate_directory, manifest)?;
+    Ok(reader)
 }
 
+/// Finalize a private profile bundle and return the reader that proved its
+/// catalog binding.
+///
+/// Durable publication independently reopens the complete bundle before and
+/// after its atomic rename.
 pub fn write_profile_catalog_manifest(
     candidate_directory: impl AsRef<Path>,
     manifest: &ProfileRevisionV2,
-) -> Result<()> {
+) -> Result<CatalogReader> {
+    let candidate_directory = candidate_directory.as_ref();
     manifest.validate()?;
-    verify_profile_catalog_binding(candidate_directory.as_ref(), manifest)?;
-    write_manifest(candidate_directory.as_ref(), manifest)
+    let reader = verify_profile_catalog_binding(candidate_directory, manifest)?;
+    write_manifest(candidate_directory, manifest)?;
+    verify_exact_profile_directory(candidate_directory)?;
+    verify_manifest_file(candidate_directory, manifest)?;
+    Ok(reader)
 }
 
 pub fn verify_source_catalog_bundle(

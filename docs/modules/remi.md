@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-27
-revision: 71
-summary: Document immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 72
+summary: Document single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -107,6 +107,13 @@ iterate in canonical database order. They retain one scalar package record,
 one normalized provide row, or one complete requirement group at a time; a
 source package's relation cardinality cannot become the publication memory
 bound.
+
+Source-manifest finalization returns the immutable reader that proved the
+catalog binding, and private staging carries that exact reader into profile
+composition instead of reopening and rehashing the same source catalog.
+Profile-manifest finalization likewise performs one private-stage binding
+proof. Durable source and profile publication still independently reopen and
+verify the complete bundle before and after its same-filesystem atomic rename.
 
 Fedora metadata acquisition is owned by
 `crates/conary-core/src/repository/parsers/fedora/metadata.rs`; the parent
