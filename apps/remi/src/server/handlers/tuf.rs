@@ -840,7 +840,8 @@ mod tests {
             if write_timestamp_key {
                 let key =
                     conary_core::ccs::signing::SigningKeyPair::generate().with_key_id("timestamp");
-                key.save_to_files(
+                crate::server::signing_authority::save_fixture_key_pair(
+                    &key,
                     &distro_key_dir.join("timestamp.private"),
                     &distro_key_dir.join("timestamp.public"),
                 )
