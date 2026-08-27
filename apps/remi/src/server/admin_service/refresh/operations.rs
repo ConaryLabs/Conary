@@ -272,14 +272,11 @@ async fn refresh_repositories_scoped_uncoordinated(
     .await?;
 
     if let Some(requested_profile) = requested_profile {
-        let repositories = native_profiles.remove(requested_profile).ok_or_else(|| {
-            ServiceError::NotFound(format!(
-                "native source profile '{requested_profile}' is not configured"
-            ))
-        })?;
-        native_profiles.clear();
-        native_profiles.insert(requested_profile.to_string(), repositories);
-        legacy_repositories.clear();
+        restrict_to_profile(
+            &mut native_profiles,
+            &mut legacy_repositories,
+            requested_profile,
+        )?;
     }
 
     let profile_jobs = native_profiles
@@ -353,6 +350,22 @@ async fn refresh_repositories_scoped_uncoordinated(
     batch.failures.extend(legacy_batch.failures);
     batch.sort();
     Ok(batch)
+}
+
+pub(super) fn restrict_to_profile(
+    native_profiles: &mut std::collections::BTreeMap<String, Vec<Repository>>,
+    legacy_repositories: &mut Vec<Repository>,
+    requested_profile: &str,
+) -> Result<(), ServiceError> {
+    let repositories = native_profiles.remove(requested_profile).ok_or_else(|| {
+        ServiceError::NotFound(format!(
+            "native source profile '{requested_profile}' is not configured"
+        ))
+    })?;
+    native_profiles.clear();
+    native_profiles.insert(requested_profile.to_string(), repositories);
+    legacy_repositories.clear();
+    Ok(())
 }
 
 async fn deactivate_profiles_without_enabled_members(

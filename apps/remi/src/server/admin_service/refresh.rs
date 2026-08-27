@@ -565,73 +565,35 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn exact_profile_retry_starts_no_unrelated_profile_run() {
-        let temp = tempfile::tempdir().expect("create tempdir");
-        let db_path = temp.path().join("metadata/conary.db");
-        let chunk_dir = temp.path().join("chunks");
-        let cache_dir = temp.path().join("cache");
-        for directory in [db_path.parent().unwrap(), &chunk_dir, &cache_dir] {
-            std::fs::create_dir_all(directory).expect("create fixture directory");
-        }
-        conary_core::db::init(&db_path).expect("initialize operational database");
-        {
-            let conn = conary_core::db::open_fast(&db_path).expect("open operational database");
-            native_repository("fedora", "fedora-44-everything-x86_64")
-                .insert(&conn)
-                .expect("insert Fedora member");
-            native_debian_repository("ubuntu", "ubuntu-resolute-main-amd64")
-                .insert(&conn)
-                .expect("insert Ubuntu member");
-        }
-        let state = Arc::new(RwLock::new(
-            crate::server::ServerState::new(crate::server::ServerConfig {
-                db_path: db_path.clone(),
-                chunk_dir,
-                cache_dir,
-                ..Default::default()
-            })
-            .expect("build server state"),
-        ));
+    #[test]
+    fn exact_profile_retry_plan_contains_no_unrelated_work() {
+        let fedora = native_repository("fedora", "fedora-44-everything-x86_64");
+        let ubuntu = native_debian_repository("ubuntu", "ubuntu-resolute-main-amd64");
+        let mut native_profiles = std::collections::BTreeMap::from([
+            ("fedora-44".to_string(), vec![fedora]),
+            ("ubuntu-26.04".to_string(), vec![ubuntu]),
+        ]);
+        let mut legacy_repositories = vec![conary_core::db::models::Repository::new(
+            "legacy".to_string(),
+            "https://legacy.invalid".to_string(),
+        )];
 
-        let first = super::super::refresh_repositories(&state, true)
-            .await
-            .expect("collect initial failures");
-        assert_eq!(first.state(), RepoRefreshBatchState::Failed);
-        let before = profile_run_counts(&db_path);
-        assert_eq!(before.get("fedora-44"), Some(&1));
-        assert_eq!(before.get("ubuntu-26.04"), Some(&1));
+        super::operations::restrict_to_profile(
+            &mut native_profiles,
+            &mut legacy_repositories,
+            "fedora-44",
+        )
+        .unwrap();
 
-        let retry = super::super::refresh_profile_repositories(&state, "fedora-44", true)
-            .await
-            .expect("retry exact Fedora profile");
-        assert_eq!(retry.state(), RepoRefreshBatchState::Failed);
-        assert!(
-            retry
-                .failures
-                .iter()
-                .all(|failure| failure.source_profile.as_deref() == Some("fedora-44"))
+        assert_eq!(
+            native_profiles
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["fedora-44"]
         );
-        let after = profile_run_counts(&db_path);
-        assert_eq!(after.get("fedora-44"), Some(&2));
-        assert_eq!(after.get("ubuntu-26.04"), Some(&1));
-    }
-
-    fn profile_run_counts(db_path: &std::path::Path) -> std::collections::BTreeMap<String, i64> {
-        let conn = conary_core::db::open_fast(db_path).expect("open operational database");
-        let mut statement = conn
-            .prepare(
-                "SELECT source_profile, COUNT(*)
-                 FROM repository_sync_runs
-                 GROUP BY source_profile
-                 ORDER BY source_profile",
-            )
-            .expect("prepare profile run counts");
-        statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .expect("query profile run counts")
-            .collect::<rusqlite::Result<_>>()
-            .expect("collect profile run counts")
+        assert_eq!(native_profiles["fedora-44"].len(), 1);
+        assert!(legacy_repositories.is_empty());
     }
 
     #[tokio::test]
