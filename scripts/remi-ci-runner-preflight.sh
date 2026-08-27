@@ -103,11 +103,13 @@ for authority_root in /conary/repository-keys /conary/deployment-backups; do
         fail "runner identity can read production authority root ${authority_root}"
 done
 
-for command in cargo git jq rg rustc sccache; do
+for command in cargo git jq rg rustc sccache unshare; do
     require_cmd "$command"
 done
 cargo fmt --version >/dev/null
 cargo clippy --version >/dev/null
+unshare --user --map-root-user --mount --propagation private /bin/true ||
+    fail "runner cannot create the user and mount namespaces required by exact ownership tests"
 
 minimum_logical_cpus="${CONARY_CI_MIN_LOGICAL_CPUS:-12}"
 minimum_memory_gib="${CONARY_CI_MIN_MEMORY_GIB:-48}"

@@ -81,8 +81,10 @@ rg -q 'queue_phase "\$phase" run_suite' scripts/remi-ci-benchmark.sh ||
 
 installer="deploy/setup-remi-ci-runner.sh"
 service="deploy/systemd/github-actions-remi-ci-runner.service"
+apparmor_profile="deploy/apparmor/conary-ci-runner"
 [[ -x "$installer" ]] || fail "Remi runner installer is missing or not executable"
 [[ -f "$service" ]] || fail "Remi runner service template is missing"
+[[ -f "$apparmor_profile" ]] || fail "Remi runner AppArmor profile is missing"
 rg -q 'RUNNER_USER="conary-ci"' "$installer" ||
     fail "installer does not use the dedicated runner identity"
 rg -q 'RUNNER_VERSION="2\.337\.0"' "$installer" ||
@@ -100,6 +102,27 @@ rg -q 'CPUQuotaPerSecUSec.*infinity' "$installer" ||
     fail "installer does not verify an uncapped runner CPU allocation"
 rg -q 'MemoryMax.*infinity' "$installer" ||
     fail "installer does not verify an uncapped runner memory allocation"
+rg -q "run_as_runner bash -c '\[\[ -r /dev/kvm && -w /dev/kvm \]\]'" "$installer" ||
+    fail "installer does not verify KVM access through the runner's shell identity"
+rg -q 'install_apparmor_profile' "$installer" ||
+    fail "installer does not install the runner AppArmor profile"
+rg -q 'systemctl restart "\$SERVICE_NAME"' "$installer" ||
+    fail "installer does not restart the listener into its AppArmor profile"
+rg -q 'apparmor_restrict_unprivileged_userns' "$installer" ||
+    fail "installer does not inspect the host-wide user-namespace restriction"
+rg -q 'host-wide AppArmor unprivileged user-namespace restriction is disabled' "$installer" ||
+    fail "installer does not reject a disabled host-wide user-namespace restriction"
+rg -q 'unshare --user --map-root-user --mount --propagation private /bin/true' \
+    scripts/remi-ci-runner-preflight.sh ||
+    fail "runner preflight does not prove exact ownership-test namespaces"
+rg -q '__RUNNER_LISTENER__ flags=\(default_allow\)' "$apparmor_profile" ||
+    fail "AppArmor profile is not attached to only the runner listener"
+rg -q '^[[:space:]]*userns,$' "$apparmor_profile" ||
+    fail "AppArmor profile does not grant the runner user namespaces"
+if rg -q 'apparmor_restrict_unprivileged_userns[=[:space:]]+0' \
+    "$installer" "$apparmor_profile"; then
+    fail "runner provisioning must not disable AppArmor user-namespace protection globally"
+fi
 if rg -q '^(CPUQuota|MemoryMax)=' "$service"; then
     fail "runner service template must not impose CPU or memory ceilings"
 fi

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-27
-revision: 56
+revision: 57
 summary: Document attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, native lifecycle gates, and the trusted Remi CI benchmark lane
 ---
 
@@ -1175,6 +1175,11 @@ memory, build and container parallelism, cache disposition, total duration, and
 per-phase duration in its retained JSON evidence. It cannot run fork or
 unmerged pull-request code and it does not replace any required hosted check
 while issue #620 measures the cold and warm results against the hosted baseline.
+The runner process tree receives AppArmor's explicit `userns` permission so
+workspace tests can construct their exact-ownership user and mount namespaces;
+the production host's global unprivileged-user-namespace restriction remains
+enabled, and the benchmark preflight fails before compilation if this scoped
+grant is absent.
 
 `conary-test deploy status` is internal infrastructure state, not a product
 release identity. Operators should read it as local checkout and managed-rollout

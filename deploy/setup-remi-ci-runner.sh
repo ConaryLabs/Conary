@@ -74,6 +74,8 @@ RUST_VERSION="1.98.0"
 SERVICE_NAME="github-actions-remi-ci-runner.service"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVICE_TEMPLATE="${SCRIPT_DIR}/systemd/${SERVICE_NAME}"
+APPARMOR_PROFILE_TEMPLATE="${SCRIPT_DIR}/apparmor/conary-ci-runner"
+APPARMOR_PROFILE_PATH="/etc/apparmor.d/conary-ci-runner"
 REGISTRATION_TOKEN=""
 TEMP_ROOT=""
 
@@ -89,9 +91,11 @@ if [[ "$MODE" == "install" ]]; then
         fail "registration token has an unexpected format"
 fi
 
-os_id="$(awk -F= '$1 == "ID" { gsub(/\"/, "", $2); print $2 }' /etc/os-release)"
+os_id="$(awk -F= '$1 == "ID" { gsub(/"/, "", $2); print $2 }' /etc/os-release)"
 [[ "$os_id" == "ubuntu" ]] || fail "this installer supports only the Ubuntu Remi host"
 [[ -f "$SERVICE_TEMPLATE" ]] || fail "service template is missing: ${SERVICE_TEMPLATE}"
+[[ -f "$APPARMOR_PROFILE_TEMPLATE" ]] ||
+    fail "AppArmor profile template is missing: ${APPARMOR_PROFILE_TEMPLATE}"
 
 run_as_runner() {
     runuser -u "$RUNNER_USER" -- env \
@@ -106,10 +110,24 @@ install_packages() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y --no-install-recommends \
-        build-essential ca-certificates clang cmake curl file fuse-overlayfs git \
+        apparmor build-essential ca-certificates clang cmake curl file fuse-overlayfs git \
         gperf jq libapt-pkg-dev liblzma-dev libseccomp-dev libssl-dev \
         linux-libc-dev musl-tools ovmf perl pkg-config podman qemu-system-x86 \
         qemu-utils ripgrep rustup sccache slirp4netns tar uidmap
+}
+
+install_apparmor_profile() {
+    local listener_path profile_staging
+    listener_path="${RUNNER_HOME}/bin/Runner.Listener"
+    [[ -x "$listener_path" ]] || fail "runner listener is missing: ${listener_path}"
+
+    profile_staging="$(mktemp)"
+    sed "s|__RUNNER_LISTENER__|${listener_path}|g" \
+        "$APPARMOR_PROFILE_TEMPLATE" > "$profile_staging"
+    apparmor_parser -Q "$profile_staging"
+    install -m 0644 -o root -g root "$profile_staging" "$APPARMOR_PROFILE_PATH"
+    rm -f "$profile_staging"
+    apparmor_parser -r "$APPARMOR_PROFILE_PATH"
 }
 
 ensure_runner_identity() {
@@ -202,15 +220,21 @@ install_service() {
     install -m 0644 -o root -g root "$service_staging" "/etc/systemd/system/${SERVICE_NAME}"
     rm -f "$service_staging"
     systemctl daemon-reload
-    systemctl enable --now "$SERVICE_NAME"
+    systemctl enable "$SERVICE_NAME"
+    systemctl restart "$SERVICE_NAME"
 }
 
 verify_setup() {
+    local listener_path listener_pid listener_profile
     require_cmd systemctl
     require_cmd runuser
+    require_cmd aa-exec
+    require_cmd apparmor_parser
+    require_cmd pgrep
     getent passwd "$RUNNER_USER" >/dev/null || fail "runner identity is missing"
     runner_uid="$(id -u "$RUNNER_USER")"
     podman_socket="/run/user/${runner_uid}/podman/podman.sock"
+    listener_path="${RUNNER_HOME}/bin/Runner.Listener"
 
     [[ "$(systemctl is-active "$SERVICE_NAME")" == "active" ]] ||
         fail "runner service is not active"
@@ -224,11 +248,26 @@ verify_setup() {
         fail "runner service has an artificial CPU affinity restriction"
     [[ "$(systemctl show "$SERVICE_NAME" -p TasksMax --value)" == "infinity" ]] ||
         fail "runner service has an artificial process ceiling"
+    [[ -f "$APPARMOR_PROFILE_PATH" ]] || fail "runner AppArmor profile is missing"
+    grep -Fq "${listener_path} (unconfined)" /sys/kernel/security/apparmor/profiles ||
+        fail "runner AppArmor profile is not loaded"
+    if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+        [[ "$(< /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == "1" ]] ||
+            fail "host-wide AppArmor unprivileged user-namespace restriction is disabled"
+    fi
+    listener_pid="$(pgrep -u "$RUNNER_USER" -f "^${listener_path} run$" | sed -n '1p')"
+    [[ -n "$listener_pid" ]] || fail "runner listener process is missing"
+    listener_profile="$(< "/proc/${listener_pid}/attr/current")"
+    [[ "$listener_profile" == "${listener_path} (unconfined)" ]] ||
+        fail "runner listener is outside its AppArmor profile: ${listener_profile}"
+    aa-exec -p "$listener_path" -- runuser -u "$RUNNER_USER" -- \
+        unshare --user --map-root-user --mount --propagation private /bin/true ||
+        fail "runner AppArmor profile does not permit exact ownership-test namespaces"
     [[ "$(run_as_runner nproc)" -ge 12 ]] || fail "runner sees fewer than 12 logical CPUs"
     [[ "$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)" -ge $((48 * 1024 * 1024)) ]] ||
         fail "host exposes less than 48 GiB of memory"
-    run_as_runner test -r /dev/kvm
-    run_as_runner test -w /dev/kvm
+    run_as_runner bash -c '[[ -r /dev/kvm && -w /dev/kvm ]]' ||
+        fail "/dev/kvm is not readable and writable by the runner identity"
     run_as_runner test -S "$podman_socket"
     run_as_runner rustc --version | grep -Fq "rustc ${RUST_VERSION} "
     run_as_runner cargo clippy --version >/dev/null
@@ -245,11 +284,11 @@ verify_setup() {
     done
 
     logical_cpus="$(run_as_runner nproc)"
-    log "ok: ${RUNNER_NAME} has ${logical_cpus} CPUs, unrestricted memory, rootless Podman, KVM, Rust ${RUST_VERSION}, and sccache"
+    log "ok: ${RUNNER_NAME} has ${logical_cpus} CPUs, unrestricted memory, scoped user namespaces, rootless Podman, KVM, Rust ${RUST_VERSION}, and sccache"
 }
 
 if [[ "$MODE" == "install" ]]; then
-    for command in apt-get curl getent grep install loginctl runuser sed sha256sum systemctl tar useradd usermod; do
+    for command in apparmor_parser apt-get curl getent grep install loginctl runuser sed sha256sum systemctl tar useradd usermod; do
         require_cmd "$command"
     done
     install_packages
@@ -257,6 +296,7 @@ if [[ "$MODE" == "install" ]]; then
     ensure_rust
     ensure_rootless_podman
     install_runner
+    install_apparmor_profile
     install_service
 fi
 
