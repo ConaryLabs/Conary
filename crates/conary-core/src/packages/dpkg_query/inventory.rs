@@ -2,6 +2,7 @@
 
 //! Fixed-work dpkg installed-inventory acquisition.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::Path;
@@ -276,20 +277,21 @@ fn parse_conffiles(field: &str) -> Result<BTreeMap<String, InstalledConfigAuthor
         };
         let path = crate::packages::archive_utils::normalize_path(path)
             .map_err(|error| Error::ParseError(error.to_string()))?;
-        if config
-            .insert(
-                path.clone(),
-                InstalledConfigAuthority::Dpkg {
-                    original_md5,
-                    obsolete,
-                    remove_on_upgrade,
-                },
-            )
-            .is_some()
-        {
-            return Err(Error::ConflictError(format!(
-                "dpkg Conffiles repeats path {path:?}"
-            )));
+        let authority = InstalledConfigAuthority::Dpkg {
+            original_md5,
+            obsolete,
+            remove_on_upgrade,
+        };
+        match config.entry(path.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(authority);
+            }
+            Entry::Occupied(entry) if entry.get() == &authority => {}
+            Entry::Occupied(_) => {
+                return Err(Error::ConflictError(format!(
+                    "dpkg Conffiles repeats path {path:?} with conflicting authority"
+                )));
+            }
         }
     }
     Ok(config)
@@ -451,5 +453,39 @@ mod tests {
         assert!(
             parse_conffiles(" /etc/fixture.conf newconffile remove-on-upgrade obsolete\n").is_err()
         );
+    }
+
+    #[test]
+    fn dpkg_conffiles_collapse_identical_repeated_normalized_authority() {
+        let config = parse_conffiles(concat!(
+            " /etc/thermald/thermal-cpu-cdev-order.xml 6bbb6d648ba2c70b9635e843818beebb\n",
+            " /etc/thermald/./thermal-cpu-cdev-order.xml 6bbb6d648ba2c70b9635e843818beebb\n",
+        ))
+        .unwrap();
+
+        assert_eq!(config.len(), 1);
+        assert_eq!(
+            config.get("/etc/thermald/thermal-cpu-cdev-order.xml"),
+            Some(&InstalledConfigAuthority::Dpkg {
+                original_md5: Some("6bbb6d648ba2c70b9635e843818beebb".to_string()),
+                obsolete: false,
+                remove_on_upgrade: false,
+            })
+        );
+    }
+
+    #[test]
+    fn dpkg_conffiles_reject_conflicting_repeated_normalized_authority() {
+        let error = parse_conffiles(concat!(
+            " /etc/fixture.conf 0123456789abcdef0123456789abcdef\n",
+            " /etc/./fixture.conf fedcba9876543210fedcba9876543210 obsolete\n",
+        ))
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::ConflictError(message)
+                if message == "dpkg Conffiles repeats path \"/etc/fixture.conf\" with conflicting authority"
+        ));
     }
 }

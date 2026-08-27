@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-12
-revision: 47
+last_updated: 2026-08-27
+revision: 48
 summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, generation activation, and configuration transactions for RPM, Debian, Arch, and eopkg packages
 ---
 
@@ -66,6 +66,11 @@ RPM itself defines as installed, and excludes `REPLACED`, `NOTINSTALLED`, and
 missing payload, and without capturing another package's replacement bytes.
 Unknown states fail closed. The pinned contract is RPM 4.20.1's
 [`rpmfileState` and `RPMFILE_IS_INSTALLED`](https://github.com/rpm-software-management/rpm/blob/c8dc5ea575a2e9c1488036d12f4b75f6a5a49120/include/rpm/rpmfiles.h#L31-L43).
+Installed dpkg `Conffiles` authority follows dpkg's accepted database shape:
+an exactly repeated normalized path with the same MD5 or `newconffile` sentinel
+and the same `obsolete` and `remove-on-upgrade` flags is one idempotent typed
+declaration. A repeated normalized path whose digest or flags differ remains a
+typed conflict and blocks adoption.
 The explicit adoption-to-CCS bridge is valid only after Conary re-resolves an
 immutable source artifact from enrolled authority and proves its typed identity
 and complete payload equal the adopted record. It then enters the same parser,
