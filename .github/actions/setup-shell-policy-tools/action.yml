@@ -1,0 +1,27 @@
+name: setup-shell-policy-tools
+description: Reuse ripgrep or install it from the canonical Ubuntu archive only
+
+runs:
+  using: composite
+  steps:
+    - name: Require ripgrep without consulting unrelated runner repositories
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v rg >/dev/null; then
+          rg --version | sed -n '1p'
+          exit 0
+        fi
+
+        ubuntu_sources=/etc/apt/sources.list.d/ubuntu.sources
+        [[ -f "$ubuntu_sources" && ! -L "$ubuntu_sources" ]] || {
+          echo "canonical Ubuntu apt source is not a plain file: $ubuntu_sources" >&2
+          exit 1
+        }
+        apt_options=(
+          -o "Dir::Etc::sourcelist=${ubuntu_sources}"
+          -o "Dir::Etc::sourceparts=/dev/null"
+        )
+        sudo apt-get "${apt_options[@]}" update
+        sudo apt-get "${apt_options[@]}" install -y --no-install-recommends ripgrep
+        command -v rg >/dev/null
