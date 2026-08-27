@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-22
-revision: 79
-summary: Route feature ownership through typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+last_updated: 2026-08-27
+revision: 80
+summary: Route feature ownership through isolated hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1333,6 +1333,10 @@ deployment, and prove installed or live behavior independently.
 **Start here:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
 `.github/workflows/release-artifact-proof.yml`;
+`.github/actions/setup-rust-workspace/action.yml`;
+`scripts/ci-install-ubuntu-packages.sh`;
+`scripts/check-github-action-runtimes.sh`;
+`scripts/test-github-action-runtimes.sh`;
 `Cargo.toml`; workspace member `Cargo.toml` manifests; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
@@ -1348,6 +1352,11 @@ static-site deployment, and production health proof.
 **Paths:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
 `.github/workflows/release-artifact-proof.yml`;
+`.github/actions/setup-rust-workspace/action.yml`;
+`.github/actions/test-generation-db-reflink/action.yml`;
+`scripts/ci-install-ubuntu-packages.sh`;
+`scripts/check-github-action-runtimes.sh`;
+`scripts/test-github-action-runtimes.sh`;
 `Cargo.toml`; `apps/*/Cargo.toml`; `crates/*/Cargo.toml`; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
@@ -1357,6 +1366,8 @@ static-site deployment, and production health proof.
 
 **Focused proof:** `bash scripts/check-release-matrix.sh`;
 `bash scripts/test-release-matrix.sh`;
+`bash scripts/check-github-action-runtimes.sh`;
+`bash scripts/test-github-action-runtimes.sh`;
 `cargo test -p conary-core --example sign_hash`;
 `cargo test -p conary --test release_ccs_manifest`;
 `cargo test -p conary-test container::image`.

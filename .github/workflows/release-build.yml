@@ -144,9 +144,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-release-
       - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev liblzma-dev libseccomp-dev pkg-config cmake
+        run: >-
+          bash scripts/ci-install-ubuntu-packages.sh
+          libssl-dev liblzma-dev libseccomp-dev pkg-config cmake
       - name: Prepare dry-run release tree
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash

@@ -87,15 +87,64 @@ else
     'if command -v rg >/dev/null; then[\s\S]*exit 0' \
     'must reuse an existing rg before any apt operation'
   require_shell_policy_match \
-    'ubuntu_sources=/etc/apt/sources\.list\.d/ubuntu\.sources[\s\S]*\[\[ -f "\$ubuntu_sources" && ! -L "\$ubuntu_sources" \]\]' \
+    'bash scripts/ci-install-ubuntu-packages\.sh ripgrep' \
+    'must delegate fallback installation to the shared Ubuntu package owner'
+fi
+
+ubuntu_package_helper="scripts/ci-install-ubuntu-packages.sh"
+if [[ ! -f "$ubuntu_package_helper" ]]; then
+  violations+=("${ubuntu_package_helper}: missing shared hosted-Ubuntu package bootstrap")
+else
+  require_ubuntu_package_match() {
+    local pattern="$1"
+    local description="$2"
+
+    if ! rg -q --multiline -- "$pattern" "$ubuntu_package_helper"; then
+      violations+=("${ubuntu_package_helper}: ${description}")
+    fi
+  }
+
+  # These regexes intentionally match literal shell variables in the helper.
+  # shellcheck disable=SC2016
+  require_ubuntu_package_match \
+    '\[\[ ! "\$package" =~ \^\[a-z0-9\]\[a-z0-9\+\.\-\]\*\$ \]\]' \
+    'must reject untyped package arguments'
+  require_ubuntu_package_match \
+    'dpkg-query --show --showformat='\''\$\{Status\}'\''[\s\S]*missing_packages' \
+    'must skip apt when every exact package is already installed'
+  # shellcheck disable=SC2016
+  require_ubuntu_package_match \
+    'ubuntu_sources=/etc/apt/sources\.list\.d/ubuntu\.sources[\s\S]*! -f "\$ubuntu_sources" \|\| -L "\$ubuntu_sources"' \
     'must require the canonical Ubuntu source as a plain file'
-  require_shell_policy_match \
+  require_ubuntu_package_match \
     'Dir::Etc::sourcelist=\$\{ubuntu_sources\}[\s\S]*Dir::Etc::sourceparts=/dev/null' \
     'must isolate apt from image-provided third-party sources'
-  require_shell_policy_match \
-    'apt-get "\$\{apt_options\[@\]\}" update[\s\S]*apt-get "\$\{apt_options\[@\]\}" install -y --no-install-recommends ripgrep' \
-    'must use the isolated apt options for update and fallback installation'
+  require_ubuntu_package_match \
+    'apt-get "\$\{apt_options\[@\]\}" update[\s\S]*apt-get "\$\{apt_options\[@\]\}" install -y --no-install-recommends' \
+    'must use the isolated apt options for update and installation'
 fi
+
+ubuntu_package_callers=(
+  ".github/actions/setup-rust-workspace/action.yml"
+  ".github/actions/setup-shell-policy-tools/action.yml"
+  ".github/actions/build-static-conary/action.yml"
+  ".github/actions/test-generation-db-reflink/action.yml"
+  ".github/workflows/release-build.yml"
+)
+for caller in "${ubuntu_package_callers[@]}"; do
+  if [[ ! -f "$caller" ]]; then
+    violations+=("${caller}: missing hosted-Ubuntu package bootstrap caller")
+  elif ! rg -q --fixed-strings 'bash scripts/ci-install-ubuntu-packages.sh' "$caller"; then
+    violations+=("${caller}: must use the shared hosted-Ubuntu package bootstrap")
+  fi
+done
+
+while IFS=: read -r file line _; do
+  violations+=("${file}:${line}: unrestricted hosted-runner apt bootstrap")
+done < <(
+  rg -n --no-heading -- 'sudo[[:space:]]+(env[[:space:]]+[^[:space:]]+[[:space:]]+)?apt-get' \
+    .github/actions .github/workflows 2>/dev/null || true
+)
 
 for workflow in .github/workflows/pr-gate.yml .github/workflows/merge-validation.yml; do
   [[ -f "$workflow" ]] || continue
@@ -111,7 +160,7 @@ for workflow in .github/workflows/pr-gate.yml .github/workflows/merge-validation
 done
 
 if [[ "${#violations[@]}" -ne 0 ]]; then
-  printf 'ERROR: unpinned GitHub Action references found:\n' >&2
+  printf 'ERROR: GitHub Actions policy violations found:\n' >&2
   printf '  %s\n' "${violations[@]}" >&2
   exit 1
 fi
