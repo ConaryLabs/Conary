@@ -257,10 +257,17 @@ pub fn delete_catalog_collection(
                    FROM repository_sync_runs run
                    JOIN repository_sync_scopes scope
                      ON scope.source_profile = run.source_profile
-                    AND scope.current_run_id = run.run_id
-                    AND scope.fencing_epoch = run.fencing_epoch
+                    AND run.fencing_epoch <= scope.fencing_epoch
                    WHERE run.state = 'candidate'
                      AND run.candidate_profile_digest = ?1
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM repository_sync_runs newer
+                         WHERE newer.source_profile = run.source_profile
+                           AND newer.fencing_epoch > run.fencing_epoch
+                           AND newer.fencing_epoch <= scope.fencing_epoch
+                           AND newer.state IN ('candidate', 'published')
+                     )
                )",
             params![
                 &resource.resource_sha256,
@@ -320,12 +327,19 @@ pub fn delete_catalog_collection(
                    FROM repository_sync_runs run
                    JOIN repository_sync_scopes scope
                      ON scope.source_profile = run.source_profile
-                    AND scope.current_run_id = run.run_id
-                    AND scope.fencing_epoch = run.fencing_epoch
+                    AND run.fencing_epoch <= scope.fencing_epoch
                    JOIN repository_sync_run_members member
                      ON member.run_id = run.run_id
                    WHERE run.state = 'candidate'
                      AND member.candidate_source_snapshot_sha256 = ?1
+                     AND NOT EXISTS (
+                         SELECT 1
+                         FROM repository_sync_runs newer
+                         WHERE newer.source_profile = run.source_profile
+                           AND newer.fencing_epoch > run.fencing_epoch
+                           AND newer.fencing_epoch <= scope.fencing_epoch
+                           AND newer.state IN ('candidate', 'published')
+                     )
                )",
             params![
                 &resource.resource_sha256,
@@ -576,10 +590,17 @@ fn load_profile_roots(
         "SELECT run.candidate_profile_digest
          FROM repository_sync_scopes scope
          JOIN repository_sync_runs run
-           ON run.run_id = scope.current_run_id
-          AND run.source_profile = scope.source_profile
-          AND run.fencing_epoch = scope.fencing_epoch
+           ON run.source_profile = scope.source_profile
+          AND run.fencing_epoch <= scope.fencing_epoch
          WHERE run.state = 'candidate'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM repository_sync_runs newer
+               WHERE newer.source_profile = run.source_profile
+                 AND newer.fencing_epoch > run.fencing_epoch
+                 AND newer.fencing_epoch <= scope.fencing_epoch
+                 AND newer.state IN ('candidate', 'published')
+           )
          ORDER BY run.source_profile",
     )?;
     let candidate_rows = candidates.query_map([], |row| row.get::<_, String>(0))?;
@@ -629,12 +650,19 @@ fn load_source_run_roots(
         "SELECT member.candidate_source_snapshot_sha256
          FROM repository_sync_scopes scope
          JOIN repository_sync_runs run
-           ON run.run_id = scope.current_run_id
-          AND run.source_profile = scope.source_profile
-          AND run.fencing_epoch = scope.fencing_epoch
+           ON run.source_profile = scope.source_profile
+          AND run.fencing_epoch <= scope.fencing_epoch
          JOIN repository_sync_run_members member ON member.run_id = run.run_id
          WHERE run.state = 'candidate'
            AND member.candidate_source_snapshot_sha256 IS NOT NULL
+           AND NOT EXISTS (
+               SELECT 1
+               FROM repository_sync_runs newer
+               WHERE newer.source_profile = run.source_profile
+                 AND newer.fencing_epoch > run.fencing_epoch
+                 AND newer.fencing_epoch <= scope.fencing_epoch
+                 AND newer.state IN ('candidate', 'published')
+           )
          ORDER BY run.source_profile, member.ordinal",
     )?;
     let candidate_rows = candidates.query_map([], |row| row.get::<_, String>(0))?;

@@ -156,6 +156,10 @@ fn select_current_candidate(conn: &Connection, run_id: &str) {
         [run_id],
     )
     .unwrap();
+    select_scope_run(conn, run_id);
+}
+
+fn select_scope_run(conn: &Connection, run_id: &str) {
     conn.execute(
         "INSERT INTO repository_sync_scopes (
              source_profile, fencing_epoch, current_run_id
@@ -304,7 +308,7 @@ fn live_run_profile_and_member_inputs_candidates_are_roots() {
 }
 
 #[test]
-fn only_the_exact_current_completed_candidate_is_a_collection_root() {
+fn latest_successful_candidate_survives_a_failed_successor_but_not_a_new_success() {
     let conn = setup();
     install_profile(&conn, 'c', &['t']);
     let stale_unrooted_plan = plan_catalog_collection(&conn).unwrap();
@@ -333,8 +337,36 @@ fn only_the_exact_current_completed_candidate_is_a_collection_root() {
     assert!(first.unreachable_profile_resources.is_empty());
     assert!(first.unreachable_source_resources.is_empty());
 
+    let failed_run = "10000000-0000-4000-8000-000000000032";
+    insert_run(&conn, failed_run, None, None, None);
+    conn.execute(
+        "UPDATE repository_sync_runs
+         SET state = 'abandoned', finished_at = 300,
+             failure_stage = 'fetching_objects', failure_category = 'transport',
+             failure_evidence = 'fixture interrupted body'
+         WHERE run_id = ?1",
+        [failed_run],
+    )
+    .unwrap();
+    select_scope_run(&conn, failed_run);
+
+    let after_failure = plan_catalog_collection(&conn).unwrap();
+    assert!(
+        after_failure
+            .reachability
+            .contains_profile_revision(&resource_digest('c'))
+    );
+    assert!(
+        after_failure
+            .reachability
+            .contains_source_snapshot(&resource_digest('t'))
+    );
+    let stale_delete = delete_catalog_collection(&conn, &stale_unrooted_plan).unwrap();
+    assert!(stale_delete.deleted_profile_resources.is_empty());
+    assert!(stale_delete.deleted_source_resources.is_empty());
+
     install_profile(&conn, 'd', &['u']);
-    let second_run = "10000000-0000-4000-8000-000000000032";
+    let second_run = "10000000-0000-4000-8000-000000000033";
     insert_run(&conn, second_run, None, Some('d'), Some(300));
     insert_run_member(&conn, second_run, 0, None, Some('u'));
     select_current_candidate(&conn, second_run);

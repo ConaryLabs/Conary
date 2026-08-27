@@ -762,6 +762,38 @@ mod tests {
     }
 
     #[test]
+    fn activation_accepts_latest_successful_candidate_after_a_failed_successor() {
+        let (conn, repo) = setup();
+        insert_run(&conn, &repo, RUN_ONE, OWNER_ONE, 1);
+        install_catalog(&conn, 'd', 'e', true);
+        insert_run(&conn, &repo, RUN_TWO, OWNER_TWO, 2);
+        conn.execute(
+            "UPDATE repository_sync_runs
+             SET state = 'abandoned', failure_stage = 'fetching_objects',
+                 failure_category = 'transport', failure_evidence = 'body ended early'
+             WHERE run_id = ?1",
+            [RUN_TWO],
+        )
+        .unwrap();
+
+        let outcome =
+            activate_profile_revision_at(&conn, &activation(1, RUN_ONE, OWNER_ONE, 'd'), 200)
+                .unwrap();
+
+        assert!(matches!(
+            outcome,
+            RemiProfileActivationOutcome::Activated(_)
+        ));
+        assert_eq!(
+            RemiActiveProfileRevision::find(&conn, "fedora-44")
+                .unwrap()
+                .unwrap()
+                .activation_run_id,
+            RUN_ONE
+        );
+    }
+
+    #[test]
     fn activation_rejects_repository_precedence_changed_after_run_start() {
         let (conn, repo) = setup();
         insert_run(&conn, &repo, RUN_ONE, OWNER_ONE, 1);

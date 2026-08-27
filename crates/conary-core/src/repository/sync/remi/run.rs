@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod candidate;
 mod contract;
+mod failure;
 mod recovery;
 
 pub use candidate::{
@@ -21,6 +22,10 @@ pub use candidate::{
 };
 use contract::{
     is_terminal_state, validate_digest, validate_member, validate_profile, validate_uuid,
+};
+pub use failure::{
+    ProfileSyncFailureCategory, ProfileSyncFailureStage, RemiSyncFailureCategory,
+    RemiSyncFailureStage,
 };
 
 #[cfg(test)]
@@ -71,59 +76,6 @@ pub struct ProfileSyncRunMember {
 }
 
 pub type RemiSyncRunMember = ProfileSyncRunMember;
-
-#[derive(Debug, Clone, Copy)]
-pub enum ProfileSyncFailureStage {
-    FetchingObjects,
-    Ingesting,
-    Publishing,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ProfileSyncFailureCategory {
-    Transport,
-    WireContract,
-    Database,
-    Fenced,
-    Internal,
-}
-
-pub type RemiSyncFailureStage = ProfileSyncFailureStage;
-pub type RemiSyncFailureCategory = ProfileSyncFailureCategory;
-
-impl ProfileSyncFailureCategory {
-    pub fn from_error(error: &Error) -> Self {
-        match error {
-            Error::DownloadError(_) | Error::HttpStatus { .. } | Error::TimeoutError(_) => {
-                Self::Transport
-            }
-            Error::ParseError(_) | Error::ConfigError(_) | Error::Json(_) => Self::WireContract,
-            Error::Database(_) => Self::Database,
-            Error::ConflictError(_) => Self::Fenced,
-            _ => Self::Internal,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Transport => "transport",
-            Self::WireContract => "wire_contract",
-            Self::Database => "database",
-            Self::Fenced => "fenced",
-            Self::Internal => "internal",
-        }
-    }
-}
-
-impl ProfileSyncFailureStage {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::FetchingObjects => "fetching_objects",
-            Self::Ingesting => "ingesting",
-            Self::Publishing => "publishing",
-        }
-    }
-}
 
 /// Begin a profile-scoped refresh using the active profile revision as its
 /// exact input digest. The first refresh may legitimately have no input.
@@ -974,21 +926,54 @@ mod tests {
         assert_eq!(run_state(&conn, &first), "candidate");
         assert_eq!(recovery[0].run_id, first.run_id);
 
-        let second = begin_profile_sync_run_at(
+        let second = begin_profile_sync_run(&conn, "fedora-44", OWNER_TWO).unwrap();
+        assert_eq!(second.fencing_epoch, 2);
+        assert_eq!(
+            current_profile_sync_candidate(&conn, "fedora-44").unwrap(),
+            Some(completed.clone())
+        );
+        assert_eq!(run_state(&conn, &first), "candidate");
+
+        abort_profile_sync_run(
             &conn,
-            "fedora-44",
-            None,
-            OWNER_TWO,
-            completed.completed_at + REMI_SYNC_LEASE_SECONDS,
+            &second,
+            ProfileSyncFailureStage::FetchingObjects,
+            ProfileSyncFailureCategory::Transport,
+            "fixture body interruption",
         )
         .unwrap();
-        assert_eq!(second.fencing_epoch, 2);
+        assert_eq!(
+            current_profile_sync_candidate(&conn, "fedora-44").unwrap(),
+            Some(completed)
+        );
+
+        let third = begin_profile_sync_run(&conn, "fedora-44", OWNER_ONE).unwrap();
+        let next_source_digest = digest('d');
+        record_profile_sync_run_member(
+            &conn,
+            &third,
+            &member(repo.id.unwrap(), 0, Some(&next_source_digest)),
+        )
+        .unwrap();
+        let next_profile_digest = digest('e');
+        ready_profile_sync_run(&conn, &third, &next_profile_digest).unwrap();
+        register_candidate_fixture(&conn, &next_profile_digest, &next_source_digest);
+        let next = complete_profile_sync_candidate(&conn, &third).unwrap();
+        assert_eq!(
+            current_profile_sync_candidate(&conn, "fedora-44").unwrap(),
+            Some(next.clone())
+        );
+
+        conn.execute(
+            "UPDATE repository_sync_runs SET state = 'published' WHERE run_id = ?1",
+            [&third.run_id],
+        )
+        .unwrap();
         assert!(
             current_profile_sync_candidate(&conn, "fedora-44")
                 .unwrap()
                 .is_none()
         );
-        assert_eq!(run_state(&conn, &first), "candidate");
     }
 
     #[test]

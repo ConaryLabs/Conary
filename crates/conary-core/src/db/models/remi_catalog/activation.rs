@@ -198,13 +198,20 @@ fn activate_profile_revision_in_transaction(
              FROM repository_sync_runs run
              JOIN repository_sync_scopes scope
                ON scope.source_profile = run.source_profile
-              AND scope.current_run_id = run.run_id
-              AND scope.fencing_epoch = run.fencing_epoch
+              AND run.fencing_epoch <= scope.fencing_epoch
              WHERE run.run_id = ?1
                AND run.source_profile = ?2
                AND run.owner_instance_uuid = ?3
                AND run.fencing_epoch = ?4
-               AND run.state IN ('candidate', 'published')",
+               AND run.state IN ('candidate', 'published')
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM repository_sync_runs newer
+                   WHERE newer.source_profile = run.source_profile
+                     AND newer.fencing_epoch > run.fencing_epoch
+                     AND newer.fencing_epoch <= scope.fencing_epoch
+                     AND newer.state IN ('candidate', 'published')
+               )",
             params![
                 &request.run_id,
                 &request.source_profile,
