@@ -390,10 +390,18 @@ fn rpm_rich_dependency_uses_the_formal_requirement_contract() {
         "x86_64",
         "rich requirement fixture",
     );
-    builder.requires(rpm::Dependency::any("(foo if bar)"));
+    let source = "(nvidia-query-resource-opengl-libs(x86-32) = :1.0.0-23.fc44 if libGL(x86-32))";
+    builder.requires(rpm::Dependency::any(source));
     let package = builder.build().unwrap();
 
     let requirements = RpmPackage::extract_requirements(&package).unwrap();
+    assert_eq!(requirements[0].native_text.as_deref(), Some(source));
+    assert_eq!(
+        requirements[0].alternatives[0]
+            .version_constraint
+            .as_deref(),
+        Some("= 1.0.0-23.fc44")
+    );
     assert!(matches!(
         requirements[0].expression,
         crate::repository::dependency_model::RepositoryRequirementExpression::If { .. }

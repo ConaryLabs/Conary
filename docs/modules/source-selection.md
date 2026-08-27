@@ -449,7 +449,11 @@ RPM requirement grammar is owned by
 not from dependency text or a package list. It accepts RPM's exact comparison
 spellings and canonicalizes aliases before typed version evaluation; enforces
 the same-operator chain and tag-context rules; and constructs repeated `with`
-from the right side as RPM does. The source-pinned Fedora 44 corpus under
+from the right side as RPM does. At authenticated RPM source ingestion only,
+an empty serialized epoch (`:version`) is decoded as omitted epoch zero in
+simple and nested rich atoms; canonical, user-authored, and persisted EVRs
+remain on the strict non-empty decimal epoch grammar. The source-pinned Fedora
+44 corpus under
 `crates/conary-core/tests/fixtures/rpm/` proves real repository expressions
 without granting those packages exceptional behavior.
 

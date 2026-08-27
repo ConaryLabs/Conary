@@ -93,12 +93,33 @@ pub fn parse_rpm_dependency(
     kind: RepositoryRequirementKind,
     input: &str,
 ) -> Result<Expression, String> {
+    parse_rpm_dependency_with_source_mode(kind, input, false)
+}
+
+/// Decode one dependency expression from RPM-owned source bytes.
+///
+/// RPM's `parseEVR()` treats an empty serialized epoch before `:` as epoch
+/// zero. Only source ingestion uses this entry point; canonical and persisted
+/// requirements continue through [`parse_rpm_dependency`] and reject that
+/// spelling.
+pub(crate) fn parse_source_rpm_dependency(
+    kind: RepositoryRequirementKind,
+    input: &str,
+) -> Result<Expression, String> {
+    parse_rpm_dependency_with_source_mode(kind, input, true)
+}
+
+fn parse_rpm_dependency_with_source_mode(
+    kind: RepositoryRequirementKind,
+    input: &str,
+    canonicalize_source_evr: bool,
+) -> Result<Expression, String> {
     let input = input.trim();
     if input.is_empty() {
         return Err("RPM dependency expression is empty".to_string());
     }
 
-    let mut parser = Parser::new(input);
+    let mut parser = Parser::new(input, canonicalize_source_evr);
     let expression = if parser.peek() == Some('(') {
         let mut checks = ParseChecks::active();
         let expression = parser.parse_rich(&mut checks)?;
@@ -121,11 +142,16 @@ pub fn parse_rpm_dependency(
 struct Parser<'a> {
     input: &'a str,
     cursor: usize,
+    canonicalize_source_evr: bool,
 }
 
 impl<'a> Parser<'a> {
-    const fn new(input: &'a str) -> Self {
-        Self { input, cursor: 0 }
+    const fn new(input: &'a str, canonicalize_source_evr: bool) -> Self {
+        Self {
+            input,
+            cursor: 0,
+            canonicalize_source_evr,
+        }
     }
 
     fn is_finished(&self) -> bool {
@@ -282,7 +308,12 @@ impl<'a> Parser<'a> {
         };
 
         self.skip_separators();
-        let version = self.take_dependency_token();
+        let source_version = self.take_dependency_token();
+        let version = if self.canonicalize_source_evr {
+            canonicalize_source_rpm_evr(source_version)?
+        } else {
+            source_version
+        };
         if version.is_empty() {
             return Err(format!(
                 "RPM dependency version is required after '{comparison}'"
@@ -333,6 +364,18 @@ impl<'a> Parser<'a> {
         RichOperator::parse(token)
             .ok_or_else(|| format!("unknown RPM rich dependency operator '{token}'"))
     }
+}
+
+/// Canonicalize RPM's source-defined empty serialized epoch to omitted epoch
+/// zero without weakening the repository-wide EVR grammar.
+pub(crate) fn canonicalize_source_rpm_evr(version: &str) -> Result<&str, String> {
+    let Some(version) = version.strip_prefix(':') else {
+        return Ok(version);
+    };
+    if version.contains(':') {
+        return Err("multiple epoch separators are not allowed".to_string());
+    }
+    Ok(version)
 }
 
 fn canonical_comparison(token: &str) -> Option<&'static str> {
@@ -514,9 +557,10 @@ mod tests {
             .map(str::trim)
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .collect::<Vec<_>>();
-        assert_eq!(expressions.len(), 8, "fixture count drifted");
+        assert_eq!(expressions.len(), 9, "fixture count drifted");
         for expression in expressions {
-            parse(expression).unwrap_or_else(|error| panic!("{expression}: {error}"));
+            parse_source_rpm_dependency(REQUIRES, expression)
+                .unwrap_or_else(|error| panic!("{expression}: {error}"));
         }
     }
 
