@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-27
-revision: 70
-summary: Document exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 71
+summary: Document immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -93,7 +93,10 @@ comparison. Member precedence never hides a different version, release, or
 architecture. Member order, repository names, and catalog insertion order never
 select a package.
 
-`RepositorySnapshotSink` schema 1 is the only native parser output contract.
+`RepositorySnapshotSink` projection schema 2 is the only native parser output
+contract. Each parser gives the sink the exact run-local file that supplied
+every authenticated metadata-object fact; the immutable sink transfers those
+verified bytes into the source candidate before parser work-file cleanup.
 Fedora primary/filelists XML, Debian Packages stanzas, ALPM archive records,
 and eopkg Package XML are authenticated into private files and decoded one
 record at a time. The sink inserts directly into the source-catalog candidate;
@@ -104,6 +107,15 @@ iterate in canonical database order. They retain one scalar package record,
 one normalized provide row, or one complete requirement group at a time; a
 source package's relation cardinality cannot become the publication memory
 bound.
+
+Fedora metadata acquisition is owned by
+`crates/conary-core/src/repository/parsers/fedora/metadata.rs`; the parent
+parser owns normalized RPM record replay and joins. Source snapshot manifests
+remain `SourceSnapshotV1`, but parser projection version 2 and the retained
+metadata directory are a hard cut: projection-version-1 manifests and legacy
+two-entry source bundles are rejected and must be rebuilt by refresh. There is
+no compatibility reader, upstream refetch fallback, or parallel source
+authority.
 
 Normalized source projections may be reused from
 `<storage.root>/cache/native-projections/<key-sha256>/`. Cache schema 1 binds
@@ -117,9 +129,13 @@ pointer unchanged.
 
 Construction is private beneath `catalog-candidates/<run-id>/`. Candidate
 SQLite integrity, schema, ordering, counts, logical digest, and source
-membership are reopened and checked before durable registration. Catalog and manifest
-files and their directories are synchronized before an atomic rename makes the
-content-addressed bundle durable. Only then does one short operational-database
+membership are reopened and checked before durable registration. Every source
+bundle has exactly `catalog.sqlite`, `manifest.json`, and a private
+`native-metadata/` directory containing only digest-named objects declared by
+the manifest; profile bundles retain their exact two-file layout. The catalog,
+manifest, retained metadata objects, and their directories are synchronized
+before an atomic rename makes the content-addressed bundle durable. Only then
+does one short operational-database
 transaction prove the current run owner and fencing epoch, register the exact
 source/profile resources, and complete the run as a terminal `candidate`.
 Refresh never advances a profile or universe pointer and never updates
@@ -429,10 +445,14 @@ reopens every ordered source snapshot catalog. Active-only revisions,
 candidate-tier Solus, missing or reordered profiles, and noncanonical digests
 fail closed.
 
-Refresh intentionally retains normalized immutable source catalogs rather than
-the parser's temporary native metadata files. The materializer therefore
-resolves each authenticated object from its `SourceSnapshotV1` HTTPS authority,
-streams no more than the declared size, and requires the exact SHA-256 and size.
+Refresh retains every exact parser-authenticated metadata file in the immutable
+source bundle that owns its digest, size, role, and source path. The
+materializer reopens each strict three-entry source bundle, revalidates every
+retained file, and copies only those bytes; it performs no network request, URL
+reconstruction, or mutable-mirror lookup. Missing, extra, symlinked,
+wrong-sized, or digest-mismatched source metadata fails before export
+publication.
+
 `NativeOracleInputSetV1` schema 1 binds the complete profile revisions, ordered
 source manifests, and digest-sorted deduplicated object inventory. Its atomic
 directory contains canonical `manifest.json` and exact digest-named files under

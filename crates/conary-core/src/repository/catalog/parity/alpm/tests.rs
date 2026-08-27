@@ -143,7 +143,7 @@ fn source_snapshot(repository: &str, database: &Path) -> SourceSnapshotV1 {
             identity: "archlinux".to_string(),
         },
         stream_binding_sha256: digest('1'),
-        parser_projection_version: 1,
+        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
         provenance: SourceProvenanceV1 {
             ecosystem: SourceEcosystemV1::Alpm,
             metadata_url: format!("https://mirror.example.test/{repository}"),

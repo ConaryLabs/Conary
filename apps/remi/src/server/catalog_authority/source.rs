@@ -15,19 +15,24 @@ use crate::server::open_runtime_db;
 struct VerifiedSourceCatalog {
     manifest: SourceSnapshotV1,
     reader: CatalogReader,
+    bundle_path: std::path::PathBuf,
+}
+
+pub(crate) struct VerifiedSourceBundle {
+    pub(crate) manifest: SourceSnapshotV1,
+    pub(crate) bundle_path: std::path::PathBuf,
 }
 
 impl CatalogAuthority {
-    /// Reopen the exact durable source snapshot bound to one profile member.
+    /// Reopen one exact source member and retain its verified bundle path.
     ///
-    /// Native parity input materialization consumes every member rather than
-    /// arriving through a package row, so member ordinal and manifest identity
-    /// remain the only selection authority.
-    pub(crate) fn source_snapshot_for_member(
+    /// Native-oracle materialization uses this path to consume retained
+    /// parser-native bytes. It never reconstructs an upstream URL.
+    pub(crate) fn source_bundle_for_member(
         &self,
         pinned: &PinnedProfileCatalog,
         member_ordinal: u32,
-    ) -> Result<SourceSnapshotV1> {
+    ) -> Result<VerifiedSourceBundle> {
         let member = pinned
             .manifest()
             .members
@@ -40,7 +45,11 @@ impl CatalogAuthority {
                     member_ordinal
                 )
             })?;
-        Ok(self.verified_source_catalog(pinned, member)?.manifest)
+        let verified = self.verified_source_catalog(pinned, member)?;
+        Ok(VerifiedSourceBundle {
+            manifest: verified.manifest,
+            bundle_path: verified.bundle_path,
+        })
     }
 
     /// Resolve the exact source snapshot that authenticated a package in one
@@ -221,7 +230,11 @@ impl CatalogAuthority {
                 bundle_path.display()
             )
         })?;
-        Ok(VerifiedSourceCatalog { manifest, reader })
+        Ok(VerifiedSourceCatalog {
+            manifest,
+            reader,
+            bundle_path,
+        })
     }
 }
 

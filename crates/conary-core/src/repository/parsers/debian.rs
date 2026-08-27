@@ -405,6 +405,7 @@ impl RepositoryParser for DebianParser {
         let (packages_path, snapshot, packages_object) =
             self.download_packages_file(repo_url, sink).await?;
         if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&packages_object))? {
+            sink.authenticated_object(packages_object, &packages_path)?;
             info!("Reused cached Debian repository projection");
             return Ok(snapshot);
         }
@@ -426,7 +427,7 @@ impl RepositoryParser for DebianParser {
             sink.package(self.package_from_entry(repo_url, entry)?)
         })?;
 
-        sink.authenticated_object(packages_object)?;
+        sink.authenticated_object(packages_object, &packages_path)?;
         info!("Parsed {} packages from Debian repository", package_count);
         Ok(snapshot)
     }

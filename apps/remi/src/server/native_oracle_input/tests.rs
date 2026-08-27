@@ -1,9 +1,6 @@
 // apps/remi/src/server/native_oracle_input/tests.rs
 
 use std::fs;
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::thread;
 
 use super::*;
 use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
@@ -28,10 +25,11 @@ fn valid_manifest() -> NativeOracleInputSetV1 {
         let mut revision = pin.manifest().clone();
         let mut sources = Vec::new();
         for member in &mut revision.members {
-            let mut source = fixture
+            let source = fixture
                 .authority()
-                .source_snapshot_for_member(&pin, member.ordinal)
+                .source_bundle_for_member(&pin, member.ordinal)
                 .expect("open fixture source");
+            let mut source = source.manifest;
             for object in &mut source.authenticated_objects {
                 object.sha256 = object_sha256.clone();
                 object.size = object_bytes.len() as u64;
@@ -186,40 +184,18 @@ fn serialized_source_authority_must_be_public_and_credential_free() {
 }
 
 #[test]
-fn repository_relative_debian_object_path_resolves_without_reconstruction() {
-    let manifest = valid_manifest();
-    let mut source = manifest.profiles[1].sources[0].clone();
-    source.provenance.metadata_url = "https://archive.ubuntu.com/ubuntu".to_string();
-    let source_path = "dists/resolute/multiverse/binary-amd64/Packages.gz";
-
-    assert_eq!(
-        source_object_url(&source, source_path).unwrap(),
-        "https://archive.ubuntu.com/ubuntu/dists/resolute/multiverse/binary-amd64/Packages.gz"
-    );
-}
-
-#[tokio::test]
-async fn publisher_bounds_download_and_reopens_persisted_bytes() {
+fn publisher_copies_retained_bytes_and_reopens_without_network() {
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("bundle");
     let manifest = valid_manifest();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0_u8; 4096];
-        let _ = stream.read(&mut request).unwrap();
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx")
-            .unwrap();
-    });
-    let fetches = vec![ObjectFetch {
+    let source = temp.path().join("retained-object");
+    fs::write(&source, b"x").unwrap();
+    let sources = vec![ObjectSource {
         object: manifest.objects[0].clone(),
-        url: format!("http://{address}/object"),
+        path: source,
     }];
 
-    publish_bundle(&output, &manifest, fetches).await.unwrap();
-    server.join().unwrap();
+    publish_bundle(&output, &manifest, sources).unwrap();
     assert_eq!(
         reopen_native_oracle_input_bundle(&output).unwrap(),
         manifest

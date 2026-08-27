@@ -17,7 +17,7 @@ use crate::repository::catalog::{
     CatalogProvideRecordV1, CatalogScopeV1, CatalogScratchAdmission,
     CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SourceCatalogCandidateV1,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
-    SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
+    SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1, retain_source_metadata_object,
 };
 use crate::repository::parsers::{
     ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject, ChecksumType,
@@ -327,16 +327,30 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         }
     }
 
-    fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()> {
-        if self
-            .authenticated_objects
-            .insert(object.role.clone(), object)
-            .is_some()
-        {
+    fn authenticated_object(
+        &mut self,
+        object: AuthenticatedMetadataObject,
+        source: &Path,
+    ) -> Result<()> {
+        if self.authenticated_objects.contains_key(&object.role) {
             return Err(Error::ConflictError(
                 "repository snapshot repeats an authenticated metadata object role".to_string(),
             ));
         }
+        let candidate_directory = self.candidate_path.parent().ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "source catalog candidate {} has no parent",
+                self.candidate_path.display()
+            ))
+        })?;
+        retain_source_metadata_object(
+            candidate_directory,
+            self.work_directory.path(),
+            source,
+            &object,
+        )?;
+        self.authenticated_objects
+            .insert(object.role.clone(), object);
         Ok(())
     }
 
@@ -368,9 +382,6 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             );
         }
         self.writer_mut()?.copy_source_catalog(&reader)?;
-        for object in objects.iter().cloned() {
-            self.authenticated_object(object)?;
-        }
         self.cache_hit = true;
         Ok(true)
     }

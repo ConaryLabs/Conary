@@ -11,10 +11,11 @@ use conary_core::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CATALOG_FILE_NAME, CatalogArtifactV1, CatalogContentV1,
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1,
     PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2, ProfileSourceMemberV2,
-    SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1, SourceMetadataObjectRoleV1,
-    SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1, SourceStreamKindV1,
-    SourceStreamV1, publish_profile_catalog_bundle, publish_source_catalog_bundle,
-    write_catalog_candidate, write_profile_catalog_manifest, write_source_catalog_manifest,
+    SOURCE_METADATA_DIRECTORY_NAME, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
+    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
+    SourceStreamKindV1, SourceStreamV1, publish_profile_catalog_bundle,
+    publish_source_catalog_bundle, write_catalog_candidate, write_profile_catalog_manifest,
+    write_source_catalog_manifest,
 };
 use conary_core::repository::dependency_model::DebianMultiArch;
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
@@ -280,14 +281,14 @@ impl ActiveCatalogFixture {
         {
             let ordinal = u32::try_from(index).expect("fixture member ordinal fits u32");
             let source_identity = format!("source-{repository_identity}");
+            let source_object_bytes =
+                format!("source-object-{profile}-{repository_identity}-{fencing_epoch}")
+                    .into_bytes();
             let source_object = SourceMetadataObjectV1 {
                 role: evidence_role.clone(),
                 source_path: format!("metadata/{repository_identity}"),
-                sha256: conary_core::hash::sha256(
-                    format!("source-object-{profile}-{repository_identity}-{fencing_epoch}")
-                        .as_bytes(),
-                ),
-                size: 1,
+                sha256: conary_core::hash::sha256(&source_object_bytes),
+                size: source_object_bytes.len() as u64,
             };
             let source_packages = if ordinal == 0 {
                 packages
@@ -340,7 +341,8 @@ impl ActiveCatalogFixture {
                 stream_binding_sha256: conary_core::hash::sha256(
                     format!("stream-binding-{profile}-{repository_identity}").as_bytes(),
                 ),
-                parser_projection_version: 1,
+                parser_projection_version:
+                    conary_core::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
                 provenance: SourceProvenanceV1 {
                     ecosystem,
                     metadata_url: format!(
@@ -366,6 +368,11 @@ impl ActiveCatalogFixture {
                 logical_digest_sha256: source_binding.logical_digest_sha256.clone(),
                 counts: source_binding.counts,
             };
+            write_fixture_source_metadata(
+                &source_candidate_dir,
+                &source_manifest.authenticated_objects[0],
+                &source_object_bytes,
+            );
             write_source_catalog_manifest(&source_candidate_dir, &source_manifest)
                 .expect("write source snapshot manifest");
             publish_source_catalog_bundle(
@@ -746,6 +753,23 @@ fn source_fixture_authority(
                 SourceMetadataObjectRoleV1::EopkgIndex,
             )
         }
+    }
+}
+
+fn write_fixture_source_metadata(candidate: &Path, object: &SourceMetadataObjectV1, bytes: &[u8]) {
+    assert_eq!(conary_core::hash::sha256(bytes), object.sha256);
+    assert_eq!(bytes.len() as u64, object.size);
+    let directory = candidate.join(SOURCE_METADATA_DIRECTORY_NAME);
+    std::fs::create_dir(&directory).expect("create fixture source metadata directory");
+    let path = directory.join(&object.sha256);
+    std::fs::write(&path, bytes).expect("write fixture source metadata object");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("set fixture source metadata directory permissions");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("set fixture source metadata object permissions");
     }
 }
 

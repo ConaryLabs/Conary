@@ -427,6 +427,7 @@ impl RepositoryParser for ArchParser {
             .download_database(repo_url, &work_directory, scratch_admission.as_ref())
             .await?;
         if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&database_object))? {
+            sink.authenticated_object(database_object, &database_file)?;
             info!("Reused cached Arch repository projection");
             return Ok(snapshot);
         }
@@ -491,7 +492,7 @@ impl RepositoryParser for ArchParser {
             })?;
         }
 
-        sink.authenticated_object(database_object)?;
+        sink.authenticated_object(database_object, &database_file)?;
         info!("Parsed {} packages from Arch repository", package_count);
         Ok(snapshot)
     }

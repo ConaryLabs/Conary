@@ -86,6 +86,7 @@ impl RepositoryParser for EopkgParser {
         }
         let snapshot = AuthenticatedSnapshotIdentity::from_download(&download)?;
         if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&index_object))? {
+            sink.authenticated_object(index_object, &index_path)?;
             return Ok(snapshot);
         }
         if sink.requires_source_candidate_preflight() {
@@ -107,7 +108,7 @@ impl RepositoryParser for EopkgParser {
             &self.architecture,
             |package| sink.package(package),
         )?;
-        sink.authenticated_object(index_object)?;
+        sink.authenticated_object(index_object, &index_path)?;
         Ok(snapshot)
     }
 }

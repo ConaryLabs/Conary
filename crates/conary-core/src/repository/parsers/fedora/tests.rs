@@ -1,5 +1,7 @@
 // conary-core/src/repository/parsers/fedora/tests.rs
 
+use super::metadata::authenticated_repomd_snapshot;
+use super::repomd::{RepoMdIndex, RepoMdRecord};
 use super::*;
 use crate::repository::dependency_model::RepositoryCapabilityKind;
 use crate::repository::dependency_model::{ConditionalRequirementBehavior, ProvideVersionRelation};

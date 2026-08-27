@@ -17,7 +17,7 @@ use crate::repository::dependency_model::{RepositoryCapabilityKind, RepositoryRe
 use crate::repository::dependency_model::{RepositoryProvide, RepositoryRequirementGroup};
 
 /// Normalized parser projection and sink schema version used in cache keys.
-pub const REPOSITORY_SNAPSHOT_PROJECTION_VERSION: u32 = 1;
+pub const REPOSITORY_SNAPSHOT_PROJECTION_VERSION: u32 = 2;
 
 /// Exact parser-level identity used to join authenticated child projections.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,7 +99,8 @@ pub(crate) fn validation_only_metadata_stream(
 /// `finish` make the collected snapshot usable.
 pub trait RepositorySnapshotSink {
     /// Private run-local directory for authenticated child downloads and
-    /// parser spools. Its contents never become immutable publication.
+    /// parser spools. Exact authenticated child files are transferred to the
+    /// sink before this directory is released.
     fn work_directory(&self) -> &Path;
 
     /// Retain exact authenticated-metadata capacity until the sink removes its
@@ -117,8 +118,12 @@ pub trait RepositorySnapshotSink {
         requirement: CatalogMetadataStreamScratchV1,
     ) -> Result<Box<dyn CatalogMetadataStreamAdmission>>;
 
-    /// Record one authenticated child object consumed by the projection.
-    fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()>;
+    /// Record one authenticated child object and its exact verified run-local file.
+    fn authenticated_object(
+        &mut self,
+        object: AuthenticatedMetadataObject,
+        source: &Path,
+    ) -> Result<()>;
 
     /// Replay a strict normalized projection when every authenticated input
     /// and the exact source binding match. The default sink has no cache.
@@ -246,7 +251,12 @@ impl RepositorySnapshotSink for CollectingRepositorySnapshotSink {
         validation_only_metadata_stream(requirement)
     }
 
-    fn authenticated_object(&mut self, object: AuthenticatedMetadataObject) -> Result<()> {
+    fn authenticated_object(
+        &mut self,
+        object: AuthenticatedMetadataObject,
+        source: &Path,
+    ) -> Result<()> {
+        verify_authenticated_object_file(self.work_directory.path(), source, &object)?;
         let role = format!("{:?}", object.role);
         if !self.object_roles.insert(role.clone()) {
             return Err(Error::ConflictError(format!(
@@ -417,6 +427,36 @@ impl RepositorySnapshotSink for CollectingRepositorySnapshotSink {
         }
         Ok(())
     }
+}
+
+fn verify_authenticated_object_file(
+    work_directory: &Path,
+    source: &Path,
+    object: &AuthenticatedMetadataObject,
+) -> Result<()> {
+    if source.parent() != Some(work_directory) {
+        return Err(Error::InvalidPath(format!(
+            "authenticated metadata object {} is not a direct child of parser work directory {}",
+            source.display(),
+            work_directory.display()
+        )));
+    }
+    let metadata = std::fs::symlink_metadata(source)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.len() != object.size
+    {
+        return Err(Error::InvalidPath(format!(
+            "authenticated metadata object {} has the wrong file type or size",
+            source.display()
+        )));
+    }
+    crate::hash::verify_file_sha256(source, &object.sha256).map_err(|error| {
+        Error::ChecksumMismatch {
+            expected: error.expected,
+            actual: error.actual,
+        }
+    })
 }
 
 impl CollectingRepositorySnapshotSink {

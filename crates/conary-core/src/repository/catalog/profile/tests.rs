@@ -190,7 +190,7 @@ fn source_manifest(
             identity: "44".to_string(),
         },
         stream_binding_sha256: digest('e'),
-        parser_projection_version: 1,
+        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
         provenance: SourceProvenanceV1 {
             ecosystem: SourceEcosystemV1::Rpm,
             metadata_url: "https://example.test/repository".to_string(),
@@ -342,7 +342,7 @@ fn debian_source_manifest(
             identity: "26.04".to_string(),
         },
         stream_binding_sha256: digest('9'),
-        parser_projection_version: 1,
+        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
         provenance: SourceProvenanceV1 {
             ecosystem: SourceEcosystemV1::Deb,
             metadata_url: "https://metadata.example.test/ubuntu".to_string(),

@@ -52,12 +52,28 @@ fn package(origin: CatalogPackageOriginV1) -> CatalogPackageRecordV1 {
 }
 
 fn source_object() -> SourceMetadataObjectV1 {
+    let bytes = source_object_bytes();
     SourceMetadataObjectV1 {
         role: SourceMetadataObjectRoleV1::RpmPrimary,
         source_path: "repodata/primary.xml.zst".to_string(),
-        sha256: digest('d'),
-        size: 1024,
+        sha256: crate::hash::sha256(&bytes),
+        size: bytes.len() as u64,
     }
+}
+
+fn source_object_bytes() -> Vec<u8> {
+    vec![b'x'; 1024]
+}
+
+fn retain_source_object(candidate: &Path, object: &SourceMetadataObjectV1) {
+    let work = tempfile::Builder::new()
+        .prefix("source-object-")
+        .tempdir_in(candidate.parent().expect("candidate parent"))
+        .expect("create source-object work directory");
+    let path = work.path().join("authenticated-object");
+    fs::write(&path, source_object_bytes()).expect("write authenticated source object");
+    retain_source_metadata_object(candidate, work.path(), &path, object)
+        .expect("retain authenticated source object");
 }
 
 fn source_content() -> CatalogContentV1 {
@@ -108,7 +124,7 @@ fn source_manifest(binding: &CatalogBindingV1) -> SourceSnapshotV1 {
             identity: "44".to_string(),
         },
         stream_binding_sha256: digest('e'),
-        parser_projection_version: 1,
+        parser_projection_version: crate::repository::catalog::SOURCE_CATALOG_PROJECTION_VERSION_V2,
         provenance: SourceProvenanceV1 {
             ecosystem: SourceEcosystemV1::Rpm,
             metadata_url: "https://example.test/repository".to_string(),
@@ -136,6 +152,7 @@ fn source_candidate(root: &Path, name: &str) -> (PathBuf, SourceSnapshotV1) {
     let binding =
         write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
     let manifest = source_manifest(&binding);
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
     write_source_catalog_manifest(&candidate, &manifest).unwrap();
     (candidate, manifest)
 }
@@ -152,6 +169,7 @@ fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
     let binding =
         write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
     let manifest = source_manifest(&binding);
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
     write_source_catalog_manifest(&candidate, &manifest).unwrap();
     verify_source_catalog_bundle(&candidate, &manifest).unwrap();
 
@@ -226,6 +244,7 @@ fn source_bundle_verification_streams_high_presentation_cardinality() {
         }])
         .unwrap();
     let manifest = source_manifest(&binding);
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
     write_source_catalog_manifest(&candidate, &manifest).unwrap();
     let reader = verify_source_catalog_bundle(&candidate, &manifest).unwrap();
     assert_eq!(reader.binding().counts.packages, PACKAGES as u64);
@@ -299,7 +318,7 @@ fn malformed_existing_destination_errors_without_removal() {
 
     let error = publish_source_catalog_bundle_with_provenance(&candidate, &catalogs, &manifest)
         .unwrap_err();
-    assert!(error.to_string().contains("must contain exactly"));
+    assert!(error.to_string().contains("incomplete or unexpected"));
     assert!(destination.exists());
     assert!(destination.join("unexpected").exists());
     assert!(candidate.exists());
@@ -338,12 +357,74 @@ fn malformed_or_extra_candidate_content_is_never_published() {
     let binding =
         write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
     let manifest = source_manifest(&binding);
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
     write_source_catalog_manifest(&candidate, &manifest).unwrap();
     fs::write(candidate.join("unowned.tmp"), b"nope").unwrap();
 
     assert!(publish_source_catalog_bundle(&candidate, &catalogs, &manifest).is_err());
     assert!(candidate.exists());
     assert!(!catalogs.join("sources").exists());
+}
+
+#[test]
+fn source_bundle_rejects_missing_truncated_tampered_and_extra_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidates = directory.path().join("candidates");
+    fs::create_dir(&candidates).unwrap();
+
+    for mutation in ["missing", "truncated", "tampered", "extra"] {
+        let (candidate, manifest) = source_candidate(&candidates, mutation);
+        let metadata = candidate.join(SOURCE_METADATA_DIRECTORY_NAME);
+        let object = metadata.join(&manifest.authenticated_objects[0].sha256);
+        match mutation {
+            "missing" => fs::remove_file(&object).unwrap(),
+            "truncated" => fs::write(&object, b"").unwrap(),
+            "tampered" => fs::write(&object, vec![b'y'; 1024]).unwrap(),
+            "extra" => fs::write(metadata.join("unexpected"), b"nope").unwrap(),
+            _ => unreachable!(),
+        }
+        assert!(
+            verify_source_catalog_bundle(&candidate, &manifest).is_err(),
+            "{mutation} metadata must fail closed"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn source_bundle_rejects_symlinked_metadata() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let candidates = directory.path().join("candidates");
+    fs::create_dir(&candidates).unwrap();
+    let (candidate, manifest) = source_candidate(&candidates, "symlinked");
+    let object = candidate
+        .join(SOURCE_METADATA_DIRECTORY_NAME)
+        .join(&manifest.authenticated_objects[0].sha256);
+    fs::remove_file(&object).unwrap();
+    symlink(candidate.join(CATALOG_FILE_NAME), &object).unwrap();
+
+    assert!(verify_source_catalog_bundle(&candidate, &manifest).is_err());
+}
+
+#[test]
+fn legacy_source_projection_cannot_claim_retained_metadata_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("candidate");
+    fs::create_dir(&candidate).unwrap();
+    let binding =
+        write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
+    let mut manifest = source_manifest(&binding);
+    manifest.parser_projection_version = 1;
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
+
+    let error = write_source_catalog_manifest(&candidate, &manifest).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("projection version 1 is unsupported")
+    );
 }
 
 #[test]
