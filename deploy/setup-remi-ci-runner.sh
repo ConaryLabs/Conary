@@ -255,7 +255,7 @@ verify_setup() {
         [[ "$(< /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == "1" ]] ||
             fail "host-wide AppArmor unprivileged user-namespace restriction is disabled"
     fi
-    listener_pid="$(pgrep -u "$RUNNER_USER" -f "^${listener_path} run$" | head -n 1)"
+    listener_pid="$(pgrep -u "$RUNNER_USER" -f "^${listener_path} run$" | sed -n '1p')"
     [[ -n "$listener_pid" ]] || fail "runner listener process is missing"
     listener_profile="$(< "/proc/${listener_pid}/attr/current")"
     [[ "$listener_profile" == "${listener_path} (unconfined)" ]] ||
