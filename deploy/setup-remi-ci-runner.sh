@@ -220,7 +220,8 @@ install_service() {
     install -m 0644 -o root -g root "$service_staging" "/etc/systemd/system/${SERVICE_NAME}"
     rm -f "$service_staging"
     systemctl daemon-reload
-    systemctl enable --now "$SERVICE_NAME"
+    systemctl enable "$SERVICE_NAME"
+    systemctl restart "$SERVICE_NAME"
 }
 
 verify_setup() {

@@ -106,6 +106,8 @@ rg -q "run_as_runner bash -c '\[\[ -r /dev/kvm && -w /dev/kvm \]\]'" "$installer
     fail "installer does not verify KVM access through the runner's shell identity"
 rg -q 'install_apparmor_profile' "$installer" ||
     fail "installer does not install the runner AppArmor profile"
+rg -q 'systemctl restart "\$SERVICE_NAME"' "$installer" ||
+    fail "installer does not restart the listener into its AppArmor profile"
 rg -q 'apparmor_restrict_unprivileged_userns' "$installer" ||
     fail "installer does not inspect the host-wide user-namespace restriction"
 rg -q 'host-wide AppArmor unprivileged user-namespace restriction is disabled' "$installer" ||
