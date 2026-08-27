@@ -21,6 +21,14 @@ use conary_core::recipe::hermetic::{
     DivergenceReport, HERMETIC_EVIDENCE_SCHEMA, HermeticBuildEvidence, RecipeIdentity,
     ReproducibilityRecord, SourceIdentity,
 };
+use conary_core::repository::catalog::{
+    CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2,
+    ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
+};
+use conary_core::repository::universe::{
+    REMI_UNIVERSE_SCHEMA_V2, RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2,
+    RemiUniverseManifestV2, RemiUniverseProfileV2,
+};
 use remi::server::config::{ReleasePublishSection, TrustedBuildAttestationSigner};
 use remi::server::{ServerConfig, ServerState};
 use rusqlite::params;
@@ -49,6 +57,7 @@ async fn remi_native_publication_fetches_and_installs_without_conversion_row() {
 
     let publish = fixture.upload_release(artifact.bytes.clone()).await;
     assert_response_status(publish, StatusCode::CREATED).await;
+    fixture.activate_public_universe();
 
     let metadata = fixture.package_metadata().await;
     assert_eq!(metadata["name"], TEST_PACKAGE);
@@ -153,6 +162,125 @@ impl M4cFixture {
             request,
         )
         .await
+    }
+
+    fn activate_public_universe(&self) {
+        let profile =
+            conary_core::repository::supported_profiles::profile_for_remi_route(TEST_DISTRO)
+                .expect("fixture route has a supported profile");
+        let mut declared_members = profile.members().iter().collect::<Vec<_>>();
+        declared_members.sort_by_key(|member| std::cmp::Reverse(member.precedence));
+        let members = declared_members
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, member)| ProfileSourceMemberV2 {
+                ordinal: u32::try_from(ordinal).unwrap(),
+                role: member.role,
+                source_identity: "fedora-project".to_string(),
+                repository_identity: member.repository_identity.clone(),
+                stream: SourceStreamV1 {
+                    kind: SourceStreamKindV1::Release,
+                    identity: "44".to_string(),
+                },
+                precedence: member.precedence,
+                required: true,
+                source_snapshot_sha256: conary_core::hash::sha256(
+                    format!("m4c-source-{}", member.repository_identity).as_bytes(),
+                ),
+            })
+            .collect::<Vec<_>>();
+        let revision = ProfileRevisionV2 {
+            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            profile: profile.id().to_string(),
+            projection_version: 1,
+            counts: CatalogCountsV1 {
+                source_evidence: members.len() as u64,
+                ..CatalogCountsV1::default()
+            },
+            members,
+            catalog: CatalogArtifactV1 {
+                sha256: conary_core::hash::sha256(b"m4c-profile-catalog"),
+                size: 1,
+            },
+            logical_digest_sha256: conary_core::hash::sha256(b"m4c-profile-logical"),
+        };
+        let profile_revision_sha256 = revision.manifest_sha256().unwrap();
+        let generated_at = chrono::Utc::now();
+        let universe = RemiUniverseManifestV2 {
+            schema_version: REMI_UNIVERSE_SCHEMA_V2,
+            sequence: 1,
+            metadata_root_sha256: conary_core::hash::sha256(b"m4c-universe-root"),
+            generated_at,
+            expires_at: generated_at + chrono::Duration::days(7),
+            profiles: vec![RemiUniverseProfileV2 {
+                ordinal: 0,
+                profile_revision_sha256: profile_revision_sha256.clone(),
+                catalog: RemiUniverseCatalogObjectV2 {
+                    schema_version: CATALOG_CONTENT_SCHEMA_V1,
+                    sha256: revision.catalog.sha256.clone(),
+                    size: revision.catalog.size,
+                    logical_digest_sha256: revision.logical_digest_sha256.clone(),
+                },
+                revision,
+            }],
+            canonical_map: RemiUniverseCanonicalMapObjectV2 {
+                schema_version: conary_core::canonical::CANONICAL_MAP_SCHEMA_VERSION,
+                sha256: conary_core::hash::sha256(b"m4c-canonical-map"),
+                size: 0,
+                revision: 0,
+                entry_count: 0,
+            },
+        };
+        universe.validate().unwrap();
+        let manifest_sha256 = universe.manifest_sha256().unwrap();
+        let manifest_json =
+            String::from_utf8(conary_core::json::canonical_json(&universe).unwrap()).unwrap();
+        let conn = conary_core::db::open_fast(&self.db_path).unwrap();
+        conary_core::db::models::RemiCatalogResource::from_profile_revision(
+            &universe.profiles[0].revision,
+            1,
+        )
+        .unwrap()
+        .insert(&conn)
+        .unwrap();
+        conn.execute(
+            "INSERT INTO remi_universe_revisions (
+                 manifest_sha256, sequence, promotion_evidence_sha256,
+                 conversion_crawl_sha256, metadata_root_sha256,
+                 canonical_map_sha256, canonical_map_size, targets_version,
+                 snapshot_version, timestamp_version, manifest_json, durable, created_at
+             ) VALUES (?1, 1, ?2, ?3, ?4, ?5, 0, 1, 1, 1, ?6, 1, 1)",
+            params![
+                &manifest_sha256,
+                conary_core::hash::sha256(b"m4c-promotion-evidence"),
+                conary_core::hash::sha256(b"m4c-conversion-crawl"),
+                &universe.metadata_root_sha256,
+                &universe.canonical_map.sha256,
+                manifest_json,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO remi_universe_profile_revisions (
+                 manifest_sha256, ordinal, source_profile, profile_revision_sha256,
+                 catalog_sha256, catalog_size
+             ) VALUES (?1, 0, ?2, ?3, ?4, ?5)",
+            params![
+                &manifest_sha256,
+                profile.id(),
+                &profile_revision_sha256,
+                &universe.profiles[0].catalog.sha256,
+                i64::try_from(universe.profiles[0].catalog.size).unwrap(),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO remi_active_universe_revision (
+                 singleton, manifest_sha256, sequence, activated_at
+             ) VALUES (1, ?1, 1, 1)",
+            [&manifest_sha256],
+        )
+        .unwrap();
     }
 
     async fn package_metadata(&self) -> Value {

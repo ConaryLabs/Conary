@@ -8,16 +8,20 @@ use conary_core::db::models::{
     RemiCatalogResource, RemiCatalogResourceKind, RemiProfileRevisionMember, RemiRuntimeSession,
 };
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, CatalogArtifactV1, CatalogContentV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
-    ProfileRevisionV2, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
-    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
-    SourceStreamKindV1, SourceStreamV1, publish_profile_catalog_bundle,
-    publish_source_catalog_bundle, write_catalog_candidate, write_profile_catalog_manifest,
-    write_source_catalog_manifest,
+    CATALOG_CONTENT_SCHEMA_V1, CATALOG_FILE_NAME, CatalogArtifactV1, CatalogContentV1,
+    CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1,
+    PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2, ProfileSourceMemberV2,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1, SourceMetadataObjectRoleV1,
+    SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1, SourceStreamKindV1,
+    SourceStreamV1, publish_profile_catalog_bundle, publish_source_catalog_bundle,
+    write_catalog_candidate, write_profile_catalog_manifest, write_source_catalog_manifest,
 };
 use conary_core::repository::dependency_model::DebianMultiArch;
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
+use conary_core::repository::universe::{
+    REMI_UNIVERSE_SCHEMA_V2, RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2,
+    RemiUniverseManifestV2, RemiUniverseProfileV2,
+};
 use conary_core::repository::versioning::VersionScheme;
 use conary_core::repository::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, OpenPgpTrustRoot, RepositoryParserConfig,
@@ -97,6 +101,129 @@ impl ActiveCatalogFixture {
         packages: Vec<CatalogPackageRecordV1>,
     ) -> String {
         self.publish_revision(profile, fencing_epoch, packages, false, true)
+    }
+
+    /// Bind every currently active public profile into one immutable universe.
+    /// Candidate-tier profiles are deliberately excluded by typed support tier.
+    pub(crate) fn activate_universe(&self, sequence: u64) -> String {
+        let conn = self.connection();
+        let mut statement = conn
+            .prepare(
+                "SELECT resource.manifest_json
+                 FROM remi_active_profile_revisions active
+                 JOIN remi_catalog_resources resource
+                   ON resource.resource_sha256 = active.profile_revision_sha256
+                 WHERE resource.resource_kind = 'profile_revision' AND resource.durable = 1
+                 ORDER BY active.source_profile",
+            )
+            .expect("prepare active fixture profile query");
+        let mut revisions = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query active fixture profiles")
+            .map(|row| {
+                serde_json::from_str::<ProfileRevisionV2>(
+                    &row.expect("read active fixture profile manifest"),
+                )
+                .expect("parse active fixture profile manifest")
+            })
+            .filter(|revision| {
+                conary_core::repository::supported_profiles::profile_by_public_id(&revision.profile)
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        revisions.sort_by(|left, right| left.profile.cmp(&right.profile));
+        let profiles = revisions
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, revision)| RemiUniverseProfileV2 {
+                ordinal: u32::try_from(ordinal).expect("fixture universe ordinal fits u32"),
+                profile_revision_sha256: revision
+                    .manifest_sha256()
+                    .expect("hash fixture profile revision"),
+                catalog: RemiUniverseCatalogObjectV2 {
+                    schema_version: CATALOG_CONTENT_SCHEMA_V1,
+                    sha256: revision.catalog.sha256.clone(),
+                    size: revision.catalog.size,
+                    logical_digest_sha256: revision.logical_digest_sha256.clone(),
+                },
+                revision,
+            })
+            .collect();
+        let generated_at = chrono::Utc::now();
+        let manifest = RemiUniverseManifestV2 {
+            schema_version: REMI_UNIVERSE_SCHEMA_V2,
+            sequence,
+            metadata_root_sha256: conary_core::hash::sha256(b"fixture universe root"),
+            generated_at,
+            expires_at: generated_at + chrono::Duration::days(7),
+            profiles,
+            canonical_map: RemiUniverseCanonicalMapObjectV2 {
+                schema_version: conary_core::canonical::CANONICAL_MAP_SCHEMA_VERSION,
+                sha256: conary_core::hash::sha256(b"fixture canonical map"),
+                size: 0,
+                revision: 0,
+                entry_count: 0,
+            },
+        };
+        manifest
+            .validate()
+            .expect("validate fixture public universe");
+        let manifest_sha256 = manifest
+            .manifest_sha256()
+            .expect("hash fixture public universe");
+        let sequence = i64::try_from(sequence).expect("fixture universe sequence fits i64");
+        let manifest_json = String::from_utf8(
+            conary_core::json::canonical_json(&manifest)
+                .expect("serialize fixture public universe"),
+        )
+        .expect("fixture public universe JSON is UTF-8");
+        conn.execute(
+            "INSERT INTO remi_universe_revisions (
+                 manifest_sha256, sequence, promotion_evidence_sha256,
+                 conversion_crawl_sha256, metadata_root_sha256,
+                 canonical_map_sha256, canonical_map_size, targets_version,
+                 snapshot_version, timestamp_version, manifest_json, durable, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?2, ?2, ?2, ?7, 1, ?2)",
+            rusqlite::params![
+                &manifest_sha256,
+                sequence,
+                conary_core::hash::sha256(b"fixture promotion evidence"),
+                conary_core::hash::sha256(b"fixture conversion crawl"),
+                &manifest.metadata_root_sha256,
+                &manifest.canonical_map.sha256,
+                manifest_json,
+            ],
+        )
+        .expect("insert fixture universe revision");
+        for profile in &manifest.profiles {
+            conn.execute(
+                "INSERT INTO remi_universe_profile_revisions (
+                     manifest_sha256, ordinal, source_profile, profile_revision_sha256,
+                     catalog_sha256, catalog_size
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    &manifest_sha256,
+                    i64::from(profile.ordinal),
+                    &profile.revision.profile,
+                    &profile.profile_revision_sha256,
+                    &profile.catalog.sha256,
+                    i64::try_from(profile.catalog.size).expect("fixture catalog size fits i64"),
+                ],
+            )
+            .expect("insert fixture universe profile");
+        }
+        conn.execute(
+            "INSERT INTO remi_active_universe_revision (
+                 singleton, manifest_sha256, sequence, activated_at
+             ) VALUES (1, ?1, ?2, ?2)
+             ON CONFLICT(singleton) DO UPDATE SET
+                 manifest_sha256 = excluded.manifest_sha256,
+                 sequence = excluded.sequence,
+                 activated_at = excluded.activated_at",
+            rusqlite::params![&manifest_sha256, sequence],
+        )
+        .expect("activate fixture public universe");
+        manifest_sha256
     }
 
     fn publish_revision(

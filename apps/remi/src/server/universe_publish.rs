@@ -82,7 +82,7 @@ pub(crate) async fn publish_current_universe_from_state(
             guard.catalog_authority.clone(),
         )
     };
-    tokio::task::spawn_blocking(move || {
+    let outcome = tokio::task::spawn_blocking(move || {
         publish_current_universe_with_authority(
             &db_path,
             &catalog_dir,
@@ -93,7 +93,32 @@ pub(crate) async fn publish_current_universe_from_state(
         )
     })
     .await
-    .context("signed Remi universe publication task did not complete")?
+    .context("signed Remi universe publication task did not complete")??;
+
+    if !matches!(outcome, UniversePublicationOutcome::Unavailable) {
+        let (db_path, catalog_authority, search_engine) = {
+            let guard = state.read().await;
+            (
+                guard.config.db_path.clone(),
+                guard.catalog_authority.clone(),
+                guard.search_engine.clone(),
+            )
+        };
+        if let Some(search_engine) = search_engine {
+            tokio::task::spawn_blocking(move || {
+                let universe = super::public_universe::PublicUniverseSnapshot::load(&db_path)?
+                    .context("activated Remi universe pointer is absent")?;
+                search_engine
+                    .rebuild_from_universe(&db_path, &catalog_authority, &universe)
+                    .context("rebuild search projection for activated Remi universe")?;
+                Ok::<_, anyhow::Error>(())
+            })
+            .await
+            .context("activated-universe search rebuild task did not complete")??;
+        }
+    }
+
+    Ok(outcome)
 }
 
 #[derive(Debug)]

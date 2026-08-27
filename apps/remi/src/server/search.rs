@@ -8,8 +8,9 @@
 use anyhow::{Context, Result};
 use conary_core::db::models::ConvertedPackage;
 use conary_core::repository::catalog::CatalogPackageRecordV1;
+use parking_lot::RwLock;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, QueryParser, RegexQuery, TermQuery};
@@ -21,6 +22,7 @@ use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term, doc};
 
 use super::catalog_authority::CatalogAuthority;
 use super::profile_catalog::ProfileCatalog;
+use super::public_universe::{PublicUniverseIdentity, PublicUniverseSnapshot};
 
 /// Document to be indexed in the search engine
 #[derive(Debug, Clone)]
@@ -52,10 +54,21 @@ pub struct SearchResult {
     pub score: f32,
 }
 
+#[derive(Debug)]
+pub(crate) enum PublicSearchError {
+    Unavailable,
+    RevisionMismatch,
+    Query(anyhow::Error),
+}
+
 /// Full-text search engine backed by Tantivy
 pub struct SearchEngine {
     index: Index,
     reader: IndexReader,
+    /// Exact signed universe projected by the currently committed index.
+    /// Persisted Tantivy bytes have no public authority until this process
+    /// successfully rebuilds and binds them.
+    authority: RwLock<Option<PublicUniverseIdentity>>,
     name_field: Field,
     name_exact_field: Field,
     /// Full package identity key for accurate delete-before-update
@@ -126,6 +139,7 @@ impl SearchEngine {
         Ok(Self {
             index,
             reader,
+            authority: RwLock::new(None),
             name_field,
             name_exact_field,
             name_distro_field,
@@ -196,7 +210,8 @@ impl SearchEngine {
         schema_builder.build()
     }
 
-    /// Index a single package document (add or update)
+    /// Index a single package document (add or update) in focused unit tests.
+    #[cfg(test)]
     pub fn index_package(&self, pkg: &PackageSearchDoc) -> Result<()> {
         let mut writer = self
             .index
@@ -249,16 +264,16 @@ impl SearchEngine {
         Ok(())
     }
 
-    /// Rebuild the entire search index from exact immutable profile catalogs.
+    /// Rebuild the entire search index from one signed public universe.
     ///
     /// Operational SQLite contributes native publication outcomes and exact
     /// conversion pins only. It never supplies activated source-package
     /// metadata for this projection.
-    pub fn rebuild_from_catalogs(
+    pub(crate) fn rebuild_from_universe(
         &self,
         db_path: &Path,
         catalog_authority: &CatalogAuthority,
-        source_profiles: &[String],
+        universe: &PublicUniverseSnapshot,
     ) -> Result<usize> {
         let conn = crate::server::open_runtime_db(db_path)?;
 
@@ -272,7 +287,12 @@ impl SearchEngine {
 
         let mut count = 0;
         let native_keys = current_native_search_keys(&conn)?;
-        for source_profile in source_profiles {
+        let source_profiles = universe
+            .profiles()
+            .map(|selection| selection.source_profile.clone())
+            .collect::<BTreeSet<_>>();
+        for selection in universe.profiles() {
+            let source_profile = &selection.source_profile;
             let profile =
                 conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
                     .with_context(|| {
@@ -281,9 +301,9 @@ impl SearchEngine {
                     )
                 })?;
             let pinned = catalog_authority
-                .open_active_profile(source_profile)
+                .open_selected_profile(selection)
                 .with_context(|| {
-                    format!("open active immutable catalog for search profile '{source_profile}'")
+                    format!("open public universe catalog for search profile '{source_profile}'")
                 })?;
             let current_conversions =
                 current_conversion_search_keys(&conn, pinned.profile_revision_sha256())?;
@@ -333,6 +353,9 @@ impl SearchEngine {
         for row in native_rows {
             let (source_profile, name, version, release, architecture, total_size) =
                 row.context("Failed to read native package row")?;
+            if !source_profiles.contains(&source_profile) {
+                continue;
+            }
             let profile =
                 conary_core::repository::supported_profiles::profile_by_public_id(&source_profile)
                     .with_context(|| {
@@ -357,11 +380,66 @@ impl SearchEngine {
             count += 1;
         }
 
+        // A public search holds this lock from its authority comparison through
+        // the Tantivy read. Take the matching write lock only for the committed
+        // index swap so no request can validate one revision and query another.
+        let mut authority = self.authority.write();
         writer.commit().context("Failed to commit rebuild")?;
-        self.reader.reload().context("Failed to reload reader")?;
+        if let Err(error) = self.reader.reload().context("Failed to reload reader") {
+            *authority = None;
+            return Err(error);
+        }
+        *authority = Some(universe.identity().clone());
 
-        tracing::info!("Search index rebuilt with {} packages", count);
+        tracing::info!(
+            universe = %universe.identity().manifest_sha256,
+            sequence = universe.identity().sequence,
+            "Search index rebuilt with {count} packages"
+        );
         Ok(count)
+    }
+
+    pub(crate) fn search_public_universe(
+        &self,
+        expected: &PublicUniverseIdentity,
+        query: &str,
+        distro: Option<&str>,
+        limit: usize,
+    ) -> std::result::Result<Vec<SearchResult>, PublicSearchError> {
+        let authority = self.authority.read();
+        match authority.as_ref() {
+            None => return Err(PublicSearchError::Unavailable),
+            Some(actual) if actual != expected => {
+                return Err(PublicSearchError::RevisionMismatch);
+            }
+            Some(_) => {}
+        }
+        let result = self
+            .search(query, distro, limit)
+            .map_err(PublicSearchError::Query);
+        drop(authority);
+        result
+    }
+
+    pub(crate) fn suggest_public_universe(
+        &self,
+        expected: &PublicUniverseIdentity,
+        prefix: &str,
+        limit: usize,
+    ) -> std::result::Result<Vec<String>, PublicSearchError> {
+        let authority = self.authority.read();
+        match authority.as_ref() {
+            None => return Err(PublicSearchError::Unavailable),
+            Some(actual) if actual != expected => {
+                return Err(PublicSearchError::RevisionMismatch);
+            }
+            Some(_) => {}
+        }
+        let result = self
+            .suggest(prefix, limit)
+            .map_err(PublicSearchError::Query);
+        drop(authority);
+        result
     }
 
     /// Full-text search with optional distro filter
@@ -756,6 +834,7 @@ mod tests {
     fn search_rebuild_preserves_native_release_identity_and_converted_false() {
         let (_dir, engine) = create_test_engine();
         let fixture = ActiveCatalogFixture::new();
+        fixture.activate("fedora-44", 1, Vec::new());
         let conn = fixture.connection();
         seed_native_publication(
             &conn,
@@ -775,9 +854,13 @@ mod tests {
             "noarch",
             "/tmp/hello-2.ccs",
         );
+        fixture.activate_universe(1);
+        let universe = PublicUniverseSnapshot::load(fixture.db_path())
+            .unwrap()
+            .unwrap();
 
         engine
-            .rebuild_from_catalogs(fixture.db_path(), fixture.authority(), &[])
+            .rebuild_from_universe(fixture.db_path(), fixture.authority(), &universe)
             .unwrap();
         let results = engine.search("hello", Some("fedora"), 10).unwrap();
 
@@ -883,14 +966,14 @@ mod tests {
         let conn = fixture.connection();
         insert_stale_conversion(&conn, "fedora-44", &profile_revision, "gtk3", "3.24.0");
         drop(conn);
+        fixture.activate_universe(1);
+        let universe = PublicUniverseSnapshot::load(fixture.db_path())
+            .unwrap()
+            .unwrap();
 
         let (_dir, engine) = create_test_engine();
         engine
-            .rebuild_from_catalogs(
-                fixture.db_path(),
-                fixture.authority(),
-                &["fedora-44".to_string()],
-            )
+            .rebuild_from_universe(fixture.db_path(), fixture.authority(), &universe)
             .unwrap();
 
         let results = engine.search("gtk3", Some("fedora"), 10).unwrap();

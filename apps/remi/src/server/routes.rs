@@ -886,6 +886,7 @@ mod tests {
                 "route-download-source",
             )],
         );
+        catalog_fixture.activate_universe(1);
 
         let ccs_bytes = [0x1f, 0x8b, 0x08, 0x00]
             .into_iter()

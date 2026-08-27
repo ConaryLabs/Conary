@@ -9,8 +9,8 @@ use base64::Engine as _;
 use conary_core::ccs::convert::ScriptletBundleSummary;
 use conary_core::db::models::{
     CONVERSION_VERSION, ChunkAccess, ConvertedPackage, NativeSourceEcosystem, NativeSourceStream,
-    RemiCatalogResource, Repository, RepositoryPackage, RepositoryPolicyScope,
-    RepositorySourcePolicy, RepositoryUpdateMode,
+    Repository, RepositoryPackage, RepositoryPolicyScope, RepositorySourcePolicy,
+    RepositoryUpdateMode,
 };
 use conary_core::repository::trust::openpgp::PreparedOpenPgpTrust;
 use conary_core::repository::versioning::VersionScheme;
@@ -30,13 +30,15 @@ fn create_test_db() -> (tempfile::NamedTempFile, rusqlite::Connection) {
     (temp_file, conn)
 }
 
-fn create_test_state(root: &tempfile::TempDir) -> Arc<RwLock<ServerState>> {
-    let db_path = root.path().join("remi.db");
+fn create_test_state(
+    root: &tempfile::TempDir,
+    catalogs: &ActiveCatalogFixture,
+) -> Arc<RwLock<ServerState>> {
+    let db_path = catalogs.db_path().to_path_buf();
     let chunk_dir = root.path().join("chunks");
     let cache_dir = root.path().join("cache");
     std::fs::create_dir_all(&chunk_dir).unwrap();
     std::fs::create_dir_all(&cache_dir).unwrap();
-    conary_core::db::init(&db_path).unwrap();
 
     let repository_keys_dir = root.path().join("repository-keys");
     let profile_keys_dir = repository_keys_dir.join("ubuntu-26.04");
@@ -56,6 +58,7 @@ fn create_test_state(root: &tempfile::TempDir) -> Arc<RwLock<ServerState>> {
         db_path,
         chunk_dir,
         cache_dir,
+        catalog_dir: catalogs.catalog_dir().to_path_buf(),
         max_concurrent_conversions: 1,
         enable_rate_limit: false,
         enable_audit_log: false,
@@ -71,7 +74,18 @@ fn create_test_state(root: &tempfile::TempDir) -> Arc<RwLock<ServerState>> {
         repository: crate::server::readiness::PublicationPhaseState::Complete,
         canonical: crate::server::readiness::PublicationPhaseState::Complete,
     };
+    state.conversion_service = state
+        .conversion_service
+        .clone()
+        .with_catalog_authority(catalogs.authority().clone());
     Arc::new(RwLock::new(state))
+}
+
+fn selection(profile: &str, profile_revision_sha256: &str) -> ProfileRevisionSelection {
+    ProfileRevisionSelection {
+        source_profile: profile.to_string(),
+        profile_revision_sha256: profile_revision_sha256.to_string(),
+    }
 }
 
 async fn install_catalog_authority(
@@ -277,10 +291,20 @@ async fn populate_debian_repository(db_path: &std::path::Path, package_url: Stri
             .unwrap(),
         ],
     };
-    let key_material_repository_name = "conversion-fixture-ubuntu-26.04";
     let source_repository_name = "conversion-fixture-ubuntu-26.04-source";
+    let key_material_identity = "ubuntu-resolute-security-main-amd64";
+    let key_material_repository_name = {
+        let conn = conary_core::db::open(db_path).unwrap();
+        conn.query_row(
+            "SELECT name FROM repositories
+             WHERE source_profile = 'ubuntu-26.04' AND repository_identity = ?1",
+            rusqlite::params![key_material_identity],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("fixture has one exact operational repository for prepared key material")
+    };
     PreparedOpenPgpTrust::prepare(
-        key_material_repository_name,
+        &key_material_repository_name,
         &conary_core::db::paths::keyring_dir(&db_path.display().to_string()),
         &policy,
     )
@@ -326,36 +350,6 @@ async fn populate_debian_repository(db_path: &std::path::Path, package_url: Stri
     package.architecture = Some("amd64".to_string());
     package.source_profile = Some("ubuntu-26.04".to_string());
     package.insert(&conn).unwrap();
-
-    // Conversion lookup may consult exactly one operational repository row
-    // for prepared key-material naming.  This row deliberately has no
-    // package rows; package identity and payload inputs come from the
-    // immutable profile catalog above.
-    let key_material_identity = "ubuntu-resolute-security-main-amd64";
-    let mut key_material_repository = Repository::new(
-        key_material_repository_name.to_string(),
-        package_url.clone(),
-    );
-    key_material_repository.source_profile = Some("ubuntu-26.04".to_string());
-    key_material_repository
-        .set_parser_config(parser_config)
-        .unwrap();
-    key_material_repository.set_trust_policy(policy).unwrap();
-    key_material_repository
-        .set_native_source_policy(
-            RepositorySourcePolicy::new(
-                "ubuntu-26.04-key-material",
-                RepositoryPolicyScope::repository(key_material_identity).unwrap(),
-                NativeSourceEcosystem::Deb,
-                NativeSourceStream::release("noble").unwrap(),
-                RepositoryUpdateMode::Follow,
-            )
-            .unwrap(),
-            key_material_identity,
-            None,
-        )
-        .unwrap();
-    key_material_repository.insert(&conn).unwrap();
 }
 
 #[test]
@@ -622,13 +616,16 @@ fn converted_ccs_path_for_download_rejects_stale_conversion_records() {
 #[tokio::test]
 async fn existing_pending_job_response_reports_pending() {
     let root = tempfile::tempdir().unwrap();
-    let state = create_test_state(&root);
+    let catalogs = ActiveCatalogFixture::new();
+    let revision = catalogs.activate("fedora-44", 1, Vec::new());
+    catalogs.activate_universe(1);
+    let state = create_test_state(&root, &catalogs);
     let query = PackageQuery {
         version: None,
         release: None,
         arch: None,
     };
-    let job_key = conversion_job_key("fedora", "curl", &query);
+    let job_key = conversion_job_key("fedora", "curl", &query, &revision);
     let job_id = state
         .write()
         .await
@@ -652,16 +649,17 @@ async fn existing_pending_job_response_reports_pending() {
 #[tokio::test]
 async fn failed_job_stays_pollable_while_unpopulated_repository_returns_typed_503() {
     let root = tempfile::tempdir().unwrap();
-    let state = create_test_state(&root);
     let catalogs = ActiveCatalogFixture::new();
-    catalogs.activate("fedora-44", 1, Vec::new());
+    let revision = catalogs.activate("fedora-44", 1, Vec::new());
+    catalogs.activate_universe(1);
+    let state = create_test_state(&root, &catalogs);
     install_catalog_authority(&state, catalogs.authority()).await;
     let query = PackageQuery {
         version: None,
         release: None,
         arch: None,
     };
-    let job_key = conversion_job_key("fedora", "curl", &query);
+    let job_key = conversion_job_key("fedora", "curl", &query, &revision);
     let failed_id = {
         let mut state = state.write().await;
         let id = state
@@ -700,7 +698,6 @@ async fn failed_job_stays_pollable_while_unpopulated_repository_returns_typed_50
 #[tokio::test]
 async fn ready_job_after_initial_cache_miss_is_revalidated_before_new_work() {
     let root = tempfile::tempdir().unwrap();
-    let state = create_test_state(&root);
     let catalogs = ActiveCatalogFixture::new();
     let profile_revision_sha256 = catalogs.activate(
         "fedora-44",
@@ -715,13 +712,14 @@ async fn ready_job_after_initial_cache_miss_is_revalidated_before_new_work() {
             "curl-source",
         )],
     );
+    let state = create_test_state(&root, &catalogs);
     install_catalog_authority(&state, catalogs.authority()).await;
     let query = PackageQuery {
         version: Some("1.0".into()),
         release: None,
         arch: Some("x86_64".into()),
     };
-    let job_key = conversion_job_key("fedora", "curl", &query);
+    let job_key = conversion_job_key("fedora", "curl", &query, &profile_revision_sha256);
     let ready_id = {
         let mut state = state.write().await;
         let id = state
@@ -748,9 +746,15 @@ async fn ready_job_after_initial_cache_miss_is_revalidated_before_new_work() {
 
     // Enter after the request's first cache lookup to reproduce a conversion
     // becoming ready in the gap before job-key coordination.
-    let response =
-        start_conversion_after_cache_miss(Arc::clone(&state), &db_path, "fedora", "curl", &query)
-            .await;
+    let response = start_conversion_after_cache_miss(
+        Arc::clone(&state),
+        &db_path,
+        "fedora",
+        "curl",
+        &query,
+        &selection("fedora-44", &profile_revision_sha256),
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response_json(response).await["name"], "curl");
@@ -770,16 +774,16 @@ async fn ready_job_after_initial_cache_miss_is_revalidated_before_new_work() {
 #[tokio::test]
 async fn missing_ready_artifact_creates_one_replacement_and_deduplicates_it() {
     let root = tempfile::tempdir().unwrap();
-    let state = create_test_state(&root);
     let catalogs = ActiveCatalogFixture::new();
-    catalogs.activate("fedora-44", 1, Vec::new());
+    let profile_revision_sha256 = catalogs.activate("fedora-44", 1, Vec::new());
+    let state = create_test_state(&root, &catalogs);
     install_catalog_authority(&state, catalogs.authority()).await;
     let query = PackageQuery {
         version: Some("1.0".into()),
         release: None,
         arch: Some("x86_64".into()),
     };
-    let job_key = conversion_job_key("fedora", "curl", &query);
+    let job_key = conversion_job_key("fedora", "curl", &query, &profile_revision_sha256);
     let db_path = catalogs.db_path().to_path_buf();
     let ready_id = {
         let mut state = state.write().await;
@@ -799,9 +803,15 @@ async fn missing_ready_artifact_creates_one_replacement_and_deduplicates_it() {
     let semaphore = state.read().await.job_manager.semaphore();
     let permit = semaphore.acquire_owned().await.unwrap();
 
-    let first =
-        start_conversion_after_cache_miss(Arc::clone(&state), &db_path, "fedora", "curl", &query)
-            .await;
+    let first = start_conversion_after_cache_miss(
+        Arc::clone(&state),
+        &db_path,
+        "fedora",
+        "curl",
+        &query,
+        &selection("fedora-44", &profile_revision_sha256),
+    )
+    .await;
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     let replacement_id: JobId = response_json(first).await["job_id"]
         .as_str()
@@ -810,9 +820,15 @@ async fn missing_ready_artifact_creates_one_replacement_and_deduplicates_it() {
         .unwrap();
     assert_ne!(replacement_id, ready_id);
 
-    let second =
-        start_conversion_after_cache_miss(Arc::clone(&state), &db_path, "fedora", "curl", &query)
-            .await;
+    let second = start_conversion_after_cache_miss(
+        Arc::clone(&state),
+        &db_path,
+        "fedora",
+        "curl",
+        &query,
+        &selection("fedora-44", &profile_revision_sha256),
+    )
+    .await;
     assert_eq!(second.status(), StatusCode::ACCEPTED);
     assert_eq!(
         response_json(second).await["job_id"],
@@ -826,7 +842,6 @@ async fn missing_ready_artifact_creates_one_replacement_and_deduplicates_it() {
 #[tokio::test]
 async fn collected_ready_mapping_revalidates_persisted_artifact_before_new_work() {
     let root = tempfile::tempdir().unwrap();
-    let state = create_test_state(&root);
     let catalogs = ActiveCatalogFixture::new();
     let profile_revision_sha256 = catalogs.activate(
         "fedora-44",
@@ -841,6 +856,7 @@ async fn collected_ready_mapping_revalidates_persisted_artifact_before_new_work(
             "curl-source",
         )],
     );
+    let state = create_test_state(&root, &catalogs);
     install_catalog_authority(&state, catalogs.authority()).await;
     let query = PackageQuery {
         version: Some("1.0".into()),
@@ -858,9 +874,15 @@ async fn collected_ready_mapping_revalidates_persisted_artifact_before_new_work(
 
     // Enter after an earlier cache miss with no retained key mapping, as if a
     // just-completed ready polling record was evicted for capacity.
-    let response =
-        start_conversion_after_cache_miss(Arc::clone(&state), &db_path, "fedora", "curl", &query)
-            .await;
+    let response = start_conversion_after_cache_miss(
+        Arc::clone(&state),
+        &db_path,
+        "fedora",
+        "curl",
+        &query,
+        &selection("fedora-44", &profile_revision_sha256),
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response_json(response).await["name"], "curl");
@@ -869,7 +891,12 @@ async fn collected_ready_mapping_revalidates_persisted_artifact_before_new_work(
             .read()
             .await
             .job_manager
-            .get_job_by_key(&conversion_job_key("fedora", "curl", &query))
+            .get_job_by_key(&conversion_job_key(
+                "fedora",
+                "curl",
+                &query,
+                &profile_revision_sha256,
+            ))
             .is_none()
     );
 }
@@ -877,9 +904,10 @@ async fn collected_ready_mapping_revalidates_persisted_artifact_before_new_work(
 #[tokio::test]
 async fn package_route_waits_for_repository_population_without_creating_failed_job() {
     let root = tempfile::tempdir().unwrap();
-    let state = create_test_state(&root);
     let catalogs = ActiveCatalogFixture::new();
-    catalogs.activate("ubuntu-26.04", 1, Vec::new());
+    let empty_revision = catalogs.activate("ubuntu-26.04", 1, Vec::new());
+    catalogs.activate_universe(1);
+    let state = create_test_state(&root, &catalogs);
     install_catalog_authority(&state, catalogs.authority()).await;
     let query = || PackageQuery {
         version: Some("1.0".into()),
@@ -920,7 +948,12 @@ async fn package_route_waits_for_repository_population_without_creating_failed_j
             .read()
             .await
             .job_manager
-            .get_job_by_key(&conversion_job_key("ubuntu", "demo", &query()))
+            .get_job_by_key(&conversion_job_key(
+                "ubuntu",
+                "demo",
+                &query(),
+                &empty_revision,
+            ))
             .is_none(),
         "a pre-ready request must not create a doomed conversion job"
     );
@@ -943,6 +976,7 @@ async fn package_route_waits_for_repository_population_without_creating_failed_j
     catalog_entry.checksum = format!("sha256:{}", hex::encode(Sha256::digest(&package)));
     let package_checksum = catalog_entry.checksum.clone();
     let profile_revision_sha256 = catalogs.activate("ubuntu-26.04", 2, vec![catalog_entry]);
+    catalogs.activate_universe(2);
     let semaphore = state.read().await.job_manager.semaphore();
     let permit = semaphore.acquire_owned().await.unwrap();
 
@@ -961,15 +995,6 @@ async fn package_route_waits_for_repository_population_without_creating_failed_j
     // semaphore keeps the worker pending while this exact-revision evidence
     // is prepared, so the test still exercises the post-admission job path.
     let state_conn = conary_core::db::open(&db_path).unwrap();
-    let fixture_conn = catalogs.connection();
-    let profile_resource = RemiCatalogResource::find_profile_revision(
-        &fixture_conn,
-        "ubuntu-26.04",
-        &profile_revision_sha256,
-    )
-    .unwrap()
-    .expect("fixture profile resource");
-    profile_resource.insert(&state_conn).unwrap();
     let ccs_path = root.path().join("cache/packages/demo.ccs");
     std::fs::create_dir_all(ccs_path.parent().unwrap()).unwrap();
     std::fs::write(&ccs_path, b"ccs").unwrap();
