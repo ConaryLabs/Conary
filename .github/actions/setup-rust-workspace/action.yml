@@ -14,9 +14,7 @@ runs:
   steps:
     - name: Install native build dependencies
       shell: bash
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libseccomp-dev
+      run: bash scripts/ci-install-ubuntu-packages.sh libseccomp-dev
     - name: Configure bounded Cargo build output
       shell: bash
       run: |

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-27
-revision: 59
-summary: Document attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
+revision: 60
+summary: Document isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -1156,6 +1156,15 @@ rest of the TOML inventory still requires a local or
 hosted container/QEMU-capable runner; do not describe a normal PR or merge run
 as having executed all 324 manifest tests unless that runner path is present in
 the specific workflow run.
+
+Host-level Ubuntu package prerequisites are owned by
+`scripts/ci-install-ubuntu-packages.sh`. It validates exact package names,
+skips apt when every package is already installed, and otherwise restricts both
+update and install to the plain canonical
+`/etc/apt/sources.list.d/ubuntu.sources` file with runner-provided source parts
+disabled. Image-provided third-party apt feeds are never CI authority.
+Package installation inside a pinned Fedora, Ubuntu, Arch, or test-container
+image remains owned by that image's native bootstrap.
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
