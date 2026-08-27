@@ -551,6 +551,7 @@ impl RepositoryClient {
                                 "Byte download attempt {attempt} lost its response body: \
                                  {detail}; retrying..."
                             );
+                            tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
                         }
                         Err(error) => return Err(error),
                     }
