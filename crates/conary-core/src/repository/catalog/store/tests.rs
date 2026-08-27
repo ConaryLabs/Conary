@@ -295,8 +295,7 @@ fn logical_digest_rejects_relations_without_a_package() {
     insert_provide(&connection, &missing_package_key, 0, &provide).unwrap();
 
     let error = digest_catalog_connection(&connection, &source_scope(), &evidence())
-        .err()
-        .expect("orphan relation must fail logical verification");
+        .expect_err("orphan relation must fail logical verification");
     assert!(
         error
             .to_string()
