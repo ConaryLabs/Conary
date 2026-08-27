@@ -118,6 +118,10 @@ rg -q 'run --startuptype service' "$installer" ||
     fail "installer does not audit the exact service-mode listener"
 rg -q 'exactly one service-mode listener' "$installer" ||
     fail "installer does not reject missing or orphaned runner listeners"
+rg -q 'wait_for_service_listener' "$installer" ||
+    fail "installer does not wait for replacement listener startup"
+rg -q 'runner service-mode listener did not appear within 10 seconds' "$installer" ||
+    fail "installer listener startup wait is not bounded"
 rg -q 'bin/runsvc\.sh.*service_entrypoint|bin/runsvc\.sh" "\$service_entrypoint' "$installer" ||
     fail "installer does not provision GitHub's signal-forwarding service wrapper"
 rg -q 'apparmor_restrict_unprivileged_userns' "$installer" ||
