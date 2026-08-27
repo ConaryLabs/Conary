@@ -17,6 +17,10 @@ use crate::repository::parsers::{
 };
 use crate::repository::trust::{RepositoryTrustPolicy, RpmMetadataAuthority, TrustRole};
 
+pub(super) fn authenticated_repomd_snapshot(bytes: &[u8]) -> AuthenticatedSnapshotIdentity {
+    AuthenticatedSnapshotIdentity::for_bytes(bytes)
+}
+
 pub(super) fn authenticated_metadata_scratch(
     repomd: &RepoMdIndex,
 ) -> Result<CatalogMetadataScratchV1> {
@@ -73,7 +77,7 @@ impl FedoraParser {
                 identity.verify(&xml_bytes)?;
             }
         }
-        let snapshot = AuthenticatedSnapshotIdentity::for_bytes(&xml_bytes);
+        let snapshot = authenticated_repomd_snapshot(&xml_bytes);
         let xml_content = String::from_utf8(xml_bytes)
             .map_err(|error| Error::ParseError(format!("Invalid UTF-8 in repomd.xml: {error}")))?;
         Ok((repomd::parse_repomd(&xml_content)?, snapshot))
