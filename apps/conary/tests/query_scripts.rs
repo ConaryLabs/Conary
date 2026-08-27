@@ -113,27 +113,28 @@ fn build_ccs_fixture(
 
 fn build_rpm_fixture() -> (TempDir, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
-    let source_dir = temp.path().join("src");
-    std::fs::create_dir_all(source_dir.join("usr/bin")).unwrap();
-    std::fs::write(
-        source_dir.join("usr/bin/native-query-fixture"),
-        b"fixture\n",
-    )
-    .unwrap();
-
-    let mut manifest = CcsManifest::new_minimal("native-query-fixture", "1.0.0");
-    manifest.package.license = Some("MIT".to_string());
-    manifest.package.platform = Some(conary_core::ccs::manifest::Platform {
-        arch: Some("x86_64".to_string()),
-        ..Default::default()
-    });
-    let result = CcsBuilder::new(manifest, &source_dir)
-        .unwrap()
-        .build()
-        .unwrap();
     let package_path = temp.path().join("native-query-fixture.rpm");
-    conary_core::ccs::native_export::rpm::generate(&result, &package_path)
-        .expect("generate native RPM query fixture");
+    let mut builder = rpm::PackageBuilder::new(
+        "native-query-fixture",
+        "1.0.0",
+        "MIT",
+        "x86_64",
+        "native query fixture",
+    );
+    builder
+        .with_file_contents(
+            b"fixture\n".to_vec(),
+            rpm::FileOptions::new("/usr/bin/native-query-fixture")
+                .permissions(0o755)
+                .user("root")
+                .group("root"),
+        )
+        .expect("add native RPM query fixture payload");
+    builder
+        .build()
+        .expect("build native RPM query fixture")
+        .write_file(&package_path)
+        .expect("write native RPM query fixture");
     (temp, package_path)
 }
 
