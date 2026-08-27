@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Context;
 use conary_core::db::models::{RemiActiveProfileRevision, RemiProfileRevisionMember, Repository};
 use conary_core::repository::catalog::{ProfileSourceMemberV2, SourceStreamKindV1};
 use conary_core::repository::{
@@ -18,11 +19,14 @@ use conary_core::repository::{
 
 use super::refresh::RepoRefreshResult;
 use super::{ServiceError, blocking_anyhow};
-use crate::server::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
+use crate::server::catalog_authority::{
+    CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection,
+};
 use crate::server::catalog_capacity::CatalogScratchCoordinator;
 use crate::server::catalog_refresh::{
-    PublishedProfileCatalog, StagedProfileCatalog, cleanup_candidate_run, plan_profile_sources,
-    publish_staged_profile_catalog, stage_profile_catalog,
+    PublishedProfileCatalog, StagedProfileCatalog, cleanup_candidate_run,
+    finish_staged_profile_catalog, plan_profile_sources, profile_revision_matches_contract,
+    publish_staged_profile_catalog, stage_profile_sources,
 };
 use crate::server::{ServerState, database_writer::DatabaseWriter};
 
@@ -33,6 +37,7 @@ struct RefreshRoots {
     catalog_dir: PathBuf,
     projection_cache_dir: PathBuf,
     database_writer: DatabaseWriter,
+    catalog_authority: CatalogAuthority,
     catalog_gc_coordinator: Arc<tokio::sync::Mutex<()>>,
     catalog_scratch_coordinator: Arc<CatalogScratchCoordinator>,
 }
@@ -66,6 +71,7 @@ pub(super) async fn refresh_native_profile(
             catalog_dir: state.config.catalog_dir.clone(),
             projection_cache_dir: state.config.cache_dir.join("native-projections"),
             database_writer: state.database_writer.clone(),
+            catalog_authority: state.catalog_authority.clone(),
             catalog_gc_coordinator: Arc::clone(&state.catalog_gc_coordinator),
             catalog_scratch_coordinator: Arc::clone(&state.catalog_scratch_coordinator),
         }
@@ -286,15 +292,20 @@ async fn stage_profile_catalog_with_heartbeat(
     repositories: Vec<Repository>,
 ) -> anyhow::Result<(StagedProfileCatalog, ProfileHeartbeat)> {
     let heartbeat = spawn_profile_heartbeat(roots, run)?;
-    let staged = stage_profile_catalog(
-        &run.run_id,
-        source_profile,
-        repositories,
-        &roots.keyring_dir,
-        &roots.catalog_candidate_dir,
-        &roots.projection_cache_dir,
-        roots.catalog_scratch_coordinator.clone(),
-    )
+    let staged = async {
+        let sources = stage_profile_sources(
+            &run.run_id,
+            source_profile,
+            repositories,
+            &roots.keyring_dir,
+            &roots.catalog_candidate_dir,
+            &roots.projection_cache_dir,
+            roots.catalog_scratch_coordinator.clone(),
+        )
+        .await?;
+        let reusable = reusable_profile_catalog(roots, source_profile, sources.members()).await?;
+        finish_staged_profile_catalog(sources, reusable).await
+    }
     .await;
     match staged {
         Ok(staged) => Ok((staged, heartbeat)),
@@ -305,6 +316,69 @@ async fn stage_profile_catalog_with_heartbeat(
             ))),
         },
     }
+}
+
+async fn reusable_profile_catalog(
+    roots: &RefreshRoots,
+    source_profile: &str,
+    members: &[ProfileSourceMemberV2],
+) -> anyhow::Result<Option<PinnedProfileCatalog>> {
+    let db_path = roots.db_path.clone();
+    let profile_for_query = source_profile.to_string();
+    let selections = tokio::task::spawn_blocking(move || {
+        let conn = conary_core::db::open_fast(&db_path)?;
+        let mut selections = Vec::new();
+        if let Some(candidate) = current_profile_sync_candidate(&conn, &profile_for_query)? {
+            selections.push(ProfileRevisionSelection {
+                source_profile: candidate.source_profile,
+                profile_revision_sha256: candidate.profile_revision_sha256,
+            });
+        }
+        if let Some(active) = RemiActiveProfileRevision::find(&conn, &profile_for_query)? {
+            let selection = ProfileRevisionSelection::from(&active);
+            if !selections.contains(&selection) {
+                selections.push(selection);
+            }
+        }
+        Ok::<_, conary_core::Error>(selections)
+    })
+    .await
+    .context("reusable profile selection task panicked")??;
+
+    for selection in selections {
+        let authority = roots.catalog_authority.clone();
+        let inspected_selection = selection.clone();
+        let inspection = tokio::task::spawn_blocking(move || {
+            authority.inspect_selected_profile(&inspected_selection)
+        })
+        .await
+        .context("reusable profile inspection task panicked")??;
+        if !profile_revision_matches_contract(&inspection.manifest, source_profile, members) {
+            continue;
+        }
+
+        let authority = roots.catalog_authority.clone();
+        let opened_selection = selection.clone();
+        let reusable =
+            tokio::task::spawn_blocking(move || authority.open_selected_profile(&opened_selection))
+                .await
+                .context("reusable profile reopen task panicked")??;
+        if !profile_revision_matches_contract(reusable.manifest(), source_profile, members) {
+            anyhow::bail!(
+                "profile '{}' revision {} changed its exact member contract while reopening",
+                source_profile,
+                selection.profile_revision_sha256
+            );
+        }
+        tracing::info!(
+            source_profile,
+            profile_revision_sha256 = %selection.profile_revision_sha256,
+            "reusing exact durable immutable profile catalog"
+        );
+        return Ok(Some(reusable));
+    }
+
+    Ok(None)
 }
 
 type ProfileHeartbeat = (

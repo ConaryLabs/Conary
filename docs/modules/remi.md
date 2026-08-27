@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 75
-summary: Document bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 76
+summary: Document exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -129,6 +129,19 @@ composition instead of reopening and rehashing the same source catalog.
 Profile-manifest finalization likewise performs one private-stage binding
 proof. Durable source and profile publication still independently reopen and
 verify the complete bundle before and after its same-filesystem atomic rename.
+
+After every source is authenticated and staged, refresh derives the complete
+ordered `ProfileSourceMemberV2` contract from those verified source manifests
+without visiting package rows. It inspects the latest successful private
+candidate and active revision manifests in that order. Exact profile,
+profile-projection version, ordinal, role, precedence, required state, source,
+repository, stream, and source-snapshot identity equality makes an existing
+immutable profile eligible for reuse. The selected bundle is then
+independently reopened and reader-pinned; the pin remains live until the new
+fenced run completes as a durable candidate. This path creates no profile
+candidate file and performs no profile-catalog reconstruction. Any changed
+member or projection version takes the normal private composition path, and a
+malformed registered selection fails instead of becoming reuse authority.
 
 Fedora metadata acquisition is owned by
 `crates/conary-core/src/repository/parsers/fedora/metadata.rs`; the parent

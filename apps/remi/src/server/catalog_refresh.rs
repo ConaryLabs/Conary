@@ -11,12 +11,15 @@ use anyhow::{Context, Result, bail};
 use conary_core::db::models::Repository;
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CatalogReader, CatalogScratchAdmission, ProfileCatalogMemberInputV2,
-    ProfileRevisionV2, SourceSnapshotV1, publish_profile_catalog_bundle,
-    publish_source_catalog_bundle, write_profile_catalog_candidate_with_scratch_admission,
-    write_profile_catalog_manifest, write_source_catalog_manifest,
+    ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1, derive_profile_catalog_members,
+    publish_profile_catalog_bundle, publish_source_catalog_bundle,
+    write_profile_catalog_candidate_with_scratch_admission, write_profile_catalog_manifest,
+    write_source_catalog_manifest,
 };
 use conary_core::repository::supported_profiles::ProfileSourceRole;
 use futures::StreamExt;
+
+use super::catalog_authority::PinnedProfileCatalog;
 
 pub(crate) const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 2;
 const MAX_CONCURRENT_SOURCE_FETCHES: usize = 4;
@@ -59,13 +62,28 @@ struct VerifiedStagedSourceCatalog {
     reader: CatalogReader,
 }
 
+/// Verified private source candidates before profile composition or exact
+/// immutable-profile reuse is selected.
+pub struct StagedProfileSources {
+    profile: String,
+    members: Vec<ProfileSourceMemberV2>,
+    sources: Vec<VerifiedStagedSourceCatalog>,
+    candidate_run_dir: PathBuf,
+    scratch_admission: Arc<dyn CatalogScratchAdmission>,
+}
+
+enum StagedProfileArtifact {
+    Candidate(PathBuf),
+    Reused(Box<PinnedProfileCatalog>),
+}
+
 /// Complete verified filesystem candidate before immutable publication begins.
 pub struct StagedProfileCatalog {
     pub profile: String,
     pub manifest: ProfileRevisionV2,
-    pub path: PathBuf,
     pub sources: Vec<StagedSourceCatalog>,
     pub candidate_run_dir: PathBuf,
+    artifact: StagedProfileArtifact,
 }
 
 /// Complete durable filesystem result, still inactive in operational SQLite.
@@ -75,6 +93,7 @@ pub struct PublishedProfileCatalog {
     pub path: PathBuf,
     pub sources: Vec<PublishedSourceCatalog>,
     pub candidate_run_dir: PathBuf,
+    _reused_profile_pin: Option<Box<PinnedProfileCatalog>>,
 }
 
 /// Assign canonical member ordinals without using fetch completion or mutable
@@ -218,9 +237,9 @@ pub fn plan_profile_sources(
         .collect()
 }
 
-/// Fetch every required native source, then bind and verify all source/profile
-/// candidates without exposing any immutable publication path.
-pub async fn stage_profile_catalog(
+/// Fetch every required native source and derive the exact ordered profile
+/// member contract without visiting package rows.
+pub async fn stage_profile_sources(
     run_id: &str,
     profile: &str,
     repositories: Vec<Repository>,
@@ -228,7 +247,7 @@ pub async fn stage_profile_catalog(
     catalog_candidate_root: &Path,
     projection_cache_root: &Path,
     scratch_admission: Arc<dyn CatalogScratchAdmission>,
-) -> Result<StagedProfileCatalog> {
+) -> Result<StagedProfileSources> {
     let plans = plan_profile_sources(profile, repositories)?;
     let candidate_run_dir = create_candidate_run_dir(catalog_candidate_root, run_id)?;
     let planned_sources = plans
@@ -283,21 +302,43 @@ pub async fn stage_profile_catalog(
     drop(fetches);
     fetched.sort_by_key(|source| source.staged.ordinal);
 
-    let profile = profile.to_string();
-    tokio::task::spawn_blocking(move || {
-        stage_profile_candidate(&profile, fetched, candidate_run_dir, scratch_admission)
+    let members = derive_profile_catalog_members(
+        profile,
+        PROFILE_CATALOG_PROJECTION_VERSION,
+        profile_member_inputs(&fetched),
+    )?;
+    Ok(StagedProfileSources {
+        profile: profile.to_string(),
+        members,
+        sources: fetched,
+        candidate_run_dir,
+        scratch_admission,
     })
-    .await
-    .context("profile catalog staging task panicked")?
 }
 
-fn stage_profile_candidate(
-    profile: &str,
-    staged_sources: Vec<VerifiedStagedSourceCatalog>,
-    candidate_run_dir: PathBuf,
-    scratch_admission: Arc<dyn CatalogScratchAdmission>,
+impl StagedProfileSources {
+    /// The exact ordered identity contract used to select immutable reuse.
+    #[must_use]
+    pub fn members(&self) -> &[ProfileSourceMemberV2] {
+        &self.members
+    }
+}
+
+/// Either bind a fully reopened immutable profile with the exact same member
+/// contract or compose a new private profile candidate.
+pub async fn finish_staged_profile_catalog(
+    staged: StagedProfileSources,
+    reusable: Option<PinnedProfileCatalog>,
 ) -> Result<StagedProfileCatalog> {
-    let inputs = staged_sources
+    tokio::task::spawn_blocking(move || stage_profile_candidate(staged, reusable))
+        .await
+        .context("profile catalog staging task panicked")?
+}
+
+fn profile_member_inputs(
+    sources: &[VerifiedStagedSourceCatalog],
+) -> Vec<ProfileCatalogMemberInputV2<'_>> {
+    sources
         .iter()
         .map(|source| ProfileCatalogMemberInputV2 {
             ordinal: source.staged.ordinal,
@@ -307,30 +348,73 @@ fn stage_profile_candidate(
             manifest: &source.staged.manifest,
             reader: &source.reader,
         })
-        .collect();
-    let profile_candidate_directory = candidate_run_dir.join("profile");
-    create_private_directory(&profile_candidate_directory, &candidate_run_dir)?;
-    let manifest = write_profile_catalog_candidate_with_scratch_admission(
-        profile_candidate_directory.join(CATALOG_FILE_NAME),
-        profile,
-        PROFILE_CATALOG_PROJECTION_VERSION,
-        inputs,
-        scratch_admission,
-    )?;
-    manifest.validate_member_contract()?;
-    write_profile_catalog_manifest(&profile_candidate_directory, &manifest)?;
+        .collect()
+}
 
-    let staged_sources = staged_sources
-        .into_iter()
-        .map(|source| source.staged)
-        .collect();
+/// Require every identity-bearing profile input to match before immutable
+/// bytes can be reused. Catalog content is verified by reopening the selected
+/// bundle, not by this bounded manifest comparison.
+pub fn profile_revision_matches_contract(
+    manifest: &ProfileRevisionV2,
+    profile: &str,
+    members: &[ProfileSourceMemberV2],
+) -> bool {
+    manifest.profile == profile
+        && manifest.projection_version == PROFILE_CATALOG_PROJECTION_VERSION
+        && manifest.members == members
+        && manifest.validate_member_contract().is_ok()
+}
+
+fn stage_profile_candidate(
+    staged: StagedProfileSources,
+    reusable: Option<PinnedProfileCatalog>,
+) -> Result<StagedProfileCatalog> {
+    let StagedProfileSources {
+        profile,
+        members,
+        sources,
+        candidate_run_dir,
+        scratch_admission,
+    } = staged;
+    let (manifest, artifact) = match reusable {
+        Some(reusable) => {
+            let manifest = reusable.manifest().clone();
+            if !profile_revision_matches_contract(&manifest, &profile, &members) {
+                bail!(
+                    "reusable profile '{}' revision {} does not match its exact staged member contract",
+                    profile,
+                    reusable.profile_revision_sha256()
+                );
+            }
+            (manifest, StagedProfileArtifact::Reused(Box::new(reusable)))
+        }
+        None => {
+            let profile_candidate_directory = candidate_run_dir.join("profile");
+            create_private_directory(&profile_candidate_directory, &candidate_run_dir)?;
+            let manifest = write_profile_catalog_candidate_with_scratch_admission(
+                profile_candidate_directory.join(CATALOG_FILE_NAME),
+                &profile,
+                PROFILE_CATALOG_PROJECTION_VERSION,
+                profile_member_inputs(&sources),
+                scratch_admission,
+            )?;
+            manifest.validate_member_contract()?;
+            write_profile_catalog_manifest(&profile_candidate_directory, &manifest)?;
+            (
+                manifest,
+                StagedProfileArtifact::Candidate(profile_candidate_directory),
+            )
+        }
+    };
+
+    let staged_sources = sources.into_iter().map(|source| source.staged).collect();
 
     Ok(StagedProfileCatalog {
-        profile: profile.to_string(),
+        profile,
         manifest,
-        path: profile_candidate_directory,
         sources: staged_sources,
         candidate_run_dir,
+        artifact,
     })
 }
 
@@ -363,13 +447,36 @@ fn publish_staged_profile(
             path,
         });
     }
-    let path = publish_profile_catalog_bundle(&staged.path, catalog_root, &staged.manifest)?;
+    let (path, reused_profile_pin) = match staged.artifact {
+        StagedProfileArtifact::Candidate(candidate) => (
+            publish_profile_catalog_bundle(&candidate, catalog_root, &staged.manifest)?,
+            None,
+        ),
+        StagedProfileArtifact::Reused(reused) => {
+            if reused.manifest() != &staged.manifest {
+                bail!("reused profile manifest changed before publication");
+            }
+            let catalog_path = reused.catalog_path();
+            if catalog_path.file_name().and_then(|name| name.to_str()) != Some(CATALOG_FILE_NAME) {
+                bail!(
+                    "reused profile catalog path {} has an unexpected file name",
+                    catalog_path.display()
+                );
+            }
+            let bundle = catalog_path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("reused profile catalog has no bundle parent"))?
+                .to_path_buf();
+            (bundle, Some(reused))
+        }
+    };
     Ok(PublishedProfileCatalog {
         profile: staged.profile,
         manifest: staged.manifest,
         path,
         sources: published_sources,
         candidate_run_dir: staged.candidate_run_dir,
+        _reused_profile_pin: reused_profile_pin,
     })
 }
 

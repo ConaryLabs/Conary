@@ -129,6 +129,22 @@ pub fn write_profile_catalog_candidate_with_scratch_admission(
     )
 }
 
+/// Derive the exact ordered profile-member contract from verified source
+/// manifests without visiting or copying package rows.
+///
+/// This is the identity-only half of profile composition. Callers can use it
+/// to select an already durable immutable profile revision, but reuse remains
+/// valid only when the complete returned contract and projection version
+/// match and the selected bundle is independently reopened.
+pub fn derive_profile_catalog_members(
+    profile: &str,
+    projection_version: u32,
+    inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
+) -> Result<Vec<ProfileSourceMemberV2>> {
+    let (members, _) = visit_profile_members(profile, projection_version, inputs, |_, _| Ok(()))?;
+    Ok(members)
+}
+
 fn write_profile_catalog_candidate_inner(
     path: &std::path::Path,
     profile: impl Into<String>,

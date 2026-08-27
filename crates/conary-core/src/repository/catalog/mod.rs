@@ -75,8 +75,8 @@ pub use parity::{
     produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
 };
 pub use profile::{
-    ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, write_profile_catalog_candidate,
-    write_profile_catalog_candidate_with_scratch_admission,
+    ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, derive_profile_catalog_members,
+    write_profile_catalog_candidate, write_profile_catalog_candidate_with_scratch_admission,
 };
 pub use record::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
