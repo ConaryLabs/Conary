@@ -175,16 +175,6 @@ impl CatalogCandidateWriter {
         insert_package(self.connection()?, &package)
     }
 
-    /// Replay one exact normalized source catalog without native parsing or a
-    /// package-sized relation vector.
-    pub(in crate::repository) fn copy_source_catalog(
-        &mut self,
-        reader: &CatalogReader,
-    ) -> Result<()> {
-        let scope = self.scope.clone();
-        reader.copy_packages_to(self.connection()?, &scope, None)
-    }
-
     /// Project one verified source member into a profile catalog while
     /// streaming its normalized relation rows.
     pub(in crate::repository) fn copy_profile_member(

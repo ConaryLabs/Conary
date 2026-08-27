@@ -125,8 +125,8 @@ pub trait RepositorySnapshotSink {
         source: &Path,
     ) -> Result<()>;
 
-    /// Replay a strict normalized projection when every authenticated input
-    /// and the exact source binding match. The default sink has no cache.
+    /// Reuse a strict normalized projection when every authenticated input and
+    /// the exact source binding match. The default sink has no cache.
     fn reuse_cached_projection(
         &mut self,
         _snapshot: &AuthenticatedSnapshotIdentity,

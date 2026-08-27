@@ -118,7 +118,7 @@ struct NativeCatalogSnapshotSink {
         AuthenticatedSnapshotIdentity,
         Vec<AuthenticatedMetadataObject>,
     )>,
-    cache_hit: bool,
+    cached_binding: Option<crate::repository::catalog::CatalogBindingV1>,
     work_leases: Vec<Box<dyn Send>>,
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
 }
@@ -205,7 +205,7 @@ impl NativeCatalogSnapshotSink {
             candidate_path: candidate_path.to_path_buf(),
             projection_cache,
             cache_inputs: None,
-            cache_hit: false,
+            cached_binding: None,
             work_leases: Vec::new(),
             scratch_admission,
         })
@@ -222,19 +222,13 @@ impl NativeCatalogSnapshotSink {
             candidate_path,
             projection_cache,
             cache_inputs,
-            cache_hit,
+            cached_binding,
             work_directory,
             work_leases,
             ..
         } = self;
         drop(work_directory);
         drop(work_leases);
-        let writer = writer.ok_or_else(|| {
-            Error::InternalError(
-                "native source parser completed without beginning its admitted candidate"
-                    .to_string(),
-            )
-        })?;
         let authenticated_objects = authenticated_objects.into_values().collect::<Vec<_>>();
         let evidence = authenticated_objects
             .iter()
@@ -245,8 +239,35 @@ impl NativeCatalogSnapshotSink {
                 size: object.size,
             })
             .collect();
-        let binding = writer.finish(evidence)?;
-        if !cache_hit
+        let reused_cache = cached_binding.is_some();
+        let binding = match (writer, cached_binding) {
+            (Some(writer), None) => writer.finish(evidence)?,
+            (None, Some(binding)) => {
+                let (cached_snapshot, cached_objects) = cache_inputs.as_ref().ok_or_else(|| {
+                    Error::InternalError(
+                        "materialized native projection has no exact cache inputs".to_string(),
+                    )
+                })?;
+                if cached_snapshot != &snapshot || cached_objects != &authenticated_objects {
+                    return Err(Error::ConflictError(
+                        "materialized native projection evidence changed after cache lookup"
+                            .to_string(),
+                    ));
+                }
+                binding
+            }
+            (Some(_), Some(_)) => {
+                return Err(Error::InternalError(
+                    "materialized native projection retained a mutable catalog writer".to_string(),
+                ));
+            }
+            (None, None) => {
+                return Err(Error::InternalError(
+                    "native source parser completed without a catalog candidate".to_string(),
+                ));
+            }
+        };
+        if !reused_cache
             && let (Some(cache), Some((cache_snapshot, cache_objects))) =
                 (projection_cache, cache_inputs)
         {
@@ -359,30 +380,37 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         snapshot: &AuthenticatedSnapshotIdentity,
         objects: &[AuthenticatedMetadataObject],
     ) -> Result<bool> {
-        self.cache_inputs = Some((snapshot.clone(), objects.to_vec()));
+        let mut cache_objects = objects.to_vec();
+        cache_objects.sort_by(|left, right| {
+            left.role
+                .cmp(&right.role)
+                .then_with(|| left.source_path.cmp(&right.source_path))
+        });
+        self.cache_inputs = Some((snapshot.clone(), cache_objects));
         let Some(cache) = &self.projection_cache else {
             return Ok(false);
         };
         let Some(reader) = cache.lookup(snapshot, objects)? else {
             return Ok(false);
         };
+        if reader.binding().scope != self.scope {
+            return Err(Error::ConflictError(
+                "native projection cache hit has the wrong source catalog scope".to_string(),
+            ));
+        }
         if let Some(admission) = &self.scratch_admission {
             let requirement = CatalogSourceCandidateScratchV1::from_cached_catalog(
                 reader.binding().artifact.size,
                 reader.binding().counts.packages,
             )?;
-            let admission = Arc::clone(admission);
-            self.writer = Some(
-                CatalogCandidateWriter::create_with_source_scratch_admission(
-                    &self.candidate_path,
-                    self.scope.clone(),
-                    admission,
-                    requirement,
-                )?,
-            );
+            let lease = admission.reserve_source_candidate(&self.candidate_path, requirement)?;
+            self.work_leases.push(lease);
         }
-        self.writer_mut()?.copy_source_catalog(&reader)?;
-        self.cache_hit = true;
+        if let Some(writer) = self.writer.take() {
+            drop(writer);
+        }
+        cache.materialize_verified(&reader, &self.candidate_path)?;
+        self.cached_binding = Some(reader.binding().clone());
         Ok(true)
     }
 

@@ -356,7 +356,7 @@ fn native_candidate_admission_precedes_file_creation_and_refusal_leaves_no_file(
 }
 
 #[test]
-fn cache_hit_admits_from_the_exact_reopened_catalog_before_replay() {
+fn cache_hit_materializes_exact_catalog_bytes_without_replay_or_finalization() {
     let root = tempfile::tempdir().unwrap();
     let repository = repository();
     let snapshot = AuthenticatedSnapshotIdentity::for_bytes(b"signed repomd cache revision");
@@ -406,17 +406,22 @@ fn cache_hit_admits_from_the_exact_reopened_catalog_before_replay() {
         sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&object))
             .unwrap()
     );
+    assert_eq!(
+        std::fs::read(&candidate).unwrap(),
+        std::fs::read(&cached_candidate).unwrap()
+    );
     let requirement = admission.source_candidates.lock().unwrap()[0];
     assert_eq!(
         requirement.canonical_projection_bytes,
         cached_binding.artifact.size
     );
     assert_eq!(requirement.package_count, cached_binding.counts.packages);
+    assert!(admission.finalizations.lock().unwrap().is_empty());
     let object_path = sink.work_directory.path().join("rpm-primary");
     std::fs::write(&object_path, authenticated_object_bytes()).unwrap();
     sink.authenticated_object(object.clone(), &object_path)
         .unwrap();
-    sink.finish(&repository, snapshot).unwrap();
+    sink.finish(&repository, snapshot.clone()).unwrap();
     assert!(candidate.exists());
     let retained = candidate
         .parent()
@@ -427,6 +432,31 @@ fn cache_hit_admits_from_the_exact_reopened_catalog_before_replay() {
         std::fs::read(retained).unwrap(),
         authenticated_object_bytes()
     );
+    assert!(admission.finalizations.lock().unwrap().is_empty());
+
+    let unadmitted_candidate = root.path().join("cache-hit-without-admission.sqlite");
+    let mut unadmitted = NativeCatalogSnapshotSink::create(
+        &repository,
+        &unadmitted_candidate,
+        Some(&cache_root),
+        None,
+    )
+    .unwrap();
+    assert!(
+        unadmitted
+            .reuse_cached_projection(&snapshot, std::slice::from_ref(&object))
+            .unwrap()
+    );
+    assert_eq!(
+        std::fs::read(&unadmitted_candidate).unwrap(),
+        std::fs::read(&cached_candidate).unwrap()
+    );
+    let object_path = unadmitted.work_directory.path().join("rpm-primary");
+    std::fs::write(&object_path, authenticated_object_bytes()).unwrap();
+    unadmitted
+        .authenticated_object(object.clone(), &object_path)
+        .unwrap();
+    unadmitted.finish(&repository, snapshot).unwrap();
 }
 
 #[test]
