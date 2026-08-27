@@ -3,6 +3,24 @@
 use super::*;
 use std::sync::Mutex;
 
+async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut buffer).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    String::from_utf8(request).unwrap()
+}
+
 struct CumulativeStreamAdmission {
     remaining: Mutex<u64>,
     admitted: Mutex<u64>,
@@ -271,6 +289,86 @@ async fn test_download_to_bytes_retries_a_transient_transport_failure() {
 }
 
 #[tokio::test]
+async fn download_to_bytes_retries_each_partial_body_before_exact_success() {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for body in [&b"s"[..], &b"sig"[..], &b"signed"[..]] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            requests.push(read_http_request(&mut stream).await);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            stream.write_all(body).await.unwrap();
+        }
+        requests
+    });
+
+    let client = RepositoryClient::new()
+        .unwrap()
+        .with_retry_policy(RetryConfig {
+            max_attempts: 3,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter_factor: 0.0,
+        });
+    let bytes = client
+        .download_to_bytes(&format!("http://{addr}/InRelease"))
+        .await
+        .unwrap();
+
+    assert_eq!(bytes, b"signed");
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests.iter().all(|request| {
+        request
+            .to_ascii_lowercase()
+            .contains("accept-encoding: identity")
+    }));
+}
+
+#[tokio::test]
+async fn exhausted_partial_byte_bodies_keep_the_typed_transport_cause() {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = read_http_request(&mut stream).await;
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsig")
+                .await
+                .unwrap();
+        }
+    });
+
+    let client = RepositoryClient::new()
+        .unwrap()
+        .with_retry_policy(RetryConfig {
+            max_attempts: 2,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter_factor: 0.0,
+        });
+    let error = client
+        .download_to_bytes(&format!("http://{addr}/InRelease"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, Error::RepositoryResponseBody { .. }));
+    assert!(error.to_string().contains("InRelease"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn test_download_file_requests_identity_encoding() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -499,6 +597,146 @@ async fn test_download_file_retries_and_resumes_after_body_failure() {
     let requests = server.await.unwrap();
     assert!(!requests[0].to_ascii_lowercase().contains("range:"));
     assert!(requests[1].to_ascii_lowercase().contains("range: bytes=3-"));
+}
+
+#[tokio::test]
+async fn resumed_file_resets_when_server_ignores_range_with_http_200() {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for attempt in 1..=2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            requests.push(read_http_request(&mut stream).await);
+            let response = if attempt == 1 {
+                &b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsig"[..]
+            } else {
+                &b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsigned"[..]
+            };
+            stream.write_all(response).await.unwrap();
+        }
+        requests
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let destination = root.path().join("Packages.gz");
+    let client = RepositoryClient::new()
+        .unwrap()
+        .with_retry_policy(RetryConfig {
+            max_attempts: 2,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter_factor: 0.0,
+        });
+    let identity = client
+        .download_file_with_identity_limit(&format!("http://{addr}/Packages.gz"), &destination, 6)
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read(&destination).unwrap(), b"signed");
+    assert_eq!(identity.size, 6);
+    assert_eq!(identity.sha256, crate::hash::sha256(b"signed"));
+    let requests = server.await.unwrap();
+    assert!(!requests[0].to_ascii_lowercase().contains("range:"));
+    assert!(requests[1].to_ascii_lowercase().contains("range: bytes=3-"));
+}
+
+#[tokio::test]
+async fn http_416_finalizes_only_an_exact_staged_total() {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await;
+        stream
+            .write_all(
+                b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */6\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        request
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let destination = root.path().join("Packages.gz");
+    std::fs::write(destination.with_extension("tmp"), b"signed").unwrap();
+    let client = RepositoryClient::new().unwrap();
+    let identity = client
+        .download_file_with_identity_limit(&format!("http://{addr}/Packages.gz"), &destination, 6)
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read(&destination).unwrap(), b"signed");
+    assert_eq!(identity.size, 6);
+    assert_eq!(identity.sha256, crate::hash::sha256(b"signed"));
+    assert!(
+        server
+            .await
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("range: bytes=6-")
+    );
+}
+
+#[tokio::test]
+async fn http_416_with_a_different_total_discards_stale_bytes_and_restarts() {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for attempt in 1..=2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            requests.push(read_http_request(&mut stream).await);
+            if attempt == 1 {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */6\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsigned",
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        requests
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let destination = root.path().join("Packages.gz");
+    std::fs::write(destination.with_extension("tmp"), b"stale").unwrap();
+    let client = RepositoryClient::new()
+        .unwrap()
+        .with_retry_policy(RetryConfig {
+            max_attempts: 2,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter_factor: 0.0,
+        });
+    let identity = client
+        .download_file_with_identity_limit(&format!("http://{addr}/Packages.gz"), &destination, 6)
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read(&destination).unwrap(), b"signed");
+    assert_eq!(identity.size, 6);
+    assert_eq!(identity.sha256, crate::hash::sha256(b"signed"));
+    let requests = server.await.unwrap();
+    assert!(requests[0].to_ascii_lowercase().contains("range: bytes=5-"));
+    assert!(!requests[1].to_ascii_lowercase().contains("range:"));
 }
 
 #[tokio::test]

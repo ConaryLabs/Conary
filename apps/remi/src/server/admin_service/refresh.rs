@@ -9,7 +9,7 @@ use super::ServiceError;
 
 mod operations;
 pub(crate) use operations::refresh_repositories_uncoordinated;
-pub use operations::{refresh_repositories, sync_repo};
+pub use operations::{refresh_profile_repositories, refresh_repositories, sync_repo};
 
 /// Result of one successful repository metadata refresh.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -215,6 +215,50 @@ mod tests {
                     RepositoryPolicyScope::repository(identity).unwrap(),
                     NativeSourceEcosystem::Rpm,
                     NativeSourceStream::release("44").unwrap(),
+                    RepositoryUpdateMode::Follow,
+                )
+                .unwrap(),
+                identity,
+                None,
+            )
+            .unwrap();
+        repository
+    }
+
+    fn native_debian_repository(name: &str, identity: &str) -> conary_core::db::models::Repository {
+        let metadata_url = format!("https://127.0.0.1:9/{identity}");
+        let mut repository =
+            conary_core::db::models::Repository::new(name.to_string(), metadata_url);
+        repository.source_profile = Some("ubuntu-26.04".to_string());
+        repository.priority = 100;
+        repository.profile_member_role =
+            Some(conary_core::repository::supported_profiles::ProfileSourceRole::Base);
+        repository.profile_member_required = true;
+        repository
+            .set_parser_config(RepositoryParserConfig::Deb {
+                distribution: "resolute".to_string(),
+                component: "main".to_string(),
+                architecture: "amd64".to_string(),
+            })
+            .unwrap();
+        repository
+            .set_trust_policy(RepositoryTrustPolicy::Debian {
+                release_keys: vec![
+                    OpenPgpTrustRoot::new(
+                        "https://example.test/ubuntu.gpg".to_string(),
+                        "B".repeat(40),
+                    )
+                    .unwrap(),
+                ],
+            })
+            .unwrap();
+        repository
+            .set_native_source_policy(
+                RepositorySourcePolicy::new(
+                    "ubuntu",
+                    RepositoryPolicyScope::repository(identity).unwrap(),
+                    NativeSourceEcosystem::Deb,
+                    NativeSourceStream::release("resolute").unwrap(),
                     RepositoryUpdateMode::Follow,
                 )
                 .unwrap(),
@@ -519,6 +563,37 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn exact_profile_retry_plan_contains_no_unrelated_work() {
+        let fedora = native_repository("fedora", "fedora-44-everything-x86_64");
+        let ubuntu = native_debian_repository("ubuntu", "ubuntu-resolute-main-amd64");
+        let mut native_profiles = std::collections::BTreeMap::from([
+            ("fedora-44".to_string(), vec![fedora]),
+            ("ubuntu-26.04".to_string(), vec![ubuntu]),
+        ]);
+        let mut legacy_repositories = vec![conary_core::db::models::Repository::new(
+            "legacy".to_string(),
+            "https://legacy.invalid".to_string(),
+        )];
+
+        super::operations::restrict_to_profile(
+            &mut native_profiles,
+            &mut legacy_repositories,
+            "fedora-44",
+        )
+        .unwrap();
+
+        assert_eq!(
+            native_profiles
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["fedora-44"]
+        );
+        assert_eq!(native_profiles["fedora-44"].len(), 1);
+        assert!(legacy_repositories.is_empty());
     }
 
     #[tokio::test]

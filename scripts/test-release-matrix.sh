@@ -1114,7 +1114,7 @@ test_check_release_matrix_rejects_unforced_post_deploy_candidates() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "private candidate deploy forces a bounded post-transition public refresh"
+        "private candidate deploy forces one bounded post-transition refresh"
 }
 
 test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority() {
@@ -1122,12 +1122,25 @@ test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                      and all(.failures[]; .source_profile == "solus"))' \
-        '                      and all(.failures[]; .source_profile != null))'
+        '                    | select(. != "solus")]' \
+        '                    | select(true)]'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "private candidate deploy forces a bounded post-transition public refresh"
+        "retries only exact failed public profiles"
+}
+
+test_check_release_matrix_rejects_all_profile_retry() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        'refresh?force=true&profile=${profile}' \
+        'refresh?force=true'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "retries only exact failed public profiles"
 }
 
 test_check_release_matrix_rejects_nonadvancing_candidate_fence() {
@@ -1675,6 +1688,7 @@ main() {
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
         test_check_release_matrix_rejects_unforced_post_deploy_candidates
         test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority
+        test_check_release_matrix_rejects_all_profile_retry
         test_check_release_matrix_rejects_nonadvancing_candidate_fence
         test_check_release_matrix_rejects_pretransition_candidate_run
         test_check_release_matrix_rejects_unbound_candidate_binary

@@ -117,6 +117,9 @@ pub struct RepoResponse {
 pub struct RefreshQuery {
     #[serde(default)]
     pub force: bool,
+    /// Restrict a retry to one exact configured native source profile.
+    #[serde(default)]
+    pub profile: Option<String>,
 }
 
 impl TryFrom<conary_core::db::models::Repository> for RepoResponse {
@@ -463,7 +466,8 @@ pub async fn sync_repo(
 
 /// POST /v1/admin/refresh
 ///
-/// Synchronize all enabled repositories, skipping fresh repos unless `force=true`.
+/// Synchronize enabled repositories, optionally restricting work to one exact
+/// native source profile. Fresh repositories are skipped unless `force=true`.
 /// Requires the "repos:write" scope.
 pub async fn refresh_repos(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -474,8 +478,16 @@ pub async fn refresh_repos(
         return err;
     }
 
-    match admin_service::refresh_repositories(&state, query.force).await {
-        Ok(batch) => refresh_batch_response(&state, query.force, batch).await,
+    let result = match query.profile.as_deref() {
+        Some(profile) => {
+            admin_service::refresh_profile_repositories(&state, profile, query.force).await
+        }
+        None => admin_service::refresh_repositories(&state, query.force).await,
+    };
+    match result {
+        Ok(batch) => {
+            refresh_batch_response(&state, query.force, query.profile.as_deref(), batch).await
+        }
         Err(e) => {
             tracing::error!("Failed to refresh repositories: {e}");
             json_error(500, "Failed to refresh repositories", "INTERNAL_ERROR")
@@ -487,6 +499,7 @@ pub async fn refresh_repos(
 pub(crate) async fn refresh_batch_response(
     state: &Arc<RwLock<ServerState>>,
     force: bool,
+    profile: Option<&str>,
     batch: RepoRefreshBatch,
 ) -> Response {
     let batch_state = batch.state();
@@ -501,6 +514,7 @@ pub(crate) async fn refresh_batch_response(
             "repos.refreshed",
             serde_json::json!({
                 "force": force,
+                "profile": profile,
                 "state": batch_state,
                 "synced": synced,
                 "skipped": skipped,
@@ -514,6 +528,7 @@ pub(crate) async fn refresh_batch_response(
         Json(serde_json::json!({
             "status": batch_state.as_str(),
             "force": force,
+            "profile": profile,
             "synced": synced,
             "skipped": skipped,
             "failed": failed,

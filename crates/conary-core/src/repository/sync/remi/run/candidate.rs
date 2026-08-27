@@ -145,11 +145,20 @@ fn current_profile_sync_candidate_in_transaction(
                 run.owner_instance_uuid, run.fencing_epoch, run.finished_at
          FROM repository_sync_scopes scope
          JOIN repository_sync_runs run
-           ON run.run_id = scope.current_run_id
-          AND run.source_profile = scope.source_profile
-          AND run.fencing_epoch = scope.fencing_epoch
+           ON run.source_profile = scope.source_profile
+          AND run.fencing_epoch <= scope.fencing_epoch
          WHERE scope.source_profile = ?1
-           AND run.state = 'candidate'",
+           AND run.state = 'candidate'
+           AND NOT EXISTS (
+               SELECT 1
+               FROM repository_sync_runs newer
+               WHERE newer.source_profile = run.source_profile
+                 AND newer.fencing_epoch > run.fencing_epoch
+                 AND newer.fencing_epoch <= scope.fencing_epoch
+                 AND newer.state IN ('candidate', 'published')
+           )
+         ORDER BY run.fencing_epoch DESC
+         LIMIT 1",
         [source_profile],
         |row| {
             Ok(ProfileSyncCandidate {

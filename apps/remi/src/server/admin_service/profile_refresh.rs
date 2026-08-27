@@ -110,6 +110,7 @@ pub(super) async fn refresh_native_profile(
                 &roots,
                 &run,
                 ProfileSyncFailureStage::Publishing,
+                profile_service_failure_category(&error),
                 &error.to_string(),
             )
             .await;
@@ -122,6 +123,7 @@ pub(super) async fn refresh_native_profile(
             &roots,
             &run,
             ProfileSyncFailureStage::Publishing,
+            profile_service_failure_category(&error),
             &error.to_string(),
         )
         .await;
@@ -135,10 +137,12 @@ pub(super) async fn refresh_native_profile(
         {
             Ok(published) => published,
             Err(error) => {
+                let category = profile_failure_category(&error);
                 abort_run(
                     &roots,
                     &run,
                     ProfileSyncFailureStage::FetchingObjects,
+                    category,
                     &format!("{error:#}"),
                 )
                 .await;
@@ -161,6 +165,7 @@ pub(super) async fn refresh_native_profile(
                 &roots,
                 &run,
                 ProfileSyncFailureStage::Publishing,
+                profile_service_failure_category(&error),
                 &error.to_string(),
             )
             .await;
@@ -174,6 +179,7 @@ pub(super) async fn refresh_native_profile(
             &roots,
             &run,
             ProfileSyncFailureStage::Publishing,
+            profile_service_failure_category(&error),
             &error.to_string(),
         )
         .await;
@@ -184,10 +190,12 @@ pub(super) async fn refresh_native_profile(
         Ok(published) => published,
         Err(error) => {
             stop_profile_heartbeat_after_error(heartbeat, &run.run_id).await;
+            let category = profile_failure_category(&error);
             abort_run(
                 &roots,
                 &run,
                 ProfileSyncFailureStage::Publishing,
+                category,
                 &format!("{error:#}"),
             )
             .await;
@@ -202,10 +210,12 @@ pub(super) async fn refresh_native_profile(
         }
     };
     if let Err(error) = stop_profile_heartbeat(heartbeat).await {
+        let category = profile_failure_category(&error);
         abort_run(
             &roots,
             &run,
             ProfileSyncFailureStage::Publishing,
+            category,
             &format!("profile refresh heartbeat failed: {error:#}"),
         )
         .await;
@@ -220,6 +230,7 @@ pub(super) async fn refresh_native_profile(
             &roots,
             &run,
             ProfileSyncFailureStage::Publishing,
+            profile_service_failure_category(&error),
             &error.to_string(),
         )
         .await;
@@ -248,6 +259,24 @@ fn profile_stage_service_error(error: &anyhow::Error) -> ServiceError {
         return ServiceError::StorageCapacity(capacity.clone());
     }
     ServiceError::Internal(format!("{error:#}"))
+}
+
+fn profile_failure_category(error: &anyhow::Error) -> ProfileSyncFailureCategory {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<conary_core::Error>())
+        .map(ProfileSyncFailureCategory::from_error)
+        .unwrap_or(ProfileSyncFailureCategory::Internal)
+}
+
+fn profile_service_failure_category(error: &ServiceError) -> ProfileSyncFailureCategory {
+    match error {
+        ServiceError::BadRequest(_) => ProfileSyncFailureCategory::WireContract,
+        ServiceError::Conflict(_) => ProfileSyncFailureCategory::Fenced,
+        ServiceError::NotFound(_)
+        | ServiceError::StorageCapacity(_)
+        | ServiceError::Internal(_) => ProfileSyncFailureCategory::Internal,
+    }
 }
 
 async fn stage_profile_catalog_with_heartbeat(
@@ -690,6 +719,7 @@ async fn abort_run(
     roots: &RefreshRoots,
     run: &ProfileSyncRun,
     stage: ProfileSyncFailureStage,
+    category: ProfileSyncFailureCategory,
     evidence: &str,
 ) {
     let db_path = roots.db_path.clone();
@@ -699,13 +729,7 @@ async fn abort_run(
     let result = tokio::task::spawn_blocking(move || {
         database_writer.execute(|| {
             let conn = conary_core::db::open_fast(&db_path)?;
-            abort_profile_sync_run(
-                &conn,
-                &run,
-                stage,
-                ProfileSyncFailureCategory::Internal,
-                &evidence,
-            )
+            abort_profile_sync_run(&conn, &run, stage, category, &evidence)
         })
     })
     .await;
@@ -792,8 +816,24 @@ fn source_snapshot_changed(
 
 #[cfg(test)]
 mod timestamp_tests {
-    use super::{record_candidate_timestamps, source_snapshot_changed};
+    use super::{profile_failure_category, record_candidate_timestamps, source_snapshot_changed};
+    use anyhow::Context;
     use conary_core::db::models::Repository;
+
+    #[test]
+    fn contextual_interrupted_body_keeps_transport_category() {
+        let result = Err::<(), _>(conary_core::Error::RepositoryResponseBody {
+            url: "https://fixture.invalid/InRelease".to_string(),
+            detail: "body ended early".to_string(),
+        })
+        .context("refresh resolute-backports");
+        let error = result.unwrap_err();
+
+        assert_eq!(
+            profile_failure_category(&error),
+            conary_core::repository::ProfileSyncFailureCategory::Transport
+        );
+    }
 
     #[test]
     fn timestamp_change_authority_distinguishes_noop_change_and_missing_candidate() {

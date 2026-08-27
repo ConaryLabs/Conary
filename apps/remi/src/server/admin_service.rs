@@ -39,7 +39,7 @@ mod test_data;
 pub(crate) use refresh::refresh_repositories_uncoordinated;
 pub use refresh::{
     RepoRefreshBatch, RepoRefreshBatchState, RepoRefreshFailure, RepoRefreshFailureKind,
-    RepoRefreshResult, refresh_repositories, sync_repo,
+    RepoRefreshResult, refresh_profile_repositories, refresh_repositories, sync_repo,
 };
 pub use repository_policy::NativeSourcePolicyInput;
 use repository_policy::apply_native_source_contract;

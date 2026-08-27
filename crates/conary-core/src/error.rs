@@ -107,6 +107,14 @@ pub enum Error {
     #[error("Download failed: {0}")]
     DownloadError(String),
 
+    /// The HTTP response began successfully but its body transport failed.
+    ///
+    /// This stays distinct from size, trust, and wire-contract refusals so a
+    /// bounded repository retry may recover it without retrying deterministic
+    /// policy failures.
+    #[error("Repository response body failed from {url}: {detail}")]
+    RepositoryResponseBody { url: String, detail: String },
+
     /// A repository declared a chunk servable but its durable object authority
     /// could not provide that exact object.
     #[error("Durable chunk {hash} is unavailable from {authority}")]

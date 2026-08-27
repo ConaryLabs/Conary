@@ -19,6 +19,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+mod stream;
+use stream::{ContentRange, ResponseStreamOptions, content_range, stream_response_to_file};
+
 /// Exact identity accumulated while response chunks are written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadedFileIdentity {
@@ -108,7 +111,15 @@ pub(crate) async fn read_response_bytes_with_limit(
 
     let mut body = Vec::new();
     let mut total = 0u64;
-    while let Some(chunk) = response.chunk().await.download_context(url)? {
+    while let Some(chunk) =
+        response
+            .chunk()
+            .await
+            .map_err(|error| Error::RepositoryResponseBody {
+                url: url.to_string(),
+                detail: error.to_string(),
+            })?
+    {
         append_limited_chunk(&mut body, &mut total, &chunk, limit, url)?;
     }
     Ok(body)
@@ -170,6 +181,29 @@ fn temp_path_for(dest_path: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("download");
     dest_path.with_file_name(format!(".{file_name}.tmp"))
+}
+
+fn finalize_confirmed_staged_download(
+    temp_path: &Path,
+    dest_path: &Path,
+) -> Result<DownloadedFileIdentity> {
+    let file = OpenOptions::new().read(true).write(true).open(temp_path)?;
+    file.sync_all()?;
+    let size = file.metadata()?.len();
+    let mut reader = std::io::BufReader::new(&file);
+    let sha256 = crate::hash::sha256_reader_hex(&mut reader)?;
+    drop(reader);
+    drop(file);
+    if let Err(error) = fs::rename(temp_path, dest_path) {
+        let _ = fs::remove_file(temp_path);
+        return Err(Error::IoError(format!(
+            "Failed to move {} to {}: {error}",
+            temp_path.display(),
+            dest_path.display()
+        )));
+    }
+    info!("Successfully downloaded to {}", dest_path.display());
+    Ok(DownloadedFileIdentity { sha256, size })
 }
 
 fn verify_local_source_metadata(source_path: &Path, expected_size: Option<u64>) -> Result<()> {
@@ -318,90 +352,6 @@ pub(crate) async fn download_static_or_http_file_with_expected_size(
     }
 
     validate_url_scheme(url_or_path)
-}
-
-/// Stream HTTP response to file with optional progress tracking
-///
-/// Always streams data in chunks, never buffering the entire response in memory.
-/// This is safe for files of any size.
-///
-/// The options carry how many bytes were already written for a resumed
-/// download. Progress starts from that offset so the user sees the complete
-/// transfer position.
-struct ResponseStreamOptions<'a> {
-    total_size: u64,
-    offset: u64,
-    progress_bar: Option<&'a ProgressBar>,
-    display_name: &'a str,
-    max_size: Option<u64>,
-    scratch_admission: Option<&'a dyn CatalogMetadataStreamAdmission>,
-    inactivity_timeout: Duration,
-}
-
-async fn stream_response_to_file(
-    mut response: reqwest::Response,
-    file: &mut File,
-    hasher: &mut crate::hash::Hasher,
-    options: ResponseStreamOptions<'_>,
-) -> Result<u64> {
-    // Set up progress bar if provided
-    if let Some(pb) = options.progress_bar {
-        if options.total_size > 0 {
-            pb.set_length(options.total_size);
-            pb.set_position(options.offset);
-            pb.set_message(options.display_name.to_string());
-        } else {
-            // Unknown size - show bytes downloaded without percentage
-            pb.set_message(format!("{} (unknown size)", options.display_name));
-        }
-    }
-
-    let mut downloaded: u64 = options.offset;
-
-    loop {
-        let chunk = tokio::time::timeout(options.inactivity_timeout, response.chunk())
-            .await
-            .map_err(|_| {
-                Error::DownloadError(format!(
-                    "response stream made no progress for {:?}",
-                    options.inactivity_timeout
-                ))
-            })?
-            .map_err(|e| Error::DownloadError(format!("read response stream: {e}")))?;
-        let Some(chunk) = chunk else {
-            break;
-        };
-        let next_size = downloaded
-            .checked_add(u64::try_from(chunk.len()).map_err(|_| {
-                Error::DownloadError("response chunk length exceeds u64".to_string())
-            })?)
-            .ok_or_else(|| {
-                Error::DownloadError("downloaded response size exceeds u64".to_string())
-            })?;
-        if options.max_size.is_some_and(|maximum| next_size > maximum) {
-            return Err(Error::DownloadError(format!(
-                "response exceeded declared size limit of {} bytes",
-                options.max_size.expect("checked maximum")
-            )));
-        }
-        let _scratch_permit = options
-            .scratch_admission
-            .map(|admission| {
-                admission.reserve_next(u64::try_from(chunk.len()).map_err(|_| {
-                    Error::DownloadError("response chunk length exceeds u64".to_string())
-                })?)
-            })
-            .transpose()?;
-        file.write_all(&chunk).io_context("write download data")?;
-        hasher.update(&chunk);
-        downloaded = next_size;
-
-        if let Some(pb) = options.progress_bar {
-            pb.set_position(downloaded);
-        }
-    }
-
-    Ok(downloaded)
 }
 
 /// Check if an HTTP status code represents a transient server error
@@ -592,8 +542,19 @@ impl RepositoryClient {
                         return Err(http_status_error(response.status(), url));
                     }
                     let headers = response.headers().clone();
-                    let body = read_response_bytes_with_limit(response, max_size, url).await?;
-                    return Ok((headers, body));
+                    match read_response_bytes_with_limit(response, max_size, url).await {
+                        Ok(body) => return Ok((headers, body)),
+                        Err(Error::RepositoryResponseBody { detail, .. })
+                            if attempt < max_attempts =>
+                        {
+                            warn!(
+                                "Byte download attempt {attempt} lost its response body: \
+                                 {detail}; retrying..."
+                            );
+                            tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 Err(error) => {
                     if attempt == max_attempts {
@@ -823,31 +784,45 @@ impl RepositoryClient {
                         continue;
                     }
 
-                    // HTTP 416 Range Not Satisfiable - file is already complete
+                    // A 416 proves completion only when its typed total equals
+                    // the exact staged byte count. Otherwise discard the stale
+                    // prefix and use a fresh bounded attempt.
                     if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-                        if existing_len > 0 {
-                            debug!(
-                                "Server returned 416, partial file ({} bytes) is already complete",
-                                existing_len
-                            );
-                            if let Err(e) = fs::rename(&temp_path, dest_path) {
-                                let _ = fs::remove_file(&temp_path);
-                                return Err(Error::IoError(format!(
-                                    "Failed to move {} to {}: {e}",
-                                    temp_path.display(),
-                                    dest_path.display()
-                                )));
-                            }
-                            let metadata = fs::metadata(dest_path)?;
-                            let mut reader = std::io::BufReader::new(File::open(dest_path)?);
-                            let sha256 = crate::hash::sha256_reader_hex(&mut reader)?;
-                            info!("Successfully downloaded to {}", dest_path.display());
-                            return Ok(DownloadedFileIdentity {
-                                sha256,
-                                size: metadata.len(),
-                            });
+                        if existing_len == 0 {
+                            return Err(http_status_error(status, url));
                         }
-                        return Err(http_status_error(status, url));
+                        let ContentRange::Unsatisfied { total } =
+                            content_range(response.headers())?
+                        else {
+                            return Err(Error::ParseError(
+                                "HTTP 416 requires an unsatisfied byte Content-Range".to_string(),
+                            ));
+                        };
+                        if total == existing_len {
+                            debug!(
+                                "Server confirmed staged download complete at {} bytes",
+                                total
+                            );
+                            return finalize_confirmed_staged_download(&temp_path, dest_path);
+                        }
+                        fs::remove_file(&temp_path).map_err(|error| {
+                            Error::IoError(format!(
+                                "Failed to discard stale partial download {}: {error}",
+                                temp_path.display()
+                            ))
+                        })?;
+                        if attempt >= self.retry_policy.max_attempts {
+                            return Err(Error::DownloadError(format!(
+                                "server rejected byte offset {existing_len} for a {total}-byte \
+                                 object"
+                            )));
+                        }
+                        warn!(
+                            "Server rejected stale byte offset {existing_len} for a {total}-byte \
+                             object; restarting..."
+                        );
+                        tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
+                        continue;
                     }
 
                     if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
@@ -855,45 +830,71 @@ impl RepositoryClient {
                     }
 
                     // Determine resume vs fresh download
-                    let (mut file, offset, total_size) =
-                        if status == reqwest::StatusCode::PARTIAL_CONTENT && existing_len > 0 {
-                            // Server supports range requests - append to existing file
-                            let content_range_total = response
-                                .headers()
-                                .get(header::CONTENT_RANGE)
-                                .and_then(|v| v.to_str().ok())
-                                .and_then(|s| {
-                                    // Parse "bytes START-END/TOTAL"
-                                    s.rsplit('/').next().and_then(|t| t.parse::<u64>().ok())
-                                })
-                                .unwrap_or(0);
-                            debug!(
-                                "Resuming download from byte {}, total size {}",
-                                existing_len, content_range_total
-                            );
-                            let file =
-                                OpenOptions::new()
-                                    .append(true)
-                                    .open(&temp_path)
-                                    .map_err(|e| {
-                                        Error::IoError(format!(
-                                            "Failed to open {} for append: {e}",
-                                            temp_path.display()
-                                        ))
-                                    })?;
-                            (file, existing_len, content_range_total)
-                        } else {
-                            // HTTP 200 - server does not support range, or fresh download.
-                            // Truncate any existing partial file.
-                            let total = response.content_length().unwrap_or(0);
-                            let file = File::create(&temp_path).map_err(|e| {
-                                Error::IoError(format!(
-                                    "Failed to create file {}: {e}",
-                                    temp_path.display()
-                                ))
-                            })?;
-                            (file, 0, total)
+                    let (mut file, offset, total_size) = if status
+                        == reqwest::StatusCode::PARTIAL_CONTENT
+                        && existing_len > 0
+                    {
+                        let ContentRange::Partial { start, end, total } =
+                            content_range(response.headers())?
+                        else {
+                            return Err(Error::ParseError(
+                                "HTTP 206 requires a concrete byte Content-Range".to_string(),
+                            ));
                         };
+                        if start != existing_len {
+                            return Err(Error::ParseError(format!(
+                                "HTTP 206 starts at byte {start}, expected staged offset \
+                                     {existing_len}"
+                            )));
+                        }
+                        if max_size.is_some_and(|maximum| total > maximum) {
+                            return Err(Error::DownloadError(format!(
+                                "byte-range response declares {total} bytes above the \
+                                     {maximum}-byte limit",
+                                maximum = max_size.expect("checked maximum")
+                            )));
+                        }
+                        let segment_size = end - start + 1;
+                        if response
+                            .content_length()
+                            .is_some_and(|length| length != segment_size)
+                        {
+                            return Err(Error::ParseError(format!(
+                                "HTTP 206 Content-Length disagrees with its {segment_size}-byte \
+                                     Content-Range"
+                            )));
+                        }
+                        debug!(
+                            "Resuming download from byte {}, total size {}",
+                            existing_len, total
+                        );
+                        let file =
+                            OpenOptions::new()
+                                .append(true)
+                                .open(&temp_path)
+                                .map_err(|e| {
+                                    Error::IoError(format!(
+                                        "Failed to open {} for append: {e}",
+                                        temp_path.display()
+                                    ))
+                                })?;
+                        (file, existing_len, total)
+                    } else if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                        return Err(Error::ParseError(
+                            "server returned HTTP 206 when no byte range was requested".to_string(),
+                        ));
+                    } else {
+                        // HTTP 200 - server does not support range, or fresh download.
+                        // Truncate any existing partial file.
+                        let total = response.content_length().unwrap_or(0);
+                        let file = File::create(&temp_path).map_err(|e| {
+                            Error::IoError(format!(
+                                "Failed to create file {}: {e}",
+                                temp_path.display()
+                            ))
+                        })?;
+                        (file, 0, total)
+                    };
 
                     let mut hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
                     if offset > 0 {
@@ -934,6 +935,23 @@ impl RepositoryClient {
                         }
                         Err(error) => return Err(error),
                     };
+                    if total_size > 0 && downloaded != total_size {
+                        let error = Error::RepositoryResponseBody {
+                            url: url.to_string(),
+                            detail: format!(
+                                "response ended at {downloaded} bytes, expected {total_size}"
+                            ),
+                        };
+                        if attempt < self.retry_policy.max_attempts {
+                            drop(file);
+                            warn!(
+                                "Download attempt {attempt} was incomplete: {error}; retrying..."
+                            );
+                            tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
+                            continue;
+                        }
+                        return Err(error);
+                    }
 
                     if let Some(pb) = progress_bar {
                         pb.finish_with_message(format!("{} [done]", display_name));

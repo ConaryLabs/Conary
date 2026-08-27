@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 74
-summary: Document linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 75
+summary: Document bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -170,9 +170,12 @@ renew that fenced lease from an independent coordinator thread at the
 core-owned heartbeat cadence, including while the run is `ready_to_publish`.
 Candidate completion ends the lease; the exact current candidate survives
 restart and lease expiry as typed promotion input. A successor refresh advances
-the fencing scope and thereby supersedes the prior candidate without changing
-public serving state. Thus a CPU-bound metadata record stream cannot
-starve its own ownership proof.
+the fencing scope and fences the previous writer, but an in-flight, failed, or
+abandoned successor does not erase the latest successful immutable candidate.
+Only a newer completed candidate or publication supersedes that proof. The
+same rule owns current-candidate lookup, promotion eligibility, and catalog-GC
+roots, so retained work remains activatable rather than merely undeleted. Thus
+a CPU-bound metadata record stream cannot starve its own ownership proof.
 
 Operational SQLite owns refresh runs and leases, resource metadata, ordered
 profile members, the exact current private candidate, the active pointer, and
@@ -192,7 +195,7 @@ revision replaces that cache entry only after its own complete verification.
 Readers opened before promotion therefore finish on the old revision; later
 readers see the complete new revision. Conversion outcomes own durable exact
 revision pins. Catalog garbage collection computes reachability from active,
-current-candidate, reader, work, and conversion pins and removes only resources
+latest-successful-candidate, reader, work, and conversion pins and removes only resources
 absent from that exact graph. A superseded candidate is collectable unless a
 different typed pin retains it; age, repository names, process liveness, and
 guessed retention windows are not collection authority. An absent exact bundle or
@@ -244,6 +247,16 @@ through the same device ledger, and applies each signed size as the HTTP stream
 cap. The immutable sink retains that lease until its run-local work directory
 and every staged child file have been removed, including error and cancellation
 unwind. A typed refusal therefore precedes child-file creation.
+HTTP acquisition requests identity encoding. A response that succeeds at the
+header boundary but truncates or fails while decoding its body is a typed
+transport failure and receives only the configured bounded retry envelope;
+deterministic size, trust, and wire-contract refusals are not retried. File
+recovery resumes only from an exact `bytes START-END/TOTAL` response whose start
+equals the staged length and whose interval and body length agree. HTTP 200
+resets the staged prefix, while HTTP 416 proves completion only when
+`bytes */TOTAL` exactly equals the staged length; disagreement discards the
+stale prefix. Final authenticated digest and size remain authority on every
+path.
 When an RPM repository omits filelists metadata, the parser audits every
 positive path requirement against the exact primary projection already held by
 the repository sink. The immutable sink walks its private catalog transaction
@@ -341,7 +354,8 @@ missing bundle, or empty catalog cannot satisfy that predicate. The protected
 private-candidate deployment workflow adds causal evidence that the static
 predicate intentionally does not own: it records the pre-transition
 inspection, starts the exact merged binary, invokes the loopback-only forced
-refresh endpoint, validates the typed completion response, and requires the
+refresh endpoint, validates the typed completion response, retries only exact
+failed public profiles through the typed `profile` scope, and requires the
 final Fedora, Ubuntu, and Arch fencing epochs to be strictly newer than their
 recorded baselines and each terminal run to have started after the recorded
 binary transition. The final evidence binds the exact merged commit, built
@@ -393,7 +407,11 @@ digest and integrity verification for each package.
 Both internal and external `POST /v1/admin/refresh` routes use the same response
 projection: HTTP 200 means every source completed or was current, 207 carries a
 mixed success/failure batch, and 502 means every configured source failed.
-Global database/setup failures remain HTTP 500. The release deployment gate
+Omitting `profile` selects every configured source. Supplying one exact
+configured native profile selects only that profile and no legacy repository;
+it is the retry boundary after a partial batch and cannot upgrade global
+publication readiness from its profile-local result. Global database/setup
+failures remain HTTP 500. The release deployment gate
 requires exact source reconciliation, every configured profile populated in
 its active immutable catalog, the fresh signed universe matching those
 revisions, and at least one validated converted artifact pinned to every
