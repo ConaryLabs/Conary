@@ -106,8 +106,18 @@ rg -q "run_as_runner bash -c '\[\[ -r /dev/kvm && -w /dev/kvm \]\]'" "$installer
     fail "installer does not verify KVM access through the runner's shell identity"
 rg -q 'install_apparmor_profile' "$installer" ||
     fail "installer does not install the runner AppArmor profile"
-rg -q 'systemctl restart "\$SERVICE_NAME"' "$installer" ||
-    fail "installer does not restart the listener into its AppArmor profile"
+rg -q 'systemctl stop --no-block "\$SERVICE_NAME"' "$installer" ||
+    fail "installer does not begin a bounded runner service drain"
+rg -q 'systemctl kill --kill-whom=all --signal=SIGINT "\$SERVICE_NAME"' "$installer" ||
+    fail "installer does not drain the complete old runner service cgroup"
+rg -q 'runner has an active worker' "$installer" ||
+    fail "installer does not refuse to interrupt an active runner worker"
+rg -q 'systemctl start "\$SERVICE_NAME"' "$installer" ||
+    fail "installer does not start the replacement listener"
+rg -q 'run --startuptype service' "$installer" ||
+    fail "installer does not audit the exact service-mode listener"
+rg -q 'exactly one service-mode listener' "$installer" ||
+    fail "installer does not reject missing or orphaned runner listeners"
 rg -q 'bin/runsvc\.sh.*service_entrypoint|bin/runsvc\.sh" "\$service_entrypoint' "$installer" ||
     fail "installer does not provision GitHub's signal-forwarding service wrapper"
 rg -q 'apparmor_restrict_unprivileged_userns' "$installer" ||

@@ -213,8 +213,37 @@ install_runner() {
     REGISTRATION_TOKEN=""
 }
 
+stop_service_tree_for_replacement() {
+    local active_state attempt
+    active_state="$(systemctl show "$SERVICE_NAME" -p ActiveState --value 2>/dev/null || true)"
+    case "$active_state" in
+        active|activating|deactivating|reloading)
+            ;;
+        *)
+            return
+            ;;
+    esac
+
+    if pgrep -u "$RUNNER_USER" -f "^${RUNNER_HOME}/bin/Runner.Worker " >/dev/null; then
+        fail "runner has an active worker; wait for the job to finish before reinstalling"
+    fi
+
+    systemctl stop --no-block "$SERVICE_NAME"
+    systemctl kill --kill-whom=all --signal=SIGINT "$SERVICE_NAME" 2>/dev/null || true
+    for ((attempt = 0; attempt < 40; attempt++)); do
+        active_state="$(systemctl show "$SERVICE_NAME" -p ActiveState --value)"
+        if [[ "$active_state" == "inactive" || "$active_state" == "failed" ]]; then
+            systemctl reset-failed "$SERVICE_NAME" 2>/dev/null || true
+            return
+        fi
+        sleep 0.25
+    done
+    fail "runner service tree did not drain before replacement"
+}
+
 install_service() {
     local runner_uid service_entrypoint service_staging
+    stop_service_tree_for_replacement
     runner_uid="$(id -u "$RUNNER_USER")"
     service_entrypoint="${RUNNER_HOME}/runsvc.sh"
     [[ -x "${RUNNER_HOME}/bin/runsvc.sh" ]] ||
@@ -227,11 +256,12 @@ install_service() {
     rm -f "$service_staging"
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
-    systemctl restart "$SERVICE_NAME"
+    systemctl start "$SERVICE_NAME"
 }
 
 verify_setup() {
     local listener_path listener_pid listener_profile
+    local -a listener_pids
     require_cmd systemctl
     require_cmd runuser
     require_cmd aa-exec
@@ -264,8 +294,12 @@ verify_setup() {
         [[ "$(< /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == "1" ]] ||
             fail "host-wide AppArmor unprivileged user-namespace restriction is disabled"
     fi
-    listener_pid="$(pgrep -u "$RUNNER_USER" -f "^${listener_path} run$" | sed -n '1p')"
-    [[ -n "$listener_pid" ]] || fail "runner listener process is missing"
+    mapfile -t listener_pids < <(
+        pgrep -u "$RUNNER_USER" -f "^${listener_path} run --startuptype service$"
+    )
+    [[ "${#listener_pids[@]}" -eq 1 ]] ||
+        fail "runner must have exactly one service-mode listener; found ${#listener_pids[@]}"
+    listener_pid="${listener_pids[0]}"
     listener_profile="$(< "/proc/${listener_pid}/attr/current")"
     [[ "$listener_profile" == "${listener_path} (unconfined)" ]] ||
         fail "runner listener is outside its AppArmor profile: ${listener_profile}"
@@ -297,7 +331,7 @@ verify_setup() {
 }
 
 if [[ "$MODE" == "install" ]]; then
-    for command in apparmor_parser apt-get curl getent grep install loginctl runuser sed sha256sum systemctl tar useradd usermod; do
+    for command in apparmor_parser apt-get curl getent grep install loginctl pgrep runuser sed sha256sum sleep systemctl tar useradd usermod; do
         require_cmd "$command"
     done
     install_packages
