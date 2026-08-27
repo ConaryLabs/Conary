@@ -620,10 +620,22 @@ tie.
 Remi composes each activated immutable profile before serving it. Higher exact
 member precedence selects provenance only when two members carry the same
 native package identity and their payload and authoritative logical records are
-identical; disagreement is a typed publication conflict. Every distinct native
-version, release, and architecture remains available to ordinary native version
+identical; disagreement is a typed publication conflict. Debian distribution
+and component are authenticated source-pocket provenance, exposed as
+`DebianSourcePocketV1`, rather than source-independent package semantics. An
+exact artifact may therefore collapse across security and updates pockets while
+the selected higher-precedence record retains its typed pocket and member
+origin. Intrinsic Debian metadata, payload identity, providers, dependencies,
+conflicts, and replacements must still agree. Every distinct native version,
+release, and architecture remains available to ordinary native version
 selection. Catalog order and member ordinal are evidence locators, not
 selection authority.
+
+`crates/conary-core/src/repository/catalog/record/debian.rs` owns this typed
+placement projection and its fail-closed metadata validation. Distribution and
+component stay in the selected record's existing canonical metadata, so this
+boundary changes profile comparison semantics without adding a second persisted
+catalog field or schema.
 
 Explicit version constraints remain strict and scheme-aware. Cross-distro
 identity mapping helps find equivalent packages; it does not replace native

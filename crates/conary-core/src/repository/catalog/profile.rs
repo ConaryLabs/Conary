@@ -48,7 +48,7 @@ impl ProfileCatalogCandidateV2 {
                 package.canonicalize_for_scope(&scope)?;
                 if let Some(index) = package_indexes.get(&package.package_key_sha256).copied() {
                     let existing: &CatalogPackageRecordV1 = &packages[index];
-                    if existing.same_profile_record(&package) {
+                    if existing.same_profile_record(&package)? {
                         return Ok(());
                     }
                     return Err(Error::ConflictError(format!(

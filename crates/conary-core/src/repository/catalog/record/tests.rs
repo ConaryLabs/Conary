@@ -76,6 +76,66 @@ fn package(snapshot: &str) -> CatalogPackageRecordV1 {
     }
 }
 
+fn debian_group(kind: &str, capability: &str) -> CatalogRequirementGroupV1 {
+    let mut group = group(capability);
+    group.kind = kind.to_string();
+    group
+}
+
+fn debian_package(distribution: &str, section: &str) -> CatalogPackageRecordV1 {
+    let snapshot = digest('d');
+    let mut record = package(&snapshot);
+    record.origin = CatalogPackageOriginV1::Profile {
+        member_ordinal: 0,
+        source_identity: "ubuntu".to_string(),
+        repository_identity: format!("ubuntu-{distribution}-main-amd64"),
+        source_snapshot_sha256: snapshot,
+    };
+    record.source_profile = "ubuntu-26.04".to_string();
+    record.name = "linux-headers-virtual-7.0".to_string();
+    record.version = "7.0.0-30.30".to_string();
+    record.package_release.clear();
+    record.architecture = Some("amd64".to_string());
+    record.debian_multi_arch = Some(DebianMultiArch::No);
+    record.description = Some("Virtual Linux kernel headers".to_string());
+    record.checksum =
+        "7c1a655f3d6cfb1d0f03d6ad484c32a9a43cdfa8dc175e83314f10c08bc02e2d".to_string();
+    record.size = 1646;
+    record.download_url = "https://archive.example.test/pool/main/l/linux-meta/linux-headers-virtual-7.0_7.0.0-30.30_amd64.deb".to_string();
+    record.metadata = Some(
+        serde_json::json!({
+            "format": "deb",
+            "distribution": distribution,
+            "component": "main",
+            "section": section,
+            "installed_size": "8"
+        })
+        .to_string(),
+    );
+    record.version_scheme = VersionScheme::Debian;
+    record.provides = vec![CatalogProvideRecordV1 {
+        capability: "linux-headers-virtual-7.0".to_string(),
+        version: Some("7.0.0-30.30".to_string()),
+        version_relation: Some(ProvideVersionRelation::Equal),
+        kind: "package".to_string(),
+        raw: Some("linux-headers-virtual-7.0 (= 7.0.0-30.30)".to_string()),
+        version_scheme: VersionScheme::Debian,
+        architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+        provenance: CapabilityProvenance::ExactIdentity,
+    }];
+    record.requirement_groups = vec![
+        debian_group("depends", "linux-headers-7.0.0-30-generic"),
+        debian_group("conflict", "linux-headers-virtual-legacy"),
+        debian_group("replace", "linux-headers-virtual-old"),
+    ];
+    record
+        .canonicalize_for_scope(&CatalogScopeV1::Profile {
+            profile: "ubuntu-26.04".to_string(),
+        })
+        .unwrap();
+    record
+}
+
 fn evidence(snapshot: &str) -> Vec<CatalogSourceEvidenceV1> {
     vec![CatalogSourceEvidenceV1::SourceSnapshot {
         member_ordinal: 0,
@@ -102,6 +162,123 @@ fn profile_content_canonicalizes_nested_records_and_json() {
     assert_eq!(
         package.requirement_groups[0].atoms[0].capability,
         "a-dependency"
+    );
+}
+
+#[test]
+fn debian_source_pocket_is_typed_provenance_not_package_semantics() {
+    let security = debian_package("resolute-security", "kernel");
+    let updates = debian_package("resolute-updates", "kernel");
+    let mut universe = debian_package("resolute-updates", "kernel");
+    let mut universe_metadata =
+        serde_json::from_str::<serde_json::Value>(universe.metadata.as_deref().unwrap()).unwrap();
+    universe_metadata["component"] = serde_json::Value::String("universe".to_string());
+    universe.metadata = Some(universe_metadata.to_string());
+
+    assert_eq!(
+        security.debian_source_pocket().unwrap(),
+        Some(DebianSourcePocketV1 {
+            distribution: "resolute-security".to_string(),
+            component: "main".to_string(),
+        })
+    );
+    assert_eq!(
+        updates.debian_source_pocket().unwrap(),
+        Some(DebianSourcePocketV1 {
+            distribution: "resolute-updates".to_string(),
+            component: "main".to_string(),
+        })
+    );
+    assert_eq!(
+        universe.debian_source_pocket().unwrap(),
+        Some(DebianSourcePocketV1 {
+            distribution: "resolute-updates".to_string(),
+            component: "universe".to_string(),
+        })
+    );
+    assert_ne!(security.metadata, updates.metadata);
+    assert!(security.same_profile_record(&updates).unwrap());
+    assert!(updates.same_profile_record(&universe).unwrap());
+}
+
+#[test]
+fn debian_pocket_deduplication_rejects_every_semantic_difference() {
+    let expected = debian_package("resolute-security", "kernel");
+    let mut differences = Vec::new();
+
+    let mut payload_digest = debian_package("resolute-updates", "kernel");
+    payload_digest.checksum = digest('e');
+    differences.push(("payload digest", payload_digest));
+
+    let mut payload_size = debian_package("resolute-updates", "kernel");
+    payload_size.size += 1;
+    differences.push(("payload size", payload_size));
+
+    let mut provider = debian_package("resolute-updates", "kernel");
+    provider.provides[0].capability = "linux-headers-virtual-7.1".to_string();
+    differences.push(("provider", provider));
+
+    for (kind, label) in [
+        ("depends", "dependency"),
+        ("conflict", "conflict"),
+        ("replace", "replacement"),
+    ] {
+        let mut relation = debian_package("resolute-updates", "kernel");
+        let group = relation
+            .requirement_groups
+            .iter_mut()
+            .find(|group| group.kind == kind)
+            .unwrap();
+        group.atoms[0].capability.push_str("-different");
+        differences.push((label, relation));
+    }
+
+    differences.push((
+        "intrinsic metadata",
+        debian_package("resolute-updates", "admin"),
+    ));
+
+    for (label, actual) in differences {
+        assert!(
+            !expected.same_profile_record(&actual).unwrap(),
+            "{label} disagreement must fail closed"
+        );
+    }
+}
+
+#[test]
+fn malformed_debian_source_pocket_fails_closed() {
+    let mut missing_component = debian_package("resolute-security", "kernel");
+    missing_component.metadata =
+        Some(r#"{"distribution":"resolute-security","format":"deb"}"#.to_string());
+    assert!(
+        missing_component
+            .debian_source_pocket()
+            .unwrap_err()
+            .to_string()
+            .contains("source-pocket field 'component'")
+    );
+
+    let mut invalid_distribution = debian_package("resolute-security", "kernel");
+    invalid_distribution.metadata =
+        Some(r#"{"component":"main","distribution":"../security","format":"deb"}"#.to_string());
+    assert!(
+        invalid_distribution
+            .debian_source_pocket()
+            .unwrap_err()
+            .to_string()
+            .contains("Debian distribution provenance")
+    );
+
+    let mut wrong_scheme = package(&digest('d'));
+    wrong_scheme.metadata =
+        Some(r#"{"component":"main","distribution":"resolute","format":"deb"}"#.to_string());
+    assert!(
+        wrong_scheme
+            .debian_source_pocket()
+            .unwrap_err()
+            .to_string()
+            .contains("under the arch version scheme")
     );
 }
 

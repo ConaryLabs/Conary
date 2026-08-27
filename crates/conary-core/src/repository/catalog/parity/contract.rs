@@ -264,7 +264,7 @@ impl NativeParityPackageV1 {
         feature = "native-rpm-oracle",
         feature = "native-debian-oracle"
     ))]
-    pub(super) fn has_same_profile_facts(&self, other: &Self) -> bool {
+    pub(super) fn has_same_profile_facts(&self, other: &Self) -> Result<bool> {
         self.as_catalog_record()
             .same_profile_record(&other.as_catalog_record())
     }

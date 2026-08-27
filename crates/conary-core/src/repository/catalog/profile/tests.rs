@@ -5,11 +5,16 @@ use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
     CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
     CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProfileMemberScratchV1,
-    CatalogProvideRecordV1, CatalogScratchAdmission, CatalogScratchCapacityError,
-    SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1, SourceMetadataObjectRoleV1,
-    SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
-    write_catalog_candidate,
+    CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
+    CatalogScratchAdmission, CatalogScratchCapacityError, SOURCE_SNAPSHOT_SCHEMA_V1,
+    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
+    SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
 };
+use crate::repository::dependency_model::{
+    DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
+    RepositoryRequirementClause, RepositoryRequirementExpression,
+};
+use crate::repository::dependency_source::CapabilityProvenance;
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
@@ -17,6 +22,8 @@ use crate::repository::{
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+mod debian_pockets;
 
 struct ProfileAdmission {
     requirement: Mutex<Option<CatalogProfileCandidateScratchV1>>,
@@ -206,6 +213,158 @@ fn source_manifest(
             source_path: "repodata/primary.xml.zst".to_string(),
             sha256: digest(evidence_digest),
             size: 1024,
+        }],
+        catalog: binding.artifact.clone(),
+        logical_digest_sha256: binding.logical_digest_sha256.clone(),
+        counts: binding.counts,
+    }
+}
+
+fn debian_requirement(kind: &str, capability: &str) -> CatalogRequirementGroupV1 {
+    let clause = RepositoryRequirementClause::name_only(capability.to_string());
+    CatalogRequirementGroupV1 {
+        kind: kind.to_string(),
+        behavior: "hard".to_string(),
+        description: None,
+        native_text: Some(capability.to_string()),
+        expression_json: serde_json::to_string(&RepositoryRequirementExpression::Atom(clause))
+            .unwrap(),
+        atoms: vec![CatalogRequirementAtomV1 {
+            capability: capability.to_string(),
+            version_constraint: None,
+            kind: "package".to_string(),
+            dependency_type: "runtime".to_string(),
+            raw: Some(capability.to_string()),
+        }],
+    }
+}
+
+fn debian_source_content(
+    repository_identity: &str,
+    distribution: &str,
+    evidence_digest: char,
+    mutate: impl FnOnce(&mut CatalogPackageRecordV1),
+) -> CatalogContentV1 {
+    let mut package = CatalogPackageRecordV1 {
+        package_key_sha256: String::new(),
+        origin: CatalogPackageOriginV1::Source {
+            source_identity: "ubuntu".to_string(),
+            repository_identity: repository_identity.to_string(),
+        },
+        source_profile: "ubuntu-26.04".to_string(),
+        name: "linux-headers-virtual-7.0".to_string(),
+        version: "7.0.0-30.30".to_string(),
+        package_release: String::new(),
+        architecture: Some("amd64".to_string()),
+        debian_multi_arch: Some(DebianMultiArch::No),
+        description: Some("Virtual Linux kernel headers".to_string()),
+        checksum: "7c1a655f3d6cfb1d0f03d6ad484c32a9a43cdfa8dc175e83314f10c08bc02e2d"
+            .to_string(),
+        size: 1646,
+        download_url: "https://archive.example.test/pool/main/l/linux-meta/linux-headers-virtual-7.0_7.0.0-30.30_amd64.deb".to_string(),
+        metadata: Some(
+            serde_json::json!({
+                "format": "deb",
+                "distribution": distribution,
+                "component": "main",
+                "section": "kernel",
+                "installed_size": "8"
+            })
+            .to_string(),
+        ),
+        is_security_update: false,
+        severity: None,
+        cve_ids: None,
+        advisory_id: None,
+        advisory_url: None,
+        version_scheme: VersionScheme::Debian,
+        provides: vec![CatalogProvideRecordV1 {
+            capability: "linux-headers-virtual-7.0".to_string(),
+            version: Some("7.0.0-30.30".to_string()),
+            version_relation: Some(ProvideVersionRelation::Equal),
+            kind: "package".to_string(),
+            raw: Some("linux-headers-virtual-7.0 (= 7.0.0-30.30)".to_string()),
+            version_scheme: VersionScheme::Debian,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::ExactIdentity,
+        }],
+        requirement_groups: vec![
+            debian_requirement("depends", "linux-headers-7.0.0-30-generic"),
+            debian_requirement("conflict", "linux-headers-virtual-legacy"),
+            debian_requirement("replace", "linux-headers-virtual-old"),
+        ],
+    };
+    mutate(&mut package);
+    CatalogContentV1::new(
+        CatalogScopeV1::Source {
+            source_profile: "ubuntu-26.04".to_string(),
+            source_identity: "ubuntu".to_string(),
+            repository_identity: repository_identity.to_string(),
+        },
+        vec![CatalogSourceEvidenceV1::AuthenticatedObject {
+            role: SourceMetadataObjectRoleV1::DebianPackages,
+            source_path: format!("dists/{distribution}/main/binary-amd64/Packages.zst"),
+            sha256: digest(evidence_digest),
+            size: 4096,
+        }],
+        vec![package],
+    )
+    .unwrap()
+}
+
+fn debian_source_manifest(
+    repository_identity: &str,
+    distribution: &str,
+    evidence_digest: char,
+    binding: &CatalogBindingV1,
+) -> SourceSnapshotV1 {
+    let parser_config = RepositoryParserConfig::Deb {
+        distribution: distribution.to_string(),
+        component: "main".to_string(),
+        architecture: "amd64".to_string(),
+    };
+    let trust_policy = RepositoryTrustPolicy::Debian {
+        release_keys: vec![
+            OpenPgpTrustRoot::new(
+                "https://example.test/ubuntu.gpg".to_string(),
+                "A".repeat(40),
+            )
+            .unwrap(),
+        ],
+    };
+    SourceSnapshotV1 {
+        schema_version: SOURCE_SNAPSHOT_SCHEMA_V1,
+        source_profile: "ubuntu-26.04".to_string(),
+        source_identity: "ubuntu".to_string(),
+        repository_identity: repository_identity.to_string(),
+        stream: SourceStreamV1 {
+            kind: SourceStreamKindV1::Release,
+            identity: "26.04".to_string(),
+        },
+        stream_binding_sha256: digest('9'),
+        parser_projection_version: 1,
+        provenance: SourceProvenanceV1 {
+            ecosystem: SourceEcosystemV1::Deb,
+            metadata_url: "https://metadata.example.test/ubuntu".to_string(),
+            content_url: Some("https://archive.example.test/ubuntu".to_string()),
+            parser_config_sha256: crate::hash::sha256(
+                &crate::json::canonical_json(&parser_config).unwrap(),
+            ),
+            parser_config,
+            trust_policy_sha256: crate::hash::sha256(
+                &crate::json::canonical_json(&trust_policy).unwrap(),
+            ),
+            trust_policy,
+        },
+        authenticated_root: CatalogArtifactV1 {
+            sha256: digest('8'),
+            size: 1024,
+        },
+        authenticated_objects: vec![SourceMetadataObjectV1 {
+            role: SourceMetadataObjectRoleV1::DebianPackages,
+            source_path: format!("dists/{distribution}/main/binary-amd64/Packages.zst"),
+            sha256: digest(evidence_digest),
+            size: 4096,
         }],
         catalog: binding.artifact.clone(),
         logical_digest_sha256: binding.logical_digest_sha256.clone(),

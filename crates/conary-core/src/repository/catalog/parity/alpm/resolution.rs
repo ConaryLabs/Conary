@@ -428,9 +428,8 @@ fn locate_exact_root<'a>(
         ))
     })?;
     let projected = project_transaction_package(profile, inputs, package)?;
-    if projected.package_key_sha256 != root.package_key_sha256
-        || !projected.has_same_profile_facts(root)
-    {
+    let same_profile_facts = projected.has_same_profile_facts(root)?;
+    if projected.package_key_sha256 != root.package_key_sha256 || !same_profile_facts {
         return Err(Error::ConflictError(format!(
             "ALPM package-oracle root '{}' does not match its exact native package",
             root.name

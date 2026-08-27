@@ -218,7 +218,7 @@ impl PackageResolutionIndex {
                         package.package_key_sha256
                     ))
                 })?;
-            if !expected.has_same_profile_facts(&package) {
+            if !expected.has_same_profile_facts(&package)? {
                 return Err(Error::ConflictError(format!(
                     "libsolv native package '{}' disagrees with the bound RPM package oracle",
                     package.name

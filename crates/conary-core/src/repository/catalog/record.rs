@@ -2,8 +2,10 @@
 
 //! Canonical package records stored in immutable repository catalogs.
 
+mod debian;
 mod digest;
 
+pub use debian::DebianSourcePocketV1;
 pub(in crate::repository) use digest::CatalogLogicalDigestV1;
 
 use std::collections::BTreeSet;
@@ -289,6 +291,7 @@ impl CatalogPackageRecordV1 {
         if let Some(metadata) = &self.metadata {
             require_canonical_json_text(metadata, "catalog package metadata")?;
         }
+        self.debian_source_pocket()?;
         crate::repository::versioning::validate_repo_version(self.version_scheme, &self.version)
             .map_err(|error| {
                 Error::ParseError(format!(
@@ -413,13 +416,16 @@ impl CatalogPackageRecordV1 {
         })
     }
 
-    /// Compare source-independent package truth inside one composed profile.
+    /// Compare source-independent base-package truth inside one composed profile.
     ///
-    /// Origin, package key, and download URL are projections of the selected
-    /// member. Every package semantic and the authenticated payload identity
-    /// must otherwise agree exactly before multiple origins may collapse.
-    pub(in crate::repository) fn same_profile_record(&self, other: &Self) -> bool {
-        self.source_profile == other.source_profile
+    /// Origin, package key, download URL, and typed Debian source-pocket
+    /// placement are projections of the selected member. Every intrinsic
+    /// package semantic and the authenticated payload identity must otherwise
+    /// agree exactly before multiple origins may collapse.
+    pub(in crate::repository) fn same_profile_base(&self, other: &Self) -> Result<bool> {
+        let (_, self_metadata) = self.profile_semantic_metadata()?;
+        let (_, other_metadata) = other.profile_semantic_metadata()?;
+        Ok(self.source_profile == other.source_profile
             && self.name == other.name
             && self.version == other.version
             && self.package_release == other.package_release
@@ -428,15 +434,19 @@ impl CatalogPackageRecordV1 {
             && self.description == other.description
             && self.checksum == other.checksum
             && self.size == other.size
-            && self.metadata == other.metadata
+            && self_metadata == other_metadata
             && self.is_security_update == other.is_security_update
             && self.severity == other.severity
             && self.cve_ids == other.cve_ids
             && self.advisory_id == other.advisory_id
             && self.advisory_url == other.advisory_url
-            && self.version_scheme == other.version_scheme
+            && self.version_scheme == other.version_scheme)
+    }
+
+    pub(in crate::repository) fn same_profile_record(&self, other: &Self) -> Result<bool> {
+        Ok(self.same_profile_base(other)?
             && self.provides == other.provides
-            && self.requirement_groups == other.requirement_groups
+            && self.requirement_groups == other.requirement_groups)
     }
 }
 
