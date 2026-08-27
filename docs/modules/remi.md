@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-27
-revision: 69
+revision: 70
 summary: Document exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -299,7 +299,19 @@ nonempty candidate for every public profile, reopens each strict immutable
 manifest and two-file bundle, validates its typed member contract, and
 re-proves its fenced run members against the current repository bindings. An
 active-only profile, superseded run, candidate-tier profile, changed binding,
-missing bundle, or empty catalog cannot satisfy that predicate.
+missing bundle, or empty catalog cannot satisfy that predicate. The protected
+private-candidate deployment workflow adds causal evidence that the static
+predicate intentionally does not own: it records the pre-transition
+inspection, starts the exact merged binary, invokes the loopback-only forced
+refresh endpoint, validates the typed completion response, and requires the
+final Fedora, Ubuntu, and Arch fencing epochs to be strictly newer than their
+recorded baselines and each terminal run to have started after the recorded
+binary transition. The final evidence binds the exact merged commit, built
+binary SHA-256, completion mode, and transition timestamp; the before-and-after
+sanitized inspections are retained. A fresh Solus candidate cannot replace any
+public-profile advance, a typed Solus refresh failure cannot block the public
+completion set, and a preexisting valid public candidate cannot make a new
+binary deployment green.
 `--require-repopulated` remains the post-promotion contract: it reads package
 counts from each active immutable profile manifest, counts only conversions
 pinned to that active revision, and requires the fresh signed universe to name

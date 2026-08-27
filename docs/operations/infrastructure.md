@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-27
-revision: 40
+revision: 41
 summary: Non-secret infrastructure, agent operations, release, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
@@ -101,14 +101,17 @@ workflow.
   either `private-candidates` or `active-repopulation` completion. It creates no
   tag or release and is not a path for deploying an unmerged pull-request head.
 - Candidate deployment retains exactly one final typed inspection instead of
-  emitting every incomplete poll. Each canonical public profile includes its
-  current candidate plus the exact latest fenced refresh run, typed state and
-  failure stage/category, member progress, raw-evidence SHA-256, and a bounded
-  redacted diagnostic copy. The protected job uploads that public-sanitized
-  JSON and writes a concise typed summary even when completion fails. It does
-  not expose service logs, generic shell access, credentials, bearer tokens,
-  private-key paths, or host-local paths, and diagnostics do not satisfy the
-  candidate publication predicate.
+  emitting every incomplete poll. Private-candidate mode also retains the
+  pre-transition inspection used as its fencing baseline. Each canonical
+  public profile includes its current candidate plus the exact latest fenced
+  refresh run, typed state and failure stage/category, member progress,
+  raw-evidence SHA-256, and a bounded redacted diagnostic copy. The protected
+  job binds the final inspection to the exact merged commit, built binary
+  SHA-256, completion mode, and post-transition timestamp, uploads those
+  public-sanitized JSON artifacts, and writes a concise typed summary even when
+  completion fails. It does not expose service logs, generic shell access,
+  credentials, bearer tokens, private-key paths, or host-local paths, and
+  diagnostics do not satisfy the candidate publication predicate.
 - The candidate Remi binary owns config/schema preparation. It type-checks the
   current config and source manifest, installs exact parser authority,
   snapshots a current SQLite epoch or moves a retired epoch plus WAL/SHM into
@@ -134,20 +137,29 @@ workflow.
   symlinks, unexpected entries, and route-slug aliases fail before service
   activation. This directory is deliberately outside release rollback and
   deletion paths.
-- After liveness succeeds, the deployment job polls the predicate selected by
-  its explicit completion mode. `private-candidates` calls
-  `conary-remi-deploy inspect-remi --require-private-candidates`; success means
-  every configured public profile has an exact current, durable, nonempty
-  private candidate whose immutable bundle and fenced repository bindings were
-  reopened and revalidated. It proves no active pointer and accepts structured
+- After liveness succeeds, the deployment job proves the predicate selected by
+  its explicit completion mode. `private-candidates` records every public
+  profile's pre-transition fencing epoch, invokes the loopback-only forced
+  refresh endpoint after the new binary starts, requires a typed successful
+  refresh response, then calls `conary-remi-deploy inspect-remi
+  --require-private-candidates` once. Success means every configured public
+  profile has an exact current, durable, nonempty private candidate whose
+  immutable bundle and fenced repository bindings were reopened and
+  revalidated, and every Fedora, Ubuntu, and Arch fencing epoch is strictly
+  newer than its recorded baseline. Each accepted terminal candidate run must
+  also have started after the recorded binary transition. Candidate-tier Solus
+  is incidental to the all-repository refresh: its success cannot satisfy and
+  its typed failure cannot block that public-profile completion contract.
+  Private-candidate completion proves no active pointer and accepts structured
   public readiness as either ready or intentionally unavailable.
-  `active-repopulation` calls `inspect-remi --require-repopulated` and requires
-  all configured public profiles to have populated active immutable catalogs,
-  a complete signing role set, a fresh signed universe naming the exact same
-  profile revisions, and at least one validated converted artifact pinned to
-  every current revision. Mutable `repository_packages` rows are not evidence
-  for either mode; dispatch or a green liveness probe alone is not deployment
-  proof.
+  `active-repopulation` polls
+  `inspect-remi --require-repopulated` and requires all configured public
+  profiles to have populated active immutable catalogs, a complete signing role
+  set, a fresh signed universe naming the exact same profile revisions, and at
+  least one validated converted artifact pinned to every current revision.
+  Mutable `repository_packages` rows are not evidence for either mode;
+  dispatch, a preexisting candidate, or a green liveness probe alone is not
+  deployment proof.
 - Exact production native-oracle inputs use the root-owned helper operation
   `export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256>
   <arch-sha256>`. The helper fixes canonical public-profile order, invokes the

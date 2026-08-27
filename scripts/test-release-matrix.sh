@@ -1104,6 +1104,71 @@ test_check_release_matrix_rejects_wrong_candidate_inspection_predicate() {
         "candidate deploy mode-specific typed inspection predicate"
 }
 
+test_check_release_matrix_rejects_unforced_post_deploy_candidates() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        "'http://127.0.0.1:8081/v1/admin/refresh?force=true'" \
+        "'http://127.0.0.1:8081/v1/admin/refresh?force=false'"
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "private candidate deploy forces a bounded post-transition public refresh"
+}
+
+test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '                      and all(.failures[]; .source_profile == "solus"))' \
+        '                      and all(.failures[]; .source_profile != null))'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "private candidate deploy forces a bounded post-transition public refresh"
+}
+
+test_check_release_matrix_rejects_nonadvancing_candidate_fence() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '                      > fencing_epoch($before; $profile)' \
+        '                      >= fencing_epoch($before; $profile)'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "private candidate deploy requires every public run to start after transition and advance its fence"
+}
+
+test_check_release_matrix_rejects_pretransition_candidate_run() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '                          > $final.deployment.transition_completed_at))' \
+        '                          >= 0))'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "private candidate deploy requires every public run to start after transition and advance its fence"
+}
+
+test_check_release_matrix_rejects_unbound_candidate_binary() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '            and .deployment.binary_sha256 == $expected_binary' \
+        '            and (.deployment.binary_sha256 | type == "string")'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy binds final evidence to exact commit and binary"
+}
+
 test_check_release_matrix_rejects_private_mode_public_readiness_claim() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1122,8 +1187,8 @@ test_check_release_matrix_rejects_discarded_candidate_failure_inspection() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '            "$COMPLETION_MODE" > remi-deployment-inspection.json <<'\''REMOTE_EOF'\''' \
-        '            "$COMPLETION_MODE" > /dev/null <<'\''REMOTE_EOF'\'''
+        '            > remi-deployment-inspection.json <<'\''REMOTE_EOF'\''' \
+        '            > /dev/null <<'\''REMOTE_EOF'\'''
 
     assert_check_release_matrix_fails \
         "$repo" \
@@ -1140,7 +1205,7 @@ test_check_release_matrix_rejects_missing_candidate_failure_artifact() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "candidate deploy retains sanitized failure inspection artifact"
+        "candidate deploy retains before-and-after sanitized inspection artifacts"
 }
 
 test_check_release_matrix_rejects_unverified_remi_suite_bundle() {
@@ -1608,6 +1673,11 @@ main() {
         test_check_release_matrix_rejects_rehearsal_artifact_promotion
         test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
+        test_check_release_matrix_rejects_unforced_post_deploy_candidates
+        test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority
+        test_check_release_matrix_rejects_nonadvancing_candidate_fence
+        test_check_release_matrix_rejects_pretransition_candidate_run
+        test_check_release_matrix_rejects_unbound_candidate_binary
         test_check_release_matrix_rejects_private_mode_public_readiness_claim
         test_check_release_matrix_rejects_discarded_candidate_failure_inspection
         test_check_release_matrix_rejects_missing_candidate_failure_artifact
