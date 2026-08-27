@@ -108,6 +108,8 @@ rg -q 'install_apparmor_profile' "$installer" ||
     fail "installer does not install the runner AppArmor profile"
 rg -q 'systemctl restart "\$SERVICE_NAME"' "$installer" ||
     fail "installer does not restart the listener into its AppArmor profile"
+rg -q 'bin/runsvc\.sh.*service_entrypoint|bin/runsvc\.sh" "\$service_entrypoint' "$installer" ||
+    fail "installer does not provision GitHub's signal-forwarding service wrapper"
 rg -q 'apparmor_restrict_unprivileged_userns' "$installer" ||
     fail "installer does not inspect the host-wide user-namespace restriction"
 rg -q 'host-wide AppArmor unprivileged user-namespace restriction is disabled' "$installer" ||
@@ -126,5 +128,11 @@ fi
 if rg -q '^(CPUQuota|MemoryMax)=' "$service"; then
     fail "runner service template must not impose CPU or memory ceilings"
 fi
+rg -q '^ExecStart=/data/conary-ci/actions-runner/runsvc\.sh$' "$service" ||
+    fail "runner service does not launch GitHub's service wrapper"
+rg -q '^KillMode=process$' "$service" ||
+    fail "runner service must signal only GitHub's forwarding service wrapper"
+rg -q '^KillSignal=SIGTERM$' "$service" ||
+    fail "runner service does not use the service wrapper's forwarded stop signal"
 
 echo "Remi CI benchmark contracts passed."
