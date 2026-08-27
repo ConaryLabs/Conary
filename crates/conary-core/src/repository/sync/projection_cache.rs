@@ -3,7 +3,7 @@
 //! Strict durable cache for normalized authenticated native projections.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -102,6 +102,73 @@ impl ProjectionCache {
                 Ok(None)
             }
         }
+    }
+
+    /// Copy one independently verified cache hit into a private source
+    /// candidate without replaying its normalized rows through SQLite.
+    ///
+    /// The exact artifact SHA-256 is checked again after the copy. This proves
+    /// that the candidate is byte-identical to the reopened cache artifact
+    /// while avoiding index construction, logical re-digestion, and `VACUUM`.
+    pub(super) fn materialize_verified(
+        &self,
+        reader: &CatalogReader,
+        candidate_path: &Path,
+    ) -> Result<()> {
+        let source = reader.path();
+        let entry = source.parent().ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "native projection cache artifact {} has no cache entry parent",
+                source.display()
+            ))
+        })?;
+        let canonical_root = self.root.canonicalize()?;
+        require_direct_child(&canonical_root, entry)?;
+        require_real_directory(entry, "native projection cache entry")?;
+
+        let candidate_parent = candidate_path.parent().ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "native projection candidate {} has no parent",
+                candidate_path.display()
+            ))
+        })?;
+        require_real_directory(candidate_parent, "native projection candidate parent")?;
+
+        let mut created_candidate = false;
+        let result = (|| {
+            let mut input = File::open(source)?;
+            let mut output = private_new_file(candidate_path)?;
+            created_candidate = true;
+            let copied = io::copy(&mut input, &mut output)?;
+            if copied != reader.binding().artifact.size {
+                return Err(Error::IoError(format!(
+                    "native projection cache materialization copied {copied} bytes; expected {}",
+                    reader.binding().artifact.size
+                )));
+            }
+            output.sync_all()?;
+            drop(output);
+            crate::hash::verify_file_sha256(candidate_path, &reader.binding().artifact.sha256)
+                .map_err(|error| Error::ChecksumMismatch {
+                    expected: error.expected,
+                    actual: error.actual,
+                })?;
+            File::open(candidate_parent)?.sync_all()?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            if created_candidate
+                && let Err(cleanup_error) = fs::remove_file(candidate_path)
+                    .and_then(|()| File::open(candidate_parent)?.sync_all())
+            {
+                return Err(Error::IoError(format!(
+                    "native projection materialization failed and candidate cleanup also failed \
+                     ({cleanup_error}): {error}"
+                )));
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub(super) fn publish(
@@ -494,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_projection_key_replays_verified_catalog_without_native_input() {
+    fn exact_projection_key_reopens_verified_catalog_without_native_input() {
         let fixture = fixture();
         fixture
             .cache
@@ -513,6 +580,53 @@ mod tests {
             .expect("exact cache key should hit");
         assert_eq!(reader.binding(), &fixture.binding);
         assert!(reader.packages().unwrap().is_empty());
+    }
+
+    #[test]
+    fn exact_materialization_preserves_existing_paths_and_removes_failed_copies() {
+        let fixture = fixture();
+        fixture
+            .cache
+            .publish(
+                &fixture.snapshot,
+                &fixture.objects,
+                &fixture.binding,
+                &fixture.candidate,
+            )
+            .unwrap();
+        let reader = fixture
+            .cache
+            .lookup(&fixture.snapshot, &fixture.objects)
+            .unwrap()
+            .unwrap();
+
+        let existing = fixture._root.path().join("existing.sqlite");
+        fs::write(&existing, b"belongs to another operation").unwrap();
+        assert!(
+            fixture
+                .cache
+                .materialize_verified(&reader, &existing)
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&existing).unwrap(),
+            b"belongs to another operation"
+        );
+
+        OpenOptions::new()
+            .write(true)
+            .open(reader.path())
+            .unwrap()
+            .write_all(b"x")
+            .unwrap();
+        let failed = fixture._root.path().join("failed.sqlite");
+        assert!(
+            fixture
+                .cache
+                .materialize_verified(&reader, &failed)
+                .is_err()
+        );
+        assert!(!failed.exists());
     }
 
     #[test]
