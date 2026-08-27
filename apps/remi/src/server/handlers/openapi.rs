@@ -301,7 +301,7 @@ pub async fn openapi_spec() -> Response {
                 "post": {
                     "operationId": "refreshRepos",
                     "summary": "Refresh upstream repository state",
-                    "description": "Synchronously refreshes every configured upstream and returns typed per-source outcomes. Successful sources commit independently; one failed source does not discard other results. A complete refresh returns 200, a mixed result returns 207, and an all-failed refresh returns 502.",
+                    "description": "Synchronously refreshes every configured upstream, or one exact native profile when profile is supplied, and returns typed per-source outcomes. Successful sources commit independently; one failed source does not discard other results. A complete selected set returns 200, a mixed result returns 207, and an all-failed selected set returns 502.",
                     "tags": ["repos"],
                     "security": [{ "bearerAuth": [] }],
                     "parameters": [
@@ -321,11 +321,11 @@ pub async fn openapi_spec() -> Response {
                         }
                     ],
                     "responses": {
-                        "200": { "description": "Every configured source completed or was current" },
-                        "207": { "description": "Some sources completed and some failed; the body contains both outcome sets" },
+                        "200": { "description": "Every selected source completed or was current" },
+                        "207": { "description": "Some selected sources completed and some failed; the body contains both outcome sets" },
                         "401": { "description": "Invalid or missing token" },
                         "403": { "description": "Insufficient scope" },
-                        "502": { "description": "Every configured source failed; the body contains typed per-source failures" }
+                        "502": { "description": "Every selected source failed; the body contains typed per-source failures" }
                     }
                 }
             },
