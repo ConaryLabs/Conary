@@ -5,6 +5,7 @@
 //! Parses Debian-style Packages.gz files which use RFC 822-like format
 //! (similar to email headers with key: value pairs).
 
+mod release;
 mod stanza;
 
 use super::common::{self, MAX_PACKAGE_SIZE};
@@ -13,7 +14,6 @@ use super::{
     ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
-use crate::repository::catalog::{CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1};
 use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
     DebianMultiArch, RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
@@ -23,12 +23,9 @@ use crate::repository::package_relation::parse_native_relation;
 use crate::repository::trust::TrustRole;
 use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
 use crate::repository::versioning::VersionScheme;
+use release::{PackagesIndexAuthority, authenticated_release_snapshot, parse_release_sha256_entry};
 use stanza::DebianPackageEntry;
 use tracing::{debug, info};
-
-fn authenticated_release_snapshot(bytes: &[u8]) -> AuthenticatedSnapshotIdentity {
-    AuthenticatedSnapshotIdentity::for_bytes(bytes)
-}
 
 /// Debian/Ubuntu repository parser
 pub struct DebianParser {
@@ -73,23 +70,13 @@ impl DebianParser {
         AuthenticatedSnapshotIdentity,
         AuthenticatedMetadataObject,
     )> {
-        let release_path = format!(
-            "{}/binary-{}/Packages.gz",
-            self.component, self.architecture
-        );
+        let authority =
+            PackagesIndexAuthority::new(&self.distribution, &self.component, &self.architecture)?;
         let release = self.download_authenticated_release(repo_url).await?;
         let snapshot = authenticated_release_snapshot(&release);
-        let authenticated = parse_release_sha256_entry(&release, &release_path)?;
-        sink.reserve_authenticated_metadata(authenticated_packages_scratch(
-            &release_path,
-            &authenticated,
-        )?)?;
-        let packages_url = format!(
-            "{}/dists/{}/{}",
-            repo_url.trim_end_matches('/'),
-            self.distribution,
-            release_path
-        );
+        let authenticated = parse_release_sha256_entry(&release, authority.release_path())?;
+        sink.reserve_authenticated_metadata(authority.scratch(&authenticated)?)?;
+        let packages_url = common::join_repo_url(repo_url, authority.source_path());
 
         debug!("Downloading Debian Packages file from: {}", packages_url);
 
@@ -100,21 +87,25 @@ impl DebianParser {
             .await?;
         let packages_object = AuthenticatedMetadataObject {
             role: AuthenticatedMetadataObjectRole::DebianPackages,
-            source_path: release_path.clone(),
+            source_path: authority.source_path().to_string(),
             sha256: download.sha256,
             size: download.size,
         };
         if packages_object.size != authenticated.size {
             return Err(Error::GpgVerificationFailed(format!(
                 "Debian Release authenticates {} as {} bytes but the repository served {} bytes",
-                release_path, authenticated.size, packages_object.size
+                authority.release_path(),
+                authenticated.size,
+                packages_object.size
             )));
         }
         if packages_object.sha256 != authenticated.sha256 {
             return Err(Error::GpgVerificationFailed(format!(
                 "Debian Packages identity mismatch for {}: Release SHA256 is {}, downloaded \
                  SHA256 is {}",
-                release_path, authenticated.sha256, packages_object.sha256
+                authority.release_path(),
+                authenticated.sha256,
+                packages_object.sha256
             )));
         }
         Ok((packages_path, snapshot, packages_object))
@@ -386,85 +377,6 @@ impl DebianParser {
             provides: structured_provides,
         })
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ReleaseSha256Entry {
-    sha256: String,
-    size: u64,
-}
-
-fn authenticated_packages_scratch(
-    release_path: &str,
-    authenticated: &ReleaseSha256Entry,
-) -> Result<CatalogMetadataScratchV1> {
-    CatalogMetadataScratchV1::from_signed_objects(vec![CatalogMetadataObjectScratchV1 {
-        role: AuthenticatedMetadataObjectRole::DebianPackages,
-        source_path: release_path.to_string(),
-        size: authenticated.size,
-    }])
-}
-
-fn parse_release_sha256_entry(release: &[u8], target: &str) -> Result<ReleaseSha256Entry> {
-    let release = std::str::from_utf8(release)
-        .map_err(|error| Error::ParseError(format!("Debian Release is not UTF-8: {error}")))?;
-    let mut in_sha256 = false;
-    let mut saw_sha256 = false;
-    let mut matched = None;
-    for line in release.lines() {
-        if line == "SHA256:" {
-            if saw_sha256 {
-                return Err(Error::ParseError(
-                    "Debian Release repeats the SHA256 field".to_string(),
-                ));
-            }
-            saw_sha256 = true;
-            in_sha256 = true;
-            continue;
-        }
-        if !line.starts_with([' ', '\t']) {
-            in_sha256 = false;
-            continue;
-        }
-        if !in_sha256 {
-            continue;
-        }
-        let columns = line.split_ascii_whitespace().collect::<Vec<_>>();
-        if columns.len() != 3 {
-            return Err(Error::ParseError(format!(
-                "Debian Release SHA256 entry must have checksum, size, and path: {line:?}"
-            )));
-        }
-        validate_sha256(columns[0], "Debian Release")?;
-        let size = columns[1].parse::<u64>().map_err(|error| {
-            Error::ParseError(format!(
-                "Debian Release SHA256 size '{}' is invalid: {error}",
-                columns[1]
-            ))
-        })?;
-        common::validate_filename(columns[2]).map_err(Error::ParseError)?;
-        if columns[2] == target {
-            if matched.is_some() {
-                return Err(Error::ParseError(format!(
-                    "Debian Release repeats SHA256 authority for {target}"
-                )));
-            }
-            matched = Some(ReleaseSha256Entry {
-                sha256: columns[0].to_string(),
-                size,
-            });
-        }
-    }
-    if !saw_sha256 {
-        return Err(Error::GpgVerificationFailed(
-            "authenticated Debian Release has no SHA256 field".to_string(),
-        ));
-    }
-    matched.ok_or_else(|| {
-        Error::GpgVerificationFailed(format!(
-            "authenticated Debian Release has no SHA256 identity for {target}"
-        ))
-    })
 }
 
 fn validate_sha256(value: &str, label: &str) -> Result<()> {
@@ -980,44 +892,6 @@ mod tests {
         assert_eq!(
             pre_depends[0].alternatives[0].version_constraint.as_deref(),
             Some(">= 2.39")
-        );
-    }
-
-    #[test]
-    fn snapshot_identity_owns_the_verified_cleartext_release_payload() {
-        let release = b"Origin: Example\nSHA256:\n";
-        assert_eq!(
-            authenticated_release_snapshot(release).size(),
-            Some(release.len() as u64)
-        );
-        assert_eq!(
-            authenticated_release_snapshot(release),
-            AuthenticatedSnapshotIdentity::for_bytes(release)
-        );
-        assert_ne!(
-            authenticated_release_snapshot(release),
-            AuthenticatedSnapshotIdentity::for_bytes(b"armored InRelease envelope")
-        );
-    }
-
-    #[test]
-    fn signed_packages_size_forms_one_exact_metadata_reservation() {
-        let entry = ReleaseSha256Entry {
-            sha256: "a".repeat(64),
-            size: 8192,
-        };
-        let requirement =
-            authenticated_packages_scratch("main/binary-amd64/Packages.gz", &entry).unwrap();
-
-        assert_eq!(requirement.required_additional_bytes, 8192);
-        assert_eq!(requirement.objects.len(), 1);
-        assert_eq!(
-            requirement.objects[0].role,
-            AuthenticatedMetadataObjectRole::DebianPackages
-        );
-        assert_eq!(
-            requirement.objects[0].source_path,
-            "main/binary-amd64/Packages.gz"
         );
     }
 }
