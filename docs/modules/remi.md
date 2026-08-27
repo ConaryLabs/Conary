@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-27
-revision: 72
-summary: Document single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 73
+summary: Document linear catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -102,11 +102,18 @@ and eopkg Package XML are authenticated into private files and decoded one
 record at a time. The sink inserts directly into the source-catalog candidate;
 Fedora pkgid joins and ALPM desc/depends pairing use private indexed SQLite
 state. Candidate logical hashing, count validation, reopen verification,
-source/profile bundle binding, strict cache replay, and profile composition
+source/profile bundle binding, exact cache materialization, and profile composition
 iterate in canonical database order. They retain one scalar package record,
 one normalized provide row, or one complete requirement group at a time; a
 source package's relation cardinality cannot become the publication memory
 bound.
+
+Logical verification merges one ordered cursor for packages, provides,
+requirement groups, and requirement atoms. Catalog cardinality therefore
+changes rows stepped while the verifier retains a fixed four SQLite statements;
+it never prepares relation queries per package or group. Missing package or
+group owners fail as typed catalog conflicts, and the emitted V1 logical digest
+and row counts remain byte-for-byte identical to canonical catalog content.
 
 Source-manifest finalization returns the immutable reader that proved the
 catalog binding, and private staging carries that exact reader into profile

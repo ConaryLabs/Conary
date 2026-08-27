@@ -2,7 +2,7 @@
 
 //! Ordered relation-row replay and logical hashing for immutable catalogs.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Rows};
 
 use super::super::record::CatalogLogicalDigestV1;
 use super::super::{
@@ -206,8 +206,13 @@ fn ordered_rows_match(
     }
 }
 
-/// Calculate and validate the exact V1 logical identity without retaining one
-/// package's potentially repository-sized provide array.
+/// Calculate and validate the exact V1 logical identity with one ordered scan
+/// per normalized table and without retaining one package's potentially
+/// repository-sized relation arrays.
+///
+/// The four cursors merge on package key and group ordinal. Catalog cardinality
+/// therefore changes rows stepped, not SQLite statements prepared or point
+/// queries executed.
 pub(in crate::repository) fn digest_catalog_connection(
     connection: &Connection,
     scope: &CatalogScopeV1,
@@ -216,50 +221,179 @@ pub(in crate::repository) fn digest_catalog_connection(
     let mut digest = CatalogLogicalDigestV1::new(scope, source_evidence)?;
     let mut packages =
         connection.prepare(&format!("{SELECT_PACKAGES} ORDER BY package_key_sha256"))?;
+    let mut provides = connection.prepare(
+        "SELECT capability, version, version_relation, kind, raw, version_scheme,
+                architecture_qualifier_json, provenance_json, package_key_sha256
+         FROM catalog_provides
+         ORDER BY package_key_sha256, ordinal",
+    )?;
+    let mut groups = connection.prepare(
+        "SELECT ordinal, kind, behavior, description, native_text, expression_json,
+                package_key_sha256
+         FROM catalog_requirement_groups
+         ORDER BY package_key_sha256, ordinal",
+    )?;
+    let mut atoms = connection.prepare(
+        "SELECT capability, version_constraint, kind, dependency_type, raw,
+                package_key_sha256, group_ordinal
+         FROM catalog_requirement_atoms
+         ORDER BY package_key_sha256, group_ordinal, ordinal",
+    )?;
     let mut package_rows = packages.query([])?;
+    let mut provide_rows = provides.query([])?;
+    let mut group_rows = groups.query([])?;
+    let mut atom_rows = atoms.query([])?;
+    let mut next_provide = next_ordered_provide(&mut provide_rows)?;
+    let mut next_group = next_ordered_group(&mut group_rows)?;
+    let mut next_atom = next_ordered_atom(&mut atom_rows)?;
+
     while let Some(row) = package_rows.next()? {
         let package = package_from_row(row)?;
         let package_key = package.package_key_sha256.clone();
+        require_relation_not_before_package(
+            next_provide.as_ref().map(|row| row.package_key.as_str()),
+            &package_key,
+            "provide",
+        )?;
+        require_relation_not_before_package(
+            next_group.as_ref().map(|row| row.package_key.as_str()),
+            &package_key,
+            "requirement group",
+        )?;
+        require_relation_not_before_package(
+            next_atom.as_ref().map(|row| row.package_key.as_str()),
+            &package_key,
+            "requirement atom",
+        )?;
         let mut package_digest = digest.begin_package(&package)?;
 
-        let mut provides = connection.prepare(
-            "SELECT capability, version, version_relation, kind, raw, version_scheme,
-                    architecture_qualifier_json, provenance_json
-             FROM catalog_provides
-             WHERE package_key_sha256 = ?1
-             ORDER BY ordinal",
-        )?;
-        let mut provide_rows = provides.query([&package_key])?;
-        while let Some(provide_row) = provide_rows.next()? {
-            package_digest.provide(&provide_from_row(provide_row)?)?;
+        while next_provide
+            .as_ref()
+            .is_some_and(|row| row.package_key == package_key)
+        {
+            let provide = next_provide.take().expect("provide lookahead exists");
+            package_digest.provide(&provide.value)?;
+            next_provide = next_ordered_provide(&mut provide_rows)?;
         }
 
-        let mut groups = connection.prepare(
-            "SELECT ordinal, kind, behavior, description, native_text, expression_json
-             FROM catalog_requirement_groups
-             WHERE package_key_sha256 = ?1
-             ORDER BY ordinal",
-        )?;
-        let mut group_rows = groups.query([&package_key])?;
-        while let Some(group_row) = group_rows.next()? {
-            let ordinal: i64 = group_row.get(0)?;
-            let group = requirement_group_from_row(group_row)?;
-            let mut group_digest = package_digest.begin_requirement_group(&group)?;
-            let mut atoms = connection.prepare(
-                "SELECT capability, version_constraint, kind, dependency_type, raw
-                 FROM catalog_requirement_atoms
-                 WHERE package_key_sha256 = ?1 AND group_ordinal = ?2
-                 ORDER BY ordinal",
-            )?;
-            let mut atom_rows = atoms.query(rusqlite::params![&package_key, ordinal])?;
-            while let Some(atom_row) = atom_rows.next()? {
-                group_digest.atom(&requirement_atom_from_row(atom_row)?)?;
+        while next_group
+            .as_ref()
+            .is_some_and(|row| row.package_key == package_key)
+        {
+            let group = next_group.take().expect("group lookahead exists");
+            require_atom_not_before_group(next_atom.as_ref(), &package_key, group.ordinal)?;
+            let mut group_digest = package_digest.begin_requirement_group(&group.value)?;
+            while next_atom.as_ref().is_some_and(|row| {
+                row.package_key == package_key && row.group_ordinal == group.ordinal
+            }) {
+                let atom = next_atom.take().expect("atom lookahead exists");
+                group_digest.atom(&atom.value)?;
+                next_atom = next_ordered_atom(&mut atom_rows)?;
             }
             group_digest.finish()?;
+            next_group = next_ordered_group(&mut group_rows)?;
+        }
+        if next_atom
+            .as_ref()
+            .is_some_and(|row| row.package_key == package_key)
+        {
+            return Err(Error::ConflictError(format!(
+                "catalog requirement atom references a missing group for package {package_key}"
+            )));
         }
         package_digest.finish()?;
     }
+    require_no_remaining_relation(next_provide.map(|row| row.package_key), "provide")?;
+    require_no_remaining_relation(next_group.map(|row| row.package_key), "requirement group")?;
+    require_no_remaining_relation(next_atom.map(|row| row.package_key), "requirement atom")?;
     digest.finish()
+}
+
+struct OrderedProvide {
+    package_key: String,
+    value: super::super::CatalogProvideRecordV1,
+}
+
+struct OrderedRequirementGroup {
+    package_key: String,
+    ordinal: i64,
+    value: CatalogRequirementGroupV1,
+}
+
+struct OrderedRequirementAtom {
+    package_key: String,
+    group_ordinal: i64,
+    value: CatalogRequirementAtomV1,
+}
+
+fn next_ordered_provide(rows: &mut Rows<'_>) -> Result<Option<OrderedProvide>> {
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    Ok(Some(OrderedProvide {
+        package_key: row.get(8)?,
+        value: provide_from_row(row)?,
+    }))
+}
+
+fn next_ordered_group(rows: &mut Rows<'_>) -> Result<Option<OrderedRequirementGroup>> {
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    Ok(Some(OrderedRequirementGroup {
+        package_key: row.get(6)?,
+        ordinal: row.get(0)?,
+        value: requirement_group_from_row(row)?,
+    }))
+}
+
+fn next_ordered_atom(rows: &mut Rows<'_>) -> Result<Option<OrderedRequirementAtom>> {
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    Ok(Some(OrderedRequirementAtom {
+        package_key: row.get(5)?,
+        group_ordinal: row.get(6)?,
+        value: requirement_atom_from_row(row)?,
+    }))
+}
+
+fn require_relation_not_before_package(
+    relation_package_key: Option<&str>,
+    package_key: &str,
+    label: &str,
+) -> Result<()> {
+    if relation_package_key.is_some_and(|relation_key| relation_key < package_key) {
+        return Err(Error::ConflictError(format!(
+            "catalog {label} row references a missing package before {package_key}"
+        )));
+    }
+    Ok(())
+}
+
+fn require_atom_not_before_group(
+    atom: Option<&OrderedRequirementAtom>,
+    package_key: &str,
+    group_ordinal: i64,
+) -> Result<()> {
+    if atom.is_some_and(|atom| {
+        atom.package_key.as_str() < package_key
+            || (atom.package_key == package_key && atom.group_ordinal < group_ordinal)
+    }) {
+        return Err(Error::ConflictError(format!(
+            "catalog requirement atom references a missing group before package {package_key} group {group_ordinal}"
+        )));
+    }
+    Ok(())
+}
+
+fn require_no_remaining_relation(package_key: Option<String>, label: &str) -> Result<()> {
+    if let Some(package_key) = package_key {
+        return Err(Error::ConflictError(format!(
+            "catalog {label} row references missing package {package_key}"
+        )));
+    }
+    Ok(())
 }
 
 fn requirement_atom_from_row(
