@@ -152,6 +152,16 @@ impl CatalogCandidateWriter {
              PRAGMA user_version = {CATALOG_CONTENT_SCHEMA_V1};"
         ))?;
         connection.execute_batch(CATALOG_SCHEMA)?;
+        // RPM filelists records join back to their primary package by the
+        // authenticated package checksum. Keep that construction-only lookup
+        // indexed: without it, one complete filelists document performs a
+        // package-table scan for every package record. The index is dropped
+        // before publication so it does not change the immutable catalog
+        // schema or invalidate otherwise reusable projections.
+        connection.execute_batch(
+            "CREATE INDEX catalog_ingest_packages_checksum
+                 ON catalog_packages(checksum, package_key_sha256);",
+        )?;
         connection.execute_batch("BEGIN IMMEDIATE")?;
         Ok(Self {
             path,
@@ -480,6 +490,8 @@ impl CatalogCandidateWriter {
                 "catalog candidate has unfinished Arch package fragments".to_string(),
             ));
         }
+        self.connection()?
+            .execute_batch("DROP INDEX catalog_ingest_packages_checksum")?;
         self.connection()?.execute_batch("COMMIT")?;
 
         let (logical_digest_sha256, counts) =
@@ -807,6 +819,59 @@ mod tests {
         assert!(message.contains("consumer 1-1"), "{message}");
         assert!(message.contains("/usr/lib/missing"), "{message}");
         assert!(message.contains("no filelists record"), "{message}");
+    }
+
+    #[test]
+    fn rpm_filelists_checksum_join_is_indexed_only_during_construction() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("catalog.sqlite3");
+        let mut writer = CatalogCandidateWriter::create(&path, scope()).unwrap();
+        writer
+            .package(rpm_package("alpha", "a", &[], None))
+            .unwrap();
+        writer
+            .package(rpm_package("bravo", "b", &[], None))
+            .unwrap();
+
+        let details = {
+            let mut statement = writer
+                .connection()
+                .unwrap()
+                .prepare(
+                    "EXPLAIN QUERY PLAN
+                     SELECT package_key_sha256, name, version, architecture
+                     FROM catalog_packages WHERE checksum = ?1
+                     ORDER BY package_key_sha256 LIMIT 1",
+                )
+                .unwrap();
+            statement
+                .query_map(["b"], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("catalog_ingest_packages_checksum")),
+            "{details:?}"
+        );
+
+        writer.finish(evidence()).unwrap();
+        let reopened = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        let published_indexes: i64 = reopened
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema
+                 WHERE type = 'index' AND name = 'catalog_ingest_packages_checksum'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(published_indexes, 0);
     }
 
     #[test]
