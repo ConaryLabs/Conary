@@ -70,6 +70,46 @@ done < <(
   done
 )
 
+shell_policy_action=".github/actions/setup-shell-policy-tools/action.yml"
+if [[ ! -f "$shell_policy_action" ]]; then
+  violations+=("${shell_policy_action}: missing shared shell-policy bootstrap")
+else
+  require_shell_policy_match() {
+    local pattern="$1"
+    local description="$2"
+
+    if ! rg -q --multiline -- "$pattern" "$shell_policy_action"; then
+      violations+=("${shell_policy_action}: ${description}")
+    fi
+  }
+
+  require_shell_policy_match \
+    'if command -v rg >/dev/null; then[\s\S]*exit 0' \
+    'must reuse an existing rg before any apt operation'
+  require_shell_policy_match \
+    'ubuntu_sources=/etc/apt/sources\.list\.d/ubuntu\.sources[\s\S]*\[\[ -f "\$ubuntu_sources" && ! -L "\$ubuntu_sources" \]\]' \
+    'must require the canonical Ubuntu source as a plain file'
+  require_shell_policy_match \
+    'Dir::Etc::sourcelist=\$\{ubuntu_sources\}[\s\S]*Dir::Etc::sourceparts=/dev/null' \
+    'must isolate apt from image-provided third-party sources'
+  require_shell_policy_match \
+    'apt-get "\$\{apt_options\[@\]\}" update[\s\S]*apt-get "\$\{apt_options\[@\]\}" install -y --no-install-recommends ripgrep' \
+    'must use the isolated apt options for update and fallback installation'
+fi
+
+for workflow in .github/workflows/pr-gate.yml .github/workflows/merge-validation.yml; do
+  [[ -f "$workflow" ]] || continue
+  uses_count="$(rg -c --fixed-strings \
+    'uses: ./.github/actions/setup-shell-policy-tools' "$workflow" || true)"
+  uses_count="${uses_count:-0}"
+  if [[ "$uses_count" -ne 3 ]]; then
+    violations+=("${workflow}: expected 3 shared shell-policy bootstrap uses, found ${uses_count}")
+  fi
+  if rg -q -- 'Install shell policy tools|apt-get install -y ripgrep' "$workflow"; then
+    violations+=("${workflow}: duplicated or unrestricted shell-policy apt bootstrap")
+  fi
+done
+
 if [[ "${#violations[@]}" -ne 0 ]]; then
   printf 'ERROR: unpinned GitHub Action references found:\n' >&2
   printf '  %s\n' "${violations[@]}" >&2
