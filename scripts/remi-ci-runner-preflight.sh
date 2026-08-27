@@ -74,6 +74,21 @@ check_cgroup_v2_limits() {
     done
 }
 
+check_test_user_namespace() {
+    local probe_root status_code
+    probe_root="$(mktemp -d)"
+    status_code=0
+    podman unshare sh -ceu '
+        test "$(id -u)" -eq 0
+        : > "$1/owned"
+        chown 1001:1001 "$1/owned"
+        test "$(stat -c %u:%g "$1/owned")" = 1001:1001
+    ' sh "$probe_root" || status_code="$?"
+    rm -rf "$probe_root"
+    [[ "$status_code" -eq 0 ]] ||
+        fail "rootless Podman user namespace cannot represent numeric UID/GID 1001"
+}
+
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
@@ -103,13 +118,12 @@ for authority_root in /conary/repository-keys /conary/deployment-backups; do
         fail "runner identity can read production authority root ${authority_root}"
 done
 
-for command in cargo git jq rg rustc sccache unshare; do
+for command in cargo git jq mktemp podman rg rustc sccache stat; do
     require_cmd "$command"
 done
 cargo fmt --version >/dev/null
 cargo clippy --version >/dev/null
-unshare --user --map-root-user --mount --propagation private /bin/true ||
-    fail "runner cannot create the user and mount namespaces required by exact ownership tests"
+check_test_user_namespace
 
 minimum_logical_cpus="${CONARY_CI_MIN_LOGICAL_CPUS:-12}"
 minimum_memory_gib="${CONARY_CI_MIN_MEMORY_GIB:-48}"

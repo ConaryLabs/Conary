@@ -49,8 +49,11 @@ Ubuntu's host-wide AppArmor restriction on unprivileged user namespaces stays
 enabled. The installer loads a `default_allow` profile attached to the exact
 runner listener executable and grants only that trusted process tree the
 `userns` permission needed by exact ownership tests. The runner remains without
-sudo, and preflight proves that a user-plus-mount namespace works before a
-benchmark consumes build time.
+sudo. Rust test phases run through `podman unshare`: inner root maps to
+`conary-ci`, while the remaining IDs map to its subordinate UID/GID ranges.
+Preflight proves that this boundary can materialize numeric UID/GID 1001 before
+a benchmark consumes build time, matching hosted container-root ownership
+semantics without granting host root.
 
 Bootstrap the Ubuntu host with a one-time repository registration token piped
 directly into `deploy/setup-remi-ci-runner.sh --registration-token-stdin`.
