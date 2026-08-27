@@ -331,7 +331,7 @@ impl CatalogSourceCandidateScratchV1 {
         Ok(requirement)
     }
 
-    /// Reuse one independently reopened source catalog as exact replay evidence.
+    /// Reuse one independently reopened source catalog as exact materialization evidence.
     pub fn from_cached_catalog(catalog_bytes: u64, package_count: u64) -> Result<Self> {
         if catalog_bytes == 0 || !catalog_bytes.is_multiple_of(CATALOG_SQLITE_PAGE_SIZE_V1) {
             return Err(crate::Error::ConfigError(
