@@ -1,7 +1,9 @@
 // apps/remi/src/server/handlers/detail/catalog.rs
 //! Exact catalog selection helpers shared by package-detail responses.
 
-use crate::server::catalog_authority::{CatalogAuthority, PinnedProfileCatalog};
+use crate::server::catalog_authority::{
+    CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection,
+};
 use anyhow::Context;
 use conary_core::repository::catalog::CatalogPackageRecordV1;
 use conary_core::repository::versioning::compare_repo_versions;
@@ -72,12 +74,12 @@ pub(super) fn extract_catalog_metadata(
 pub(super) fn pin_response_catalog<'a>(
     catalog_authority: &CatalogAuthority,
     pinned_profiles: &'a mut HashMap<String, PinnedProfileCatalog>,
-    source_profile: &str,
+    selection: &ProfileRevisionSelection,
 ) -> anyhow::Result<&'a PinnedProfileCatalog> {
-    match pinned_profiles.entry(source_profile.to_string()) {
+    match pinned_profiles.entry(selection.source_profile.clone()) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
         Entry::Vacant(entry) => {
-            let pinned = catalog_authority.open_active_profile(source_profile)?;
+            let pinned = catalog_authority.open_selected_profile(selection)?;
             Ok(entry.insert(pinned))
         }
     }

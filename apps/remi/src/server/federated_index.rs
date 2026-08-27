@@ -11,7 +11,7 @@
 //! - Version deduplication with preference for converted packages
 //! - Graceful degradation when upstream peers are unavailable
 
-use crate::server::catalog_authority::CatalogAuthority;
+use crate::server::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
 use crate::server::handlers::sparse::{
     SparseIndexEntry, SparseVersionEntry, build_sparse_entry_with_revision,
 };
@@ -139,6 +139,7 @@ pub async fn fetch_remote_sparse_entry(
     url: &str,
     distro: &str,
     name: &str,
+    expected_profile_revision_sha256: &str,
 ) -> Result<Option<SparseIndexEntry>> {
     let fetch_url = format!("{}/v1/index/{}/{}", url.trim_end_matches('/'), distro, name);
 
@@ -161,6 +162,17 @@ pub async fn fetch_remote_sparse_entry(
             response.status(),
             distro,
             name
+        );
+        return Ok(None);
+    }
+
+    let remote_revision = response
+        .headers()
+        .get(crate::server::handlers::public_read::PROFILE_REVISION_HEADER)
+        .and_then(|value| value.to_str().ok());
+    if remote_revision != Some(expected_profile_revision_sha256) {
+        warn!(
+            "Upstream {url} did not prove profile revision {expected_profile_revision_sha256} for {distro}/{name}"
         );
         return Ok(None);
     }
@@ -265,22 +277,34 @@ pub fn merge_sparse_entries(
 
 /// Build a federated sparse index entry by combining local data with upstream sources.
 ///
-/// 1. Builds the local entry from one pinned active profile catalog
-/// 2. Fetches entries from all upstream peers in parallel
+/// 1. Builds the local entry from one universe-selected profile catalog
+/// 2. Fetches entries from peers that prove the same profile revision
 /// 3. Merges everything together
 /// 4. Caches the result for the configured TTL
 pub async fn build_federated_sparse_entry(
     catalog_authority: CatalogAuthority,
     db_path: &std::path::Path,
-    distro: &str,
     name: &str,
+    selection: ProfileRevisionSelection,
     fed_config: &FederatedIndexConfig,
     cache: &Arc<FederatedIndexCache>,
     client: &reqwest::Client,
 ) -> Result<Option<SparseIndexEntry>> {
+    let distro = conary_core::repository::supported_profiles::profile_by_public_id(
+        &selection.source_profile,
+    )
+    .with_context(|| {
+        format!(
+            "federated sparse selection names unsupported profile '{}'",
+            selection.source_profile
+        )
+    })?
+    .remi_route_slug()
+    .to_string();
     let db_path_owned = db_path.to_path_buf();
-    let distro_owned = distro.to_string();
+    let distro_owned = distro.clone();
     let name_owned = name.to_string();
+    let local_selection = selection.clone();
 
     let (profile_revision_sha256, local_entry) = tokio::task::spawn_blocking(move || {
         build_sparse_entry_with_revision(
@@ -288,12 +312,18 @@ pub async fn build_federated_sparse_entry(
             &db_path_owned,
             &distro_owned,
             &name_owned,
+            &local_selection,
         )
     })
     .await??;
 
     if let Some(cached) = cache
-        .get(&profile_revision_sha256, distro, name, fed_config.cache_ttl)
+        .get(
+            &profile_revision_sha256,
+            &distro,
+            name,
+            fed_config.cache_ttl,
+        )
         .await
     {
         debug!("Federated cache hit for {}/{}", distro, name);
@@ -305,14 +335,21 @@ pub async fn build_federated_sparse_entry(
     for url in &fed_config.upstream_urls {
         let client = client.clone();
         let url = url.clone();
-        let distro = distro.to_string();
+        let distro = distro.clone();
         let name = name.to_string();
         let timeout = fed_config.timeout;
+        let expected_profile_revision_sha256 = selection.profile_revision_sha256.clone();
 
         fetch_futures.push(tokio::spawn(async move {
             match tokio::time::timeout(
                 timeout,
-                fetch_remote_sparse_entry(&client, &url, &distro, &name),
+                fetch_remote_sparse_entry(
+                    &client,
+                    &url,
+                    &distro,
+                    &name,
+                    &expected_profile_revision_sha256,
+                ),
             )
             .await
             {
@@ -350,11 +387,11 @@ pub async fn build_federated_sparse_entry(
     }
 
     // Merge all entries
-    let merged = merge_sparse_entries(distro, name, all_entries)?;
+    let merged = merge_sparse_entries(&distro, name, all_entries)?;
 
     // Cache the result
     cache
-        .put(&profile_revision_sha256, distro, name, merged.clone())
+        .put(&profile_revision_sha256, &distro, name, merged.clone())
         .await;
 
     Ok(Some(merged))
@@ -558,11 +595,17 @@ mod tests {
         let app = axum::Router::new().route(
             "/v1/index/fedora/nginx",
             axum::routing::get(|| async {
-                axum::Json(make_entry(
-                    "curl",
-                    "fedora",
-                    vec![make_version("1.0", false)],
-                ))
+                (
+                    [(
+                        crate::server::handlers::public_read::PROFILE_REVISION_HEADER,
+                        REVISION_A,
+                    )],
+                    axum::Json(make_entry(
+                        "curl",
+                        "fedora",
+                        vec![make_version("1.0", false)],
+                    )),
+                )
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -574,6 +617,7 @@ mod tests {
             &format!("http://{address}"),
             "fedora",
             "nginx",
+            REVISION_A,
         )
         .await
         .expect_err("upstream body identity must match its requested URL");

@@ -323,15 +323,19 @@ native capability names preserve exact upstream UTF-8, including non-ASCII
 RPM provides and significant surrounding whitespace in file/path capabilities;
 non-path names remain trimmed and control-free.
 
-Serving selection is therefore a two-step typed decision: the public route maps
-to one exact profile ID, then `CatalogAuthority` opens the verified revision
-named by that profile's active pointer. Sparse, detail, search, index, prewarm,
-and conversion lookup retain that exact reader for their work. Repository
-names, insertion or fetch completion order, route slugs, and operational
-package rows cannot select a source member or silently fill an absent catalog.
-The profile package record carries exact source-member provenance; conversion
-also verifies the corresponding source snapshot and holds the profile revision
-through outcome persistence.
+Private refresh, proof, and prewarm selection maps one exact profile ID to its
+fenced active or explicitly selected candidate revision. Public serving adds a
+separate required step: one active signed universe snapshot names the complete
+public profile set and each exact revision, and `CatalogAuthority` reopens only
+those selected revisions. Sparse, detail, search, statistics, package lookup,
+download, and request-triggered conversion retain that exact selection for
+their work. An active profile pointer alone grants no public authority.
+Repository names, insertion or fetch completion order, route slugs, candidate
+catalog contents, and operational package rows cannot select a source member or
+silently fill an absent universe. The profile package record carries exact
+source-member provenance; conversion also verifies the corresponding source
+snapshot and holds the universe-selected profile revision through outcome
+persistence.
 
 Refresh may advance a profile pointer while old readers and conversions finish.
 Reader pins, work pins, active pointers, and durable conversion pins form the

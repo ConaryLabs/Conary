@@ -3,81 +3,34 @@
 //! Exact immutable-revision lookup for converted package serving.
 
 use super::{PackageManifest, PackageQuery, ScriptletPackageMetadata};
-use crate::server::catalog_authority::CatalogAuthority;
-use anyhow::Result;
-use axum::http::StatusCode;
+use anyhow::{Context, Result};
 use std::path::Path;
-
-/// Resolve the exact immutable profile revision selected by the active
-/// catalog pointer. A request that cannot establish that authority must go
-/// through the normal repository-readiness path; it must never fall back to a
-/// source-profile-only conversion row.
-pub(super) async fn active_profile_revision_for_request(
-    catalog_authority: CatalogAuthority,
-    distro: &str,
-) -> Option<String> {
-    let profile_id = conary_core::repository::supported_profiles::profile_for_remi_route(distro)?
-        .id()
-        .to_string();
-    let lookup_profile_id = profile_id.clone();
-    match tokio::task::spawn_blocking(move || {
-        catalog_authority
-            .open_active_profile(&lookup_profile_id)
-            .map(|catalog| catalog.profile_revision_sha256().to_string())
-    })
-    .await
-    {
-        Ok(Ok(revision)) => Some(revision),
-        Ok(Err(error)) => {
-            tracing::debug!(profile = %profile_id, "active immutable profile unavailable: {error}");
-            None
-        }
-        Err(error) => {
-            tracing::debug!(profile = %profile_id, "active immutable profile task failed: {error}");
-            None
-        }
-    }
-}
 
 pub(super) async fn converted_manifest_for_request(
     db_path: &Path,
-    catalog_authority: &CatalogAuthority,
-    distro: &str,
+    profile_revision_sha256: &str,
+    route: &str,
     name: &str,
     query: &PackageQuery,
-) -> Result<ConvertedManifestLookup, (StatusCode, &'static str)> {
-    let Some(profile_revision_sha256) =
-        active_profile_revision_for_request(catalog_authority.clone(), distro).await
-    else {
-        return Ok(ConvertedManifestLookup::Missing);
-    };
+) -> Result<ConvertedManifestLookup> {
     let check_db = db_path.to_path_buf();
-    let check_distro = distro.to_string();
+    let check_revision = profile_revision_sha256.to_string();
+    let check_route = route.to_string();
     let check_name = name.to_string();
     let check_version = query.version.clone();
     let check_arch = query.arch.clone();
-    match tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         check_converted(
             &check_db,
-            &profile_revision_sha256,
-            &check_distro,
+            &check_revision,
+            &check_route,
             &check_name,
             check_version.as_deref(),
             check_arch.as_deref(),
         )
     })
     .await
-    {
-        Ok(Ok(lookup)) => Ok(lookup),
-        Ok(Err(error)) => {
-            tracing::error!("Database error checking conversion: {}", error);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Database error"))
-        }
-        Err(error) => {
-            tracing::error!("Blocking task failed: {}", error);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))
-        }
-    }
+    .context("converted package lookup task did not complete")?
 }
 
 pub(super) enum ConvertedManifestLookup {

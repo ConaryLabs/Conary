@@ -6,12 +6,15 @@
 //! The admin API (`admin/` submodule) returns JSON errors via `auth::json_error()`
 //! with `{"error": "...", "code": "..."}` bodies.
 //!
-//! Public endpoints (chunks, packages, detail, etc.) return plain-text error bodies
-//! via `(StatusCode, &str).into_response()` for simplicity.
+//! Public package-read endpoints return typed JSON when the signed universe
+//! authority is unavailable. Other public endpoints still use plain-text error
+//! bodies via `(StatusCode, &str).into_response()` where no typed contract is
+//! defined.
 //!
 //! New endpoints should follow the convention of their parent router:
 //! - Admin router handlers: use `json_error()` or `check_scope()`
-//! - Public router handlers: use plain-text `(StatusCode, message)` tuples
+//! - Public package-read handlers: use `public_read` for authority failures
+//! - Other public router handlers: use plain-text `(StatusCode, message)` tuples
 // TODO: Unify error response format across all endpoints.
 
 pub mod admin;
@@ -27,6 +30,7 @@ pub mod oci;
 pub mod openapi;
 pub mod packages;
 pub mod profiles;
+pub(crate) mod public_read;
 pub mod recipes;
 pub mod search;
 pub mod seeds;

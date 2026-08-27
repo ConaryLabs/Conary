@@ -971,11 +971,34 @@ is decided by the persisted converted-package lookup and its current-artifact
 validation, never by stale in-memory job state. Accepted responses publish the
 actual pending or converting state rather than flattening both to converting.
 
-Every route resolves the public route slug to one exact persisted source
-profile, opens its active immutable catalog, and validates conversions against
-that handle's exact revision and durable pin. A stale row is reconverted;
-malformed or unpinned current state is surfaced as a server data error.
-Conversion has no operator promotion state or alternate serving lane.
+Every public package-read route first loads one immutable snapshot of
+`remi_active_universe_revision`, validates its stored manifest and member rows,
+and resolves the route slug through the exact profile revision named by that
+signed universe. Operational active-profile pointers may already contain the
+next private candidate; they are not public read authority. Detail, sparse
+resolution, statistics, package lookup, download, and on-demand conversion all
+retain the universe-selected revision for the complete request or background
+job. A stale conversion row is reconverted; malformed or unpinned current state
+fails closed. Conversion has no operator promotion state or alternate serving
+lane.
+
+An absent universe, a profile absent from that universe, an unreadable
+authority, or an unbound search projection returns HTTP 503 with
+`code=PUBLIC_UNIVERSE_UNAVAILABLE`, a stable typed `reason`, `Retry-After`, and
+`Cache-Control: no-store`. Successful projections expose
+`X-Conary-Universe-Revision` and `X-Conary-Universe-Sequence`; profile-scoped
+responses also expose `X-Conary-Profile-Revision`. Deployment and promotion
+proofs can therefore assert that detail, sparse resolution, search, and
+statistics agree without inferring identity from response contents.
+
+The on-disk Tantivy index has no authority merely because it can be opened.
+Startup rebuilds it only from the exact profiles in the active signed universe
+and binds the committed projection to that universe identity in memory. Search
+returns typed unavailability before the rebuild completes or whenever
+activation advances beyond the bound index. Candidate-tier catalogs and native
+publications outside the selected universe are never indexed. Federated sparse
+entries are merged only when the peer response proves the same exact profile
+revision; an absent or different binding contributes no data.
 
 Local object visibility in `server/publication.rs` is a reachability check:
 native and converted publication references come from their signed transport
@@ -1042,12 +1065,15 @@ Implementation ownership lives in child modules:
 - `catalog_capacity.rs`: shared filesystem-scoped metadata, profile-candidate
   growth, catalog finalization, and projection-copy reservations with typed
   capacity refusal.
-- `catalog_authority.rs` and `profile_catalog.rs`: active-pointer resolution,
-  verified immutable readers, reader-lifetime pins, and serving projections.
+- `catalog_authority.rs` and `profile_catalog.rs`: exact-revision resolution,
+  verified immutable readers, reader-lifetime pins, and catalog projections.
+- `public_universe.rs` and `handlers/public_read.rs`: signed-universe snapshot
+  selection, typed public unavailability, and exact response identity headers.
 - `catalog_gc.rs`: exact active/current-candidate/work/reader/conversion
   reachability and bundle deletion after operational intent is durable.
-- `handlers/detail.rs` and `handlers/detail/catalog.rs`: detail and analytics
-  response assembly, with one exact profile pin per response and catalog-owned
+- `handlers/detail.rs`, `handlers/detail/catalog.rs`, and
+  `handlers/detail/tests.rs`: detail and analytics response assembly, with one
+  universe-selected exact profile pin per response and catalog-owned
   package/version metadata.
 - `delta_manifests.rs` and `delta_manifests/tests.rs`: exact-revision delta
   cache authority and its focused corruption/revision test corpus.

@@ -6,8 +6,9 @@
 //! All database queries run via `spawn_blocking` for async compatibility.
 
 use crate::server::ServerState;
-use crate::server::catalog_authority::CatalogAuthority;
+use crate::server::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
 use crate::server::profile_catalog::ProfileCatalog;
+use crate::server::public_universe::PublicUniverseSnapshot;
 use anyhow::Context;
 use axum::{
     Json,
@@ -15,7 +16,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use conary_core::db::models::{ConvertedPackage, DownloadCount, RemiActiveProfileRevision};
+use conary_core::db::models::{ConvertedPackage, DownloadCount};
 use conary_core::repository::remi_metadata::RemiRequirementGroup;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::{HandlerResult, open_handler_db, run_blocking};
+use super::public_read;
+use super::{HandlerResult, open_handler_db};
 
 mod catalog;
 
@@ -97,23 +99,40 @@ pub async fn get_package_detail(
 ) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
-    let state = state.read().await;
-    let db_path = state.config.db_path.clone();
-    let catalog_authority = state.catalog_authority.clone();
-    drop(state);
-    let detail = run_blocking("package detail", move || {
-        query_package_detail(&catalog_authority, &db_path, &distro, &name)
+    let context = public_read::context(&state).await?;
+    let selection = context.profile_for_route(&distro)?;
+    let db_path = context.db_path.clone();
+    let catalog_authority = context.catalog_authority.clone();
+    let query_distro = distro.clone();
+    let query_name = name.clone();
+    let query_selection = selection.clone();
+    let detail = public_read::run("package detail", move || {
+        query_package_detail(
+            &catalog_authority,
+            &db_path,
+            &query_distro,
+            &query_name,
+            &query_selection,
+        )
     })
     .await?;
 
     match detail {
-        Some(detail) => Ok((
-            StatusCode::OK,
-            [(header::CACHE_CONTROL, "public, max-age=300")],
-            Json(detail),
-        )
-            .into_response()),
-        None => Ok((StatusCode::NOT_FOUND, "Package not found").into_response()),
+        Some(detail) => Ok(public_read::stamp(
+            (
+                StatusCode::OK,
+                [(header::CACHE_CONTROL, "public, max-age=300")],
+                Json(detail),
+            )
+                .into_response(),
+            &context.universe,
+            Some(&selection),
+        )),
+        None => Ok(public_read::stamp(
+            (StatusCode::NOT_FOUND, "Package not found").into_response(),
+            &context.universe,
+            Some(&selection),
+        )),
     }
 }
 
@@ -126,21 +145,34 @@ pub async fn get_versions(
 ) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
-    let state = state.read().await;
-    let db_path = state.config.db_path.clone();
-    let catalog_authority = state.catalog_authority.clone();
-    drop(state);
-    let versions = run_blocking("versions", move || {
-        query_versions(&catalog_authority, &db_path, &distro, &name)
+    let context = public_read::context(&state).await?;
+    let selection = context.profile_for_route(&distro)?;
+    let db_path = context.db_path.clone();
+    let catalog_authority = context.catalog_authority.clone();
+    let query_distro = distro.clone();
+    let query_name = name.clone();
+    let query_selection = selection.clone();
+    let versions = public_read::run("versions", move || {
+        query_versions(
+            &catalog_authority,
+            &db_path,
+            &query_distro,
+            &query_name,
+            &query_selection,
+        )
     })
     .await?;
 
-    Ok((
-        StatusCode::OK,
-        [(header::CACHE_CONTROL, "public, max-age=300")],
-        Json(versions),
-    )
-        .into_response())
+    Ok(public_read::stamp(
+        (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "public, max-age=300")],
+            Json(versions),
+        )
+            .into_response(),
+        &context.universe,
+        Some(&selection),
+    ))
 }
 
 /// GET /v1/packages/:distro/:name/dependencies
@@ -152,21 +184,32 @@ pub async fn get_dependencies(
 ) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
-    let state = state.read().await;
-    let db_path = state.config.db_path.clone();
-    let catalog_authority = state.catalog_authority.clone();
-    drop(state);
-    let deps = run_blocking("dependencies", move || {
-        query_dependencies(&catalog_authority, &db_path, &distro, &name)
+    let context = public_read::context(&state).await?;
+    let selection = context.profile_for_route(&distro)?;
+    let catalog_authority = context.catalog_authority.clone();
+    let query_distro = distro.clone();
+    let query_name = name.clone();
+    let query_selection = selection.clone();
+    let deps = public_read::run("dependencies", move || {
+        query_dependencies(
+            &catalog_authority,
+            &query_distro,
+            &query_name,
+            &query_selection,
+        )
     })
     .await?;
 
-    Ok((
-        StatusCode::OK,
-        [(header::CACHE_CONTROL, "public, max-age=300")],
-        Json(deps),
-    )
-        .into_response())
+    Ok(public_read::stamp(
+        (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "public, max-age=300")],
+            Json(deps),
+        )
+            .into_response(),
+        &context.universe,
+        Some(&selection),
+    ))
 }
 
 /// GET /v1/packages/:distro/:name/rdepends
@@ -178,21 +221,32 @@ pub async fn get_reverse_dependencies(
 ) -> HandlerResult<Response> {
     super::validate_distro_and_name(&distro, &name)?;
 
-    let state = state.read().await;
-    let db_path = state.config.db_path.clone();
-    let catalog_authority = state.catalog_authority.clone();
-    drop(state);
-    let rdeps = run_blocking("reverse dependencies", move || {
-        query_reverse_dependencies(&catalog_authority, &db_path, &distro, &name)
+    let context = public_read::context(&state).await?;
+    let selection = context.profile_for_route(&distro)?;
+    let catalog_authority = context.catalog_authority.clone();
+    let query_distro = distro.clone();
+    let query_name = name.clone();
+    let query_selection = selection.clone();
+    let rdeps = public_read::run("reverse dependencies", move || {
+        query_reverse_dependencies(
+            &catalog_authority,
+            &query_distro,
+            &query_name,
+            &query_selection,
+        )
     })
     .await?;
 
-    Ok((
-        StatusCode::OK,
-        [(header::CACHE_CONTROL, "public, max-age=300")],
-        Json(rdeps),
-    )
-        .into_response())
+    Ok(public_read::stamp(
+        (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "public, max-age=300")],
+            Json(rdeps),
+        )
+            .into_response(),
+        &context.universe,
+        Some(&selection),
+    ))
 }
 
 /// GET /v1/stats/popular?distro=fedora&limit=50
@@ -202,24 +256,41 @@ pub async fn get_popular(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
 ) -> HandlerResult<Response> {
-    let state = state.read().await;
-    let db_path = state.config.db_path.clone();
-    let catalog_authority = state.catalog_authority.clone();
-    drop(state);
+    let context = public_read::context(&state).await?;
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
+    if let Some(distro) = distro.as_deref() {
+        super::validate_supported_distro_route(distro)?;
+    }
+    let profile = distro
+        .as_deref()
+        .map(|distro| context.profile_for_route(distro))
+        .transpose()?;
 
-    let packages = run_blocking("popular", move || {
-        query_popular(&catalog_authority, &db_path, distro.as_deref(), limit)
+    let db_path = context.db_path.clone();
+    let catalog_authority = context.catalog_authority.clone();
+    let universe = context.universe.clone();
+    let packages = public_read::run("popular", move || {
+        query_popular(
+            &catalog_authority,
+            &db_path,
+            &universe,
+            distro.as_deref(),
+            limit,
+        )
     })
     .await?;
 
-    Ok((
-        StatusCode::OK,
-        [(header::CACHE_CONTROL, "public, max-age=300")],
-        Json(packages),
-    )
-        .into_response())
+    Ok(public_read::stamp(
+        (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "public, max-age=300")],
+            Json(packages),
+        )
+            .into_response(),
+        &context.universe,
+        profile.as_ref(),
+    ))
 }
 
 /// GET /v1/stats/recent?distro=fedora&limit=50
@@ -229,24 +300,41 @@ pub async fn get_recent(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(params): Query<StatsQuery>,
 ) -> HandlerResult<Response> {
-    let state = state.read().await;
-    let db_path = state.config.db_path.clone();
-    let catalog_authority = state.catalog_authority.clone();
-    drop(state);
+    let context = public_read::context(&state).await?;
     let limit = params.limit.unwrap_or(50).min(200);
     let distro = params.distro;
+    if let Some(distro) = distro.as_deref() {
+        super::validate_supported_distro_route(distro)?;
+    }
+    let profile = distro
+        .as_deref()
+        .map(|distro| context.profile_for_route(distro))
+        .transpose()?;
 
-    let packages = run_blocking("recent", move || {
-        query_recent(&catalog_authority, &db_path, distro.as_deref(), limit)
+    let db_path = context.db_path.clone();
+    let catalog_authority = context.catalog_authority.clone();
+    let universe = context.universe.clone();
+    let packages = public_read::run("recent", move || {
+        query_recent(
+            &catalog_authority,
+            &db_path,
+            &universe,
+            distro.as_deref(),
+            limit,
+        )
     })
     .await?;
 
-    Ok((
-        StatusCode::OK,
-        [(header::CACHE_CONTROL, "public, max-age=300")],
-        Json(packages),
-    )
-        .into_response())
+    Ok(public_read::stamp(
+        (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "public, max-age=300")],
+            Json(packages),
+        )
+            .into_response(),
+        &context.universe,
+        profile.as_ref(),
+    ))
 }
 
 /// GET /v1/stats/overview
@@ -255,22 +343,26 @@ pub async fn get_recent(
 pub async fn get_overview(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> HandlerResult<Response> {
-    let state = state.read().await;
-    let db_path = state.config.db_path.clone();
-    let catalog_authority = state.catalog_authority.clone();
-    drop(state);
+    let context = public_read::context(&state).await?;
 
-    let stats = run_blocking("overview", move || {
-        query_overview(&catalog_authority, &db_path)
+    let db_path = context.db_path.clone();
+    let catalog_authority = context.catalog_authority.clone();
+    let universe = context.universe.clone();
+    let stats = public_read::run("overview", move || {
+        query_overview(&catalog_authority, &db_path, &universe)
     })
     .await?;
 
-    Ok((
-        StatusCode::OK,
-        [(header::CACHE_CONTROL, "public, max-age=60")],
-        Json(stats),
-    )
-        .into_response())
+    Ok(public_read::stamp(
+        (
+            StatusCode::OK,
+            [(header::CACHE_CONTROL, "public, max-age=60")],
+            Json(stats),
+        )
+            .into_response(),
+        &context.universe,
+        None,
+    ))
 }
 
 // --- Database query functions (run on blocking threads) ---
@@ -280,14 +372,16 @@ fn query_package_detail(
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
+    selection: &ProfileRevisionSelection,
 ) -> anyhow::Result<Option<PackageDetail>> {
     let conn = open_handler_db(db_path)?;
     let source_profile = source_profile_for_route(distro)?;
+    anyhow::ensure!(selection.source_profile == source_profile);
 
     // Package identity, version ordering, payload metadata, and dependency
     // groups all come from this one immutable reader. Operational SQLite is
     // used below only for analytics and conversion rows.
-    let pinned = catalog_authority.open_active_profile(source_profile)?;
+    let pinned = catalog_authority.open_selected_profile(selection)?;
     let catalog = ProfileCatalog::new(&pinned);
     let packages = catalog.find_package_records_by_name(name)?;
     let latest = latest_catalog_package(&packages)?;
@@ -337,10 +431,12 @@ fn query_versions(
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
+    selection: &ProfileRevisionSelection,
 ) -> anyhow::Result<Vec<VersionSummary>> {
     let conn = open_handler_db(db_path)?;
     let source_profile = source_profile_for_route(distro)?;
-    let pinned = catalog_authority.open_active_profile(source_profile)?;
+    anyhow::ensure!(selection.source_profile == source_profile);
+    let pinned = catalog_authority.open_selected_profile(selection)?;
     let catalog = ProfileCatalog::new(&pinned);
     version_summaries(&conn, &catalog, name)
 }
@@ -379,12 +475,13 @@ fn version_summaries(
 
 fn query_dependencies(
     catalog_authority: &CatalogAuthority,
-    _db_path: &std::path::Path,
     distro: &str,
     name: &str,
+    selection: &ProfileRevisionSelection,
 ) -> anyhow::Result<Vec<RemiRequirementGroup>> {
     let source_profile = source_profile_for_route(distro)?;
-    let pinned = catalog_authority.open_active_profile(source_profile)?;
+    anyhow::ensure!(selection.source_profile == source_profile);
+    let pinned = catalog_authority.open_selected_profile(selection)?;
     let catalog = ProfileCatalog::new(&pinned);
     let packages = catalog.find_package_records_by_name(name)?;
     let Some(latest) = latest_catalog_package(&packages)? else {
@@ -395,12 +492,13 @@ fn query_dependencies(
 
 fn query_reverse_dependencies(
     catalog_authority: &CatalogAuthority,
-    _db_path: &std::path::Path,
     distro: &str,
     name: &str,
+    selection: &ProfileRevisionSelection,
 ) -> anyhow::Result<Vec<String>> {
     let source_profile = source_profile_for_route(distro)?;
-    let pinned = catalog_authority.open_active_profile(source_profile)?;
+    anyhow::ensure!(selection.source_profile == source_profile);
+    let pinned = catalog_authority.open_selected_profile(selection)?;
     let packages = ProfileCatalog::new(&pinned).package_records()?;
     let mut names = HashSet::new();
     for package in packages {
@@ -424,6 +522,7 @@ fn query_reverse_dependencies(
 fn query_popular(
     catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
+    universe: &PublicUniverseSnapshot,
     distro: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<Vec<PackageSummary>> {
@@ -431,16 +530,16 @@ fn query_popular(
 
     if let Some(distro) = distro {
         let source_profile = source_profile_for_route(distro)?;
+        let selection = universe.profile(source_profile).with_context(|| {
+            format!("profile '{source_profile}' is absent from the selected public universe")
+        })?;
         let counts = DownloadCount::popular(&conn, source_profile, limit)?;
         let mut pinned_profiles = HashMap::new();
         let mut results = Vec::with_capacity(counts.len());
         for count in counts {
             let summary = {
-                let pinned = pin_response_catalog(
-                    catalog_authority,
-                    &mut pinned_profiles,
-                    &count.source_profile,
-                )?;
+                let pinned =
+                    pin_response_catalog(catalog_authority, &mut pinned_profiles, selection)?;
                 let catalog = ProfileCatalog::new(pinned);
                 enrich_package_summary(&catalog, &count.package_name, count.total_count)?
             };
@@ -450,16 +549,33 @@ fn query_popular(
         }
         Ok(results)
     } else {
-        // All distros - query download_counts directly
-        let mut stmt = conn.prepare(
+        let source_profiles = universe
+            .profiles()
+            .map(|selection| selection.source_profile.clone())
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            !source_profiles.is_empty(),
+            "public universe has no profiles"
+        );
+        let placeholders = std::iter::repeat_n("?", source_profiles.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             "SELECT source_profile, package_name, total_count
              FROM download_counts
+             WHERE source_profile IN ({placeholders})
              ORDER BY total_count DESC
-             LIMIT ?1",
-        )?;
+             LIMIT ?"
+        );
+        let mut parameters = source_profiles
+            .into_iter()
+            .map(rusqlite::types::Value::Text)
+            .collect::<Vec<_>>();
+        parameters.push(rusqlite::types::Value::Integer(i64::try_from(limit)?));
+        let mut stmt = conn.prepare(&sql)?;
 
         let rows = stmt
-            .query_map(rusqlite::params![limit as i64], |row| {
+            .query_map(rusqlite::params_from_iter(parameters), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -471,9 +587,12 @@ fn query_popular(
         let mut results = Vec::new();
         let mut pinned_profiles = HashMap::new();
         for (source_profile, name, count) in rows {
+            let Some(selection) = universe.profile(&source_profile) else {
+                continue;
+            };
             let summary = {
                 let pinned =
-                    pin_response_catalog(catalog_authority, &mut pinned_profiles, &source_profile)?;
+                    pin_response_catalog(catalog_authority, &mut pinned_profiles, selection)?;
                 let catalog = ProfileCatalog::new(pinned);
                 enrich_package_summary(&catalog, &name, count)?
             };
@@ -488,6 +607,7 @@ fn query_popular(
 fn query_recent(
     catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
+    universe: &PublicUniverseSnapshot,
     distro: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<Vec<PackageSummary>> {
@@ -495,6 +615,9 @@ fn query_recent(
 
     if let Some(distro) = distro {
         let source_profile = source_profile_for_route(distro)?;
+        let selection = universe.profile(source_profile).with_context(|| {
+            format!("profile '{source_profile}' is absent from the selected public universe")
+        })?;
         let mut stmt = conn.prepare(
             "SELECT package_name
              FROM download_stats
@@ -515,7 +638,7 @@ fn query_recent(
                 .map_or(0, |count| count.total_count);
             let summary = {
                 let pinned =
-                    pin_response_catalog(catalog_authority, &mut pinned_profiles, source_profile)?;
+                    pin_response_catalog(catalog_authority, &mut pinned_profiles, selection)?;
                 let catalog = ProfileCatalog::new(pinned);
                 enrich_package_summary(&catalog, &name, download_count)?
             };
@@ -525,16 +648,34 @@ fn query_recent(
         }
         Ok(summaries)
     } else {
-        let mut stmt = conn.prepare(
+        let source_profiles = universe
+            .profiles()
+            .map(|selection| selection.source_profile.clone())
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            !source_profiles.is_empty(),
+            "public universe has no profiles"
+        );
+        let placeholders = std::iter::repeat_n("?", source_profiles.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
             "SELECT package_name, source_profile
              FROM download_stats
+             WHERE source_profile IN ({placeholders})
              GROUP BY package_name, source_profile
              ORDER BY MAX(downloaded_at) DESC, source_profile, package_name
-             LIMIT ?1",
-        )?;
+             LIMIT ?"
+        );
+        let mut parameters = source_profiles
+            .into_iter()
+            .map(rusqlite::types::Value::Text)
+            .collect::<Vec<_>>();
+        parameters.push(rusqlite::types::Value::Integer(i64::try_from(limit)?));
+        let mut stmt = conn.prepare(&sql)?;
 
         let rows = stmt
-            .query_map(rusqlite::params![limit as i64], |row| {
+            .query_map(rusqlite::params_from_iter(parameters), |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -542,11 +683,14 @@ fn query_recent(
         let mut summaries = Vec::new();
         let mut pinned_profiles = HashMap::new();
         for (name, source_profile) in rows {
+            let Some(selection) = universe.profile(&source_profile) else {
+                continue;
+            };
             let download_count = DownloadCount::find_by_package(&conn, &source_profile, &name)?
                 .map_or(0, |count| count.total_count);
             let summary = {
                 let pinned =
-                    pin_response_catalog(catalog_authority, &mut pinned_profiles, &source_profile)?;
+                    pin_response_catalog(catalog_authority, &mut pinned_profiles, selection)?;
                 let catalog = ProfileCatalog::new(pinned);
                 enrich_package_summary(&catalog, &name, download_count)?
             };
@@ -561,23 +705,16 @@ fn query_recent(
 fn query_overview(
     catalog_authority: &CatalogAuthority,
     db_path: &std::path::Path,
+    universe: &PublicUniverseSnapshot,
 ) -> anyhow::Result<OverviewStats> {
     let conn = open_handler_db(db_path)?;
 
-    // The active pointer set is operational control-plane state; all package
-    // counts and conversion identities below come from each pointer's exact
-    // immutable catalog revision.
-    let active_profiles = RemiActiveProfileRevision::list(&conn)?;
+    // Package counts and conversion identities come only from the exact
+    // revisions in this one signed universe snapshot.
     let mut total_packages = 0_i64;
     let mut total_converted = 0_i64;
-    for pointer in &active_profiles {
-        let pinned = catalog_authority.open_active_profile(&pointer.source_profile)?;
-        if pinned.profile_revision_sha256() != pointer.profile_revision_sha256 {
-            anyhow::bail!(
-                "active profile '{}' changed while building overview",
-                pointer.source_profile
-            );
-        }
+    for selection in universe.profiles() {
+        let pinned = catalog_authority.open_selected_profile(selection)?;
         let packages = ProfileCatalog::new(&pinned).package_records()?;
         let package_keys = packages
             .iter()
@@ -604,13 +741,13 @@ fn query_overview(
             let converted_id = converted.id.ok_or_else(|| {
                 anyhow::anyhow!(
                     "current repository conversion for profile '{}' has no database id",
-                    pointer.source_profile
+                    selection.source_profile
                 )
             })?;
             ConvertedPackage::require_conversion_pin(&conn, converted_id)?;
             converted.scriptlet_summary()?;
             let artifact = converted.repository_artifact()?;
-            if artifact.source_profile == pointer.source_profile
+            if artifact.source_profile == selection.source_profile
                 && package_keys.contains(&(
                     artifact.package_name.to_string(),
                     artifact.package_version.to_string(),
@@ -621,15 +758,30 @@ fn query_overview(
             }
         }
     }
-    let total_distros = i64::try_from(active_profiles.len())?;
+    let total_distros = i64::try_from(universe.profiles().len())?;
 
-    // Download stats from aggregated table
-    let download_stats = DownloadCount::global_stats(&conn)?;
+    let mut total_downloads = 0_i64;
+    let mut downloads_30d = 0_i64;
+    for selection in universe.profiles() {
+        let (profile_total, profile_30d) = conn.query_row(
+            "SELECT COALESCE(SUM(total_count), 0), COALESCE(SUM(count_30d), 0)
+             FROM download_counts
+             WHERE source_profile = ?1",
+            [&selection.source_profile],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        total_downloads = total_downloads
+            .checked_add(profile_total)
+            .context("public universe total download count overflow")?;
+        downloads_30d = downloads_30d
+            .checked_add(profile_30d)
+            .context("public universe 30-day download count overflow")?;
+    }
 
     Ok(OverviewStats {
         total_packages,
-        total_downloads: download_stats.total_downloads,
-        downloads_30d: download_stats.downloads_30d,
+        total_downloads,
+        downloads_30d,
         total_distros,
         total_converted,
     })
@@ -694,291 +846,4 @@ fn current_converted_keys(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::server::catalog_authority::test_support::{
-        ActiveCatalogFixture, package as catalog_package,
-    };
-    use conary_core::db::models::{CONVERSION_VERSION, ConvertedPackage};
-    use conary_core::repository::catalog::CatalogPackageRecordV1;
-
-    fn package(
-        name: &str,
-        version: &str,
-        architecture: &str,
-        marker: &str,
-    ) -> CatalogPackageRecordV1 {
-        let mut package = catalog_package(
-            "fedora-44",
-            name,
-            version,
-            "",
-            Some(architecture),
-            3,
-            marker,
-        );
-        package.description = Some(format!("catalog description {marker}"));
-        package.metadata = Some(
-            serde_json::json!({
-                "license": "MIT",
-                "homepage": format!("https://example.invalid/{marker}")
-            })
-            .to_string(),
-        );
-        package
-    }
-
-    fn insert_converted(
-        conn: &Connection,
-        profile_revision_sha256: &str,
-        name: &str,
-        version: &str,
-        architecture: &str,
-        conversion_version: i32,
-    ) {
-        let transport = crate::server::conversion::test_support::test_transport(&[]);
-        let mut converted = ConvertedPackage::new_repository(
-            "fedora-44".to_string(),
-            profile_revision_sha256.to_string(),
-            name.to_string(),
-            version.to_string(),
-            architecture.to_string(),
-            "rpm".to_string(),
-            format!("sha256:source-{name}-{version}"),
-            &transport,
-            3,
-            format!("sha256:content-{name}-{version}"),
-            format!("/tmp/{name}-{version}.ccs"),
-            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
-        );
-        converted.conversion_version = conversion_version;
-        converted.insert_with_conversion_pin(conn, 1).unwrap();
-    }
-
-    fn insert_stale_conversion(
-        conn: &Connection,
-        profile_revision_sha256: &str,
-        name: &str,
-        version: &str,
-        architecture: &str,
-    ) {
-        let transport = crate::server::conversion::test_support::test_transport(&[]);
-        let mut converted = ConvertedPackage::new_repository(
-            "fedora-44".to_string(),
-            profile_revision_sha256.to_string(),
-            name.to_string(),
-            version.to_string(),
-            architecture.to_string(),
-            "rpm".to_string(),
-            format!("sha256:source-{name}-{version}"),
-            &transport,
-            3,
-            format!("sha256:content-{name}-{version}"),
-            format!("/tmp/{name}-{version}.ccs"),
-            conary_core::db::models::EMPTY_REPOSITORY_PROVIDES_DIGEST.to_string(),
-        );
-        converted.conversion_version = CONVERSION_VERSION - 1;
-        converted.insert_with_conversion_pin(conn, 1).unwrap();
-    }
-
-    #[test]
-    fn package_detail_ignores_stale_converted_rows() {
-        let fixture = ActiveCatalogFixture::new();
-        let revision = fixture.activate(
-            "fedora-44",
-            1,
-            vec![package("pkg", "1.0", "x86_64", "stale")],
-        );
-        let conn = fixture.connection();
-        insert_converted(
-            &conn,
-            &revision,
-            "pkg",
-            "1.0",
-            "x86_64",
-            CONVERSION_VERSION - 1,
-        );
-
-        let detail = query_package_detail(fixture.authority(), fixture.db_path(), "fedora", "pkg")
-            .unwrap()
-            .unwrap();
-
-        assert!(!detail.converted);
-        assert!(detail.versions.iter().all(|version| !version.converted));
-    }
-
-    #[test]
-    fn package_versions_require_matching_architecture_for_converted_status() {
-        let fixture = ActiveCatalogFixture::new();
-        let revision = fixture.activate(
-            "fedora-44",
-            1,
-            vec![package("pkg", "1.0", "aarch64", "catalog")],
-        );
-        let conn = fixture.connection();
-        insert_converted(&conn, &revision, "pkg", "1.0", "x86_64", CONVERSION_VERSION);
-
-        let versions =
-            query_versions(fixture.authority(), fixture.db_path(), "fedora", "pkg").unwrap();
-
-        assert_eq!(versions.len(), 1);
-        assert_eq!(versions[0].architecture.as_deref(), Some("aarch64"));
-        assert!(!versions[0].converted);
-    }
-
-    #[test]
-    fn overview_ignores_stale_converted_rows() {
-        let fixture = ActiveCatalogFixture::new();
-        let revision = fixture.activate(
-            "fedora-44",
-            1,
-            vec![
-                package("stale", "1.0", "x86_64", "stale"),
-                package("current", "1.0", "x86_64", "current"),
-            ],
-        );
-        let conn = fixture.connection();
-        insert_converted(
-            &conn,
-            &revision,
-            "stale",
-            "1.0",
-            "x86_64",
-            CONVERSION_VERSION - 1,
-        );
-        insert_converted(
-            &conn,
-            &revision,
-            "current",
-            "1.0",
-            "x86_64",
-            CONVERSION_VERSION,
-        );
-        let overview = query_overview(fixture.authority(), fixture.db_path()).unwrap();
-
-        assert_eq!(overview.total_converted, 1);
-    }
-
-    #[test]
-    fn recent_packages_use_analytics_order_and_catalog_payload_without_package_rows() {
-        let fixture = ActiveCatalogFixture::new();
-        fixture.activate(
-            "fedora-44",
-            1,
-            vec![
-                package("recent-new", "1.0", "x86_64", "new-catalog"),
-                package("recent-old", "1.0", "x86_64", "old-catalog"),
-            ],
-        );
-        let conn = fixture.connection();
-        conn.execute(
-            "INSERT INTO download_stats (
-                 source_profile, package_name, package_version, downloaded_at
-             ) VALUES ('fedora-44', 'recent-new', '1.0', '2026-08-22 02:00:00')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO download_stats (
-                 source_profile, package_name, package_version, downloaded_at
-             ) VALUES ('fedora-44', 'recent-old', '1.0', '2026-08-22 01:00:00')",
-            [],
-        )
-        .unwrap();
-
-        let recent =
-            query_recent(fixture.authority(), fixture.db_path(), Some("fedora"), 10).unwrap();
-
-        assert_eq!(recent.len(), 2);
-        assert_eq!(recent[0].name, "recent-new");
-        assert_eq!(
-            recent[0].description.as_deref(),
-            Some("catalog description new-catalog")
-        );
-        assert_eq!(recent[1].name, "recent-old");
-        assert_eq!(
-            recent[1].description.as_deref(),
-            Some("catalog description old-catalog")
-        );
-    }
-
-    #[test]
-    fn popular_packages_use_analytics_order_and_catalog_payload_without_package_rows() {
-        let fixture = ActiveCatalogFixture::new();
-        fixture.activate(
-            "fedora-44",
-            1,
-            vec![
-                package("popular-high", "1.0", "x86_64", "high-catalog"),
-                package("popular-low", "1.0", "x86_64", "low-catalog"),
-            ],
-        );
-        let conn = fixture.connection();
-        conn.execute(
-            "INSERT INTO download_counts (source_profile, package_name, total_count)
-             VALUES ('fedora-44', 'popular-high', 20)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO download_counts (source_profile, package_name, total_count)
-             VALUES ('fedora-44', 'popular-low', 5)",
-            [],
-        )
-        .unwrap();
-
-        let popular =
-            query_popular(fixture.authority(), fixture.db_path(), Some("fedora"), 10).unwrap();
-
-        assert_eq!(popular.len(), 2);
-        assert_eq!(popular[0].name, "popular-high");
-        assert_eq!(popular[0].download_count, 20);
-        assert_eq!(
-            popular[0].description.as_deref(),
-            Some("catalog description high-catalog")
-        );
-        assert_eq!(popular[1].name, "popular-low");
-        assert_eq!(popular[1].download_count, 5);
-        assert_eq!(
-            popular[1].description.as_deref(),
-            Some("catalog description low-catalog")
-        );
-    }
-
-    #[test]
-    fn package_detail_counts_only_current_conversions() {
-        let fixture = ActiveCatalogFixture::new();
-        let revision = fixture.activate(
-            "fedora-44",
-            1,
-            vec![
-                package("pkg", "1.0", "x86_64", "one"),
-                package("pkg", "2.0", "x86_64", "two"),
-            ],
-        );
-        let conn = fixture.connection();
-
-        insert_converted(&conn, &revision, "pkg", "1.0", "x86_64", CONVERSION_VERSION);
-        insert_stale_conversion(&conn, &revision, "pkg", "2.0", "x86_64");
-
-        let detail = query_package_detail(fixture.authority(), fixture.db_path(), "fedora", "pkg")
-            .unwrap()
-            .unwrap();
-        let versions =
-            query_versions(fixture.authority(), fixture.db_path(), "fedora", "pkg").unwrap();
-        let overview = query_overview(fixture.authority(), fixture.db_path()).unwrap();
-
-        assert!(detail.converted);
-        assert_eq!(overview.total_converted, 1);
-        assert!(
-            versions
-                .iter()
-                .any(|version| version.version == "1.0" && version.converted)
-        );
-        assert!(
-            versions
-                .iter()
-                .any(|version| version.version == "2.0" && !version.converted)
-        );
-    }
-}
+mod tests;

@@ -6,6 +6,7 @@
 //! - If not converted: return 202 Accepted with job ID for polling
 
 use crate::server::ServerState;
+use crate::server::catalog_authority::ProfileRevisionSelection;
 use crate::server::conversion::ScriptletPackageMetadata;
 use crate::server::jobs::{ConversionJob, JobId, JobStatus};
 use axum::{
@@ -22,9 +23,11 @@ mod serving;
 #[cfg(test)]
 use serving::check_converted;
 use serving::{
-    ConvertedDownloadLookup, ConvertedManifestLookup, active_profile_revision_for_request,
-    converted_ccs_path_for_download, converted_manifest_for_request,
+    ConvertedDownloadLookup, ConvertedManifestLookup, converted_ccs_path_for_download,
+    converted_manifest_for_request,
 };
+
+use super::public_read::{self, PublicUniverseUnavailableReason};
 
 /// Query parameters for package requests
 #[derive(Debug, Deserialize)]
@@ -113,9 +116,8 @@ fn repository_not_ready_response(
 
 async fn repository_not_ready_after_cache_miss(
     state: &Arc<RwLock<ServerState>>,
-    route: &str,
+    selection: &ProfileRevisionSelection,
 ) -> Option<Response> {
-    let profile = conary_core::repository::supported_profiles::profile_for_remi_route(route)?;
     let (publication, catalog_authority) = {
         let state = state.read().await;
         (
@@ -125,42 +127,44 @@ async fn repository_not_ready_after_cache_miss(
     };
     if !publication.is_ready() {
         return Some(repository_not_ready_response(
-            profile.id(),
+            &selection.source_profile,
             RepositoryNotReadyReason::PublicationPending,
             publication,
         ));
     }
 
-    let profile_id = profile.id().to_string();
+    let selected = selection.clone();
     match tokio::task::spawn_blocking(move || {
-        crate::server::readiness::source_profile_is_populated(&catalog_authority, &profile_id)
+        catalog_authority
+            .verify_selected_profile(&selected)
+            .map(|inspection| inspection.manifest.counts.packages > 0)
     })
     .await
     {
         Ok(Ok(true)) => None,
         Ok(Ok(false)) => Some(repository_not_ready_response(
-            profile.id(),
+            &selection.source_profile,
             RepositoryNotReadyReason::ProfileEmpty,
             publication,
         )),
         Ok(Err(error)) => {
             tracing::warn!(
-                profile = profile.id(),
+                profile = selection.source_profile,
                 "Repository readiness probe failed: {error}"
             );
             Some(repository_not_ready_response(
-                profile.id(),
+                &selection.source_profile,
                 RepositoryNotReadyReason::PopulationProbeUnavailable,
                 publication,
             ))
         }
         Err(error) => {
             tracing::warn!(
-                profile = profile.id(),
+                profile = selection.source_profile,
                 "Repository readiness task failed: {error}"
             );
             Some(repository_not_ready_response(
-                profile.id(),
+                &selection.source_profile,
                 RepositoryNotReadyReason::PopulationProbeUnavailable,
                 publication,
             ))
@@ -174,14 +178,15 @@ async fn start_conversion_when_repository_ready(
     distro: &str,
     name: &str,
     query: &PackageQuery,
+    selection: &ProfileRevisionSelection,
 ) -> Response {
     let coordinator = state.read().await.publication_coordinator.clone();
     let _publication_guard = coordinator.lock_owned().await;
-    if let Some(response) = repository_not_ready_after_cache_miss(&state, distro).await {
+    if let Some(response) = repository_not_ready_after_cache_miss(&state, selection).await {
         return response;
     }
 
-    start_conversion_after_cache_miss(state, db_path, distro, name, query).await
+    start_conversion_after_cache_miss(state, db_path, distro, name, query, selection).await
 }
 
 fn active_conversion_response(job: &ConversionJob, eta_seconds: Option<u32>) -> Response {
@@ -204,14 +209,20 @@ fn active_conversion_response(job: &ConversionJob, eta_seconds: Option<u32>) -> 
         .into_response()
 }
 
-fn conversion_job_key(distro: &str, name: &str, query: &PackageQuery) -> String {
+fn conversion_job_key(
+    distro: &str,
+    name: &str,
+    query: &PackageQuery,
+    profile_revision_sha256: &str,
+) -> String {
     format!(
-        "{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}",
         distro,
         name,
         query.version.as_deref().unwrap_or("latest"),
         query.release.as_deref().unwrap_or("default"),
-        query.arch.as_deref().unwrap_or("default")
+        query.arch.as_deref().unwrap_or("default"),
+        profile_revision_sha256,
     )
 }
 
@@ -221,8 +232,9 @@ async fn start_conversion_after_cache_miss(
     distro: &str,
     name: &str,
     query: &PackageQuery,
+    selection: &ProfileRevisionSelection,
 ) -> Response {
-    let job_key = conversion_job_key(distro, name, query);
+    let job_key = conversion_job_key(distro, name, query, &selection.profile_revision_sha256);
     let mut state_guard = state.write().await;
     if let Some(existing_job) = state_guard.job_manager.get_active_job_by_key(&job_key) {
         return active_conversion_response(existing_job, None);
@@ -233,13 +245,26 @@ async fn start_conversion_after_cache_miss(
     // polling record can then be evicted. Holding this lock makes the lookup
     // and any replacement reservation one atomic decision relative to job
     // creation, completion, and cleanup.
-    let catalog_authority = state_guard.catalog_authority.clone();
-    match converted_manifest_for_request(db_path, &catalog_authority, distro, name, query).await {
+    match converted_manifest_for_request(
+        db_path,
+        &selection.profile_revision_sha256,
+        distro,
+        name,
+        query,
+    )
+    .await
+    {
         Ok(ConvertedManifestLookup::Ready(manifest)) => {
             return Json(manifest).into_response();
         }
         Ok(ConvertedManifestLookup::Missing) => {}
-        Err(error) => return error.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "final converted package lookup failed");
+            return public_read::unavailable_response(
+                PublicUniverseUnavailableReason::AuthorityUnavailable,
+                Some(&selection.source_profile),
+            );
+        }
     }
 
     match state_guard.job_manager.create_job(
@@ -251,8 +276,9 @@ async fn start_conversion_after_cache_miss(
     ) {
         Ok(job_id) => {
             let state_clone = Arc::clone(&state);
+            let conversion_selection = selection.clone();
             tokio::spawn(async move {
-                run_conversion(state_clone, job_id).await;
+                run_conversion(state_clone, job_id, conversion_selection).await;
             });
 
             (
@@ -362,13 +388,15 @@ pub async fn get_package(
         return e;
     }
 
-    let (db_path, catalog_authority) = {
-        let state_guard = state.read().await;
-        (
-            state_guard.config.db_path.clone(),
-            state_guard.catalog_authority.clone(),
-        )
+    let context = match public_read::context(&state).await {
+        Ok(context) => context,
+        Err(response) => return response.into_response(),
     };
+    let selection = match context.profile_for_route(&distro) {
+        Ok(selection) => selection,
+        Err(response) => return response.into_response(),
+    };
+    let db_path = context.db_path.clone();
 
     // Check if package is already converted (use spawn_blocking to avoid blocking
     // the async runtime with synchronous SQLite I/O)
@@ -391,32 +419,65 @@ pub async fn get_package(
     .await
     {
         Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Ready(manifest))) => {
-            return Json(manifest).into_response();
+            return public_read::stamp(
+                Json(manifest).into_response(),
+                &context.universe,
+                Some(&selection),
+            );
         }
         Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Ambiguous(releases))) => {
-            return native_ambiguity_response(releases);
+            return public_read::stamp(
+                native_ambiguity_response(releases),
+                &context.universe,
+                Some(&selection),
+            );
         }
         Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Missing)) => {}
         Ok(Err(e)) => {
             tracing::error!("Database error checking native publication: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+            return public_read::unavailable_response(
+                PublicUniverseUnavailableReason::AuthorityUnavailable,
+                Some(&selection.source_profile),
+            );
         }
         Err(e) => {
             tracing::error!("Blocking task failed: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+            return public_read::unavailable_response(
+                PublicUniverseUnavailableReason::AuthorityUnavailable,
+                Some(&selection.source_profile),
+            );
         }
     }
 
     // Check if package is already converted (use spawn_blocking to avoid blocking
     // the async runtime with synchronous SQLite I/O)
-    match converted_manifest_for_request(&db_path, &catalog_authority, &distro, &name, &query).await
+    match converted_manifest_for_request(
+        &db_path,
+        &selection.profile_revision_sha256,
+        &distro,
+        &name,
+        &query,
+    )
+    .await
     {
-        Ok(ConvertedManifestLookup::Ready(manifest)) => return Json(manifest).into_response(),
+        Ok(ConvertedManifestLookup::Ready(manifest)) => {
+            return public_read::stamp(
+                Json(manifest).into_response(),
+                &context.universe,
+                Some(&selection),
+            );
+        }
         Ok(ConvertedManifestLookup::Missing) => {}
-        Err(error) => return error.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "converted package lookup failed");
+            return public_read::unavailable_response(
+                PublicUniverseUnavailableReason::AuthorityUnavailable,
+                Some(&selection.source_profile),
+            );
+        }
     }
 
-    let job_key = conversion_job_key(&distro, &name, &query);
+    let job_key = conversion_job_key(&distro, &name, &query, &selection.profile_revision_sha256);
     if let Some(job) = state
         .read()
         .await
@@ -424,14 +485,25 @@ pub async fn get_package(
         .get_active_job_by_key(&job_key)
         .cloned()
     {
-        return active_conversion_response(&job, None);
+        return public_read::stamp(
+            active_conversion_response(&job, None),
+            &context.universe,
+            Some(&selection),
+        );
     }
 
-    start_conversion_when_repository_ready(state, &db_path, &distro, &name, &query).await
+    let response =
+        start_conversion_when_repository_ready(state, &db_path, &distro, &name, &query, &selection)
+            .await;
+    public_read::stamp(response, &context.universe, Some(&selection))
 }
 
 /// Run the actual conversion in a background task
-async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
+async fn run_conversion(
+    state: Arc<RwLock<ServerState>>,
+    job_id: JobId,
+    selection: ProfileRevisionSelection,
+) {
     // Acquire a semaphore permit to limit concurrent conversions.
     // This prevents unbounded parallelism when many conversion requests
     // arrive simultaneously. Clone the Arc<Semaphore> so the permit can
@@ -488,11 +560,12 @@ async fn run_conversion(state: Arc<RwLock<ServerState>>, job_id: JobId) {
     let version = job.version.clone();
     let architecture = job.architecture.clone();
     let result = conversion_service
-        .convert_package_async(
+        .convert_package_from_selection_async(
             &distro,
             &package_name,
             version.as_deref(),
             architecture.as_deref(),
+            selection,
         )
         .await
         .map_err(|e| anyhow::anyhow!("conversion failed: {e}"));
@@ -556,12 +629,18 @@ pub async fn download_package(
         return e;
     }
 
-    let (native_db_path, native_analytics) = {
+    let context = match public_read::context(&state).await {
+        Ok(context) => context,
+        Err(response) => return response.into_response(),
+    };
+    let selection = match context.profile_for_route(&distro) {
+        Ok(selection) => selection,
+        Err(response) => return response.into_response(),
+    };
+    let native_db_path = context.db_path.clone();
+    let native_analytics = {
         let state_guard = state.read().await;
-        (
-            state_guard.config.db_path.clone(),
-            state_guard.analytics.clone(),
-        )
+        state_guard.analytics.clone()
     };
     let native_ua = headers
         .get(header::USER_AGENT)
@@ -586,7 +665,7 @@ pub async fn download_package(
     .await
     {
         Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Ready(native))) => {
-            return stream_ccs_file(
+            let response = stream_ccs_file(
                 std::path::PathBuf::from(native.package_path),
                 native_analytics,
                 &distro,
@@ -596,18 +675,29 @@ pub async fn download_package(
                 native_ua.as_deref(),
             )
             .await;
+            return public_read::stamp(response, &context.universe, Some(&selection));
         }
         Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Ambiguous(releases))) => {
-            return native_ambiguity_response(releases);
+            return public_read::stamp(
+                native_ambiguity_response(releases),
+                &context.universe,
+                Some(&selection),
+            );
         }
         Ok(Ok(crate::server::native_publish::public_lookup::NativeLookup::Missing)) => {}
         Ok(Err(e)) => {
             tracing::error!("Database error checking native publication download: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+            return public_read::unavailable_response(
+                PublicUniverseUnavailableReason::AuthorityUnavailable,
+                Some(&selection.source_profile),
+            );
         }
         Err(e) => {
             tracing::error!("Blocking task failed: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+            return public_read::unavailable_response(
+                PublicUniverseUnavailableReason::AuthorityUnavailable,
+                Some(&selection.source_profile),
+            );
         }
     }
 
@@ -616,21 +706,24 @@ pub async fn download_package(
     // Only active jobs own request deduplication. Completed artifacts are
     // validated against persisted repository authority below; failed work may
     // be retried through `get_package`.
-    let job_key = conversion_job_key(&distro, &name, &query);
+    let job_key = conversion_job_key(&distro, &name, &query, &selection.profile_revision_sha256);
     let job_info = state_guard
         .job_manager
         .get_active_job_by_key(&job_key)
         .cloned();
 
     if let Some(job) = &job_info {
-        return active_conversion_response(job, None);
+        return public_read::stamp(
+            active_conversion_response(job, None),
+            &context.universe,
+            Some(&selection),
+        );
     }
 
     // No job found: look up the converted package through the DB instead of
     // trusting a cache filename. Conversion-version bumps make old CCS files
     // stale even when the bytes are still on disk.
-    let db_path = state_guard.config.db_path.clone();
-    let catalog_authority = state_guard.catalog_authority.clone();
+    let db_path = context.db_path.clone();
     let analytics = state_guard.analytics.clone();
     let ua = headers
         .get(header::USER_AGENT)
@@ -642,11 +735,7 @@ pub async fn download_package(
     let lookup_name = name.clone();
     let lookup_version = query.version.clone();
     let lookup_arch = query.arch.clone();
-    let Some(profile_revision_sha256) =
-        active_profile_revision_for_request(catalog_authority, &distro).await
-    else {
-        return get_package(State(state), Path((distro, name)), Query(query)).await;
-    };
+    let profile_revision_sha256 = selection.profile_revision_sha256.clone();
     let ccs_path = match tokio::task::spawn_blocking(move || {
         converted_ccs_path_for_download(
             &lookup_db,
@@ -664,16 +753,22 @@ pub async fn download_package(
         }
         Ok(Err(e)) => {
             tracing::error!("Database error checking downloadable conversion: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+            return public_read::unavailable_response(
+                PublicUniverseUnavailableReason::AuthorityUnavailable,
+                Some(&selection.source_profile),
+            );
         }
         Err(e) => {
             tracing::error!("Blocking task failed: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+            return public_read::unavailable_response(
+                PublicUniverseUnavailableReason::AuthorityUnavailable,
+                Some(&selection.source_profile),
+            );
         }
     };
 
     // Stream the file (analytics recorded inside after confirming file is readable)
-    stream_ccs_file(
+    let response = stream_ccs_file(
         ccs_path,
         analytics,
         &distro,
@@ -682,7 +777,8 @@ pub async fn download_package(
         query.arch.as_deref(),
         ua.as_deref(),
     )
-    .await
+    .await;
+    public_read::stamp(response, &context.universe, Some(&selection))
 }
 
 /// Stream a CCS file as a response, recording analytics only on success.

@@ -287,14 +287,6 @@ fn active_profile_is_populated(
         && inspection.manifest.counts.packages > 0)
 }
 
-/// Check one exact public profile without deriving authority from its route.
-pub(crate) fn source_profile_is_populated(
-    catalog_authority: &CatalogAuthority,
-    profile: &str,
-) -> Result<bool, String> {
-    active_profile_is_populated(catalog_authority, profile).map_err(|error| format!("{error:#}"))
-}
-
 /// Open the database read-only, run a query, and require the exact schema epoch.
 ///
 /// A missing database reports `Fresh`, which is not ready: a server with no

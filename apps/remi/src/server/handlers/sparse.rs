@@ -16,8 +16,10 @@ use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::server::catalog_authority::CatalogAuthority;
+use crate::server::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
 use crate::server::profile_catalog::ProfileCatalog;
+
+use super::public_read;
 
 /// GET /v1/index/{distro}/{name}
 ///
@@ -33,66 +35,93 @@ pub async fn get_sparse_entry(
         return e;
     }
 
-    let state_guard = state.read().await;
-    let db_path = state_guard.config.db_path.clone();
-    let catalog_authority = state_guard.catalog_authority.clone();
-    let fed_config = state_guard.federated_config.clone();
-    let fed_cache = state_guard.federated_cache.clone();
-    let http_client = state_guard.http_client.clone();
-    drop(state_guard);
-
-    // Use federated builder if federation is enabled
+    let context = match public_read::context(&state).await {
+        Ok(context) => context,
+        Err(response) => return response.into_response(),
+    };
+    let selection = match context.profile_for_route(&distro) {
+        Ok(selection) => selection,
+        Err(response) => return response.into_response(),
+    };
+    let (fed_config, fed_cache, http_client) = {
+        let guard = state.read().await;
+        (
+            guard.federated_config.clone(),
+            guard.federated_cache.clone(),
+            guard.http_client.clone(),
+        )
+    };
     if let (Some(config), Some(cache)) = (fed_config, fed_cache) {
         let result = crate::server::federated_index::build_federated_sparse_entry(
-            catalog_authority,
-            &db_path,
-            &distro,
+            context.catalog_authority.clone(),
+            &context.db_path,
             &name,
+            selection.clone(),
             &config,
             &cache,
             &http_client,
         )
         .await;
-
         return match result {
             Ok(Some(entry)) => {
                 let json = match super::serialize_json(&entry, "federated sparse entry") {
-                    Ok(j) => j,
-                    Err(e) => return e,
+                    Ok(json) => json,
+                    Err(response) => return response,
                 };
-                super::json_response(json, 60)
+                public_read::stamp(
+                    super::json_response(json, 60),
+                    &context.universe,
+                    Some(&selection),
+                )
             }
-            Ok(None) => (StatusCode::NOT_FOUND, "Package not found").into_response(),
-            Err(e) => {
-                tracing::error!("Failed to build federated sparse entry: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
+            Ok(None) => public_read::stamp(
+                (StatusCode::NOT_FOUND, "Package not found").into_response(),
+                &context.universe,
+                Some(&selection),
+            ),
+            Err(error) => {
+                tracing::error!(%error, "federated sparse read failed");
+                public_read::unavailable_response(
+                    super::public_read::PublicUniverseUnavailableReason::AuthorityUnavailable,
+                    Some(&selection.source_profile),
+                )
             }
         };
     }
-
-    // Non-federated path: local only
-    let result = tokio::task::spawn_blocking(move || {
-        build_sparse_entry(&catalog_authority, &db_path, &distro, &name)
+    let db_path = context.db_path.clone();
+    let catalog_authority = context.catalog_authority.clone();
+    let lookup_distro = distro.clone();
+    let lookup_name = name.clone();
+    let lookup_selection = selection.clone();
+    let result = public_read::run("sparse index", move || {
+        build_sparse_entry(
+            &catalog_authority,
+            &db_path,
+            &lookup_distro,
+            &lookup_name,
+            &lookup_selection,
+        )
     })
     .await;
 
     match result {
-        Ok(Ok(Some(entry))) => {
+        Ok(Some(entry)) => {
             let json = match super::serialize_json(&entry, "sparse index entry") {
                 Ok(j) => j,
                 Err(e) => return e,
             };
-            super::json_response(json, 60)
+            public_read::stamp(
+                super::json_response(json, 60),
+                &context.universe,
+                Some(&selection),
+            )
         }
-        Ok(Ok(None)) => (StatusCode::NOT_FOUND, "Package not found").into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("Failed to build sparse entry: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
-        Err(e) => {
-            tracing::error!("Blocking task failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-        }
+        Ok(None) => public_read::stamp(
+            (StatusCode::NOT_FOUND, "Package not found").into_response(),
+            &context.universe,
+            Some(&selection),
+        ),
+        Err(response) => response.into_response(),
     }
 }
 
@@ -103,8 +132,9 @@ pub(super) fn build_sparse_entry(
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
+    selection: &ProfileRevisionSelection,
 ) -> Result<Option<SparseIndexEntry>, anyhow::Error> {
-    build_sparse_entry_with_revision(catalog_authority, db_path, distro, name)
+    build_sparse_entry_with_revision(catalog_authority, db_path, distro, name, selection)
         .map(|(_, entry)| entry)
 }
 
@@ -113,13 +143,19 @@ pub(crate) fn build_sparse_entry_with_revision(
     db_path: &std::path::Path,
     distro: &str,
     name: &str,
+    selection: &ProfileRevisionSelection,
 ) -> Result<(String, Option<SparseIndexEntry>), anyhow::Error> {
     let conn = Connection::open(db_path)?;
     let source_profile =
         conary_core::repository::supported_profiles::profile_for_remi_route(distro)
             .ok_or_else(|| anyhow::anyhow!("unsupported public route '{distro}'"))?;
 
-    let pinned = catalog_authority.open_active_profile(source_profile.id())?;
+    anyhow::ensure!(
+        selection.source_profile == source_profile.id(),
+        "public universe selection '{}' does not match route '{distro}'",
+        selection.source_profile
+    );
+    let pinned = catalog_authority.open_selected_profile(selection)?;
     let catalog = ProfileCatalog::new(&pinned);
     let revision_sha256 = catalog.profile_revision_sha256().to_string();
     let minimum_size = u64::try_from(REMI_SPARSE_MIN_PACKAGE_SIZE)

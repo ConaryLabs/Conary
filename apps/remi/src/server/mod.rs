@@ -51,6 +51,7 @@ pub mod profile_catalog;
 mod promotion;
 mod promotion_evidence;
 mod promotion_proof;
+pub(crate) mod public_universe;
 pub mod publication;
 mod publication_scheduler;
 pub mod r2;
@@ -749,23 +750,29 @@ async fn run_server_on_runtime(
         match SearchEngine::new(&index_dir) {
             Ok(engine) => {
                 let engine = Arc::new(engine);
-                // Rebuild from exact immutable profile readers in background.
+                // Rebuild from the exact signed public universe in background.
+                // Until that succeeds, the persisted index has no serving
+                // authority and search returns typed unavailability.
                 let rebuild_engine = Arc::clone(&engine);
                 let rebuild_db = server_config.db_path.clone();
-                let (rebuild_catalog_authority, rebuild_source_profiles) = {
-                    let state_guard = state.read().await;
-                    (
-                        state_guard.catalog_authority.clone(),
-                        state_guard.required_source_profiles.clone(),
-                    )
-                };
+                let rebuild_catalog_authority = state.read().await.catalog_authority.clone();
                 tokio::task::spawn_blocking(move || {
-                    if let Err(e) = rebuild_engine.rebuild_from_catalogs(
-                        &rebuild_db,
-                        &rebuild_catalog_authority,
-                        &rebuild_source_profiles,
-                    ) {
-                        tracing::error!("Failed to rebuild search index: {}", e);
+                    match public_universe::PublicUniverseSnapshot::load(&rebuild_db) {
+                        Ok(Some(universe)) => {
+                            if let Err(error) = rebuild_engine.rebuild_from_universe(
+                                &rebuild_db,
+                                &rebuild_catalog_authority,
+                                &universe,
+                            ) {
+                                tracing::error!(%error, "Failed to rebuild public search index");
+                            }
+                        }
+                        Ok(None) => tracing::info!(
+                            "Search index remains unavailable until a signed universe is active"
+                        ),
+                        Err(error) => {
+                            tracing::error!(%error, "Failed to load public search authority")
+                        }
                     }
                 });
                 state.write().await.search_engine = Some(engine);

@@ -67,10 +67,27 @@ fn activate(fixture: &ActiveCatalogFixture, packages: Vec<CatalogPackageRecordV1
     fixture.activate("fedora-44", 1, packages);
 }
 
+fn selection(fixture: &ActiveCatalogFixture) -> ProfileRevisionSelection {
+    let pinned = fixture
+        .authority()
+        .open_active_profile("fedora-44")
+        .expect("open active fixture profile");
+    ProfileRevisionSelection {
+        source_profile: "fedora-44".to_string(),
+        profile_revision_sha256: pinned.profile_revision_sha256().to_string(),
+    }
+}
+
 fn sparse_entry(fixture: &ActiveCatalogFixture, name: &str) -> SparseIndexEntry {
-    build_sparse_entry(fixture.authority(), fixture.db_path(), "fedora", name)
-        .unwrap()
-        .expect("catalog package should be visible")
+    build_sparse_entry(
+        fixture.authority(),
+        fixture.db_path(),
+        "fedora",
+        name,
+        &selection(fixture),
+    )
+    .unwrap()
+    .expect("catalog package should be visible")
 }
 
 #[tokio::test]
@@ -119,6 +136,7 @@ fn zero_sized_catalog_packages_are_excluded_from_entry() {
             fixture.db_path(),
             "fedora",
             "placeholder",
+            &selection(&fixture),
         )
         .unwrap()
         .is_none()
@@ -248,9 +266,20 @@ fn operational_repository_row_mutation_and_deletion_do_not_change_catalog_output
 #[test]
 fn sparse_readers_fail_closed_without_an_active_catalog() {
     let fixture = ActiveCatalogFixture::new();
+    let missing = ProfileRevisionSelection {
+        source_profile: "fedora-44".to_string(),
+        profile_revision_sha256: "a".repeat(64),
+    };
 
     assert!(
-        build_sparse_entry(fixture.authority(), fixture.db_path(), "fedora", "missing",).is_err()
+        build_sparse_entry(
+            fixture.authority(),
+            fixture.db_path(),
+            "fedora",
+            "missing",
+            &missing,
+        )
+        .is_err()
     );
 }
 
@@ -328,6 +357,7 @@ fn native_publication_architecture_aliases_fail_as_duplicates() {
         fixture.db_path(),
         "fedora",
         "native-alias",
+        &selection(&fixture),
     )
     .expect_err("normalized duplicate publication identity must fail closed");
     assert!(
