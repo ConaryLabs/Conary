@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-27
-revision: 37
+revision: 38
 summary: Non-secret infrastructure, agent operations, release, trusted Remi CI benchmark capacity, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
@@ -61,7 +61,10 @@ AppArmor profile, and installs the
 to audit the installed boundary without changing it.
 The unit launches the pinned runner's `runsvc.sh` service wrapper so systemd's
 stop signal is forwarded to the listener and maintenance restarts do not wait
-for the five-minute forced-stop timeout.
+for the five-minute forced-stop timeout. Reinstallation refuses while a worker
+job is active, drains the complete old service cgroup before replacing the
+unit, and audits that exactly one service-mode listener remains. This prevents
+an interactive-wrapper migration from leaving an orphaned second listener.
 
 Only one benchmark job runs at a time. That job sets Cargo, Rust tests, Make,
 and CMake parallelism to all logical CPUs visible through `nproc`; the runner
