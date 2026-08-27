@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-19
-revision: 11
+last_updated: 2026-08-27
+revision: 12
 status: active
 current_result: 0/10
 summary: Outcome tracker for Conary's first cross-distro external tester milestone
@@ -35,24 +35,25 @@ but does not count as a completion.
 
 ## Release Gate
 
-The publication gate for synchronized suite `v0.16.1` is complete. The
+The publication gate for synchronized suite `v0.16.1` is complete historical
+release evidence. The
 `docs/operations/release-artifact-matrix.md` records its exact reviewed commit,
 annotated tag, immutable 15-asset release across four products, checksums and
 GitHub digests, release attestation, detached CCS signature, deployments,
 signed bootstrap manifest, build-only routes, and three-distro
-released-package proof. Production Remi runs the exact tagged binary.
+released-package proof.
 
 Protected failed tag `v0.16.0` remains reserved and has no release; it was not
 moved or reused when the strictly higher `v0.16.1` suite was published.
 
-That complete release closeout does not by itself open outreach. The
-ordinary-package corpus gate owned by #110/W7 must also pass before this
-tracker names a pinned tester version. No tester version is assigned in
-advance, and `v0.16.1` must not be presented as one merely because it is the
-current release authority.
+W7's ordinary-package corpus gate passed through #110 and PR #487. That does
+not make `v0.16.1` tester authority: the release predates the signed-universe
+client protocol and current schema. [Launch status](launch-status.json) is the
+machine-readable owner of the exact open gates and assigns no tester version
+until they complete.
 
 Release proof is not an external-user completion. The result therefore remains
-0/10, and broad outreach remains postponed by the W7 corpus gate plus the
+0/10, and broad outreach remains postponed by the launch gates above plus the
 separate cached-history and venue-eligibility gates.
 
 Supported tester hosts are x86_64 Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
@@ -62,7 +63,11 @@ Use a disposable VM, snapshot, spare system, or other non-critical host.
 
 No broad-outreach post has been published and no new date is assigned. The
 venue copy remains in `docs/operations/external-tester-outreach.md`. Fresh
-dates require:
+dates require the product gates above, then a five-person guided pilot whose
+qualifying completions count toward the same 10-person milestone. Record time
+to first transaction, maintainer interventions, desired workload, rollback
+understanding, and seven-day reuse. The fifth participant's target is zero live
+maintainer intervention. Broad-venue dates additionally require:
 
 - GitHub Support dereferencing of cached pre-rewrite history;
 - current venue-rule and posting-eligibility checks.

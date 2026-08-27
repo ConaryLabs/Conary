@@ -1,10 +1,10 @@
 ---
-last_updated: 2026-08-19
-revision: 30
-summary: Track Conary's active W7 corpus gate, typed semantic coverage, external tester milestone, and later workstreams
-proof_baseline: "immutable synchronized v0.16.1 suite at 0fb961bacc6360107506371b16b7f0345ba6f927; exact tagged Remi deployed; external tester result remains 0/10 behind #110"
+last_updated: 2026-08-27
+revision: 31
+summary: Track Conary's signed-universe launch gate, daily-driver floor, synchronized preview release, and external tester milestone
+proof_baseline: "W7/#110 closed through PR #487; immutable v0.16.1 remains historical release evidence rather than tester authority; #598 owns first complete signed public universe; external tester result remains 0/10"
 current_milestone: first external tester loop
-active_workstream: W7 Just-Works Corpus Gate
+active_workstream: W7.5 Signed Universe And Launch Gate
 next_workstream: W8 External Tester Outreach
 ---
 
@@ -80,16 +80,18 @@ new source-format/host-format crossing requirement.
 
 ### Engineering precondition for outreach
 
-Outreach is gated on the corpus proof in W7, not merely on venue scheduling.
-Ordinary Fedora and Arch repository packages currently fail conversion in
-classes owned by #98, #99, and #102 through #105. A tester asking for
-`ansible`, `btop`, `aisleriot`, `NetworkManager`, or `bash-completion` reaches
-a known typed failure, so outreach conducted before W7 spends scarce
-first-impression attempts reproducing defects the tracker already owns.
+W7's ordinary-package corpus proof passed through #110 and PR #487. Outreach
+now waits on W7.5: one complete signed zero-exclusion public universe, the
+pre-release daily-driver safety and usability floor, a synchronized release
+whose clean-host journey uses only public artifacts, and recorded
+performance/usefulness proof. Milestone `v0.17 Limited Preview — useful package
+bridge` holds exactly ten launch deliverables. [Launch status](launch-status.json)
+is their machine-readable current-state owner.
 
-W4 through W7 therefore precede the outreach half of the milestone. This does
-not relax the 10-unique-tester exit condition; it orders the work so each
-attempt tests onboarding rather than parser fidelity.
+This ordering does not relax the 10-unique-tester exit condition. It prevents
+first-impression attempts from testing a partial public catalog, a transaction
+that discovers conflicts during mutation, or a client/server combination that
+was never released together.
 
 ## Principles and Safety Boundaries
 
@@ -126,11 +128,11 @@ the stated scope, not whether a workstream happens to be active.
 | Generation build and export | limited | Bootable-image export (raw/qcow2/ISO plus a UEFI QEMU boot proof) is retained and proven from a supported-host fixture rather than from bootstrap; the re-based Group O/P suites passed locally on 2026-07-31. Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
-| Remi core and publication | solid | Exact tagged `remi 0.16.1` is deployed at schema revision 40 with 6/6 populated sources, four exact signing profiles, 110,182 repository packages, 3,855 conversions, and a passing readiness probe. Its binary hash matches the immutable release asset. Distribution and a wider stranger-operated path remain limited. |
+| Remi core and publication | active launch gate | The signed immutable-universe architecture is implemented through its production ceremony. #598 remains open because no complete Fedora/Ubuntu/Arch universe is active; public readiness correctly stays false. The v0.16.1 schema-40 deployment record is historical release evidence, not current production or tester authority. |
 | conaryd package and query service | limited | Authorization is exact root/daemon/configured-group authority; restart semantics, resolver-backed dry-run proof, and deployment remain incomplete. |
 | Federation | experimental | Only `/v1/federation/directory` is routed and no federation call exists in chunk serving, so the router is a library nothing invokes on a local miss. TLS fingerprint pinning is enforced in code; the documented disagreement is a docs defect. See the federation horizon for measured state and slice ordering. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
-| External product readiness | unfinished | The synchronized `v0.16.1` released-package matrix is complete. The revised cross-distro milestone remains 0/10, and outreach is separately gated on W7/#110 corpus proof, cached-history clearance, and venue eligibility. Release proof is not tester readiness. |
+| External product readiness | unfinished | W7 passed. The cross-distro milestone remains 0/10, and outreach is gated on W7.5's signed universe, daily-driver floor, synchronized release, performance/usefulness proof, guided pilot, cached-history clearance, and venue eligibility. Release proof is not tester readiness. |
 
 ## Workstreams
 
@@ -177,10 +179,11 @@ the stated scope, not whether a workstream happens to be active.
   venue eligibility, and the 0/10 tracker are now W8's.
 - **Current truth:** the latest immutable release is synchronized suite
   `v0.16.1`. Its released RPM, DEB, and Arch packages passed the Cartesian
-  source-format lifecycle on Fedora 44, Ubuntu 26.04 LTS, and Arch. Remi runs
-  the exact tagged suite binary; conaryd and conary-test are checksum-verified
-  build-only artifacts. This is current release authority, not pinned tester
-  authority. W7/#110 owns the ordinary-package corpus gate.
+  source-format lifecycle on Fedora 44, Ubuntu 26.04 LTS, and Arch. The
+  release-era Remi deployment ran the exact tagged suite binary; conaryd and
+  conary-test are checksum-verified build-only artifacts. This is current
+  published-release authority, not current production or pinned tester
+  authority. W7/#110 subsequently closed the ordinary-package corpus gate.
 - **Execution status:** complete for the release, deployment, and
   published-package proof it owns.
 - **Dependencies:** none remaining.
@@ -194,7 +197,7 @@ the stated scope, not whether a workstream happens to be active.
   Exact hashes and complete per-product evidence live in the release matrix.
   The CCS has a detached signature; no product publishes an SBOM or additional
   provenance sidecar.
-- **Current deployment evidence:** independent proof reports installed
+- **Release-era deployment evidence:** independent proof reported installed
   `remi 0.16.1` with the exact release hash, schema revision 40, 6/6 populated
   sources, four signing profiles, 110,182 repository packages, and 3,855
   conversions. The protected deployment readiness probe passed.
@@ -309,10 +312,11 @@ the stated scope, not whether a workstream happens to be active.
 
 ### W7 Just-Works Corpus Gate
 
-- **Outcome:** a clean machine on each supported host completes the ordinary
+- **Outcome:** complete. A clean machine on each supported host completes the ordinary
   user journey end to end, and failures are reported as typed stages rather
   than message text.
-- **Execution status:** active after W4 through W6 completion. Typed per-case
+- **Execution status:** closed 2026-08-21 through #110 and PR #487 after all 29
+  protected jobs passed. Typed per-case
   reporting and the closed 44-property authority landed through #456; #458
   makes the daily-driver native fixture attributable in one focused local
   manifest. #463 adds exact directory and symlink topology to that same
@@ -332,9 +336,9 @@ the stated scope, not whether a workstream happens to be active.
   ALPM. PR #487 owns the selected closure slice: TNPM13 through TNPM32 declare
   all 44 required semantic properties, add exact preview-before-apply proof to
   the shared three-by-three lifecycle contract, and make each forced failure
-  assert the state appropriate to its typed boundary. #39 remains the release
-  bootstrap prerequisite and is implemented in PR #486 pending immutable
-  publication proof.
+  assert the state appropriate to its typed boundary. #39's bootstrap protocol
+  is implemented through PR #486; its remaining public-endpoint and
+  first-carrying-release proof moved to #639.
 - **Issues:** #110 as the corpus umbrella; #458 and #463 for focused
   daily-driver attribution; #462 and #464 for payload-topology export gaps;
   #460 and #461 for closed legacy parity defects; #470 for versioned dependency
@@ -343,7 +347,8 @@ the stated scope, not whether a workstream happens to be active.
   remaining configuration states; plus #39
   for bootstrap.
 - **User journey:** install the signed release through one documented bootstrap
-  entry point; `conary system init` with no hand-edited state; sync and
+  entry point; let the native release package own `conary system init` with no
+  hand-edited state, then inspect that state read-only; sync and
   authenticate repositories; request a package by ordinary name; resolve the
   complete transaction; obtain or produce a signed CCS artifact through Remi;
   reopen and verify it; preview the exact transaction; install with no manual
@@ -376,17 +381,67 @@ the stated scope, not whether a workstream happens to be active.
   2026-07-31 Group O/P result is the current boot evidence. Hosted
   `native-daily-driver-corpus` and `native-cross-source-lifecycle` are the
   ordinary-package semantic and lifecycle gates, not substitutes for boot.
-- **Gate:** the full three-by-three corpus passes in the hosted PR gate with
-  zero package-specific exceptions, #39 has immutable public release proof,
-  and the KVM limitation plus named local replacement gate remains explicit
-  until remote KVM is restored.
+- **Gate:** passed. The full three-by-three corpus passed in the hosted PR gate
+  with zero package-specific exceptions. #39's first carrying-release proof is
+  now part of W7.5/#639, and the KVM limitation plus named local replacement
+  gate remains explicit until remote KVM is restored.
+
+### W7.5 Signed Universe And Launch Gate
+
+- **Outcome:** one complete signed Fedora/Ubuntu/Arch public universe is active;
+  ordinary mutations meet the public-preview safety and usability floor; and
+  one exact synchronized release completes the clean-host newcomer journey
+  using only public artifacts.
+- **Execution status:** active. #517 owns the immutable-universe architecture;
+  #598 owns its first zero-exclusion production ceremony. #637 restored public
+  ingress and prevents deploy-helper ownership drift. #638 must prove typed
+  unavailability before activation and one-revision search/detail/index/stats
+  agreement after activation. #639 owns the release cut and released journey.
+- **Phase 0 -- ingress and truth:** #637's production remediation, protected
+  helper deployment, and closeout are complete. Land #640 so W7 closure and
+  current blockers are truthful; pursue the cached-history dereference and
+  dated venue checks in parallel.
+- **Phase 1 -- complete public universe:** close #606 and #619, record #605 and
+  #614 production closeout, export exact native-oracle inputs through #601,
+  prove #638's no-active-universe failure posture, then execute #598. Promotion
+  requires every exact candidate variant to succeed with zero exclusions. A
+  proof-derived partial preview universe would be a separate reviewed authority
+  contract; it is not an alternate #598 readout or a post-failure goal change.
+- **Phase 2 -- daily-driver floor:** #534 proves that a supported normal apply
+  publishes its exact changeset before success or returns a typed recoverable
+  partial outcome; #122 rejects complete materialization conflicts before any
+  mutation; and #132's first three ranked slices establish correct TTY progress,
+  one warning/error voice, and one grouped transaction summary. #642 gives
+  removal the same non-mutating plan/apply control as install and update. #643
+  provides one read-only typed status result for release, repository,
+  generation/publication, carrier, and database health.
+- **Phase 3 -- synchronized release:** #639 cuts one exact tagged suite, deploys
+  the matching Remi binary and schema, completes #39's endpoint/release proof,
+  and re-proves the Fedora/Ubuntu/Arch journey. The installer invokes the native
+  package transaction; package post-install owns initialization, and the journey
+  verifies that result read-only rather than asking the user to rerun it.
+- **Phase 4 -- proof and pilot preparation:** #121 records cold/warm baselines
+  and work-amplification counters before #535 is considered; #149 records useful
+  foreign-only workloads from the exact release; and contributor-facing #497
+  follows the known non-root/umask hermeticity repairs rather than advertising
+  a setup whose owning tests fail locally.
+- **Parked before the preview:** #539, #538, #537, #536, #644, #69, #66, #65,
+  #63, #64, #72, #70, #74, #50, #46, federation completion, and #272's
+  full-system replacement proof do not enter this launch lane without a new
+  issue-backed dependency justified by launch or tester evidence.
+- **Gate:** #598 zero-exclusion evidence, #638 read-surface agreement, the
+  #122/#534/#132/#642/#643 floor, #639 released public-artifact proof, and
+  #121/#149 launch proof are complete.
+  The announcement claim remains the individual-package cross-distribution
+  bridge recorded in `launch-status.json`; #272 owns any later full-system
+  replacement claim.
 
 ### W8 External Tester Outreach
 
 - **Outcome:** Conary has external evidence that strangers can install and
   remove a package whose source format differs from the supported host's native
   format.
-- **Execution status:** gated on W7. Scope inherited from the former W3.
+- **Execution status:** gated on W7.5. Scope inherited from the former W3.
 - **Issue:** #48.
 - **Current truth:** no broad external venue post has been published, and the
   tracker remains 0/10. One organic external tester's former adoption-led
@@ -397,15 +452,19 @@ the stated scope, not whether a workstream happens to be active.
   completions. Issue #41's Artix host and Fedora-form source route remain
   outside the supported host proof and require exact source-selection,
   source-pin, and repository evidence before classification.
-- **Dependencies:** W7's corpus gate; GitHub Support must dereference the
-  cached pull-request and commit views that still expose pre-rewrite history;
-  and the maintainer must re-check each venue's current account and rule
-  eligibility immediately before submission.
-- **Next gate:** after W7 passes, GitHub Support confirms the cached history is
-  no longer reachable, and venue checks pass, assign a new staggered schedule.
-  Then submit the refreshed Show HN packet, record its actual URL and
-  timestamp, and collect privacy-safe reports toward the first unique
-  qualifying tester.
+- **Dependencies:** W7.5's product gate assigns the exact tester release and
+  opens the guided pilot. GitHub Support must dereference cached pre-rewrite
+  pull-request/commit views, and the maintainer must re-check each venue's
+  current account/rule eligibility, before broad submission rather than before
+  direct guided participants.
+- **Next gate:** after W7.5 passes, recruit the first five unaffiliated
+  participants as a staggered guided pilot;
+  each qualifying completion counts toward the same 10-person milestone. Track
+  time to first transaction, intervention count, requested workload, rollback
+  understanding, and seven-day reuse. By the fifth participant, the target is
+  zero live maintainer intervention. Only after that pilot and the separate
+  cached-history/venue checks, submit the refreshed broad-venue packet, record
+  each actual URL and timestamp, and continue toward ten.
 - **Evidence rule:** each completion belongs to a unique outsider and covers
   exactly `foreign artifact install -> list/query -> update --dry-run ->
   remove` on a supported host where source and host formats differ. Every
@@ -418,23 +477,29 @@ the stated scope, not whether a workstream happens to be active.
 - **Non-goals:** automated posting, redefining partial attempts as completion,
   or broadening the supported scope to make the count easier.
 
-## Issue Map
+## Launch Funnel And Issue Map
 
-Every open issue has exactly one owning workstream. The roadmap owns ordering,
-cross-issue blockers, and milestone truth; each issue owns bounded scope,
-acceptance criteria, and proof.
+This is an ordering index, not a perpetual enumeration of every open issue.
+GitHub milestones and issue links own per-issue disposition; the roadmap owns
+workstream order and cross-issue gates. The `v0.17 Limited Preview — useful
+package bridge` milestone is deliberately capped at ten user-visible
+deliverables. Its dependency issues remain attached to their owning epic or
+ceremony rather than inflating the launch milestone. Anything outside the
+launch lane is post-preview, blocked by user evidence, or parked in a named
+horizon unless an issue-backed roadmap change says otherwise.
 
 | Workstream | Issues | Priority |
 | --- | --- | --- |
 | W4 Source Fidelity Hard Cut | #102, #103, #98, #99 (slices 99a-99c), #107 | P0 |
 | W5 Source Authority Model | #108 specification, #104, #105 | P0 |
 | W6 Authority Audit Closure | #67 epic, #109, plus narrow ledger slices | P1 |
-| W7 Just-Works Corpus Gate | #110 closure in PR #487, #39 bootstrap in PR #486 | P0 |
+| W7 Just-Works Corpus Gate | #110 closed in PR #487; #39 protocol in PR #486 | complete |
+| W7.5 Signed Universe And Launch Gate | milestone deliverables #598, #638, #122, #534, #132, #642, #643, #639, #121, #149; dependencies #517, #601, #605, #606, #614, #619; completed ingress #637; truth/disposition #640; contributor follow-up #497 | P0/P1 |
 | W8 External Tester Outreach | #48 | gated |
 | W9 Common Package Capability Classes | #74, #50, #46, #67 P2 remainder | P1 |
 | W10 Distro-Agnostic Takeover | #62 epic decomposed, #68 | P2 |
 | Native packaging horizon | #70, #51, #72 | P2 |
-| Service and operator horizon | #69, #65, #66, #73 | P2 |
+| Service and operator horizon | #69, #65, #66, #73, #644 (remaining #132 presentation slices) | P2 |
 | System artifacts horizon | #63, #64, #71 | P2 |
 | Closed | #41 closed 2026-07-31 after the selected-root alias regression repair and current Fedora export/boot proof; original Artix route tracked as W8 evidence | not engineering work |
 
@@ -488,7 +553,7 @@ accepted here.
 
 - **Outcome:** package classes that require a substantive compatibility service
   rather than a parser correction complete the same user journey.
-- **Execution status:** gated on W7. Ordered after outreach begins, not before.
+- **Execution status:** gated on W8 launch. Ordered after outreach begins, not before.
 - **Issues:** #74, #50, #46, and the P2 remainder of #67.
 - **Ordering and rationale:**
   - #74 `rpmlib(ConcurrentAccess)` is an ecosystem-level runtime capability, not
@@ -723,18 +788,19 @@ clean-host proof. W3's release proof gate was reopened for the supported `htop`
 SONAME repair and again for issue #41's path-safety and support-bundle defects,
 then superseded by the post-hard-cut package authority suite. The latest exact
 immutable release evidence is synchronized `v0.16.1` at
-`0fb961bacc6360107506371b16b7f0345ba6f927`; current Remi deployment authority
-is the exact tagged `remi 0.16.1` binary. This release authority remains
-separate from the unassigned tester pin and 0/10 external milestone.
+`0fb961bacc6360107506371b16b7f0345ba6f927`. It remains historical release
+authority, not current production or tester authority: the signed-universe
+architecture advanced to schema 53 after that tag. #639 will establish the
+next exact release/deployment proof. The tester pin remains unassigned and the
+external milestone remains 0/10.
 
 W3 was subsequently split. Its release gate is complete, and its external
-tester outreach moved to W8 behind an engineering gate, because a bounded
-hosted prewarm sample showed that ordinary Fedora and Arch repository packages
-still fail conversion in classes owned by #98, #99, and #102 through #105.
-Outreach against those defects would spend first-impression attempts
-reproducing known typed failures. W4 is now active.
+tester outreach moved to W8 behind an engineering gate. W4 through W7 are now
+complete. W7.5 is active because the immutable-universe architecture, current
+daily-driver floor, and post-universe synchronized release must become one
+publicly reproducible product path before outreach.
 
 The 2026-07-20 through 2026-07-22 manual outreach window passed without a post
-and is retired. Rescheduling now waits on the W7 corpus gate in addition to
-GitHub Support dereferencing cached pre-rewrite pull-request and commit views
-and the venue-specific eligibility checks. No replacement date is assigned.
+and is retired. Rescheduling now waits on W7.5, GitHub Support dereferencing
+cached pre-rewrite pull-request and commit views, and the venue-specific
+eligibility checks. No replacement date is assigned.

@@ -7,13 +7,13 @@
 
 <PageMeta
 	title="Conary tester release status — Conary"
-	description={`Conary ${previewRelease.tag} is published and verified; the packaged tester loop remains paused until the ordinary-package corpus gate passes.`}
+	description={previewRelease.testerAuthorityReason}
 	path="/install/"
 />
 
 <PageIntro
 	eyebrow="Tester loop paused"
-	title="The release is verified; the tester runbook remains paused."
+	title="W7 passed; the public universe and synchronized release remain."
 	description={previewRelease.testerAuthorityReason}
 />
 
@@ -41,9 +41,8 @@
 				<h2 id="authority-pause-title">The package runbook is not open.</h2>
 				<p>
 					{previewRelease.testerAuthorityReason} The exact {previewRelease.tag}
-					artifacts are the current immutable release, but release proof is not the
-					ordinary-package corpus proof required before outreach. This page will reopen
-					only after that separate gate closes and a tester pin is assigned.
+					artifacts remain immutable historical release evidence. This page will reopen
+					only after the current launch gates close and a tester pin is assigned.
 				</p>
 				<div class="button-row">
 					<a href={previewRelease.matrixUrl} class="btn btn-primary">

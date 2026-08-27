@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "last_updated": "2026-08-27",
+  "current_milestone": "first_external_tester_loop",
+  "published_release": {
+    "version": "0.16.1",
+    "tag": "v0.16.1",
+    "tester_authority": false
+  },
+  "tester_authority": {
+    "state": "unassigned",
+    "reason": "The W7 ordinary-package gate passed, but no tester release is assigned while typed public reads (#638), the signed zero-exclusion universe (#598), daily-driver floor (#122, #534, #132, #642, #643), synchronized public release (#639), and performance/usefulness proof (#121, #149) remain open.",
+    "blocking_issues": [638, 598, 122, 534, 132, 642, 643, 639, 121, 149]
+  },
+  "gates": {
+    "ordinary_package_journey": {
+      "state": "passed",
+      "issue": 110
+    },
+    "public_ingress": {
+      "state": "passed",
+      "issue": 637
+    },
+    "public_read_surfaces": {
+      "state": "blocked",
+      "issue": 638
+    },
+    "public_universe": {
+      "state": "blocked",
+      "issue": 598,
+      "promotion_threshold": "zero_exclusions"
+    },
+    "daily_driver_floor": {
+      "state": "blocked",
+      "issues": [122, 534, 132, 642, 643]
+    },
+    "synchronized_release": {
+      "state": "blocked",
+      "issue": 639
+    },
+    "launch_proof": {
+      "state": "blocked",
+      "issues": [121, 149]
+    },
+    "external_outreach": {
+      "state": "not_started",
+      "issue": 48,
+      "broad_outreach_requires_guided_completions": 5
+    }
+  },
+  "guided_pilot": {
+    "state": "not_started",
+    "completed": 0,
+    "target": 5,
+    "target_live_interventions_by_fifth": 0
+  },
+  "tester_milestone": {
+    "completed": 0,
+    "target": 10
+  },
+  "supported_hosts": [
+    "fedora-44-x86_64",
+    "ubuntu-26.04-x86_64",
+    "arch-x86_64"
+  ],
+  "announcement_claim": "Conary Preview is a rollback-first package bridge for installing proven RPM, DEB, and Arch packages across Fedora, Ubuntu, and Arch.",
+  "full_system_claim": {
+    "state": "unproven",
+    "issue": 272
+  }
+}

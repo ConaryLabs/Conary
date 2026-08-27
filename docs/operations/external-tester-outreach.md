@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-19
-revision: 9
+last_updated: 2026-08-27
+revision: 10
 status: postponed
 target_release: unassigned
 summary: Postponed multi-venue launch packet for the first cross-distro tester loop
@@ -12,9 +12,11 @@ summary: Postponed multi-venue launch packet for the first cross-distro tester l
 > 0/10. The two earlier supported-host reports remain useful adoption and
 > onboarding evidence, but neither installed a source package whose format
 > differed from the host's native format. Release `v0.16.1` is published and
-> artifact-verified, but release proof does not satisfy #110's ordinary-package
-> corpus gate. No tester release is assigned. Do not publish the copy below
-> until W7, external cached-history, and venue-eligibility gates are closed.
+> artifact-verified and W7's #110 ordinary-package gate passed. The canonical
+> [launch status](../roadmaps/launch-status.json) assigns no tester release
+> while its engineering gates remain open. Do not publish the copy below until
+> that status assigns an exact release and the external cached-history,
+> guided-pilot, and venue-eligibility gates are closed.
 
 The venue copy below references the current `v0.16.1` release as an
 unpublishable draft, not as assigned tester authority. The maintainer re-pins
@@ -196,12 +198,19 @@ failed attempts are useful evidence.
 - [x] Publish and independently verify the synchronized `v0.16.1` suite that
   contains the supported-host fixes, then replace every release version and
   URL in this draft.
-- [ ] Pass #110's ordinary-package corpus gate and assign the exact tester
-  release without treating release proof as corpus proof.
+- [x] Pass #110's ordinary-package corpus gate through PR #487 without treating
+  release proof as corpus proof.
+- [ ] Activate #598's signed zero-exclusion public universe behind #638's typed
+  read surface; complete the #122/#534/#132/#642/#643 daily-driver floor,
+  #639's synchronized release, and #121/#149 launch proof; then assign the
+  re-proven suite as exact tester authority.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
   and commit views have been dereferenced.
 - [ ] Re-check each venue's current rules and account eligibility immediately
   before posting.
+- [ ] Complete a staggered guided pilot with five unaffiliated qualifying
+  testers; record intervention count and the other milestone measures, with
+  zero live maintainer intervention as the target by tester five.
 - [ ] Assign a staggered schedule only after every preceding gate passes.
 - [ ] After launch, record every actual post URL and timestamp.
 

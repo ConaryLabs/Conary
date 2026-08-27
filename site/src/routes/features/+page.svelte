@@ -1,6 +1,7 @@
 <script lang="ts">
 	import PageIntro from '$lib/components/PageIntro.svelte';
 	import PageMeta from '$lib/components/PageMeta.svelte';
+	import { previewRelease } from '$lib/preview-release';
 </script>
 
 <PageMeta
@@ -106,11 +107,11 @@
 
 		<div class="category category-preview" id="preview-supported">
 			<div class="category-heading">
-				<span class="category-status preview">source validation active · release pending</span>
+				<span class="category-status preview">W7 passed · launch gate active</span>
 				<h2 class="category-title">The bounded tester loop</h2>
 				<p>
 					Cross-distro packages have a documented, inspectable transaction workflow.
-					The packaged tester loop is paused until a release contains the current fixes.
+					{previewRelease.testerAuthorityReason}
 				</p>
 			</div>
 

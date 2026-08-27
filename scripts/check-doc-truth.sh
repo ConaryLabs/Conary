@@ -14,6 +14,10 @@ if ! command -v rg >/dev/null 2>&1; then
     echo "ERROR: ripgrep (rg) is required for docs truth checks" >&2
     exit 1
 fi
+if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq is required for launch-status truth checks" >&2
+    exit 1
+fi
 
 DOCS_TRUTH_SCHEMA_CHECK_PATHS=(
     "docs/ARCHITECTURE.md"
@@ -248,10 +252,86 @@ workspace_release_version() {
 }
 
 published_conary_release_version() {
-    local source="site/src/lib/preview-release.ts"
+    local source="docs/roadmaps/launch-status.json"
     require_file "$source" || return 1
 
-    sed -nE "s/^[[:space:]]*const[[:space:]]+version[[:space:]]*=[[:space:]]*'([^']+)'.*/\1/p" "$source" | head -n1
+    jq -r '.published_release.version // empty' "$source"
+}
+
+check_launch_status() {
+    local status="docs/roadmaps/launch-status.json"
+    require_file "$status" || return
+
+    if ! jq -e '
+        def unique_issues:
+            type == "array"
+            and all(.[]; (type == "number" and . > 0))
+            and (unique | length) == length;
+        def positive_unique_issues:
+            unique_issues and length > 0;
+        def blocking_gate_issues:
+            [
+                .gates
+                | to_entries[]
+                | .key as $key
+                | select($key != "external_outreach")
+                | select(.value.state != "passed")
+                | .value
+                | (.issue? // empty), (.issues[]?)
+            ];
+        .schema_version == 1
+        and (.last_updated | type == "string")
+        and .current_milestone == "first_external_tester_loop"
+        and (.published_release.version | type == "string" and length > 0)
+        and .published_release.tag == ("v" + .published_release.version)
+        and (.tester_authority.state == "unassigned" or .tester_authority.state == "assigned")
+        and .published_release.tester_authority == (.tester_authority.state == "assigned")
+        and (.tester_authority.reason | type == "string" and length > 0)
+        and (.tester_authority.blocking_issues | unique_issues)
+        and .tester_authority.blocking_issues == blocking_gate_issues
+        and (if .tester_authority.state == "assigned" then (.tester_authority.blocking_issues | length) == 0 else (.tester_authority.blocking_issues | length) > 0 end)
+        and all(.gates[]; (.state == "passed" or .state == "blocked" or .state == "not_started"))
+        and (.gates.ordinary_package_journey.issue | type == "number" and . > 0)
+        and (.gates.public_ingress.issue | type == "number" and . > 0)
+        and (.gates.public_read_surfaces.issue | type == "number" and . > 0)
+        and (.gates.public_universe.issue | type == "number" and . > 0)
+        and .gates.public_universe.promotion_threshold == "zero_exclusions"
+        and (.gates.daily_driver_floor.issues | positive_unique_issues)
+        and (.gates.synchronized_release.issue | type == "number" and . > 0)
+        and (.gates.launch_proof.issues | positive_unique_issues)
+        and (.gates.external_outreach.issue | type == "number" and . > 0)
+        and .gates.external_outreach.broad_outreach_requires_guided_completions == .guided_pilot.target
+        and (.guided_pilot.state == "not_started" or .guided_pilot.state == "active" or .guided_pilot.state == "complete")
+        and .guided_pilot.target == 5
+        and .guided_pilot.target_live_interventions_by_fifth == 0
+        and (.guided_pilot.completed >= 0 and .guided_pilot.completed <= .guided_pilot.target)
+        and .tester_milestone.target == 10
+        and (.tester_milestone.completed >= 0 and .tester_milestone.completed <= .tester_milestone.target)
+        and (.supported_hosts | type == "array" and length == 3 and (unique | length) == 3)
+        and (.announcement_claim | startswith("Conary Preview is a rollback-first package bridge"))
+        and .full_system_claim == {"state":"unproven","issue":272}
+    ' "$status" >/dev/null; then
+        report_error "$status: malformed or drifted launch-status contract"
+    fi
+
+    require_match "README.md" 'docs/roadmaps/launch-status\.json' 'canonical launch-status link'
+    require_match "ROADMAP.md" 'docs/roadmaps/launch-status\.json' 'canonical launch-status link'
+    require_match "README.md" 'rollback-first package bridge' 'bounded preview announcement claim'
+    require_match "docs/roadmaps/development-roadmap.md" 'W7\.5 Signed Universe And Launch Gate' 'active signed-universe launch workstream'
+    require_match "docs/roadmaps/development-roadmap.md" 'zero exclusions' 'zero-exclusion W8 gate'
+    require_match "site/src/lib/preview-release.ts" 'launch-status\.json' 'site launch-status import'
+    require_match "site/src/lib/preview-release.ts" 'launchStatus\.published_release\.version' 'derived published release version'
+    require_match "site/src/lib/preview-release.ts" 'launchStatus\.tester_authority\.reason' 'derived tester-authority reason'
+
+    local stale_pattern='until #110|#110[^.\n]*(remains open|is open|is pending|must pass)|gated on W7\.[^0-9]'
+    local file line_no text
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no retains #110 as an open launch gate: $text"
+    done < <(
+        rg -nH -i -- "$stale_pattern" \
+            README.md ROADMAP.md docs/roadmaps docs/guides/agent-assisted-tester-loop.md \
+            docs/operations/external-tester-outreach.md site/src || true
+    )
 }
 
 check_schema_versions() {
@@ -427,8 +507,8 @@ check_release_doc_versions() {
 
     require_match \
         "site/src/lib/preview-release.ts" \
-        "^const version = '${published_version}';$" \
-        "single published-release version authority ${published_version}"
+        '^const version = launchStatus\.published_release\.version;$' \
+        "derived published-release version authority ${published_version}"
     while IFS=: read -r file line_no text; do
         report_error "$file:$line_no duplicates the site published-release version instead of deriving it: $text"
     done < <(
@@ -979,6 +1059,7 @@ check_schema_versions
 check_retired_commands
 check_system_init_source_independence
 check_preview_status
+check_launch_status
 check_release_doc_versions
 check_site_preview_truth
 check_preview_claim_drift

@@ -223,7 +223,7 @@
 					<h3>Where Conary is still early</h3>
 					<p>
 						Conary {previewRelease.version} is an immutable published preview artifact, but
-						it is not current tester authority while the ordinary-package corpus gate remains open.
+						it is not current tester authority. {previewRelease.testerAuthorityReason}
 						Native CCS packages are few, the cross-distro lifecycle matrix still needs wider
 						installed-host evidence, generation work is VM-only, and the community and
 						operational evidence are small beside established managers.
@@ -239,7 +239,7 @@
 				<p>Third-party extensions are excluded unless a cell names an add-on or separate stack.</p>
 			</div>
 			<ul class="source-list">
-				<li><a href={previewRelease.testerGuideUrl}>Conary paused tester guide <span aria-hidden="true">↗</span></a></li>
+				<li><a href={previewRelease.testerGuideUrl}>Conary launch-status tester guide <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://github.com/ConaryLabs/Conary/blob/main/docs/modules/source-selection.md">Conary source-selection boundary <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/">Ubuntu 26.04 APT summary <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://dnf5.readthedocs.io/en/latest/commands/history.8.html">DNF5 history commands <span aria-hidden="true">↗</span></a></li>

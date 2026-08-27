@@ -18,11 +18,14 @@ maintainer pivot may close the milestone instead only when a reproducible
 systemic blocker is documented with the affected attempts and chosen next
 action.
 
-The synchronized `v0.15.0` suite and its released-package proof are complete.
-The active workstream is W6 Authority Audit Closure; W7 then owns the
-ordinary-package corpus gate in #110. Outreach remains at 0/10 and moves only
-after that engineering gate plus the separate cached-history and venue checks
-close. Release publication alone does not assign tester authority.
+W7's ordinary-package gate closed through #110 and PR #487. The active launch
+lane now completes the signed immutable public universe in #598, the
+pre-release daily-driver floor in #122, #534, #132, #642, and #643, the
+synchronized public-artifact journey in #639, and launch proof in #121/#149.
+Outreach remains at 0/10 and still waits for
+the separate cached-history and venue checks. The machine-readable
+[launch status](docs/roadmaps/launch-status.json) owns the current gate and
+tester-pin state; release publication alone does not assign tester authority.
 
 Detailed maturity, workstream status, proof, blockers, and longer horizons live
 in the [development roadmap](docs/roadmaps/development-roadmap.md).

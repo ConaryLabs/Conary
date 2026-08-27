@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-19
-revision: 26
-summary: Record immutable v0.16.1 evidence and the unassigned external tester authority
+last_updated: 2026-08-27
+revision: 27
+summary: Record immutable v0.16.1 historical evidence and the unassigned external tester authority
 ---
 
 # Release Artifact Matrix
@@ -40,14 +40,15 @@ together, routed through their declared deployment modes, and independently
 verified. Historical product-prefixed tags and releases remain immutable
 evidence for their own trees, but they are not current release inputs.
 
-Production Remi runs the exact tagged `remi 0.16.1` binary whose release asset
-has SHA-256
+The v0.16.1 release-era deployment ran the exact tagged `remi 0.16.1` binary
+whose release asset has SHA-256
 `64452867a6b3dab69df6ffd6b2610379321247de3abb2be07a62b4089eb9959d`.
-The deployment proof recorded schema revision 40, 6/6 populated sources,
-110,182 repository packages, 3,855 conversions, and all four signing profiles.
-Broad external outreach remains separately postponed at 0/10 qualifying
-completions until #110's ordinary-package corpus gate passes; release proof is
-not tester authority.
+That historical deployment proof recorded schema revision 40, 6/6 populated
+sources, 110,182 repository packages, 3,855 conversions, and all four signing
+profiles. It is not a claim about the current production schema or active
+public universe. Broad external outreach remains separately postponed at 0/10
+qualifying completions behind the current gates in
+`docs/roadmaps/launch-status.json`; release proof is not tester authority.
 
 This suite adds two Conary product assets:
 `conary-bootstrap-v1.manifest` and its detached `.sig`. The release workflow
@@ -66,7 +67,7 @@ version-validation run and has no GitHub release; it was not moved or reused.
 | Artifact product | Artifact classes | Current construction authority | Suite deploy mode | Current immutable authority | Local build |
 | --- | --- | --- | --- | --- | --- |
 | `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst`, signed bootstrap manifest | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected release assets, static sites, and released-package proof | synchronized suite `v0.16.1`; detached signatures for the CCS artifact and bootstrap manifest | `cargo build -p conary` |
-| `remi` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected Remi deployment and repopulation proof, serialized before Conary deployment | synchronized suite `v0.16.1`; exact released binary deployed | `cargo build -p remi` |
+| `remi` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected Remi deployment and repopulation proof, serialized before Conary deployment | synchronized suite `v0.16.1`; exact released binary proven at release closeout | `cargo build -p remi` |
 | `conaryd` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | synchronized suite `v0.16.1`; build-only route | `cargo build -p conaryd` |
 | `conary-test` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | synchronized suite `v0.16.1`; build-only route | `cargo build -p conary-test` |
 
@@ -131,8 +132,10 @@ version-validation run and has no GitHub release; it was not moved or reused.
 - The same deployment recorded Remi schema revision 40, 6/6 populated sources,
   four exact signing profiles, 110,182 repository packages, and 3,855
   conversions; the public readiness endpoint reported `ready=true`.
-- Release and deployment proof remain distinct from tester authority. The
-  external tester pin is still unassigned behind #110.
+- Release and deployment proof remain distinct from tester authority. W7/#110
+  later passed, but this historical suite predates the signed-universe client;
+  the external tester pin remains unassigned behind the current launch-status
+  gates.
 
 ### Conary 0.15.0 synchronized suite
 

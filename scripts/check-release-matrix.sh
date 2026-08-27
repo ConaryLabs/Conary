@@ -261,7 +261,7 @@ forbid_match "$release_build" 'CCS_FILE=\$\(ls ' 'ambiguous first-match CCS sign
 require_job_match "$release_build" bundle-conary 'scripts/bootstrap-manifest\.sh[\s\S]*conary-bootstrap-v1\.manifest[\s\S]*sign_hash "\$BOOTSTRAP_MANIFEST"[\s\S]*sign_hash --verify "\$BOOTSTRAP_MANIFEST"' 'signed and verified release bootstrap manifest construction'
 require_job_match "$release_build" bundle-suite 'conary-bootstrap-v1\.manifest[\s\S]*conary-bootstrap-v1\.manifest\.sig[\s\S]*artifact_patterns \| length\) == 13' 'complete bootstrap asset publication'
 require_job_match "$release_build" bundle-conary 'sign_hash --show-public-key[\s\S]*TRUSTED_UPDATE_KEYS[\s\S]*release signing key does not match an embedded trusted update key' 'live signing key must match an embedded trusted update key'
-require_job_match "$release_build" bundle-suite 'Publication and released-package proof do not make[\s\S]*pinned external-tester release[\s\S]*issue #110[\s\S]*tester loop stays[\s\S]*paused' 'release notes must keep publication separate from tester authority'
+require_job_match "$release_build" bundle-suite 'Publication and released-package proof do not make[\s\S]*pinned external-tester release[\s\S]*versioned launch-status resource[\s\S]*tester loop stays[\s\S]*paused until that resource assigns this exact tag' 'release notes must derive tester authority from versioned launch status'
 forbid_match "$release_build" '### Supported tester lane|blob/\$\{TAG_NAME\}/docs/guides/agent-assisted-tester-loop\.md' 'premature tester-lane release note'
 require_match "$release_build" 'deterministic dry-run signing key' 'dry-run signing fallback'
 require_match "$release_build" 'REHEARSAL_SIGNING_PUBLIC_KEY\.txt' 'dry-run signing public key artifact'

@@ -944,9 +944,9 @@ jobs:
 
           The Conary native packages target x86_64 Fedora 44, Ubuntu 26.04 LTS,
           and Arch Linux. Publication and released-package proof do not make
-          this the pinned external-tester release. The ordinary-package corpus
-          gate remains separately owned by issue #110, and the tester loop stays
-          paused until that gate and the release closeout are recorded.
+          this the pinned external-tester release. Assignment is owned by the
+          repository's versioned launch-status resource. The tester loop stays
+          paused until that resource assigns this exact tag.
 
           Download \`SHA256SUMS\` and the required artifact. Native Conary
           packages are named:
