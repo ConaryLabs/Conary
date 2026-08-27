@@ -291,10 +291,10 @@ fn primary_xml_preserves_every_rpm_weak_relation_kind() {
         <rpm:entry name="suggested-provider"/>
       </rpm:suggests>
       <rpm:supplements>
-        <rpm:entry name="(installed-a and installed-b)"/>
+        <rpm:entry name="((xorg-x11-server-Xorg and emacs) unless emacs-nw)"/>
       </rpm:supplements>
       <rpm:enhances>
-        <rpm:entry name="enhanced-provider"/>
+        <rpm:entry name="((plasma-discover and rpm-ostree) unless dnf)"/>
       </rpm:enhances>
 "#,
     );
@@ -320,11 +320,11 @@ fn primary_xml_preserves_every_rpm_weak_relation_kind() {
             ),
             (
                 RepositoryRequirementKind::Supplements,
-                Some("(installed-a and installed-b)"),
+                Some("((xorg-x11-server-Xorg and emacs) unless emacs-nw)"),
             ),
             (
                 RepositoryRequirementKind::Enhances,
-                Some("enhanced-provider"),
+                Some("((plasma-discover and rpm-ostree) unless dnf)"),
             ),
         ]
     );

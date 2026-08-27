@@ -368,10 +368,19 @@ fn validate_tag_context(
     kind: RepositoryRequirementKind,
     checks: ParseChecks,
 ) -> Result<(), String> {
-    let tag_operator = if kind == RepositoryRequirementKind::Conflict {
-        RichOperator::Or
-    } else {
-        RichOperator::And
+    let tag_operator = match kind {
+        RepositoryRequirementKind::Conflict
+        | RepositoryRequirementKind::Supplements
+        | RepositoryRequirementKind::Enhances => RichOperator::Or,
+        RepositoryRequirementKind::Depends
+        | RepositoryRequirementKind::PreDepends
+        | RepositoryRequirementKind::Optional
+        | RepositoryRequirementKind::Recommends
+        | RepositoryRequirementKind::Suggests
+        | RepositoryRequirementKind::Build
+        | RepositoryRequirementKind::Breaks
+        | RepositoryRequirementKind::Replace
+        | RepositoryRequirementKind::Obsolete => RichOperator::And,
     };
     validate_parse_checks(tag_operator, checks)
 }
@@ -557,8 +566,36 @@ mod tests {
 
     #[test]
     fn enforces_upstream_tag_context_rules() {
-        assert!(parse("(a unless b)").is_err());
-        assert!(parse_rpm_dependency(RepositoryRequirementKind::Conflict, "(a if b)").is_err());
+        for kind in [
+            RepositoryRequirementKind::Conflict,
+            RepositoryRequirementKind::Supplements,
+            RepositoryRequirementKind::Enhances,
+        ] {
+            parse_rpm_dependency(kind, "(a unless b)")
+                .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
+            assert!(
+                parse_rpm_dependency(kind, "(a if b)").is_err(),
+                "{kind:?} must use RPM's reverse OR-context"
+            );
+        }
+        for kind in [
+            RepositoryRequirementKind::Depends,
+            RepositoryRequirementKind::PreDepends,
+            RepositoryRequirementKind::Optional,
+            RepositoryRequirementKind::Recommends,
+            RepositoryRequirementKind::Suggests,
+            RepositoryRequirementKind::Build,
+            RepositoryRequirementKind::Breaks,
+            RepositoryRequirementKind::Replace,
+            RepositoryRequirementKind::Obsolete,
+        ] {
+            parse_rpm_dependency(kind, "(a if b)")
+                .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
+            assert!(
+                parse_rpm_dependency(kind, "(a unless b)").is_err(),
+                "{kind:?} must use RPM's default AND-context"
+            );
+        }
         assert!(parse("((a unless b) and c)").is_err());
         assert!(
             parse_rpm_dependency(RepositoryRequirementKind::Conflict, "((a if b) or c)").is_err()
