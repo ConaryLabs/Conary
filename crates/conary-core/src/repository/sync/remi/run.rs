@@ -715,7 +715,7 @@ mod tests {
                      artifact_sha256, artifact_size, logical_digest_sha256,
                      manifest_json, durable, created_at
                  ) VALUES (?1, ?2, 'fedora-44', ?3, 1, ?4, '{}', 1, 1)",
-                params![resource_digest, kind, digest('c'), digest('d')],
+                params![resource_digest, kind, resource_digest, digest('d')],
             )
             .unwrap();
         }
