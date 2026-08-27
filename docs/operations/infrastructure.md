@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-27
-revision: 41
-summary: Non-secret infrastructure, agent operations, release, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
+revision: 42
+summary: Non-secret infrastructure, agent operations, release, typed and causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -166,7 +166,9 @@ workflow.
   typed `remi native-oracle-input` command as the service user, retains the
   durable independently reopened directory below
   `/conary/evidence/native-oracle-inputs/`, and stages a mode-0600 transport tar
-  under `/tmp` for the authenticated caller. It grants no generic path,
+  under `/tmp` for the authenticated caller. The typed command copies only
+  exact metadata bytes retained in the immutable source bundles and performs no
+  upstream network request or URL reconstruction. It grants no generic path,
   candidate-tier profile, native comparison, conversion, proof, activation, or
   pointer-mutation authority.
 - Production R2 inventory and backfill use the manually dispatched
