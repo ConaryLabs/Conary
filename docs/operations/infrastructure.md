@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-27
-revision: 36
+revision: 37
 summary: Non-secret infrastructure, agent operations, release, trusted Remi CI benchmark capacity, typed and causally inspectable deployment completion, exact native-oracle input export, and current remote development tooling
 ---
 
@@ -59,6 +59,9 @@ That installer verifies the pinned GitHub runner archive, provisions Rust
 AppArmor profile, and installs the
 `github-actions-remi-ci-runner.service` unit. Re-run it with `--verify-only`
 to audit the installed boundary without changing it.
+The unit launches the pinned runner's `runsvc.sh` service wrapper so systemd's
+stop signal is forwarded to the listener and maintenance restarts do not wait
+for the five-minute forced-stop timeout.
 
 Only one benchmark job runs at a time. That job sets Cargo, Rust tests, Make,
 and CMake parallelism to all logical CPUs visible through `nproc`; the runner

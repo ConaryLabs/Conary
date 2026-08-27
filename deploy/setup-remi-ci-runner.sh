@@ -214,7 +214,13 @@ install_runner() {
 }
 
 install_service() {
+    local runner_uid service_entrypoint service_staging
     runner_uid="$(id -u "$RUNNER_USER")"
+    service_entrypoint="${RUNNER_HOME}/runsvc.sh"
+    [[ -x "${RUNNER_HOME}/bin/runsvc.sh" ]] ||
+        fail "runner service wrapper is missing: ${RUNNER_HOME}/bin/runsvc.sh"
+    install -m 0755 -o "$RUNNER_USER" -g "$RUNNER_USER" \
+        "${RUNNER_HOME}/bin/runsvc.sh" "$service_entrypoint"
     service_staging="$(mktemp)"
     sed "s/__RUNNER_UID__/${runner_uid}/g" "$SERVICE_TEMPLATE" > "$service_staging"
     install -m 0644 -o root -g root "$service_staging" "/etc/systemd/system/${SERVICE_NAME}"
@@ -240,6 +246,9 @@ verify_setup() {
         fail "runner service is not active"
     [[ "$(systemctl show "$SERVICE_NAME" -p User --value)" == "$RUNNER_USER" ]] ||
         fail "runner service identity is not ${RUNNER_USER}"
+    systemctl show "$SERVICE_NAME" -p ExecStart --value |
+        grep -Fq "path=${RUNNER_HOME}/runsvc.sh ;" ||
+        fail "runner service does not use GitHub's signal-forwarding service wrapper"
     [[ "$(systemctl show "$SERVICE_NAME" -p CPUQuotaPerSecUSec --value)" == "infinity" ]] ||
         fail "runner service has an artificial CPU quota"
     [[ "$(systemctl show "$SERVICE_NAME" -p MemoryMax --value)" == "infinity" ]] ||
