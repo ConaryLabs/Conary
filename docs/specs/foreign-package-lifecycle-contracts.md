@@ -288,6 +288,13 @@ generation's applied-changeset high-water mark into
 also appears on N+1 if N was never booted; completing either projection
 supersedes every other projection of the same request.
 
+The same persisted high-water authority bounds boot-artifact reuse. If the
+current completed generation has no subsequently applied boot-runtime request,
+publication may independently reopen and reuse its verified kernel, initramfs,
+and EFI artifacts. A new boot-runtime request invalidates reuse and requires
+the exact generation sysroot rebuild path. No package-name, distribution, or
+path-list policy substitutes for the typed lifecycle request.
+
 The packaged `conary-generation-activation.service` invokes the hidden
 `conary system generation activate` continuation. It consumes no work on a
 native boot. A Conary boot must contain exactly one non-negative

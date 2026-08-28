@@ -367,6 +367,29 @@ impl ActivationRequest {
             .optional()?;
         raw.map(RawRequest::decode).transpose()
     }
+
+    /// Whether applied package work added boot-runtime mutation authority in
+    /// the open/closed changeset interval `(after, through]`.
+    pub fn has_applied_boot_runtime_between(
+        conn: &Connection,
+        after_changeset_id: Option<i64>,
+        through_changeset_id: i64,
+    ) -> Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1
+                 FROM activation_requests r
+                 JOIN changesets c ON c.id = r.changeset_id
+                 WHERE r.source_kind = 'captured-boot-runtime'
+                   AND c.status = 'applied'
+                   AND (?1 IS NULL OR r.changeset_id > ?1)
+                   AND r.changeset_id <= ?2
+             )",
+            params![after_changeset_id, through_changeset_id],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+    }
 }
 
 impl GenerationActivationIntent {

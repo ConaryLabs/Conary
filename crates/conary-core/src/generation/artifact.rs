@@ -11,6 +11,12 @@ use super::root_manifest::{
     MutableStateManifest,
 };
 
+mod boot_reuse;
+
+pub(crate) use boot_reuse::{
+    VerifiedGenerationBootAssets, load_verified_generation_boot_assets, stage_reused_boot_assets,
+};
+
 pub const ARTIFACT_MANIFEST_FILE: &str = ".conary-artifact.json";
 pub const ARTIFACT_MANIFEST_VERSION: u32 = 3;
 pub const GENERATION_CARRIER_CAPABILITIES_VERSION: u32 = 1;

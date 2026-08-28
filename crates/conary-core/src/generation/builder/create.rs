@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use super::BuildResult;
 use super::GenerationActivation;
 use super::boot_assets::{
-    resolve_generation_boot_asset_sources, stage_runtime_boot_assets_from_sources,
+    resolve_generation_boot_asset_sources_for_publication, stage_runtime_boot_assets_from_sources,
 };
 use super::carrier_capabilities::generation_carrier_capabilities;
 use super::cas::{cas_objects_from_manifests, verify_runtime_generation_cas_object_presence};
@@ -297,8 +297,12 @@ fn build_generation_from_runtime_inputs(
     // generation authority rather than remain in an ephemeral sysroot.
     validate_runtime_generation_root_is_self_contained(&runtime_inputs.generation)?;
     let architecture = runtime_generation_architecture()?;
-    let boot_asset_sources =
-        resolve_generation_boot_asset_sources(&mut runtime_inputs, generations_root, boot_root)?;
+    let boot_asset_sources = resolve_generation_boot_asset_sources_for_publication(
+        conn,
+        &mut runtime_inputs,
+        generations_root,
+        boot_root,
+    )?;
     let security_capability_xattr_count = runtime_inputs.security_capability_xattr_count();
 
     // Step 4: Build the EROFS image from the finalized immutable manifest.
