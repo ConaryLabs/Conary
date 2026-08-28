@@ -471,6 +471,36 @@ test_deploy_remi_rejects_malformed_authority_root() {
     test ! -e "$fake_root/usr/local/bin/remi"
 }
 
+test_inspect_remi_storage_reports_bounded_numeric_evidence() {
+    local fake_root="${tmpdir}/root-storage-inspection"
+    local inspection
+    write_config "$fake_root"
+    mkdir -p \
+        "$fake_root/conary/metadata" \
+        "$fake_root/conary/deployment-backups/first" \
+        "$fake_root/conary/deployment-backups/second"
+    truncate -s 1048576 "$fake_root/conary/metadata/conary.db"
+    printf 'first\n' >"$fake_root/conary/deployment-backups/first/transition.json"
+    printf 'second\n' >"$fake_root/conary/deployment-backups/second/transition.json"
+
+    inspection="$(run_helper "$fake_root" inspect-remi-storage)"
+    jq -e '
+        .schema_version == 1
+        and .filesystem.available_bytes > 0
+        and .database.files == 1
+        and .database.logical_bytes == 1048576
+        and .database.allocated_bytes >= 0
+        and .transition_backups.directories == 2
+        and .transition_backups.logical_bytes > 0
+        and .transition_backups.allocated_bytes >= 0
+    ' <<<"$inspection" >/dev/null
+
+    ln -s "$fake_root/conary/metadata/conary.db" \
+        "$fake_root/conary/deployment-backups/first/database-link"
+    expect_fail "symlinked deployment backup storage" \
+        run_helper "$fake_root" inspect-remi-storage
+}
+
 test_export_native_oracle_inputs_uses_exact_public_candidates() {
     local fake_root="${tmpdir}/root-native-input"
     local bundle="${tmpdir}/remi-native-input.tar.gz"
@@ -550,6 +580,7 @@ main() {
     test_shared_conary_root_is_preserved_and_drift_fails_closed
     test_verify_ingress_requires_exact_deployed_bytes
     test_deploy_remi_rejects_malformed_authority_root
+    test_inspect_remi_storage_reports_bounded_numeric_evidence
     test_export_native_oracle_inputs_uses_exact_public_candidates
     test_install_helper_requires_exact_digest
     test_verify_access_does_not_require_a_running_service

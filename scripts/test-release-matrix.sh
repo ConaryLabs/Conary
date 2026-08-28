@@ -1208,6 +1208,32 @@ test_check_release_matrix_rejects_discarded_candidate_failure_inspection() {
         "candidate deploy retains one validated final typed inspection"
 }
 
+test_check_release_matrix_rejects_missing_candidate_phase_evidence() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '            start_phase database-transition-and-restart' \
+        '            echo "database transition timing removed" >&2'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy retains typed phase timing and early-failure evidence"
+}
+
+test_check_release_matrix_rejects_missing_candidate_storage_evidence() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '            > remi-predeployment-storage.json' \
+        '            > /dev/null'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy retains before-and-after numeric storage evidence"
+}
+
 test_check_release_matrix_rejects_missing_candidate_failure_artifact() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1694,6 +1720,8 @@ main() {
         test_check_release_matrix_rejects_unbound_candidate_binary
         test_check_release_matrix_rejects_private_mode_public_readiness_claim
         test_check_release_matrix_rejects_discarded_candidate_failure_inspection
+        test_check_release_matrix_rejects_missing_candidate_phase_evidence
+        test_check_release_matrix_rejects_missing_candidate_storage_evidence
         test_check_release_matrix_rejects_missing_candidate_failure_artifact
         test_check_release_matrix_rejects_unverified_remi_suite_bundle
         test_check_release_matrix_rejects_merge_validation_production_probes

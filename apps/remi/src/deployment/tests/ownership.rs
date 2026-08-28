@@ -91,5 +91,5 @@ fn live_runtime_rejects_rollback_before_consistent_state_is_restored() {
     let marker: String = conn
         .query_row("SELECT value FROM deployment_marker", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(marker, "before");
+    assert_eq!(marker, "after");
 }

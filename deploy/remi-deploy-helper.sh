@@ -25,6 +25,7 @@ usage:
   conary-remi-deploy publish-test-artifact <filename> <sha256> <staged-file>
   conary-remi-deploy install-helper <sha256> <helper>
   conary-remi-deploy inspect-remi [--require-private-candidates|--require-repopulated]
+  conary-remi-deploy inspect-remi-storage
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
   conary-remi-deploy verify-ingress
   conary-remi-deploy verify-access
@@ -527,6 +528,93 @@ inspect_remi() {
     "$bin" "${args[@]}"
 }
 
+inspect_remi_storage() {
+    [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
+    require_shared_conary_root
+
+    local runtime_root database_root backup_root
+    runtime_root="$(root_path /conary)"
+    database_root="${runtime_root}/metadata/conary.db"
+    backup_root="${runtime_root}/deployment-backups"
+
+    local database_files=0 database_logical_bytes=0 database_allocated_bytes=0
+    local path size blocks
+    for path in "$database_root" "${database_root}-wal" "${database_root}-shm"; do
+        if [[ ! -e "$path" && ! -L "$path" ]]; then
+            continue
+        fi
+        [[ -f "$path" && ! -L "$path" ]] ||
+            die "Remi database storage contains a non-plain SQLite file"
+        size="$(stat -c '%s' "$path")" || die "could not measure Remi SQLite size"
+        blocks="$(stat -c '%b' "$path")" || die "could not measure Remi SQLite blocks"
+        [[ "$size" =~ ^[0-9]+$ && "$blocks" =~ ^[0-9]+$ ]] ||
+            die "could not measure Remi SQLite storage"
+        database_files=$((database_files + 1))
+        database_logical_bytes=$((database_logical_bytes + size))
+        database_allocated_bytes=$((database_allocated_bytes + blocks * 512))
+    done
+
+    local backup_directories=0 backup_logical_bytes=0 backup_allocated_bytes=0
+    if [[ -e "$backup_root" || -L "$backup_root" ]]; then
+        [[ -d "$backup_root" && ! -L "$backup_root" ]] ||
+            die "deployment backup root is not a plain directory"
+        local unexpected
+        unexpected="$(find "$backup_root" -xdev -type l -print -quit)" ||
+            die "could not inspect deployment backup symlinks"
+        [[ -z "$unexpected" ]] ||
+            die "deployment backup storage contains a symlink"
+        unexpected="$(find "$backup_root" -mindepth 1 -maxdepth 1 ! -type d -print -quit)" ||
+            die "could not inspect deployment backup entries"
+        [[ -z "$unexpected" ]] ||
+            die "deployment backup root contains an unexpected entry"
+        backup_directories="$(
+            find "$backup_root" -mindepth 1 -maxdepth 1 -type d -printf x |
+                awk '{ total += length($0) } END { print total + 0 }'
+        )" || die "could not count deployment backups"
+        backup_logical_bytes="$(du --bytes --summarize -- "$backup_root" | cut -f1)" ||
+            die "could not measure logical deployment backup bytes"
+        backup_allocated_bytes="$(du --block-size=1 --summarize -- "$backup_root" | cut -f1)" ||
+            die "could not measure allocated deployment backup bytes"
+        [[ "$backup_directories" =~ ^[0-9]+$ \
+            && "$backup_logical_bytes" =~ ^[0-9]+$ \
+            && "$backup_allocated_bytes" =~ ^[0-9]+$ ]] ||
+            die "deployment backup storage returned nonnumeric evidence"
+    fi
+
+    local available_blocks block_size available_bytes
+    if ! read -r available_blocks block_size \
+        < <(stat -f -c '%a %S' "$runtime_root"); then
+        die "could not measure Remi filesystem availability"
+    fi
+    [[ "$available_blocks" =~ ^[0-9]+$ && "$block_size" =~ ^[0-9]+$ ]] ||
+        die "could not measure Remi filesystem availability"
+    available_bytes=$((available_blocks * block_size))
+
+    jq -n \
+        --argjson available_bytes "$available_bytes" \
+        --argjson database_files "$database_files" \
+        --argjson database_logical_bytes "$database_logical_bytes" \
+        --argjson database_allocated_bytes "$database_allocated_bytes" \
+        --argjson backup_directories "$backup_directories" \
+        --argjson backup_logical_bytes "$backup_logical_bytes" \
+        --argjson backup_allocated_bytes "$backup_allocated_bytes" '
+        {
+          schema_version: 1,
+          filesystem: {available_bytes: $available_bytes},
+          database: {
+            files: $database_files,
+            logical_bytes: $database_logical_bytes,
+            allocated_bytes: $database_allocated_bytes
+          },
+          transition_backups: {
+            directories: $backup_directories,
+            logical_bytes: $backup_logical_bytes,
+            allocated_bytes: $backup_allocated_bytes
+          }
+        }
+    '
+}
+
 export_native_oracle_inputs() {
     local export_id="$1"
     local fedora_sha256="$2"
@@ -614,6 +702,10 @@ case "${1:-}" in
     inspect-remi)
         [[ $# -le 2 ]] || usage
         inspect_remi "${2:-}"
+        ;;
+    inspect-remi-storage)
+        [[ $# -eq 1 ]] || usage
+        inspect_remi_storage
         ;;
     export-native-oracle-inputs)
         [[ $# -eq 5 ]] || usage
