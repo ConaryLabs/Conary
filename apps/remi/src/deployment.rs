@@ -14,13 +14,15 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+mod database_transition;
 mod refresh_diagnostics;
+use database_transition::DatabaseTransition;
 pub use refresh_diagnostics::{
     DeploymentProfileRefreshState, DeploymentRefreshFailureCategory, DeploymentRefreshFailureStage,
     DeploymentRefreshRunState,
 };
 
-const TRANSITION_SCHEMA: u32 = 2;
+const TRANSITION_SCHEMA: u32 = 3;
 const DEFAULT_REPOSITORY_MANIFEST_TARGET: &str = "/etc/conary/remi-repositories.toml";
 const DEFAULT_REPOSITORY_KEYS_DIR: &str = "/conary/repository-keys";
 
@@ -149,29 +151,6 @@ struct FileTransition {
     existed: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
-enum DatabaseTransition {
-    KeepCurrent {
-        files: Vec<DatabaseFileTransition>,
-    },
-    Initialize {
-        target: PathBuf,
-    },
-    Rebuild {
-        observed: String,
-        files: Vec<DatabaseFileTransition>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DatabaseFileTransition {
-    target: PathBuf,
-    backup: PathBuf,
-    existed: bool,
-}
-
 pub fn prepare(options: &PrepareOptions) -> Result<PathBuf> {
     validate_deployment_id(&options.deployment_id)?;
     if !(1..=128).contains(&options.max_concurrent) {
@@ -221,7 +200,7 @@ pub fn prepare(options: &PrepareOptions) -> Result<PathBuf> {
         &options.repository_manifest_target,
         &transition_dir.join("remi-repositories.toml.previous"),
     )?;
-    let database = plan_database_transition(&db_path, compatibility, &transition_dir)?;
+    let database = database_transition::plan(&db_path, compatibility, &transition_dir)?;
     let transition = TransitionManifest {
         schema_version: TRANSITION_SCHEMA,
         deployment_id: options.deployment_id.clone(),
@@ -272,7 +251,7 @@ pub fn rollback(manifest_path: &Path) -> Result<()> {
 }
 
 fn rollback_transition(transition: &TransitionManifest, manifest_path: &Path) -> Result<()> {
-    rollback_database(&transition.database, manifest_path)?;
+    database_transition::rollback(&transition.database, manifest_path)?;
     restore_file(&transition.repository_manifest)?;
     restore_file(&transition.config)?;
     Ok(())
@@ -694,54 +673,6 @@ fn plan_file_transition(target: &Path, backup: &Path) -> Result<FileTransition> 
     })
 }
 
-fn plan_database_transition(
-    db_path: &Path,
-    compatibility: SchemaCompatibility,
-    transition_dir: &Path,
-) -> Result<DatabaseTransition> {
-    match compatibility {
-        SchemaCompatibility::Current => Ok(DatabaseTransition::KeepCurrent {
-            files: plan_database_files(db_path, transition_dir)?,
-        }),
-        SchemaCompatibility::Fresh => {
-            if let Some(parent) = db_path.parent() {
-                require_plain_directory(parent, "database parent")?;
-            }
-            Ok(DatabaseTransition::Initialize {
-                target: db_path.to_path_buf(),
-            })
-        }
-        SchemaCompatibility::RebuildRequired { observed } => {
-            let files = plan_database_files(db_path, transition_dir)?;
-            Ok(DatabaseTransition::Rebuild { observed, files })
-        }
-    }
-}
-
-fn plan_database_files(
-    db_path: &Path,
-    transition_dir: &Path,
-) -> Result<Vec<DatabaseFileTransition>> {
-    sqlite_paths(db_path)
-        .into_iter()
-        .map(|target| {
-            let existed = target.exists();
-            if existed {
-                require_plain_file(&target, "SQLite database file")?;
-            }
-            let file_name = target
-                .file_name()
-                .context("SQLite database path has no file name")?
-                .to_os_string();
-            Ok(DatabaseFileTransition {
-                target,
-                backup: transition_dir.join(file_name),
-                existed,
-            })
-        })
-        .collect()
-}
-
 fn apply_transition(
     transition: &TransitionManifest,
     new_config: &str,
@@ -756,45 +687,7 @@ fn apply_transition(
         0o644,
     )?;
 
-    match &transition.database {
-        DatabaseTransition::KeepCurrent { files } => {
-            for file in files.iter().filter(|file| file.existed) {
-                fs::copy(&file.target, &file.backup).with_context(|| {
-                    format!(
-                        "failed to snapshot {} to {}",
-                        file.target.display(),
-                        file.backup.display()
-                    )
-                })?;
-                File::open(&file.backup)?.sync_all()?;
-            }
-            sync_parent(
-                files
-                    .first()
-                    .and_then(|file| file.backup.parent())
-                    .context("database transition has no backup parent")?,
-            )?;
-        }
-        DatabaseTransition::Rebuild { files, .. } => {
-            for file in files.iter().filter(|file| file.existed) {
-                fs::rename(&file.target, &file.backup).with_context(|| {
-                    format!(
-                        "failed to move {} to {}",
-                        file.target.display(),
-                        file.backup.display()
-                    )
-                })?;
-            }
-            sync_parent(
-                files
-                    .first()
-                    .and_then(|file| file.target.parent())
-                    .context("database transition has no parent")?,
-            )?;
-        }
-        DatabaseTransition::Initialize { .. } => {}
-    }
-    Ok(())
+    database_transition::apply(&transition.database)
 }
 
 fn backup_file(transition: &FileTransition) -> Result<()> {
@@ -818,64 +711,6 @@ fn restore_file(transition: &FileTransition) -> Result<()> {
     } else {
         remove_plain_file_if_present(&transition.target)
     }
-}
-
-fn rollback_database(database: &DatabaseTransition, manifest_path: &Path) -> Result<()> {
-    match database {
-        DatabaseTransition::Initialize { target } => {
-            preserve_failed_database(&sqlite_paths(target), manifest_path)?;
-            Ok(())
-        }
-        DatabaseTransition::KeepCurrent { files } | DatabaseTransition::Rebuild { files, .. } => {
-            for file in files.iter().filter(|file| !file.existed) {
-                preserve_failed_database(std::slice::from_ref(&file.target), manifest_path)?;
-            }
-            for file in files.iter().filter(|file| file.existed) {
-                if file.backup.exists() {
-                    preserve_failed_database(std::slice::from_ref(&file.target), manifest_path)?;
-                    require_plain_file(&file.backup, "SQLite transition backup")?;
-                    fs::rename(&file.backup, &file.target).with_context(|| {
-                        format!(
-                            "failed to restore {} from {}",
-                            file.target.display(),
-                            file.backup.display()
-                        )
-                    })?;
-                } else if !file.target.exists() {
-                    bail!(
-                        "database transition lost both live file and backup for {}",
-                        file.target.display()
-                    );
-                }
-            }
-            if let Some(parent) = files.first().and_then(|file| file.target.parent()) {
-                sync_parent(parent)?;
-            }
-            Ok(())
-        }
-    }
-}
-
-fn preserve_failed_database(paths: &[PathBuf], manifest_path: &Path) -> Result<()> {
-    let failed_dir = manifest_path
-        .parent()
-        .context("transition manifest has no parent")?
-        .join("failed-current");
-    let mut created = false;
-    for path in paths {
-        if !path.exists() {
-            continue;
-        }
-        require_plain_file(path, "failed current database file")?;
-        if !created {
-            fs::create_dir_all(&failed_dir)?;
-            fs::set_permissions(&failed_dir, fs::Permissions::from_mode(0o750))?;
-            created = true;
-        }
-        let file_name = path.file_name().context("database path has no file name")?;
-        fs::rename(path, failed_dir.join(file_name))?;
-    }
-    Ok(())
 }
 
 fn install_file_atomic(source: &Path, target: &Path, mode: u32) -> Result<()> {
@@ -997,20 +832,6 @@ fn validate_transition_manifest(transition: &TransitionManifest) -> Result<()> {
         );
     }
     validate_deployment_id(&transition.deployment_id)
-}
-
-fn sqlite_paths(db_path: &Path) -> [PathBuf; 3] {
-    [
-        db_path.to_path_buf(),
-        appended_path(db_path, "-wal"),
-        appended_path(db_path, "-shm"),
-    ]
-}
-
-fn appended_path(path: &Path, suffix: &str) -> PathBuf {
-    let mut value = path.as_os_str().to_os_string();
-    value.push(suffix);
-    PathBuf::from(value)
 }
 
 fn sync_parent(path: &Path) -> Result<()> {

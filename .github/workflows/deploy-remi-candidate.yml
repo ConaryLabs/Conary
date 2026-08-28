@@ -114,6 +114,26 @@ jobs:
           scp $ssh_opts deploy/remi-deploy-helper.sh "${target}:${remote_helper}"
           ssh $ssh_opts "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha' '$remote_helper'"
+          ssh $ssh_opts "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi-storage" \
+            > remi-predeployment-storage.json
+          jq -e '
+            .schema_version == 1
+            and (.filesystem.available_bytes | type == "number")
+            and .filesystem.available_bytes >= 0
+            and (.database.files | type == "number")
+            and .database.files >= 0
+            and (.database.logical_bytes | type == "number")
+            and .database.logical_bytes >= 0
+            and (.database.allocated_bytes | type == "number")
+            and .database.allocated_bytes >= 0
+            and (.transition_backups.directories | type == "number")
+            and .transition_backups.directories >= 0
+            and (.transition_backups.logical_bytes | type == "number")
+            and .transition_backups.logical_bytes >= 0
+            and (.transition_backups.allocated_bytes | type == "number")
+            and .transition_backups.allocated_bytes >= 0
+          ' remi-predeployment-storage.json >/dev/null
           if [[ "$COMPLETION_MODE" == "private-candidates" ]]; then
             ssh $ssh_opts "$target" \
               "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi" \
@@ -146,6 +166,96 @@ jobs:
             completion_mode="$5"
             deployed_commit_sha="$6"
             deployed_binary_sha256="$7"
+            transition_completed_at=null
+            deployment_outcome=failure
+            failure_phase=""
+            phase_events='[]'
+            active_phase=""
+            phase_started_ns=0
+            evidence_emitted=0
+
+            start_phase() {
+              active_phase="$1"
+              phase_started_ns="$(date -u +%s%N)"
+              echo "Remi deployment phase started: ${active_phase}" >&2
+            }
+
+            finish_phase() {
+              local outcome="$1"
+              local finished_ns duration_ms
+              finished_ns="$(date -u +%s%N)"
+              duration_ms=$(( (finished_ns - phase_started_ns) / 1000000 ))
+              phase_events="$(jq -c \
+                --arg name "$active_phase" \
+                --arg outcome "$outcome" \
+                --argjson duration_ms "$duration_ms" \
+                '. + [{name: $name, outcome: $outcome, duration_ms: $duration_ms}]' \
+                <<<"$phase_events")"
+              echo "Remi deployment phase ${outcome}: ${active_phase} (${duration_ms} ms)" >&2
+              active_phase=""
+              phase_started_ns=0
+            }
+
+            emit_inspection() {
+              local inspection="$1"
+              local inspection_available="$2"
+              jq -c \
+                --arg commit_sha "$deployed_commit_sha" \
+                --arg binary_sha256 "$deployed_binary_sha256" \
+                --arg completion_mode "$completion_mode" \
+                --arg outcome "$deployment_outcome" \
+                --arg failure_phase "$failure_phase" \
+                --argjson inspection_available "$inspection_available" \
+                --argjson transition_completed_at "$transition_completed_at" \
+                --argjson phases "$phase_events" '
+                  . + {
+                    deployment_evidence_schema_version: 2,
+                    inspection_available: $inspection_available,
+                    deployment: {
+                      commit_sha: $commit_sha,
+                      binary_sha256: $binary_sha256,
+                      completion_mode: $completion_mode,
+                      outcome: $outcome,
+                      failure_phase: (
+                        if $failure_phase == "" then null else $failure_phase end
+                      ),
+                      transition_completed_at: $transition_completed_at,
+                      phases: $phases
+                    }
+                  }
+                ' <<<"$inspection"
+              evidence_emitted=1
+            }
+
+            emit_current_inspection() {
+              local inspection inspection_status
+              inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi 2>/dev/null)"
+              inspection_status=$?
+              if (( inspection_status == 0 )) \
+                && jq -e 'type == "object"' <<<"$inspection" >/dev/null 2>&1; then
+                emit_inspection "$inspection" true
+              else
+                emit_inspection '{}' false
+              fi
+            }
+
+            retain_failure_evidence() {
+              local status=$?
+              trap - EXIT
+              set +e
+              if (( evidence_emitted == 0 )); then
+                if [[ -n "$active_phase" ]]; then
+                  failure_phase="$active_phase"
+                  finish_phase failure
+                elif [[ -z "$failure_phase" ]]; then
+                  failure_phase=remote-session
+                fi
+                emit_current_inspection
+              fi
+              exit "$status"
+            }
+            trap retain_failure_evidence EXIT
+
             [[ "$deployed_commit_sha" =~ ^[0-9a-f]{40}$ ]] || {
               echo "candidate commit is not a canonical SHA" >&2
               exit 1
@@ -154,31 +264,19 @@ jobs:
               echo "candidate binary digest is not a canonical SHA-256" >&2
               exit 1
             }
+            start_phase database-transition-and-restart
             sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$1" "$2" "$3" "$4" >&2
+            finish_phase complete
             transition_completed_at="$(date -u +%s)"
+            start_phase ingress-after-transition
             sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress >&2
-            emit_inspection() {
-              jq -c \
-                --arg commit_sha "$deployed_commit_sha" \
-                --arg binary_sha256 "$deployed_binary_sha256" \
-                --arg completion_mode "$completion_mode" \
-                --argjson transition_completed_at "$transition_completed_at" '
-                  . + {
-                    deployment_evidence_schema_version: 1,
-                    deployment: {
-                      commit_sha: $commit_sha,
-                      binary_sha256: $binary_sha256,
-                      completion_mode: $completion_mode,
-                      transition_completed_at: $transition_completed_at
-                    }
-                  }
-                '
-            }
+            finish_phase complete
             case "$completion_mode" in
               private-candidates)
                 requirement=--require-private-candidates
                 description="post-deploy private profile candidates"
                 sleep 1
+                start_phase forced-refresh-all
                 set +e
                 refresh="$(curl --fail-with-body --silent --show-error \
                   --connect-timeout 30 --max-time 7200 --request POST \
@@ -202,13 +300,14 @@ jobs:
                     or .source_profile == "arch"
                     or .source_profile == "solus")
                 ' <<<"$refresh" >/dev/null; then
+                  failure_phase="$active_phase"
+                  finish_phase failure
                   echo "post-deploy forced candidate refresh failed" >&2
                   jq -c '{status, force, synced, skipped, failed}' \
                     <<<"$refresh" >&2 || true
-                  sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi \
-                    | emit_inspection
                   exit 1
                 fi
+                finish_phase complete
                 jq -c '{status, force, synced, skipped, failed}' \
                   <<<"$refresh" >&2
                 mapfile -t retry_profiles < <(jq -r '
@@ -225,6 +324,7 @@ jobs:
                       ;;
                   esac
                   echo "retrying only failed profile ${profile}" >&2
+                  start_phase "forced-refresh-${profile}"
                   set +e
                   scoped_refresh="$(curl --fail-with-body --silent --show-error \
                     --connect-timeout 30 --max-time 7200 --request POST \
@@ -239,25 +339,32 @@ jobs:
                     and (.results | length) > 0
                     and all(.results[]; .source_profile == $profile)
                   ' <<<"$scoped_refresh" >/dev/null; then
+                    failure_phase="$active_phase"
+                    finish_phase failure
                     echo "profile-scoped candidate retry failed for ${profile}" >&2
                     jq -c '{status, force, profile, synced, skipped, failed}' \
                       <<<"$scoped_refresh" >&2 || true
-                    sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi \
-                      | emit_inspection
                     exit 1
                   fi
+                  finish_phase complete
                   jq -c '{status, force, profile, synced, skipped, failed}' \
                     <<<"$scoped_refresh" >&2
                 done
+                start_phase private-candidate-inspection
                 if ! inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy \
                   inspect-remi "$requirement" 2>&1)"; then
-                  sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi \
-                    | emit_inspection
+                  failure_phase="$active_phase"
+                  finish_phase failure
                   echo "Remi ${description} are incomplete after the forced refresh" >&2
                   exit 1
                 fi
+                finish_phase complete
+                start_phase ingress-after-completion
                 sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress >&2
-                emit_inspection <<<"$inspection"
+                finish_phase complete
+                deployment_outcome=complete
+                emit_inspection "$inspection" true
+                trap - EXIT
                 exit 0
                 ;;
               active-repopulation)
@@ -269,11 +376,17 @@ jobs:
                 exit 1
                 ;;
             esac
+            start_phase active-repopulation-wait
             for attempt in $(seq 1 120); do
               if inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy \
                 inspect-remi "$requirement" 2>&1)"; then
+                finish_phase complete
+                start_phase ingress-after-completion
                 sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress >&2
-                emit_inspection <<<"$inspection"
+                finish_phase complete
+                deployment_outcome=complete
+                emit_inspection "$inspection" true
+                trap - EXIT
                 exit 0
               fi
               echo "Remi ${description} are still incomplete (${attempt}/120)" >&2
@@ -281,47 +394,135 @@ jobs:
                 sleep 30
               fi
             done
-            sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi \
-              | emit_inspection
+            failure_phase="$active_phase"
+            finish_phase failure
             echo "Remi did not complete ${description} within one hour" >&2
             exit 1
           REMOTE_EOF
           deploy_status=$?
           set -e
+          if [[ ! -s remi-deployment-inspection.json ]] \
+            || ! jq -e 'type == "object"' remi-deployment-inspection.json \
+              >/dev/null 2>&1; then
+            echo "remote deployment returned no valid evidence; recovering a read-only inspection" >&2
+            set +e
+            recovered_inspection="$(ssh $ssh_opts "$target" \
+              "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi" 2>/dev/null)"
+            recovered_status=$?
+            set -e
+            if (( recovered_status == 0 )) \
+              && jq -e 'type == "object"' <<<"$recovered_inspection" >/dev/null 2>&1; then
+              inspection_available=true
+              inspection="$recovered_inspection"
+            else
+              inspection_available=false
+              inspection='{}'
+            fi
+            jq -c \
+              --arg commit_sha "$CANDIDATE_SHA" \
+              --arg binary_sha256 "$BINARY_SHA256" \
+              --arg completion_mode "$COMPLETION_MODE" \
+              --argjson inspection_available "$inspection_available" '
+                . + {
+                  deployment_evidence_schema_version: 2,
+                  inspection_available: $inspection_available,
+                  deployment: {
+                    commit_sha: $commit_sha,
+                    binary_sha256: $binary_sha256,
+                    completion_mode: $completion_mode,
+                    outcome: "failure",
+                    failure_phase: "remote-session-or-transport",
+                    transition_completed_at: null,
+                    phases: []
+                  }
+                }
+              ' <<<"$inspection" > remi-deployment-inspection.json
+          fi
+          set +e
+          ssh $ssh_opts "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi-storage" \
+            > remi-deployment-storage.json
+          storage_status=$?
+          set -e
+          if (( storage_status != 0 )) \
+            || ! jq -e '
+              .schema_version == 1
+              and (.filesystem.available_bytes | type == "number")
+              and .filesystem.available_bytes >= 0
+              and (.database.files | type == "number")
+              and .database.files >= 0
+              and (.database.logical_bytes | type == "number")
+              and .database.logical_bytes >= 0
+              and (.database.allocated_bytes | type == "number")
+              and .database.allocated_bytes >= 0
+              and (.transition_backups.directories | type == "number")
+              and .transition_backups.directories >= 0
+              and (.transition_backups.logical_bytes | type == "number")
+              and .transition_backups.logical_bytes >= 0
+              and (.transition_backups.allocated_bytes | type == "number")
+              and .transition_backups.allocated_bytes >= 0
+            ' remi-deployment-storage.json >/dev/null; then
+            echo "deployment did not return valid typed storage evidence" >&2
+            exit 1
+          fi
           [[ -s remi-deployment-inspection.json \
             && ! -L remi-deployment-inspection.json ]] || {
               echo "deployment did not return a final typed inspection" >&2
               exit 1
           }
+          if (( deploy_status == 0 )); then
+            expected_outcome=complete
+          else
+            expected_outcome=failure
+          fi
           jq -e \
             --arg expected_commit "$CANDIDATE_SHA" \
             --arg expected_binary "$BINARY_SHA256" \
-            --arg expected_mode "$COMPLETION_MODE" '
-            .deployment_evidence_schema_version == 1
+            --arg expected_mode "$COMPLETION_MODE" \
+            --arg expected_outcome "$expected_outcome" '
+            .deployment_evidence_schema_version == 2
             and .deployment.commit_sha == $expected_commit
             and .deployment.binary_sha256 == $expected_binary
             and .deployment.completion_mode == $expected_mode
-            and (.deployment.transition_completed_at | type == "number")
-            and (.schema_epoch | type == "string")
-            and (.schema_revision | type == "number")
-            and (.configured_profiles | type == "number")
-            and (.candidate_profiles | type == "number")
-            and (.candidates | type == "array")
-            and all(.candidates[];
-              (.profile == "fedora-44"
-                or .profile == "ubuntu-26.04"
-                or .profile == "arch")
-              and (.configured_sources | type == "number")
-              and (.packages | type == "number")
-              and (.latest_refresh == null or (
-                (.latest_refresh.run_id | type == "string")
-                and (.latest_refresh.fencing_epoch | type == "number")
-                and (.latest_refresh.state | type == "string")
-                and (.latest_refresh.run_members | type == "number")
-                and (.latest_refresh.candidate_members | type == "number")
-                and (.latest_refresh.redactions | type == "array")
-              ))
-            )
+            and .deployment.outcome == $expected_outcome
+            and (.inspection_available | type == "boolean")
+            and (.deployment.phases | type == "array")
+            and all(.deployment.phases[];
+              (.name | type == "string")
+              and (.outcome == "complete" or .outcome == "failure")
+              and (.duration_ms | type == "number")
+              and .duration_ms >= 0)
+            and (if $expected_outcome == "complete" then
+              .inspection_available == true
+              and .deployment.failure_phase == null
+              and (.deployment.transition_completed_at | type == "number")
+            else
+              (.deployment.failure_phase | type == "string")
+              and (.deployment.transition_completed_at == null
+                or (.deployment.transition_completed_at | type == "number"))
+            end)
+            and (if .inspection_available then
+              (.schema_epoch | type == "string")
+              and (.schema_revision | type == "number")
+              and (.configured_profiles | type == "number")
+              and (.candidate_profiles | type == "number")
+              and (.candidates | type == "array")
+              and all(.candidates[];
+                (.profile == "fedora-44"
+                  or .profile == "ubuntu-26.04"
+                  or .profile == "arch")
+                and (.configured_sources | type == "number")
+                and (.packages | type == "number")
+                and (.latest_refresh == null or (
+                  (.latest_refresh.run_id | type == "string")
+                  and (.latest_refresh.fencing_epoch | type == "number")
+                  and (.latest_refresh.state | type == "string")
+                  and (.latest_refresh.run_members | type == "number")
+                  and (.latest_refresh.candidate_members | type == "number")
+                  and (.latest_refresh.redactions | type == "array")
+                ))
+              )
+            else true end)
           ' remi-deployment-inspection.json >/dev/null
           if [[ "$COMPLETION_MODE" == "private-candidates" \
             && "$deploy_status" -eq 0 ]]; then
@@ -372,16 +573,23 @@ jobs:
               echo "### Final typed Remi inspection"
               echo
               jq -r '
-                .candidates[] |
-                "- \(.profile): candidate `\(.profile_revision_sha256 // "absent")`; "
-                + "packages \(.packages); latest refresh `\(.latest_refresh.state // "none")`; "
-                + "stage `\(.latest_refresh.failure_stage // "none")`; "
-                + "category `\(.latest_refresh.failure_category // "none")`; "
-                + "members \(.latest_refresh.candidate_members // 0)/\(.latest_refresh.run_members // 0); "
-                + "evidence `\(.latest_refresh.failure_evidence_sha256 // "none")`"
+                "- deployment outcome: `\(.deployment.outcome)`",
+                "- failure phase: `\(.deployment.failure_phase // "none")`",
+                "- final inspection available: `\(.inspection_available)`",
+                (.deployment.phases[]?
+                  | "- phase `\(.name)`: \(.outcome) in \(.duration_ms) ms"),
+                (.candidates[]?
+                  | "- \(.profile): candidate `\(.profile_revision_sha256 // "absent")`; "
+                    + "packages \(.packages); latest refresh `\(.latest_refresh.state // "none")`; "
+                    + "stage `\(.latest_refresh.failure_stage // "none")`; "
+                    + "category `\(.latest_refresh.failure_category // "none")`; "
+                    + "members \(.latest_refresh.candidate_members // 0)/\(.latest_refresh.run_members // 0); "
+                    + "evidence `\(.latest_refresh.failure_evidence_sha256 // "none")`")
               ' remi-deployment-inspection.json
               if [[ -s remi-predeployment-inspection.json \
-                && ! -L remi-predeployment-inspection.json ]]; then
+                && ! -L remi-predeployment-inspection.json ]] \
+                && jq -e '.deployment.outcome == "complete" and .inspection_available' \
+                  remi-deployment-inspection.json >/dev/null; then
                 echo
                 echo "Post-deploy fencing advances:"
                 jq -r --slurpfile final remi-deployment-inspection.json '
@@ -396,7 +604,32 @@ jobs:
                   | ["fedora-44", "ubuntu-26.04", "arch"][] as $profile
                   | "- \($profile): epoch \(epoch($before; $profile)) -> "
                     + "\(epoch($after; $profile))"
-                ' remi-predeployment-inspection.json
+                  ' remi-predeployment-inspection.json
+              fi
+              if [[ -s remi-predeployment-storage.json \
+                && ! -L remi-predeployment-storage.json \
+                && -s remi-deployment-storage.json \
+                && ! -L remi-deployment-storage.json ]]; then
+                echo
+                echo "Storage evidence (before -> after):"
+                jq -r --slurpfile final remi-deployment-storage.json '
+                  . as $before
+                  | $final[0] as $after
+                  | "- available bytes: \($before.filesystem.available_bytes) -> "
+                    + "\($after.filesystem.available_bytes)",
+                    "- SQLite logical bytes: \($before.database.logical_bytes) -> "
+                    + "\($after.database.logical_bytes)",
+                    "- SQLite allocated bytes: \($before.database.allocated_bytes) -> "
+                    + "\($after.database.allocated_bytes)",
+                    "- transition backups: \($before.transition_backups.directories) -> "
+                    + "\($after.transition_backups.directories)",
+                    "- transition-backup logical bytes: "
+                    + "\($before.transition_backups.logical_bytes) -> "
+                    + "\($after.transition_backups.logical_bytes)",
+                    "- transition-backup allocated bytes: "
+                    + "\($before.transition_backups.allocated_bytes) -> "
+                    + "\($after.transition_backups.allocated_bytes)"
+                ' remi-predeployment-storage.json
               fi
             } >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -408,6 +641,8 @@ jobs:
           path: |
             remi-deployment-inspection.json
             remi-predeployment-inspection.json
+            remi-deployment-storage.json
+            remi-predeployment-storage.json
           if-no-files-found: warn
           retention-days: 30
       - name: Verify the selected Remi completion contract

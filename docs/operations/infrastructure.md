@@ -112,15 +112,29 @@ workflow.
   completion fails. It does not expose service logs, generic shell access,
   credentials, bearer tokens, private-key paths, or host-local paths, and
   diagnostics do not satisfy the candidate publication predicate.
+- Candidate deployment evidence records each remote phase and its wall time:
+  database transition/restart, ingress verification, all-profile refresh,
+  each exact-profile retry, completion inspection, and final ingress proof.
+  An early remote or transport failure still produces a sanitized typed
+  failure envelope and attempts one read-only final inspection; it never turns
+  missing diagnostics into a successful deployment. Before and after the
+  remote attempt, `inspect-remi-storage` records only numeric filesystem,
+  SQLite, and transition-backup counts plus logical/allocated byte totals. It
+  rejects symlinked or structurally unexpected backup storage and exposes no
+  host path.
 - The candidate Remi binary owns config/schema preparation. It type-checks the
   current config and source manifest, installs exact parser authority,
-  snapshots a current SQLite epoch or moves a retired epoch plus WAL/SHM into
-  `/conary/deployment-backups/`, and emits the transition manifest used for
-  automatic rollback. The pre-deploy database remains recoverable; retired
-  schemas are not migrated in place. The helper stops Remi before preparation,
+  retains a current-schema SQLite database in place or moves a retired epoch
+  plus WAL/SHM into `/conary/deployment-backups/`, and emits the transition
+  manifest used for automatic rollback. Schema revision is the persisted-data
+  compatibility boundary: a same-revision binary rollback restores config and
+  repository authority while retaining the compatible live database, so an
+  ordinary deploy performs zero complete database copies. Retired schemas are
+  not migrated in place and retain their exact recoverable files. The helper
+  stops Remi before preparation,
   and the candidate independently enforces that quiescence: prepare acquires
   the same kernel-backed canonical runtime-root lock as the server before its
-  first mutation. Transition-manifest schema 2 records that exact canonical
+  first mutation. Transition-manifest schema 3 records that exact canonical
   root, and rollback reacquires it before restoring config, repository
   authority, or SQLite state. Live ownership fails immediately; service names,
   PIDs, lock-file contents, timestamps, and stale-file cleanup are not recovery

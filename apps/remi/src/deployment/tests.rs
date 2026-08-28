@@ -16,6 +16,15 @@ fn prepare_hard_switches_config_and_initializes_fresh_database() {
     let transition_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
     assert_eq!(transition_json["schema_version"], TRANSITION_SCHEMA);
+    let mut retired_schema = transition_json.clone();
+    retired_schema["schema_version"] = serde_json::Value::from(2);
+    let retired_schema: TransitionManifest = serde_json::from_value(retired_schema).unwrap();
+    assert!(
+        validate_transition_manifest(&retired_schema)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported transition manifest schema 2")
+    );
     assert_eq!(
         transition_json["runtime_root"],
         std::fs::canonicalize(temp.path())
@@ -354,7 +363,7 @@ fn retired_database_is_moved_and_restored_on_rollback() {
 }
 
 #[test]
-fn current_database_is_snapshotted_and_restored_on_rollback() {
+fn current_database_is_not_copied_and_remains_compatible_on_rollback() {
     let (temp, options) = arrange();
     let db_path = temp.path().join("metadata/conary.db");
     let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -367,6 +376,14 @@ fn current_database_is_snapshotted_and_restored_on_rollback() {
     drop(conn);
 
     let manifest = prepare(&options).unwrap();
+    let transition: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    assert_eq!(transition["database"]["action"], "keep-current");
+    assert_eq!(
+        transition["database"]["target"],
+        db_path.to_string_lossy().as_ref()
+    );
+    assert!(!manifest.parent().unwrap().join("conary.db").exists());
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     conn.execute("UPDATE deployment_marker SET value = 'after'", [])
         .unwrap();
@@ -377,13 +394,40 @@ fn current_database_is_snapshotted_and_restored_on_rollback() {
     let marker: String = conn
         .query_row("SELECT value FROM deployment_marker", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(marker, "before");
+    assert_eq!(marker, "after");
+    assert!(!manifest.parent().unwrap().join("failed-current").exists());
+}
+
+#[test]
+fn same_schema_rollback_rejects_an_incompatible_live_database() {
+    let (temp, options) = arrange();
+    let db_path = temp.path().join("metadata/conary.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
+    drop(conn);
+
+    let manifest = prepare(&options).unwrap();
+    fs::remove_file(&db_path).unwrap();
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO schema_version (version) VALUES (79);",
+    )
+    .unwrap();
+    drop(conn);
+
+    let error = rollback(&manifest).expect_err("incompatible live database must fail closed");
     assert!(
-        manifest
-            .parent()
+        format!("{error:#}").contains("same-schema rollback found an incompatible live database"),
+        "unexpected rollback error: {error:#}"
+    );
+    assert!(
+        !fs::read_to_string(&options.config_path)
             .unwrap()
-            .join("failed-current/conary.db")
-            .exists()
+            .contains("[upstream.old]")
     );
 }
 

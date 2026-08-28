@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 76
-summary: Document exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 77
+summary: Document zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -337,10 +337,17 @@ from that endpoint; liveness alone is not deployment evidence. The free-space
 floor is `storage.readiness_min_free`, defaulting to 10 GiB.
 It is a serving-health threshold, not catalog-construction scratch admission.
 
-`apps/remi/src/deployment.rs` owns recoverable config/schema transitions and
-read-only deployment inspection. It snapshots a current database or retires an
-old schema epoch before replacement, so health failure can restore config,
-source authority, and SQLite state together. Startup reconciles the installed
+`apps/remi/src/deployment.rs` owns recoverable config/schema orchestration and
+read-only deployment inspection;
+`apps/remi/src/deployment/database_transition.rs` owns persisted database
+planning, application, and rollback. A current schema revision remains in
+place across binary replacement and rollback, making the schema revision the
+explicit persisted-data compatibility boundary and performing no complete
+database copy. A retired schema epoch plus WAL/SHM is moved into the transition
+backup and restored exactly on rollback. Transition-manifest schema 3 is a
+hard cut with no reader for schema 2; existing completed backup manifests are
+historical evidence, while any unfinished old-schema transition must be
+resolved with its owning binary before deploying this cut. Startup reconciles the installed
 manifest before opening listeners, then immediately refreshes metadata and runs
 the canonical discovery fetch and exact-contract rebuild before eligible
 exact-profile prewarm. Before creating storage subdirectories, opening the
@@ -353,7 +360,7 @@ timestamps, and stale-file cleanup are never ownership authority.
 Deployment prepare derives and canonicalizes that same runtime root from the
 validated candidate config, acquires the same kernel lock before signing-key,
 backup, config, repository-manifest, or database mutation, and records the
-canonical root in transition-manifest schema 2. Rollback reads that typed root
+canonical root in transition-manifest schema 3. Rollback reads that typed root
 and acquires the same lock before restoring any target. The superseded manifest
 shape has no compatibility reader. Deployment inspection remains read-only
 evidence and never establishes quiescence or mutation ownership. It reports
@@ -373,7 +380,15 @@ final Fedora, Ubuntu, and Arch fencing epochs to be strictly newer than their
 recorded baselines and each terminal run to have started after the recorded
 binary transition. The final evidence binds the exact merged commit, built
 binary SHA-256, completion mode, and transition timestamp; the before-and-after
-sanitized inspections are retained. A fresh Solus candidate cannot replace any
+sanitized inspections are retained. Evidence schema 2 also records the typed
+outcome, causal failure phase, and duration of every completed or failed remote
+phase. An early remote-session or transport failure produces a failure envelope
+and attempts one read-only recovery inspection instead of discarding the causal
+state. The root-owned helper's read-only `inspect-remi-storage` surface adds
+before-and-after available bytes, live SQLite file count and logical/allocated
+bytes, and transition-backup directory count and logical/allocated bytes. It
+fails closed on symlinked or unexpected backup entries and emits no host paths.
+A fresh Solus candidate cannot replace any
 public-profile advance, a typed Solus refresh failure cannot block the public
 completion set, and a preexisting valid public candidate cannot make a new
 binary deployment green.
