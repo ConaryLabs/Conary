@@ -9,6 +9,7 @@ use std::fs::OpenOptions;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -41,11 +42,17 @@ pub(super) const CATALOG_APPLICATION_ID: i64 = 0x434e_5259;
 #[cfg(test)]
 thread_local! {
     static LOGICAL_VERIFICATION_PASSES: Cell<usize> = const { Cell::new(0) };
+    static PHYSICAL_VERIFICATION_PASSES: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(in crate::repository) fn logical_verification_passes_for_test() -> usize {
     LOGICAL_VERIFICATION_PASSES.get()
+}
+
+#[cfg(test)]
+pub(in crate::repository) fn physical_verification_passes_for_test() -> usize {
+    PHYSICAL_VERIFICATION_PASSES.get()
 }
 
 pub(super) const CATALOG_SCHEMA: &str = r#"
@@ -236,6 +243,7 @@ impl CatalogReader {
         expected: &CatalogBindingV1,
         verify_logical_content: bool,
     ) -> Result<Self> {
+        let started = Instant::now();
         expected.validate()?;
         let metadata = fs::symlink_metadata(path).map_err(|error| {
             Error::IoError(format!(
@@ -314,6 +322,15 @@ impl CatalogReader {
             reader.verify_logical_content()?;
             reader.verification_proof = Some(CatalogVerificationProofV1::new(expected));
         }
+        #[cfg(test)]
+        PHYSICAL_VERIFICATION_PASSES.set(PHYSICAL_VERIFICATION_PASSES.get() + 1);
+        tracing::info!(
+            catalog = %reader.path.display(),
+            catalog_bytes = expected.artifact.size,
+            verify_logical_content,
+            elapsed_ms = started.elapsed().as_millis(),
+            "Immutable catalog reopen completed"
+        );
         Ok(reader)
     }
 

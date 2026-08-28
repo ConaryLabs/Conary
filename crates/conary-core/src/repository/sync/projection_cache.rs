@@ -147,14 +147,15 @@ impl ProjectionCache {
     /// Copy one independently verified cache hit into a private source
     /// candidate without replaying its normalized rows through SQLite.
     ///
-    /// The exact artifact SHA-256 is checked again after the copy. This proves
-    /// that the candidate is byte-identical to the reopened cache artifact
-    /// while avoiding index construction, logical re-digestion, and `VACUUM`.
+    /// The copied artifact receives one complete physical reopen while carrying
+    /// the cache entry's exact logical proof. This proves that the candidate is
+    /// byte-identical to the reopened cache artifact while avoiding index
+    /// construction, logical re-digestion, and `VACUUM`.
     pub(super) fn materialize_verified(
         &self,
         reader: &CatalogReader,
         candidate_path: &Path,
-    ) -> Result<()> {
+    ) -> Result<CatalogReader> {
         let source = reader.path();
         let entry = source.parent().ok_or_else(|| {
             Error::InvalidPath(format!(
@@ -188,13 +189,13 @@ impl ProjectionCache {
             }
             output.sync_all()?;
             drop(output);
-            crate::hash::verify_file_sha256(candidate_path, &reader.binding().artifact.sha256)
-                .map_err(|error| Error::ChecksumMismatch {
-                    expected: error.expected,
-                    actual: error.actual,
-                })?;
+            let candidate_reader = CatalogReader::open_verified_with_proof(
+                candidate_path,
+                reader.binding(),
+                reader.verification_proof()?,
+            )?;
             File::open(candidate_parent)?.sync_all()?;
-            Ok(())
+            Ok(candidate_reader)
         })();
         if let Err(error) = result {
             if created_candidate
@@ -208,7 +209,7 @@ impl ProjectionCache {
             }
             return Err(error);
         }
-        Ok(())
+        result
     }
 
     #[cfg(test)]
@@ -530,7 +531,7 @@ mod tests {
         CatalogCandidateWriter, CatalogFinalizationScratchV2, CatalogMetadataScratchV1,
         CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1, CatalogScopeV1,
         CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
-        logical_verification_passes_for_test,
+        logical_verification_passes_for_test, physical_verification_passes_for_test,
     };
     use crate::repository::parsers::AuthenticatedMetadataObject;
     use std::sync::Mutex;
@@ -729,6 +730,23 @@ mod tests {
             .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
             .unwrap();
         let reader = fixture.cache.lookup(&fixture.inputs).unwrap().unwrap();
+
+        let materialized = fixture._root.path().join("materialized.sqlite");
+        let physical_passes = physical_verification_passes_for_test();
+        let materialized_reader = fixture
+            .cache
+            .materialize_verified(&reader, &materialized)
+            .unwrap();
+        assert_eq!(
+            materialized_reader.path(),
+            materialized.canonicalize().unwrap()
+        );
+        assert_eq!(
+            physical_verification_passes_for_test(),
+            physical_passes + 1,
+            "materialization must perform one complete candidate proof"
+        );
+        drop(materialized_reader);
 
         let existing = fixture._root.path().join("existing.sqlite");
         fs::write(&existing, b"belongs to another operation").unwrap();

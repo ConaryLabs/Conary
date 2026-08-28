@@ -89,11 +89,13 @@ pub use record::{
     CatalogSourceEvidenceV1, DebianSourcePocketV1,
 };
 pub use source::SourceCatalogCandidateV1;
-#[cfg(test)]
-pub(in crate::repository) use store::logical_verification_passes_for_test;
 pub use store::{
     CatalogBindingV1, CatalogPackageNamePageV1, CatalogReader, write_catalog_candidate,
 };
 pub(in crate::repository) use store::{
     CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1,
+};
+#[cfg(test)]
+pub(in crate::repository) use store::{
+    logical_verification_passes_for_test, physical_verification_passes_for_test,
 };
