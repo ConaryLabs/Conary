@@ -78,18 +78,16 @@ pub async fn materialize_native_oracle_inputs(
     let initial_candidates = capture_current_candidates(&config.db_path, &config.candidates)?;
 
     let authority = CatalogAuthority::for_inspection(&config.db_path, &config.catalog_dir);
-    let mut pins = Vec::with_capacity(config.candidates.len());
+    let pins = authority
+        .open_selected_profiles(&config.candidates)
+        .context("pin complete native-oracle input profile set before catalog reopen")?;
+    ensure!(
+        pins.len() == config.candidates.len(),
+        "native-oracle input profile pin count changed during atomic reopen"
+    );
     let mut profiles = Vec::with_capacity(config.candidates.len());
     let mut object_sources = BTreeMap::<String, ObjectSource>::new();
-    for selection in &config.candidates {
-        let pin = authority
-            .open_selected_profile(selection)
-            .with_context(|| {
-                format!(
-                    "pin native-oracle input profile '{}' revision {}",
-                    selection.source_profile, selection.profile_revision_sha256
-                )
-            })?;
+    for (selection, pin) in config.candidates.iter().zip(&pins) {
         ensure!(
             pin.selection() == selection,
             "native-oracle input profile changed during reopen"
@@ -100,7 +98,7 @@ pub async fn materialize_native_oracle_inputs(
         let mut sources = Vec::with_capacity(pin.manifest().members.len());
         for member in &pin.manifest().members {
             let source = authority
-                .source_bundle_for_member(&pin, member.ordinal)
+                .source_bundle_for_member(pin, member.ordinal)
                 .with_context(|| {
                     format!(
                         "reopen native-oracle source '{}' member {}",
@@ -127,7 +125,6 @@ pub async fn materialize_native_oracle_inputs(
             revision: pin.manifest().clone(),
             sources,
         });
-        pins.push(pin);
     }
 
     let objects = object_sources
