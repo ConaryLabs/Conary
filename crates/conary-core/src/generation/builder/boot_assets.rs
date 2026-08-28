@@ -12,7 +12,10 @@ use super::kernel::{
 use super::runtime_inputs;
 use super::sysroot::materialize_runtime_generation_sysroot;
 use crate::filesystem::CasStore;
-use crate::generation::artifact::{BootAssetSources, BootAssetsManifest, stage_boot_assets};
+use crate::generation::artifact::{
+    BootAssetSources, BootAssetsManifest, VerifiedGenerationBootAssets, stage_boot_assets,
+    stage_reused_boot_assets,
+};
 use crate::generation::root_manifest::{GenerationRootEntry, capture_existing_payload_node};
 use crate::payload::{PayloadContentAuthority, PayloadNodeKind};
 
@@ -23,6 +26,13 @@ pub(super) struct RuntimeBootAssetSources {
     pub(super) initramfs: PathBuf,
     pub(super) efi_bootloader: PathBuf,
     pub(super) _sysroot_workspace: Option<tempfile::TempDir>,
+    pub(super) staging: RuntimeBootAssetStaging,
+}
+
+#[derive(Debug)]
+pub(super) enum RuntimeBootAssetStaging {
+    Copy,
+    Reuse(Box<VerifiedGenerationBootAssets>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,15 +54,20 @@ pub(super) fn stage_runtime_boot_assets_from_sources(
         )));
     }
 
-    stage_boot_assets(BootAssetSources {
-        generation_dir: gen_dir,
-        generation,
-        architecture,
-        kernel_version,
-        kernel: &sources.kernel,
-        initramfs: &sources.initramfs,
-        efi_bootloader: &sources.efi_bootloader,
-    })
+    match &sources.staging {
+        RuntimeBootAssetStaging::Copy => stage_boot_assets(BootAssetSources {
+            generation_dir: gen_dir,
+            generation,
+            architecture,
+            kernel_version,
+            kernel: &sources.kernel,
+            initramfs: &sources.initramfs,
+            efi_bootloader: &sources.efi_bootloader,
+        }),
+        RuntimeBootAssetStaging::Reuse(source) => {
+            stage_reused_boot_assets(gen_dir, generation, architecture, source)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -78,6 +93,21 @@ pub(super) fn resolve_generation_boot_asset_sources(
         Path::new("depmod"),
         Path::new("cpio"),
     )
+}
+
+pub(super) fn resolve_generation_boot_asset_sources_for_publication(
+    conn: &rusqlite::Connection,
+    runtime_inputs: &mut runtime_inputs::RuntimeGenerationInputs,
+    generations_root: &Path,
+    boot_root: &Path,
+) -> crate::Result<RuntimeBootAssetSources> {
+    if boot_root == Path::new("/boot")
+        && let Some(sources) =
+            super::boot_reuse::resolve_reusable_boot_assets(conn, generations_root)?
+    {
+        return Ok(sources);
+    }
+    resolve_generation_boot_asset_sources(runtime_inputs, generations_root, boot_root)
 }
 
 fn resolve_generation_boot_asset_sources_with_tools(
@@ -327,6 +357,7 @@ fn runtime_boot_asset_sources_for_release(
         initramfs,
         efi_bootloader,
         _sysroot_workspace: None,
+        staging: RuntimeBootAssetStaging::Copy,
     })
 }
 

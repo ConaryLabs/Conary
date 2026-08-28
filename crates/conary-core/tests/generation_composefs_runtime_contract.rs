@@ -167,14 +167,20 @@ fn generation_builder_stages_boot_assets_from_cas_sysroot_for_default_runtime_bu
 
 #[test]
 fn generation_builder_retains_boot_preparation_mutations_before_freezing_erofs() {
-    for path in [
-        "generation/builder/create.rs",
-        "generation/builder/rebuild.rs",
+    for (path, resolver) in [
+        (
+            "generation/builder/create.rs",
+            "resolve_generation_boot_asset_sources_for_publication(",
+        ),
+        (
+            "generation/builder/rebuild.rs",
+            "resolve_generation_boot_asset_sources(&mut runtime_inputs",
+        ),
     ] {
         let source =
             fs::read_to_string(core_source(path)).expect("failed to read generation builder");
         let prepare = source
-            .find("resolve_generation_boot_asset_sources(&mut runtime_inputs")
+            .find(resolver)
             .expect("generation builder must finalize boot-derived manifest authority");
         let freeze = source
             .find("build_erofs_image_from_root_manifest(&runtime_inputs.generation")

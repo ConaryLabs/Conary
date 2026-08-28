@@ -176,6 +176,14 @@ closed, versioned generation request with their exact argv. At boot, provider
 drift or execution failure remains a durable automatic retry under the same
 generation activation state machine.
 
+That typed request stream also owns boot-artifact invalidation. A later
+ordinary package publication may reuse the completed current generation's
+independently verified kernel, initramfs, and EFI files only when no applied
+boot-runtime request exists after that generation's published changeset
+high-water mark. Any such request forces exact sysroot preparation and boot
+asset regeneration; package names and filesystem-path guesses do not decide
+the boundary.
+
 ## Source-Format Failure Semantics
 
 The typed transaction graph owns failure behavior:

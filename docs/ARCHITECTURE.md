@@ -141,6 +141,7 @@ crates/conary-core/      Core library crate
     |   +-- builder/create.rs Generation creation orchestration
     |   +-- builder/rebuild.rs Recovery rebuild orchestration
     |   +-- builder/boot_assets.rs Runtime/generation boot asset resolution
+    |   +-- builder/boot_reuse.rs Typed unchanged-boot reuse eligibility
     |   +-- builder/initramfs.rs Dracut initramfs generation support
     |   +-- builder/kernel.rs Kernel release discovery
     |   +-- builder/root_validation.rs Self-contained runtime root validation
@@ -154,6 +155,7 @@ crates/conary-core/      Core library crate
     |   +-- root_manifest/materialize.rs Exact typed-root reconstruction
     |   +-- root_manifest/composefs.rs Typed manifest to EROFS serialization
     |   +-- artifact.rs  Generation artifact contract, CAS manifest, and boot assets
+    |   +-- artifact/boot_reuse.rs Boot-only verification and immutable link staging
     |   +-- artifact/tests.rs Artifact contract and tamper-regression coverage
     |   +-- export.rs    Raw/qcow2 generation artifact disk export
     |   +-- export/tests.rs Export carrier and provenance regression coverage
@@ -588,12 +590,16 @@ Submodules: builder.rs (public
 generation-builder hub),
 builder/create.rs and builder/rebuild.rs (generation creation and recovery
 rebuild orchestration), builder/carrier_capabilities.rs (persisted target
-capability projection), builder/boot_assets.rs, builder/initramfs.rs,
+capability projection), builder/boot_assets.rs, builder/boot_reuse.rs,
+builder/initramfs.rs,
 builder/kernel.rs, and builder/sysroot.rs (runtime boot asset and sysroot
 materialization support), builder/root_validation.rs and
 builder/runtime_inputs.rs (self-contained runtime input validation), and
 root_manifest/composefs.rs (exact typed-root EROFS serialization). artifact.rs
-owns the exportable generation contract and boot assets; export.rs owns
+owns the exportable generation contract and boot assets, while
+artifact/boot_reuse.rs reopens only a completed generation's boot contract and
+stages its verified immutable files without enumerating the payload CAS;
+export.rs owns
 raw/qcow2 disk export from validated artifacts; mount.rs owns composefs
 mount/unmount; metadata.rs owns JSON
 metadata), gc.rs (typed CAS reachability and object collection), delta.rs
@@ -605,6 +611,17 @@ identities and atomically materializes generation-local `/etc` uppers. There is
 no generic hash-conflict/manual-merge path. Target immutable-backing security
 discovery and application live in
 `crates/conary-core/src/ccs/hooks/capabilities/filesystem_security.rs`.
+
+An ordinary package publication reuses the current completed generation's
+kernel, initramfs, and EFI files only when its terminal publication row proves
+the prior applied-changeset high-water mark and no applied typed boot-runtime
+request exists in the interval through the current high-water mark. Reuse
+reopens the artifact and boot manifests, verifies all three source files, and
+hard-links them into the pending generation before the new artifact contract
+verifies them again. Any new boot-runtime request, missing terminal publication
+authority, identity mismatch, or checksum failure takes the exact rebuild path
+or fails closed. Package names, distribution labels, and path heuristics never
+select this fast path.
 
 ### composefs Integration
 

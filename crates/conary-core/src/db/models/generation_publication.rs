@@ -142,6 +142,28 @@ impl GenerationPublication {
             .map_err(Into::into)
     }
 
+    /// Return the terminal publication that established one generation's
+    /// exact package changeset high-water mark.
+    pub fn completed_for_generation(
+        conn: &Connection,
+        generation_number: i64,
+    ) -> Result<Option<Self>> {
+        let sql = format!(
+            "SELECT {} FROM generation_publications
+             WHERE generation_number = ?1
+               AND phase = 'database_backed_up'
+               AND status = 'complete'
+               AND recoverable = 0
+             ORDER BY id DESC
+             LIMIT 1",
+            Self::COLUMNS
+        );
+        conn.prepare(&sql)?
+            .query_row([generation_number], Self::from_row)
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn bind_selected_root_snapshot(&self, conn: &Connection, snapshot_id: i64) -> Result<()> {
         let id = self
             .id

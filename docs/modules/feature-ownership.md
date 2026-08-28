@@ -575,6 +575,7 @@ and export raw/qcow2/ISO carriers.
 `crates/conary-core/src/generation/builder/rebuild.rs`;
 `crates/conary-core/src/generation/builder/carrier_capabilities.rs`;
 `crates/conary-core/src/generation/builder/boot_assets.rs`;
+`crates/conary-core/src/generation/builder/boot_reuse.rs`;
 `crates/conary-core/src/generation/builder/initramfs.rs`;
 `crates/conary-core/src/generation/builder/kernel.rs`;
 `crates/conary-core/src/generation/builder/root_validation.rs`;
@@ -582,6 +583,7 @@ and export raw/qcow2/ISO carriers.
 `crates/conary-core/src/generation/export.rs`;
 `crates/conary-core/src/generation/export/tests.rs`;
 `crates/conary-core/src/generation/artifact.rs`;
+`crates/conary-core/src/generation/artifact/boot_reuse.rs`;
 `crates/conary-core/src/generation/artifact/tests.rs`;
 `crates/conary-core/src/ccs/hooks/capabilities.rs`;
 `crates/conary-core/src/ccs/hooks/capabilities/filesystem_security.rs`;
