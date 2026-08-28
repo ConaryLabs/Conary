@@ -11,7 +11,8 @@ use conary_core::ccs::native_transaction::{
     plan_native_transaction,
 };
 use conary_core::db::models::{
-    ConfigFile, InstalledNativeLifecycleBundle, PackagePayloadOwnership, Trove,
+    ConfigFile, InstalledNativeLifecycleBundle, NativeLifecycleResidualState,
+    PackagePayloadOwnership, Trove,
 };
 use conary_core::repository::dependency_model::PackageRelationRemovalMode;
 use conary_core::repository::versioning::VersionScheme;
@@ -522,6 +523,19 @@ impl PreparedNativeTransaction {
             }
         }
 
+        if !native_global_state_has_possible_consumer(
+            conn,
+            &owners,
+            arch_transaction,
+            &deb_change_indices,
+        )? && let Some(prepared) = Self::prepare_without_global_native_state(
+            &changes,
+            &path_capability_changes,
+            requires_upgrade_payload_boundary,
+        )? {
+            return Ok(prepared);
+        }
+
         let views = owners
             .iter()
             .map(|owner| NativeBundleView {
@@ -742,6 +756,18 @@ impl PreparedNativeTransaction {
                 bundle,
             });
         }
+
+        if !native_global_state_has_possible_consumer(
+            conn,
+            &owners,
+            arch_transaction,
+            &deb_change_indices,
+        )? && let Some(prepared) =
+            Self::prepare_without_global_native_state(&changes, &path_capability_changes, false)?
+        {
+            return Ok(prepared);
+        }
+
         let views = owners
             .iter()
             .map(|owner| NativeBundleView {
@@ -800,6 +826,45 @@ impl PreparedNativeTransaction {
         self.requires_upgrade_payload_boundary
     }
 
+    /// Build the exact payload graph without projecting unrelated installed
+    /// native state. The lightweight plan is accepted only when it produces no
+    /// lifecycle event; a future planner-owned event therefore falls back to
+    /// the complete projection path rather than silently losing its inputs.
+    fn prepare_without_global_native_state(
+        changes: &[NativeTransactionChange],
+        path_capability_changes: &[NativeTransactionPathCapabilities],
+        requires_upgrade_payload_boundary: bool,
+    ) -> Result<Option<Self>> {
+        let transaction_state = NativeTransactionState::default();
+        let plan = plan_native_transaction(&[], changes, &transaction_state)?;
+        if !plan.events.is_empty() {
+            return Ok(None);
+        }
+        let empty_paths = BTreeSet::new();
+        let path_projection = NativePathProjection::from_transaction(
+            &plan,
+            changes,
+            &empty_paths,
+            path_capability_changes,
+            &empty_paths,
+        )?;
+        Ok(Some(Self {
+            owners: Vec::new(),
+            plan,
+            changes: changes.to_vec(),
+            transaction_state,
+            debian_config_before: Vec::new(),
+            operations: changes.iter().map(|change| change.operation).collect(),
+            requires_upgrade_payload_boundary,
+            arch_transaction: false,
+            arch_ldconfig_required_after: false,
+            host_capabilities: None,
+            path_projection,
+            activation_invocations: RefCell::new(Vec::new()),
+            continued_lifecycle_failures: RefCell::new(Vec::new()),
+        }))
+    }
+
     pub(super) fn rpm_sysusers_interface(&self) -> Result<&conary_core::ccs::ExecutableInterface> {
         self.host_capabilities
             .as_ref()
@@ -807,6 +872,22 @@ impl PreparedNativeTransaction {
             .sysusers_interface()
             .map_err(anyhow::Error::from)
     }
+}
+
+/// Whether any typed authority can consume the transaction-wide package,
+/// capability, or path projections. Ambiguous or present authority takes the
+/// complete path; only an exact absence of all consumers admits the compact
+/// payload-graph path.
+fn native_global_state_has_possible_consumer(
+    conn: &rusqlite::Connection,
+    owners: &[NativeBundleOwner],
+    arch_transaction: bool,
+    deb_change_indices: &BTreeSet<usize>,
+) -> Result<bool> {
+    if !owners.is_empty() || arch_transaction || !deb_change_indices.is_empty() {
+        return Ok(true);
+    }
+    Ok(!NativeLifecycleResidualState::find_all(conn)?.is_empty())
 }
 
 fn host_capabilities_for_plan(

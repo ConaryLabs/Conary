@@ -31,6 +31,8 @@ mod deconfiguration;
 mod provider_projection;
 #[path = "tests/rpm_warning.rs"]
 mod rpm_warning;
+#[path = "tests/state_projection.rs"]
+mod state_projection;
 
 fn pre_remove_bundle(package_name: &str, version: &str) -> NativeLifecycleBundle {
     let body = "exit 0\n".to_string();
