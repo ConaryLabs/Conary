@@ -170,7 +170,7 @@ jobs:
           echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
           chmod 600 ~/.ssh/remi_key
           ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh_opts="-i ~/.ssh/remi_key -o StrictHostKeyChecking=accept-new"
+          ssh_opts="-i ~/.ssh/remi_key -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=accept-new"
 
           remote_bundle="/tmp/remi-${VERSION}-${GITHUB_RUN_ID}.tar.gz"
           remote_repositories="/tmp/remi-repositories-${GITHUB_RUN_ID}.toml"

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 45
-summary: Non-secret infrastructure, agent operations, release, build-once exact-main Remi candidates, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
+revision: 46
+summary: Non-secret infrastructure, agent operations, release, build-once exact-main Remi candidates, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -100,6 +100,12 @@ workflow.
   and uses the same recoverable helper and source manifest. Dispatch must choose
   either `private-candidates` or `active-repopulation` completion. It creates no
   tag or release and is not a path for deploying an unmerged pull-request head.
+- Candidate deployment uses one fail-closed SSH option contract for every
+  remote command and transfer: authentication is noninteractive, initial
+  connection time is bounded, and protocol keepalives cover long refresh and
+  inspection phases. A dead transport therefore fails within a bounded window;
+  an otherwise healthy long-running remote phase remains attached to its
+  protected runner and can return typed terminal evidence.
 - Candidate deployment retains exactly one final typed inspection instead of
   emitting every incomplete poll. Private-candidate mode also retains the
   pre-transition inspection used as its fencing baseline. The workflow runs

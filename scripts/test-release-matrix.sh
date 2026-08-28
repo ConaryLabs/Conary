@@ -1252,6 +1252,19 @@ test_check_release_matrix_rejects_cold_candidate_rebuild() {
         "candidate deploy cold Rust compilation"
 }
 
+test_check_release_matrix_rejects_unbounded_candidate_transport() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '-o ServerAliveInterval=15' \
+        '-o ServerAliveInterval=0'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy must keep every authenticated remote operation noninteractive, bounded, and alive"
+}
+
 test_check_release_matrix_rejects_loose_artifact_latency_budget() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1930,6 +1943,7 @@ main() {
         test_check_release_matrix_rejects_unprotected_candidate_artifact
         test_check_release_matrix_rejects_loose_candidate_build_policy
         test_check_release_matrix_rejects_cold_candidate_rebuild
+        test_check_release_matrix_rejects_unbounded_candidate_transport
         test_check_release_matrix_rejects_loose_artifact_latency_budget
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
         test_check_release_matrix_rejects_unforced_post_deploy_candidates
