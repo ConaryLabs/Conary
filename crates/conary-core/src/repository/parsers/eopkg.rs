@@ -5,6 +5,7 @@
 use super::{
     AuthenticatedMetadataObjectRole, AuthenticatedProjectionInputV1, AuthenticatedSnapshotIdentity,
     ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
+    SourceCandidatePreflightOutcome,
 };
 use crate::error::{Error, Result};
 use crate::packages::eopkg::xml;
@@ -19,6 +20,7 @@ use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
 use crate::repository::versioning::VersionScheme;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
+use tracing::info;
 
 pub struct EopkgParser {
     architecture: String,
@@ -93,13 +95,27 @@ impl RepositoryParser for EopkgParser {
         if sink.requires_source_candidate_preflight() {
             let decoder =
                 super::common::open_metadata_decoder(&index_path, "authenticated eopkg index")?;
-            parse_index_reader(
+            let preflight_package_count = parse_index_reader(
                 std::io::BufReader::new(decoder),
                 origin,
                 &self.architecture,
                 |package| sink.preflight_package(package),
             )?;
-            sink.begin_source_candidate()?;
+            match sink.begin_source_candidate()? {
+                SourceCandidatePreflightOutcome::CompleteProjection => {
+                    sink.authenticated_object(index_object, &index_path)?;
+                    info!(
+                        "Parsed {preflight_package_count} packages from eopkg repository in one authenticated metadata pass"
+                    );
+                    return Ok(snapshot);
+                }
+                SourceCandidatePreflightOutcome::ReplayAuthenticatedMetadata => {}
+                SourceCandidatePreflightOutcome::ArchFragmentsReplayed => {
+                    return Err(Error::InternalError(
+                        "eopkg parser received an ALPM preflight replay outcome".to_string(),
+                    ));
+                }
+            }
         }
         let decoder =
             super::common::open_metadata_decoder(&index_path, "authenticated eopkg index")?;

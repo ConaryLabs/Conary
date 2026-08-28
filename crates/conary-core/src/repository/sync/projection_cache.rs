@@ -529,9 +529,10 @@ mod tests {
     use super::*;
     use crate::repository::catalog::{
         CatalogCandidateWriter, CatalogFinalizationScratchV2, CatalogMetadataScratchV1,
-        CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1, CatalogScopeV1,
-        CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
-        logical_verification_passes_for_test, physical_verification_passes_for_test,
+        CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
+        CatalogProjectionSpoolScratchV1, CatalogScopeV1, CatalogScratchCapacityError,
+        SourceMetadataObjectRoleV1, logical_verification_passes_for_test,
+        physical_verification_passes_for_test,
     };
     use crate::repository::parsers::AuthenticatedMetadataObject;
     use std::sync::Mutex;
@@ -582,6 +583,14 @@ mod tests {
             _requirement: CatalogMetadataStreamScratchV1,
         ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
             panic!("projection cache must not request streamed metadata admission")
+        }
+
+        fn stream_projection_spool(
+            &self,
+            _work_directory: &Path,
+            _requirement: CatalogProjectionSpoolScratchV1,
+        ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+            panic!("projection cache must not request projection spool admission")
         }
 
         fn reserve_finalization(

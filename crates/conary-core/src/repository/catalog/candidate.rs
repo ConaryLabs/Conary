@@ -488,8 +488,8 @@ mod tests {
         CATALOG_FINALIZATION_SCRATCH_SCHEMA_V2, CatalogCopyScratchV1, CatalogFinalizationScratchV2,
         CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
         CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogProfileCandidateScratchV1,
-        CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
-        CatalogScratchCapacityError, CatalogSourceEvidenceV1,
+        CatalogProjectionSpoolScratchV1, CatalogProvideRecordV1, CatalogRequirementAtomV1,
+        CatalogRequirementGroupV1, CatalogScratchCapacityError, CatalogSourceEvidenceV1,
     };
     use crate::repository::dependency_model::{
         ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryRequirementClause,
@@ -544,6 +544,14 @@ mod tests {
             _requirement: CatalogMetadataStreamScratchV1,
         ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
             panic!("candidate writer must not request streamed metadata admission")
+        }
+
+        fn stream_projection_spool(
+            &self,
+            _work_directory: &Path,
+            _requirement: CatalogProjectionSpoolScratchV1,
+        ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+            panic!("candidate writer must not request projection spool admission")
         }
 
         fn reserve_finalization(

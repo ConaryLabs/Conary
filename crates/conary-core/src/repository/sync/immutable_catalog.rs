@@ -6,6 +6,9 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
+
+use tracing::info;
 
 use crate::db::models::{
     AuthenticatedSnapshotIdentity, NativeSourceEcosystem, NativeSourceStream, Repository,
@@ -15,12 +18,19 @@ use crate::repository::catalog::source::SourceCatalogAuthorityV1;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogMetadataStreamAdmission,
     CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
-    CatalogProvideRecordV1, CatalogReader, CatalogScopeV1, CatalogScratchAdmission,
-    CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SOURCE_CATALOG_PROJECTION_VERSION_V2,
-    SOURCE_SNAPSHOT_SCHEMA_V1, SourceCatalogCandidateV1, SourceEcosystemV1,
-    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
-    SourceStreamKindV1, SourceStreamV1, retain_source_metadata_object,
+    CatalogProjectionSpoolScratchV1, CatalogProvideRecordV1, CatalogReader, CatalogScopeV1,
+    CatalogScratchAdmission, CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1,
+    SOURCE_CATALOG_PROJECTION_VERSION_V2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceCatalogCandidateV1,
+    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
+    SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1, retain_source_metadata_object,
     verify_registered_source_catalog_bundle,
+};
+
+mod spool;
+
+use spool::{
+    PROJECTION_SPOOL_FILE_NAME, ProjectionSpoolRecordV1, ProjectionSpoolWriterV1,
+    SpoolProvideMergeV1,
 };
 
 /// One exact registered source snapshot eligible for reuse after the current
@@ -73,6 +83,7 @@ use crate::repository::parsers::{
     ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject,
     AuthenticatedProjectionInputV1, ChecksumType, PackageMetadata, RepositorySnapshotSink,
     SnapshotPackageIdentity, SnapshotPackageJoin, SnapshotProvideUpdate,
+    SourceCandidatePreflightOutcome,
 };
 
 use super::types::{RepositorySyncSnapshot, SyncedPackageRow};
@@ -240,6 +251,8 @@ struct NativeCatalogSnapshotSink {
     scope: CatalogScopeV1,
     preflight_projection_bytes: u64,
     preflight_package_count: u64,
+    preflight_spool: Option<ProjectionSpoolWriterV1>,
+    preflight_is_arch: bool,
     repository_id: i64,
     source_profile: String,
     repository_url: String,
@@ -336,6 +349,22 @@ impl NativeCatalogSnapshotSink {
             .is_none()
             .then(|| CatalogCandidateWriter::create(candidate_path, scope.clone()))
             .transpose()?;
+        let preflight_spool = match scratch_admission.as_ref() {
+            Some(admission) => {
+                let requirement = CatalogProjectionSpoolScratchV1::new(PROJECTION_SPOOL_FILE_NAME)?;
+                let stream =
+                    admission.stream_projection_spool(work_directory.path(), requirement)?;
+                Some(ProjectionSpoolWriterV1::create(
+                    &work_directory.path().join(PROJECTION_SPOOL_FILE_NAME),
+                    stream,
+                )?)
+            }
+            None => None,
+        };
+        let preflight_is_arch = matches!(
+            repo.require_parser_config()?.format(),
+            crate::repository::registry::RepositoryFormat::Arch
+        );
         let preflight_projection_bytes = u64::try_from(
             crate::json::canonical_json(&scope)
                 .map_err(|error| {
@@ -350,6 +379,8 @@ impl NativeCatalogSnapshotSink {
             scope,
             preflight_projection_bytes,
             preflight_package_count: 0,
+            preflight_spool,
+            preflight_is_arch,
             repository_id: repo
                 .id
                 .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?,
@@ -472,7 +503,7 @@ impl NativeCatalogSnapshotSink {
         Ok(record)
     }
 
-    fn observe_projection<T: serde::Serialize>(&mut self, value: &T) -> Result<()> {
+    fn observe_projection<T: serde::Serialize>(&mut self, value: &T) -> Result<Vec<u8>> {
         let bytes = crate::json::canonical_json(value).map_err(|error| {
             Error::ParseError(format!("serialize native source preflight fact: {error}"))
         })?;
@@ -484,7 +515,15 @@ impl NativeCatalogSnapshotSink {
             .ok_or_else(|| {
                 Error::IoError("native source preflight byte count overflow".to_string())
             })?;
-        Ok(())
+        Ok(bytes)
+    }
+
+    fn preflight_spool_mut(&mut self) -> Result<&mut ProjectionSpoolWriterV1> {
+        self.preflight_spool.as_mut().ok_or_else(|| {
+            Error::InternalError(
+                "native source preflight has no admitted normalized spool".to_string(),
+            )
+        })
     }
 
     fn writer_mut(&mut self) -> Result<&mut CatalogCandidateWriter> {
@@ -604,7 +643,10 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             return Ok(());
         }
         let record = self.project_package(package)?;
-        self.observe_projection(&record)?;
+        let bytes = self.observe_projection(&record)?;
+        if !self.preflight_is_arch {
+            self.preflight_spool_mut()?.package_bytes(&bytes)?;
+        }
         self.preflight_package_count = self
             .preflight_package_count
             .checked_add(1)
@@ -624,7 +666,7 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
                 &provide,
                 crate::repository::versioning::VersionScheme::Rpm,
             );
-            self.observe_projection(&CatalogProvideRecordV1::from(normalized))?;
+            let _ = self.observe_projection(&CatalogProvideRecordV1::from(normalized))?;
         }
         Ok(())
     }
@@ -654,7 +696,8 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             provides: Vec::new(),
         };
         let record = self.project_package(package)?;
-        self.observe_projection(&record)
+        let _ = self.observe_projection(&record)?;
+        Ok(())
     }
 
     fn preflight_arch_package_fragment(
@@ -670,12 +713,13 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             ArchPackageFragmentKind::Desc => "desc",
             ArchPackageFragmentKind::Depends => "depends",
         };
-        self.observe_projection(&(directory, kind, content))
+        let bytes = self.observe_projection(&(directory, kind, content))?;
+        self.preflight_spool_mut()?.arch_fragment_bytes(&bytes)
     }
 
-    fn begin_source_candidate(&mut self) -> Result<()> {
+    fn begin_source_candidate(&mut self) -> Result<SourceCandidatePreflightOutcome> {
         if !self.requires_source_candidate_preflight() {
-            return Ok(());
+            return Ok(SourceCandidatePreflightOutcome::ReplayAuthenticatedMetadata);
         }
         if self.writer.is_some() {
             return Err(Error::ConflictError(
@@ -695,7 +739,83 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
                 requirement,
             )?,
         );
-        Ok(())
+        let replay_started = Instant::now();
+        let mut spool = self
+            .preflight_spool
+            .take()
+            .ok_or_else(|| {
+                Error::InternalError(
+                    "native source candidate began without a normalized preflight spool"
+                        .to_string(),
+                )
+            })?
+            .finish()?
+            .open()?;
+        let stats = spool.stats();
+        while let Some(record) = spool.next()? {
+            match record {
+                ProjectionSpoolRecordV1::Package(package) => {
+                    if self.preflight_is_arch {
+                        return Err(Error::InternalError(
+                            "ALPM preflight spool unexpectedly contains a complete package"
+                                .to_string(),
+                        ));
+                    }
+                    self.writer_mut()?.package(package)?;
+                }
+                ProjectionSpoolRecordV1::ProvideMerge(merge) => {
+                    if self.preflight_is_arch {
+                        return Err(Error::InternalError(
+                            "ALPM preflight spool unexpectedly contains an RPM provide merge"
+                                .to_string(),
+                        ));
+                    }
+                    let checksum = normalized_snapshot_checksum(&merge.identity);
+                    self.writer_mut()?.extend_package_provides(
+                        merge.join.as_str(),
+                        &checksum,
+                        &merge.identity.name,
+                        &merge.identity.version,
+                        merge.identity.architecture.as_deref(),
+                        merge.provides,
+                    )?;
+                }
+                ProjectionSpoolRecordV1::FinishJoin(join) => {
+                    if self.preflight_is_arch {
+                        return Err(Error::InternalError(
+                            "ALPM preflight spool unexpectedly contains an RPM join".to_string(),
+                        ));
+                    }
+                    self.writer_mut()?.finish_package_join(join.as_str())?;
+                }
+                ProjectionSpoolRecordV1::ArchFragment {
+                    directory,
+                    kind,
+                    content,
+                } => {
+                    if !self.preflight_is_arch {
+                        return Err(Error::InternalError(
+                            "non-ALPM preflight spool contains an Arch fragment".to_string(),
+                        ));
+                    }
+                    self.writer_mut()?
+                        .stage_arch_package_fragment(directory, kind, content)?;
+                }
+            }
+        }
+        info!(
+            repository = %self.repository.name,
+            spool_bytes = stats.bytes,
+            spool_records = stats.records,
+            package_count = self.preflight_package_count,
+            elapsed_ms = replay_started.elapsed().as_millis(),
+            "Normalized native projection spool replay completed"
+        );
+        if self.preflight_is_arch {
+            Ok(SourceCandidatePreflightOutcome::ArchFragmentsReplayed)
+        } else {
+            Ok(SourceCandidatePreflightOutcome::CompleteProjection)
+        }
     }
 
     fn package(&mut self, package: PackageMetadata) -> Result<()> {
@@ -725,20 +845,32 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
     ) -> Result<SnapshotProvideUpdate> {
         if self.requires_source_candidate_preflight() && self.writer.is_none() {
             let added = provides.len();
-            self.preflight_package_provides(provides)?;
+            let normalized = provides
+                .iter()
+                .map(|provide| {
+                    super::native::normalized_repository_provide(
+                        provide,
+                        crate::repository::versioning::VersionScheme::Rpm,
+                    )
+                    .into()
+                })
+                .collect::<Vec<CatalogProvideRecordV1>>();
+            for provide in &normalized {
+                let _ = self.observe_projection(provide)?;
+            }
+            self.preflight_spool_mut()?
+                .provide_merge(&SpoolProvideMergeV1 {
+                    join,
+                    identity: identity.clone(),
+                    provides: normalized,
+                })?;
             return Ok(SnapshotProvideUpdate {
                 matched_packages: 1,
                 added,
                 already_known: 0,
             });
         }
-        let checksum = match identity.checksum_type {
-            ChecksumType::Sha1 => format!("sha1:{}", identity.checksum.trim_start_matches("sha1:")),
-            ChecksumType::Sha256 => {
-                format!("sha256:{}", identity.checksum.trim_start_matches("sha256:"))
-            }
-            ChecksumType::Sha512 | ChecksumType::Md5 => identity.checksum.clone(),
-        };
+        let checksum = normalized_snapshot_checksum(identity);
         let provides = provides
             .iter()
             .map(|provide| {
@@ -766,7 +898,7 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
 
     fn finish_package_join(&mut self, join: SnapshotPackageJoin) -> Result<()> {
         if self.requires_source_candidate_preflight() && self.writer.is_none() {
-            return Ok(());
+            return self.preflight_spool_mut()?.finish_join(join);
         }
         self.writer_mut()?.finish_package_join(join.as_str())
     }
@@ -777,6 +909,16 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         }
         self.writer_mut()?
             .validate_rpm_primary_file_requirements(repo_url)
+    }
+}
+
+fn normalized_snapshot_checksum(identity: &SnapshotPackageIdentity) -> String {
+    match identity.checksum_type {
+        ChecksumType::Sha1 => format!("sha1:{}", identity.checksum.trim_start_matches("sha1:")),
+        ChecksumType::Sha256 => {
+            format!("sha256:{}", identity.checksum.trim_start_matches("sha256:"))
+        }
+        ChecksumType::Sha512 | ChecksumType::Md5 => identity.checksum.clone(),
     }
 }
 

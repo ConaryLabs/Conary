@@ -5,10 +5,11 @@ use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCopyScratchV1, CatalogFinalizationScratchV2,
     CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
     CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProfileMemberScratchV1,
-    CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
-    CatalogScratchAdmission, CatalogScratchCapacityError, SOURCE_SNAPSHOT_SCHEMA_V1,
-    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
-    SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
+    CatalogProjectionSpoolScratchV1, CatalogProvideRecordV1, CatalogRequirementAtomV1,
+    CatalogRequirementGroupV1, CatalogScratchAdmission, CatalogScratchCapacityError,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1, SourceMetadataObjectRoleV1,
+    SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
+    write_catalog_candidate,
 };
 use crate::repository::dependency_model::{
     DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
@@ -86,6 +87,14 @@ impl CatalogScratchAdmission for ProfileAdmission {
         _requirement: CatalogMetadataStreamScratchV1,
     ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
         panic!("profile writer must not request streamed metadata admission")
+    }
+
+    fn stream_projection_spool(
+        &self,
+        _work_directory: &Path,
+        _requirement: CatalogProjectionSpoolScratchV1,
+    ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+        panic!("profile writer must not request projection spool admission")
     }
 
     fn reserve_finalization(

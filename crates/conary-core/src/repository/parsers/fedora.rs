@@ -16,7 +16,7 @@ use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
     AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedProjectionInputV1,
     AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
-    RepositorySnapshotSink,
+    RepositorySnapshotSink, SourceCandidatePreflightOutcome,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
@@ -861,26 +861,55 @@ impl RepositoryParser for FedoraParser {
                     "RPM primary metadata",
                 ),
             );
-            self.parse_primary_reader(&mut reader, repo_url, |package| {
-                sink.preflight_package(package)
-            })?;
+            let preflight_package_count =
+                self.parse_primary_reader(&mut reader, repo_url, |package| {
+                    sink.preflight_package(package)
+                })?;
             let decoded = reader.get_ref().read_bytes();
             if decoded != primary_open_size {
                 return Err(Error::GpgVerificationFailed(format!(
                     "signed repomd.xml authenticates primary metadata as {primary_open_size} decompressed bytes but {primary_url} decoded to {decoded} bytes"
                 )));
             }
-            if let Some((filelists_url, filelists_path, _, filelists_open_size)) =
-                &filelists_download
-            {
-                filelists::ingest_verified_filelists_into(
-                    sink,
-                    filelists_path,
-                    *filelists_open_size,
-                    filelists_url,
-                )?;
+            let preflight_filelists =
+                if let Some((filelists_url, filelists_path, _, filelists_open_size)) =
+                    &filelists_download
+                {
+                    Some(filelists::ingest_verified_filelists_into(
+                        sink,
+                        filelists_path,
+                        *filelists_open_size,
+                        filelists_url,
+                    )?)
+                } else {
+                    None
+                };
+            match sink.begin_source_candidate()? {
+                SourceCandidatePreflightOutcome::CompleteProjection => {
+                    sink.authenticated_object(primary_object, &primary_path)?;
+                    match filelists_download {
+                        Some((_, filelists_path, filelists_object, _)) => {
+                            sink.authenticated_object(filelists_object, &filelists_path)?;
+                            let ingest = preflight_filelists.expect("filelists preflight ran");
+                            info!(
+                                "Ingested {} filelists package records: {} file capabilities added, {} already published by primary.xml",
+                                ingest.records, ingest.files_added, ingest.files_already_known
+                            );
+                        }
+                        None => sink.validate_rpm_primary_file_requirements(repo_url)?,
+                    }
+                    info!(
+                        "Parsed {preflight_package_count} packages from Fedora repository in one authenticated metadata pass"
+                    );
+                    return Ok(snapshot);
+                }
+                SourceCandidatePreflightOutcome::ReplayAuthenticatedMetadata => {}
+                SourceCandidatePreflightOutcome::ArchFragmentsReplayed => {
+                    return Err(Error::InternalError(
+                        "Fedora parser received an ALPM preflight replay outcome".to_string(),
+                    ));
+                }
             }
-            sink.begin_source_candidate()?;
         }
         let package_count = {
             let decoder = common::open_metadata_decoder(
