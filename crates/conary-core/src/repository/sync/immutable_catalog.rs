@@ -476,8 +476,8 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         if let Some(writer) = self.writer.take() {
             drop(writer);
         }
-        cache.materialize_verified(&reader, &self.candidate_path)?;
-        self.cached_reader = Some(reader);
+        let candidate_reader = cache.materialize_verified(&reader, &self.candidate_path)?;
+        self.cached_reader = Some(candidate_reader);
         Ok(true)
     }
 

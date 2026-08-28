@@ -6,7 +6,8 @@ use crate::repository::catalog::{
     CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
     ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
-    SourceStreamV1, logical_verification_passes_for_test, write_catalog_candidate,
+    SourceStreamV1, logical_verification_passes_for_test, physical_verification_passes_for_test,
+    write_catalog_candidate,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::versioning::VersionScheme;
@@ -273,14 +274,80 @@ fn local_logical_proof_survives_manifesting_and_atomic_publication() {
     let manifest = source_manifest(&binding);
     retain_source_object(&candidate, &manifest.authenticated_objects[0]);
     let verified = CatalogReader::open_verified(&catalog_path, &binding).unwrap();
+    let candidate_physical_passes = physical_verification_passes_for_test();
     let manifested =
-        write_source_catalog_manifest_verified(&candidate, &manifest, &verified).unwrap();
+        write_source_catalog_manifest_verified(&candidate, &manifest, verified).unwrap();
+    assert_eq!(
+        physical_verification_passes_for_test(),
+        candidate_physical_passes,
+        "manifesting must consume the exact candidate proof without reopening it"
+    );
 
     let published =
-        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, &manifested)
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, manifested)
             .unwrap();
+    assert_eq!(
+        physical_verification_passes_for_test(),
+        candidate_physical_passes + 1,
+        "publication must perform exactly one independent destination reopen"
+    );
     assert!(!candidate.exists());
     verify_source_catalog_bundle(&published, &manifest).unwrap();
+}
+
+#[test]
+fn verified_manifest_handoff_requires_the_exact_candidate_reader() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first");
+    let second = directory.path().join("second");
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    let first_catalog = first.join(CATALOG_FILE_NAME);
+    let binding = write_catalog_candidate(&first_catalog, &source_content()).unwrap();
+    let manifest = source_manifest(&binding);
+    retain_source_object(&first, &manifest.authenticated_objects[0]);
+    fs::copy(&first_catalog, second.join(CATALOG_FILE_NAME)).unwrap();
+    retain_source_object(&second, &manifest.authenticated_objects[0]);
+    let verified = CatalogReader::open_verified(&first_catalog, &binding).unwrap();
+
+    let error = match write_source_catalog_manifest_verified(&second, &manifest, verified) {
+        Err(error) => error,
+        Ok(_) => panic!("a reader for another path finalized the candidate"),
+    };
+    assert!(error.to_string().contains("does not own exact candidate"));
+    assert!(!second.join(CATALOG_MANIFEST_FILE_NAME).exists());
+}
+
+#[test]
+fn profile_manifest_and_publication_reuse_one_candidate_proof() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("profile");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidate).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+    let source_snapshot_sha256 = digest('8');
+    let catalog_path = candidate.join(CATALOG_FILE_NAME);
+    let binding =
+        write_catalog_candidate(&catalog_path, &profile_content(&source_snapshot_sha256)).unwrap();
+    let manifest = profile_manifest(&binding, &source_snapshot_sha256);
+    let verified = CatalogReader::open_verified(&catalog_path, &binding).unwrap();
+    let candidate_physical_passes = physical_verification_passes_for_test();
+
+    let manifested =
+        write_profile_catalog_manifest_verified(&candidate, &manifest, verified).unwrap();
+    assert_eq!(
+        physical_verification_passes_for_test(),
+        candidate_physical_passes
+    );
+    let published =
+        publish_profile_catalog_bundle_verified(&candidate, &catalogs, &manifest, manifested)
+            .unwrap();
+    assert_eq!(
+        physical_verification_passes_for_test(),
+        candidate_physical_passes + 1
+    );
+    assert!(!candidate.exists());
+    assert!(published.exists());
 }
 
 #[test]
@@ -296,7 +363,7 @@ fn local_logical_proof_never_bypasses_bundle_byte_binding() {
     retain_source_object(&candidate, &manifest.authenticated_objects[0]);
     let verified = CatalogReader::open_verified(&catalog_path, &binding).unwrap();
     let manifested =
-        write_source_catalog_manifest_verified(&candidate, &manifest, &verified).unwrap();
+        write_source_catalog_manifest_verified(&candidate, &manifest, verified).unwrap();
 
     let mut file = OpenOptions::new()
         .read(true)
@@ -309,11 +376,12 @@ fn local_logical_proof_never_bypasses_bundle_byte_binding() {
     drop(file);
 
     let error =
-        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, &manifested)
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, manifested)
             .unwrap_err();
     assert!(error.to_string().contains("Checksum mismatch"));
-    assert!(candidate.exists());
-    assert!(!catalogs.join("sources").exists());
+    assert!(!candidate.exists());
+    assert!(catalogs.join("sources").exists());
+    assert_eq!(fs::read_dir(catalogs.join("sources")).unwrap().count(), 0);
 }
 
 #[test]

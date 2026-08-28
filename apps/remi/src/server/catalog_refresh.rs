@@ -325,7 +325,7 @@ pub async fn stage_profile_sources(
                         let reader = write_source_catalog_manifest_verified(
                             &candidate_directory,
                             &candidate.manifest,
-                            &candidate.reader,
+                            candidate.reader,
                         )?;
                         Ok::<_, anyhow::Error>(VerifiedStagedSourceCatalog {
                             staged: StagedSourceCatalog {
@@ -539,7 +539,7 @@ fn stage_profile_candidate(
             let verification = write_profile_catalog_manifest_verified(
                 &profile_candidate_directory,
                 &manifest,
-                &candidate.reader,
+                candidate.reader,
             )?;
             (
                 manifest,
@@ -594,7 +594,7 @@ fn publish_staged_profile(
             &source.path,
             catalog_root,
             &source.manifest,
-            &verification,
+            verification,
         )?;
         published_sources.push(PublishedSourceCatalog {
             ordinal: source.ordinal,
@@ -614,7 +614,7 @@ fn publish_staged_profile(
                 &directory,
                 catalog_root,
                 &staged.manifest,
-                &verification,
+                *verification,
             )?,
             None,
         ),

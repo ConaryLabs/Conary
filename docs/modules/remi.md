@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 88
-summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 89
+summary: Document linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -124,16 +124,20 @@ package and relation field; their indexed destination reads reuse cached
 statements and any disagreement fails the private candidate before publication.
 
 Candidate finalization calculates the deterministic logical digest and then
-performs one complete independent reopen. That full reopen mints an opaque,
+performs one complete independent candidate reopen. That full reopen mints an opaque,
 non-serializable process-local proof bound to the exact scope, byte SHA-256 and
 size, logical digest, and relation counts. Private staging carries that proof
 through source manifesting, projection-cache publication, profile composition,
 and profile manifesting instead of reconstructing and re-digesting the same
-rows a third or fourth time. Durable source and profile publication still
-independently reopen the complete bundle before and after its same-filesystem
-atomic rename; each reopen checks file type and sidecars, byte hash and size,
-SQLite application/schema identity and integrity, the complete stored binding,
-manifest evidence, and exact directory membership. The exact-byte proof
+rows a third or fourth time. Manifesting requires that exact reader to own the
+canonical private candidate path and binding, then hands the same linear reader
+to publication. Publication rechecks bounded directory and manifest structure,
+drops the candidate reader, atomically renames the same directory, and performs
+one complete independent destination reopen. An already-existing exact
+destination is independently reopened instead. The destination proof checks
+file type and sidecars, byte hash and size, SQLite application/schema identity
+and integrity, the complete stored binding, manifest evidence, and exact
+directory membership. The exact-byte proof
 carries the already-completed canonical logical replay, computed table
 cardinalities, and explicit missing-package/group rejection, so neither the
 Rust row reconstruction, table-count scans, nor SQLite's foreign-key relation
