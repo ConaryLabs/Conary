@@ -1621,6 +1621,32 @@ test_check_release_matrix_rejects_discarded_candidate_failure_inspection() {
         "candidate deploy retains one validated final typed inspection"
 }
 
+test_check_release_matrix_rejects_mixed_candidate_inspection_channels() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '                inspect-remi "$requirement" 2>/dev/null)"; then' \
+        '                inspect-remi "$requirement" 2>&1)"; then'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "channel-separated diagnostics"
+}
+
+test_check_release_matrix_rejects_unvalidated_candidate_inspection() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '            deployment_inspection_is_typed() {' \
+        '            deployment_inspection_is_untyped() {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "channel-separated diagnostics"
+}
+
 test_check_release_matrix_rejects_missing_candidate_phase_evidence() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2200,6 +2226,8 @@ main() {
         test_check_release_matrix_rejects_private_mode_public_readiness_claim
         test_check_release_matrix_rejects_untyped_candidate_baseline_failure
         test_check_release_matrix_rejects_discarded_candidate_failure_inspection
+        test_check_release_matrix_rejects_mixed_candidate_inspection_channels
+        test_check_release_matrix_rejects_unvalidated_candidate_inspection
         test_check_release_matrix_rejects_missing_candidate_phase_evidence
         test_check_release_matrix_rejects_missing_candidate_storage_evidence
         test_check_release_matrix_rejects_missing_candidate_failure_artifact
