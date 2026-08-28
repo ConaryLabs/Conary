@@ -335,7 +335,14 @@ pub fn load_generation_artifact(generation_dir: &Path) -> crate::Result<Generati
     load_generation_artifact_with_cas_verification(generation_dir, CasObjectVerification::Deep)
 }
 
-pub fn load_generation_artifact_for_activation(
+/// Load a local generation whose CAS objects were verified when they entered the store.
+///
+/// The artifact, metadata, EROFS image, root/state/CAS manifests, boot manifest, and boot
+/// assets are still reopened and checked against their persisted digests. Every referenced CAS
+/// object must also exist at its authoritative content-addressed path with the exact recorded
+/// size. Only the redundant full-content rehash is skipped; callers without prior verified CAS
+/// authority must use [`load_generation_artifact`] instead.
+pub fn load_generation_artifact_with_verified_cas(
     generation_dir: &Path,
 ) -> crate::Result<GenerationArtifact> {
     load_generation_artifact_with_cas_verification(

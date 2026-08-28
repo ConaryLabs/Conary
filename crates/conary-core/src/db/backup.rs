@@ -796,7 +796,7 @@ fn verify_generation_artifact_identity(
     generation_number: i64,
 ) -> Result<()> {
     let artifact =
-        crate::generation::artifact::load_generation_artifact_for_activation(generation_dir)?;
+        crate::generation::artifact::load_generation_artifact_with_verified_cas(generation_dir)?;
     if artifact.generation != generation_number {
         return Err(Error::RecoveryFailed(format!(
             "generation artifact mismatch: backup is for generation {generation_number}, artifact declares {}",

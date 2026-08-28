@@ -210,7 +210,7 @@ fn seed_generation_mutable_state(
     runtime_root: &ConaryRuntimeRoot,
     generation_number: i64,
 ) -> anyhow::Result<()> {
-    let artifact = conary_core::generation::artifact::load_generation_artifact(
+    let artifact = conary_core::generation::artifact::load_generation_artifact_with_verified_cas(
         &runtime_root.generation_path(generation_number),
     )
     .map_err(|error| {

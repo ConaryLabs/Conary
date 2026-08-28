@@ -543,7 +543,7 @@ envelopes.
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
 3. **Record**: Freeze and strictly unmount, decode the upper into a typed changed-path delta, validate and append only affected indexed authority, and bind recoverable publication debt to that child snapshot before committing package state
 4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content
-5. **Materialize state**: Project `/etc/...` manifest paths into the generation-local `/etc` overlay upper without retaining the `/etc` prefix, then apply the ordered typed config transactions; `/var` and `/srv` remain live mutable-root state
+5. **Materialize state**: Reopen the artifact, metadata, EROFS, root/state/CAS manifests, and boot contract; require every manifest-listed CAS path and size, while reusing the content identity verified at CAS ingestion instead of rehashing the complete immutable payload set. Project `/etc/...` manifest paths into the generation-local `/etc` overlay upper without retaining the `/etc` prefix, reading only the exact state objects being materialized, then apply the ordered typed config transactions; `/var` and `/srv` remain live mutable-root state
 6. **Publish**: Advance one persisted replay phase at a time: artifact ready, current link durable, configuration status projected, matching system state active, and generation-bound database backup durable. Only the final phase makes publication debt terminal
 7. **Recover**: Under the runtime mutation lock, resume at the persisted phase and replay each remaining idempotent effect. A matching `/conary/current` link proves only link publication; it never implies configuration projection or database backup completion
 8. **Compensate**: Rollback binds its publication debt to the exact pre-mutation snapshot and records a new compensating changeset
@@ -599,6 +599,10 @@ root_manifest/composefs.rs (exact typed-root EROFS serialization). artifact.rs
 owns the exportable generation contract and boot assets, while
 artifact/boot_reuse.rs reopens only a completed generation's boot contract and
 stages its verified immutable files without enumerating the payload CAS;
+the local verified-CAS artifact loader reopens every artifact and manifest
+digest plus all referenced CAS paths and sizes without rereading immutable
+payload bodies; the explicit artifact/export loader remains the deep
+content-verification boundary;
 export.rs owns
 raw/qcow2 disk export from validated artifacts; mount.rs owns composefs
 mount/unmount; metadata.rs owns JSON

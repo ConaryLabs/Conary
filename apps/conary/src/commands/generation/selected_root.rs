@@ -460,7 +460,7 @@ fn prepare_current_root(
         let artifact = if require_materialized {
             conary_core::generation::artifact::load_generation_artifact(&generation_path)?
         } else {
-            conary_core::generation::artifact::load_generation_artifact_for_activation(
+            conary_core::generation::artifact::load_generation_artifact_with_verified_cas(
                 &generation_path,
             )?
         };
