@@ -31,6 +31,7 @@ fn git_dirty() -> Option<bool> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").ok()?;
     let output = Command::new("git")
         .current_dir(manifest_dir)
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .args(["status", "--porcelain", "--untracked-files=no"])
         .output()
         .ok()?;

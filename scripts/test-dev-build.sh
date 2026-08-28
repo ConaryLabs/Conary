@@ -222,9 +222,15 @@ assert_watch_paths_exist() {
     done <<<"$output"
 }
 
+linked_index="$(git -C "$linked" rev-parse --git-path index)"
+touch "$linked/tracked"
+index_mtime_before="$(stat -c '%y' "$linked_index")"
 remi_metadata_out="$(
     CARGO_MANIFEST_DIR="$linked/apps/remi" "$tmp/remi-build-metadata"
 )"
+index_mtime_after="$(stat -c '%y' "$linked_index")"
+[[ "$index_mtime_before" == "$index_mtime_after" ]] ||
+    fail "Remi build metadata mutated the Git index that it watches"
 assert_watch_paths_exist "$remi_metadata_out" "$linked/apps/remi"
 linked_git_dir="$(git -C "$linked" rev-parse --git-dir)"
 assert_contains "$remi_metadata_out" \
