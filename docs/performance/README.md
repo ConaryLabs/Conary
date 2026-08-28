@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-15
-revision: 2
-summary: Record commit-bound reproducible performance evidence and the first measured Remi conversion optimization
+last_updated: 2026-08-28
+revision: 3
+summary: Record commit-bound reproducible performance evidence, exact command resource metrics, and measured Remi optimization results
 ---
 
 # Performance evidence
@@ -11,6 +11,23 @@ Conary's user-facing and service workflows. Evidence records name the exact
 source commit, hardware label, source identity, cache state, work performed,
 and phase timings so later comparisons do not turn a changed fixture or a warm
 cache into an apparent improvement.
+
+## Exact command recorder
+
+`apps/conary/tests/fixtures/native/record-command-performance.py` executes one
+exact argv without a shell and writes one create-only schema-1 JSON record. It
+binds the result to a full source commit, fixture SHA-256, implementation,
+operation, cache state, and sample number. Linux child-resource evidence
+includes wall and CPU time, peak RSS, page faults, block I/O operations, and
+context switches. Failed or signalled commands still produce evidence and
+retain their command outcome.
+
+Use one fresh recorder process and one output path per sample. The recorder
+refuses to replace an existing record. It deliberately does not infer whether
+a cache is cold or warm; the benchmark driver owns and proves that setup before
+passing the label. Network bytes, CAS work, SQLite statements, durability
+calls, complete-root scans, and internal phase timing remain separate typed
+counters rather than estimates derived from elapsed time.
 
 ## Remi conversion baseline: 2026-08-15
 
