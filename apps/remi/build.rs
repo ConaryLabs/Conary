@@ -35,10 +35,7 @@ fn git_dirty() -> Option<bool> {
         .args(["status", "--porcelain", "--untracked-files=no"])
         .output()
         .ok()?;
-    output
-        .status
-        .success()
-        .then_some(!output.stdout.is_empty())
+    output.status.success().then_some(!output.stdout.is_empty())
 }
 
 fn main() {
