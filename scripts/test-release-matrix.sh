@@ -1116,7 +1116,7 @@ remi_predeployment_inspection_fixture() {
       {
         baseline_schema_version: 1,
         schema_epoch: "conary-current-v1",
-        schema_revision: 53,
+        schema_revision: 54,
         configured_profiles: 3,
         candidate_profiles: 2,
         candidates: [

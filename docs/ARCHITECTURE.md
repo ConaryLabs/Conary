@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-22
-revision: 58
-summary: Describe workspace and release boundaries, immutable Remi catalogs, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
+last_updated: 2026-08-28
+revision: 59
+summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and byte-identical artifact aliases, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -670,7 +670,7 @@ The operational schema is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 49 is a rebuild-only hard cut. Remi's operational database
+Schema revision 54 is a rebuild-only hard cut. Remi's operational database
 stores immutable-catalog resource metadata, ordered profile members, fenced
 active pointers, refresh runs, runtime sessions, and exact work/reader/
 conversion pins. Activated native package, provide, and requirement authority
@@ -681,7 +681,10 @@ are created and deleted atomically. The previous latest-profile key and
 source-profile-only retention decision have no compatibility reader. Native
 authenticated roots are validated as transient refresh inputs and recorded in
 immutable source manifests; repositories no longer retain a mutable latest-root
-observation.
+observation. A resource is identified by that exact manifest SHA-256. Distinct
+authenticated manifests may bind one byte-identical normalized catalog
+artifact, while membership, reachability, deletion, and filesystem ownership
+remain scoped to each resource identity and exact bundle.
 Repository freshness is four explicit facts: `last_checked_at` records a
 successful authenticated check, `last_changed_at` a different source revision,
 `last_validated_at` completed parser/catalog validation, and
@@ -741,10 +744,10 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 49 retains revision 48's immutable Remi source/profile
-resource graph and exact input-revision conversion pins, removes the overloaded
-repository `last_sync` field, and records check/change/validation/publication
-facts separately. Native parser schema 1 streams authenticated file-backed
+Schema revision 54 retains the immutable Remi source/profile resource graph and
+exact input-revision conversion pins, removes the false one-artifact-to-one-
+manifest constraint, and keeps check/change/validation/publication facts
+separate. Native parser schema 1 streams authenticated file-backed
 children into private catalog candidates; exact normalized cache reuse binds
 the source stream, root, child roles and digests, parser version, and catalog
 schema. Private candidates are reopened and verified, synchronized, and
