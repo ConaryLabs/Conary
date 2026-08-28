@@ -4,6 +4,10 @@ inputs:
   phase:
     description: Stable protected job phase label.
     required: true
+  policy:
+    description: Exact compiler-cache policy family to validate.
+    required: false
+    default: gnu
 runs:
   using: composite
   steps:
@@ -11,6 +15,7 @@ runs:
       shell: bash
       env:
         CACHE_PHASE: ${{ inputs.phase }}
+        CACHE_POLICY: ${{ inputs.policy }}
       run: |
         set -euo pipefail
         [[ "$CACHE_PHASE" =~ ^[a-z0-9-]+$ ]] || {
@@ -21,7 +26,15 @@ runs:
           echo "compiler-cache summary has no sccache executable" >&2
           exit 1
         }
-        [[ "${CONARY_COMPILER_CACHE_NAMESPACE:-}" =~ ^protected-gnu-local-v1-[0-9a-f]{64}$ ]] || {
+        case "$CACHE_POLICY" in
+          gnu) namespace_prefix=protected-gnu-local-v1 ;;
+          native-matrix) namespace_prefix=native-matrix-musl-local-v1 ;;
+          *)
+            echo "compiler-cache policy must be gnu or native-matrix" >&2
+            exit 1
+            ;;
+        esac
+        [[ "${CONARY_COMPILER_CACHE_NAMESPACE:-}" =~ ^${namespace_prefix}-[0-9a-f]{64}$ ]] || {
           echo "compiler-cache summary has no exact protected namespace" >&2
           exit 1
         }
@@ -42,6 +55,7 @@ runs:
         {
           echo "### Rust compiler-cache result: $CACHE_PHASE"
           echo
+          echo "- policy: \`$CACHE_POLICY\`"
           echo "- namespace: \`${CONARY_COMPILER_CACHE_NAMESPACE}\`"
           jq -r '
             "- compile_requests: `\(.stats.compile_requests)`\n"

@@ -149,6 +149,7 @@ done
 
 compiler_cache_action=".github/actions/setup-rust-workspace/action.yml"
 compiler_cache_summary_action=".github/actions/summarize-rust-cache/action.yml"
+native_compiler_cache_action=".github/actions/setup-native-matrix-compiler-cache/action.yml"
 if [[ ! -f "$compiler_cache_action" ]]; then
   violations+=("${compiler_cache_action}: missing protected compiler-cache owner")
 else
@@ -201,11 +202,77 @@ else
   }
 
   require_compiler_cache_summary_match \
-    'CONARY_COMPILER_CACHE_NAMESPACE:-[\s\S]*protected-gnu-local-v1-\[0-9a-f\]\{64\}' \
-    'must reject missing or non-exact protected namespaces'
+    'policy:[\s\S]*default: gnu[\s\S]*gnu\) namespace_prefix=protected-gnu-local-v1[\s\S]*native-matrix\) namespace_prefix=native-matrix-musl-local-v1[\s\S]*CONARY_COMPILER_CACHE_NAMESPACE:-[\s\S]*namespace_prefix[\s\S]*\[0-9a-f\]\{64\}' \
+    'must reject unknown policies and missing or non-exact protected namespaces'
   require_compiler_cache_summary_match \
     '--show-stats --stats-format json[\s\S]*\.version == "0\.16\.0"[\s\S]*startswith\("Local disk: "\)[\s\S]*\.stats\.compile_requests[\s\S]*\.stats\.cache_hits\.counts[\s\S]*\.stats\.cache_misses\.counts[\s\S]*\.stats\.cache_errors\.counts[\s\S]*\.stats\.cache_writes[\s\S]*\.stats\.cache_read_errors[\s\S]*\.stats\.cache_write_errors[\s\S]*\.stats\.cache_timeouts' \
       'must retain typed request, hit, miss, and error evidence from the pinned cache'
+fi
+
+if [[ ! -f "$native_compiler_cache_action" ]]; then
+  violations+=("${native_compiler_cache_action}: missing native matrix compiler-cache owner")
+else
+  require_native_cache_action_fixed() {
+    local needle="$1"
+    local description="$2"
+
+    if ! rg -q --fixed-strings -- "$needle" "$native_compiler_cache_action"; then
+      violations+=("${native_compiler_cache_action}: ${description}")
+    fi
+  }
+
+  for binding in \
+    "rustc=%s" \
+    "cargo=%s" \
+    "lock=%s" \
+    "target=x86_64-unknown-linux-musl" \
+    "cc=%s" \
+    "native_abi=%s" \
+    "builder=%s" \
+    "header_probe=%s" \
+    "build_action=%s" \
+    "cache_action=%s" \
+    "features=default" \
+    "test_harness=true" \
+    "rustflags=%s" \
+    "encoded_rustflags=%s" \
+    "incremental=%s" \
+    "dev_debug=%s" \
+    "test_debug=%s"; do
+    require_native_cache_action_fixed "$binding" \
+      "native matrix compiler-cache identity must bind ${binding}"
+  done
+  require_native_cache_action_fixed \
+    'echo "SCCACHE_CACHE_BACKEND=local-disk-bulk-v1"' \
+    'native matrix compiler cache must use the local bulk backend'
+  # This fixed string intentionally matches a literal shell variable.
+  # shellcheck disable=SC2016
+  require_native_cache_action_fixed \
+    'echo "SCCACHE_DIR=$RUNNER_TEMP/native-matrix-sccache"' \
+    'native matrix compiler cache must use its bounded runner-local directory'
+  require_native_cache_action_fixed \
+    'echo "SCCACHE_LOCAL_RW_MODE=READ_WRITE"' \
+    'native matrix cache producer must write only to its runner-local seed'
+  # shellcheck disable=SC2016
+  require_native_cache_action_fixed \
+    'namespace="native-matrix-musl-local-v1-${identity}"' \
+    'native matrix cache must use its exact policy identity'
+  # shellcheck disable=SC2016
+  require_native_cache_action_fixed \
+    'exact_key="${restore_prefix}${GITHUB_SHA}"' \
+    'native matrix cache snapshots must bind the exact source commit'
+  require_native_cache_action_fixed \
+    'uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
+    'native matrix cache restore must use the pinned split cache action'
+  require_native_cache_action_fixed \
+    'restore-keys: ${{ steps.policy.outputs.restore_prefix }}' \
+    'native matrix cache must restore a compatible policy seed across source heads'
+  require_native_cache_action_fixed \
+    'uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba' \
+    'native matrix cache must install the pinned sccache action'
+  if rg -q --fixed-strings 'SCCACHE_GHA_ENABLED' "$native_compiler_cache_action"; then
+    violations+=("${native_compiler_cache_action}: native matrix cache must not use the per-object GitHub backend")
+  fi
 fi
 
 native_matrix_workflow=".github/workflows/pr-gate.yml"
@@ -219,54 +286,18 @@ if [[ -f "$native_matrix_workflow" ]]; then
     fi
   }
 
-  for binding in \
-    "rustc=%s" \
-    "cargo=%s" \
-    "lock=%s" \
-    "target=x86_64-unknown-linux-musl" \
-    "cc=%s" \
-    "native_abi=%s" \
-    "builder=%s" \
-    "header_probe=%s" \
-    "action=%s" \
-    "features=default" \
-    "test_harness=true" \
-    "rustflags=%s" \
-    "encoded_rustflags=%s" \
-    "incremental=%s" \
-    "dev_debug=%s" \
-    "test_debug=%s"; do
-    require_native_matrix_fixed "$binding" \
-      "native matrix compiler-cache identity must bind ${binding}"
-  done
   require_native_matrix_fixed \
-    'SCCACHE_CACHE_BACKEND: local-disk-bulk-v1' \
-    'native matrix compiler cache must use the local bulk backend'
-  # This fixed string intentionally matches a literal shell variable.
-  # shellcheck disable=SC2016
-  require_native_matrix_fixed \
-    'echo "SCCACHE_DIR=$RUNNER_TEMP/native-matrix-sccache"' \
-    'native matrix compiler cache must use its bounded runner-local directory'
-  require_native_matrix_fixed \
-    'SCCACHE_LOCAL_RW_MODE: READ_WRITE' \
-    'native matrix producer must be the sole writable native cache owner'
-  # shellcheck disable=SC2016
-  require_native_matrix_fixed \
-    'namespace="native-matrix-musl-local-v1-${identity}"' \
-    'native matrix cache must use its exact policy identity'
-  # shellcheck disable=SC2016
-  require_native_matrix_fixed \
-    'exact_key="${restore_prefix}${GITHUB_SHA}"' \
-    'native matrix cache must bulk-save an exact source key'
-  require_native_matrix_fixed \
-    'uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
-    'native matrix cache restore must use the pinned split cache action'
+    'uses: ./.github/actions/setup-native-matrix-compiler-cache' \
+    'native matrix producer must consume the shared exact cache policy'
   require_native_matrix_fixed \
     'uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
     'native matrix cache save must use the pinned split cache action'
   require_native_matrix_fixed \
-    "if: \${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}" \
+    "if: \${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache.outputs.cache_hit != 'true' }}" \
     'native matrix cache must save only a new exact key'
+  require_native_matrix_fixed \
+    'key: ${{ steps.native-cache.outputs.exact_key }}' \
+    'native matrix cache save must use the shared exact source key'
   require_native_matrix_fixed \
     'key: native-matrix-artifact-v1-${{ github.run_id }}-${{ github.sha }}' \
     'native matrix artifact reuse must bind the exact workflow run and source'
@@ -279,8 +310,66 @@ if [[ -f "$native_matrix_workflow" ]]; then
   require_native_matrix_fixed \
     'Save verified exact-run matrix artifact' \
     'native matrix artifact cache must be written only after fresh verification'
-  if rg -q --fixed-strings 'SCCACHE_GHA_ENABLED' "$native_matrix_workflow"; then
-    violations+=("${native_matrix_workflow}: native matrix cache must not use the per-object GitHub backend")
+fi
+
+trusted_seed_workflow=".github/workflows/merge-validation.yml"
+if [[ -f "$trusted_seed_workflow" ]]; then
+  require_trusted_seed_match() {
+    local pattern="$1"
+    local description="$2"
+
+    if ! rg -q --multiline -- "$pattern" "$trusted_seed_workflow"; then
+      violations+=("${trusted_seed_workflow}: ${description}")
+    fi
+  }
+
+  require_trusted_seed_match \
+    'native-matrix-compiler-cache:[\s\S]*EXPECTED_REF: \$\{\{ github\.ref \}\}[\s\S]*refs/heads/main[\s\S]*setup-native-matrix-compiler-cache[\s\S]*build-static-conary[\s\S]*with-test-harness: "true"' \
+    'trusted main must prime the complete native matrix compiler seed'
+  require_trusted_seed_match \
+    'policy: native-matrix[\s\S]*--stop-server[\s\S]*steps\.native-cache\.outputs\.cache_hit != '\''true'\''[\s\S]*actions/cache/save@[0-9a-f]{40}[\s\S]*key: \$\{\{ steps\.native-cache\.outputs\.exact_key \}\}' \
+    'trusted main must retain typed evidence and save only a completed exact native seed'
+fi
+
+pr_cache_cleanup_workflow=".github/workflows/cleanup-pr-caches.yml"
+if [[ ! -f "$pr_cache_cleanup_workflow" ]]; then
+  violations+=("${pr_cache_cleanup_workflow}: missing closed-pull-request cache cleanup")
+else
+  require_pr_cache_cleanup_fixed() {
+    local needle="$1"
+    local description="$2"
+
+    if ! rg -q --fixed-strings -- "$needle" "$pr_cache_cleanup_workflow"; then
+      violations+=("${pr_cache_cleanup_workflow}: ${description}")
+    fi
+  }
+
+  require_pr_cache_cleanup_fixed \
+    'pull_request_target:' \
+    'cache cleanup must use the base workflow for cross-repository pull requests'
+  require_pr_cache_cleanup_fixed \
+    'types: [closed]' \
+    'cache cleanup must run only after a pull request closes'
+  require_pr_cache_cleanup_fixed \
+    'actions: write' \
+    'cache cleanup must declare its exact mutation permission'
+  require_pr_cache_cleanup_fixed \
+    'cache_ref="refs/pull/${PR_NUMBER}/merge"' \
+    'cache cleanup must derive only the closed pull request merge ref'
+  require_pr_cache_cleanup_fixed \
+    'gh api --paginate --method GET "repos/${GH_REPO}/actions/caches"' \
+    'cache cleanup must enumerate every cache in the exact ref'
+  require_pr_cache_cleanup_fixed \
+    '-f ref="$cache_ref" -f per_page=100' \
+    'cache cleanup enumeration must bind the exact merge ref'
+  require_pr_cache_cleanup_fixed \
+    'gh api --method DELETE "repos/${GH_REPO}/actions/caches/${cache_id}"' \
+    'cache cleanup must delete only validated cache IDs from that ref'
+  if rg -q --fixed-strings -- '--all' "$pr_cache_cleanup_workflow"; then
+    violations+=("${pr_cache_cleanup_workflow}: cache cleanup must never use a repository-wide delete")
+  fi
+  if rg -q -- 'actions/checkout|pull_request\.head' "$pr_cache_cleanup_workflow"; then
+    violations+=("${pr_cache_cleanup_workflow}: privileged cache cleanup must not consume pull request code")
   fi
 fi
 

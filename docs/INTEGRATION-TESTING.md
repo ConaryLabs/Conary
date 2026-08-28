@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-27
-revision: 60
-summary: Document isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
+revision: 61
+summary: Document trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -189,18 +189,24 @@ For the protected PR matrix, `--with-test-harness` also produces fully static
 binaries with exact source, toolchain, flag, cache-policy, and digest evidence;
 each isolated distro cell independently verifies and reopens that immutable
 artifact. The compiler cache only avoids repeated compilation and is never
-accepted as source or test authority. The native producer restores its bounded
-musl cache in one bulk transfer, writes locally during the build, stops the
-cache server, and bulk-saves a new exact-head seed; this avoids thousands of
-remote object requests on the producer's critical path. Compatible
-hosted-Ubuntu source jobs
-also share exact GNU compiler outputs through a namespace derived from the
+accepted as source or test authority. The trusted `merge-validation` workflow
+publishes bounded GNU and musl cache snapshots from reviewed `main`.
+Pull-request workflows can restore those default-branch snapshots but cannot
+overwrite them; their own updated snapshots remain confined to the pull
+request merge ref and are deleted from that exact scope when the pull request
+closes. The native producer restores its bounded musl cache in one
+bulk transfer, writes locally during the build, stops the cache server, and
+bulk-saves a new exact-head snapshot. This avoids thousands of remote object
+requests on the producer's critical path while content-keyed compiler objects
+preserve unchanged work across source heads. Compatible hosted-Ubuntu source
+jobs also share exact GNU compiler outputs through a namespace derived from the
 Rust/Cargo toolchain, lockfile, target, C compiler, native ABI, and effective
-codegen policy. One primer writes a bounded local-disk sccache, bulk-saves it
-under the exact workflow commit, and must finish before every consumer restores
-that exact seed read-only. This avoids a per-object remote request storm while
-retaining typed request, hit, miss, write, and error counts for every job;
-cache contents never replace a job's own command or result.
+codegen policy. One primer per workflow writes a bounded local-disk sccache,
+bulk-saves it under the exact workflow commit, and must finish before every
+same-workflow consumer restores that exact seed read-only. This avoids a
+per-object remote request storm while retaining typed request, hit, miss,
+write, and error counts for every job; cache contents never replace a job's own
+command or result.
 After a producer has packaged and independently verified the exact static
 bundle, it also retains that bundle under the workflow run ID and tested commit.
 A retry of that same run verifies and reopens those exact bytes before skipping
@@ -879,7 +885,8 @@ available. Review the generated bundle before attaching it. It does not copy
 
 - `merge-validation` is the trusted on-merge lane. The former Forge
   control-plane server smoke is retired; the workflow currently runs hosted
-  build/list/Remi smoke checks instead.
+  build/list/Remi smoke checks and publishes compatible GNU and native-matrix
+  compiler seeds from reviewed `main` instead.
 - `scheduled-ops` keeps hosted Remi health, audit, and manifest-inventory
   checks active. Forge-backed Phase 1-3 and QEMU jobs are retired; local QEMU
   evidence must name its host, date, distro, suite, and counts.
@@ -1195,7 +1202,7 @@ image remains owned by that image's native bootstrap.
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused eight-distro native lifecycle matrix and authentic derivative APT proof |
-| `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation for `conary`, `remi`, `conaryd`, and `conary-test` |
+| `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation plus default-branch GNU and native-matrix compiler seeding |
 | `release-artifact-proof` | Conary deployment + manual dispatch | Install each published native package and run the three-distro Cartesian lifecycle with those exact bytes |
 | `scheduled-ops` | Nightly/scheduled + manual dispatch | Deep validation, health checks, and scheduled operational audits |
 

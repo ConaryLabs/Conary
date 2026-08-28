@@ -130,6 +130,75 @@ jobs:
         with:
           phase: main-gnu-cache-primer
 
+  native-matrix-compiler-cache:
+    name: native-matrix-compiler-cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_ENCODED_RUSTFLAGS: ""
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      RUSTFLAGS: ""
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Require a trusted main cache source
+        env:
+          EXPECTED_REF: ${{ github.ref }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_REF" == refs/heads/main ]] || {
+            echo "native cache seeding is restricted to refs/heads/main" >&2
+            exit 1
+          }
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "native cache seed source must be a full lowercase SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || {
+            echo "native cache seed checkout does not match the workflow commit" >&2
+            exit 1
+          }
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]] || {
+            echo "native cache seed checkout is not clean" >&2
+            exit 1
+          }
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.98.0
+      - name: Install native matrix compiler inputs
+        run: >-
+          bash scripts/ci-install-ubuntu-packages.sh
+          musl-tools gperf linux-libc-dev
+      - name: Install the native matrix Rust target
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Restore and activate native compiler-cache policy
+        id: native-cache
+        uses: ./.github/actions/setup-native-matrix-compiler-cache
+      - name: Prime native matrix compilation from reviewed main
+        uses: ./.github/actions/build-static-conary
+        with:
+          with-test-harness: "true"
+      - name: Retain native compiler-cache primer evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-native-matrix-cache-primer
+          policy: native-matrix
+      - name: Stop native compiler cache before bulk save
+        run: |
+          "$SCCACHE_PATH" --stop-server
+      - name: Save exact trusted-main native compiler cache
+        if: ${{ steps.native-cache.outputs.cache_hit != 'true' }}
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/native-matrix-sccache
+          key: ${{ steps.native-cache.outputs.exact_key }}
+
   clippy:
     name: clippy
     runs-on: ubuntu-latest
