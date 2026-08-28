@@ -16,11 +16,12 @@ cache into an apparent improvement.
 
 `apps/conary/tests/fixtures/native/record-command-performance.py` executes one
 exact argv without a shell and writes one create-only schema-1 JSON record. It
-binds the result to a full source commit, fixture SHA-256, implementation,
-operation, cache state, and sample number. Linux child-resource evidence
-includes wall and CPU time, peak RSS, page faults, block I/O operations, and
-context switches. Failed or signalled commands still produce evidence and
-retain their command outcome.
+binds the result to the full product and harness source commits, fixture and
+prepared-environment SHA-256 digests, implementation and version, operation,
+cache state, sample number, resolved executable path, and executable SHA-256.
+Linux child-resource evidence includes wall and CPU time, peak RSS, page
+faults, block I/O operations, and context switches. Failed or signalled
+commands still produce evidence and retain their command outcome.
 
 Use one fresh recorder process and one output path per sample. The recorder
 refuses to replace an existing record. It deliberately does not infer whether

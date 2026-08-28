@@ -7,11 +7,13 @@ from __future__ import annotations
 import argparse
 import datetime
 import errno
+import hashlib
 import json
 import os
 import platform
 import re
 import resource
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -31,15 +33,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--implementation", required=True)
     parser.add_argument("--operation", required=True)
     parser.add_argument("--cache-state", required=True, choices=("cold", "warm"))
-    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--product-source-commit", required=True)
+    parser.add_argument("--harness-source-commit", required=True)
+    parser.add_argument("--implementation-version", required=True)
     parser.add_argument("--fixture-sha256", required=True)
+    parser.add_argument("--environment-sha256", required=True)
     parser.add_argument("--sample", required=True, type=int)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
-    if not COMMIT_RE.fullmatch(args.source_commit):
-        parser.error("--source-commit must be a full lowercase Git commit")
-    if not SHA256_RE.fullmatch(args.fixture_sha256):
-        parser.error("--fixture-sha256 must be a lowercase SHA-256 digest")
+    for option, value in (
+        ("--product-source-commit", args.product_source_commit),
+        ("--harness-source-commit", args.harness_source_commit),
+    ):
+        if not COMMIT_RE.fullmatch(value):
+            parser.error(f"{option} must be a full lowercase Git commit")
+    for option, value in (
+        ("--fixture-sha256", args.fixture_sha256),
+        ("--environment-sha256", args.environment_sha256),
+    ):
+        if not SHA256_RE.fullmatch(value):
+            parser.error(f"{option} must be a lowercase SHA-256 digest")
     if args.sample < 1:
         parser.error("--sample must be positive")
     if not args.command:
@@ -98,6 +111,24 @@ def additive_rusage(after: resource.struct_rusage, before: resource.struct_rusag
     }
 
 
+def resolve_executable(command: str) -> Path:
+    candidate = command if "/" in command else shutil.which(command)
+    if candidate is None:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), command)
+    resolved = Path(candidate).resolve(strict=True)
+    if not resolved.is_file():
+        raise OSError(errno.EINVAL, "command executable is not a regular file", resolved)
+    return resolved
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def write_new_json(path: Path, value: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     encoded = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
@@ -127,6 +158,8 @@ def main() -> int:
             os.strerror(errno.EEXIST),
             args.output,
         )
+    executable = resolve_executable(args.command[0])
+    executable_sha256 = sha256_file(executable)
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
     started_ns = time.monotonic_ns()
     completed = subprocess.run(args.command, check=False)
@@ -143,9 +176,12 @@ def main() -> int:
         "schema_version": 1,
         "recorded_at": datetime.datetime.now(datetime.UTC).isoformat(),
         "identity": {
-            "source_commit": args.source_commit,
+            "product_source_commit": args.product_source_commit,
+            "harness_source_commit": args.harness_source_commit,
             "fixture_sha256": args.fixture_sha256,
+            "environment_sha256": args.environment_sha256,
             "implementation": args.implementation,
+            "implementation_version": args.implementation_version,
             "operation": args.operation,
             "cache_state": args.cache_state,
             "sample": args.sample,
@@ -159,7 +195,11 @@ def main() -> int:
             "cpu_model": cpu_model(),
             "memory_total_kib": memory_total_kib(),
         },
-        "command": {"argv": args.command},
+        "command": {
+            "argv": args.command,
+            "executable_path": str(executable),
+            "executable_sha256": executable_sha256,
+        },
         "outcome": {"exit_code": exit_code, "signal": signal},
         "process": process,
     }
