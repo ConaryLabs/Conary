@@ -768,7 +768,7 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
                                 .to_string(),
                         ));
                     }
-                    self.writer_mut()?.package(package)?;
+                    self.writer_mut()?.package(*package)?;
                 }
                 ProjectionSpoolRecordV1::ProvideMerge(merge) => {
                     if self.preflight_is_arch {

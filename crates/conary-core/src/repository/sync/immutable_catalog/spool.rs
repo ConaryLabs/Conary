@@ -34,7 +34,7 @@ pub(super) struct SpoolProvideMergeV1 {
 }
 
 pub(super) enum ProjectionSpoolRecordV1 {
-    Package(CatalogPackageRecordV1),
+    Package(Box<CatalogPackageRecordV1>),
     ProvideMerge(SpoolProvideMergeV1),
     FinishJoin(SnapshotPackageJoin),
     ArchFragment {
@@ -260,7 +260,9 @@ impl ProjectionSpoolReaderV1 {
             Error::ParseError("normalized projection spool record count overflow".to_string())
         })?;
         let record = match kind[0] {
-            PACKAGE_RECORD => ProjectionSpoolRecordV1::Package(decode(&payload, "package")?),
+            PACKAGE_RECORD => {
+                ProjectionSpoolRecordV1::Package(Box::new(decode(&payload, "package")?))
+            }
             PROVIDE_MERGE_RECORD => {
                 ProjectionSpoolRecordV1::ProvideMerge(decode(&payload, "provide merge")?)
             }
