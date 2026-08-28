@@ -198,6 +198,19 @@ workflow.
   upstream network request or URL reconstruction. It grants no generic path,
   candidate-tier profile, native comparison, conversion, proof, activation, or
   pointer-mutation authority.
+- The protected `export-remi-native-oracle-inputs` workflow is the production
+  caller and artifact handoff. Its only input is a successful
+  `deploy-remi-candidate` run in `private-candidates` mode. It reopens that
+  run's sanitized inspection, requires the exact ordered Fedora, Ubuntu, and
+  Arch revisions, invokes the fixed helper operation through the production
+  SSH boundary, and removes only the staged `/tmp` transport after download.
+  The runner independently rejects unsafe tar members, noncanonical or
+  duplicate-key JSON, revision/source digest drift, incomplete object
+  inventories, and wrong-sized or digest-mismatched metadata. The seven-day
+  handoff artifact contains the exact uncompressed transport, its canonical
+  public-sanitized verification record, and the source deployment inspection;
+  it grants no native-oracle production, conversion, proof, or activation
+  authority.
 - Production R2 inventory and backfill use the manually dispatched
   `remi-r2-durability` workflow after its exact `commit_sha` is merged into
   `main` and deployed. The protected job enters through the normal Remi SSH
