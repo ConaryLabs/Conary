@@ -1,5 +1,5 @@
 name: setup-rust-workspace
-description: Install Rust components and warm cargo cache for workspace jobs.
+description: Install Rust components plus bounded dependency and compiler caches.
 inputs:
   components:
     description: Optional comma-separated Rust components to install.
@@ -9,9 +9,23 @@ inputs:
     description: Exact workspace Rust toolchain to install.
     required: false
     default: 1.98.0
+  compiler-cache:
+    description: Enable exact-policy GHA sccache for compatible hosted Ubuntu jobs.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
+    - name: Validate compiler-cache policy
+      shell: bash
+      env:
+        COMPILER_CACHE_REQUEST: ${{ inputs.compiler-cache }}
+      run: |
+        set -euo pipefail
+        [[ "$COMPILER_CACHE_REQUEST" == "true" || "$COMPILER_CACHE_REQUEST" == "false" ]] || {
+          echo "compiler-cache must be true or false" >&2
+          exit 1
+        }
     - name: Install native build dependencies
       shell: bash
       run: bash scripts/ci-install-ubuntu-packages.sh libseccomp-dev
@@ -35,3 +49,62 @@ runs:
         key: ${{ runner.os }}-cargo-deps-v1-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-deps-v1-
+    - name: Bind exact compiler-cache policy
+      if: ${{ inputs.compiler-cache == 'true' }}
+      shell: bash
+      env:
+        REQUESTED_TOOLCHAIN: ${{ inputs.toolchain }}
+      run: |
+        set -euo pipefail
+        [[ "$(rustc --version | awk '{print $2}')" == "$REQUESTED_TOOLCHAIN" ]] || {
+          echo "active rustc does not match requested compiler-cache toolchain" >&2
+          exit 1
+        }
+        native_abi="$(dpkg-query --show --showformat='${Package}=${Version}\n' libseccomp-dev)"
+        identity="$(
+          {
+            printf 'schema=1\n'
+            printf 'rustc=%s\n' "$(rustc -vV)"
+            printf 'cargo=%s\n' "$(cargo -vV)"
+            printf 'lock=%s\n' "$(sha256sum Cargo.lock | cut -d ' ' -f 1)"
+            printf 'target=%s\n' "$(rustc -vV | sed -n 's/^host: //p')"
+            printf 'cc=%s\n' "$(cc --version | sed -n '1p')"
+            printf 'native_abi=%s\n' "$native_abi"
+            printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
+            printf 'encoded_rustflags=%s\n' "${CARGO_ENCODED_RUSTFLAGS:-}"
+            printf 'incremental=%s\n' "${CARGO_INCREMENTAL:-}"
+            printf 'dev_debug=%s\n' "${CARGO_PROFILE_DEV_DEBUG:-}"
+            printf 'test_debug=%s\n' "${CARGO_PROFILE_TEST_DEBUG:-}"
+          } | sha256sum | cut -d ' ' -f 1
+        )"
+        namespace="protected-gnu-v1-${identity}"
+        {
+          echo "SCCACHE_GHA_ENABLED=true"
+          echo "SCCACHE_GHA_VERSION=$namespace"
+          echo "SCCACHE_VERSION=0.16.0"
+        } >> "$GITHUB_ENV"
+        {
+          echo "### Rust compiler-cache identity"
+          echo
+          echo "- namespace: \`$namespace\`"
+          echo "- rust_toolchain: \`$REQUESTED_TOOLCHAIN\`"
+          echo "- Cargo.lock_sha256: \`$(sha256sum Cargo.lock | cut -d ' ' -f 1)\`"
+          echo "- native_abi: \`$native_abi\`"
+          echo "- note: exact features and effective codegen flags remain part of each sccache object key"
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Install bounded shared compiler cache
+      if: ${{ inputs.compiler-cache == 'true' }}
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      with:
+        version: v0.16.0
+    - name: Activate exact compiler cache
+      if: ${{ inputs.compiler-cache == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        [[ -x "${SCCACHE_PATH:-}" ]] || {
+          echo "sccache action did not expose an executable" >&2
+          exit 1
+        }
+        echo "RUSTC_WRAPPER=$SCCACHE_PATH" >> "$GITHUB_ENV"
+        "$SCCACHE_PATH" --zero-stats

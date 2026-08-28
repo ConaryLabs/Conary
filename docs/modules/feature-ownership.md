@@ -1336,6 +1336,7 @@ deployment, and prove installed or live behavior independently.
 `.github/workflows/deploy-remi-candidate.yml`;
 `.github/workflows/release-artifact-proof.yml`;
 `.github/actions/setup-rust-workspace/action.yml`;
+`.github/actions/summarize-rust-cache/action.yml`;
 `scripts/ci-install-ubuntu-packages.sh`;
 `scripts/check-github-action-runtimes.sh`;
 `scripts/test-github-action-runtimes.sh`;
@@ -1358,6 +1359,7 @@ static-site deployment, and production health proof.
 `.github/workflows/deploy-remi-candidate.yml`;
 `.github/workflows/release-artifact-proof.yml`;
 `.github/actions/setup-rust-workspace/action.yml`;
+`.github/actions/summarize-rust-cache/action.yml`;
 `.github/actions/test-generation-db-reflink/action.yml`;
 `scripts/ci-install-ubuntu-packages.sh`;
 `scripts/check-github-action-runtimes.sh`;

@@ -482,7 +482,12 @@ old process. That can fail with `Text file busy`.
 - `merge-validation` proves the current source tree through deterministic
   source, build, policy, and test checks. It must not probe mutable production
   endpoints, because production continues to serve the previously deployed
-  release until the candidate passes this gate and is tagged.
+  release until the candidate passes this gate and is tagged. Compatible GNU
+  jobs may reuse compiler outputs through one exact-policy namespace derived
+  from the toolchain, lockfile, target, native ABI, and codegen settings. Each
+  job still runs its complete command and retains typed cache hit, miss, write,
+  and error evidence; a cache is optimization, never test or artifact
+  authority.
 - `deploy-and-verify` consumes that serialized metadata instead of re-deriving
   product behavior locally. It deploys and proves Remi first, then stages and
   proves Conary release assets and static sites from the same suite bundle.

@@ -121,8 +121,14 @@ jobs:
       - uses: ./.github/actions/setup-rust-workspace
         with:
           components: clippy
+          compiler-cache: "true"
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Retain clippy compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-clippy
 
   workspace-tests:
     name: workspace-tests
@@ -130,10 +136,17 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: "true"
       - name: Enable exact ownership-test namespaces
         uses: ./.github/actions/setup-exact-ownership-tests
       - name: Run workspace tests
         run: cargo test --workspace --exclude conary-test --verbose
+      - name: Retain workspace-test compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-workspace-tests
 
   alpm-parity-producer:
     name: alpm-parity-producer
@@ -206,7 +219,14 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: "true"
       - uses: ./.github/actions/test-generation-db-reflink
+      - name: Retain generation-test compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-generation-db-reflink
 
   conary-test-crate:
     name: conary-test-crate
@@ -214,8 +234,15 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: "true"
       - name: Test conary-test
         run: cargo test -p conary-test --verbose
+      - name: Retain conary-test compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-conary-test
 
   doctests:
     name: doctests
@@ -223,8 +250,15 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: "true"
       - name: Run doctests
         run: cargo test --doc --workspace --verbose
+      - name: Retain doctest compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-doctests
 
   local-smoke:
     name: local-smoke
@@ -232,10 +266,17 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: "true"
       - name: Build release-facing binaries
         run: cargo build -p conary -p remi -p conaryd -p conary-test --verbose
       - name: Check integration-test manifest inventory
         run: cargo run -p conary-test -- list
+      - name: Retain local-smoke compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-local-smoke
       - name: Explain paused remote validation
         run: |
           cat <<'EOF'

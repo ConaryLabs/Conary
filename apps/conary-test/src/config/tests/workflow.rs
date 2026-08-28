@@ -17,6 +17,8 @@ const NATIVE_PARITY_JOB_ID: &str = "native-pm-parity";
 const NATIVE_PARITY_GATE_ID: &str = "native-pm-parity-gate";
 const RELEASE_ARTIFACT_MATRIX_JOB_ID: &str = "native-package-lifecycle";
 const RELEASE_ARTIFACT_GATE_ID: &str = "release-artifact-proof";
+const COMPILER_CACHE_SETUP_ACTION: &str = "./.github/actions/setup-rust-workspace";
+const COMPILER_CACHE_SUMMARY_ACTION: &str = "./.github/actions/summarize-rust-cache";
 
 #[derive(Debug, Deserialize)]
 struct Workflow {
@@ -137,6 +139,10 @@ fn release_artifact_workflow_path() -> PathBuf {
         .join("../../.github/workflows/release-artifact-proof.yml")
 }
 
+fn merge_validation_workflow_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/merge-validation.yml")
+}
+
 fn parse_job<T>(workflow: &Workflow, id: &str) -> T
 where
     T: for<'de> Deserialize<'de>,
@@ -160,6 +166,42 @@ fn named_step<'a>(steps: &'a [WorkflowStep], name: &str) -> &'a WorkflowStep {
         "job must contain exactly one step named `{name}`"
     );
     matches[0]
+}
+
+fn action_step<'a>(steps: &'a [WorkflowStep], action: &str) -> &'a WorkflowStep {
+    let matches = steps
+        .iter()
+        .filter(|step| step.uses.as_deref() == Some(action))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matches.len(),
+        1,
+        "job must contain exactly one `{action}` step"
+    );
+    matches[0]
+}
+
+fn assert_protected_compiler_cache(job: &WorkspaceTestJob, phase: &str) {
+    let setup = action_step(&job.steps, COMPILER_CACHE_SETUP_ACTION);
+    assert_eq!(
+        setup
+            .with
+            .get("compiler-cache")
+            .and_then(serde_yaml::Value::as_str),
+        Some("true"),
+        "protected GNU job must opt into compiler reuse explicitly"
+    );
+
+    let summary = action_step(&job.steps, COMPILER_CACHE_SUMMARY_ACTION);
+    assert_eq!(summary.condition.as_deref(), Some("${{ always() }}"));
+    assert_eq!(
+        summary
+            .with
+            .get("phase")
+            .and_then(serde_yaml::Value::as_str),
+        Some(phase),
+        "compiler-cache evidence must use the exact protected phase"
+    );
 }
 
 fn assert_exact_head_artifact_consumer(job: &MatrixJob) {
@@ -589,6 +631,34 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     );
     assert!(!tests.continue_on_error);
     assert_eq!(tests.condition, None);
+}
+
+#[test]
+fn compatible_protected_jobs_share_compiler_outputs_with_typed_evidence() {
+    let pr = load_workflow();
+    for (job_id, phase) in [
+        ("clippy", "pr-clippy"),
+        ("workspace-tests", "pr-workspace-tests"),
+        ("generation-db-reflink", "pr-generation-db-reflink"),
+        ("conary-test-crate", "pr-conary-test"),
+        ("doctests", "pr-doctests"),
+    ] {
+        let job: WorkspaceTestJob = parse_job(&pr, job_id);
+        assert_protected_compiler_cache(&job, phase);
+    }
+
+    let main = load_workflow_from(merge_validation_workflow_path());
+    for (job_id, phase) in [
+        ("clippy", "main-clippy"),
+        ("workspace-tests", "main-workspace-tests"),
+        ("generation-db-reflink", "main-generation-db-reflink"),
+        ("conary-test-crate", "main-conary-test"),
+        ("doctests", "main-doctests"),
+        ("local-smoke", "main-local-smoke"),
+    ] {
+        let job: WorkspaceTestJob = parse_job(&main, job_id);
+        assert_protected_compiler_cache(&job, phase);
+    }
 }
 
 #[test]

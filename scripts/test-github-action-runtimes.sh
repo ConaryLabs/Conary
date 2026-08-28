@@ -14,11 +14,16 @@ write_fixture() {
   mkdir -p \
     "$root/.github/workflows" \
     "$root/.github/actions/setup-rust-workspace" \
+    "$root/.github/actions/summarize-rust-cache" \
     "$root/.github/actions/setup-shell-policy-tools" \
     "$root/.github/actions/build-static-conary" \
     "$root/.github/actions/test-generation-db-reflink" \
     "$root/scripts"
   cp scripts/ci-install-ubuntu-packages.sh "$root/scripts/"
+  cp .github/actions/setup-rust-workspace/action.yml \
+    "$root/.github/actions/setup-rust-workspace/action.yml"
+  cp .github/actions/summarize-rust-cache/action.yml \
+    "$root/.github/actions/summarize-rust-cache/action.yml"
   cat > "$root/.github/workflows/policy.yml" <<EOF
 name: policy
 on: workflow_dispatch
@@ -40,17 +45,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: bash scripts/ci-install-ubuntu-packages.sh libssl-dev
-EOF
-
-  cat > "$root/.github/actions/setup-rust-workspace/action.yml" <<'EOF'
-name: setup-rust-workspace
-runs:
-  using: composite
-  steps:
-    - run: echo setup
-      shell: bash
-    - run: bash scripts/ci-install-ubuntu-packages.sh libseccomp-dev
-      shell: bash
 EOF
 
   cat > "$root/.github/actions/setup-shell-policy-tools/action.yml" <<'EOF'
@@ -90,11 +84,13 @@ good_root="$tmpdir/good"
 unsafe_shell_root="$tmpdir/unsafe-shell"
 unsafe_apt_root="$tmpdir/unsafe-apt"
 unsafe_source_root="$tmpdir/unsafe-source"
+unsafe_cache_root="$tmpdir/unsafe-cache"
 write_fixture "$bad_root" "actions/checkout@v6"
 write_fixture "$good_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_shell_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_apt_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_source_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+write_fixture "$unsafe_cache_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 sed -i 's/if command -v rg >\/dev\/null; then/if false; then/' \
   "$unsafe_shell_root/.github/actions/setup-shell-policy-tools/action.yml"
 sed -i \
@@ -103,6 +99,8 @@ sed -i \
 sed -i \
   's#/etc/apt/sources.list.d/ubuntu.sources#/etc/apt/sources.list#' \
   "$unsafe_source_root/scripts/ci-install-ubuntu-packages.sh"
+sed -i 's/version: v0\.16\.0/version: latest/' \
+  "$unsafe_cache_root/.github/actions/setup-rust-workspace/action.yml"
 
 if bash scripts/check-github-action-runtimes.sh "$bad_root" >"$tmpdir/bad.out" 2>"$tmpdir/bad.err"; then
   echo "expected unpinned action fixture to fail" >&2
@@ -161,6 +159,21 @@ if ! rg -q 'must require the canonical Ubuntu source as a plain file' \
   "$tmpdir/unsafe-source.err"; then
   echo "expected failure to name the noncanonical Ubuntu apt source" >&2
   cat "$tmpdir/unsafe-source.err" >&2
+  exit 1
+fi
+
+if bash scripts/check-github-action-runtimes.sh "$unsafe_cache_root" \
+  >"$tmpdir/unsafe-cache.out" 2>"$tmpdir/unsafe-cache.err"; then
+  echo "expected unpinned compiler-cache fixture to fail" >&2
+  cat "$tmpdir/unsafe-cache.out" >&2
+  cat "$tmpdir/unsafe-cache.err" >&2
+  exit 1
+fi
+
+if ! rg -q 'must install the pinned sccache implementation and version' \
+  "$tmpdir/unsafe-cache.err"; then
+  echo "expected failure to name the unpinned compiler cache" >&2
+  cat "$tmpdir/unsafe-cache.err" >&2
   exit 1
 fi
 

@@ -27,7 +27,7 @@ runs:
 
         harness="${{ inputs.harness }}"
         [[ -x "$harness" ]] || {
-          echo "verified static conary-test harness is missing: $harness" >&2
+          echo "configured conary-test harness is missing: $harness" >&2
           exit 1
         }
         ref="$("$harness" images base-ref --distro '${{ inputs.distro }}')"

@@ -139,6 +139,57 @@ for caller in "${ubuntu_package_callers[@]}"; do
   fi
 done
 
+compiler_cache_action=".github/actions/setup-rust-workspace/action.yml"
+compiler_cache_summary_action=".github/actions/summarize-rust-cache/action.yml"
+if [[ ! -f "$compiler_cache_action" ]]; then
+  violations+=("${compiler_cache_action}: missing protected compiler-cache owner")
+else
+  require_compiler_cache_match() {
+    local pattern="$1"
+    local description="$2"
+
+    if ! rg -q --multiline -- "$pattern" "$compiler_cache_action"; then
+      violations+=("${compiler_cache_action}: ${description}")
+    fi
+  }
+
+  require_compiler_cache_match \
+    'compiler-cache:[\s\S]*default: "false"[\s\S]*COMPILER_CACHE_REQUEST: \$\{\{ inputs\.compiler-cache \}\}[\s\S]*== "true" \|\| "\$COMPILER_CACHE_REQUEST" == "false"' \
+    'must default off and reject non-boolean cache policy'
+  require_compiler_cache_match \
+    'SCCACHE_GHA_VERSION=\$namespace[\s\S]*SCCACHE_VERSION=0\.16\.0' \
+    'must bind the exact cache namespace and sccache version'
+  require_compiler_cache_match \
+    'mozilla-actions/sccache-action@[0-9a-f]{40}[\s\S]*version: v0\.16\.0' \
+    'must install the pinned sccache implementation and version'
+  require_compiler_cache_match \
+    'rustc=\%s[\s\S]*cargo=\%s[\s\S]*lock=\%s[\s\S]*target=\%s[\s\S]*cc=\%s[\s\S]*native_abi=\%s[\s\S]*rustflags=\%s[\s\S]*encoded_rustflags=\%s[\s\S]*incremental=\%s[\s\S]*dev_debug=\%s[\s\S]*test_debug=\%s' \
+    'must bind toolchain, source dependency, native ABI, and codegen policy'
+  require_compiler_cache_match \
+    'echo "RUSTC_WRAPPER=\$SCCACHE_PATH" >> "\$GITHUB_ENV"[\s\S]*"\$SCCACHE_PATH" --zero-stats' \
+    'must activate the exact cache executable and reset per-job evidence'
+fi
+
+if [[ ! -f "$compiler_cache_summary_action" ]]; then
+  violations+=("${compiler_cache_summary_action}: missing protected compiler-cache evidence owner")
+else
+  require_compiler_cache_summary_match() {
+    local pattern="$1"
+    local description="$2"
+
+    if ! rg -q --multiline -- "$pattern" "$compiler_cache_summary_action"; then
+      violations+=("${compiler_cache_summary_action}: ${description}")
+    fi
+  }
+
+  require_compiler_cache_summary_match \
+    'SCCACHE_GHA_VERSION:-[\s\S]*protected-gnu-v1-\[0-9a-f\]\{64\}' \
+    'must reject missing or non-exact protected namespaces'
+  require_compiler_cache_summary_match \
+    '--show-stats --stats-format json[\s\S]*\.version == "0\.16\.0"[\s\S]*\.stats\.compile_requests[\s\S]*\.stats\.cache_hits\.counts[\s\S]*\.stats\.cache_misses\.counts[\s\S]*\.stats\.cache_errors\.counts[\s\S]*\.stats\.cache_writes[\s\S]*\.stats\.cache_read_errors[\s\S]*\.stats\.cache_write_errors[\s\S]*\.stats\.cache_timeouts' \
+    'must retain typed request, hit, miss, and error evidence from the pinned cache'
+fi
+
 while IFS=: read -r file line _; do
   violations+=("${file}:${line}: unrestricted hosted-runner apt bootstrap")
 done < <(
