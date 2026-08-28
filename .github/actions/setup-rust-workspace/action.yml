@@ -1,5 +1,5 @@
 name: setup-rust-workspace
-description: Install Rust components and warm cargo cache for workspace jobs.
+description: Install Rust components plus bounded dependency and compiler caches.
 inputs:
   components:
     description: Optional comma-separated Rust components to install.
@@ -9,9 +9,26 @@ inputs:
     description: Exact workspace Rust toolchain to install.
     required: false
     default: 1.98.0
+  compiler-cache:
+    description: "Exact compiler-cache role: off, writer, or reader."
+    required: false
+    default: "off"
 runs:
   using: composite
   steps:
+    - name: Validate compiler-cache policy
+      shell: bash
+      env:
+        COMPILER_CACHE_REQUEST: ${{ inputs.compiler-cache }}
+      run: |
+        set -euo pipefail
+        case "$COMPILER_CACHE_REQUEST" in
+          off|writer|reader) ;;
+          *)
+            echo "compiler-cache must be off, writer, or reader" >&2
+            exit 1
+            ;;
+        esac
     - name: Install native build dependencies
       shell: bash
       run: bash scripts/ci-install-ubuntu-packages.sh libseccomp-dev
@@ -35,3 +52,109 @@ runs:
         key: ${{ runner.os }}-cargo-deps-v1-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-deps-v1-
+    - name: Bind exact compiler-cache policy
+      if: ${{ inputs.compiler-cache != 'off' }}
+      id: compiler-cache-policy
+      shell: bash
+      env:
+        CACHE_ROLE: ${{ inputs.compiler-cache }}
+        REQUESTED_TOOLCHAIN: ${{ inputs.toolchain }}
+      run: |
+        set -euo pipefail
+        [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+          echo "compiler-cache source must be a full lowercase SHA" >&2
+          exit 1
+        }
+        [[ "$(rustc --version | awk '{print $2}')" == "$REQUESTED_TOOLCHAIN" ]] || {
+          echo "active rustc does not match requested compiler-cache toolchain" >&2
+          exit 1
+        }
+        native_abi="$(dpkg-query --show --showformat='${Package}=${Version}\n' libseccomp-dev)"
+        identity="$(
+          {
+            printf 'schema=1\n'
+            printf 'rustc=%s\n' "$(rustc -vV)"
+            printf 'cargo=%s\n' "$(cargo -vV)"
+            printf 'lock=%s\n' "$(sha256sum Cargo.lock | cut -d ' ' -f 1)"
+            printf 'target=%s\n' "$(rustc -vV | sed -n 's/^host: //p')"
+            printf 'cc=%s\n' "$(cc --version | sed -n '1p')"
+            printf 'native_abi=%s\n' "$native_abi"
+            printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
+            printf 'encoded_rustflags=%s\n' "${CARGO_ENCODED_RUSTFLAGS:-}"
+            printf 'incremental=%s\n' "${CARGO_INCREMENTAL:-}"
+            printf 'dev_debug=%s\n' "${CARGO_PROFILE_DEV_DEBUG:-}"
+            printf 'test_debug=%s\n' "${CARGO_PROFILE_TEST_DEBUG:-}"
+          } | sha256sum | cut -d ' ' -f 1
+        )"
+        namespace="protected-gnu-local-v1-${identity}"
+        restore_prefix="${namespace}-"
+        exact_key="${restore_prefix}${GITHUB_SHA}"
+        case "$CACHE_ROLE" in
+          writer) local_mode=READ_WRITE ;;
+          reader) local_mode=READ_ONLY ;;
+          *)
+            echo "compiler-cache policy received an invalid active role" >&2
+            exit 1
+            ;;
+        esac
+        {
+          echo "CONARY_COMPILER_CACHE_NAMESPACE=$namespace"
+          echo "SCCACHE_VERSION=0.16.0"
+          echo "SCCACHE_DIR=$RUNNER_TEMP/protected-gnu-sccache"
+          echo "SCCACHE_CACHE_SIZE=4G"
+          echo "SCCACHE_LOCAL_RW_MODE=$local_mode"
+        } >> "$GITHUB_ENV"
+        {
+          echo "exact_key=$exact_key"
+          echo "restore_prefix=$restore_prefix"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "### Rust compiler-cache identity"
+          echo
+          echo "- namespace: \`$namespace\`"
+          echo "- rust_toolchain: \`$REQUESTED_TOOLCHAIN\`"
+          echo "- Cargo.lock_sha256: \`$(sha256sum Cargo.lock | cut -d ' ' -f 1)\`"
+          echo "- native_abi: \`$native_abi\`"
+          echo "- role: \`$CACHE_ROLE\`"
+          echo "- note: exact features and effective codegen flags remain part of each sccache object key"
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Restore writable compiler-cache seed
+      if: ${{ inputs.compiler-cache == 'writer' }}
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ runner.temp }}/protected-gnu-sccache
+        key: ${{ steps.compiler-cache-policy.outputs.exact_key }}
+        restore-keys: ${{ steps.compiler-cache-policy.outputs.restore_prefix }}
+    - name: Restore exact read-only compiler cache
+      if: ${{ inputs.compiler-cache == 'reader' }}
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ runner.temp }}/protected-gnu-sccache
+        key: ${{ steps.compiler-cache-policy.outputs.exact_key }}
+        fail-on-cache-miss: true
+    - name: Install bounded shared compiler cache
+      if: ${{ inputs.compiler-cache != 'off' }}
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      with:
+        version: v0.16.0
+    - name: Activate exact compiler cache
+      if: ${{ inputs.compiler-cache != 'off' }}
+      shell: bash
+      env:
+        CACHE_ROLE: ${{ inputs.compiler-cache }}
+      run: |
+        set -euo pipefail
+        [[ -x "${SCCACHE_PATH:-}" ]] || {
+          echo "sccache action did not expose an executable" >&2
+          exit 1
+        }
+        if [[ "$CACHE_ROLE" == "reader" ]]; then
+          [[ -d "$SCCACHE_DIR" && ! -L "$SCCACHE_DIR" ]] || {
+            echo "exact reader cache did not restore a plain directory" >&2
+            exit 1
+          }
+        else
+          mkdir -p "$SCCACHE_DIR"
+        fi
+        echo "RUSTC_WRAPPER=$SCCACHE_PATH" >> "$GITHUB_ENV"
+        "$SCCACHE_PATH" --zero-stats

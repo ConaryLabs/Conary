@@ -113,27 +113,108 @@ jobs:
           python3 scripts/check-third-party-divergence.py
           python3 scripts/test-third-party-divergence.py
 
-  clippy:
-    name: clippy
+  gnu-compiler-cache:
+    name: gnu-compiler-cache
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/setup-rust-workspace
         with:
+          compiler-cache: writer
+      - name: Prime exact workspace test compilation
+        run: cargo test --workspace --no-run --verbose
+      - name: Retain compiler-cache primer evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-gnu-cache-primer
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
           components: clippy
+          compiler-cache: reader
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Retain clippy compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-clippy
+
+  workspace-test-shards:
+    name: workspace-test (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: conary
+          - shard: conary-core-repository
+          - shard: conary-core-remaining
+          - shard: conary-core-targets
+          - shard: remaining
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
+      - name: Enable exact ownership-test namespaces
+        uses: ./.github/actions/setup-exact-ownership-tests
+      - name: Run workspace test shard
+        env:
+          TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          case "$TEST_SHARD" in
+            conary) cargo test -p conary --verbose ;;
+            conary-core-repository) cargo test -p conary-core --lib repository:: --verbose ;;
+            conary-core-remaining)
+              cargo test -p conary-core --lib --verbose -- --skip repository::
+              ;;
+            conary-core-targets) cargo test -p conary-core --bins --test '*' --verbose ;;
+            remaining)
+              cargo test --workspace --exclude conary-test \
+                --exclude conary --exclude conary-core --verbose
+              ;;
+            *)
+              echo "unknown workspace test shard: $TEST_SHARD" >&2
+              exit 1
+              ;;
+          esac
+      - name: Retain workspace-shard compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-workspace-${{ matrix.shard }}
 
   workspace-tests:
     name: workspace-tests
     runs-on: ubuntu-latest
+    needs: workspace-test-shards
+    if: ${{ always() }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/setup-rust-workspace
-      - name: Enable exact ownership-test namespaces
-        uses: ./.github/actions/setup-exact-ownership-tests
-      - name: Run workspace tests
-        run: cargo test --workspace --exclude conary-test --verbose
+      - name: Require every workspace test shard
+        env:
+          SHARDS_RESULT: ${{ needs.workspace-test-shards.result }}
+        run: test "$SHARDS_RESULT" = success
 
   alpm-parity-producer:
     name: alpm-parity-producer
@@ -203,39 +284,91 @@ jobs:
     name: generation-db-reflink
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
       - uses: ./.github/actions/test-generation-db-reflink
+      - name: Retain generation-test compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-generation-db-reflink
 
   conary-test-crate:
     name: conary-test-crate
     runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
       - name: Test conary-test
         run: cargo test -p conary-test --verbose
+      - name: Retain conary-test compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-conary-test
 
   doctests:
     name: doctests
     runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
       - name: Run doctests
         run: cargo test --doc --workspace --verbose
+      - name: Retain doctest compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-doctests
 
   local-smoke:
     name: local-smoke
     runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
       - name: Build release-facing binaries
         run: cargo build -p conary -p remi -p conaryd -p conary-test --verbose
       - name: Check integration-test manifest inventory
         run: cargo run -p conary-test -- list
+      - name: Retain local-smoke compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: main-local-smoke
       - name: Explain paused remote validation
         run: |
           cat <<'EOF'

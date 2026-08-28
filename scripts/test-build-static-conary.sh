@@ -131,8 +131,16 @@ grep -q 'source "$(dirname "${BASH_SOURCE\[0\]}")/kernel-header-roots.sh"' "$bui
     fail "build-static-conary.sh must source the shared probe"
 for needle in \
     'CFLAGS="-O2 $KERNEL_HEADER_FLAGS"' \
-    'CFLAGS_x86_64_unknown_linux_musl="$KERNEL_HEADER_FLAGS"'; do
-    grep -qF "$needle" "$build_script" ||
+    'CFLAGS_x86_64_unknown_linux_musl="$KERNEL_HEADER_FLAGS"' \
+    '--with-test-harness' \
+    'cargo build "${cargo_packages[@]}" --target "$TARGET" --locked' \
+    'cargo test -p conary-test --lib --target "$TARGET" --locked' \
+    'conary-test-library-tests' \
+    'CONARY_STATIC_BUILD_METRICS_PATH' \
+    'static_dependency_cache_hit' \
+    'static_runtime_build_ms' \
+    'library_test_build_ms'; do
+    grep -qF -- "$needle" "$build_script" ||
         fail "build-static-conary.sh must pass the resolved flags: $needle"
 done
 if grep -q 'KERNEL_HEADER_DIR' "$build_script"; then
