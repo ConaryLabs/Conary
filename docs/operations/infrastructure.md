@@ -178,9 +178,12 @@ workflow.
   --require-private-candidates` once. Success means every configured public
   profile has an exact current, durable, nonempty private candidate whose
   immutable bundle and fenced repository bindings were reopened and
-  revalidated, and every Fedora, Ubuntu, and Arch fencing epoch is strictly
-  newer than its recorded baseline. Each accepted terminal candidate run must
-  also have started after the recorded binary transition. Candidate-tier Solus
+  revalidated. A same-schema deployment requires every Fedora, Ubuntu, and
+  Arch fencing epoch to be strictly newer than its recorded baseline. A hard
+  schema transition starts a new fencing authority, so its positive fresh
+  epochs are not ordered against the retired database. Both paths require each
+  accepted terminal candidate run to match its candidate and to have started
+  after the recorded binary transition. Candidate-tier Solus
   is incidental to the all-repository refresh: its success cannot satisfy and
   its typed failure cannot block that public-profile completion contract.
   Private-candidate completion proves no active pointer and accepts structured
