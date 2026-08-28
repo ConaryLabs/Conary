@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-27
-revision: 27
-summary: Record immutable v0.16.1 historical evidence and the unassigned external tester authority
+last_updated: 2026-08-28
+revision: 28
+summary: Record immutable v0.16.1 historical evidence, build-once exact-main Remi candidates, and the unassigned external tester authority
 ---
 
 # Release Artifact Matrix
@@ -64,10 +64,21 @@ Workspace version `0.16.1` and the published release are synchronized.
 Protected tag `v0.16.0` remains reserved evidence for a failed
 version-validation run and has no GitHub release; it was not moved or reused.
 
+Between suite releases, `.github/workflows/build-remi-candidate.yml` constructs
+one exact release-profile Remi artifact for every protected `main` commit. Its
+schema-v1 manifest binds the source tree, lockfile, toolchain, build command,
+flags, runner provenance, binary and deterministic bundle digests, compiler
+cache statistics, and phase/link timings. The candidate deployment lane accepts
+only a successful `push` artifact for the requested SHA on this repository's
+`main`, reopens and verifies the bundle, and enforces a 60-second
+locate/download/verify budget. It never compiles Remi itself. These artifacts
+are deployment candidates, not tags, releases, or substitutes for the
+synchronized suite authority below.
+
 | Artifact product | Artifact classes | Current construction authority | Suite deploy mode | Current immutable authority | Local build |
 | --- | --- | --- | --- | --- | --- |
 | `conary` | binary, `.ccs`, `.rpm`, `.deb`, `.pkg.tar.zst`, signed bootstrap manifest | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected release assets, static sites, and released-package proof | synchronized suite `v0.16.1`; detached signatures for the CCS artifact and bootstrap manifest | `cargo build -p conary` |
-| `remi` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected Remi deployment and repopulation proof, serialized before Conary deployment | synchronized suite `v0.16.1`; exact released binary proven at release closeout | `cargo build -p remi` |
+| `remi` | binary and tarball | `.github/workflows/release-build.yml` for suites; `.github/workflows/build-remi-candidate.yml` for build-once exact-main candidates; `scripts/release.sh suite`, `scripts/release-matrix.sh` | protected Remi deployment and repopulation proof, serialized before Conary deployment | synchronized suite `v0.16.1`; exact released binary proven at release closeout | `cargo build -p remi` |
 | `conaryd` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | synchronized suite `v0.16.1`; build-only route | `cargo build -p conaryd` |
 | `conary-test` | binary and tarball | `.github/workflows/release-build.yml`, `scripts/release.sh suite`, `scripts/release-matrix.sh` | `none` | synchronized suite `v0.16.1`; build-only route | `cargo build -p conary-test` |
 

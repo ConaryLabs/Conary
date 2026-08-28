@@ -16,6 +16,7 @@ on:
           - active-repopulation
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -54,24 +55,82 @@ jobs:
             echo "candidate must already be merged into origin/main" >&2
             exit 1
           }
-      - uses: ./.github/actions/setup-rust-workspace
-      - name: Build exact Remi candidate bundle
-        id: bundle
+      - name: Start exact candidate artifact clock
+        id: artifact-start
+        shell: bash
+        run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
+      - name: Locate exact protected-main candidate build
+        id: artifact-source
+        env:
+          CANDIDATE_SHA: ${{ github.event.inputs.commit_sha }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          cargo build -p remi --release --locked
-          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "remi") | .version')"
-          [[ -n "$version" && "$version" != "null" ]] || {
-            echo "failed to resolve Remi package version" >&2
+          runs="$(gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/build-remi-candidate.yml/runs" \
+            -f event=push -f status=success -f head_sha="$CANDIDATE_SHA" \
+            -f branch=main -f per_page=100)"
+          source_run="$(jq -c \
+            --arg sha "$CANDIDATE_SHA" \
+            --arg repository "$GITHUB_REPOSITORY" '
+              [.workflow_runs[]
+                | select(.head_sha == $sha)
+                | select(.head_branch == "main")
+                | select(.event == "push")
+                | select(.status == "completed")
+                | select(.conclusion == "success")
+                | select(.head_repository.full_name == $repository)
+                | select(.path
+                    | startswith(".github/workflows/build-remi-candidate.yml"))]
+              | sort_by(.run_number)
+              | last // empty
+            ' <<<"$runs")"
+          [[ -n "$source_run" ]] || {
+            echo "no successful protected-main Remi artifact exists for $CANDIDATE_SHA" >&2
             exit 1
           }
-          candidate="remi-${version}-linux-x64"
-          cp target/release/remi "$candidate"
-          tar czf "${candidate}.tar.gz" "$candidate"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "bundle=${candidate}.tar.gz" >> "$GITHUB_OUTPUT"
-          echo "binary_sha256=$(sha256sum "$candidate" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          source_run_id="$(jq -r '.id' <<<"$source_run")"
+          [[ "$source_run_id" =~ ^[0-9]+$ ]] || {
+            echo "protected candidate build returned an invalid run id" >&2
+            exit 1
+          }
+          echo "run_id=$source_run_id" >> "$GITHUB_OUTPUT"
+      - name: Download exact protected-main candidate artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: remi-candidate-${{ github.event.inputs.commit_sha }}
+          path: ${{ runner.temp }}/remi-candidate-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.artifact-source.outputs.run_id }}
+      - name: Verify exact candidate artifact and latency budget
+        id: bundle
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/remi-candidate-artifact
+          CANDIDATE_SHA: ${{ github.event.inputs.commit_sha }}
+          SOURCE_RUN_ID: ${{ steps.artifact-source.outputs.run_id }}
+          STARTED_NS: ${{ steps.artifact-start.outputs.started_ns }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          verification="$(scripts/remi-candidate-artifact.sh verify \
+            "$ARTIFACT_DIR" "$CANDIDATE_SHA" "$SOURCE_RUN_ID" push)"
+          jq -e '.schema_version == 1' <<<"$verification" >/dev/null
+          finished_ns="$(date -u +%s%N)"
+          availability_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))
+          (( availability_ms <= 60000 )) || {
+            echo "exact candidate artifact took ${availability_ms} ms to locate, download, and verify" >&2
+            exit 1
+          }
+          cp -- "$ARTIFACT_DIR/remi-candidate-manifest.json" \
+            remi-candidate-manifest.json
+          echo "version=$(jq -r '.version' <<<"$verification")" >> "$GITHUB_OUTPUT"
+          echo "bundle=$(jq -r '.bundle' <<<"$verification")" >> "$GITHUB_OUTPUT"
+          echo "binary_sha256=$(jq -r '.binary_sha256' <<<"$verification")" >> "$GITHUB_OUTPUT"
+          echo "bundle_sha256=$(jq -r '.bundle_sha256' <<<"$verification")" >> "$GITHUB_OUTPUT"
+          echo "source_run_id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "availability_ms=$availability_ms" >> "$GITHUB_OUTPUT"
       - name: Deploy merged Remi candidate
         env:
           VERSION: ${{ steps.bundle.outputs.version }}
@@ -650,6 +709,7 @@ jobs:
         with:
           name: remi-deployment-inspection-${{ github.run_id }}
           path: |
+            remi-candidate-manifest.json
             remi-deployment-inspection.json
             remi-predeployment-inspection.json
             remi-deployment-storage.json
@@ -681,6 +741,9 @@ jobs:
           CANDIDATE_SHA: ${{ github.event.inputs.commit_sha }}
           VERSION: ${{ steps.bundle.outputs.version }}
           BINARY_SHA256: ${{ steps.bundle.outputs.binary_sha256 }}
+          BUNDLE_SHA256: ${{ steps.bundle.outputs.bundle_sha256 }}
+          SOURCE_RUN_ID: ${{ steps.bundle.outputs.source_run_id }}
+          ARTIFACT_AVAILABILITY_MS: ${{ steps.bundle.outputs.availability_ms }}
           COMPLETION_MODE: ${{ github.event.inputs.completion_mode }}
         shell: bash
         run: |
@@ -690,6 +753,9 @@ jobs:
             echo "- commit: \`$CANDIDATE_SHA\`"
             echo "- binary version: \`$VERSION\`"
             echo "- binary SHA-256: \`$BINARY_SHA256\`"
+            echo "- bundle SHA-256: \`$BUNDLE_SHA256\`"
+            echo "- protected build run: \`$SOURCE_RUN_ID\`"
+            echo "- artifact locate/download/verify: \`${ARTIFACT_AVAILABILITY_MS} ms\`"
             echo "- completion mode: \`$COMPLETION_MODE\`"
             if [[ "$COMPLETION_MODE" == "private-candidates" ]]; then
               echo "- candidate refresh: forced after binary transition; every public fencing epoch advanced"

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 44
-summary: Non-secret infrastructure, agent operations, release, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
+revision: 45
+summary: Non-secret infrastructure, agent operations, release, build-once exact-main Remi candidates, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -499,9 +499,16 @@ old process. That can fail with `Text file busy`.
   Rust flags, manually reapplies the distro's frame-pointer, package-note, and
   native dependency flags, and leaves release codegen and stripping to the
   workspace Cargo profile.
-- Exact-main `deploy-remi-candidate` remains available between suite releases
-  for bounded hard cuts. It creates no tag or release and does not change suite
-  version authority.
+- Every protected `main` push runs `build-remi-candidate` once and retains an
+  immutable, exact-commit Remi bundle plus a manifest binding source tree,
+  toolchain, build flags, binary and bundle digests, compiler-cache statistics,
+  and phase/link timing for 30 days. An exact-commit manual rebuild compares
+  its binary and bundle byte identities with the protected push artifact.
+  `deploy-remi-candidate` remains available between suite releases for bounded
+  hard cuts, but it may only locate and verify that successful protected-main
+  artifact. It has no Rust setup or compilation path and rejects lookup,
+  download, and verification work exceeding 60 seconds. The deployment creates
+  no tag or release and does not change suite version authority.
 - Release verification is a GitHub workflow concern, not a Forgejo or
   Forge-hosted control-plane concern
 

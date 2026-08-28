@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 79
-summary: Document constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 80
+summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -371,7 +371,13 @@ manifest and two-file bundle, validates its typed member contract, and
 re-proves its fenced run members against the current repository bindings. An
 active-only profile, superseded run, candidate-tier profile, changed binding,
 missing bundle, or empty catalog cannot satisfy that predicate. The protected
-private-candidate deployment workflow adds causal evidence that the static
+`build-remi-candidate` workflow constructs the release-profile binary once per
+protected `main` commit and retains a deterministic bundle plus exact source,
+toolchain, compiler-cache, digest, and timing provenance. Candidate deployment
+accepts only that commit's successful protected `push` artifact, reopens its
+single-file bundle, and fails if locate/download/verification exceeds 60
+seconds; the deployment workflow contains no compilation path. The protected
+private-candidate deployment workflow then adds causal evidence that the static
 predicate intentionally does not own: it records the pre-transition
 inspection, starts the exact merged binary, invokes the loopback-only forced
 refresh endpoint, validates the typed completion response, retries only exact
