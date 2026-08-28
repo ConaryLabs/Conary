@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 77
-summary: Document zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 78
+summary: Document coherent typed incomplete deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -380,8 +380,11 @@ final Fedora, Ubuntu, and Arch fencing epochs to be strictly newer than their
 recorded baselines and each terminal run to have started after the recorded
 binary transition. The final evidence binds the exact merged commit, built
 binary SHA-256, completion mode, and transition timestamp; the before-and-after
-sanitized inspections are retained. Evidence schema 2 also records the typed
-outcome, causal failure phase, and duration of every completed or failed remote
+sanitized inspections are retained. A pre-transition profile with no current
+candidate is accepted only with null candidate identity, zero packages, and a
+typed latest refresh; it contributes a baseline fence but never satisfies the
+strict post-transition candidate predicate. Evidence schema 2 also records the
+typed outcome, causal failure phase, and duration of every completed or failed remote
 phase. An early remote-session or transport failure produces a failure envelope
 and attempts one read-only recovery inspection instead of discarding the causal
 state. The root-owned helper's read-only `inspect-remi-storage` surface adds

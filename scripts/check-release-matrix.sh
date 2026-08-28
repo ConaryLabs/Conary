@@ -8,6 +8,7 @@ workspace_manifest="Cargo.toml"
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
 candidate_deploy_workflow=".github/workflows/deploy-remi-candidate.yml"
+candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
 artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
 merge_workflow=".github/workflows/merge-validation.yml"
 pr_workflow=".github/workflows/pr-gate.yml"
@@ -145,6 +146,8 @@ for required_file in \
     "$workspace_manifest" \
     "$release_build" \
     "$deploy_workflow" \
+    "$candidate_deploy_workflow" \
+    "$candidate_predeployment_filter" \
     "$artifact_proof_workflow" \
     "$merge_workflow" \
     "$pr_workflow" \
@@ -386,6 +389,9 @@ require_job_match "$deploy_workflow" deploy-remi 'name: Deploy remi bundle[\s\S]
 require_job_match "$deploy_workflow" deploy-remi 'bundle_dir="source-artifacts/\$\{BUNDLE_NAME\}"[\s\S]*sha256sum -c SHA256SUMS[\s\S]*bundle="\$\{bundle_dir\}/remi-\$\{VERSION\}-linux-x64\.tar\.gz"' 'Remi deployment must verify the complete suite checksums before staging its bundle'
 require_job_match "$deploy_workflow" deploy-remi 'deploy-remi[\s\S]*verify-ingress[\s\S]*inspect-remi[\s\S]*--require-repopulated[\s\S]*verify-ingress' 'suite Remi deploy verifies static ingress after mutation and completion'
 require_match "$candidate_deploy_workflow" 'completion_mode:\n[[:space:]]+description: Exact deployment state that this run must prove\.\n[[:space:]]+required: true\n[[:space:]]+type: choice\n[[:space:]]+options:\n[[:space:]]+- private-candidates\n[[:space:]]+- active-repopulation' 'candidate deploy explicit typed completion mode'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'inspect-remi"[\s\S]*> remi-predeployment-inspection\.json[\s\S]*jq -e -f deploy/remi-predeployment-inspection\.jq[\s\S]*remi-predeployment-inspection\.json' 'candidate deploy validates its typed pre-transition baseline before mutation'
+require_match "$candidate_predeployment_filter" 'if \.profile_revision_sha256 == null then[\s\S]*\.run_id == null[\s\S]*\.completed_at == null[\s\S]*\.packages == 0[\s\S]*else[\s\S]*\(\.profile_revision_sha256 \| sha256\)[\s\S]*\(\.run_id \| type == "string"\)' 'candidate deploy baseline must distinguish an absent candidate from a complete typed identity'
+require_match "$candidate_predeployment_filter" '\(\[\.candidates\[\]\.profile\] \| sort\) == public_profiles[\s\S]*\(\.latest_refresh \| refresh_state\)' 'candidate deploy baseline must contain every exact public profile and typed refresh state'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'private-candidates\)[\s\S]*requirement=--require-private-candidates[\s\S]*active-repopulation\)[\s\S]*requirement=--require-repopulated[\s\S]*inspect-remi "\$requirement"' 'candidate deploy mode-specific typed inspection predicate'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'timeout-minutes: 300[\s\S]*inspect-remi"[\s\S]*> remi-predeployment-inspection\.json[\s\S]*transition_completed_at="\$\(date -u \+%s\)"[\s\S]*sleep 1[\s\S]*--max-time 7200 --request POST[\s\S]*http://127\.0\.0\.1:8081/v1/admin/refresh\?force=true[\s\S]*\.force == true[\s\S]*\.profile == null[\s\S]*\.status == "partial"[\s\S]*select\(\. != "solus"\)[\s\S]*refresh\?force=true&profile=\$\{profile\}[\s\S]*\.profile == \$profile[\s\S]*all\(\.results\[\]; \.source_profile == \$profile\)' 'private candidate deploy forces one bounded post-transition refresh and retries only exact failed public profiles'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate '--arg expected_commit "\$CANDIDATE_SHA"[\s\S]*--arg expected_binary "\$BINARY_SHA256"[\s\S]*\.deployment\.commit_sha == \$expected_commit[\s\S]*\.deployment\.binary_sha256 == \$expected_binary' 'candidate deploy binds final evidence to exact commit and binary'
