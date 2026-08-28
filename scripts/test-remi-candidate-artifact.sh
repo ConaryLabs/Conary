@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 script="${repo_root}/scripts/remi-candidate-artifact.sh"
 linker="${repo_root}/scripts/timed-linker.sh"
+rustc_wrapper="${repo_root}/scripts/timed-rustc-wrapper.sh"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -12,10 +13,39 @@ fail() {
     exit 1
 }
 
+fake_wrapper="${tmpdir}/fake-rustc-wrapper"
+cat >"$fake_wrapper" <<'EOF'
+#!/usr/bin/env bash
+exit "${FAKE_RUSTC_STATUS:-0}"
+EOF
+chmod +x "$fake_wrapper"
+wrapper_timings="${tmpdir}/wrapper-timings.tsv"
+CONARY_REAL_RUSTC_WRAPPER="$fake_wrapper" \
+CONARY_RUSTC_TIMINGS_PATH="$wrapper_timings" \
+    "$rustc_wrapper" rustc --crate-name fixture --crate-type bin
+IFS=$'\t' read -r wrapper_ms wrapper_status wrapper_crate wrapper_type \
+    <"$wrapper_timings"
+[[ "$wrapper_ms" =~ ^[0-9]+$ && "$wrapper_status" == 0 \
+    && "$wrapper_crate" == fixture && "$wrapper_type" == bin ]] ||
+    fail "timed Rust compiler wrapper did not retain attributable success evidence"
+set +e
+FAKE_RUSTC_STATUS=7 \
+CONARY_REAL_RUSTC_WRAPPER="$fake_wrapper" \
+CONARY_RUSTC_TIMINGS_PATH="$wrapper_timings" \
+    "$rustc_wrapper" rustc --crate-name failed --crate-type rlib
+wrapper_exit=$?
+set -e
+[[ "$wrapper_exit" == 7 ]] || fail "timed Rust compiler wrapper lost compiler failure status"
+tail -n 1 "$wrapper_timings" | awk -F '\t' \
+    'NF == 4 && $1 ~ /^[0-9]+$/ && $2 == 7 && $3 == "failed" && $4 == "rlib" { ok = 1 }
+     END { exit !ok }' ||
+    fail "timed Rust compiler wrapper did not retain attributable failure evidence"
+
 fixture="${tmpdir}/fixture"
 mkdir -p "$fixture/scripts" "$fixture/target/release"
 cp "$script" "$fixture/scripts/remi-candidate-artifact.sh"
 cp "$linker" "$fixture/scripts/timed-linker.sh"
+cp "$rustc_wrapper" "$fixture/scripts/timed-rustc-wrapper.sh"
 chmod +x "$fixture/scripts/"*.sh
 cat >"$fixture/Cargo.toml" <<'EOF'
 [workspace]
@@ -55,6 +85,12 @@ stats="${tmpdir}/sccache-stats.json"
 cat >"$stats" <<'EOF'
 {"compile_requests":10,"cache_hits":9,"cache_misses":1}
 EOF
+rustc_timings="${tmpdir}/rustc-timings.tsv"
+cat >"$rustc_timings" <<'EOF'
+5	0	dependency	rlib
+81	0	remi	bin
+3	1	probe	bin
+EOF
 
 package_once() {
     local output="$1"
@@ -71,12 +107,13 @@ package_once() {
         CARGO_PROFILE_DEV_DEBUG=0 \
         CARGO_PROFILE_TEST_DEBUG=0 \
         SCCACHE_VERSION=0.16.0 \
-        SCCACHE_GHA_VERSION=remi-release-v1 \
+        SCCACHE_CACHE_BACKEND=local-disk-bulk-v1 \
+        CONARY_COMPILER_CACHE_NAMESPACE=remi-release-local-v1-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
         CONARY_GIT_COMMIT="$commit" \
         CONARY_GIT_DIRTY=false \
         scripts/remi-candidate-artifact.sh package \
-          target/release/remi "$output" 1.2.3 "$commit" 1234 10 20 30 \
-          "$timings" "$stats"
+          target/release/remi "$output" 1.2.3 "$commit" 1234 10 20 25 30 \
+          "$timings" "$rustc_timings" "$stats"
     )
 }
 
@@ -100,7 +137,7 @@ cmp "${tmpdir}/first-stable-manifest.json" "${tmpdir}/second-stable-manifest.jso
       >"${tmpdir}/verified.json"
 )
 jq -e '
-  .schema_version == 1
+  .schema_version == 2
   and .version == "1.2.3"
   and (.binary_sha256 | test("^[0-9a-f]{64}$"))
   and (.bundle_sha256 | test("^[0-9a-f]{64}$"))
@@ -110,6 +147,17 @@ jq -e '
   and .measurements.linker_ms_total == 48
   and .measurements.successful_link_ms_total == 46
   and .measurements.remi_final_link_ms == 34
+  and .measurements.compiler_cache_save_ms == 25
+  and .measurements.rustc_invocations == 3
+  and .measurements.rustc_ms_total == 89
+  and .measurements.successful_rustc_ms_total == 86
+  and .compiler_timing == {
+    "slowest_ms": 81,
+    "slowest_status": 0,
+    "slowest_crate": "remi",
+    "slowest_crate_type": "bin"
+  }
+  and .compiler_cache.backend == "local-disk-bulk-v1"
 ' "$first/remi-candidate-manifest.json" >/dev/null
 
 rm "$second/remi-1.2.3-linux-x64"
@@ -133,6 +181,21 @@ grep -Fq 'candidate bundle digest does not match its manifest' \
     "${tmpdir}/bundle-tamper.err" ||
     fail "tamper failure did not name the downloaded bundle digest"
 mv "${tmpdir}/bundle-backup" "$second/remi-1.2.3-linux-x64.tar.gz"
+
+cp "$first/rustc-timings.tsv" "${tmpdir}/rustc-timings-backup"
+printf '999\t0\tforged\tbin\n' >>"$first/rustc-timings.tsv"
+if (
+    cd "$fixture"
+    GITHUB_REPOSITORY=ConaryLabs/Conary \
+      scripts/remi-candidate-artifact.sh verify "$first" "$commit" 1234 push
+) >"${tmpdir}/compiler-timing-tamper.out" \
+    2>"${tmpdir}/compiler-timing-tamper.err"; then
+    fail "tampered compiler timing evidence passed verification"
+fi
+grep -Fq 'compiler timing evidence digest does not match its manifest' \
+    "${tmpdir}/compiler-timing-tamper.err" ||
+    fail "compiler timing tamper failure did not name the evidence digest"
+mv "${tmpdir}/rustc-timings-backup" "$first/rustc-timings.tsv"
 
 cp "$first/remi-1.2.3-linux-x64" "${tmpdir}/binary-backup"
 printf '\ncorrupt\n' >>"$first/remi-1.2.3-linux-x64"

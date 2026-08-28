@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 47
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, build-once exact-main Remi candidates, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
+revision: 48
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -545,7 +545,11 @@ old process. That can fail with `Text file busy`.
 - Every protected `main` push runs `build-remi-candidate` once and retains an
   immutable, exact-commit Remi bundle plus a manifest binding source tree,
   toolchain, build flags, binary and bundle digests, compiler-cache statistics,
-  and phase/link timing for 30 days. An exact-commit manual rebuild compares
+  and attributable compiler/phase/link timing for 30 days. The build restores
+  one compatible, bounded local-disk sccache snapshot in bulk, compiles without
+  per-object network requests, stops the cache server, and saves the completed
+  exact-head snapshot once. The signed binary and manifest remain authority;
+  cache contents never are. An exact-commit manual rebuild compares
   its binary and bundle byte identities with the protected push artifact.
   `deploy-remi-candidate` remains available between suite releases for bounded
   hard cuts, but it may only locate and verify that successful protected-main

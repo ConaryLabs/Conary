@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 83
-summary: Route feature ownership through trusted-main compiler seeding, shared compiler caching with isolated build targets, build-once exact-main deployment artifacts, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+revision: 84
+summary: Route feature ownership through trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1338,6 +1338,7 @@ deployment, and prove installed or live behavior independently.
 `.github/workflows/deploy-remi-candidate.yml`;
 `.github/workflows/release-artifact-proof.yml`;
 `.github/actions/setup-rust-workspace/action.yml`;
+`.github/actions/setup-remi-candidate-compiler-cache/action.yml`;
 `.github/actions/summarize-rust-cache/action.yml`;
 `scripts/ci-install-ubuntu-packages.sh`;
 `scripts/check-github-action-runtimes.sh`;
@@ -1345,6 +1346,7 @@ deployment, and prove installed or live behavior independently.
 `Cargo.toml`; workspace member `Cargo.toml` manifests; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/remi-candidate-artifact.sh`; `scripts/timed-linker.sh`;
+`scripts/timed-rustc-wrapper.sh`; `scripts/test-remi-candidate-artifact.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
 `apps/conary/tests/release_ccs_manifest.rs`;
@@ -1363,6 +1365,7 @@ static-site deployment, and production health proof.
 `.github/workflows/deploy-remi-candidate.yml`;
 `.github/workflows/release-artifact-proof.yml`;
 `.github/actions/setup-rust-workspace/action.yml`;
+`.github/actions/setup-remi-candidate-compiler-cache/action.yml`;
 `.github/actions/summarize-rust-cache/action.yml`;
 `.github/actions/test-generation-db-reflink/action.yml`;
 `scripts/ci-install-ubuntu-packages.sh`;
@@ -1371,6 +1374,7 @@ static-site deployment, and production health proof.
 `Cargo.toml`; `apps/*/Cargo.toml`; `crates/*/Cargo.toml`; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
 `scripts/remi-candidate-artifact.sh`; `scripts/timed-linker.sh`;
+`scripts/timed-rustc-wrapper.sh`; `scripts/test-remi-candidate-artifact.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
 `apps/conary/tests/release_ccs_manifest.rs`;
@@ -1378,6 +1382,7 @@ static-site deployment, and production health proof.
 
 **Focused proof:** `bash scripts/check-release-matrix.sh`;
 `bash scripts/test-release-matrix.sh`;
+`bash scripts/test-remi-candidate-artifact.sh`;
 `bash scripts/check-github-action-runtimes.sh`;
 `bash scripts/test-github-action-runtimes.sh`;
 `cargo test -p conary-core --example sign_hash`;

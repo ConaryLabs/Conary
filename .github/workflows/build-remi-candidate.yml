@@ -31,9 +31,6 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
       RUSTFLAGS: ""
       RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: remi-release-v1
-      SCCACHE_VERSION: 0.16.0
     steps:
       - name: Check out exact merged candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -86,10 +83,11 @@ jobs:
         id: cache-start
         shell: bash
         run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
-      - name: Install bounded shared compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Restore and activate Remi compiler-cache policy
+        id: remi-cache
+        uses: ./.github/actions/setup-remi-candidate-compiler-cache
         with:
-          version: v0.16.0
+          source-sha: ${{ steps.candidate.outputs.sha }}
       - name: Finish compiler-cache setup clock
         id: cache
         env:
@@ -97,12 +95,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ -x "${SCCACHE_PATH:-}" ]] || {
-            echo "sccache action did not expose an executable" >&2
-            exit 1
-          }
-          echo "RUSTC_WRAPPER=$SCCACHE_PATH" >> "$GITHUB_ENV"
-          "$SCCACHE_PATH" --zero-stats
           finished_ns="$(date -u +%s%N)"
           echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
       - name: Build exact release-profile Remi binary
@@ -113,13 +105,18 @@ jobs:
         run: |
           set -euo pipefail
           link_timings="${RUNNER_TEMP}/remi-link-timings.tsv"
+          rustc_timings="${RUNNER_TEMP}/remi-rustc-timings.tsv"
           cache_stats="${RUNNER_TEMP}/remi-sccache-stats.json"
           : > "$link_timings"
+          : > "$rustc_timings"
           export CONARY_GIT_COMMIT="$CANDIDATE_SHA"
           export CONARY_GIT_DIRTY=false
           export CONARY_REAL_LINKER="$(realpath "$(command -v cc)")"
           export CONARY_LINK_TIMINGS_PATH="$link_timings"
+          export CONARY_REAL_RUSTC_WRAPPER="$SCCACHE_PATH"
+          export CONARY_RUSTC_TIMINGS_PATH="$rustc_timings"
           export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$(pwd)/scripts/timed-linker.sh"
+          export RUSTC_WRAPPER="$(pwd)/scripts/timed-rustc-wrapper.sh"
           {
             echo "CONARY_GIT_COMMIT=$CONARY_GIT_COMMIT"
             echo "CONARY_GIT_DIRTY=$CONARY_GIT_DIRTY"
@@ -133,17 +130,51 @@ jobs:
             echo "timed linker emitted no measurements" >&2
             exit 1
           }
+          [[ -s "$rustc_timings" ]] || {
+            echo "timed Rust compiler wrapper emitted no measurements" >&2
+            exit 1
+          }
           echo "duration_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_OUTPUT"
           echo "link_timings=$link_timings" >> "$GITHUB_OUTPUT"
+          echo "rustc_timings=$rustc_timings" >> "$GITHUB_OUTPUT"
           echo "cache_stats=$cache_stats" >> "$GITHUB_OUTPUT"
+      - name: Stop Remi compiler cache before bulk save
+        run: "$SCCACHE_PATH --stop-server"
+      - name: Start Remi compiler-cache save clock
+        if: ${{ steps.remi-cache.outputs.cache_hit != 'true' }}
+        id: cache-save-start
+        shell: bash
+        run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
+      - name: Save exact Remi compiler cache
+        if: ${{ steps.remi-cache.outputs.cache_hit != 'true' }}
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/remi-release-sccache
+          key: ${{ steps.remi-cache.outputs.exact_key }}
+      - name: Finish Remi compiler-cache save clock
+        if: ${{ steps.remi-cache.outputs.cache_hit != 'true' }}
+        id: cache-save
+        env:
+          STARTED_NS: ${{ steps.cache-save-start.outputs.started_ns }}
+        shell: bash
+        run: |
+          finished_ns="$(date -u +%s%N)"
+          echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+      - name: Record exact Remi compiler-cache reuse
+        if: ${{ steps.remi-cache.outputs.cache_hit == 'true' }}
+        id: cache-save-hit
+        shell: bash
+        run: echo "duration_ms=0" >> "$GITHUB_OUTPUT"
       - name: Package immutable candidate evidence
         id: package
         env:
           CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
           SETUP_MS: ${{ steps.setup.outputs.duration_ms }}
           CACHE_SETUP_MS: ${{ steps.cache.outputs.duration_ms }}
+          CACHE_SAVE_MS: ${{ steps.cache-save.outputs.duration_ms || steps.cache-save-hit.outputs.duration_ms }}
           BUILD_MS: ${{ steps.build.outputs.duration_ms }}
           LINK_TIMINGS: ${{ steps.build.outputs.link_timings }}
+          RUSTC_TIMINGS: ${{ steps.build.outputs.rustc_timings }}
           CACHE_STATS: ${{ steps.build.outputs.cache_stats }}
         shell: bash
         run: |
@@ -153,8 +184,8 @@ jobs:
           output_dir="${RUNNER_TEMP}/remi-candidate-artifact"
           manifest="$(scripts/remi-candidate-artifact.sh package \
             target/release/remi "$output_dir" "$version" "$CANDIDATE_SHA" \
-            "$GITHUB_RUN_ID" "$SETUP_MS" "$CACHE_SETUP_MS" "$BUILD_MS" \
-            "$LINK_TIMINGS" "$CACHE_STATS")"
+            "$GITHUB_RUN_ID" "$SETUP_MS" "$CACHE_SETUP_MS" "$CACHE_SAVE_MS" \
+            "$BUILD_MS" "$LINK_TIMINGS" "$RUSTC_TIMINGS" "$CACHE_STATS")"
           echo "directory=$output_dir" >> "$GITHUB_OUTPUT"
           echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -168,7 +199,7 @@ jobs:
           scripts/remi-candidate-artifact.sh verify \
             "$ARTIFACT_DIR" "$CANDIDATE_SHA" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" \
             > "${RUNNER_TEMP}/fresh-artifact-verification.json"
-          jq -e '.schema_version == 1' \
+          jq -e '.schema_version == 2' \
             "${RUNNER_TEMP}/fresh-artifact-verification.json" >/dev/null
       - name: Locate prior exact protected build
         id: prior
@@ -245,6 +276,7 @@ jobs:
             ${{ steps.package.outputs.directory }}/remi-candidate-manifest.json
             ${{ steps.package.outputs.directory }}/*.tar.gz
             ${{ steps.package.outputs.directory }}/link-timings.tsv
+            ${{ steps.package.outputs.directory }}/rustc-timings.tsv
             ${{ steps.package.outputs.directory }}/sccache-stats.json
           if-no-files-found: error
           compression-level: 0
@@ -267,7 +299,12 @@ jobs:
             jq -r '
               "- dependency_setup_ms: `\(.measurements.dependency_setup_ms)`\n"
               + "- compiler_cache_setup_ms: `\(.measurements.compiler_cache_setup_ms)`\n"
+              + "- compiler_cache_save_ms: `\(.measurements.compiler_cache_save_ms)`\n"
               + "- cargo_build_ms: `\(.measurements.cargo_build_ms)`\n"
+              + "- rustc_ms_total: `\(.measurements.rustc_ms_total)`\n"
+              + "- slowest_rustc: `\(.compiler_timing.slowest_crate)` "
+              + "(`\(.compiler_timing.slowest_crate_type)`, "
+              + "`\(.compiler_timing.slowest_ms)` ms)\n"
               + "- linker_ms_total: `\(.measurements.linker_ms_total)`\n"
               + "- remi_final_link_ms: `\(.measurements.remi_final_link_ms)`\n"
               + "- bundle_ms: `\(.measurements.bundle_ms)`\n"

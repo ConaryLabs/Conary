@@ -258,6 +258,7 @@ create_release_policy_fixture() {
     mkdir -p \
         "$repo/scripts" \
         "$repo/.github/actions/setup-exact-ownership-tests" \
+        "$repo/.github/actions/setup-remi-candidate-compiler-cache" \
         "$repo/.github/actions/setup-rust-workspace" \
         "$repo/.github/ISSUE_TEMPLATE" \
         "$repo/.github/workflows" \
@@ -282,6 +283,7 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/scripts/verify-native-oracle-input-transport.py" \
         "$repo/scripts/verify-native-oracle-input-transport.py"
     cp "$REPO_ROOT/scripts/timed-linker.sh" "$repo/scripts/timed-linker.sh"
+    cp "$REPO_ROOT/scripts/timed-rustc-wrapper.sh" "$repo/scripts/timed-rustc-wrapper.sh"
     cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
         "$repo/deploy/remi-predeployment-inspection.jq"
     cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
@@ -291,6 +293,8 @@ create_release_policy_fixture() {
         "$repo/.github/actions/setup-exact-ownership-tests/action.yml"
     cp "$REPO_ROOT/.github/actions/setup-rust-workspace/action.yml" \
         "$repo/.github/actions/setup-rust-workspace/action.yml"
+    cp "$REPO_ROOT/.github/actions/setup-remi-candidate-compiler-cache/action.yml" \
+        "$repo/.github/actions/setup-remi-candidate-compiler-cache/action.yml"
     cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md" "$repo/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
     cp "$REPO_ROOT/docs/operations/release-artifact-matrix.md" "$repo/docs/operations/release-artifact-matrix.md"
     cp "$REPO_ROOT/site/src/lib/preview-release.ts" "$repo/site/src/lib/preview-release.ts"
@@ -1236,7 +1240,20 @@ test_check_release_matrix_rejects_loose_candidate_build_policy() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "candidate artifact verifier must recompute version and enforce the exact build policy"
+        "candidate artifact verifier must recompute version and enforce the exact build and bulk-cache policy"
+}
+
+test_check_release_matrix_rejects_per_object_candidate_cache() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/actions/setup-remi-candidate-compiler-cache/action.yml" \
+        'SCCACHE_CACHE_BACKEND=local-disk-bulk-v1' \
+        'SCCACHE_CACHE_BACKEND=remote-object-v1'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate compiler cache must use one exact-policy bounded local bulk seed"
 }
 
 test_check_release_matrix_rejects_cold_candidate_rebuild() {
@@ -1942,6 +1959,7 @@ main() {
         test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
         test_check_release_matrix_rejects_unprotected_candidate_artifact
         test_check_release_matrix_rejects_loose_candidate_build_policy
+        test_check_release_matrix_rejects_per_object_candidate_cache
         test_check_release_matrix_rejects_cold_candidate_rebuild
         test_check_release_matrix_rejects_unbounded_candidate_transport
         test_check_release_matrix_rejects_loose_artifact_latency_budget

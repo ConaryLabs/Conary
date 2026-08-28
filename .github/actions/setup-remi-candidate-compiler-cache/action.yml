@@ -1,0 +1,110 @@
+name: setup-remi-candidate-compiler-cache
+description: Restore and activate the exact-policy Remi release compiler cache.
+inputs:
+  source-sha:
+    description: Exact reviewed main commit being compiled.
+    required: true
+outputs:
+  exact_key:
+    description: Immutable cache snapshot key for the current source commit.
+    value: ${{ steps.policy.outputs.exact_key }}
+  restore_prefix:
+    description: Compatible policy namespace used to find an earlier snapshot.
+    value: ${{ steps.policy.outputs.restore_prefix }}
+  cache_hit:
+    description: Whether the exact current-commit snapshot was restored.
+    value: ${{ steps.restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Bind exact Remi compiler-cache policy
+      id: policy
+      shell: bash
+      env:
+        SOURCE_SHA: ${{ inputs.source-sha }}
+      run: |
+        set -euo pipefail
+        [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+          echo "Remi compiler-cache source must be a full lowercase SHA" >&2
+          exit 1
+        }
+        [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]] || {
+          echo "Remi compiler-cache checkout does not match its source" >&2
+          exit 1
+        }
+        native_abi="$(
+          dpkg-query --show --showformat='${Package}=${Version}\n' \
+            libseccomp-dev | LC_ALL=C sort
+        )"
+        identity="$(
+          {
+            printf 'schema=1\n'
+            printf 'rustc=%s\n' "$(rustc -vV)"
+            printf 'cargo=%s\n' "$(cargo -vV)"
+            printf 'lock=%s\n' "$(sha256sum Cargo.lock | cut -d ' ' -f 1)"
+            printf 'workspace_manifest=%s\n' "$(sha256sum Cargo.toml | cut -d ' ' -f 1)"
+            printf 'remi_manifest=%s\n' "$(sha256sum apps/remi/Cargo.toml | cut -d ' ' -f 1)"
+            printf 'target=%s\n' "$(rustc -vV | sed -n 's/^host: //p')"
+            printf 'cc=%s\n' "$(cc --version | sed -n '1p')"
+            printf 'native_abi=%s\n' "$native_abi"
+            printf 'cache_action=%s\n' "$(sha256sum .github/actions/setup-remi-candidate-compiler-cache/action.yml | cut -d ' ' -f 1)"
+            printf 'profile=release\n'
+            printf 'features=default\n'
+            printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
+            printf 'encoded_rustflags=%s\n' "${CARGO_ENCODED_RUSTFLAGS:-}"
+            printf 'incremental=%s\n' "${CARGO_INCREMENTAL:-}"
+            printf 'dev_debug=%s\n' "${CARGO_PROFILE_DEV_DEBUG:-}"
+            printf 'test_debug=%s\n' "${CARGO_PROFILE_TEST_DEBUG:-}"
+          } | sha256sum | cut -d ' ' -f 1
+        )"
+        namespace="remi-release-local-v1-${identity}"
+        restore_prefix="${namespace}-"
+        exact_key="${restore_prefix}${SOURCE_SHA}"
+        {
+          echo "CONARY_COMPILER_CACHE_NAMESPACE=$namespace"
+          echo "SCCACHE_CACHE_BACKEND=local-disk-bulk-v1"
+          echo "SCCACHE_CACHE_SIZE=4G"
+          echo "SCCACHE_DIR=$RUNNER_TEMP/remi-release-sccache"
+          echo "SCCACHE_LOCAL_RW_MODE=READ_WRITE"
+          echo "SCCACHE_VERSION=0.16.0"
+        } >> "$GITHUB_ENV"
+        {
+          echo "exact_key=$exact_key"
+          echo "restore_prefix=$restore_prefix"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "### Remi release compiler-cache identity"
+          echo
+          echo "- namespace: \`$namespace\`"
+          echo "- Cargo.lock_sha256: \`$(sha256sum Cargo.lock | cut -d ' ' -f 1)\`"
+          echo "- profile: \`release\`"
+          echo "- source_snapshot: \`$SOURCE_SHA\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Restore Remi compiler-cache seed
+      id: restore
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ runner.temp }}/remi-release-sccache
+        key: ${{ steps.policy.outputs.exact_key }}
+        restore-keys: ${{ steps.policy.outputs.restore_prefix }}
+    - name: Install bounded shared compiler cache
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      with:
+        version: v0.16.0
+    - name: Activate Remi compiler cache
+      shell: bash
+      run: |
+        set -euo pipefail
+        [[ -x "${SCCACHE_PATH:-}" ]] || {
+          echo "sccache action did not expose an executable" >&2
+          exit 1
+        }
+        if [[ -e "$SCCACHE_DIR" ]]; then
+          [[ -d "$SCCACHE_DIR" && ! -L "$SCCACHE_DIR" ]] || {
+            echo "Remi compiler cache must be a plain directory" >&2
+            exit 1
+          }
+        else
+          mkdir -p "$SCCACHE_DIR"
+        fi
+        "$SCCACHE_PATH" --zero-stats
