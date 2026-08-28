@@ -234,10 +234,10 @@ if [[ -f "$native_matrix_workflow" ]]; then
   require_native_matrix_fixed \
     'SCCACHE_CACHE_BACKEND: local-disk-bulk-v1' \
     'native matrix compiler cache must use the local bulk backend'
-  # These fixed strings intentionally match literal workflow expressions.
+  # This fixed string intentionally matches a literal shell variable.
   # shellcheck disable=SC2016
   require_native_matrix_fixed \
-    'SCCACHE_DIR: ${{ runner.temp }}/native-matrix-sccache' \
+    'echo "SCCACHE_DIR=$RUNNER_TEMP/native-matrix-sccache"' \
     'native matrix compiler cache must use its bounded runner-local directory'
   require_native_matrix_fixed \
     'SCCACHE_LOCAL_RW_MODE: READ_WRITE' \

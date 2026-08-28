@@ -325,13 +325,11 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
             "producer must pin {key}"
         );
     }
-    assert_eq!(
-        job.env
-            .get("SCCACHE_DIR")
-            .and_then(serde_yaml::Value::as_str),
-        Some("${{ runner.temp }}/native-matrix-sccache")
-    );
     assert!(!job.env.contains_key("SCCACHE_GHA_ENABLED"));
+    assert!(
+        !job.env.contains_key("SCCACHE_DIR"),
+        "runner.temp is step-scoped and must be exported by the cache-policy step"
+    );
 
     let cache_policy = named_step(&job.steps, "Bind exact native compiler-cache policy");
     let cache_policy_run = cache_policy.run.as_deref().expect("native cache policy");
@@ -360,6 +358,7 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
     }
     assert!(cache_policy_run.contains("native-matrix-musl-local-v1-${identity}"));
     assert!(cache_policy_run.contains("${restore_prefix}${GITHUB_SHA}"));
+    assert!(cache_policy_run.contains("SCCACHE_DIR=$RUNNER_TEMP/native-matrix-sccache"));
 
     let restore = action_step(
         &job.steps,

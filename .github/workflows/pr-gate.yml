@@ -31,7 +31,6 @@ jobs:
       RUSTC_WRAPPER: sccache
       SCCACHE_CACHE_BACKEND: local-disk-bulk-v1
       SCCACHE_CACHE_SIZE: 4G
-      SCCACHE_DIR: ${{ runner.temp }}/native-matrix-sccache
       SCCACHE_LOCAL_RW_MODE: READ_WRITE
       SCCACHE_VERSION: 0.16.0
     steps:
@@ -113,7 +112,10 @@ jobs:
           namespace="native-matrix-musl-local-v1-${identity}"
           restore_prefix="${namespace}-"
           exact_key="${restore_prefix}${GITHUB_SHA}"
-          echo "SCCACHE_CACHE_NAMESPACE=$namespace" >> "$GITHUB_ENV"
+          {
+            echo "SCCACHE_CACHE_NAMESPACE=$namespace"
+            echo "SCCACHE_DIR=$RUNNER_TEMP/native-matrix-sccache"
+          } >> "$GITHUB_ENV"
           {
             echo "exact_key=$exact_key"
             echo "restore_prefix=$restore_prefix"
