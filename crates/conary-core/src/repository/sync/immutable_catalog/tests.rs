@@ -356,15 +356,21 @@ fn native_candidate_admission_precedes_file_creation_and_refusal_leaves_no_file(
 }
 
 #[test]
-fn cache_hit_materializes_exact_catalog_bytes_without_replay_or_finalization() {
+fn authenticated_root_churn_reuses_exact_child_projection_and_binds_new_root() {
     let root = tempfile::tempdir().unwrap();
     let repository = repository();
-    let snapshot = AuthenticatedSnapshotIdentity::for_bytes(b"signed repomd cache revision");
+    let cached_snapshot = AuthenticatedSnapshotIdentity::for_bytes(b"signed repomd cache revision");
+    let refreshed_snapshot =
+        AuthenticatedSnapshotIdentity::for_bytes(b"signed repomd refreshed revision");
     let object = authenticated_object();
+    let projection_input = AuthenticatedProjectionInputV1::with_authenticated_decoded_size(
+        object.clone(),
+        authenticated_object_bytes().len() as u64,
+    );
     let source = source_catalog_candidate(
         &repository,
         vec![package(&repository)],
-        snapshot.clone(),
+        cached_snapshot.clone(),
         vec![object.clone()],
     )
     .unwrap();
@@ -377,8 +383,7 @@ fn cache_hit_materializes_exact_catalog_bytes_without_replay_or_finalization() {
     )
     .unwrap()
     .publish(
-        &snapshot,
-        std::slice::from_ref(&object),
+        std::slice::from_ref(&projection_input),
         &cached_binding,
         &cached_candidate,
     )
@@ -403,8 +408,9 @@ fn cache_hit_materializes_exact_catalog_bytes_without_replay_or_finalization() {
     .unwrap();
 
     assert!(
-        sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&object))
-            .unwrap()
+        sink.reuse_cached_projection(&refreshed_snapshot, std::slice::from_ref(&projection_input),)
+            .unwrap(),
+        "an authenticated-root change over identical parser inputs must hit"
     );
     assert_eq!(
         std::fs::read(&candidate).unwrap(),
@@ -421,7 +427,21 @@ fn cache_hit_materializes_exact_catalog_bytes_without_replay_or_finalization() {
     std::fs::write(&object_path, authenticated_object_bytes()).unwrap();
     sink.authenticated_object(object.clone(), &object_path)
         .unwrap();
-    sink.finish(&repository, snapshot.clone()).unwrap();
+    let refreshed = sink
+        .finish(&repository, refreshed_snapshot.clone())
+        .unwrap();
+    assert_eq!(
+        refreshed.manifest.authenticated_root.sha256,
+        refreshed_snapshot.sha256()
+    );
+    assert_eq!(
+        refreshed.manifest.authenticated_root.size,
+        refreshed_snapshot.size().unwrap()
+    );
+    assert_ne!(
+        refreshed.manifest.authenticated_root.sha256,
+        cached_snapshot.sha256()
+    );
     assert!(candidate.exists());
     let retained = candidate
         .parent()
@@ -444,7 +464,7 @@ fn cache_hit_materializes_exact_catalog_bytes_without_replay_or_finalization() {
     .unwrap();
     assert!(
         unadmitted
-            .reuse_cached_projection(&snapshot, std::slice::from_ref(&object))
+            .reuse_cached_projection(&refreshed_snapshot, std::slice::from_ref(&projection_input),)
             .unwrap()
     );
     assert_eq!(
@@ -456,7 +476,7 @@ fn cache_hit_materializes_exact_catalog_bytes_without_replay_or_finalization() {
     unadmitted
         .authenticated_object(object.clone(), &object_path)
         .unwrap();
-    unadmitted.finish(&repository, snapshot).unwrap();
+    unadmitted.finish(&repository, refreshed_snapshot).unwrap();
 }
 
 #[test]

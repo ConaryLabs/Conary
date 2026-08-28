@@ -16,8 +16,9 @@ mod sink;
 mod snapshot;
 
 pub use sink::{
-    ArchPackageFragmentKind, ArchPackageRecord, REPOSITORY_SNAPSHOT_PROJECTION_VERSION,
-    RepositorySnapshotSink, SnapshotPackageIdentity, SnapshotPackageJoin, SnapshotProvideUpdate,
+    ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedProjectionInputV1,
+    REPOSITORY_SNAPSHOT_PROJECTION_VERSION, RepositorySnapshotSink, SnapshotPackageIdentity,
+    SnapshotPackageJoin, SnapshotProvideUpdate,
 };
 pub(crate) use sink::{CollectingRepositorySnapshotSink, validation_only_metadata_stream};
 pub use snapshot::{

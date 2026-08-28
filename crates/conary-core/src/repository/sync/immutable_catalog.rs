@@ -27,9 +27,9 @@ pub struct VerifiedSourceCatalogCandidateV1 {
     pub reader: CatalogReader,
 }
 use crate::repository::parsers::{
-    ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject, ChecksumType,
-    PackageMetadata, RepositorySnapshotSink, SnapshotPackageIdentity, SnapshotPackageJoin,
-    SnapshotProvideUpdate,
+    ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject,
+    AuthenticatedProjectionInputV1, ChecksumType, PackageMetadata, RepositorySnapshotSink,
+    SnapshotPackageIdentity, SnapshotPackageJoin, SnapshotProvideUpdate,
 };
 
 use super::types::{RepositorySyncSnapshot, SyncedPackageRow};
@@ -144,7 +144,7 @@ struct NativeCatalogSnapshotSink {
     projection_cache: Option<super::projection_cache::ProjectionCache>,
     cache_inputs: Option<(
         AuthenticatedSnapshotIdentity,
-        Vec<AuthenticatedMetadataObject>,
+        Vec<AuthenticatedProjectionInputV1>,
     )>,
     cached_reader: Option<CatalogReader>,
     work_leases: Vec<Box<dyn Send>>,
@@ -271,12 +271,16 @@ impl NativeCatalogSnapshotSink {
         let (binding, reader) = match (writer, cached_reader) {
             (Some(writer), None) => writer.finish_verified(evidence)?,
             (None, Some(reader)) => {
-                let (cached_snapshot, cached_objects) = cache_inputs.as_ref().ok_or_else(|| {
+                let (cached_snapshot, cached_inputs) = cache_inputs.as_ref().ok_or_else(|| {
                     Error::InternalError(
                         "materialized native projection has no exact cache inputs".to_string(),
                     )
                 })?;
-                if cached_snapshot != &snapshot || cached_objects != &authenticated_objects {
+                let cached_objects = cached_inputs
+                    .iter()
+                    .map(|input| input.object.clone())
+                    .collect::<Vec<_>>();
+                if cached_snapshot != &snapshot || cached_objects != authenticated_objects {
                     return Err(Error::ConflictError(
                         "materialized native projection evidence changed after cache lookup"
                             .to_string(),
@@ -296,16 +300,10 @@ impl NativeCatalogSnapshotSink {
             }
         };
         if !reused_cache
-            && let (Some(cache), Some((cache_snapshot, cache_objects))) =
+            && let (Some(cache), Some((_cache_snapshot, cache_inputs))) =
                 (projection_cache, cache_inputs)
         {
-            cache.publish_verified(
-                &cache_snapshot,
-                &cache_objects,
-                &binding,
-                &candidate_path,
-                &reader,
-            )?;
+            cache.publish_verified(&cache_inputs, &binding, &candidate_path, &reader)?;
         }
         let authority = source_catalog_authority(repo, snapshot, authenticated_objects)?;
         let manifest =
@@ -414,19 +412,20 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
     fn reuse_cached_projection(
         &mut self,
         snapshot: &AuthenticatedSnapshotIdentity,
-        objects: &[AuthenticatedMetadataObject],
+        inputs: &[AuthenticatedProjectionInputV1],
     ) -> Result<bool> {
-        let mut cache_objects = objects.to_vec();
-        cache_objects.sort_by(|left, right| {
-            left.role
-                .cmp(&right.role)
-                .then_with(|| left.source_path.cmp(&right.source_path))
+        let mut cache_inputs = inputs.to_vec();
+        cache_inputs.sort_by(|left, right| {
+            left.object
+                .role
+                .cmp(&right.object.role)
+                .then_with(|| left.object.source_path.cmp(&right.object.source_path))
         });
-        self.cache_inputs = Some((snapshot.clone(), cache_objects));
+        self.cache_inputs = Some((snapshot.clone(), cache_inputs));
         let Some(cache) = &self.projection_cache else {
             return Ok(false);
         };
-        let Some(reader) = cache.lookup(snapshot, objects)? else {
+        let Some(reader) = cache.lookup(inputs)? else {
             return Ok(false);
         };
         if reader.binding().scope != self.scope {

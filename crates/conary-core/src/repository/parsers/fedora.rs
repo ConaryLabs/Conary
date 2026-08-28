@@ -14,8 +14,9 @@
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
-    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
-    ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedProjectionInputV1,
+    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{
@@ -800,6 +801,8 @@ impl RepositoryParser for FedoraParser {
         let (primary_url, primary_path, primary_object) = self
             .download_primary_xml(repo_url, &repomd.primary, sink.work_directory())
             .await?;
+        let primary_compressed = common::metadata_file_is_compressed(&primary_path)?;
+        let primary_open_size = repomd.primary.authenticated_open_size(primary_compressed)?;
         let filelists_download = if let Some(record) = repomd.filelists.as_ref() {
             let (url, path, identity) = self
                 .download_verified_document(
@@ -821,11 +824,21 @@ impl RepositoryParser for FedoraParser {
         } else {
             None
         };
-        let mut objects = vec![primary_object.clone()];
-        if let Some((_, _, object, _)) = &filelists_download {
-            objects.push(object.clone());
+        let mut projection_inputs = vec![
+            AuthenticatedProjectionInputV1::with_authenticated_decoded_size(
+                primary_object.clone(),
+                primary_open_size,
+            ),
+        ];
+        if let Some((_, _, object, open_size)) = &filelists_download {
+            projection_inputs.push(
+                AuthenticatedProjectionInputV1::with_authenticated_decoded_size(
+                    object.clone(),
+                    *open_size,
+                ),
+            );
         }
-        if sink.reuse_cached_projection(&snapshot, &objects)? {
+        if sink.reuse_cached_projection(&snapshot, &projection_inputs)? {
             sink.authenticated_object(primary_object, &primary_path)?;
             if let Some((_, path, object, _)) = filelists_download {
                 sink.authenticated_object(object, &path)?;
@@ -835,8 +848,6 @@ impl RepositoryParser for FedoraParser {
         }
 
         // Parse primary.xml one package at a time.
-        let compressed = common::metadata_file_is_compressed(&primary_path)?;
-        let open_size = repomd.primary.authenticated_open_size(compressed)?;
         if sink.requires_source_candidate_preflight() {
             let decoder = common::open_metadata_decoder(
                 &primary_path,
@@ -844,15 +855,19 @@ impl RepositoryParser for FedoraParser {
             )?;
             let mut reader = std::io::BufReader::with_capacity(
                 256 * 1024,
-                common::AuthenticatedLengthReader::new(decoder, open_size, "RPM primary metadata"),
+                common::AuthenticatedLengthReader::new(
+                    decoder,
+                    primary_open_size,
+                    "RPM primary metadata",
+                ),
             );
             self.parse_primary_reader(&mut reader, repo_url, |package| {
                 sink.preflight_package(package)
             })?;
             let decoded = reader.get_ref().read_bytes();
-            if decoded != open_size {
+            if decoded != primary_open_size {
                 return Err(Error::GpgVerificationFailed(format!(
-                    "signed repomd.xml authenticates primary metadata as {open_size} decompressed bytes but {primary_url} decoded to {decoded} bytes"
+                    "signed repomd.xml authenticates primary metadata as {primary_open_size} decompressed bytes but {primary_url} decoded to {decoded} bytes"
                 )));
             }
             if let Some((filelists_url, filelists_path, _, filelists_open_size)) =
@@ -874,14 +889,18 @@ impl RepositoryParser for FedoraParser {
             )?;
             let mut reader = std::io::BufReader::with_capacity(
                 256 * 1024,
-                common::AuthenticatedLengthReader::new(decoder, open_size, "RPM primary metadata"),
+                common::AuthenticatedLengthReader::new(
+                    decoder,
+                    primary_open_size,
+                    "RPM primary metadata",
+                ),
             );
             let package_count =
                 self.parse_primary_reader(&mut reader, repo_url, |package| sink.package(package))?;
             let decoded = reader.get_ref().read_bytes();
-            if decoded != open_size {
+            if decoded != primary_open_size {
                 return Err(Error::GpgVerificationFailed(format!(
-                    "signed repomd.xml authenticates primary metadata as {open_size} decompressed bytes but {primary_url} decoded to {decoded} bytes"
+                    "signed repomd.xml authenticates primary metadata as {primary_open_size} decompressed bytes but {primary_url} decoded to {decoded} bytes"
                 )));
             }
             package_count

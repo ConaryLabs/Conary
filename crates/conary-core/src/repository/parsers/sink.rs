@@ -5,6 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{Error, Result};
 
 use super::{
@@ -18,6 +20,35 @@ use crate::repository::dependency_model::{RepositoryProvide, RepositoryRequireme
 
 /// Normalized parser projection and sink schema version used in cache keys.
 pub const REPOSITORY_SNAPSHOT_PROJECTION_VERSION: u32 = 2;
+
+/// Exact authenticated bytes and root-derived bounds that affect one native
+/// parser projection. Root fields that do not affect normalized output are not
+/// part of this identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticatedProjectionInputV1 {
+    pub object: AuthenticatedMetadataObject,
+    pub authenticated_decoded_size: Option<u64>,
+}
+
+impl AuthenticatedProjectionInputV1 {
+    pub fn exact_object(object: AuthenticatedMetadataObject) -> Self {
+        Self {
+            object,
+            authenticated_decoded_size: None,
+        }
+    }
+
+    pub fn with_authenticated_decoded_size(
+        object: AuthenticatedMetadataObject,
+        authenticated_decoded_size: u64,
+    ) -> Self {
+        Self {
+            object,
+            authenticated_decoded_size: Some(authenticated_decoded_size),
+        }
+    }
+}
 
 /// Exact parser-level identity used to join authenticated child projections.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,12 +156,14 @@ pub trait RepositorySnapshotSink {
         source: &Path,
     ) -> Result<()>;
 
-    /// Reuse a strict normalized projection when every authenticated input and
-    /// the exact source binding match. The default sink has no cache.
+    /// Reuse a strict normalized projection when every projection-affecting
+    /// authenticated child and the exact source binding match. The separately
+    /// authenticated root remains current source-manifest authority. The
+    /// default sink has no cache.
     fn reuse_cached_projection(
         &mut self,
         _snapshot: &AuthenticatedSnapshotIdentity,
-        _objects: &[AuthenticatedMetadataObject],
+        _inputs: &[AuthenticatedProjectionInputV1],
     ) -> Result<bool> {
         Ok(false)
     }

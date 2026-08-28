@@ -7,8 +7,8 @@
 
 use super::{
     ArchPackageFragmentKind, AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole,
-    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
-    RepositorySnapshotSink,
+    AuthenticatedProjectionInputV1, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
+    RepositoryParser, RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
 use crate::repository::catalog::{CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1};
@@ -426,7 +426,9 @@ impl RepositoryParser for ArchParser {
         let (database_file, snapshot, database_object) = self
             .download_database(repo_url, &work_directory, scratch_admission.as_ref())
             .await?;
-        if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&database_object))? {
+        let projection_input =
+            AuthenticatedProjectionInputV1::exact_object(database_object.clone());
+        if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&projection_input))? {
             sink.authenticated_object(database_object, &database_file)?;
             info!("Reused cached Arch repository projection");
             return Ok(snapshot);

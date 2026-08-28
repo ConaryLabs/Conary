@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-26
-revision: 52
-summary: Document typed profile support tiers and complete membership, signed Remi universe and canonical-map authority, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+last_updated: 2026-08-28
+revision: 53
+summary: Document typed profile support tiers and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -313,11 +313,13 @@ required state, and composed package
 catalog for the public profile. Candidate construction is private; durable
 content-addressed publication precedes one fenced active-pointer transaction.
 An exact normalized projection cache can bypass native parsing only when the
-stream binding, authenticated root, every child role and digest, parser
-projection version, and catalog schema all match. Its verified catalog is
-replayed as normalized package and relation rows through the same bounded
-candidate writer; cache contents never
-replace the immutable source manifest or active profile pointer as authority.
+stream binding, every authenticated child role/path/digest/size, every typed
+root-derived parser bound, parser projection version, and catalog schema all
+match. The freshly authenticated top-level root remains bound into the new
+immutable source manifest, but wrapper-only signature or timestamp churn does
+not change normalized catalog bytes. Cache hits materialize the independently
+reopened exact catalog artifact without row replay; cache contents never replace
+the immutable source manifest or active profile pointer as authority.
 Catalog source/profile/repository IDs remain bounded printable ASCII. Typed
 native capability names preserve exact upstream UTF-8, including non-ASCII
 RPM provides and significant surrounding whitespace in file/path capabilities;

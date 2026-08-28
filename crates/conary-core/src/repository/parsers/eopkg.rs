@@ -3,8 +3,8 @@
 //! Authenticated Solus eopkg repository-index parser.
 
 use super::{
-    AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
-    RepositoryParser, RepositorySnapshotSink,
+    AuthenticatedMetadataObjectRole, AuthenticatedProjectionInputV1, AuthenticatedSnapshotIdentity,
+    ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
 use crate::packages::eopkg::xml;
@@ -85,7 +85,8 @@ impl RepositoryParser for EopkgParser {
             )));
         }
         let snapshot = AuthenticatedSnapshotIdentity::from_download(&download)?;
-        if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&index_object))? {
+        let projection_input = AuthenticatedProjectionInputV1::exact_object(index_object.clone());
+        if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&projection_input))? {
             sink.authenticated_object(index_object, &index_path)?;
             return Ok(snapshot);
         }
