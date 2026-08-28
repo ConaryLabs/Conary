@@ -16,10 +16,13 @@ pub(in crate::repository) use bundle::retain_source_metadata_object;
 pub use bundle::{
     CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, PublishedCatalogBundle,
     SOURCE_METADATA_DIRECTORY_NAME, publish_profile_catalog_bundle,
-    publish_profile_catalog_bundle_with_provenance, publish_source_catalog_bundle,
+    publish_profile_catalog_bundle_verified, publish_profile_catalog_bundle_with_provenance,
+    publish_source_catalog_bundle, publish_source_catalog_bundle_verified,
     publish_source_catalog_bundle_with_provenance, source_metadata_object_path,
-    verify_profile_catalog_bundle, verify_source_catalog_bundle, write_profile_catalog_manifest,
-    write_source_catalog_manifest,
+    verify_profile_catalog_bundle, verify_registered_profile_catalog_bundle,
+    verify_source_catalog_bundle, write_profile_catalog_manifest,
+    write_profile_catalog_manifest_verified, write_source_catalog_manifest,
+    write_source_catalog_manifest_verified,
 };
 pub use candidate::CatalogCandidateWriter;
 pub use capacity::{
@@ -75,8 +78,10 @@ pub use parity::{
     produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
 };
 pub use profile::{
-    ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, derive_profile_catalog_members,
-    write_profile_catalog_candidate, write_profile_catalog_candidate_with_scratch_admission,
+    ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, VerifiedProfileCatalogCandidateV2,
+    derive_profile_catalog_members, write_profile_catalog_candidate,
+    write_profile_catalog_candidate_verified_with_scratch_admission,
+    write_profile_catalog_candidate_with_scratch_admission,
 };
 pub use record::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
@@ -84,6 +89,11 @@ pub use record::{
     CatalogSourceEvidenceV1, DebianSourcePocketV1,
 };
 pub use source::SourceCatalogCandidateV1;
+#[cfg(test)]
+pub(in crate::repository) use store::logical_verification_passes_for_test;
 pub use store::{
     CatalogBindingV1, CatalogPackageNamePageV1, CatalogReader, write_catalog_candidate,
+};
+pub(in crate::repository) use store::{
+    CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1,
 };

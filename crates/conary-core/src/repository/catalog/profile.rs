@@ -31,6 +31,13 @@ pub struct ProfileCatalogCandidateV2 {
     content: CatalogContentV1,
 }
 
+/// One profile revision paired with the reader that completed its full
+/// logical verification in this process.
+pub struct VerifiedProfileCatalogCandidateV2 {
+    pub manifest: ProfileRevisionV2,
+    pub reader: CatalogReader,
+}
+
 impl ProfileCatalogCandidateV2 {
     pub fn compose(
         profile: impl Into<String>,
@@ -109,7 +116,14 @@ pub fn write_profile_catalog_candidate(
     projection_version: u32,
     inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
 ) -> Result<ProfileRevisionV2> {
-    write_profile_catalog_candidate_inner(path.as_ref(), profile, projection_version, inputs, None)
+    Ok(write_profile_catalog_candidate_inner(
+        path.as_ref(),
+        profile,
+        projection_version,
+        inputs,
+        None,
+    )?
+    .manifest)
 }
 
 /// Compose a profile candidate with typed SQLite finalization admission.
@@ -120,6 +134,25 @@ pub fn write_profile_catalog_candidate_with_scratch_admission(
     inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
     scratch_admission: Arc<dyn super::CatalogScratchAdmission>,
 ) -> Result<ProfileRevisionV2> {
+    Ok(write_profile_catalog_candidate_inner(
+        path.as_ref(),
+        profile,
+        projection_version,
+        inputs,
+        Some(scratch_admission),
+    )?
+    .manifest)
+}
+
+/// Compose an admitted profile candidate while retaining its complete logical
+/// verification for immediate manifesting and publication.
+pub fn write_profile_catalog_candidate_verified_with_scratch_admission(
+    path: impl AsRef<std::path::Path>,
+    profile: impl Into<String>,
+    projection_version: u32,
+    inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
+    scratch_admission: Arc<dyn super::CatalogScratchAdmission>,
+) -> Result<VerifiedProfileCatalogCandidateV2> {
     write_profile_catalog_candidate_inner(
         path.as_ref(),
         profile,
@@ -151,7 +184,7 @@ fn write_profile_catalog_candidate_inner(
     projection_version: u32,
     inputs: Vec<ProfileCatalogMemberInputV2<'_>>,
     scratch_admission: Option<Arc<dyn super::CatalogScratchAdmission>>,
-) -> Result<ProfileRevisionV2> {
+) -> Result<VerifiedProfileCatalogCandidateV2> {
     let profile = profile.into();
     let scope = CatalogScopeV1::Profile {
         profile: profile.clone(),
@@ -179,8 +212,9 @@ fn write_profile_catalog_candidate_inner(
             )
         },
     )?;
-    let binding = writer.finish(evidence)?;
-    bind_profile_revision(profile, projection_version, members, &binding)
+    let (binding, reader) = writer.finish_verified(evidence)?;
+    let manifest = bind_profile_revision(profile, projection_version, members, &binding)?;
+    Ok(VerifiedProfileCatalogCandidateV2 { manifest, reader })
 }
 
 fn profile_candidate_scratch(
