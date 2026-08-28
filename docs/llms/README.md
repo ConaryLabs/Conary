@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-20
-revision: 18
-summary: Lean vendor-neutral assistant routing into canonical Conary owners and task-sized proof packets
+last_updated: 2026-08-28
+revision: 19
+summary: Lean vendor-neutral assistant routing into canonical Conary owners, task-sized proof packets, and a shared compiler cache with isolated worktree targets
 ---
 
 # Conary For Coding Assistants
@@ -26,7 +26,9 @@ bash scripts/agent-context.sh --path <file> --brief
 The packet names the owning files, neighboring systems, focused proof,
 interaction gate, documentation owner, and safety invariants. Read those files
 before editing. Use `--run focused` for a narrow change; use `--run gate` only
-when the packet's interaction condition applies.
+when the packet's interaction condition applies. Both execution modes consume
+`scripts/dev-build.sh`, which shares eligible compiler outputs across linked
+worktrees without sharing their Cargo target directories.
 
 ## Context Budget
 
@@ -101,6 +103,10 @@ stay in ignored local files.
 - For broad refactor planning, use `scripts/line-count-report.sh` and
   `scripts/maintainability-drift-report.sh` as evidence aids, not replacement
   owners or automatic failure gates.
+- Use `scripts/dev-build.sh cargo -- <cargo arguments>` for repeated local
+  builds, and `scripts/dev-build.sh status` to inspect the shared compiler
+  cache. Caller-selected wrappers, cache locations, and Cargo targets retain
+  precedence; cache cleanup never owns a worktree target.
 - When tool, SDK, model, or harness behavior matters, verify current official
   vendor documentation before changing durable guidance.
 
