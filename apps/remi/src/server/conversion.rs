@@ -17,10 +17,10 @@ mod workflow;
 
 use crate::server::catalog_authority::CatalogAuthority;
 use crate::server::database_writer::DatabaseWriter;
+use crate::server::publication_coordinator::PublicationCoordinator;
 use crate::server::{BoundedCache, R2Store};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 pub use types::{
     CONVERSION_BENCHMARK_SCHEMA_V1, ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence,
     ConversionBenchmarkSample, ConversionBenchmarkSampleClass, ScriptletPackageMetadata,
@@ -49,7 +49,7 @@ pub struct ConversionService {
     /// Shared owner for the short SQLite mutation phases of conversion work.
     database_writer: DatabaseWriter,
     /// Shared owner for complete repository publication operations.
-    publication_coordinator: Arc<Mutex<()>>,
+    publication_coordinator: Arc<PublicationCoordinator>,
 }
 
 impl ConversionService {
@@ -68,7 +68,7 @@ impl ConversionService {
             bounded_cache: None,
             repository_keys_dir: None,
             database_writer: DatabaseWriter::default(),
-            publication_coordinator: Arc::new(Mutex::new(())),
+            publication_coordinator: Arc::new(PublicationCoordinator::default()),
         }
     }
 
@@ -86,7 +86,7 @@ impl ConversionService {
 
     pub(crate) fn with_publication_coordinator(
         mut self,
-        publication_coordinator: Arc<Mutex<()>>,
+        publication_coordinator: Arc<PublicationCoordinator>,
     ) -> Self {
         self.publication_coordinator = publication_coordinator;
         self

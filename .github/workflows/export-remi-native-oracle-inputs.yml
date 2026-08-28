@@ -101,7 +101,7 @@ jobs:
           jq -e \
             --arg commit "$DEPLOYED_COMMIT_SHA" '
               . as $inspection
-              | .deployment_evidence_schema_version == 2
+              | .deployment_evidence_schema_version == 3
               and .inspection_available == true
               and .deployment.commit_sha == $commit
               and (.deployment.binary_sha256 | test("^[0-9a-f]{64}$"))
@@ -109,6 +109,9 @@ jobs:
               and .deployment.outcome == "complete"
               and .deployment.failure_phase == null
               and (.deployment.transition_completed_at | type == "number")
+              and (.deployment.repository_refreshes | type == "array")
+              and (.deployment.repository_refreshes | length) >= 1
+              and .deployment.repository_refreshes[0].scope == {kind: "all"}
               and (.candidates | map(.profile))
                 == ["fedora-44", "ubuntu-26.04", "arch"]
               and all(.candidates[];
@@ -120,9 +123,15 @@ jobs:
                 and .configured_sources > 0
                 and .latest_refresh.run_id == .run_id
                 and .latest_refresh.state == "candidate"
+                and (.latest_refresh.started_at | type == "number")
                 and (.latest_refresh.finished_at | type == "number")
-                and (.latest_refresh.started_at
-                  > $inspection.deployment.transition_completed_at))
+                and (.latest_refresh.finished_at
+                  > $inspection.deployment.transition_completed_at)
+                and (. as $candidate
+                  | any($inspection.deployment.repository_refreshes[];
+                      (.successful_profiles | index($candidate.profile)) != null
+                      and $candidate.latest_refresh.started_at >= .started_at
+                      and $candidate.latest_refresh.finished_at <= .finished_at)))
             ' "$inspection" >/dev/null || {
               echo "deployment evidence does not prove one exact complete private candidate set" >&2
               exit 1

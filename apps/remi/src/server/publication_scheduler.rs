@@ -18,6 +18,7 @@ use tokio::time::Instant;
 use crate::server::admin_service::{self, RepoRefreshBatch, RepoRefreshBatchState};
 use crate::server::canonical_fetch::{self, CanonicalCycleReport, CanonicalCycleState};
 use crate::server::config::CanonicalSection;
+use crate::server::publication_coordinator::{RepositoryRefreshAdmission, RepositoryRefreshScope};
 use crate::server::readiness::PublicationPhaseState;
 use crate::server::{ConversionService, PrewarmConfig, ServerState, prewarm};
 
@@ -87,8 +88,17 @@ where
     CanonicalFuture: Future<Output = CanonicalCycleReport>,
 {
     let coordinator = state.read().await.publication_coordinator.clone();
-    let _publication_guard = coordinator.lock_owned().await;
+    let RepositoryRefreshAdmission::Execute(permit) = coordinator
+        .admit_repository_refresh(RepositoryRefreshScope::All, false, None)
+        .await
+    else {
+        unreachable!("background refreshes never provide a coalescing floor")
+    };
     let refresh_output = refresh.await;
+    let _publication_guard = match refresh_output.as_ref() {
+        Some(batch) => permit.complete(batch.clone()).0,
+        None => permit.fail(),
+    };
     let canonical_output = canonical().await;
     record_repository_readiness(state, refresh_output.as_ref()).await;
     record_canonical_readiness(state, &canonical_output).await;
@@ -97,8 +107,17 @@ where
 
 async fn refresh_repositories(state: &Arc<RwLock<ServerState>>) -> Option<RepoRefreshBatch> {
     let coordinator = state.read().await.publication_coordinator.clone();
-    let _publication_guard = coordinator.lock_owned().await;
+    let RepositoryRefreshAdmission::Execute(permit) = coordinator
+        .admit_repository_refresh(RepositoryRefreshScope::All, false, None)
+        .await
+    else {
+        unreachable!("background refreshes never provide a coalescing floor")
+    };
     let batch = refresh_repositories_uncoordinated(state).await;
+    let _publication_guard = match batch.as_ref() {
+        Some(batch) => permit.complete(batch.clone()).0,
+        None => permit.fail(),
+    };
     record_repository_readiness(state, batch.as_ref()).await;
     batch
 }

@@ -9,7 +9,8 @@ use super::ServiceError;
 
 mod operations;
 pub(crate) use operations::refresh_repositories_uncoordinated;
-pub use operations::{refresh_profile_repositories, refresh_repositories, sync_repo};
+pub use operations::sync_repo;
+pub(crate) use operations::{refresh_profile_repositories, refresh_repositories};
 
 /// Result of one successful repository metadata refresh.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -90,7 +91,7 @@ impl RepoRefreshBatchState {
 }
 
 /// Typed per-source outcomes for one multi-repository refresh.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RepoRefreshBatch {
     pub results: Vec<RepoRefreshResult>,
     pub failures: Vec<RepoRefreshFailure>,
@@ -446,9 +447,10 @@ mod tests {
             crate::server::ServerState::new(config).expect("build server state"),
         ));
 
-        let batch = super::super::refresh_repositories(&state, false)
+        let execution = super::super::refresh_repositories(&state, false, None)
             .await
             .expect("enumerate configured sources");
+        let batch = execution.batch;
         assert_eq!(batch.state(), RepoRefreshBatchState::Partial);
         assert_eq!(batch.results.len(), 1);
         assert_eq!(batch.results[0].name, "current-fedora");
@@ -528,9 +530,10 @@ mod tests {
             crate::server::ServerState::new(config).expect("build server state"),
         ));
 
-        let batch = super::super::refresh_repositories(&state, true)
+        let execution = super::super::refresh_repositories(&state, true, None)
             .await
             .expect("collect failed profile refresh");
+        let batch = execution.batch;
         assert_eq!(batch.state(), RepoRefreshBatchState::Failed);
         assert!(batch.results.is_empty());
         assert_eq!(batch.failures.len(), 2);
@@ -620,9 +623,10 @@ mod tests {
             })
             .expect("build server state"),
         ));
-        let batch = super::super::refresh_repositories(&state, false)
+        let execution = super::super::refresh_repositories(&state, false, None)
             .await
             .expect("reconcile empty active profile");
+        let batch = execution.batch;
         assert_eq!(batch.state(), RepoRefreshBatchState::Complete);
 
         let conn = conary_core::db::open_fast(&db_path).expect("reopen operational database");

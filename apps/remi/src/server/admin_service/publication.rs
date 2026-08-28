@@ -49,7 +49,7 @@ pub(super) fn staged_profile_intent(
 
 pub(super) async fn guard(state: &Arc<RwLock<ServerState>>) -> OwnedMutexGuard<()> {
     let coordinator = state.read().await.publication_coordinator.clone();
-    coordinator.lock_owned().await
+    coordinator.lock_repository_mutation_owned().await
 }
 
 pub(super) async fn record_single_repository_outcome(

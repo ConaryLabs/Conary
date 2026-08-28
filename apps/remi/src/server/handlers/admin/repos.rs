@@ -11,8 +11,7 @@ use tokio::sync::RwLock;
 
 use crate::server::ServerState;
 use crate::server::admin_service::{
-    self, CreateRepoInput, NativeSourcePolicyInput, RepoRefreshBatch, RepoRefreshBatchState,
-    UpdateRepoInput,
+    self, CreateRepoInput, NativeSourcePolicyInput, UpdateRepoInput,
 };
 use crate::server::auth::{Scope, TokenScopes, json_error};
 use conary_core::db::models::RepositoryOwnership;
@@ -112,14 +111,11 @@ pub struct RepoResponse {
     pub native_source: Option<NativeSourcePolicyResponse>,
 }
 
-/// Query parameters for refresh endpoints.
+/// Query parameters for one exact repository sync.
 #[derive(Debug, Deserialize)]
-pub struct RefreshQuery {
+pub struct SyncQuery {
     #[serde(default)]
     pub force: bool,
-    /// Restrict a retry to one exact configured native source profile.
-    #[serde(default)]
-    pub profile: Option<String>,
 }
 
 impl TryFrom<conary_core::db::models::Repository> for RepoResponse {
@@ -423,7 +419,7 @@ pub async fn delete_repo(
 pub async fn sync_repo(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(name): Path<String>,
-    Query(query): Query<RefreshQuery>,
+    Query(query): Query<SyncQuery>,
     scopes: Option<axum::Extension<TokenScopes>>,
 ) -> Response {
     if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
@@ -464,96 +460,12 @@ pub async fn sync_repo(
     }
 }
 
-/// POST /v1/admin/refresh
-///
-/// Synchronize enabled repositories, optionally restricting work to one exact
-/// native source profile. Fresh repositories are skipped unless `force=true`.
-/// Requires the "repos:write" scope.
-pub async fn refresh_repos(
-    State(state): State<Arc<RwLock<ServerState>>>,
-    Query(query): Query<RefreshQuery>,
-    scopes: Option<axum::Extension<TokenScopes>>,
-) -> Response {
-    if let Some(err) = check_scope(&scopes, Scope::ReposWrite) {
-        return err;
-    }
-
-    let result = match query.profile.as_deref() {
-        Some(profile) => {
-            admin_service::refresh_profile_repositories(&state, profile, query.force).await
-        }
-        None => admin_service::refresh_repositories(&state, query.force).await,
-    };
-    match result {
-        Ok(batch) => {
-            refresh_batch_response(&state, query.force, query.profile.as_deref(), batch).await
-        }
-        Err(e) => {
-            tracing::error!("Failed to refresh repositories: {e}");
-            json_error(500, "Failed to refresh repositories", "INTERNAL_ERROR")
-        }
-    }
-}
-
-/// Publish and render the one canonical multi-source refresh result.
-pub(crate) async fn refresh_batch_response(
-    state: &Arc<RwLock<ServerState>>,
-    force: bool,
-    profile: Option<&str>,
-    batch: RepoRefreshBatch,
-) -> Response {
-    let batch_state = batch.state();
-    let synced = batch.synced_count();
-    let skipped = batch.skipped_count();
-    let failed = batch.failures.len();
-    let status_code = refresh_status_code(batch_state);
-
-    {
-        let guard = state.read().await;
-        guard.publish_event(
-            "repos.refreshed",
-            serde_json::json!({
-                "force": force,
-                "profile": profile,
-                "state": batch_state,
-                "synced": synced,
-                "skipped": skipped,
-                "failed": failed,
-            }),
-        );
-    }
-
-    (
-        status_code,
-        Json(serde_json::json!({
-            "status": batch_state.as_str(),
-            "force": force,
-            "profile": profile,
-            "synced": synced,
-            "skipped": skipped,
-            "failed": failed,
-            "results": batch.results,
-            "failures": batch.failures,
-        })),
-    )
-        .into_response()
-}
-
-fn refresh_status_code(batch_state: RepoRefreshBatchState) -> StatusCode {
-    match batch_state {
-        RepoRefreshBatchState::Complete => StatusCode::OK,
-        RepoRefreshBatchState::Partial => StatusCode::MULTI_STATUS,
-        RepoRefreshBatchState::Failed => StatusCode::BAD_GATEWAY,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
     use tower::ServiceExt;
 
     use super::super::test_helpers::{rebuild_app, test_app, test_app_with_database_writer};
-    use super::{RepoRefreshBatchState, refresh_status_code};
 
     #[tokio::test]
     async fn test_repo_crud_lifecycle() {
@@ -843,49 +755,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_refresh_repos_empty_ok() {
-        let (app, _db_path) = test_app().await;
-
-        let resp = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/v1/admin/refresh")
-                    .header("Authorization", "Bearer test-admin-token-12345")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body["status"], "complete");
-        assert_eq!(body["synced"], 0);
-        assert_eq!(body["skipped"], 0);
-        assert_eq!(body["failed"], 0);
-    }
-
-    #[test]
-    fn refresh_batch_state_has_distinct_http_outcomes() {
-        assert_eq!(
-            refresh_status_code(RepoRefreshBatchState::Complete),
-            StatusCode::OK
-        );
-        assert_eq!(
-            refresh_status_code(RepoRefreshBatchState::Partial),
-            StatusCode::MULTI_STATUS
-        );
-        assert_eq!(
-            refresh_status_code(RepoRefreshBatchState::Failed),
-            StatusCode::BAD_GATEWAY
-        );
     }
 
     #[tokio::test]
