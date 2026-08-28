@@ -138,6 +138,28 @@ impl CatalogAuthority {
         })
     }
 
+    /// Inspect one exact registered revision without opening or hashing its
+    /// catalog contents. Callers may use these bounded facts to decide whether
+    /// a full independently reopened bundle is eligible for immutable reuse.
+    pub(crate) fn inspect_selected_profile(
+        &self,
+        selection: &ProfileRevisionSelection,
+    ) -> Result<SelectedProfileInspection> {
+        let flags =
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(&self.db_path, flags).with_context(|| {
+            format!(
+                "open Remi operational database to inspect profile '{}' revision {}",
+                selection.source_profile, selection.profile_revision_sha256
+            )
+        })?;
+        let resolved = resolve_profile_selection(&conn, &self.catalog_dir, selection.clone())?;
+        inspect_resolved_profile_files(&resolved)?;
+        Ok(SelectedProfileInspection {
+            manifest: resolved.manifest,
+        })
+    }
+
     /// Independently reopen one exact registered revision without granting it
     /// active authority.
     pub(crate) fn verify_selected_profile(

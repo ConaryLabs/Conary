@@ -434,6 +434,31 @@ fn profile_composition_uses_explicit_member_order_and_binds_exact_content() {
         "fedora-updates-x86_64"
     );
 
+    let identity_only_members = derive_profile_catalog_members(
+        "fedora-44",
+        1,
+        vec![
+            ProfileCatalogMemberInputV2 {
+                ordinal: 1,
+                role: ProfileSourceRole::Updates,
+                precedence: 20,
+                required: true,
+                manifest: &second_manifest,
+                reader: &second_reader,
+            },
+            ProfileCatalogMemberInputV2 {
+                ordinal: 0,
+                role: ProfileSourceRole::Base,
+                precedence: 10,
+                required: true,
+                manifest: &first_manifest,
+                reader: &first_reader,
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(identity_only_members, forward.members());
+
     let profile_path = directory.path().join("profile.sqlite");
     let profile_binding = write_catalog_candidate(&profile_path, forward.content()).unwrap();
     let revision = forward.bind(&profile_binding).unwrap();
