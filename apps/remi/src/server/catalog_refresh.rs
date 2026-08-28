@@ -75,7 +75,7 @@ pub struct StagedProfileSources {
 enum StagedProfileArtifact {
     Candidate {
         directory: PathBuf,
-        verification: CatalogReader,
+        verification: Box<CatalogReader>,
     },
     Reused(Box<PinnedProfileCatalog>),
 }
@@ -416,7 +416,7 @@ fn stage_profile_candidate(
                 manifest,
                 StagedProfileArtifact::Candidate {
                     directory: profile_candidate_directory,
-                    verification,
+                    verification: Box::new(verification),
                 },
             )
         }
