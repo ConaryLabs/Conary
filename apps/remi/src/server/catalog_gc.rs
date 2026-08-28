@@ -13,7 +13,9 @@ use conary_core::db::models::{
     RemiCatalogRunCandidate, acknowledge_catalog_deletion, delete_catalog_collection,
     plan_catalog_collection,
 };
-use conary_core::repository::catalog::{CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME};
+use conary_core::repository::catalog::{
+    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, SOURCE_METADATA_DIRECTORY_NAME,
+};
 use conary_core::repository::{
     acknowledge_profile_sync_candidate_cleanup, recover_expired_profile_sync_runs,
 };
@@ -307,7 +309,7 @@ fn remove_exact_bundle(
             path.display()
         );
     }
-    validate_exact_bundle_layout(&path)?;
+    validate_exact_bundle_layout(&path, kind)?;
     if fs::symlink_metadata(&tombstone).is_ok() {
         bail!(
             "catalog deletion target {} and tombstone {} both exist",
@@ -399,7 +401,7 @@ fn require_digest(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_exact_bundle_layout(path: &Path) -> Result<()> {
+fn validate_exact_bundle_layout(path: &Path, kind: RemiCatalogResourceKind) -> Result<()> {
     let mut names = fs::read_dir(path)?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -408,6 +410,9 @@ fn validate_exact_bundle_layout(path: &Path) -> Result<()> {
         std::ffi::OsString::from(CATALOG_FILE_NAME),
         std::ffi::OsString::from(CATALOG_MANIFEST_FILE_NAME),
     ];
+    if kind == RemiCatalogResourceKind::SourceSnapshot {
+        expected.push(std::ffi::OsString::from(SOURCE_METADATA_DIRECTORY_NAME));
+    }
     expected.sort();
     if names != expected {
         bail!(
@@ -415,13 +420,36 @@ fn validate_exact_bundle_layout(path: &Path) -> Result<()> {
             path.display()
         );
     }
-    for name in &expected {
+    for name in [CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME] {
         let child = path.join(name);
         let child_metadata = fs::symlink_metadata(&child)?;
         if child_metadata.file_type().is_symlink() || !child_metadata.file_type().is_file() {
             bail!(
                 "catalog deletion target child {} is not a regular file",
                 child.display()
+            );
+        }
+    }
+    if kind == RemiCatalogResourceKind::SourceSnapshot {
+        validate_source_metadata_layout(&path.join(SOURCE_METADATA_DIRECTORY_NAME))?;
+    }
+    Ok(())
+}
+
+fn validate_source_metadata_layout(path: &Path) -> Result<()> {
+    require_real_directory(path, "source catalog native-metadata directory")?;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("source metadata object has a non-UTF-8 name"))?;
+        require_digest(&name, "source metadata object digest")?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            bail!(
+                "source metadata object {} is not a regular file",
+                entry.path().display()
             );
         }
     }
@@ -517,10 +545,15 @@ mod tests {
         conary_core::hash::sha256(format!("{{\"resource\":\"{byte}\"}}").as_bytes())
     }
 
-    fn exact_bundle(path: &Path) {
+    fn exact_bundle(path: &Path, kind: RemiCatalogResourceKind) {
         fs::create_dir_all(path).unwrap();
         fs::write(path.join(CATALOG_FILE_NAME), b"catalog").unwrap();
         fs::write(path.join(CATALOG_MANIFEST_FILE_NAME), b"manifest").unwrap();
+        if kind == RemiCatalogResourceKind::SourceSnapshot {
+            let metadata = path.join(SOURCE_METADATA_DIRECTORY_NAME);
+            fs::create_dir(&metadata).unwrap();
+            fs::write(metadata.join(digest('e')), b"authenticated metadata").unwrap();
+        }
     }
 
     #[tokio::test]
@@ -580,7 +613,7 @@ mod tests {
             "fedora-44",
             &exact_digest,
         );
-        exact_bundle(&exact);
+        exact_bundle(&exact, RemiCatalogResourceKind::SourceSnapshot);
         assert!(
             remove_exact_bundle(
                 &catalog_root,
@@ -599,7 +632,7 @@ mod tests {
             "fedora-44",
             &malformed_digest,
         );
-        exact_bundle(&malformed);
+        exact_bundle(&malformed, RemiCatalogResourceKind::SourceSnapshot);
         fs::write(malformed.join("unexpected"), b"evidence").unwrap();
         assert!(
             remove_exact_bundle(
@@ -612,11 +645,37 @@ mod tests {
         );
         assert!(malformed.join("unexpected").exists());
 
+        let malformed_metadata_digest = digest('f');
+        let malformed_metadata = bundle_path(
+            &catalog_root,
+            RemiCatalogResourceKind::SourceSnapshot,
+            "fedora-44",
+            &malformed_metadata_digest,
+        );
+        exact_bundle(&malformed_metadata, RemiCatalogResourceKind::SourceSnapshot);
+        fs::write(
+            malformed_metadata
+                .join(SOURCE_METADATA_DIRECTORY_NAME)
+                .join("unexpected"),
+            b"evidence",
+        )
+        .unwrap();
+        assert!(
+            remove_exact_bundle(
+                &catalog_root,
+                RemiCatalogResourceKind::SourceSnapshot,
+                "fedora-44",
+                &malformed_metadata_digest,
+            )
+            .is_err()
+        );
+        assert!(malformed_metadata.exists());
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
             let target = root.path().join("target");
-            exact_bundle(&target);
+            exact_bundle(&target, RemiCatalogResourceKind::SourceSnapshot);
             let linked_digest = digest('c');
             let linked = bundle_path(
                 &catalog_root,
@@ -640,7 +699,7 @@ mod tests {
             fs::create_dir(&redirected_root).unwrap();
             let redirected_digest = digest('d');
             let redirected = redirected_root.join(&redirected_digest);
-            exact_bundle(&redirected);
+            exact_bundle(&redirected, RemiCatalogResourceKind::SourceSnapshot);
             let symlinked_catalog_root = root.path().join("symlinked-parent-catalogs");
             fs::create_dir(&symlinked_catalog_root).unwrap();
             symlink(&redirected_root, symlinked_catalog_root.join("sources")).unwrap();
@@ -669,7 +728,7 @@ mod tests {
             "fedora-44",
             &resource_digest,
         );
-        exact_bundle(&original);
+        exact_bundle(&original, RemiCatalogResourceKind::SourceSnapshot);
         let tombstone_parent = ensure_tombstone_parent(
             &catalog_root,
             RemiCatalogResourceKind::SourceSnapshot,
@@ -740,12 +799,10 @@ mod tests {
                 created_at: 1,
             };
             resource.insert(&conn).unwrap();
-            exact_bundle(&bundle_path(
-                &catalog_root,
+            exact_bundle(
+                &bundle_path(&catalog_root, kind, "fedora-44", &resource.resource_sha256),
                 kind,
-                "fedora-44",
-                &resource.resource_sha256,
-            ));
+            );
         }
         drop(conn);
 
@@ -791,12 +848,15 @@ mod tests {
             created_at: 1,
         };
         resource.insert(&conn).unwrap();
-        exact_bundle(&bundle_path(
-            &catalog_root,
+        exact_bundle(
+            &bundle_path(
+                &catalog_root,
+                resource.kind,
+                &resource.source_profile,
+                &resource.resource_sha256,
+            ),
             resource.kind,
-            &resource.source_profile,
-            &resource.resource_sha256,
-        ));
+        );
         drop(conn);
 
         let coordinator = Arc::new(Mutex::new(()));
@@ -901,8 +961,8 @@ mod tests {
             "fedora-44",
             &source_digest,
         );
-        exact_bundle(&profile_path);
-        exact_bundle(&source_path);
+        exact_bundle(&profile_path, RemiCatalogResourceKind::ProfileRevision);
+        exact_bundle(&source_path, RemiCatalogResourceKind::SourceSnapshot);
 
         let report =
             collect_catalog_garbage_uncoordinated(db_path, catalog_root, DatabaseWriter::default())
