@@ -24,7 +24,7 @@ usage:
   conary-remi-deploy deploy-site <site|web> <staging-dir>
   conary-remi-deploy publish-test-artifact <filename> <sha256> <staged-file>
   conary-remi-deploy install-helper <sha256> <helper>
-  conary-remi-deploy inspect-remi [--require-private-candidates|--require-repopulated]
+  conary-remi-deploy inspect-remi [--require-private-candidates [--accept-candidates-completed-after <unix-seconds>]|--require-repopulated]
   conary-remi-deploy inspect-remi-candidate-baseline <version> <sha256> <bundle.tar.gz>
   conary-remi-deploy inspect-remi-storage
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
@@ -58,6 +58,12 @@ validate_positive_int() {
     local value="$1"
     [[ "$value" =~ ^[0-9]+$ ]] || die "expected positive integer, got: $value"
     (( value >= 1 && value <= 128 )) || die "value out of allowed range 1..128: $value"
+}
+
+validate_positive_timestamp() {
+    local value="$1"
+    [[ "$value" =~ ^[1-9][0-9]{0,17}$ ]] ||
+        die "expected positive Unix timestamp, got: $value"
 }
 
 validate_sha256() {
@@ -515,16 +521,38 @@ install_helper() {
 }
 
 inspect_remi() {
-    local requirement="${1:-}"
-    [[ -z "$requirement" || "$requirement" == "--require-private-candidates" || \
-        "$requirement" == "--require-repopulated" ]] ||
-        die "invalid inspect-remi option: $requirement"
+    local requirement=""
+    local completed_after=""
+    while (( $# > 0 )); do
+        case "$1" in
+            --require-private-candidates|--require-repopulated)
+                [[ -z "$requirement" ]] || die "duplicate inspect-remi requirement"
+                requirement="$1"
+                shift
+                ;;
+            --accept-candidates-completed-after)
+                [[ -z "$completed_after" ]] ||
+                    die "duplicate private-candidate completion floor"
+                (( $# >= 2 )) || die "private-candidate completion floor is missing"
+                validate_positive_timestamp "$2"
+                completed_after="$2"
+                shift 2
+                ;;
+            *) die "invalid inspect-remi option: $1" ;;
+        esac
+    done
+    if [[ -n "$completed_after" && "$requirement" != "--require-private-candidates" ]]; then
+        die "private-candidate completion floor requires --require-private-candidates"
+    fi
     local bin
     bin="$(root_path /usr/local/bin/remi)"
     [[ -f "$bin" && ! -L "$bin" ]] || die "Remi binary is not a plain file: $bin"
     local args=(deployment inspect --config "$(root_path /etc/conary/remi.toml)")
     if [[ -n "$requirement" ]]; then
         args+=("$requirement")
+    fi
+    if [[ -n "$completed_after" ]]; then
+        args+=(--accept-candidates-completed-after "$completed_after")
     fi
     "$bin" "${args[@]}"
 }
@@ -740,8 +768,8 @@ case "${1:-}" in
         install_helper "$2" "$3"
         ;;
     inspect-remi)
-        [[ $# -le 2 ]] || usage
-        inspect_remi "${2:-}"
+        shift
+        inspect_remi "$@"
         ;;
     inspect-remi-candidate-baseline)
         [[ $# -eq 4 ]] || usage

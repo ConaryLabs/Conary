@@ -78,6 +78,11 @@ pub(crate) struct InspectArgs {
     #[arg(long, conflicts_with = "require_repopulated")]
     require_private_candidates: bool,
 
+    /// Reuse each candidate's durable publication proof only when its refresh
+    /// completed strictly after this Unix timestamp.
+    #[arg(long, requires = "require_private_candidates")]
+    accept_candidates_completed_after: Option<i64>,
+
     /// Fail until every active profile has conversions and a matching signed universe.
     #[arg(long, conflicts_with = "require_private_candidates")]
     require_repopulated: bool,
@@ -106,9 +111,19 @@ pub(crate) fn run(command: Command) -> Result<()> {
             println!("{}", baseline.into_pretty_json()?);
         }
         Command::Inspect(args) => {
-            let state = remi::deployment::inspect_state(&args.config)?;
+            let state = match args.accept_candidates_completed_after {
+                Some(completed_after) => remi::deployment::inspect_recent_private_candidate_state(
+                    &args.config,
+                    completed_after,
+                )?,
+                None => remi::deployment::inspect_state(&args.config)?,
+            };
             println!("{}", serde_json::to_string_pretty(&state)?);
-            if args.require_private_candidates && !state.private_candidates_complete() {
+            let private_candidates_complete = args.accept_candidates_completed_after.map_or_else(
+                || state.private_candidates_complete(),
+                |completed_after| state.private_candidates_completed_after(completed_after),
+            );
+            if args.require_private_candidates && !private_candidates_complete {
                 bail!("Remi private profile candidates are not complete");
             }
             if args.require_repopulated && !state.repopulation_complete() {

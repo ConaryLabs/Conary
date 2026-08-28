@@ -1230,6 +1230,14 @@ remi_postdeployment_fencing_fixture() {
       {
         schema_epoch: "conary-current-v1",
         schema_revision: $schema_revision,
+        candidate_verification: {
+          mode: "publication_attested",
+          completed_after: 20,
+          elapsed_micros: 1000,
+          catalog_files_reopened: 0,
+          catalog_bytes_hashed: 0,
+          catalog_bytes_integrity_checked: 0
+        },
         deployment: {
           transition_completed_at: 20,
           repository_refreshes: [{
@@ -1491,6 +1499,32 @@ test_check_release_matrix_rejects_missing_refresh_causal_floor() {
         "private candidate deploy coalesces one bounded post-transition refresh"
 }
 
+test_check_release_matrix_rejects_unbounded_candidate_completion_inspection() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '--accept-candidates-completed-after "$completed_after"' \
+        '--config "$completed_after"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy binds one causal bounded private-candidate inspection to the exact transition while retaining full active inspection"
+}
+
+test_check_release_matrix_rejects_candidate_completion_catalog_rescan() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '.candidate_verification.catalog_bytes_hashed == 0' \
+        '.candidate_verification.catalog_bytes_hashed >= 0'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy binds one causal bounded private-candidate inspection to the exact transition while retaining full active inspection"
+}
+
 test_check_release_matrix_rejects_untyped_refresh_coalescing_result() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1540,7 +1574,7 @@ test_check_release_matrix_rejects_nonadvancing_candidate_fence() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "candidate deploy requires a typed post-transition refresh generation, candidate completion, and advances fences only within one schema authority"
+        "candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority"
 }
 
 test_check_release_matrix_rejects_pretransition_candidate_completion() {
@@ -1553,7 +1587,20 @@ test_check_release_matrix_rejects_pretransition_candidate_completion() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "candidate deploy requires a typed post-transition refresh generation, candidate completion, and advances fences only within one schema authority"
+        "candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority"
+}
+
+test_check_release_matrix_rejects_unattested_candidate_fencing() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-postdeployment-fencing.jq" \
+        '      and ($final.candidate_verification.catalog_bytes_integrity_checked == 0)' \
+        '      and ($final.candidate_verification.catalog_bytes_integrity_checked >= 0)'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority"
 }
 
 test_check_release_matrix_rejects_candidate_checkout_fencing_policy() {
@@ -1626,8 +1673,8 @@ test_check_release_matrix_rejects_mixed_candidate_inspection_channels() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                inspect-remi "$requirement" 2>/dev/null)"; then' \
-        '                inspect-remi "$requirement" 2>&1)"; then'
+        '                "${helper_args[@]}" 2>/dev/null)"; then' \
+        '                "${helper_args[@]}" 2>&1)"; then'
 
     assert_check_release_matrix_fails \
         "$repo" \
@@ -2216,11 +2263,14 @@ main() {
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
         test_check_release_matrix_rejects_unforced_post_deploy_candidates
         test_check_release_matrix_rejects_missing_refresh_causal_floor
+        test_check_release_matrix_rejects_unbounded_candidate_completion_inspection
+        test_check_release_matrix_rejects_candidate_completion_catalog_rescan
         test_check_release_matrix_rejects_untyped_refresh_coalescing_result
         test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority
         test_check_release_matrix_rejects_all_profile_retry
         test_check_release_matrix_rejects_nonadvancing_candidate_fence
         test_check_release_matrix_rejects_pretransition_candidate_completion
+        test_check_release_matrix_rejects_unattested_candidate_fencing
         test_check_release_matrix_rejects_candidate_checkout_fencing_policy
         test_check_release_matrix_rejects_unbound_candidate_binary
         test_check_release_matrix_rejects_private_mode_public_readiness_claim

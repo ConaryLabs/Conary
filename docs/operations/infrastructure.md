@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 52
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causally inspectable deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
+revision: 53
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -145,11 +145,19 @@ workflow.
   workflow time.
   Inspection JSON is accepted only from stdout and structurally validated
   before final ingress; stderr diagnostics are never spliced into the typed
-  evidence. A failed completion predicate reuses its already captured typed
-  inspection, while an early remote, invalid-output, or transport failure
-  produces a sanitized failure envelope and attempts one read-only final
-  inspection only when no typed capture exists. Neither path turns missing
-  diagnostics into a successful deployment. Before and after the
+  evidence. Private-candidate completion passes the exact deployment-transition
+  timestamp as a causal floor. Because candidate completion is ordered after
+  complete catalog proof and an independent durable-destination reopen, that
+  mode rechecks the exact registered candidate, manifest, bundle shape, file
+  size, fenced run members, and repository bindings without rehashing or
+  integrity-scanning the same multi-gigabyte catalogs again. Its typed evidence
+  must report `publication_attested`, the exact transition floor, and zero
+  catalog reopen/hash/integrity work. Active-repopulation and ordinary manual
+  inspections retain the full reopen path. A failed completion predicate reuses
+  its already captured typed inspection, while an early remote, invalid-output,
+  or transport failure produces a sanitized failure envelope and attempts one
+  read-only final inspection only when no typed capture exists. Neither path
+  turns missing diagnostics into a successful deployment. Before and after the
   remote attempt, `inspect-remi-storage` records only numeric filesystem,
   SQLite, and transition-backup counts plus logical/allocated byte totals. It
   rejects symlinked or structurally unexpected backup storage and exposes no

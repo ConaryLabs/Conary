@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 90
-summary: Document typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 91
+summary: Document causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -415,7 +415,9 @@ floor is `storage.readiness_min_free`, defaulting to 10 GiB.
 It is a serving-health threshold, not catalog-construction scratch admission.
 
 `apps/remi/src/deployment.rs` owns recoverable config/schema orchestration and
-read-only deployment inspection;
+read-only deployment-state assembly;
+`apps/remi/src/deployment/candidate_inspection.rs` owns full and causally
+publication-attested private-candidate inspection;
 `apps/remi/src/deployment/database_transition.rs` owns persisted database
 planning, application, and rollback. A current schema revision remains in
 place across binary replacement and rollback, making the schema revision the
@@ -443,11 +445,24 @@ shape has no compatibility reader. Deployment inspection remains read-only
 evidence and never establishes quiescence or mutation ownership. It reports
 active and private-candidate state separately in canonical public-profile
 order. `--require-private-candidates` requires one exact current, durable,
-nonempty candidate for every public profile, reopens each strict immutable
-manifest and two-file bundle, validates its typed member contract, and
-re-proves its fenced run members against the current repository bindings. An
-active-only profile, superseded run, candidate-tier profile, changed binding,
-missing bundle, or empty catalog cannot satisfy that predicate. The protected
+nonempty candidate for every public profile, fully reopens each strict
+immutable manifest and two-file bundle, validates its typed member contract,
+and re-proves its fenced run members against the current repository bindings.
+The deployment-only
+`--accept-candidates-completed-after <unix-seconds>` form is valid only with
+that predicate. Candidate completion is already ordered after a complete
+private-candidate proof and one independent durable-destination reopen. The
+causal form therefore requires the exact candidate and terminal refresh to
+have completed strictly after its positive floor, then rechecks the durable
+registry, canonical manifest bytes, exact directory entries, regular catalog
+file and signed size, member contract, fenced run members, and current
+repository bindings without repeating catalog hashing or SQLite integrity
+scans. Its typed verification object records `publication_attested`, the exact
+floor, elapsed microseconds, and zero reopened/hash/integrity catalog bytes;
+the ordinary form records `full_reopen` and the exact catalog work. An
+active-only profile, superseded or pre-floor run, candidate-tier profile,
+changed binding, missing bundle, empty catalog, or mismatched proof mode cannot
+satisfy the causal predicate. The protected
 `build-remi-candidate` workflow constructs the release-profile binary once per
 protected `main` commit and retains a deterministic bundle plus exact source,
 toolchain, compiler-cache, digest, and timing provenance. Candidate deployment

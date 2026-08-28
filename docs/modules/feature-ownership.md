@@ -1148,6 +1148,7 @@ release uploads, and static test fixtures through Remi.
 
 **Start here:** `apps/remi/src/server/release_publish.rs`;
 `apps/remi/src/deployment.rs`;
+`apps/remi/src/deployment/candidate_inspection.rs`;
 `apps/remi/src/server/signing_authority.rs`;
 `apps/remi/src/server/mod.rs`;
 `apps/remi/src/server/admin_service.rs`;

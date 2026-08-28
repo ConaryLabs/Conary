@@ -395,6 +395,15 @@ jobs:
                 and (.configured_profiles | type == "number")
                 and (.populated_profiles | type == "number")
                 and (.candidate_profiles | type == "number")
+                and (.candidate_verification | type == "object")
+                and (.candidate_verification.mode == "full_reopen"
+                  or .candidate_verification.mode == "publication_attested")
+                and (.candidate_verification.completed_after == null
+                  or (.candidate_verification.completed_after | type == "number"))
+                and (.candidate_verification.elapsed_micros | type == "number")
+                and (.candidate_verification.catalog_files_reopened | type == "number")
+                and (.candidate_verification.catalog_bytes_hashed | type == "number")
+                and (.candidate_verification.catalog_bytes_integrity_checked | type == "number")
                 and (.profiles | type == "array")
                 and (.candidates | type == "array")
               ' <<<"$candidate" >/dev/null 2>&1
@@ -402,11 +411,16 @@ jobs:
 
             capture_completion_inspection() {
               local requirement="$1"
+              local completed_after="${2:-}"
               local inspection_status
+              local helper_args=(inspect-remi "$requirement")
+              if [[ -n "$completed_after" ]]; then
+                helper_args+=(--accept-candidates-completed-after "$completed_after")
+              fi
               inspection=""
               inspection_failure=""
               if inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy \
-                inspect-remi "$requirement" 2>/dev/null)"; then
+                "${helper_args[@]}" 2>/dev/null)"; then
                 inspection_status=0
               else
                 inspection_status=$?
@@ -564,7 +578,8 @@ jobs:
                     <<<"$scoped_refresh" >&2
                 done
                 start_phase private-candidate-inspection
-                if ! capture_completion_inspection "$requirement"; then
+                if ! capture_completion_inspection \
+                  "$requirement" "$transition_completed_at"; then
                   failure_phase="$active_phase"
                   finish_phase failure
                   echo "Remi ${description} inspection failed: ${inspection_failure}" >&2
@@ -712,7 +727,12 @@ jobs:
               and (.deployment.transition_completed_at | type == "number")
               and (.deployment.transition_completed_at as $transition_completed_at
               | if $expected_mode == "private-candidates" then
-                (.deployment.repository_refreshes | type == "array")
+                .candidate_verification.mode == "publication_attested"
+                and .candidate_verification.completed_after == $transition_completed_at
+                and .candidate_verification.catalog_files_reopened == 0
+                and .candidate_verification.catalog_bytes_hashed == 0
+                and .candidate_verification.catalog_bytes_integrity_checked == 0
+                and (.deployment.repository_refreshes | type == "array")
                 and (.deployment.repository_refreshes | length) >= 1
                 and all(.deployment.repository_refreshes[];
                   (.generation | type == "number")
@@ -727,7 +747,9 @@ jobs:
                   and (.successful_profiles | type == "array")
                   and (.failed_profiles | type == "array"))
               else
-                .deployment.repository_refreshes == []
+                .candidate_verification.mode == "full_reopen"
+                and .candidate_verification.completed_after == null
+                and .deployment.repository_refreshes == []
               end)
             else
               (.deployment.failure_phase | type == "string")
