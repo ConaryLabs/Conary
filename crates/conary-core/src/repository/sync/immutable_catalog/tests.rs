@@ -1,7 +1,10 @@
 // crates/conary-core/src/repository/sync/immutable_catalog/tests.rs
 
 use super::*;
-use crate::db::models::{RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode};
+use crate::db::models::{
+    NativeSourceEcosystem, NativeSourceStream, RepositoryPolicyScope, RepositorySourcePolicy,
+    RepositoryUpdateMode,
+};
 use crate::repository::catalog::{
     CATALOG_FILE_NAME, CatalogCopyScratchV1, CatalogFinalizationScratchV2,
     CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1, CatalogMetadataStreamAdmission,
@@ -13,6 +16,7 @@ use crate::repository::catalog::{
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::parsers::PackageMetadata;
 use crate::repository::sync::synced_package_row;
+use crate::repository::sync::types::SyncedPackageRow;
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
