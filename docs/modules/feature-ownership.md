@@ -1466,13 +1466,15 @@ keeping Cargo targets isolated per worktree and cleanup explicitly bounded to
 the compiler cache.
 
 **Start here:** `scripts/dev-build.sh`; `scripts/test-dev-build.sh`;
-`CONTRIBUTING.md`; `docs/llms/README.md`.
+`apps/remi/build.rs`; `apps/conary-test/build.rs`; `CONTRIBUTING.md`;
+`docs/llms/README.md`.
 
 **Neighbor systems:** Cargo and rustc invocation, `sccache`, Git linked
 worktrees, agent-context proof execution, caller-provided build environments,
 and local disk usage.
 
-**Paths:** `scripts/dev-build.sh`; `scripts/test-dev-build.sh`.
+**Paths:** `scripts/dev-build.sh`; `scripts/test-dev-build.sh`;
+`apps/remi/build.rs`; `apps/conary-test/build.rs`.
 
 **Focused proof:** `bash scripts/test-dev-build.sh`.
 
@@ -1489,7 +1491,10 @@ selects one. Existing `RUSTC_WRAPPER`, `CARGO_TARGET_DIR`, `SCCACHE_DIR`, and
 cache-size settings retain precedence. Cache cleanup requires an exact marker
 and explicit confirmation, rejects broad or symlink targets, and never deletes
 a Cargo target. A cache miss or compiler failure is reported once; it must not
-silently rerun the compiler outside the selected cache.
+silently rerun the compiler outside the selected cache. Build metadata may
+watch only existing Git control paths; it must not permanently invalidate a
+linked worktree or recursively watch the common Git directory that owns the
+shared cache.
 
 ## Agent/MCP Operation Surfaces
 

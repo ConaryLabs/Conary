@@ -196,6 +196,58 @@ wait "$linked_pid"
     fail "linked worktree did not retain its isolated target"
 [[ "$fixture/target" != "$linked/target" ]] || fail "target paths unexpectedly collapsed"
 
+mkdir -p "$fixture/apps/remi" "$fixture/apps/conary-test" \
+    "$linked/apps/remi" "$linked/apps/conary-test"
+install -m 0644 "$repo_root/apps/remi/build.rs" "$fixture/apps/remi/build.rs"
+install -m 0644 "$repo_root/apps/conary-test/build.rs" \
+    "$fixture/apps/conary-test/build.rs"
+install -m 0644 "$repo_root/apps/remi/build.rs" "$linked/apps/remi/build.rs"
+install -m 0644 "$repo_root/apps/conary-test/build.rs" \
+    "$linked/apps/conary-test/build.rs"
+rustc --edition 2024 "$repo_root/apps/remi/build.rs" \
+    -o "$tmp/remi-build-metadata"
+rustc --edition 2024 "$repo_root/apps/conary-test/build.rs" \
+    -o "$tmp/conary-test-build-metadata"
+
+assert_watch_paths_exist() {
+    local output="$1" manifest_dir="$2" line watched
+    while IFS= read -r line; do
+        [[ "$line" == cargo:rerun-if-changed=* ]] || continue
+        watched="${line#cargo:rerun-if-changed=}"
+        if [[ "$watched" != /* ]]; then
+            watched="${manifest_dir}/${watched}"
+        fi
+        [[ -e "$watched" ]] ||
+            fail "build metadata emitted a permanently missing watch path: $watched"
+    done <<<"$output"
+}
+
+remi_metadata_out="$(
+    CARGO_MANIFEST_DIR="$linked/apps/remi" "$tmp/remi-build-metadata"
+)"
+assert_watch_paths_exist "$remi_metadata_out" "$linked/apps/remi"
+linked_git_dir="$(git -C "$linked" rev-parse --git-dir)"
+assert_contains "$remi_metadata_out" \
+    "cargo:rerun-if-changed=${linked_git_dir}/HEAD"
+assert_contains "$remi_metadata_out" \
+    "cargo:rerun-if-changed=${linked_git_dir}/index"
+assert_contains "$remi_metadata_out" 'cargo:rustc-env=CONARY_GIT_DIRTY=false'
+
+conary_test_metadata_out="$(
+    CARGO_MANIFEST_DIR="$linked/apps/conary-test" "$tmp/conary-test-build-metadata"
+)"
+assert_watch_paths_exist "$conary_test_metadata_out" "$linked/apps/conary-test"
+
+main_conary_test_metadata_out="$(
+    CARGO_MANIFEST_DIR="$fixture/apps/conary-test" "$tmp/conary-test-build-metadata"
+)"
+assert_watch_paths_exist "$main_conary_test_metadata_out" \
+    "$fixture/apps/conary-test"
+if grep -Fxq "cargo:rerun-if-changed=${fixture}/.git" \
+    <<<"$main_conary_test_metadata_out"; then
+    fail "main-worktree metadata recursively watched the common Git directory"
+fi
+
 [[ ! -e "$repo_root/tools/sccache-wrapper.sh" ]] ||
     fail "the retired compiler fallback wrapper still exists"
 

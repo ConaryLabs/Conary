@@ -13,17 +13,14 @@ fn main() {
         git_path(&["rev-parse", "--git-common-dir"]),
         git_path(&["rev-parse", "--show-toplevel"]),
     ) {
-        println!(
-            "cargo:rerun-if-changed={}",
-            repo_root.join(".git").display()
-        );
-        println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
-        println!("cargo:rerun-if-changed={}", git_dir.join("refs").display());
+        let worktree_git_pointer = repo_root.join(".git");
+        if worktree_git_pointer.is_file() {
+            emit_optional_watch(&worktree_git_pointer);
+        }
+        emit_optional_watch(&git_dir.join("HEAD"));
+        emit_optional_watch(&git_dir.join("refs"));
         emit_optional_watch(&git_dir.join("packed-refs"));
-        println!(
-            "cargo:rerun-if-changed={}",
-            git_common_dir.join("refs").display()
-        );
+        emit_optional_watch(&git_common_dir.join("refs"));
         emit_optional_watch(&git_common_dir.join("packed-refs"));
     }
 
