@@ -259,7 +259,7 @@ impl PayloadClaim {
             "SELECT {} FROM payload_claims WHERE path = ?1 ORDER BY trove_id",
             Self::COLUMNS
         );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare_cached(&sql)?;
         Ok(stmt
             .query_map([path], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -270,7 +270,7 @@ impl PayloadClaim {
             "SELECT {} FROM payload_claims WHERE trove_id = ?1 ORDER BY path",
             Self::COLUMNS
         );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare_cached(&sql)?;
         Ok(stmt
             .query_map([trove_id], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
@@ -284,7 +284,7 @@ impl PayloadClaim {
              ORDER BY trove_id, path",
             Self::COLUMNS
         );
-        let mut stmt = conn.prepare(&sql)?;
+        let mut stmt = conn.prepare_cached(&sql)?;
         Ok(stmt
             .query_map([path], Self::from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?)
