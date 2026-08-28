@@ -1399,6 +1399,19 @@ test_check_release_matrix_rejects_private_mode_public_readiness_claim() {
         "candidate deploy mode-specific public readiness contract"
 }
 
+test_check_release_matrix_rejects_untyped_candidate_baseline_failure() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '                      failure_phase: "predeployment-candidate-baseline",' \
+        '                      failure_phase: null,'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy verifies the exact staged candidate, validates the schema-compatible live baseline, and retains typed preflight failure evidence before mutation"
+}
+
 test_check_release_matrix_rejects_discarded_candidate_failure_inspection() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1984,6 +1997,7 @@ main() {
         test_check_release_matrix_rejects_pretransition_candidate_run
         test_check_release_matrix_rejects_unbound_candidate_binary
         test_check_release_matrix_rejects_private_mode_public_readiness_claim
+        test_check_release_matrix_rejects_untyped_candidate_baseline_failure
         test_check_release_matrix_rejects_discarded_candidate_failure_inspection
         test_check_release_matrix_rejects_missing_candidate_phase_evidence
         test_check_release_matrix_rejects_missing_candidate_storage_evidence

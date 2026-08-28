@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-28
-revision: 85
+revision: 86
 summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -440,10 +440,16 @@ final Fedora, Ubuntu, and Arch fencing epochs to be strictly newer than their
 recorded baselines and each terminal run to have started after the recorded
 binary transition. The final evidence binds the exact merged commit, built
 binary SHA-256, completion mode, and transition timestamp; the before-and-after
-sanitized inspections are retained. The versioned `deployment baseline`
-surface runs from the exact SHA-256-checked staged binary and reads only current
-schema, installed manifest reconciliation, relational candidate/run-member
-identity, and latest typed refresh state. Candidate identity is one optional
+sanitized inspections are retained. Before that read, the root helper extracts
+the staged binary and verifies its exact version and SHA-256 without opening
+the live database. The versioned `deployment baseline` surface then runs from
+the existing plain executable when one is installed, so the baseline reader
+owns the schema revision currently on disk. A host without an installed binary
+falls back to the verified staged binary, which still requires the persisted
+database to match its exact current schema. This keeps a hard schema cut
+deployable without letting the incoming binary interpret retired rows. The
+baseline reads only installed manifest reconciliation, relational
+candidate/run-member identity, and latest typed refresh state. Candidate identity is one optional
 object, so a revision, run, or completion field cannot be half-present. It
 performs no signing, catalog, package, conversion, or universe inspection and
 reports wall/CPU/RSS, SQLite statement and logical page-read work, zero catalog
@@ -452,8 +458,10 @@ two seconds or any nonzero catalog access before mutation. A profile without a
 candidate contributes a null identity and its latest refresh fence but never
 satisfies the strict post-transition candidate predicate. Evidence schema 2
 also records the typed outcome, causal failure phase, and duration of every
-completed or failed remote phase. An early remote-session or transport failure
-produces a failure envelope and attempts one read-only recovery inspection
+completed or failed remote phase. A failed pre-deployment baseline is retained
+as `predeployment-candidate-baseline` with its measured duration rather than an
+empty or misclassified transport artifact. An early remote-session or transport
+failure produces a failure envelope and attempts one read-only recovery inspection
 instead of discarding the causal state. The root-owned helper's read-only
 `inspect-remi-storage` surface adds
 before-and-after available bytes, live SQLite file count and logical/allocated

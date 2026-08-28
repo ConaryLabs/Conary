@@ -123,7 +123,7 @@ if [[ "\${1:-}" == "deployment" && "\${2:-}" == "baseline" ]]; then
                 ;;
         esac
     done
-    printf '{"baseline_schema_version":1,"config":"%s"}\n' "\$config"
+    printf '{"baseline_schema_version":1,"config":"%s","owner":"candidate"}\n' "\$config"
     exit 0
 fi
 if [[ "\${1:-}" == "deployment" && "\${2:-}" == "inspect" ]]; then
@@ -441,10 +441,16 @@ test_candidate_baseline_uses_exact_staged_binary_without_mutation() {
         0.8.0 "$digest" "$bundle")"
     jq -e \
         --arg config "$fake_root/etc/conary/remi.toml" \
-        '.baseline_schema_version == 1 and .config == $config' \
+        '.baseline_schema_version == 1 and .config == $config and .owner == "candidate"' \
         <<<"$inspection" >/dev/null
     test -f "$bundle"
     test ! -e "$fake_root/usr/local/bin/remi"
+
+    mkdir -p "$fake_root/conary/metadata"
+    printf 'persisted database\n' >"$fake_root/conary/metadata/conary.db"
+    inspection="$(run_helper "$fake_root" inspect-remi-candidate-baseline \
+        0.8.0 "$digest" "$bundle")"
+    jq -e '.owner == "candidate"' <<<"$inspection" >/dev/null
 
     expect_fail "candidate baseline digest mismatch" \
         run_helper "$fake_root" inspect-remi-candidate-baseline \
@@ -454,6 +460,42 @@ test_candidate_baseline_uses_exact_staged_binary_without_mutation() {
     expect_fail "candidate baseline version mismatch" \
         run_helper "$fake_root" inspect-remi-candidate-baseline \
         0.8.1 "$digest" "$bundle"
+}
+
+test_candidate_baseline_uses_installed_schema_owner_after_candidate_verification() {
+    local fake_root="${tmpdir}/root-remi-live-baseline"
+    local bundle="${tmpdir}/remi-live-baseline.tar.gz"
+    local digest inspection installed
+    write_config "$fake_root"
+    make_fake_remi_bundle "$bundle" 0.8.0
+    digest="$(tar xOzf "$bundle" remi-0.8.0-linux-x64 | sha256sum | cut -d ' ' -f 1)"
+    installed="$fake_root/usr/local/bin/remi"
+    mkdir -p "$(dirname "$installed")"
+    cat >"$installed" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == "deployment" && "${2:-}" == "baseline" ]]
+shift 2
+[[ "${1:-}" == "--config" && -n "${2:-}" && $# -eq 2 ]]
+printf '{"baseline_schema_version":1,"config":"%s","owner":"installed"}\n' "$2"
+EOF
+    chmod 0755 "$installed"
+
+    inspection="$(run_helper "$fake_root" inspect-remi-candidate-baseline \
+        0.8.0 "$digest" "$bundle")"
+    jq -e \
+        --arg config "$fake_root/etc/conary/remi.toml" \
+        '.baseline_schema_version == 1 and .config == $config and .owner == "installed"' \
+        <<<"$inspection" >/dev/null
+    test -f "$bundle"
+    test "$($installed deployment baseline --config "$fake_root/etc/conary/remi.toml" \
+        | jq -r .owner)" = "installed"
+
+    mv "$installed" "${installed}.real"
+    ln -s "${installed}.real" "$installed"
+    expect_fail "symlinked installed baseline owner" \
+        run_helper "$fake_root" inspect-remi-candidate-baseline \
+        0.8.0 "$digest" "$bundle"
 }
 
 test_shared_conary_root_is_preserved_and_drift_fails_closed() {
@@ -622,6 +664,7 @@ main() {
     test_publish_test_artifact_rejects_unverified_or_mutating_inputs
     test_deploy_remi_uses_candidate_owned_transition
     test_candidate_baseline_uses_exact_staged_binary_without_mutation
+    test_candidate_baseline_uses_installed_schema_owner_after_candidate_verification
     test_shared_conary_root_is_preserved_and_drift_fails_closed
     test_verify_ingress_requires_exact_deployed_bytes
     test_deploy_remi_rejects_malformed_authority_root
