@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 51
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
+revision: 52
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causally inspectable deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -143,9 +143,13 @@ workflow.
   aggregate state, and successful/failed profile sets. Candidate completion is
   bounded by one of those exact generations rather than inferred from elapsed
   workflow time.
-  An early remote or transport failure still produces a sanitized typed
-  failure envelope and attempts one read-only final inspection; it never turns
-  missing diagnostics into a successful deployment. Before and after the
+  Inspection JSON is accepted only from stdout and structurally validated
+  before final ingress; stderr diagnostics are never spliced into the typed
+  evidence. A failed completion predicate reuses its already captured typed
+  inspection, while an early remote, invalid-output, or transport failure
+  produces a sanitized failure envelope and attempts one read-only final
+  inspection only when no typed capture exists. Neither path turns missing
+  diagnostics into a successful deployment. Before and after the
   remote attempt, `inspect-remi-storage` records only numeric filesystem,
   SQLite, and transition-backup counts plus logical/allocated byte totals. It
   rejects symlinked or structurally unexpected backup storage and exposes no

@@ -142,6 +142,10 @@ if [[ "\${1:-}" == "deployment" && "\${2:-}" == "inspect" ]]; then
         esac
     done
     printf '%s\n' "\${args[@]}" >"\${config}.inspect-args"
+    if [[ "\${CONARY_FAKE_INSPECT_DIAGNOSTIC:-0}" == "1" ]]; then
+        printf 'INFO immutable catalog reopen completed\n' >&2
+        printf '%s\n' '{"schema_epoch":"test-v1","schema_revision":1,"configured_profiles":3,"populated_profiles":0,"candidate_profiles":3,"profiles":[],"candidates":[]}'
+    fi
     exit 0
 fi
 if [[ "\${1:-}" == "native-oracle-input" ]]; then
@@ -177,6 +181,7 @@ run_helper() {
 
     CONARY_REMI_DEPLOY_ROOT="$fake_root" \
     CONARY_REMI_DEPLOY_SKIP_RESTART=1 \
+    CONARY_FAKE_INSPECT_DIAGNOSTIC="${CONARY_FAKE_INSPECT_DIAGNOSTIC:-0}" \
         bash "$helper" "$@"
 }
 
@@ -391,6 +396,8 @@ test_deploy_remi_uses_candidate_owned_transition() {
     local fake_root="${tmpdir}/root-remi"
     local bundle="${tmpdir}/remi-0.8.0.tar.gz"
     local repositories="${tmpdir}/repositories.toml"
+    local inspection_stdout="${tmpdir}/inspect-remi.stdout"
+    local inspection_stderr="${tmpdir}/inspect-remi.stderr"
     write_config "$fake_root"
     mkdir -p "$fake_root/usr/local/bin"
     make_fake_remi_bundle "$bundle" 0.8.0
@@ -425,6 +432,17 @@ test_deploy_remi_uses_candidate_owned_transition() {
     run_helper "$fake_root" inspect-remi --require-repopulated
     grep -Fx -- "--require-repopulated" \
         "$fake_root/etc/conary/remi.toml.inspect-args" >/dev/null
+    CONARY_FAKE_INSPECT_DIAGNOSTIC=1 \
+        run_helper "$fake_root" inspect-remi --require-private-candidates \
+        >"$inspection_stdout" 2>"$inspection_stderr"
+    jq -e '
+        .schema_epoch == "test-v1"
+        and .candidate_profiles == 3
+    ' "$inspection_stdout" >/dev/null
+    grep -Fx 'INFO immutable catalog reopen completed' \
+        "$inspection_stderr" >/dev/null
+    ! rg -q 'INFO immutable catalog' "$inspection_stdout" ||
+        fail "Remi inspection diagnostics contaminated JSON stdout"
     expect_fail "unknown Remi inspection requirement" \
         run_helper "$fake_root" inspect-remi --require-something-vague
 }

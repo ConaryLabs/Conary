@@ -290,6 +290,8 @@ jobs:
             active_phase=""
             phase_started_ns=0
             evidence_emitted=0
+            inspection=""
+            inspection_failure=""
 
             start_phase() {
               active_phase="$1"
@@ -381,6 +383,51 @@ jobs:
                 emit_inspection "$inspection" true
               else
                 emit_inspection '{}' false
+              fi
+            }
+
+            deployment_inspection_is_typed() {
+              local candidate="$1"
+              jq -e '
+                type == "object"
+                and (.schema_epoch | type == "string")
+                and (.schema_revision | type == "number")
+                and (.configured_profiles | type == "number")
+                and (.populated_profiles | type == "number")
+                and (.candidate_profiles | type == "number")
+                and (.profiles | type == "array")
+                and (.candidates | type == "array")
+              ' <<<"$candidate" >/dev/null 2>&1
+            }
+
+            capture_completion_inspection() {
+              local requirement="$1"
+              local inspection_status
+              inspection=""
+              inspection_failure=""
+              if inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy \
+                inspect-remi "$requirement" 2>/dev/null)"; then
+                inspection_status=0
+              else
+                inspection_status=$?
+              fi
+              if (( inspection_status != 0 )); then
+                if deployment_inspection_is_typed "$inspection"; then
+                  inspection_failure=predicate-unsatisfied
+                else
+                  inspection_failure=command-failed
+                fi
+                return 1
+              fi
+              if ! deployment_inspection_is_typed "$inspection"; then
+                inspection_failure=invalid-typed-output
+                return 1
+              fi
+            }
+
+            emit_captured_inspection_if_typed() {
+              if deployment_inspection_is_typed "$inspection"; then
+                emit_inspection "$inspection" true
               fi
             }
 
@@ -517,11 +564,11 @@ jobs:
                     <<<"$scoped_refresh" >&2
                 done
                 start_phase private-candidate-inspection
-                if ! inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy \
-                  inspect-remi "$requirement" 2>&1)"; then
+                if ! capture_completion_inspection "$requirement"; then
                   failure_phase="$active_phase"
                   finish_phase failure
-                  echo "Remi ${description} are incomplete after the forced refresh" >&2
+                  echo "Remi ${description} inspection failed: ${inspection_failure}" >&2
+                  emit_captured_inspection_if_typed
                   exit 1
                 fi
                 finish_phase complete
@@ -544,8 +591,7 @@ jobs:
             esac
             start_phase active-repopulation-wait
             for attempt in $(seq 1 120); do
-              if inspection="$(sudo -n /usr/local/sbin/conary-remi-deploy \
-                inspect-remi "$requirement" 2>&1)"; then
+              if capture_completion_inspection "$requirement"; then
                 finish_phase complete
                 start_phase ingress-after-completion
                 sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress >&2
@@ -555,7 +601,7 @@ jobs:
                 trap - EXIT
                 exit 0
               fi
-              echo "Remi ${description} are still incomplete (${attempt}/120)" >&2
+              echo "Remi ${description} are still incomplete: ${inspection_failure} (${attempt}/120)" >&2
               if (( attempt < 120 )); then
                 sleep 30
               fi
@@ -563,6 +609,7 @@ jobs:
             failure_phase="$active_phase"
             finish_phase failure
             echo "Remi did not complete ${description} within one hour" >&2
+            emit_captured_inspection_if_typed
             exit 1
           REMOTE_EOF
           deploy_status=$?
