@@ -623,35 +623,10 @@ jobs:
           ' remi-deployment-inspection.json >/dev/null
           if [[ "$COMPLETION_MODE" == "private-candidates" \
             && "$deploy_status" -eq 0 ]]; then
-            jq -e --slurpfile baseline remi-predeployment-inspection.json '
-              def fencing_epoch($inspection; $profile):
-                ([
-                  $inspection.candidates[]?
-                  | select(.profile == $profile)
-                  | .latest_refresh.fencing_epoch
-                ] | first) // -1;
-              . as $final
-              | $baseline[0] as $before
-              | ["fedora-44", "ubuntu-26.04", "arch"] as $profiles
-              | all($profiles[];
-                  . as $profile
-                  | ([
-                      $final.candidates[]
-                      | select(.profile == $profile)
-                    ] | length) == 1
-                    and ($final.candidates[]
-                      | select(.profile == $profile)
-                      | (.profile_revision_sha256 | test("^[0-9a-f]{64}$"))
-                        and (.run_id | type == "string")
-                        and (.latest_refresh.run_id == .run_id)
-                        and (.latest_refresh.state == "candidate")
-                        and (.latest_refresh.finished_at | type == "number")
-                        and (.latest_refresh.started_at
-                          > $final.deployment.transition_completed_at))
-                    and fencing_epoch($final; $profile)
-                      > fencing_epoch($before; $profile)
-                )
-            ' remi-deployment-inspection.json >/dev/null || {
+            jq -e \
+              --slurpfile baseline remi-predeployment-inspection.json \
+              -f deploy/remi-postdeployment-fencing.jq \
+              remi-deployment-inspection.json >/dev/null || {
               echo "private candidates do not come from post-deploy fenced refreshes" >&2
               exit 1
             }
@@ -701,7 +676,7 @@ jobs:
                 && jq -e '.deployment.outcome == "complete" and .inspection_available' \
                   remi-deployment-inspection.json >/dev/null; then
                 echo
-                echo "Post-deploy fencing advances:"
+                echo "Post-deploy fenced refresh proof:"
                 jq -r --slurpfile final remi-deployment-inspection.json '
                   def epoch($inspection; $profile):
                     ([
@@ -712,8 +687,15 @@ jobs:
                   . as $before
                   | $final[0] as $after
                   | ["fedora-44", "ubuntu-26.04", "arch"][] as $profile
-                  | "- \($profile): epoch \(epoch($before; $profile)) -> "
-                    + "\(epoch($after; $profile))"
+                  | if .schema_epoch == $after.schema_epoch
+                      and .schema_revision == $after.schema_revision then
+                      "- \($profile): schema revision \(.schema_revision), epoch "
+                        + "\(epoch($before; $profile)) -> \(epoch($after; $profile))"
+                    else
+                      "- \($profile): schema revision \(.schema_revision), epoch "
+                        + "\(epoch($before; $profile)) -> schema revision "
+                        + "\($after.schema_revision), fresh epoch \(epoch($after; $profile))"
+                    end
                   ' remi-predeployment-inspection.json
               fi
               if [[ -s remi-predeployment-storage.json \

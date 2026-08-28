@@ -12,6 +12,7 @@ candidate_deploy_workflow=".github/workflows/deploy-remi-candidate.yml"
 native_oracle_export_workflow=".github/workflows/export-remi-native-oracle-inputs.yml"
 native_oracle_transport_verifier="scripts/verify-native-oracle-input-transport.py"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
+candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
 candidate_artifact_script="scripts/remi-candidate-artifact.sh"
 timed_linker_script="scripts/timed-linker.sh"
 timed_rustc_wrapper="scripts/timed-rustc-wrapper.sh"
@@ -156,6 +157,7 @@ for required_file in \
     "$candidate_build_workflow" \
     "$candidate_deploy_workflow" \
     "$candidate_predeployment_filter" \
+    "$candidate_postdeployment_filter" \
     "$candidate_artifact_script" \
     "$timed_linker_script" \
     "$timed_rustc_wrapper" \
@@ -426,7 +428,9 @@ require_match "$candidate_predeployment_filter" '\.wall_time_micros <= 2000000[\
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'private-candidates\)[\s\S]*requirement=--require-private-candidates[\s\S]*active-repopulation\)[\s\S]*requirement=--require-repopulated[\s\S]*inspect-remi "\$requirement"' 'candidate deploy mode-specific typed inspection predicate'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'timeout-minutes: 300[\s\S]*inspect-remi-candidate-baseline[\s\S]*> remi-predeployment-inspection\.json[\s\S]*transition_completed_at="\$\(date -u \+%s\)"[\s\S]*sleep 1[\s\S]*--max-time 7200 --request POST[\s\S]*http://127\.0\.0\.1:8081/v1/admin/refresh\?force=true[\s\S]*\.force == true[\s\S]*\.profile == null[\s\S]*\.status == "partial"[\s\S]*select\(\. != "solus"\)[\s\S]*refresh\?force=true&profile=\$\{profile\}[\s\S]*\.profile == \$profile[\s\S]*all\(\.results\[\]; \.source_profile == \$profile\)' 'private candidate deploy forces one bounded post-transition refresh and retries only exact failed public profiles'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate '--arg expected_commit "\$CANDIDATE_SHA"[\s\S]*--arg expected_binary "\$BINARY_SHA256"[\s\S]*\.deployment\.commit_sha == \$expected_commit[\s\S]*\.deployment\.binary_sha256 == \$expected_binary' 'candidate deploy binds final evidence to exact commit and binary'
-require_job_match "$candidate_deploy_workflow" deploy-remi-candidate '--slurpfile baseline remi-predeployment-inspection\.json[\s\S]*\["fedora-44", "ubuntu-26\.04", "arch"\][\s\S]*\.latest_refresh\.started_at[\s\S]*> \$final\.deployment\.transition_completed_at[\s\S]*fencing_epoch\(\$final; \$profile\)[\s\S]*> fencing_epoch\(\$before; \$profile\)' 'private candidate deploy requires every public run to start after transition and advance its fence'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate '--slurpfile baseline remi-predeployment-inspection\.json[\s\S]*-f deploy/remi-postdeployment-fencing\.jq' 'private candidate deploy validates post-transition fencing with the reviewed typed filter'
+require_match "$candidate_postdeployment_filter" 'def same_fencing_authority\(\$before; \$final\):[\s\S]*\.schema_epoch == \$final\.schema_epoch[\s\S]*\.schema_revision == \$final\.schema_revision' 'candidate deploy scopes comparable fences to one schema authority'
+require_match "$candidate_postdeployment_filter" '\.latest_refresh\.run_id == \.run_id[\s\S]*\.latest_refresh\.started_at[\s\S]*> \$final\.deployment\.transition_completed_at[\s\S]*if same_fencing_authority\(\$before; \$final\) then[\s\S]*> fencing_epoch\(\$before; \$profile\)[\s\S]*else[\s\S]*fencing_epoch\(\$final; \$profile\) > 0' 'candidate deploy requires post-transition candidate identity and advances fences only within one schema authority'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'deploy-remi "\$1" "\$2" "\$3" "\$4"[\s\S]*verify-ingress[\s\S]*inspect-remi "\$requirement"[\s\S]*verify-ingress' 'candidate deploy verifies static ingress after mutation and completion'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'if \[\[ "\$COMPLETION_MODE" == "active-repopulation" \]\]; then[\s\S]*\.ready == true[\s\S]*ready_status=.*curl[\s\S]*"200" \|\| "\$ready_status" == "503"[\s\S]*\.ready \| type == "boolean"' 'candidate deploy mode-specific public readiness contract'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'set \+e[\s\S]*ssh \$ssh_opts "\$target" bash -s[\s\S]*> remi-deployment-inspection\.json <<.REMOTE_EOF.[\s\S]*inspection="\$\(sudo[\s\S]*inspect-remi "\$requirement" 2>&1\)"[\s\S]*attempt < 120[\s\S]*deploy_status=\$\?[\s\S]*latest_refresh\.run_id[\s\S]*latest_refresh\.redactions[\s\S]*exit "\$deploy_status"' 'candidate deploy retains one validated final typed inspection'

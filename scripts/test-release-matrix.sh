@@ -286,6 +286,8 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/scripts/timed-rustc-wrapper.sh" "$repo/scripts/timed-rustc-wrapper.sh"
     cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
         "$repo/deploy/remi-predeployment-inspection.jq"
+    cp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" \
+        "$repo/deploy/remi-postdeployment-fencing.jq"
     cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
     cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
@@ -1191,6 +1193,100 @@ test_remi_predeployment_filter_accepts_typed_incomplete_baseline() {
     fi
 }
 
+remi_postdeployment_fencing_fixture() {
+    local schema_revision="$1"
+    local fedora_epoch="$2"
+    local ubuntu_epoch="$3"
+    local arch_epoch="$4"
+
+    jq -n \
+        --argjson schema_revision "$schema_revision" \
+        --argjson fedora_epoch "$fedora_epoch" \
+        --argjson ubuntu_epoch "$ubuntu_epoch" \
+        --argjson arch_epoch "$arch_epoch" '
+      def candidate($profile; $run; $epoch; $sources): {
+        profile: $profile,
+        configured_sources: $sources,
+        packages: 1,
+        profile_revision_sha256:
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        run_id: $run,
+        latest_refresh: {
+          run_id: $run,
+          fencing_epoch: $epoch,
+          state: "candidate",
+          started_at: 21,
+          heartbeat_at: 22,
+          finished_at: 23,
+          failure_stage: null,
+          failure_category: null,
+          run_members: $sources,
+          candidate_members: $sources,
+          failure_evidence_sha256: null,
+          failure_diagnostic: null,
+          redactions: []
+        }
+      };
+      {
+        schema_epoch: "conary-current-v1",
+        schema_revision: $schema_revision,
+        deployment: {transition_completed_at: 20},
+        candidates: [
+          candidate("fedora-44"; "fedora-final"; $fedora_epoch; 2),
+          candidate("ubuntu-26.04"; "ubuntu-final"; $ubuntu_epoch; 16),
+          candidate("arch"; "arch-final"; $arch_epoch; 3)
+        ]
+      }
+    '
+}
+
+test_remi_postdeployment_filter_scopes_fences_to_schema_authority() {
+    local baseline final filter baseline_path
+    baseline="$(remi_predeployment_inspection_fixture)"
+    filter="$REPO_ROOT/deploy/remi-postdeployment-fencing.jq"
+    baseline_path="$(mktemp "${TEST_RUN_ROOT}/remi-baseline.XXXXXX")"
+    printf '%s\n' "$baseline" > "$baseline_path"
+
+    final="$(remi_postdeployment_fencing_fixture 54 7 7 6)"
+    jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
+        <<<"$final" >/dev/null ||
+        fail "same-schema advancing fences were rejected"
+
+    if jq '.candidates[0].latest_refresh.fencing_epoch = 6' <<<"$final" \
+        | jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
+            >/dev/null; then
+        fail "same-schema nonadvancing fence passed postdeployment validation"
+    fi
+
+    baseline="$(jq \
+        '.schema_revision = 53
+          | .candidates[0].latest_refresh.fencing_epoch = 12
+          | .candidates[1].latest_refresh.fencing_epoch = 13
+          | .candidates[2].latest_refresh.fencing_epoch = 11' \
+        <<<"$baseline")"
+    printf '%s\n' "$baseline" > "$baseline_path"
+    final="$(remi_postdeployment_fencing_fixture 54 2 2 2)"
+    jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
+        <<<"$final" >/dev/null ||
+        fail "fresh post-transition schema fences were compared to retired authority"
+
+    if jq '.candidates[0].latest_refresh.started_at = 20' <<<"$final" \
+        | jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
+            >/dev/null; then
+        fail "pre-transition candidate run passed postdeployment validation"
+    fi
+    if jq '.candidates[0].latest_refresh.run_id = "different-run"' <<<"$final" \
+        | jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
+            >/dev/null; then
+        fail "candidate with mismatched refresh identity passed postdeployment validation"
+    fi
+    if jq '.candidates[0].latest_refresh.fencing_epoch = 0' <<<"$final" \
+        | jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
+            >/dev/null; then
+        fail "nonpositive fresh schema fence passed postdeployment validation"
+    fi
+}
+
 test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1351,26 +1447,26 @@ test_check_release_matrix_rejects_nonadvancing_candidate_fence() {
     local repo
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                      > fencing_epoch($before; $profile)' \
-        '                      >= fencing_epoch($before; $profile)'
+        "$repo/deploy/remi-postdeployment-fencing.jq" \
+        '                > fencing_epoch($before; $profile)' \
+        '                >= fencing_epoch($before; $profile)'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "private candidate deploy requires every public run to start after transition and advance its fence"
+        "candidate deploy requires post-transition candidate identity and advances fences only within one schema authority"
 }
 
 test_check_release_matrix_rejects_pretransition_candidate_run() {
     local repo
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                          > $final.deployment.transition_completed_at))' \
-        '                          >= 0))'
+        "$repo/deploy/remi-postdeployment-fencing.jq" \
+        '                > $final.deployment.transition_completed_at))' \
+        '                >= 0))'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "private candidate deploy requires every public run to start after transition and advance its fence"
+        "candidate deploy requires post-transition candidate identity and advances fences only within one schema authority"
 }
 
 test_check_release_matrix_rejects_unbound_candidate_binary() {
@@ -1981,6 +2077,7 @@ main() {
         test_check_release_matrix_rejects_moving_artifact_proof_toolchain
         test_check_release_matrix_rejects_rehearsal_artifact_promotion
         test_remi_predeployment_filter_accepts_typed_incomplete_baseline
+        test_remi_postdeployment_filter_scopes_fences_to_schema_authority
         test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline
         test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
         test_check_release_matrix_rejects_unprotected_candidate_artifact
