@@ -31,9 +31,7 @@ pub(super) use util::{
     canonical_json_string, checked_i64, checked_ordinal, create_private_file, hash_file,
     sidecar_path, sync_parent, validate_candidate_path,
 };
-use util::{
-    checked_sqlite_usize, conversion_error, parse_json_column, read_u64, reject_nonempty_sidecars,
-};
+use util::{checked_sqlite_usize, conversion_error, parse_json_column, reject_nonempty_sidecars};
 pub(in crate::repository) use verification::{
     CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1,
 };
@@ -222,8 +220,8 @@ impl CatalogReader {
     /// The Remi publisher performs the logical/schema replay before its
     /// dedicated universe role signs the artifact. A universe client has
     /// already verified that signature and the exact file SHA-256; it repeats
-    /// the physical schema, integrity, binding, and relational-count checks
-    /// here, then copies normalized rows directly between SQLite databases.
+    /// the physical schema, integrity, and embedded-binding checks here, then
+    /// copies normalized rows directly between SQLite databases.
     /// This avoids turning one arbitrarily large presentation or expression
     /// field into synchronization memory.
     pub(in crate::repository) fn open_verified_signed_artifact(
@@ -299,14 +297,13 @@ impl CatalogReader {
                 path.display()
             )));
         }
-        let stored = read_binding(&connection, expected.artifact.clone())?;
+        let stored = verification::read_binding(&connection, expected.artifact.clone())?;
         if &stored != expected {
             return Err(Error::ConflictError(format!(
                 "catalog {} metadata does not match its exact manifest binding",
                 path.display()
             )));
         }
-        verify_relational_counts(&connection, expected.counts)?;
         let mut reader = Self {
             path: canonical_path,
             binding: expected.clone(),
@@ -973,79 +970,6 @@ pub(super) fn for_each_package_connection(
             load_requirement_groups(connection, &package.package_key_sha256)?;
         package.validate(scope)?;
         visitor(package)?;
-    }
-    Ok(())
-}
-
-fn read_binding(connection: &Connection, artifact: CatalogArtifactV1) -> Result<CatalogBindingV1> {
-    connection
-        .query_row(
-            "SELECT schema_version, scope_json, logical_digest_sha256,
-                    package_count, provide_count, requirement_group_count,
-                    requirement_atom_count, source_evidence_count
-             FROM catalog_metadata WHERE singleton = 1",
-            [],
-            |row| {
-                let schema_version: i64 = row.get(0)?;
-                if schema_version != i64::from(CATALOG_CONTENT_SCHEMA_V1) {
-                    return Err(conversion_error(
-                        0,
-                        format!("unsupported catalog schema {schema_version}"),
-                    ));
-                }
-                Ok(CatalogBindingV1 {
-                    scope: parse_json_column(row, 1)?,
-                    artifact,
-                    logical_digest_sha256: row.get(2)?,
-                    counts: CatalogCountsV1 {
-                        packages: read_u64(row, 3, "package count")?,
-                        provides: read_u64(row, 4, "provide count")?,
-                        requirement_groups: read_u64(row, 5, "requirement group count")?,
-                        requirement_atoms: read_u64(row, 6, "requirement atom count")?,
-                        source_evidence: read_u64(row, 7, "source evidence count")?,
-                    },
-                })
-            },
-        )
-        .optional()?
-        .ok_or_else(|| Error::InitError("catalog metadata singleton is missing".to_string()))
-}
-
-fn verify_relational_counts(connection: &Connection, expected: CatalogCountsV1) -> Result<()> {
-    for (table, value, label) in [
-        ("catalog_packages", expected.packages, "packages"),
-        ("catalog_provides", expected.provides, "provides"),
-        (
-            "catalog_requirement_groups",
-            expected.requirement_groups,
-            "requirement groups",
-        ),
-        (
-            "catalog_requirement_atoms",
-            expected.requirement_atoms,
-            "requirement atoms",
-        ),
-        (
-            "catalog_source_evidence",
-            expected.source_evidence,
-            "source evidence",
-        ),
-    ] {
-        let actual: i64 =
-            connection.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
-                row.get(0)
-            })?;
-        if u64::try_from(actual).ok() != Some(value) {
-            return Err(Error::ConflictError(format!(
-                "catalog relational {label} count {actual} does not match manifest count {value}"
-            )));
-        }
-    }
-    let mut violations = connection.prepare("PRAGMA foreign_key_check")?;
-    if violations.exists([])? {
-        return Err(Error::InitError(
-            "catalog failed SQLite foreign_key_check".to_string(),
-        ));
     }
     Ok(())
 }

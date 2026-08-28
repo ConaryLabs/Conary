@@ -156,8 +156,11 @@ pub fn verify_profile_catalog_bundle(
 ///
 /// The caller must first resolve the exact manifest digest through the durable
 /// profile registry. This function rechecks the canonical bundle manifest and
-/// every physical/schema/integrity/binding/count/foreign-key property, then
-/// carries the V2 publication attestation instead of reconstructing all rows.
+/// every physical/schema/integrity and embedded-binding property, then carries
+/// the V2 publication attestation instead of counting, reconstructing, or
+/// foreign-key-scanning all rows. The exact artifact binding carries the
+/// publisher's completed logical replay, row cardinalities, and explicit
+/// orphan rejection.
 /// Unregistered or externally supplied bundles use
 /// [`verify_profile_catalog_bundle`] instead.
 pub fn verify_registered_profile_catalog_bundle(
