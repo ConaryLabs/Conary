@@ -81,15 +81,17 @@ pub use static_repo::{
 };
 pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
-    PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncCandidate, ProfileSyncFailureCategory,
-    ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember, ProfileSyncRunRecovery,
-    RepositoryWriteAuthority, VerifiedSourceCatalogCandidateV1, abort_profile_sync_run,
+    DurableSourceCatalogReuseV1, PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncCandidate,
+    ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
+    ProfileSyncRunRecovery, RepositoryWriteAuthority, SourceCatalogMaterializationV1,
+    VerifiedSourceCatalogCandidateV1, abort_profile_sync_run,
     acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run,
     begin_profile_sync_run_with_input, begin_profile_sync_run_with_members,
     complete_profile_sync_candidate, current_profile_sync_candidate, current_timestamp,
     fetch_native_source_catalog, heartbeat_profile_sync_run, needs_sync, parse_timestamp,
     ready_profile_sync_run, record_profile_sync_run_member, recover_expired_profile_sync_runs,
-    stream_native_source_catalog, stream_native_source_catalog_verified_with_scratch_admission,
+    stream_native_source_catalog, stream_native_source_catalog_verified_blocking_with_reuse,
+    stream_native_source_catalog_verified_with_scratch_admission,
     stream_native_source_catalog_verified_with_scratch_admission_blocking,
     stream_native_source_catalog_with_scratch_admission, sync_repository,
     sync_repository_from_db_path,

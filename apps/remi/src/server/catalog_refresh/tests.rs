@@ -266,6 +266,7 @@ fn exact_reuse_skips_profile_candidate_construction() {
                     required: member.required,
                     manifest,
                     path,
+                    artifact: StagedSourceArtifact::DurableReuse,
                 },
                 reader,
             }
@@ -288,6 +289,47 @@ fn exact_reuse_skips_profile_candidate_construction() {
 
     assert!(matches!(staged.artifact, StagedProfileArtifact::Reused(_)));
     assert!(!candidate_run_dir.join("profile").exists());
+    let published = publish_staged_profile(staged, fixture.catalog_dir())
+        .expect("retain exact registered source and profile publications");
+    assert_eq!(published.sources.len(), published.manifest.members.len());
+    assert!(published.sources.iter().all(|source| {
+        source.path
+            == fixture
+                .catalog_dir()
+                .join("sources")
+                .join(source.manifest.manifest_sha256().unwrap())
+    }));
+    assert!(!candidate_run_dir.join("profile").exists());
+}
+
+#[test]
+fn registered_source_selection_resolves_every_exact_candidate_member() {
+    let fixture = ActiveCatalogFixture::new();
+    let profile = "fedora-44";
+    let revision = fixture.candidate(profile, 1, Vec::new());
+    let selection = ProfileRevisionSelection {
+        source_profile: profile.to_string(),
+        profile_revision_sha256: revision,
+    };
+
+    let reusable = fixture
+        .authority()
+        .inspect_source_reuse_for_selection(&selection)
+        .expect("resolve registered source candidates");
+    assert!(!reusable.is_empty());
+    for (ordinal, source) in reusable {
+        assert_eq!(source.manifest().source_profile, profile);
+        assert_eq!(
+            source.bundle_path(),
+            fixture
+                .catalog_dir()
+                .join("sources")
+                .join(source.manifest().manifest_sha256().unwrap())
+        );
+        assert!(!source.manifest().repository_identity.is_empty());
+        assert!(source.manifest().counts.source_evidence > 0);
+        assert!(ordinal < 2);
+    }
 }
 
 #[derive(Default)]

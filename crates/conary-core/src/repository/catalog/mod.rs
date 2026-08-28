@@ -20,9 +20,9 @@ pub use bundle::{
     publish_source_catalog_bundle, publish_source_catalog_bundle_verified,
     publish_source_catalog_bundle_with_provenance, source_metadata_object_path,
     verify_profile_catalog_bundle, verify_registered_profile_catalog_bundle,
-    verify_source_catalog_bundle, write_profile_catalog_manifest,
-    write_profile_catalog_manifest_verified, write_source_catalog_manifest,
-    write_source_catalog_manifest_verified,
+    verify_registered_source_catalog_bundle, verify_source_catalog_bundle,
+    write_profile_catalog_manifest, write_profile_catalog_manifest_verified,
+    write_source_catalog_manifest, write_source_catalog_manifest_verified,
 };
 pub use candidate::CatalogCandidateWriter;
 pub use capacity::{

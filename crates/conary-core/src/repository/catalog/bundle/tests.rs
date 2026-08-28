@@ -263,6 +263,31 @@ fn registered_profile_bundle_reopen_uses_its_durable_v2_logical_attestation() {
 }
 
 #[test]
+fn registered_source_bundle_reopen_uses_its_durable_logical_attestation() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("source");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidate).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+    let binding =
+        write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
+    let manifest = source_manifest(&binding);
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
+    write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    let published = publish_source_catalog_bundle(&candidate, &catalogs, &manifest).unwrap();
+    let logical_passes_after_publication = logical_verification_passes_for_test();
+
+    let reader = verify_registered_source_catalog_bundle(&published, &manifest).unwrap();
+    assert_eq!(reader.binding(), &binding);
+    assert!(reader.verification_proof().is_ok());
+    assert_eq!(
+        logical_verification_passes_for_test(),
+        logical_passes_after_publication,
+        "registered source reopen must not replay normalized catalog rows"
+    );
+}
+
+#[test]
 fn local_logical_proof_survives_manifesting_and_atomic_publication() {
     let directory = tempfile::tempdir().unwrap();
     let candidate = directory.path().join("candidate");

@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::db::models::{
@@ -16,16 +16,58 @@ use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogMetadataStreamAdmission,
     CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
     CatalogProvideRecordV1, CatalogReader, CatalogScopeV1, CatalogScratchAdmission,
-    CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SourceCatalogCandidateV1,
-    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
-    SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1, retain_source_metadata_object,
+    CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SOURCE_CATALOG_PROJECTION_VERSION_V2,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceCatalogCandidateV1, SourceEcosystemV1,
+    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
+    SourceStreamKindV1, SourceStreamV1, retain_source_metadata_object,
+    verify_registered_source_catalog_bundle,
 };
+
+/// One exact registered source snapshot eligible for reuse after the current
+/// upstream metadata independently authenticates to the same authority.
+#[derive(Debug, Clone)]
+pub struct DurableSourceCatalogReuseV1 {
+    manifest: SourceSnapshotV1,
+    bundle_path: PathBuf,
+}
+
+impl DurableSourceCatalogReuseV1 {
+    pub fn new(manifest: SourceSnapshotV1, bundle_path: PathBuf) -> Result<Self> {
+        manifest.validate()?;
+        Ok(Self {
+            manifest,
+            bundle_path,
+        })
+    }
+
+    #[must_use]
+    pub fn manifest(&self) -> &SourceSnapshotV1 {
+        &self.manifest
+    }
+
+    #[must_use]
+    pub fn bundle_path(&self) -> &Path {
+        &self.bundle_path
+    }
+}
+
+/// How the verified source reader reached the profile-composition boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceCatalogMaterializationV1 {
+    /// A new private catalog was constructed from authenticated native bytes.
+    PrivateCandidate,
+    /// An exact projection-cache entry was copied into a private candidate.
+    ProjectionCacheCandidate,
+    /// An exact registered durable bundle was reopened in place.
+    DurableReuse { bundle_path: PathBuf },
+}
 
 /// One source manifest paired with the process-local reader that completed its
 /// full logical verification.
 pub struct VerifiedSourceCatalogCandidateV1 {
     pub manifest: SourceSnapshotV1,
     pub reader: CatalogReader,
+    pub materialization: SourceCatalogMaterializationV1,
 }
 use crate::repository::parsers::{
     ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject,
@@ -68,6 +110,7 @@ pub async fn stream_native_source_catalog(
         candidate_path,
         projection_cache_root,
         None,
+        None,
     )
     .await?
     .manifest)
@@ -87,6 +130,7 @@ pub async fn stream_native_source_catalog_with_scratch_admission(
         candidate_path,
         projection_cache_root,
         Some(scratch_admission),
+        None,
     )
     .await?
     .manifest)
@@ -107,6 +151,7 @@ pub async fn stream_native_source_catalog_verified_with_scratch_admission(
         candidate_path,
         projection_cache_root,
         Some(scratch_admission),
+        None,
     )
     .await
 }
@@ -130,6 +175,33 @@ pub fn stream_native_source_catalog_verified_with_scratch_admission_blocking(
         candidate_path,
         projection_cache_root,
         Some(scratch_admission),
+        None,
+    ))
+}
+
+/// Run one verified native-source pipeline with an optional exact durable
+/// source selected by the caller's registered authority.
+///
+/// Reuse is accepted only after the current authenticated root and every
+/// projection input reproduce the registered manifest authority. An exact
+/// match reopens the durable bundle once and creates no candidate catalog;
+/// changed upstream identity retains the ordinary projection-cache/new-build
+/// path.
+pub fn stream_native_source_catalog_verified_blocking_with_reuse(
+    repo: &Repository,
+    keyring_dir: &Path,
+    candidate_path: &Path,
+    projection_cache_root: Option<&Path>,
+    scratch_admission: Arc<dyn CatalogScratchAdmission>,
+    durable_reuse: Option<DurableSourceCatalogReuseV1>,
+) -> Result<VerifiedSourceCatalogCandidateV1> {
+    drive_native_source_future_on_private_runtime(stream_native_source_catalog_inner(
+        repo,
+        keyring_dir,
+        candidate_path,
+        projection_cache_root,
+        Some(scratch_admission),
+        durable_reuse,
     ))
 }
 
@@ -148,19 +220,22 @@ async fn stream_native_source_catalog_inner(
     candidate_path: &Path,
     projection_cache_root: Option<&Path>,
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
+    durable_reuse: Option<DurableSourceCatalogReuseV1>,
 ) -> Result<VerifiedSourceCatalogCandidateV1> {
     let parser = prepare_repository_native_parser(repo, keyring_dir).await?;
-    let mut sink = NativeCatalogSnapshotSink::create(
+    let mut sink = NativeCatalogSnapshotSink::create_with_reuse(
         repo,
         candidate_path,
         projection_cache_root,
         scratch_admission,
+        durable_reuse,
     )?;
     let snapshot = parser.ingest_snapshot(&repo.url, &mut sink).await?;
     sink.finish(repo, snapshot)
 }
 
 struct NativeCatalogSnapshotSink {
+    repository: Repository,
     writer: Option<CatalogCandidateWriter>,
     scope: CatalogScopeV1,
     preflight_projection_bytes: u64,
@@ -179,17 +254,41 @@ struct NativeCatalogSnapshotSink {
         Vec<AuthenticatedProjectionInputV1>,
     )>,
     cached_reader: Option<CatalogReader>,
+    materialization: SourceCatalogMaterializationV1,
+    durable_reuse: Option<DurableSourceCatalogReuseV1>,
     work_leases: Vec<Box<dyn Send>>,
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
 }
 
 impl NativeCatalogSnapshotSink {
+    #[cfg(test)]
     fn create(
         repo: &Repository,
         candidate_path: &Path,
         projection_cache_root: Option<&Path>,
         scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
     ) -> Result<Self> {
+        Self::create_with_reuse(
+            repo,
+            candidate_path,
+            projection_cache_root,
+            scratch_admission,
+            None,
+        )
+    }
+
+    fn create_with_reuse(
+        repo: &Repository,
+        candidate_path: &Path,
+        projection_cache_root: Option<&Path>,
+        scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
+        durable_reuse: Option<DurableSourceCatalogReuseV1>,
+    ) -> Result<Self> {
+        if durable_reuse.is_some() && scratch_admission.is_none() {
+            return Err(Error::ConfigError(
+                "durable source reuse requires source-candidate scratch admission".to_string(),
+            ));
+        }
         repo.validate_stream_binding()?;
         let source_profile = repo.source_profile.clone().ok_or_else(|| {
             Error::ConfigError(format!(
@@ -246,6 +345,7 @@ impl NativeCatalogSnapshotSink {
         )
         .map_err(|_| Error::IoError("native source scope byte count exceeds u64".to_string()))?;
         Ok(Self {
+            repository: repo.clone(),
             writer,
             scope,
             preflight_projection_bytes,
@@ -266,6 +366,8 @@ impl NativeCatalogSnapshotSink {
             projection_cache,
             cache_inputs: None,
             cached_reader: None,
+            materialization: SourceCatalogMaterializationV1::PrivateCandidate,
+            durable_reuse,
             work_leases: Vec::new(),
             scratch_admission,
         })
@@ -283,6 +385,7 @@ impl NativeCatalogSnapshotSink {
             projection_cache,
             cache_inputs,
             cached_reader,
+            materialization,
             work_directory,
             work_leases,
             ..
@@ -299,7 +402,10 @@ impl NativeCatalogSnapshotSink {
                 size: object.size,
             })
             .collect();
-        let reused_cache = cached_reader.is_some();
+        let should_publish_cache = matches!(
+            &materialization,
+            SourceCatalogMaterializationV1::PrivateCandidate
+        );
         let (binding, reader) = match (writer, cached_reader) {
             (Some(writer), None) => writer.finish_verified(evidence)?,
             (None, Some(reader)) => {
@@ -331,7 +437,7 @@ impl NativeCatalogSnapshotSink {
                 ));
             }
         };
-        if !reused_cache
+        if should_publish_cache
             && let (Some(cache), Some((_cache_snapshot, cache_inputs))) =
                 (projection_cache, cache_inputs)
         {
@@ -340,7 +446,11 @@ impl NativeCatalogSnapshotSink {
         let authority = source_catalog_authority(repo, snapshot, authenticated_objects)?;
         let manifest =
             crate::repository::catalog::source::bind_source_snapshot(authority, &binding)?;
-        Ok(VerifiedSourceCatalogCandidateV1 { manifest, reader })
+        Ok(VerifiedSourceCatalogCandidateV1 {
+            manifest,
+            reader,
+            materialization,
+        })
     }
 
     fn project_package(&self, package: PackageMetadata) -> Result<CatalogPackageRecordV1> {
@@ -454,6 +564,9 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
                 .then_with(|| left.object.source_path.cmp(&right.object.source_path))
         });
         self.cache_inputs = Some((snapshot.clone(), cache_inputs));
+        if self.reuse_registered_source(snapshot, inputs)? {
+            return Ok(true);
+        }
         let Some(cache) = &self.projection_cache else {
             return Ok(false);
         };
@@ -478,6 +591,7 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         }
         let candidate_reader = cache.materialize_verified(&reader, &self.candidate_path)?;
         self.cached_reader = Some(candidate_reader);
+        self.materialization = SourceCatalogMaterializationV1::ProjectionCacheCandidate;
         Ok(true)
     }
 
@@ -664,6 +778,58 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
         self.writer_mut()?
             .validate_rpm_primary_file_requirements(repo_url)
     }
+}
+
+impl NativeCatalogSnapshotSink {
+    fn reuse_registered_source(
+        &mut self,
+        snapshot: &AuthenticatedSnapshotIdentity,
+        inputs: &[AuthenticatedProjectionInputV1],
+    ) -> Result<bool> {
+        let Some(reuse) = self.durable_reuse.as_ref() else {
+            return Ok(false);
+        };
+        let authenticated_objects = inputs
+            .iter()
+            .map(|input| input.object.clone())
+            .collect::<Vec<_>>();
+        let authority =
+            source_catalog_authority(&self.repository, snapshot.clone(), authenticated_objects)?;
+        if !source_snapshot_matches_authority(&reuse.manifest, &authority) {
+            return Ok(false);
+        }
+
+        let reader = verify_registered_source_catalog_bundle(&reuse.bundle_path, &reuse.manifest)?;
+        let rebound =
+            crate::repository::catalog::source::bind_source_snapshot(authority, reader.binding())?;
+        if rebound != reuse.manifest {
+            return Err(Error::ConflictError(
+                "registered source snapshot changed while its durable bundle was reopened"
+                    .to_string(),
+            ));
+        }
+        self.cached_reader = Some(reader);
+        self.materialization = SourceCatalogMaterializationV1::DurableReuse {
+            bundle_path: reuse.bundle_path.clone(),
+        };
+        Ok(true)
+    }
+}
+
+fn source_snapshot_matches_authority(
+    manifest: &SourceSnapshotV1,
+    authority: &SourceCatalogAuthorityV1,
+) -> bool {
+    manifest.schema_version == SOURCE_SNAPSHOT_SCHEMA_V1
+        && manifest.source_profile == authority.source_profile
+        && manifest.source_identity == authority.source_identity
+        && manifest.repository_identity == authority.repository_identity
+        && manifest.stream == authority.stream
+        && manifest.stream_binding_sha256 == authority.stream_binding_sha256
+        && manifest.parser_projection_version == SOURCE_CATALOG_PROJECTION_VERSION_V2
+        && manifest.provenance == authority.provenance
+        && manifest.authenticated_root == authority.authenticated_root
+        && manifest.authenticated_objects == authority.authenticated_objects
 }
 
 fn source_catalog_candidate(

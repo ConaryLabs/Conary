@@ -3,11 +3,12 @@
 use super::*;
 use crate::db::models::{RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode};
 use crate::repository::catalog::{
-    CatalogCopyScratchV1, CatalogFinalizationScratchV2, CatalogMetadataObjectScratchV1,
-    CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
-    CatalogPackageOriginV1, CatalogScopeV1, CatalogScratchAdmission, CatalogScratchCapacityError,
-    CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1,
-    write_catalog_candidate,
+    CATALOG_FILE_NAME, CatalogCopyScratchV1, CatalogFinalizationScratchV2,
+    CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1, CatalogMetadataStreamAdmission,
+    CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogScopeV1,
+    CatalogScratchAdmission, CatalogScratchCapacityError, CatalogSourceCandidateScratchV1,
+    CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1, write_catalog_candidate,
+    write_source_catalog_manifest,
 };
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::parsers::PackageMetadata;
@@ -185,6 +186,41 @@ fn authenticated_object() -> SourceMetadataObjectV1 {
 
 fn authenticated_object_bytes() -> Vec<u8> {
     vec![b'x'; 2048]
+}
+
+fn durable_source_reuse(
+    root: &Path,
+    repository: &Repository,
+    snapshot: AuthenticatedSnapshotIdentity,
+) -> (DurableSourceCatalogReuseV1, AuthenticatedProjectionInputV1) {
+    let object = authenticated_object();
+    let source = source_catalog_candidate(
+        repository,
+        vec![package(repository)],
+        snapshot,
+        vec![object.clone()],
+    )
+    .unwrap();
+    let bundle = root.join("durable-source");
+    std::fs::create_dir(&bundle).unwrap();
+    let binding = write_catalog_candidate(bundle.join("catalog.sqlite"), source.content()).unwrap();
+    let manifest = source.bind(&binding).unwrap();
+    let work = tempfile::Builder::new()
+        .prefix("durable-source-object-")
+        .tempdir_in(root)
+        .unwrap();
+    let object_path = work.path().join("rpm-primary");
+    std::fs::write(&object_path, authenticated_object_bytes()).unwrap();
+    retain_source_metadata_object(&bundle, work.path(), &object_path, &object).unwrap();
+    drop(write_source_catalog_manifest(&bundle, &manifest).unwrap());
+    let projection_input = AuthenticatedProjectionInputV1::with_authenticated_decoded_size(
+        object,
+        authenticated_object_bytes().len() as u64,
+    );
+    (
+        DurableSourceCatalogReuseV1::new(manifest, bundle).unwrap(),
+        projection_input,
+    )
 }
 
 #[test]
@@ -488,6 +524,138 @@ fn authenticated_root_churn_reuses_exact_child_projection_and_binds_new_root() {
         .authenticated_object(object.clone(), &object_path)
         .unwrap();
     unadmitted.finish(&repository, refreshed_snapshot).unwrap();
+}
+
+#[test]
+fn exact_registered_source_reuse_creates_no_candidate_catalog_or_scratch_reservation() {
+    let root = tempfile::tempdir().unwrap();
+    let repository = repository();
+    let snapshot = AuthenticatedSnapshotIdentity::for_bytes(b"signed repomd durable revision");
+    let (reuse, projection_input) =
+        durable_source_reuse(root.path(), &repository, snapshot.clone());
+    let expected_manifest = reuse.manifest().clone();
+    let durable_path = reuse.bundle_path().to_path_buf();
+    let candidate_directory = root.path().join("candidate");
+    std::fs::create_dir(&candidate_directory).unwrap();
+    let candidate = candidate_directory.join("catalog.sqlite");
+    let admission = Arc::new(RecordingAdmission {
+        source_candidates: Mutex::new(Vec::new()),
+        finalizations: Mutex::new(Vec::new()),
+        metadata: Mutex::new(Vec::new()),
+        streams: Mutex::new(Vec::new()),
+        stream_chunks: Arc::new(Mutex::new(Vec::new())),
+        lease_drops: Arc::new(AtomicUsize::new(0)),
+        refuse_source: false,
+    });
+    let mut sink = NativeCatalogSnapshotSink::create_with_reuse(
+        &repository,
+        &candidate,
+        None,
+        Some(admission.clone()),
+        Some(reuse),
+    )
+    .unwrap();
+
+    assert!(
+        sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&projection_input))
+            .unwrap()
+    );
+    assert!(!candidate.exists());
+    assert!(admission.source_candidates.lock().unwrap().is_empty());
+    let object_path = sink.work_directory.path().join("rpm-primary");
+    std::fs::write(&object_path, authenticated_object_bytes()).unwrap();
+    sink.authenticated_object(projection_input.object.clone(), &object_path)
+        .unwrap();
+    let result = sink.finish(&repository, snapshot).unwrap();
+
+    assert_eq!(result.manifest, expected_manifest);
+    assert_eq!(
+        result.materialization,
+        SourceCatalogMaterializationV1::DurableReuse {
+            bundle_path: durable_path,
+        }
+    );
+    assert!(!candidate.exists());
+    assert!(admission.finalizations.lock().unwrap().is_empty());
+}
+
+#[test]
+fn changed_authenticated_root_does_not_reuse_registered_source() {
+    let root = tempfile::tempdir().unwrap();
+    let repository = repository();
+    let registered = AuthenticatedSnapshotIdentity::for_bytes(b"registered repomd revision");
+    let changed = AuthenticatedSnapshotIdentity::for_bytes(b"changed repomd revision");
+    let (reuse, projection_input) = durable_source_reuse(root.path(), &repository, registered);
+    let candidate_directory = root.path().join("candidate");
+    std::fs::create_dir(&candidate_directory).unwrap();
+    let admission = Arc::new(RecordingAdmission {
+        source_candidates: Mutex::new(Vec::new()),
+        finalizations: Mutex::new(Vec::new()),
+        metadata: Mutex::new(Vec::new()),
+        streams: Mutex::new(Vec::new()),
+        stream_chunks: Arc::new(Mutex::new(Vec::new())),
+        lease_drops: Arc::new(AtomicUsize::new(0)),
+        refuse_source: false,
+    });
+    let mut sink = NativeCatalogSnapshotSink::create_with_reuse(
+        &repository,
+        &candidate_directory.join("catalog.sqlite"),
+        None,
+        Some(admission),
+        Some(reuse),
+    )
+    .unwrap();
+
+    assert!(
+        !sink
+            .reuse_cached_projection(&changed, std::slice::from_ref(&projection_input))
+            .unwrap()
+    );
+}
+
+#[test]
+fn corrupted_registered_source_fails_closed_without_candidate_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let repository = repository();
+    let snapshot = AuthenticatedSnapshotIdentity::for_bytes(b"registered repomd revision");
+    let (reuse, projection_input) =
+        durable_source_reuse(root.path(), &repository, snapshot.clone());
+    let catalog_path = reuse.bundle_path().join(CATALOG_FILE_NAME);
+    let mut bytes = std::fs::read(&catalog_path).unwrap();
+    let last = bytes.last_mut().unwrap();
+    *last ^= 0xff;
+    std::fs::write(&catalog_path, bytes).unwrap();
+    let candidate_directory = root.path().join("candidate");
+    std::fs::create_dir(&candidate_directory).unwrap();
+    let candidate = candidate_directory.join(CATALOG_FILE_NAME);
+    let admission = Arc::new(RecordingAdmission {
+        source_candidates: Mutex::new(Vec::new()),
+        finalizations: Mutex::new(Vec::new()),
+        metadata: Mutex::new(Vec::new()),
+        streams: Mutex::new(Vec::new()),
+        stream_chunks: Arc::new(Mutex::new(Vec::new())),
+        lease_drops: Arc::new(AtomicUsize::new(0)),
+        refuse_source: false,
+    });
+    let mut sink = NativeCatalogSnapshotSink::create_with_reuse(
+        &repository,
+        &candidate,
+        None,
+        Some(admission),
+        Some(reuse),
+    )
+    .unwrap();
+
+    let error = sink
+        .reuse_cached_projection(&snapshot, std::slice::from_ref(&projection_input))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("Checksum mismatch")
+            || error.to_string().contains("SHA-256")
+            || error.to_string().contains("hash"),
+        "{error}"
+    );
+    assert!(!candidate.exists());
 }
 
 #[test]

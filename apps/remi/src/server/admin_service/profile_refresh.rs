@@ -2,6 +2,8 @@
 
 //! Profile-scoped immutable native catalog refresh and candidate completion.
 
+mod source_reuse;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -138,31 +140,36 @@ pub(super) async fn refresh_native_profile(
         return Err(error);
     }
 
-    let (staged, heartbeat) =
-        match stage_profile_catalog_with_heartbeat(&roots, &run, &source_profile, repositories)
-            .await
-        {
-            Ok(published) => published,
-            Err(error) => {
-                let category = profile_failure_category(&error);
-                abort_run(
-                    &roots,
-                    &run,
-                    ProfileSyncFailureStage::FetchingObjects,
-                    category,
-                    &format!("{error:#}"),
-                )
-                .await;
-                log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
-                let primary = profile_stage_service_error(&error);
-                return match collect_catalog_garbage(&roots).await {
-                    Ok(_) => Err(primary),
-                    Err(cleanup) => Err(ServiceError::Internal(format!(
-                        "{primary}; exact catalog recovery also failed: {cleanup}"
-                    ))),
-                };
-            }
-        };
+    let (staged, heartbeat) = match stage_profile_catalog_with_heartbeat(
+        &roots,
+        &run,
+        &source_profile,
+        repositories,
+        &plans,
+    )
+    .await
+    {
+        Ok(published) => published,
+        Err(error) => {
+            let category = profile_failure_category(&error);
+            abort_run(
+                &roots,
+                &run,
+                ProfileSyncFailureStage::FetchingObjects,
+                category,
+                &format!("{error:#}"),
+            )
+            .await;
+            log_cleanup_failure(cleanup_run(&roots, &run.run_id).await, &run.run_id);
+            let primary = profile_stage_service_error(&error);
+            return match collect_catalog_garbage(&roots).await {
+                Ok(_) => Err(primary),
+                Err(cleanup) => Err(ServiceError::Internal(format!(
+                    "{primary}; exact catalog recovery also failed: {cleanup}"
+                ))),
+            };
+        }
+    };
 
     let results = match profile_refresh_results(&source_profile, &names, &staged) {
         Ok(results) => results,
@@ -296,9 +303,12 @@ async fn stage_profile_catalog_with_heartbeat(
     run: &ProfileSyncRun,
     source_profile: &str,
     repositories: Vec<Repository>,
+    plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
 ) -> anyhow::Result<(StagedProfileCatalog, ProfileHeartbeat)> {
     let heartbeat = spawn_profile_heartbeat(roots, run)?;
     let staged = async {
+        let reusable_sources =
+            source_reuse::registered_source_reuse(roots, source_profile, plans).await?;
         let sources = stage_profile_sources(
             &run.run_id,
             source_profile,
@@ -307,6 +317,7 @@ async fn stage_profile_catalog_with_heartbeat(
             &roots.catalog_candidate_dir,
             &roots.projection_cache_dir,
             roots.catalog_scratch_coordinator.clone(),
+            reusable_sources,
         )
         .await?;
         let reusable = reusable_profile_catalog(roots, source_profile, sources.members()).await?;
@@ -329,29 +340,7 @@ async fn reusable_profile_catalog(
     source_profile: &str,
     members: &[ProfileSourceMemberV2],
 ) -> anyhow::Result<Option<PinnedProfileCatalog>> {
-    let db_path = roots.db_path.clone();
-    let profile_for_query = source_profile.to_string();
-    let selections = tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        let mut selections = Vec::new();
-        if let Some(candidate) = current_profile_sync_candidate(&conn, &profile_for_query)? {
-            selections.push(ProfileRevisionSelection {
-                source_profile: candidate.source_profile,
-                profile_revision_sha256: candidate.profile_revision_sha256,
-            });
-        }
-        if let Some(active) = RemiActiveProfileRevision::find(&conn, &profile_for_query)? {
-            let selection = ProfileRevisionSelection::from(&active);
-            if !selections.contains(&selection) {
-                selections.push(selection);
-            }
-        }
-        Ok::<_, conary_core::Error>(selections)
-    })
-    .await
-    .context("reusable profile selection task panicked")??;
-
-    for selection in selections {
+    for selection in source_reuse::profile_reuse_selections(roots, source_profile).await? {
         let authority = roots.catalog_authority.clone();
         let inspected_selection = selection.clone();
         let inspection = tokio::task::spawn_blocking(move || {

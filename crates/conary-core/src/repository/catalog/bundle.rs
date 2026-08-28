@@ -120,6 +120,27 @@ pub fn verify_source_catalog_bundle(
     Ok(reader)
 }
 
+/// Reopen a locally registered, content-addressed source snapshot whose
+/// publisher already required a complete logical replay before registration.
+///
+/// The durable registry owner must first validate the canonical manifest,
+/// resource metadata, and exact source-snapshot identity. This function then
+/// repeats the complete filesystem, byte hash, SQLite schema/integrity,
+/// embedded-binding, and retained-metadata checks without replaying every
+/// normalized relation through Rust values.
+pub fn verify_registered_source_catalog_bundle(
+    directory: impl AsRef<Path>,
+    expected: &SourceSnapshotV1,
+) -> Result<CatalogReader> {
+    expected.validate()?;
+    verify_exact_source_directory(directory.as_ref())?;
+    verify_manifest_file(directory.as_ref(), expected)?;
+    let reader =
+        verify_source_catalog_binding_with_durable_attestation(directory.as_ref(), expected)?;
+    verify_source_metadata_directory(directory.as_ref(), expected)?;
+    Ok(reader)
+}
+
 fn verify_source_catalog_bundle_with_proof(
     directory: &Path,
     expected: &SourceSnapshotV1,
@@ -478,6 +499,21 @@ fn verify_profile_catalog_binding_with_durable_attestation(
         &attestation,
     )?;
     verify_profile_evidence(directory, manifest, &reader)?;
+    Ok(reader)
+}
+
+fn verify_source_catalog_binding_with_durable_attestation(
+    directory: &Path,
+    manifest: &SourceSnapshotV1,
+) -> Result<CatalogReader> {
+    let binding = source_catalog_binding(manifest);
+    let attestation = CatalogDurableLogicalAttestationV1::new(&binding);
+    let reader = CatalogReader::open_verified_with_durable_attestation(
+        directory.join(CATALOG_FILE_NAME),
+        &binding,
+        &attestation,
+    )?;
+    verify_source_evidence(directory, manifest, &reader)?;
     Ok(reader)
 }
 
