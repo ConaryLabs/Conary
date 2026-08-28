@@ -101,6 +101,22 @@ cargo build -p conaryd
 cargo build -p conary --release
 ```
 
+For repeated builds, the repository-owned development environment shares
+eligible compiler outputs across linked worktrees while leaving each
+worktree's Cargo target isolated:
+
+```bash
+scripts/dev-build.sh cargo -- build -p conary
+scripts/dev-build.sh cargo -- test -p remi
+scripts/dev-build.sh status
+```
+
+The shared compiler cache lives under the common Git directory and is bounded
+to 10 GiB by default. Existing `RUSTC_WRAPPER`, `CARGO_TARGET_DIR`,
+`SCCACHE_DIR`, and `SCCACHE_CACHE_SIZE` values retain precedence. Use
+`scripts/dev-build.sh clean --yes` only when intentionally clearing that
+marked compiler cache; it never removes Cargo targets.
+
 The project root is a virtual Cargo workspace with eight members:
 `apps/conary`, `apps/remi`, `apps/conaryd`, `apps/conary-test`,
 `crates/conary-agent-contract`, `crates/conary-bootstrap`,

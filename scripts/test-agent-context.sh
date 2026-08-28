@@ -397,7 +397,7 @@ cat > "$environment_map" <<'EOF'
 
 **Paths:** `scripts/agent-context.sh`.
 
-**Focused proof:** `printf 'target=%s\n' "$CARGO_TARGET_DIR"`.
+**Focused proof:** `printf 'target=%s wrapper=%s\n' "$CARGO_TARGET_DIR" "${RUSTC_WRAPPER-<unset>}"`.
 
 **Interaction gate:** `true`.
 
@@ -412,12 +412,28 @@ fi
 EOF
 isolated_target="$tmp/private-target"
 run_out="$(
-    CARGO_TARGET_DIR="$isolated_target" \
+    env -u RUSTC_WRAPPER \
+        CARGO_TARGET_DIR="$isolated_target" \
+        CONARY_COMPILER_CACHE=off \
         BASH_ENV="$tmp/login-reset.sh" \
-        "$script" --feature environment --run focused --map "$environment_map"
+        "$script" --feature environment --run focused --map "$environment_map" 2>&1
 )"
 grep -Fq "target=$isolated_target" <<<"$run_out" \
     || fail "--run did not preserve the caller's CARGO_TARGET_DIR; got: $run_out"
+grep -Fq 'wrapper=<unset>' <<<"$run_out" \
+    || fail "--run explicit cache disable unexpectedly installed a wrapper; got: $run_out"
+grep -Fq 'compiler-cache=disabled' <<<"$run_out" \
+    || fail "--run did not consume the shared development environment owner; got: $run_out"
+
+run_out="$(
+    CARGO_TARGET_DIR="$isolated_target" \
+        RUSTC_WRAPPER=/caller/rustc-wrapper \
+        "$script" --feature environment --run focused --map "$environment_map" 2>&1
+)"
+grep -Fq 'wrapper=/caller/rustc-wrapper' <<<"$run_out" \
+    || fail "--run replaced the caller's RUSTC_WRAPPER; got: $run_out"
+grep -Fq 'compiler-cache=caller-wrapper' <<<"$run_out" \
+    || fail "--run did not report caller wrapper precedence; got: $run_out"
 
 failing_map="$tmp/failing-map.md"
 write_fixture_map "$failing_map"
@@ -443,7 +459,7 @@ grep -q $'^resolution\t' <<<"$real_list" || fail "real map --list missing resolu
 grep -q $'^canonical-map\t' <<<"$real_list" || fail "real map --list missing canonical-map slug"
 grep -q $'^release\t' <<<"$real_list" || fail "real map --list missing release slug"
 grep -q $'^database-state\t' <<<"$real_list" || fail "real map --list missing database-state slug"
-[[ "$(wc -l <<<"$real_list")" -eq 17 ]] || fail "real map --list did not print 17 cards"
+[[ "$(wc -l <<<"$real_list")" -eq 18 ]] || fail "real map --list did not print 18 cards"
 
 "$script" --path apps/conary/src/commands/install/mod.rs > "$tmp/real-install.out"
 grep -q '^slug: install$' "$tmp/real-install.out" \

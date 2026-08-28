@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-27
-revision: 80
-summary: Route feature ownership through isolated hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+last_updated: 2026-08-28
+revision: 81
+summary: Route feature ownership through shared compiler caching with isolated build targets, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1456,6 +1456,45 @@ set, and each case binds its claims to source-artifact roles that must resolve
 to unique runtime SHA-256 identities. Only completed cases contribute coverage;
 the declared and emitted case counts and required/covered semantic sets must
 agree.
+
+## Developer Build Environment
+
+**Slug:** dev-build
+
+**Capability:** share eligible compiler outputs across linked worktrees while
+keeping Cargo targets isolated per worktree and cleanup explicitly bounded to
+the compiler cache.
+
+**Start here:** `scripts/dev-build.sh`; `scripts/test-dev-build.sh`;
+`apps/remi/build.rs`; `apps/conary-test/build.rs`; `CONTRIBUTING.md`;
+`docs/llms/README.md`.
+
+**Neighbor systems:** Cargo and rustc invocation, `sccache`, Git linked
+worktrees, agent-context proof execution, caller-provided build environments,
+and local disk usage.
+
+**Paths:** `scripts/dev-build.sh`; `scripts/test-dev-build.sh`;
+`apps/remi/build.rs`; `apps/conary-test/build.rs`.
+
+**Focused proof:** `bash scripts/test-dev-build.sh`.
+
+**Interaction gate:** `bash scripts/test-agent-context.sh` when proof execution
+changes; `bash scripts/agent-context.sh --validate` when ownership routing
+changes.
+
+**Docs to update:** `CONTRIBUTING.md`; `docs/llms/README.md`;
+`docs/modules/feature-ownership.md`.
+
+**Safety notes:** the Git common directory owns only the bounded compiler
+cache; Cargo targets remain worktree-local unless the caller explicitly
+selects one. Existing `RUSTC_WRAPPER`, `CARGO_TARGET_DIR`, `SCCACHE_DIR`, and
+cache-size settings retain precedence. Cache cleanup requires an exact marker
+and explicit confirmation, rejects broad or symlink targets, and never deletes
+a Cargo target. A cache miss or compiler failure is reported once; it must not
+silently rerun the compiler outside the selected cache. Build metadata may
+watch only existing Git control paths; it must not permanently invalidate a
+linked worktree or recursively watch the common Git directory that owns the
+shared cache.
 
 ## Agent/MCP Operation Surfaces
 

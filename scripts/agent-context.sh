@@ -547,8 +547,11 @@ mode_validate() {
 }
 
 mode_run() {
-    local heading="$1" field cmd
+    local heading="$1" field cmd dev_build
     local -a cmds=()
+
+    dev_build="${repo_root}/scripts/dev-build.sh"
+    [[ -x "$dev_build" ]] || fail "development build environment is not executable: $dev_build"
 
     case "$run_kind" in
         focused) field="Focused proof" ;;
@@ -562,7 +565,7 @@ mode_run() {
 
     for cmd in "${cmds[@]}"; do
         printf '+ %s\n' "$cmd"
-        bash -c "$cmd" || fail "command failed: $cmd"
+        "$dev_build" run -- bash -c "$cmd" || fail "command failed: $cmd"
     done
     printf 'All %s %s command(s) passed for %s.\n' "${#cmds[@]}" "$run_kind" "$heading"
 }
