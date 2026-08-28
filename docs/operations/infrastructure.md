@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 49
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
+revision: 50
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -125,7 +125,11 @@ workflow.
   public profile includes its current candidate plus the exact latest fenced
   refresh run, typed state and failure stage/category, member progress,
   raw-evidence SHA-256, and a bounded redacted diagnostic copy. The protected
-  job binds the final inspection to the exact merged commit, built binary
+  job materializes its postdeployment fencing predicate from the exact
+  `github.workflow_sha` whose workflow definition is executing, not from the
+  deliberately older candidate checkout. It requires that workflow authority
+  to be merged into `origin/main`. The job binds the final inspection to the
+  exact merged candidate commit, built binary
   SHA-256, completion mode, and post-transition timestamp, uploads those
   public-sanitized JSON artifacts, and writes a concise typed summary even when
   completion fails. It does not expose service logs, generic shell access,

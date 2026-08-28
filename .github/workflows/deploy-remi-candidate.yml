@@ -141,6 +141,7 @@ jobs:
           COMPLETION_MODE: ${{ github.event.inputs.completion_mode }}
           CANDIDATE_SHA: ${{ github.event.inputs.commit_sha }}
           BINARY_SHA256: ${{ steps.bundle.outputs.binary_sha256 }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -155,11 +156,28 @@ jobs:
               exit 1
               ;;
           esac
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "workflow authority is not a canonical commit SHA" >&2
+            exit 1
+          }
+          git fetch --no-tags origin "$WORKFLOW_SHA"
+          git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
+            echo "workflow authority must already be merged into origin/main" >&2
+            exit 1
+          }
+          workflow_fencing_policy="$RUNNER_TEMP/remi-postdeployment-fencing-${GITHUB_RUN_ID}.jq"
+          git show "${WORKFLOW_SHA}:deploy/remi-postdeployment-fencing.jq" \
+            > "$workflow_fencing_policy"
+          [[ -s "$workflow_fencing_policy" && ! -L "$workflow_fencing_policy" ]] || {
+            echo "exact workflow authority has no regular postdeployment fencing policy" >&2
+            exit 1
+          }
 
           target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
           mkdir -p ~/.ssh
           cleanup_candidate_deploy() {
             rm -f ~/.ssh/remi_key
+            rm -f -- "$workflow_fencing_policy"
             if [[ -n "${ssh_opts:-}" && -n "${remote_bundle:-}" ]]; then
               ssh $ssh_opts "$target" \
                 "rm -f -- '$remote_bundle' '${remote_repositories:-}' '${remote_helper:-}'" \
@@ -625,7 +643,7 @@ jobs:
             && "$deploy_status" -eq 0 ]]; then
             jq -e \
               --slurpfile baseline remi-predeployment-inspection.json \
-              -f deploy/remi-postdeployment-fencing.jq \
+              -f "$workflow_fencing_policy" \
               remi-deployment-inspection.json >/dev/null || {
               echo "private candidates do not come from post-deploy fenced refreshes" >&2
               exit 1
