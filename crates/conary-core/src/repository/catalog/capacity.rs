@@ -929,6 +929,19 @@ mod tests {
     }
 
     #[test]
+    fn projection_spool_requirement_is_run_local_and_versioned() {
+        let requirement =
+            CatalogProjectionSpoolScratchV1::new("normalized-projection-v1.spool").unwrap();
+        requirement.validate().unwrap();
+
+        assert!(CatalogProjectionSpoolScratchV1::new("../projection.spool").is_err());
+        assert!(CatalogProjectionSpoolScratchV1::new("/tmp/projection.spool").is_err());
+        let mut superseded = requirement;
+        superseded.schema_version += 1;
+        assert!(superseded.validate().is_err());
+    }
+
+    #[test]
     fn copy_requirement_is_exact_and_rejects_contradiction() {
         let requirement = CatalogCopyScratchV1::from_exact_bytes(4096, 257).unwrap();
         assert_eq!(requirement.required_additional_bytes, 4353);

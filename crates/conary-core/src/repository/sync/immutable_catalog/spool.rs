@@ -365,3 +365,103 @@ fn decode<T: DeserializeOwned>(payload: &[u8], label: &str) -> Result<T> {
         ))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::repository::catalog::CatalogMetadataStreamAdmission;
+
+    struct RecordingAdmission {
+        chunks: Arc<Mutex<Vec<u64>>>,
+        refuse: bool,
+    }
+
+    impl CatalogMetadataStreamAdmission for RecordingAdmission {
+        fn reserve_next(&self, additional_bytes: u64) -> Result<Box<dyn Send>> {
+            if self.refuse {
+                return Err(Error::IoError(
+                    "projection spool capacity refused".to_string(),
+                ));
+            }
+            self.chunks.lock().unwrap().push(additional_bytes);
+            Ok(Box::new(()))
+        }
+    }
+
+    fn admission(refuse: bool) -> (RecordingAdmission, Arc<Mutex<Vec<u64>>>) {
+        let chunks = Arc::new(Mutex::new(Vec::new()));
+        (
+            RecordingAdmission {
+                chunks: Arc::clone(&chunks),
+                refuse,
+            },
+            chunks,
+        )
+    }
+
+    #[test]
+    fn admitted_spool_round_trips_and_verifies_complete_digest() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(PROJECTION_SPOOL_FILE_NAME);
+        let (admission, chunks) = admission(false);
+        let mut writer = ProjectionSpoolWriterV1::create(&path, Box::new(admission)).unwrap();
+        let fragment = crate::json::canonical_json(&("alpha", "desc", "payload")).unwrap();
+        writer.arch_fragment_bytes(&fragment).unwrap();
+        let mut reader = writer.finish().unwrap().open().unwrap();
+
+        match reader.next().unwrap().unwrap() {
+            ProjectionSpoolRecordV1::ArchFragment {
+                directory,
+                kind,
+                content,
+            } => {
+                assert_eq!(directory, "alpha");
+                assert_eq!(kind, ArchPackageFragmentKind::Desc);
+                assert_eq!(content, "payload");
+            }
+            _ => panic!("unexpected projection spool record"),
+        }
+        assert!(reader.next().unwrap().is_none());
+        assert_eq!(chunks.lock().unwrap().iter().sum::<u64>(), reader.bytes);
+        drop(reader);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn changed_spool_bytes_fail_digest_verification() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(PROJECTION_SPOOL_FILE_NAME);
+        let (admission, _) = admission(false);
+        let mut writer = ProjectionSpoolWriterV1::create(&path, Box::new(admission)).unwrap();
+        let fragment = crate::json::canonical_json(&("alpha", "desc", "payload")).unwrap();
+        writer.arch_fragment_bytes(&fragment).unwrap();
+        let reader = writer.finish().unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        let offset = bytes
+            .windows(b"payload".len())
+            .position(|window| window == b"payload")
+            .unwrap();
+        bytes[offset] = b'P';
+        fs::write(&path, bytes).unwrap();
+        let mut reader = reader.open().unwrap();
+
+        assert!(reader.next().unwrap().is_some());
+        assert!(matches!(reader.next(), Err(Error::ConflictError(_))));
+    }
+
+    #[test]
+    fn refused_spool_chunk_leaves_no_staged_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(PROJECTION_SPOOL_FILE_NAME);
+        let (admission, _) = admission(true);
+        let mut writer = ProjectionSpoolWriterV1::create(&path, Box::new(admission)).unwrap();
+        writer
+            .finish_join(SnapshotPackageJoin::RpmFilelists)
+            .unwrap();
+
+        assert!(writer.finish().is_err());
+        assert!(!path.exists());
+    }
+}
