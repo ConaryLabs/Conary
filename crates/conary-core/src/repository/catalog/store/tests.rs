@@ -362,6 +362,41 @@ fn logical_digest_rejects_relations_without_a_package() {
 }
 
 #[test]
+fn full_verified_reopen_rejects_orphan_relations_through_logical_replay() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("orphan.sqlite");
+    let content =
+        CatalogContentV1::new(source_scope(), evidence(), vec![package("bash", "a")]).unwrap();
+    let mut binding = write_catalog_candidate(&path, &content).unwrap();
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys = OFF")
+        .unwrap();
+    let missing_package_key = "b".repeat(64);
+    let mut orphan = package("orphan", "orphan");
+    let provide = orphan.provides.remove(0);
+    insert_provide(&connection, &missing_package_key, 0, &provide).unwrap();
+    connection
+        .execute(
+            "UPDATE catalog_metadata SET provide_count = provide_count + 1 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+    connection.close().unwrap();
+
+    binding.counts.provides += 1;
+    binding.artifact = CatalogArtifactV1 {
+        sha256: hash_file(&path).unwrap(),
+        size: fs::metadata(&path).unwrap().len(),
+    };
+    let error = CatalogReader::open_verified(&path, &binding)
+        .err()
+        .expect("full logical replay must reject an orphan relation");
+    assert!(error.to_string().contains("missing package"));
+}
+
+#[test]
 fn logical_digest_streams_high_cardinality_package_relations() {
     const CHILD_ENV: &str = "CONARY_CATALOG_HIGH_CARDINALITY_CHILD";
     if std::env::var_os(CHILD_ENV).is_none() {

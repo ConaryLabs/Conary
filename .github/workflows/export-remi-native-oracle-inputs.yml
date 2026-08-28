@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: remi-native-oracle-input-export-production
+  group: deploy-and-verify
   cancel-in-progress: false
 
 jobs:

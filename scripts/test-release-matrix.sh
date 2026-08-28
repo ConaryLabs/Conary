@@ -1477,6 +1477,19 @@ test_check_release_matrix_rejects_nonproduction_native_oracle_export() {
         "native-oracle export protected production operator boundary"
 }
 
+test_check_release_matrix_rejects_unserialized_native_oracle_export() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '  group: deploy-and-verify' \
+        '  group: remi-native-oracle-input-export-production'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export serialized with candidate and release deployment"
+}
+
 test_check_release_matrix_rejects_loose_native_oracle_transport() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1977,6 +1990,7 @@ main() {
         test_check_release_matrix_rejects_missing_candidate_failure_artifact
         test_check_release_matrix_rejects_unprotected_native_oracle_source
         test_check_release_matrix_rejects_nonproduction_native_oracle_export
+        test_check_release_matrix_rejects_unserialized_native_oracle_export
         test_check_release_matrix_rejects_loose_native_oracle_transport
         test_check_release_matrix_rejects_unverified_remi_suite_bundle
         test_check_release_matrix_rejects_merge_validation_production_probes

@@ -326,6 +326,111 @@ fn public_reader_holds_and_releases_exact_revision_pin() {
     assert_eq!(remaining, 0);
 }
 
+#[test]
+fn selected_profile_batch_holds_every_pin_until_all_readers_are_open() {
+    let fixture = fixture();
+    let first = add_revision(&fixture, 'a', 1);
+    let second = add_revision(&fixture, 'b', 2);
+    let db_path = fixture.root.path().join("batch-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy batch authority fixture database");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let selections = [
+        super::ProfileRevisionSelection {
+            source_profile: PROFILE.to_string(),
+            profile_revision_sha256: first.digest.clone(),
+        },
+        super::ProfileRevisionSelection {
+            source_profile: PROFILE.to_string(),
+            profile_revision_sha256: second.digest.clone(),
+        },
+    ];
+
+    let pinned = authority
+        .open_selected_profiles(&selections)
+        .expect("atomically pin and reopen complete selection set");
+    assert_eq!(
+        pinned
+            .iter()
+            .map(super::PinnedProfileCatalog::profile_revision_sha256)
+            .collect::<Vec<_>>(),
+        vec![first.digest.as_str(), second.digest.as_str()]
+    );
+    let conn = Connection::open(&db_path).expect("reopen batch authority database");
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM remi_profile_revision_pins",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count complete batch pins"),
+        2
+    );
+
+    drop(pinned);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM remi_profile_revision_pins",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count released batch pins"),
+        0
+    );
+}
+
+#[test]
+fn selected_profile_batch_releases_every_pin_when_one_reopen_fails() {
+    let fixture = fixture();
+    let first = add_revision(&fixture, 'a', 1);
+    let second = add_revision(&fixture, 'b', 2);
+    let db_path = fixture.root.path().join("failed-batch-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy failed batch authority fixture database");
+    let mut bytes = fs::read(&second.artifact_path).expect("read second catalog artifact");
+    let offset = bytes.len() / 2;
+    bytes[offset] ^= 0xff;
+    fs::write(&second.artifact_path, bytes).expect("tamper second catalog artifact");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let selections = [
+        super::ProfileRevisionSelection {
+            source_profile: PROFILE.to_string(),
+            profile_revision_sha256: first.digest,
+        },
+        super::ProfileRevisionSelection {
+            source_profile: PROFILE.to_string(),
+            profile_revision_sha256: second.digest,
+        },
+    ];
+
+    let error = authority
+        .open_selected_profiles(&selections)
+        .expect_err("one invalid catalog must fail the complete pinned set");
+    assert!(format!("{error:#}").contains("Checksum mismatch"));
+    let conn = Connection::open(&db_path).expect("reopen failed batch authority database");
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM remi_profile_revision_pins",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count cleaned failed batch pins"),
+        0
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn async_reader_drop_queues_release_without_blocking_the_executor() {
     let fixture = fixture();

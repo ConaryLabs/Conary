@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 83
-summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 84
+summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -132,10 +132,12 @@ and profile manifesting instead of reconstructing and re-digesting the same
 rows a third or fourth time. Durable source and profile publication still
 independently reopen the complete bundle before and after its same-filesystem
 atomic rename; each reopen checks file type and sidecars, byte hash and size,
-SQLite application/schema identity and integrity, stored binding, relation
-counts, foreign keys, manifest evidence, and exact directory membership. Only
-the already-completed Rust row reconstruction and logical re-digest are
-omitted.
+SQLite application/schema identity and integrity, the complete stored binding,
+manifest evidence, and exact directory membership. The exact-byte proof
+carries the already-completed canonical logical replay, computed table
+cardinalities, and explicit missing-package/group rejection, so neither the
+Rust row reconstruction, table-count scans, nor SQLite's foreign-key relation
+scan is repeated for unchanged bytes.
 
 Native projection cache schema 2 also makes that logical proof durable without
 making cache bytes an independent package authority. Publication requires the
@@ -144,9 +146,11 @@ exact catalog binding. A later hit first re-derives the complete cache key from
 the authenticated root and children plus stream, parser-projection, and catalog
 schema identities. It then checks the canonical manifest and attestation,
 regular-file and sidecar policy, byte SHA-256 and size, SQLite
-application/schema identity and integrity, stored binding, relation counts,
-foreign keys, and exact source evidence. Only after those checks does it mint a
-new process-local proof and omit the redundant normalized-row reconstruction.
+application/schema identity and integrity, the complete stored binding, and
+exact source evidence. Only after those checks does it mint a new process-local
+proof. The exact catalog SHA-256 binds the publisher's canonical logical proof,
+computed table cardinalities, and orphan rejection, so cache lookup does not
+replay any complete relation pass.
 The schema hard cut makes older cache entries misses; separately loaded bundles
 and signed artifacts retain their own verification authorities.
 
@@ -171,13 +175,15 @@ repository, stream, and source-snapshot identity equality makes an existing
 immutable profile eligible for reuse. The selected V2 bundle is resolved
 through its exact durable registry entry and content-addressed canonical
 manifest, then independently reopened with the same physical, SQLite,
-integrity, binding, count, foreign-key, and member-evidence checks described
-above. V2 publication already required the complete logical replay, so this
-registered reopen carries that durable attestation instead of deserializing and
-re-digesting every row after each service restart. Externally supplied or
-unregistered bundles do not receive this authority. The reader pin remains live
-until the new fenced run completes as a durable candidate. This path creates no
-profile candidate file and performs no profile-catalog reconstruction. Any
+integrity, binding, and member-evidence checks described above. V2 publication
+already required the complete logical replay, exact table cardinalities, and
+explicit orphan rejection, so this registered reopen carries that durable
+exact-byte attestation instead of counting, deserializing, re-digesting, or
+foreign-key-scanning every row after each service restart. Externally supplied
+or unregistered bundles do not receive this authority. The reader pin remains
+live until the new fenced run completes as a durable candidate. This path
+creates no profile candidate file and performs no profile-catalog
+reconstruction. Any
 changed member or projection version takes the normal private composition path,
 and a malformed registered selection fails instead of becoming reuse
 authority.
@@ -904,9 +910,10 @@ manifest-identical sync updates verified freshness state without replacing a
 catalog.
 
 Candidate construction verifies every signed catalog's immutable SQLite
-artifact, physical schema, integrity, manifest binding, and relational counts.
-The Remi publisher already performed the canonical logical/schema replay before
-the dedicated universe role signed those exact bytes. Configured profiles are
+artifact, physical schema, integrity, and complete manifest binding. The Remi
+publisher already performed the canonical logical/schema replay, computed the
+bound table cardinalities, and rejected orphan relations before the dedicated
+universe role signed those exact bytes. Configured profiles are
 copied SQLite-to-SQLite into one private immutable resolution index; the
 canonical map streams one entry at a time into the same candidate. Secondary
 indexes are built after bulk replay, and the append-only candidate must have no
