@@ -7,8 +7,11 @@ cd "$repo_root"
 workspace_manifest="Cargo.toml"
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
+candidate_build_workflow=".github/workflows/build-remi-candidate.yml"
 candidate_deploy_workflow=".github/workflows/deploy-remi-candidate.yml"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
+candidate_artifact_script="scripts/remi-candidate-artifact.sh"
+timed_linker_script="scripts/timed-linker.sh"
 artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
 merge_workflow=".github/workflows/merge-validation.yml"
 pr_workflow=".github/workflows/pr-gate.yml"
@@ -146,8 +149,11 @@ for required_file in \
     "$workspace_manifest" \
     "$release_build" \
     "$deploy_workflow" \
+    "$candidate_build_workflow" \
     "$candidate_deploy_workflow" \
     "$candidate_predeployment_filter" \
+    "$candidate_artifact_script" \
+    "$timed_linker_script" \
     "$artifact_proof_workflow" \
     "$merge_workflow" \
     "$pr_workflow" \
@@ -388,7 +394,15 @@ require_job_match "$deploy_workflow" prove-conary-release-artifacts 'needs: \[re
 require_job_match "$deploy_workflow" deploy-remi 'name: Deploy remi bundle[\s\S]*name: Verify remi health[\s\S]*curl -fsS https://remi\.conary\.io/health >/dev/null[\s\S]*name: Verify remi readiness[\s\S]*body=\$\(curl -fsS --max-time 30 https://remi\.conary\.io/health/ready\)[\s\S]*jq -e '\''\.ready == true'\''' 'exact post-deploy Remi liveness and structured readiness proof'
 require_job_match "$deploy_workflow" deploy-remi 'bundle_dir="source-artifacts/\$\{BUNDLE_NAME\}"[\s\S]*sha256sum -c SHA256SUMS[\s\S]*bundle="\$\{bundle_dir\}/remi-\$\{VERSION\}-linux-x64\.tar\.gz"' 'Remi deployment must verify the complete suite checksums before staging its bundle'
 require_job_match "$deploy_workflow" deploy-remi 'deploy-remi[\s\S]*verify-ingress[\s\S]*inspect-remi[\s\S]*--require-repopulated[\s\S]*verify-ingress' 'suite Remi deploy verifies static ingress after mutation and completion'
+require_match "$candidate_build_workflow" 'push:\n[[:space:]]+branches:\n[[:space:]]+- main[\s\S]*workflow_dispatch:[\s\S]*commit_sha:[\s\S]*Exact commit already merged into main' 'candidate artifact build must run for protected main and allow exact reproducibility rebuilds'
+require_job_match "$candidate_build_workflow" build-remi-candidate 'SCCACHE_GHA_VERSION: remi-release-v1[\s\S]*git merge-base --is-ancestor "\$REQUESTED_SHA" origin/main[\s\S]*mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba[\s\S]*cargo build -p remi --release --locked' 'candidate artifact build must bind protected source and use the pinned shared release cache'
+require_job_match "$candidate_build_workflow" build-remi-candidate 'remi-candidate-artifact\.sh package[\s\S]*remi-candidate-artifact\.sh verify[\s\S]*event=push -f status=success -f head_sha="\$CANDIDATE_SHA"[\s\S]*Prove same-input binary reproducibility[\s\S]*\.artifact\.binary_sha256 == \$prior\[0\]\.artifact\.binary_sha256[\s\S]*name: remi-candidate-\$\{\{ steps\.candidate\.outputs\.sha \}\}[\s\S]*retention-days: 30' 'candidate artifact build must package, verify, reproduce, and retain the exact protected binary'
+require_match "$candidate_artifact_script" 'source: \{[\s\S]*commit_sha: \$commit_sha[\s\S]*cargo_lock_sha256: \$lock_sha256[\s\S]*build: \{[\s\S]*command: "cargo build -p remi --release --locked"[\s\S]*provenance: \{[\s\S]*workflow_run_id: \$workflow_run_id[\s\S]*artifact: \{[\s\S]*binary_sha256: \$artifact_sha256[\s\S]*bundle_sha256: \$bundle_sha256' 'candidate artifact manifest must bind exact source, build, provenance, and digests'
+require_match "$candidate_artifact_script" 'tar --create --format=gnu --sort=name --mtime='\''UTC 1970-01-01'\''[\s\S]*gzip --no-name[\s\S]*listing="\$\(tar -tzf "\$bundle"\)"[\s\S]*\[\[ "\$listing" == "\$binary_name" \]\][\s\S]*bundled_binary_sha' 'candidate artifact must be deterministic and reopen its exact single-file bundle'
 require_match "$candidate_deploy_workflow" 'completion_mode:\n[[:space:]]+description: Exact deployment state that this run must prove\.\n[[:space:]]+required: true\n[[:space:]]+type: choice\n[[:space:]]+options:\n[[:space:]]+- private-candidates\n[[:space:]]+- active-repopulation' 'candidate deploy explicit typed completion mode'
+require_match "$candidate_deploy_workflow" 'permissions:[\s\S]*actions: read[\s\S]*contents: read[\s\S]*event=push -f status=success -f head_sha="\$CANDIDATE_SHA"[\s\S]*\.head_branch == "main"[\s\S]*\.event == "push"[\s\S]*\.conclusion == "success"[\s\S]*\.head_repository\.full_name == \$repository[\s\S]*build-remi-candidate\.yml' 'candidate deploy must select only the exact successful protected-main build'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c[\s\S]*name: remi-candidate-\$\{\{ github\.event\.inputs\.commit_sha \}\}[\s\S]*run-id: \$\{\{ steps\.artifact-source\.outputs\.run_id \}\}[\s\S]*remi-candidate-artifact\.sh verify[\s\S]*"\$SOURCE_RUN_ID" push[\s\S]*availability_ms <= 60000 \)\)' 'candidate deploy must download, verify, and budget the exact protected artifact'
+forbid_match "$candidate_deploy_workflow" 'cargo build -p remi --release|setup-rust-workspace' 'candidate deploy cold Rust compilation'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'scp \$ssh_opts "\$BUNDLE"[\s\S]*inspect-remi-candidate-baseline[\s\S]*\$VERSION[\s\S]*\$BINARY_SHA256[\s\S]*\$remote_bundle[\s\S]*> remi-predeployment-inspection\.json[\s\S]*jq -e -f deploy/remi-predeployment-inspection\.jq[\s\S]*\.measurement\.output_bytes == \$baseline_bytes' 'candidate deploy runs and validates the exact staged binary constant-time baseline before mutation'
 require_match "$candidate_predeployment_filter" 'def candidate_identity:[\s\S]*\. == null or \([\s\S]*\(\.profile_revision_sha256 \| sha256\)[\s\S]*\(\.run_id \| type == "string"\)[\s\S]*\(\.completed_at \| type == "number"\)' 'candidate deploy baseline must distinguish an absent candidate from a complete typed identity'
 require_match "$candidate_predeployment_filter" '\(\[\.candidates\[\]\.profile\] \| sort\) == public_profiles[\s\S]*\(\.latest_refresh \| refresh_state\)' 'candidate deploy baseline must contain every exact public profile and typed refresh state'
@@ -403,7 +417,7 @@ require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'set \+e[\s
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'deployment_evidence_schema_version: 2[\s\S]*start_phase database-transition-and-restart[\s\S]*start_phase ingress-after-transition[\s\S]*start_phase forced-refresh-all[\s\S]*start_phase "forced-refresh-\$\{profile\}"[\s\S]*start_phase private-candidate-inspection[\s\S]*start_phase ingress-after-completion[\s\S]*failure_phase: "remote-session-or-transport"[\s\S]*\.deployment\.outcome == \$expected_outcome[\s\S]*\.deployment\.phases[\s\S]*\.duration_ms >= 0' 'candidate deploy retains typed phase timing and early-failure evidence'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'inspect-remi-storage[\s\S]*> remi-predeployment-storage\.json[\s\S]*\.filesystem\.available_bytes[\s\S]*\.database\.logical_bytes[\s\S]*\.database\.allocated_bytes[\s\S]*\.transition_backups\.directories[\s\S]*> remi-deployment-storage\.json[\s\S]*Storage evidence \(before -> after\)[\s\S]*remi-deployment-storage\.json[\s\S]*remi-predeployment-storage\.json' 'candidate deploy retains before-and-after numeric storage evidence'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'name: Summarize final typed deployment inspection[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*latest_refresh\.failure_stage[\s\S]*latest_refresh\.failure_category[\s\S]*latest_refresh\.failure_evidence_sha256' 'candidate deploy summarizes sanitized refresh failure authority'
-require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'name: Upload final sanitized deployment inspection[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f[\s\S]*remi-deployment-inspection\.json[\s\S]*remi-predeployment-inspection\.json[\s\S]*retention-days: 30' 'candidate deploy retains before-and-after sanitized inspection artifacts'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'name: Upload final sanitized deployment inspection[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f[\s\S]*remi-candidate-manifest\.json[\s\S]*remi-deployment-inspection\.json[\s\S]*remi-predeployment-inspection\.json[\s\S]*retention-days: 30' 'candidate deploy retains before-and-after sanitized inspection artifacts plus source provenance'
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'obsolete public verify URL'
 forbid_match "$deploy_workflow" '24273700060' 'retired one-time conaryd bootstrap exception'
 forbid_match "$deploy_workflow" 'deploy_asset_ref' 'retired bootstrap-only deploy asset ref'

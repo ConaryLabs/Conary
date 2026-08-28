@@ -119,6 +119,20 @@ rm "$second/remi-1.2.3-linux-x64"
       >/dev/null
 )
 
+cp "$second/remi-1.2.3-linux-x64.tar.gz" "${tmpdir}/bundle-backup"
+printf '\ncorrupt\n' >>"$second/remi-1.2.3-linux-x64.tar.gz"
+if (
+    cd "$fixture"
+    GITHUB_REPOSITORY=ConaryLabs/Conary \
+      scripts/remi-candidate-artifact.sh verify "$second" "$commit" 1234 push
+) >"${tmpdir}/bundle-tamper.out" 2>"${tmpdir}/bundle-tamper.err"; then
+    fail "tampered downloaded bundle passed verification"
+fi
+grep -Fq 'candidate bundle digest does not match its manifest' \
+    "${tmpdir}/bundle-tamper.err" ||
+    fail "tamper failure did not name the downloaded bundle digest"
+mv "${tmpdir}/bundle-backup" "$second/remi-1.2.3-linux-x64.tar.gz"
+
 cp "$first/remi-1.2.3-linux-x64" "${tmpdir}/binary-backup"
 printf '\ncorrupt\n' >>"$first/remi-1.2.3-linux-x64"
 if (

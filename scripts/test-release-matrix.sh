@@ -274,7 +274,10 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/scripts/release-matrix.sh" "$repo/scripts/release-matrix.sh"
     cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
+    cp "$REPO_ROOT/.github/workflows/build-remi-candidate.yml" "$repo/.github/workflows/build-remi-candidate.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-remi-candidate.yml" "$repo/.github/workflows/deploy-remi-candidate.yml"
+    cp "$REPO_ROOT/scripts/remi-candidate-artifact.sh" "$repo/scripts/remi-candidate-artifact.sh"
+    cp "$REPO_ROOT/scripts/timed-linker.sh" "$repo/scripts/timed-linker.sh"
     cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
         "$repo/deploy/remi-predeployment-inspection.jq"
     cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
@@ -1202,6 +1205,45 @@ test_check_release_matrix_rejects_ambiguous_candidate_completion_mode() {
         "candidate deploy explicit typed completion mode"
 }
 
+test_check_release_matrix_rejects_unprotected_candidate_artifact() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '                | select(.event == "push")' \
+        '                | select(.event == "pull_request")'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy must select only the exact successful protected-main build"
+}
+
+test_check_release_matrix_rejects_cold_candidate_rebuild() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '          verification="$(scripts/remi-candidate-artifact.sh verify \' \
+        $'          cargo build -p remi --release --locked\n          verification="$(scripts/remi-candidate-artifact.sh verify \\'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy cold Rust compilation"
+}
+
+test_check_release_matrix_rejects_loose_artifact_latency_budget() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '          (( availability_ms <= 60000 )) || {' \
+        '          (( availability_ms <= 600000 )) || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy must download, verify, and budget the exact protected artifact"
+}
+
 test_check_release_matrix_rejects_wrong_candidate_inspection_predicate() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1824,6 +1866,9 @@ main() {
         test_remi_predeployment_filter_accepts_typed_incomplete_baseline
         test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline
         test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
+        test_check_release_matrix_rejects_unprotected_candidate_artifact
+        test_check_release_matrix_rejects_cold_candidate_rebuild
+        test_check_release_matrix_rejects_loose_artifact_latency_budget
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
         test_check_release_matrix_rejects_unforced_post_deploy_candidates
         test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority

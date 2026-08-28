@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 81
-summary: Route feature ownership through shared compiler caching with isolated build targets, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+revision: 82
+summary: Route feature ownership through shared compiler caching with isolated build targets, build-once exact-main deployment artifacts, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1332,6 +1332,8 @@ deployment, and prove installed or live behavior independently.
 
 **Start here:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
+`.github/workflows/build-remi-candidate.yml`;
+`.github/workflows/deploy-remi-candidate.yml`;
 `.github/workflows/release-artifact-proof.yml`;
 `.github/actions/setup-rust-workspace/action.yml`;
 `scripts/ci-install-ubuntu-packages.sh`;
@@ -1339,6 +1341,7 @@ deployment, and prove installed or live behavior independently.
 `scripts/test-github-action-runtimes.sh`;
 `Cargo.toml`; workspace member `Cargo.toml` manifests; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
+`scripts/remi-candidate-artifact.sh`; `scripts/timed-linker.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
 `apps/conary/tests/release_ccs_manifest.rs`;
@@ -1351,6 +1354,8 @@ static-site deployment, and production health proof.
 
 **Paths:** `.github/workflows/release-build.yml`;
 `.github/workflows/deploy-and-verify.yml`;
+`.github/workflows/build-remi-candidate.yml`;
+`.github/workflows/deploy-remi-candidate.yml`;
 `.github/workflows/release-artifact-proof.yml`;
 `.github/actions/setup-rust-workspace/action.yml`;
 `.github/actions/test-generation-db-reflink/action.yml`;
@@ -1359,6 +1364,7 @@ static-site deployment, and production health proof.
 `scripts/test-github-action-runtimes.sh`;
 `Cargo.toml`; `apps/*/Cargo.toml`; `crates/*/Cargo.toml`; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
+`scripts/remi-candidate-artifact.sh`; `scripts/timed-linker.sh`;
 `scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
 `scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
 `apps/conary/tests/release_ccs_manifest.rs`;
