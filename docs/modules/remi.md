@@ -549,6 +549,14 @@ This bundle supplies input bytes only. It does not produce or compare
 `NativeParityOracleV1` or `NativeResolutionOracleV1`, run conversion, or grant
 publication authority.
 
+Production transport is owned by the protected
+`export-remi-native-oracle-inputs` workflow. The workflow accepts only one
+successful protected-main private-candidate deployment run, derives all three
+revision bindings from that run's typed inspection, calls the fixed root-owned
+helper operation, and independently reopens every transported manifest and
+object byte before retaining the short-lived handoff artifact. Callers cannot
+supply paths, profile order, conversion commands, or publication operations.
+
 ```text
 remi native-oracle-input \
   --db /conary/metadata/conary.db \
