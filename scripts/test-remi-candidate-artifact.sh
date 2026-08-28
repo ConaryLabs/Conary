@@ -23,6 +23,7 @@ resolver = "2"
 members = []
 
 [workspace.package]
+version = "1.2.3"
 rust-version = "1.98.0"
 EOF
 cat >"$fixture/Cargo.lock" <<'EOF'
@@ -69,7 +70,7 @@ package_once() {
         CARGO_INCREMENTAL=0 \
         CARGO_PROFILE_DEV_DEBUG=0 \
         CARGO_PROFILE_TEST_DEBUG=0 \
-        SCCACHE_VERSION=0.17.0 \
+        SCCACHE_VERSION=0.16.0 \
         SCCACHE_GHA_VERSION=remi-release-v1 \
         CONARY_GIT_COMMIT="$commit" \
         CONARY_GIT_DIRTY=false \
@@ -156,6 +157,21 @@ if (
 fi
 grep -Fq 'candidate manifest bindings are invalid' "${tmpdir}/commit.err" ||
     fail "commit failure did not name the manifest binding"
+
+cp "$first/remi-candidate-manifest.json" "${tmpdir}/manifest-backup"
+jq '.build.rustflags = "-C target-cpu=native"' \
+    "$first/remi-candidate-manifest.json" >"${tmpdir}/manifest-mutated"
+mv "${tmpdir}/manifest-mutated" "$first/remi-candidate-manifest.json"
+if (
+    cd "$fixture"
+    GITHUB_REPOSITORY=ConaryLabs/Conary \
+      scripts/remi-candidate-artifact.sh verify "$first" "$commit" 1234 push
+) >"${tmpdir}/policy.out" 2>"${tmpdir}/policy.err"; then
+    fail "artifact with mismatched build policy passed verification"
+fi
+grep -Fq 'candidate manifest bindings are invalid' "${tmpdir}/policy.err" ||
+    fail "build-policy failure did not name the manifest binding"
+mv "${tmpdir}/manifest-backup" "$first/remi-candidate-manifest.json"
 
 touch "$fixture/untracked"
 if package_once "${tmpdir}/dirty" >"${tmpdir}/dirty.out" 2>"${tmpdir}/dirty.err"; then

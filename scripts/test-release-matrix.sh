@@ -1218,6 +1218,19 @@ test_check_release_matrix_rejects_unprotected_candidate_artifact() {
         "candidate deploy must select only the exact successful protected-main build"
 }
 
+test_check_release_matrix_rejects_loose_candidate_build_policy() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-candidate-artifact.sh" \
+        '          and .build.rustflags == ""' \
+        '          and (.build.rustflags | type == "string")'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate artifact verifier must recompute version and enforce the exact build policy"
+}
+
 test_check_release_matrix_rejects_cold_candidate_rebuild() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1867,6 +1880,7 @@ main() {
         test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline
         test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
         test_check_release_matrix_rejects_unprotected_candidate_artifact
+        test_check_release_matrix_rejects_loose_candidate_build_policy
         test_check_release_matrix_rejects_cold_candidate_rebuild
         test_check_release_matrix_rejects_loose_artifact_latency_budget
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate

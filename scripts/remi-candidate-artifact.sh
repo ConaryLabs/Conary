@@ -37,6 +37,10 @@ workspace_rust_version() {
     sed -n 's/^rust-version = "\([^"]\+\)"$/\1/p' Cargo.toml
 }
 
+workspace_version() {
+    sed -n 's/^version = "\([^"]\+\)"$/\1/p' Cargo.toml
+}
+
 require_regular_file() {
     local path="$1"
     [[ -f "$path" && ! -L "$path" ]] || fail "expected a regular non-symlink file: $path"
@@ -277,12 +281,25 @@ verify_artifact() {
     artifact_dir="$(realpath "$artifact_dir")"
     local manifest="${artifact_dir}/remi-candidate-manifest.json"
     require_regular_file "$manifest"
+    local expected_version manifest_rustc_sha manifest_target
+    expected_version="$(workspace_version)"
+    [[ -n "$expected_version" ]] || fail "workspace version is missing"
+    manifest_rustc_sha="$(
+        jq -rj '.build.rustc_verbose' "$manifest" | sha256sum | cut -d ' ' -f 1
+    )"
+    manifest_target="$(
+        jq -r '.build.rustc_verbose' "$manifest" | sed -n 's/^host: //p'
+    )"
+    [[ -n "$manifest_target" ]] || fail "candidate manifest rustc target is missing"
     jq -e \
         --arg commit "$expected_commit" \
         --arg tree "$(git rev-parse 'HEAD^{tree}')" \
         --arg lock "$(sha256_file Cargo.lock)" \
         --arg workspace_manifest "$(sha256_file Cargo.toml)" \
+        --arg version "$expected_version" \
         --arg rust_toolchain "$(workspace_rust_version)" \
+        --arg rustc_verbose_sha256 "$manifest_rustc_sha" \
+        --arg target "$manifest_target" \
         --arg repository "${GITHUB_REPOSITORY:-ConaryLabs/Conary}" \
         --arg event "$expected_event" \
         --argjson run_id "$expected_run_id" '
@@ -293,13 +310,20 @@ verify_artifact() {
           and .source.cargo_lock_sha256 == $lock
           and .source.workspace_manifest_sha256 == $workspace_manifest
           and .build.package == "remi"
+          and .build.version == $version
           and .build.rust_toolchain == $rust_toolchain
           and .build.profile == "release"
           and .build.features == "default"
           and .build.command == "cargo build -p remi --release --locked"
           and .build.linker == "scripts/timed-linker.sh"
           and .build.linker_sha256 == $linker_sha256
+          and .build.rustflags == ""
+          and .build.cargo_encoded_rustflags == ""
           and .build.cargo_incremental == "0"
+          and .build.cargo_profile_dev_debug == "0"
+          and .build.cargo_profile_test_debug == "0"
+          and .build.sccache_version == "0.16.0"
+          and .build.sccache_gha_version == "remi-release-v1"
           and .provenance.repository == $repository
           and .provenance.workflow == "build-remi-candidate"
           and .provenance.event == $event
@@ -308,14 +332,12 @@ verify_artifact() {
           and .provenance.runner_arch == "X64"
           and (.build.version | type == "string")
           and (.build.rustc_verbose | type == "string")
-          and (.build.rustc_verbose_sha256 | test("^[0-9a-f]{64}$"))
+          and .build.rustc_verbose_sha256 == $rustc_verbose_sha256
           and (.build.cargo_verbose | type == "string")
-          and (.build.target | type == "string")
-          and (.build.sccache_version | type == "string")
-          and (.build.sccache_gha_version | type == "string")
+          and .build.target == $target
           and .build.conary_git_commit == $commit
           and .build.conary_git_dirty == "false"
-          and (.artifact.binary | test("^remi-[0-9A-Za-z.-]+-linux-x64$"))
+          and .artifact.binary == ("remi-" + $version + "-linux-x64")
           and (.artifact.binary_sha256 | test("^[0-9a-f]{64}$"))
           and (.artifact.binary_bytes | type == "number" and . > 0)
           and .artifact.bundle == (.artifact.binary + ".tar.gz")
