@@ -42,6 +42,7 @@ pub(in crate::repository) mod types;
 pub use immutable_catalog::{
     VerifiedSourceCatalogCandidateV1, fetch_native_source_catalog, stream_native_source_catalog,
     stream_native_source_catalog_verified_with_scratch_admission,
+    stream_native_source_catalog_verified_with_scratch_admission_blocking,
     stream_native_source_catalog_with_scratch_admission,
 };
 pub use remi::{

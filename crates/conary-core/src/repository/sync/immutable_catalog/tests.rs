@@ -188,6 +188,17 @@ fn authenticated_object_bytes() -> Vec<u8> {
 }
 
 #[test]
+fn private_source_runtime_drives_async_io_without_an_ambient_runtime() {
+    let result = drive_native_source_future_on_private_runtime(async {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        Ok::<_, Error>(42)
+    })
+    .unwrap();
+
+    assert_eq!(result, 42);
+}
+
+#[test]
 fn immutable_sink_retains_metadata_lease_until_work_files_are_removed() {
     let root = tempfile::tempdir().unwrap();
     let candidate = root.path().join("catalog.sqlite");

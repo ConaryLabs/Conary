@@ -2,10 +2,13 @@
 
 //! Private construction and durable publication of one immutable profile catalog.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::fs::{self, File};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::Repository;
@@ -17,12 +20,38 @@ use conary_core::repository::catalog::{
     write_profile_catalog_manifest_verified, write_source_catalog_manifest_verified,
 };
 use conary_core::repository::supported_profiles::ProfileSourceRole;
-use futures::StreamExt;
+use futures::{StreamExt, stream::FuturesUnordered};
 
 use super::catalog_authority::PinnedProfileCatalog;
 
 pub(crate) const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 2;
 const MAX_CONCURRENT_SOURCE_FETCHES: usize = 4;
+
+#[derive(Default)]
+struct SourceWorkerCounters {
+    active: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+impl SourceWorkerCounters {
+    fn enter(self: &Arc<Self>) -> ActiveSourceWorker {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(active, Ordering::SeqCst);
+        ActiveSourceWorker(Arc::clone(self))
+    }
+
+    fn peak(&self) -> usize {
+        self.peak.load(Ordering::SeqCst)
+    }
+}
+
+struct ActiveSourceWorker(Arc<SourceWorkerCounters>);
+
+impl Drop for ActiveSourceWorker {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// One exact source member and its explicitly assigned profile ordinal.
 #[derive(Clone)]
@@ -262,51 +291,86 @@ pub async fn stage_profile_sources(
             Ok((plan, candidate_directory))
         })
         .collect::<Result<Vec<_>>>()?;
-    let mut fetches = futures::stream::iter(planned_sources.into_iter().map(
+    let source_count = planned_sources.len();
+    let started = Instant::now();
+    let worker_counters = Arc::new(SourceWorkerCounters::default());
+    let fetched = run_bounded_source_jobs_with(
+        planned_sources,
+        MAX_CONCURRENT_SOURCE_FETCHES,
         |(plan, candidate_directory)| {
             let keyring_dir = keyring_dir.to_path_buf();
             let projection_cache_root = projection_cache_root.to_path_buf();
             let scratch_admission = Arc::clone(&scratch_admission);
+            let worker_counters = Arc::clone(&worker_counters);
+            let source_profile = profile.to_string();
+            let repository_name = plan.repository.name.clone();
             async move {
-                let candidate = conary_core::repository::stream_native_source_catalog_verified_with_scratch_admission(
-                        &plan.repository,
-                        &keyring_dir,
-                        &candidate_directory.join(CATALOG_FILE_NAME),
-                        Some(&projection_cache_root),
-                        scratch_admission,
-                    )
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "fetch authenticated catalog source '{}'",
-                            plan.repository.name
+                let ordinal = plan.ordinal;
+                let source_started = Instant::now();
+                let result = run_source_pipeline_on_blocking_worker(
+                    move || {
+                        let candidate = conary_core::repository::stream_native_source_catalog_verified_with_scratch_admission_blocking(
+                            &plan.repository,
+                            &keyring_dir,
+                            &candidate_directory.join(CATALOG_FILE_NAME),
+                            Some(&projection_cache_root),
+                            scratch_admission,
                         )
-                    })?;
-                let reader = write_source_catalog_manifest_verified(
-                    &candidate_directory,
-                    &candidate.manifest,
-                    &candidate.reader,
-                )?;
-                Ok::<_, anyhow::Error>(VerifiedStagedSourceCatalog {
-                    staged: StagedSourceCatalog {
-                        ordinal: plan.ordinal,
-                        role: plan.role,
-                        precedence: plan.precedence,
-                        required: plan.required,
-                        manifest: candidate.manifest,
-                        path: candidate_directory,
+                        .with_context(|| {
+                            format!(
+                                "fetch authenticated catalog source '{}'",
+                                plan.repository.name
+                            )
+                        })?;
+                        let reader = write_source_catalog_manifest_verified(
+                            &candidate_directory,
+                            &candidate.manifest,
+                            &candidate.reader,
+                        )?;
+                        Ok::<_, anyhow::Error>(VerifiedStagedSourceCatalog {
+                            staged: StagedSourceCatalog {
+                                ordinal: plan.ordinal,
+                                role: plan.role,
+                                precedence: plan.precedence,
+                                required: plan.required,
+                                manifest: candidate.manifest,
+                                path: candidate_directory,
+                            },
+                            reader,
+                        })
                     },
-                    reader,
-                })
+                    worker_counters,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "run native source pipeline '{}' on an independent worker",
+                        repository_name
+                    )
+                });
+                tracing::info!(
+                    source_profile,
+                    repository = repository_name,
+                    ordinal,
+                    elapsed_ms = source_started.elapsed().as_millis(),
+                    succeeded = result.is_ok(),
+                    "Native source pipeline worker completed"
+                );
+                result
             }
         },
-    ))
-    .buffer_unordered(MAX_CONCURRENT_SOURCE_FETCHES);
-    let mut fetched = Vec::new();
-    while let Some(result) = fetches.next().await {
-        fetched.push(result?);
-    }
-    drop(fetches);
+    )
+    .await;
+    tracing::info!(
+        source_profile = profile,
+        source_count,
+        peak_source_workers = worker_counters.peak(),
+        worker_limit = MAX_CONCURRENT_SOURCE_FETCHES,
+        elapsed_ms = started.elapsed().as_millis(),
+        succeeded = fetched.is_ok(),
+        "Native profile source staging completed"
+    );
+    let mut fetched = fetched?;
     fetched.sort_by_key(|source| source.staged.ordinal);
 
     let members = derive_profile_catalog_members(
@@ -321,6 +385,71 @@ pub async fn stage_profile_sources(
         candidate_run_dir,
         scratch_admission,
     })
+}
+
+/// Run one complete native-source pipeline on its own blocking worker. The
+/// pipeline owns its private async I/O driver, so network waits and synchronous
+/// decode, normalization, SQLite, hashing, and finalization never occupy a
+/// server runtime worker and can overlap with sibling sources.
+async fn run_source_pipeline_on_blocking_worker<F, T>(
+    pipeline: F,
+    counters: Arc<SourceWorkerCounters>,
+) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let _active = counters.enter();
+        pipeline()
+    })
+    .await
+    .context("native source pipeline worker panicked")?
+}
+
+/// Keep the source-worker bound exact, stop launching queued work after the
+/// first failure, and drain every already-launched worker before returning so
+/// candidate cleanup cannot race a detached blocking task.
+async fn run_bounded_source_jobs_with<Job, Output, Runner, RunFuture>(
+    jobs: Vec<Job>,
+    concurrency: usize,
+    runner: Runner,
+) -> Result<Vec<Output>>
+where
+    Runner: Fn(Job) -> RunFuture,
+    RunFuture: Future<Output = Result<Output>>,
+{
+    if concurrency == 0 {
+        bail!("native source worker concurrency must be at least one");
+    }
+    let mut queued = VecDeque::from(jobs);
+    let mut in_flight = FuturesUnordered::new();
+    for _ in 0..concurrency {
+        let Some(job) = queued.pop_front() else {
+            break;
+        };
+        in_flight.push(runner(job));
+    }
+
+    let mut completed = Vec::new();
+    let mut failure = None;
+    while let Some(result) = in_flight.next().await {
+        match result {
+            Ok(output) if failure.is_none() => completed.push(output),
+            Ok(_) => {}
+            Err(error) if failure.is_none() => failure = Some(error),
+            Err(_) => {}
+        }
+        if failure.is_none()
+            && let Some(job) = queued.pop_front()
+        {
+            in_flight.push(runner(job));
+        }
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(completed),
+    }
 }
 
 impl StagedProfileSources {

@@ -3,6 +3,7 @@
 //! Native repository projection into immutable source-catalog candidates.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -108,6 +109,37 @@ pub async fn stream_native_source_catalog_verified_with_scratch_admission(
         Some(scratch_admission),
     )
     .await
+}
+
+/// Run one verified native-source pipeline on a caller-owned blocking worker.
+///
+/// The private current-thread runtime owns this source's authenticated network
+/// acquisition while synchronous parsing and SQLite construction remain on the
+/// same isolated worker. Callers must not invoke this from an async runtime
+/// worker; use a bounded blocking-worker scheduler instead.
+pub fn stream_native_source_catalog_verified_with_scratch_admission_blocking(
+    repo: &Repository,
+    keyring_dir: &Path,
+    candidate_path: &Path,
+    projection_cache_root: Option<&Path>,
+    scratch_admission: Arc<dyn CatalogScratchAdmission>,
+) -> Result<VerifiedSourceCatalogCandidateV1> {
+    drive_native_source_future_on_private_runtime(stream_native_source_catalog_inner(
+        repo,
+        keyring_dir,
+        candidate_path,
+        projection_cache_root,
+        Some(scratch_admission),
+    ))
+}
+
+fn drive_native_source_future_on_private_runtime<T>(
+    future: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(future)
 }
 
 async fn stream_native_source_catalog_inner(
