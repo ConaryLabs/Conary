@@ -830,7 +830,10 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
                 shard: "conary".to_string(),
             },
             WorkspaceTestShardLane {
-                shard: "conary-core-lib".to_string(),
+                shard: "conary-core-repository".to_string(),
+            },
+            WorkspaceTestShardLane {
+                shard: "conary-core-remaining".to_string(),
             },
             WorkspaceTestShardLane {
                 shard: "conary-core-targets".to_string(),
@@ -872,7 +875,8 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     let command = tests.run.as_deref().expect("workspace shard dispatch");
     for predicate in [
         "conary) cargo test -p conary --verbose",
-        "conary-core-lib) cargo test -p conary-core --lib --verbose",
+        "conary-core-repository) cargo test -p conary-core --lib repository:: --verbose",
+        "cargo test -p conary-core --lib --verbose -- --skip repository::",
         "conary-core-targets) cargo test -p conary-core --bins --test '*' --verbose",
         "cargo test --workspace --exclude conary-test",
         "--exclude conary --exclude conary-core --verbose",

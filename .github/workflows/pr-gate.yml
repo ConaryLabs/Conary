@@ -458,7 +458,8 @@ jobs:
       matrix:
         include:
           - shard: conary
-          - shard: conary-core-lib
+          - shard: conary-core-repository
+          - shard: conary-core-remaining
           - shard: conary-core-targets
           - shard: remaining
     steps:
@@ -479,7 +480,10 @@ jobs:
           set -euo pipefail
           case "$TEST_SHARD" in
             conary) cargo test -p conary --verbose ;;
-            conary-core-lib) cargo test -p conary-core --lib --verbose ;;
+            conary-core-repository) cargo test -p conary-core --lib repository:: --verbose ;;
+            conary-core-remaining)
+              cargo test -p conary-core --lib --verbose -- --skip repository::
+              ;;
             conary-core-targets) cargo test -p conary-core --bins --test '*' --verbose ;;
             remaining)
               cargo test --workspace --exclude conary-test \

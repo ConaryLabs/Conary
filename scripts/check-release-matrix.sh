@@ -299,7 +299,7 @@ for workflow in "$pr_workflow" "$merge_workflow" "$release_build"; do
     require_literal_count "$workflow" 'uses: ./.github/actions/setup-exact-ownership-tests' 1 'shared exact ownership setup'
     forbid_match "$workflow" 'apparmor_restrict_unprivileged_userns|unshare --user' 'inline exact ownership namespace setup'
 done
-namespace_before_shards_pattern="uses: \\./\\.github/actions/setup-exact-ownership-tests[\\s\\S]*conary\\) cargo test -p conary --verbose[\\s\\S]*conary-core-lib\\) cargo test -p conary-core --lib --verbose[\\s\\S]*conary-core-targets\\) cargo test -p conary-core --bins --test '\\*' --verbose[\\s\\S]*cargo test --workspace --exclude conary-test[\\s\\S]*--exclude conary --exclude conary-core --verbose"
+namespace_before_shards_pattern="uses: \\./\\.github/actions/setup-exact-ownership-tests[\\s\\S]*conary\\) cargo test -p conary --verbose[\\s\\S]*conary-core-repository\\) cargo test -p conary-core --lib repository:: --verbose[\\s\\S]*cargo test -p conary-core --lib --verbose -- --skip repository::[\\s\\S]*conary-core-targets\\) cargo test -p conary-core --bins --test '\\*' --verbose[\\s\\S]*cargo test --workspace --exclude conary-test[\\s\\S]*--exclude conary --exclude conary-core --verbose"
 require_job_match "$pr_workflow" workspace-test-shards "$namespace_before_shards_pattern" 'PR workspace test shards and ownership setup order'
 require_job_match "$merge_workflow" workspace-test-shards "$namespace_before_shards_pattern" 'merge workspace test shards and ownership setup order'
 workspace_aggregate_pattern='needs: workspace-test-shards[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*SHARDS_RESULT: \$\{\{ needs\.workspace-test-shards\.result \}\}[\s\S]*test "\$SHARDS_RESULT" = success'
