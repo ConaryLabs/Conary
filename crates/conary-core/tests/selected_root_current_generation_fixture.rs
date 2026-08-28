@@ -1,6 +1,6 @@
 // conary-core/tests/selected_root_current_generation_fixture.rs
 
-use conary_core::generation::artifact::load_generation_artifact_for_activation;
+use conary_core::generation::artifact::load_generation_artifact_with_verified_cas;
 use conary_core::generation::mount::current_generation;
 use std::path::PathBuf;
 use std::process::Command;
@@ -19,7 +19,7 @@ fn selected_root_current_generation_fixture_is_an_exact_mountable_artifact() {
 
     assert_eq!(current_generation(runtime_root.path()).unwrap(), Some(1));
     let artifact =
-        load_generation_artifact_for_activation(&runtime_root.path().join("generations/1"))
+        load_generation_artifact_with_verified_cas(&runtime_root.path().join("generations/1"))
             .unwrap();
     assert_eq!(artifact.generation, 1);
     assert!(artifact.generation_root.entries.is_empty());

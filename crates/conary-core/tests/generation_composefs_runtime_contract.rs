@@ -231,7 +231,7 @@ fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
         "export/import artifact loading must remain the deep verification point"
     );
     assert!(
-        artifact_rs.contains("pub fn load_generation_artifact_for_activation")
+        artifact_rs.contains("pub fn load_generation_artifact_with_verified_cas")
             && artifact_rs.contains("CasObjectVerification::AlreadyVerified"),
         "local activation must validate the artifact contract without rehashing every CAS object"
     );
@@ -271,6 +271,30 @@ fn runtime_generation_paths_are_routed_through_runtime_root_contract() {
 }
 
 #[test]
+fn publication_state_seed_reuses_verified_cas_without_deep_payload_reads() {
+    let composefs_ops_rs = fs::read_to_string(app_source("commands/composefs_ops.rs"))
+        .expect("failed to read commands/composefs_ops.rs");
+    let seed_body = composefs_ops_rs
+        .split_once("fn seed_generation_mutable_state(")
+        .and_then(|(_, body)| body.split_once("pub(crate) fn publish_generation_link"))
+        .map(|(body, _)| body)
+        .expect("failed to isolate mutable-state seed");
+
+    assert!(
+        seed_body.contains("load_generation_artifact_with_verified_cas"),
+        "publication must reopen the complete local artifact contract without rehashing every verified CAS payload"
+    );
+    assert!(
+        !seed_body.contains("artifact::load_generation_artifact("),
+        "publication mutable-state seeding must not invoke the deep export verifier"
+    );
+    assert!(
+        seed_body.contains("materialize_config_state_upper"),
+        "publication must still materialize the exact typed mutable-state authority"
+    );
+}
+
+#[test]
 fn generation_switch_does_not_force_verity_when_metadata_says_it_is_unavailable() {
     let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
         .expect("failed to read commands/generation/switch.rs");
@@ -291,7 +315,7 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
         .expect("failed to read commands/generation/builder.rs");
 
     assert!(
-        commands_rs.contains("load_generation_artifact_for_activation"),
+        commands_rs.contains("load_generation_artifact_with_verified_cas"),
         "next-boot activation must validate the generation artifact contract before selecting a generation without rehashing every local CAS object"
     );
 
@@ -336,7 +360,7 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
     );
 
     assert!(
-        switch_rs.contains("load_generation_artifact_for_activation(&gen_dir)"),
+        switch_rs.contains("load_generation_artifact_with_verified_cas(&gen_dir)"),
         "debug live switch must also validate the local artifact contract before mounting"
     );
     assert!(
@@ -378,7 +402,7 @@ fn recovery_does_not_promote_generations_by_erofs_magic_only() {
         fs::read_to_string(core_source("transaction/mod.rs")).expect("failed to read mod.rs");
 
     assert!(
-        recovery_rs.contains("load_generation_artifact_for_activation"),
+        recovery_rs.contains("load_generation_artifact_with_verified_cas"),
         "recovery must load the generation artifact contract before promoting a generation"
     );
     assert!(

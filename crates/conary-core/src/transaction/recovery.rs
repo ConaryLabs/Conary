@@ -3,7 +3,7 @@
 use super::TransactionEngine;
 use crate::Result;
 use crate::db::models::{GenerationPublication, SystemState};
-use crate::generation::artifact::{GenerationArtifact, load_generation_artifact_for_activation};
+use crate::generation::artifact::{GenerationArtifact, load_generation_artifact_with_verified_cas};
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -308,7 +308,7 @@ fn generations_dir_has_entries(path: &Path) -> Result<bool> {
 }
 
 fn load_generation_artifact_for_number(gen_num: i64, gen_dir: &Path) -> Result<GenerationArtifact> {
-    let artifact = load_generation_artifact_for_activation(gen_dir)?;
+    let artifact = load_generation_artifact_with_verified_cas(gen_dir)?;
     if artifact.generation != gen_num {
         return Err(crate::Error::InvalidPath(format!(
             "generation directory {} contains artifact for generation {}",

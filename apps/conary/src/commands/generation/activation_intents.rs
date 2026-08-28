@@ -93,7 +93,7 @@ fn validate_generation_artifact(
     generation_number: i64,
 ) -> Result<()> {
     let generation_dir = runtime_root.generation_path(generation_number);
-    let artifact = conary_core::generation::artifact::load_generation_artifact_for_activation(
+    let artifact = conary_core::generation::artifact::load_generation_artifact_with_verified_cas(
         &generation_dir,
     )
     .with_context(|| {

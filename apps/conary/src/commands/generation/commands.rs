@@ -47,7 +47,7 @@ fn validate_generation_activation_artifact(
 ) -> Result<()> {
     let gen_dir = runtime_root.generation_path(number);
     let artifact =
-        conary_core::generation::artifact::load_generation_artifact_for_activation(&gen_dir)
+        conary_core::generation::artifact::load_generation_artifact_with_verified_cas(&gen_dir)
             .with_context(|| {
                 format!("Generation {number} is not an activatable composefs artifact")
             })?;

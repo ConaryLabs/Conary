@@ -493,7 +493,7 @@ fn write_generation_artifact_sorts_cas_manifest_objects() {
 }
 
 #[test]
-fn preverified_artifact_write_skips_deep_cas_hashing_but_loader_verifies() {
+fn verified_cas_loader_skips_deep_hashing_while_deep_loader_rejects_corruption() {
     let tmp = TempDir::new().unwrap();
     let artifact_root = tmp.path().join("output");
     let generation_dir = artifact_root.join("generations/1");
@@ -557,11 +557,76 @@ fn preverified_artifact_write_skips_deep_cas_hashing_but_loader_verifies() {
         .write_to(&generation_dir)
         .unwrap();
 
-    let artifact = load_generation_artifact_for_activation(&generation_dir).unwrap();
+    let artifact = load_generation_artifact_with_verified_cas(&generation_dir).unwrap();
     assert_eq!(artifact.cas_objects.len(), 1);
 
     let err = load_generation_artifact(&generation_dir).unwrap_err();
     assert!(err.to_string().contains("CAS object SHA-256"));
+}
+
+#[test]
+fn verified_cas_loader_rejects_missing_and_wrong_sized_objects() {
+    let missing = ArtifactFixture::new();
+    let missing_path = crate::filesystem::object_path(
+        &missing.generation_dir.join("../../objects"),
+        &missing.cas_object_hash,
+    )
+    .unwrap();
+    fs::remove_file(missing_path).unwrap();
+    let err = load_generation_artifact_with_verified_cas(&missing.generation_dir).unwrap_err();
+    assert!(err.to_string().contains("CAS object"));
+
+    let wrong_size = ArtifactFixture::new();
+    wrong_size.rewrite_cas_manifest(|manifest| manifest.objects[0].size += 1, true);
+    let err = load_generation_artifact_with_verified_cas(&wrong_size.generation_dir).unwrap_err();
+    assert!(err.to_string().contains("size"));
+}
+
+#[test]
+fn verified_cas_loader_retains_non_payload_digest_checks() {
+    let artifact = ArtifactFixture::new();
+    artifact.write_metadata_digest(None);
+    let err = load_generation_artifact_with_verified_cas(&artifact.generation_dir).unwrap_err();
+    assert!(err.to_string().contains("artifact_manifest_sha256"));
+
+    let root = ArtifactFixture::new();
+    fs::write(&root.root_erofs, b"tampered-root").unwrap();
+    let err = load_generation_artifact_with_verified_cas(&root.generation_dir).unwrap_err();
+    assert!(err.to_string().contains("root.erofs"));
+
+    let root_manifest = ArtifactFixture::new();
+    fs::write(
+        root_manifest
+            .generation_dir
+            .join(GENERATION_ROOT_MANIFEST_FILE),
+        b"{}",
+    )
+    .unwrap();
+    let err =
+        load_generation_artifact_with_verified_cas(&root_manifest.generation_dir).unwrap_err();
+    assert!(err.to_string().contains("generation root manifest"));
+
+    let state_manifest = ArtifactFixture::new();
+    fs::write(
+        state_manifest
+            .generation_dir
+            .join(MUTABLE_STATE_MANIFEST_FILE),
+        b"{}",
+    )
+    .unwrap();
+    let err =
+        load_generation_artifact_with_verified_cas(&state_manifest.generation_dir).unwrap_err();
+    assert!(err.to_string().contains("mutable-state manifest"));
+
+    let child = ArtifactFixture::new();
+    child.rewrite_cas_manifest(|manifest| manifest.objects.clear(), false);
+    let err = load_generation_artifact_with_verified_cas(&child.generation_dir).unwrap_err();
+    assert!(err.to_string().contains("cas-manifest"));
+
+    let boot = ArtifactFixture::new();
+    fs::write(&boot.kernel_path, b"tampered-kernel").unwrap();
+    let err = load_generation_artifact_with_verified_cas(&boot.generation_dir).unwrap_err();
+    assert!(err.to_string().contains("boot asset"));
 }
 
 #[cfg(unix)]
