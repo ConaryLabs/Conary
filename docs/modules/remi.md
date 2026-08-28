@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-28
-revision: 86
+revision: 87
 summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -215,6 +215,19 @@ tampered, mixed, or noncanonical entry is removed from this exact cache
 namespace and cannot become package authority. Cache candidates are private,
 synchronized, and atomically renamed; a cache fault fails the private refresh
 and leaves the active profile pointer unchanged.
+
+One profile stages at most four native-source pipelines concurrently. Each
+complete mixed pipeline runs on an independent bounded blocking worker with a
+private current-thread Tokio runtime. Authenticated network waits use that
+worker's I/O driver, while synchronous decode, normalization, SQLite writing,
+hashing, cache materialization, and source-manifest proof stay off server
+runtime workers and may use separate CPU cores. This is scheduling only; it
+does not split or reorder one source's authority writer. A first failure stops
+launching queued sources and the scheduler drains every already-started
+blocking worker before candidate cleanup can begin. Source-completion logs
+record per-source elapsed time, and the profile summary records the observed
+peak worker count, configured bound, source count, outcome, and total elapsed
+time so effective concurrency remains production-visible.
 
 Construction is private beneath `catalog-candidates/<run-id>/`. Candidate
 SQLite integrity, schema, ordering, counts, logical digest, and source

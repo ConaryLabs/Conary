@@ -19,6 +19,9 @@ use crate::server::catalog_authority::{
 };
 use crate::server::catalog_capacity::CatalogScratchCoordinator;
 
+use std::sync::{Condvar, Mutex};
+use std::time::Duration;
+
 fn repository(name: &str, identity: &str, priority: i32) -> Repository {
     let mut repository =
         Repository::new(name.to_string(), format!("https://example.test/{identity}"));
@@ -285,4 +288,122 @@ fn exact_reuse_skips_profile_candidate_construction() {
 
     assert!(matches!(staged.artifact, StagedProfileArtifact::Reused(_)));
     assert!(!candidate_run_dir.join("profile").exists());
+}
+
+#[derive(Default)]
+struct OverlapState {
+    active: usize,
+    released: bool,
+}
+
+struct OverlapGate {
+    target: usize,
+    state: Mutex<OverlapState>,
+    changed: Condvar,
+}
+
+impl OverlapGate {
+    fn new(target: usize) -> Self {
+        Self {
+            target,
+            state: Mutex::new(OverlapState::default()),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn meet(&self) -> Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.active += 1;
+        if state.active == self.target {
+            state.released = true;
+            self.changed.notify_all();
+        }
+        let (mut state, _) = self
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(2), |state| !state.released)
+            .unwrap();
+        let released = state.released;
+        state.active -= 1;
+        anyhow::ensure!(
+            released,
+            "blocking source pipelines did not reach {}-way overlap",
+            self.target
+        );
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn source_pipelines_use_bounded_independent_blocking_workers() {
+    let gate = Arc::new(OverlapGate::new(4));
+    let counters = Arc::new(SourceWorkerCounters::default());
+    let outputs = run_bounded_source_jobs_with((0..8).collect(), 4, {
+        let gate = Arc::clone(&gate);
+        let counters = Arc::clone(&counters);
+        move |job| {
+            let gate = Arc::clone(&gate);
+            let counters = Arc::clone(&counters);
+            async move {
+                run_source_pipeline_on_blocking_worker(
+                    move || {
+                        gate.meet()?;
+                        Ok(job)
+                    },
+                    counters,
+                )
+                .await
+            }
+        }
+    })
+    .await
+    .expect("run bounded source workers");
+
+    assert_eq!(outputs.len(), 8);
+    assert_eq!(counters.peak(), 4);
+}
+
+struct ActiveJob(Arc<AtomicUsize>);
+
+impl Drop for ActiveJob {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn source_failure_stops_queued_work_and_drains_started_jobs() {
+    let launched = Arc::new(AtomicUsize::new(0));
+    let active = Arc::new(AtomicUsize::new(0));
+    let result = run_bounded_source_jobs_with((0..6).collect(), 2, {
+        let launched = Arc::clone(&launched);
+        let active = Arc::clone(&active);
+        move |job| {
+            let launched = Arc::clone(&launched);
+            let active = Arc::clone(&active);
+            async move {
+                launched.fetch_add(1, Ordering::SeqCst);
+                active.fetch_add(1, Ordering::SeqCst);
+                let _active = ActiveJob(active);
+                if job == 0 {
+                    anyhow::bail!("injected source failure");
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                Ok(job)
+            }
+        }
+    })
+    .await;
+
+    assert!(result.unwrap_err().to_string().contains("injected"));
+    assert_eq!(launched.load(Ordering::SeqCst), 2);
+    assert_eq!(active.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn zero_source_worker_bound_is_rejected() {
+    let error =
+        run_bounded_source_jobs_with(vec![0], 0, |job| async move { Ok::<_, anyhow::Error>(job) })
+            .await
+            .unwrap_err();
+    assert!(error.to_string().contains("at least one"));
 }
