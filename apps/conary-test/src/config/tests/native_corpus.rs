@@ -4,6 +4,7 @@ use super::{conary_fixture_path, load_manifest, remi_manifest_path};
 
 mod daily_driver;
 mod evidence;
+mod performance;
 mod rejection;
 mod version_rewrite;
 
