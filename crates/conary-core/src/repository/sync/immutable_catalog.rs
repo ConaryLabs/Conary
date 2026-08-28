@@ -14,11 +14,18 @@ use crate::repository::catalog::source::SourceCatalogAuthorityV1;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogMetadataStreamAdmission,
     CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
-    CatalogProvideRecordV1, CatalogScopeV1, CatalogScratchAdmission,
+    CatalogProvideRecordV1, CatalogReader, CatalogScopeV1, CatalogScratchAdmission,
     CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SourceCatalogCandidateV1,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
     SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1, retain_source_metadata_object,
 };
+
+/// One source manifest paired with the process-local reader that completed its
+/// full logical verification.
+pub struct VerifiedSourceCatalogCandidateV1 {
+    pub manifest: SourceSnapshotV1,
+    pub reader: CatalogReader,
+}
 use crate::repository::parsers::{
     ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject, ChecksumType,
     PackageMetadata, RepositorySnapshotSink, SnapshotPackageIdentity, SnapshotPackageJoin,
@@ -54,14 +61,15 @@ pub async fn stream_native_source_catalog(
     candidate_path: &Path,
     projection_cache_root: Option<&Path>,
 ) -> Result<SourceSnapshotV1> {
-    stream_native_source_catalog_inner(
+    Ok(stream_native_source_catalog_inner(
         repo,
         keyring_dir,
         candidate_path,
         projection_cache_root,
         None,
     )
-    .await
+    .await?
+    .manifest)
 }
 
 /// Stream one source candidate with typed SQLite finalization admission.
@@ -72,6 +80,26 @@ pub async fn stream_native_source_catalog_with_scratch_admission(
     projection_cache_root: Option<&Path>,
     scratch_admission: Arc<dyn CatalogScratchAdmission>,
 ) -> Result<SourceSnapshotV1> {
+    Ok(stream_native_source_catalog_inner(
+        repo,
+        keyring_dir,
+        candidate_path,
+        projection_cache_root,
+        Some(scratch_admission),
+    )
+    .await?
+    .manifest)
+}
+
+/// Stream one admitted source while retaining its full logical verification
+/// for immediate manifesting and publication in the same process.
+pub async fn stream_native_source_catalog_verified_with_scratch_admission(
+    repo: &Repository,
+    keyring_dir: &Path,
+    candidate_path: &Path,
+    projection_cache_root: Option<&Path>,
+    scratch_admission: Arc<dyn CatalogScratchAdmission>,
+) -> Result<VerifiedSourceCatalogCandidateV1> {
     stream_native_source_catalog_inner(
         repo,
         keyring_dir,
@@ -88,7 +116,7 @@ async fn stream_native_source_catalog_inner(
     candidate_path: &Path,
     projection_cache_root: Option<&Path>,
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
-) -> Result<SourceSnapshotV1> {
+) -> Result<VerifiedSourceCatalogCandidateV1> {
     let parser = prepare_repository_native_parser(repo, keyring_dir).await?;
     let mut sink = NativeCatalogSnapshotSink::create(
         repo,
@@ -118,7 +146,7 @@ struct NativeCatalogSnapshotSink {
         AuthenticatedSnapshotIdentity,
         Vec<AuthenticatedMetadataObject>,
     )>,
-    cached_binding: Option<crate::repository::catalog::CatalogBindingV1>,
+    cached_reader: Option<CatalogReader>,
     work_leases: Vec<Box<dyn Send>>,
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
 }
@@ -205,7 +233,7 @@ impl NativeCatalogSnapshotSink {
             candidate_path: candidate_path.to_path_buf(),
             projection_cache,
             cache_inputs: None,
-            cached_binding: None,
+            cached_reader: None,
             work_leases: Vec::new(),
             scratch_admission,
         })
@@ -215,14 +243,14 @@ impl NativeCatalogSnapshotSink {
         self,
         repo: &Repository,
         snapshot: AuthenticatedSnapshotIdentity,
-    ) -> Result<SourceSnapshotV1> {
+    ) -> Result<VerifiedSourceCatalogCandidateV1> {
         let NativeCatalogSnapshotSink {
             writer,
             authenticated_objects,
             candidate_path,
             projection_cache,
             cache_inputs,
-            cached_binding,
+            cached_reader,
             work_directory,
             work_leases,
             ..
@@ -239,10 +267,10 @@ impl NativeCatalogSnapshotSink {
                 size: object.size,
             })
             .collect();
-        let reused_cache = cached_binding.is_some();
-        let binding = match (writer, cached_binding) {
-            (Some(writer), None) => writer.finish(evidence)?,
-            (None, Some(binding)) => {
+        let reused_cache = cached_reader.is_some();
+        let (binding, reader) = match (writer, cached_reader) {
+            (Some(writer), None) => writer.finish_verified(evidence)?,
+            (None, Some(reader)) => {
                 let (cached_snapshot, cached_objects) = cache_inputs.as_ref().ok_or_else(|| {
                     Error::InternalError(
                         "materialized native projection has no exact cache inputs".to_string(),
@@ -254,7 +282,7 @@ impl NativeCatalogSnapshotSink {
                             .to_string(),
                     ));
                 }
-                binding
+                (reader.binding().clone(), reader)
             }
             (Some(_), Some(_)) => {
                 return Err(Error::InternalError(
@@ -271,10 +299,18 @@ impl NativeCatalogSnapshotSink {
             && let (Some(cache), Some((cache_snapshot, cache_objects))) =
                 (projection_cache, cache_inputs)
         {
-            cache.publish(&cache_snapshot, &cache_objects, &binding, &candidate_path)?;
+            cache.publish_verified(
+                &cache_snapshot,
+                &cache_objects,
+                &binding,
+                &candidate_path,
+                &reader,
+            )?;
         }
         let authority = source_catalog_authority(repo, snapshot, authenticated_objects)?;
-        crate::repository::catalog::source::bind_source_snapshot(authority, &binding)
+        let manifest =
+            crate::repository::catalog::source::bind_source_snapshot(authority, &binding)?;
+        Ok(VerifiedSourceCatalogCandidateV1 { manifest, reader })
     }
 
     fn project_package(&self, package: PackageMetadata) -> Result<CatalogPackageRecordV1> {
@@ -410,7 +446,7 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             drop(writer);
         }
         cache.materialize_verified(&reader, &self.candidate_path)?;
-        self.cached_binding = Some(reader.binding().clone());
+        self.cached_reader = Some(reader);
         Ok(true)
     }
 

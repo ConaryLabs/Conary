@@ -17,6 +17,7 @@ use conary_core::repository::{
     ready_profile_sync_run, record_profile_sync_run_member,
 };
 
+use super::publication::{ProfilePublicationIntent, staged_profile_intent};
 use super::refresh::RepoRefreshResult;
 use super::{ServiceError, blocking_anyhow};
 use crate::server::catalog_authority::{
@@ -179,7 +180,12 @@ pub(super) async fn refresh_native_profile(
             return Err(error);
         }
     };
-    if let Err(error) = record_publication_intent(&roots, &run, &plans, &staged).await {
+    let publication_intent = staged_profile_intent(&staged);
+    let publication_result = match publication_intent {
+        Ok(intent) => record_publication_intent(&roots, &run, &plans, intent).await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = publication_result {
         stop_profile_heartbeat_after_error(heartbeat, &run.run_id).await;
         abort_run(
             &roots,
@@ -610,7 +616,7 @@ async fn record_publication_intent(
     roots: &RefreshRoots,
     run: &ProfileSyncRun,
     plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
-    staged: &StagedProfileCatalog,
+    staged: ProfilePublicationIntent,
 ) -> Result<(), ServiceError> {
     let db_path = roots.db_path.clone();
     let database_writer = roots.database_writer.clone();
@@ -650,27 +656,19 @@ async fn record_publication_intent(
     for member in &mut members {
         member.input_source_snapshot_sha256 =
             input_members.get(&member.repository_identity).cloned();
-        let source = staged
-            .sources
-            .iter()
-            .find(|source| i64::from(source.ordinal) == member.ordinal)
-            .ok_or_else(|| {
-                ServiceError::Internal(format!(
-                    "profile '{}' lacks staged source ordinal {}",
-                    staged.profile, member.ordinal
-                ))
-            })?;
         member.candidate_source_snapshot_sha256 = Some(
-            source
-                .manifest
-                .manifest_sha256()
-                .map_err(ServiceError::from)?,
+            staged
+                .candidate_sources
+                .get(&member.ordinal)
+                .cloned()
+                .ok_or_else(|| {
+                    ServiceError::Internal(format!(
+                        "profile '{}' lacks staged source ordinal {}",
+                        staged.profile, member.ordinal
+                    ))
+                })?,
         );
     }
-    let profile_digest = staged
-        .manifest
-        .manifest_sha256()
-        .map_err(ServiceError::from)?;
     blocking_anyhow(move || {
         database_writer
             .execute(|| {
@@ -678,7 +676,7 @@ async fn record_publication_intent(
                 for member in &members {
                     record_profile_sync_run_member(&conn, &run, member)?;
                 }
-                ready_profile_sync_run(&conn, &run, &profile_digest)
+                ready_profile_sync_run(&conn, &run, &staged.profile_digest)
             })
             .map_err(anyhow::Error::from)
     })

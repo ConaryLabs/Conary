@@ -12,14 +12,17 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CATALOG_FILE_NAME, CatalogBindingV1, CatalogCopyScratchV1,
-    CatalogReader, CatalogScratchAdmission, CatalogSourceEvidenceV1,
+    CatalogDurableLogicalAttestationV1, CatalogReader, CatalogScratchAdmission,
+    CatalogSourceEvidenceV1, CatalogVerificationProofV1,
 };
 use crate::repository::parsers::{
     AuthenticatedMetadataObject, AuthenticatedSnapshotIdentity,
     REPOSITORY_SNAPSHOT_PROJECTION_VERSION,
 };
 
-const CACHE_SCHEMA_VERSION: u32 = 1;
+const CACHE_KEY_SCHEMA_VERSION: u32 = 1;
+const CACHE_MANIFEST_SCHEMA_VERSION: u32 = 2;
+const LOGICAL_ATTESTATION_SCHEMA_VERSION: u32 = 1;
 const MANIFEST_FILE_NAME: &str = "projection.json";
 const MAX_MANIFEST_SIZE: u64 = 1024 * 1024;
 
@@ -37,9 +40,47 @@ struct ProjectionCacheKeyV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProjectionCacheManifestV1 {
+struct ProjectionCacheLogicalAttestationV1 {
+    schema_version: u32,
+    catalog_binding_sha256: String,
+}
+
+impl ProjectionCacheLogicalAttestationV1 {
+    fn for_catalog(catalog: &CatalogBindingV1) -> Result<Self> {
+        Ok(Self {
+            schema_version: LOGICAL_ATTESTATION_SCHEMA_VERSION,
+            catalog_binding_sha256: catalog_binding_sha256(catalog)?,
+        })
+    }
+
+    fn reopen_authority(
+        &self,
+        catalog: &CatalogBindingV1,
+    ) -> Result<CatalogDurableLogicalAttestationV1> {
+        if self.schema_version != LOGICAL_ATTESTATION_SCHEMA_VERSION {
+            return Err(Error::ConflictError(format!(
+                "native projection cache has unsupported logical attestation schema {}",
+                self.schema_version
+            )));
+        }
+        let expected = catalog_binding_sha256(catalog)?;
+        if self.catalog_binding_sha256 != expected {
+            return Err(Error::ConflictError(
+                "native projection cache logical attestation does not bind its exact catalog"
+                    .to_string(),
+            ));
+        }
+        Ok(CatalogDurableLogicalAttestationV1::new(catalog))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectionCacheManifestV2 {
+    schema_version: u32,
     key: ProjectionCacheKeyV1,
     catalog: CatalogBindingV1,
+    logical_attestation: ProjectionCacheLogicalAttestationV1,
 }
 
 pub(super) struct ProjectionCache {
@@ -171,6 +212,7 @@ impl ProjectionCache {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn publish(
         &self,
         snapshot: &AuthenticatedSnapshotIdentity,
@@ -178,10 +220,41 @@ impl ProjectionCache {
         catalog: &CatalogBindingV1,
         candidate_path: &Path,
     ) -> Result<()> {
+        let verified = CatalogReader::open_verified(candidate_path, catalog)?;
+        self.publish_verified(snapshot, objects, catalog, candidate_path, &verified)
+    }
+
+    /// Publish a candidate whose exact binding already passed a complete
+    /// logical replay in this process.
+    pub(super) fn publish_verified(
+        &self,
+        snapshot: &AuthenticatedSnapshotIdentity,
+        objects: &[AuthenticatedMetadataObject],
+        catalog: &CatalogBindingV1,
+        candidate_path: &Path,
+        verified: &CatalogReader,
+    ) -> Result<()> {
+        self.publish_inner(
+            snapshot,
+            objects,
+            catalog,
+            candidate_path,
+            verified.verification_proof()?,
+        )
+    }
+
+    fn publish_inner(
+        &self,
+        snapshot: &AuthenticatedSnapshotIdentity,
+        objects: &[AuthenticatedMetadataObject],
+        catalog: &CatalogBindingV1,
+        candidate_path: &Path,
+        proof: &CatalogVerificationProofV1,
+    ) -> Result<()> {
         let key = self.key(snapshot, objects)?;
         let entry = self.entry_path(&key)?;
         if entry.try_exists()? {
-            self.lookup_exact(&entry, &key)?;
+            self.lookup_exact_inner(&entry, &key, Some(proof))?;
             return Ok(());
         }
 
@@ -195,9 +268,11 @@ impl ProjectionCache {
                     .to_string(),
             ));
         }
-        let manifest = ProjectionCacheManifestV1 {
+        let manifest = ProjectionCacheManifestV2 {
+            schema_version: CACHE_MANIFEST_SCHEMA_VERSION,
             key: key.clone(),
             catalog: catalog.clone(),
+            logical_attestation: ProjectionCacheLogicalAttestationV1::for_catalog(catalog)?,
         };
         let manifest_bytes = crate::json::canonical_json(&manifest).map_err(Error::ConfigError)?;
         let manifest_size = u64::try_from(manifest_bytes.len()).map_err(|_| {
@@ -236,7 +311,7 @@ impl ProjectionCache {
             match fs::rename(&stage, &entry) {
                 Ok(()) => {
                     File::open(&self.root)?.sync_all()?;
-                    if let Err(error) = self.lookup_exact(&entry, &key) {
+                    if let Err(error) = self.lookup_exact_inner(&entry, &key, Some(proof)) {
                         return Err(cleanup_failed_publication(&self.root, &entry, error));
                     }
                     Ok(())
@@ -248,7 +323,8 @@ impl ProjectionCache {
                     ) =>
                 {
                     remove_exact_entry(&self.root, &stage)?;
-                    self.lookup_exact(&entry, &key).map(|_| ())
+                    self.lookup_exact_inner(&entry, &key, Some(proof))
+                        .map(|_| ())
                 }
                 Err(error) => Err(error.into()),
             }
@@ -260,6 +336,15 @@ impl ProjectionCache {
     }
 
     fn lookup_exact(&self, entry: &Path, key: &ProjectionCacheKeyV1) -> Result<CatalogReader> {
+        self.lookup_exact_inner(entry, key, None)
+    }
+
+    fn lookup_exact_inner(
+        &self,
+        entry: &Path,
+        key: &ProjectionCacheKeyV1,
+        proof: Option<&CatalogVerificationProofV1>,
+    ) -> Result<CatalogReader> {
         require_direct_child(&self.root, entry)?;
         require_real_directory(entry, "native projection cache entry")?;
         let manifest_path = entry.join(MANIFEST_FILE_NAME);
@@ -274,7 +359,13 @@ impl ProjectionCache {
             )));
         }
         let bytes = fs::read(&manifest_path)?;
-        let manifest: ProjectionCacheManifestV1 = serde_json::from_slice(&bytes)?;
+        let manifest: ProjectionCacheManifestV2 = serde_json::from_slice(&bytes)?;
+        if manifest.schema_version != CACHE_MANIFEST_SCHEMA_VERSION {
+            return Err(Error::ConflictError(format!(
+                "native projection cache has unsupported manifest schema {}",
+                manifest.schema_version
+            )));
+        }
         if &manifest.key != key {
             return Err(Error::ConflictError(
                 "native projection cache manifest key does not match its exact lookup key"
@@ -287,8 +378,20 @@ impl ProjectionCache {
                 "native projection cache manifest is not canonical JSON".to_string(),
             ));
         }
-        let reader =
-            CatalogReader::open_verified(entry.join(CATALOG_FILE_NAME), &manifest.catalog)?;
+        let durable_attestation = manifest
+            .logical_attestation
+            .reopen_authority(&manifest.catalog)?;
+        let catalog_path = entry.join(CATALOG_FILE_NAME);
+        let reader = match proof {
+            Some(proof) => {
+                CatalogReader::open_verified_with_proof(&catalog_path, &manifest.catalog, proof)?
+            }
+            None => CatalogReader::open_verified_with_durable_attestation(
+                &catalog_path,
+                &manifest.catalog,
+                &durable_attestation,
+            )?,
+        };
         let expected_evidence = key
             .authenticated_objects
             .iter()
@@ -327,7 +430,7 @@ impl ProjectionCache {
             }
         }
         Ok(ProjectionCacheKeyV1 {
-            cache_schema_version: CACHE_SCHEMA_VERSION,
+            cache_schema_version: CACHE_KEY_SCHEMA_VERSION,
             parser_projection_version: REPOSITORY_SNAPSHOT_PROJECTION_VERSION,
             catalog_schema_version: CATALOG_CONTENT_SCHEMA_V1,
             stream_binding_sha256: self.stream_binding_sha256.clone(),
@@ -345,6 +448,11 @@ impl ProjectionCache {
         let bytes = crate::json::canonical_json(key).map_err(Error::ConfigError)?;
         Ok(self.root.join(crate::hash::sha256(&bytes)))
     }
+}
+
+fn catalog_binding_sha256(catalog: &CatalogBindingV1) -> Result<String> {
+    let bytes = crate::json::canonical_json(catalog).map_err(Error::ConfigError)?;
+    Ok(crate::hash::sha256(&bytes))
 }
 
 fn cleanup_failed_publication(root: &Path, entry: &Path, error: Error) -> Error {
@@ -430,6 +538,7 @@ mod tests {
         CatalogCandidateWriter, CatalogFinalizationScratchV1, CatalogMetadataScratchV1,
         CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1, CatalogScopeV1,
         CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
+        logical_verification_passes_for_test,
     };
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -580,6 +689,36 @@ mod tests {
             .expect("exact cache key should hit");
         assert_eq!(reader.binding(), &fixture.binding);
         assert!(reader.packages().unwrap().is_empty());
+    }
+
+    #[test]
+    fn verified_projection_publication_rehashes_the_copied_artifact() {
+        let fixture = fixture();
+        let verified = CatalogReader::open_verified(&fixture.candidate, &fixture.binding).unwrap();
+        fixture
+            .cache
+            .publish_verified(
+                &fixture.snapshot,
+                &fixture.objects,
+                &fixture.binding,
+                &fixture.candidate,
+                &verified,
+            )
+            .unwrap();
+        let logical_passes_after_publication = logical_verification_passes_for_test();
+
+        let reader = fixture
+            .cache
+            .lookup(&fixture.snapshot, &fixture.objects)
+            .unwrap()
+            .expect("verified publication must remain a normal durable cache hit");
+        assert_eq!(reader.binding(), &fixture.binding);
+        assert!(reader.verification_proof().is_ok());
+        assert_eq!(
+            logical_verification_passes_for_test(),
+            logical_passes_after_publication,
+            "durable cache lookup must not replay normalized catalog rows"
+        );
     }
 
     #[test]
@@ -756,9 +895,46 @@ mod tests {
             .unwrap();
         let entry = fixture.cache.entry_path(&key).unwrap();
         let manifest_path = entry.join(MANIFEST_FILE_NAME);
-        let mut manifest: ProjectionCacheManifestV1 =
+        let mut manifest: ProjectionCacheManifestV2 =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-        manifest.key.parser_projection_version += 1;
+        manifest.schema_version = 1;
+        fs::write(
+            &manifest_path,
+            crate::json::canonical_json(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            fixture
+                .cache
+                .lookup(&fixture.snapshot, &fixture.objects)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!entry.exists());
+    }
+
+    #[test]
+    fn altered_durable_logical_attestation_is_discarded_before_reuse() {
+        let fixture = fixture();
+        fixture
+            .cache
+            .publish(
+                &fixture.snapshot,
+                &fixture.objects,
+                &fixture.binding,
+                &fixture.candidate,
+            )
+            .unwrap();
+        let key = fixture
+            .cache
+            .key(&fixture.snapshot, &fixture.objects)
+            .unwrap();
+        let entry = fixture.cache.entry_path(&key).unwrap();
+        let manifest_path = entry.join(MANIFEST_FILE_NAME);
+        let mut manifest: ProjectionCacheManifestV2 =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.logical_attestation.catalog_binding_sha256 = "0".repeat(64);
         fs::write(
             &manifest_path,
             crate::json::canonical_json(&manifest).unwrap(),
