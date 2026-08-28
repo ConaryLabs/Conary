@@ -1,11 +1,53 @@
 // crates/conary-core/src/repository/catalog/store/verification.rs
 
-//! Non-serializable proof carried between same-process immutable reopens.
+//! Immutable reopen checks and non-serializable exact-artifact proofs.
 
 use std::path::Path;
 
-use super::{CatalogBindingV1, CatalogReader};
+use rusqlite::{Connection, OptionalExtension};
+
+use super::util::{conversion_error, parse_json_column, read_u64};
+use super::{CATALOG_CONTENT_SCHEMA_V1, CatalogBindingV1, CatalogReader};
 use crate::error::{Error, Result};
+use crate::repository::catalog::{CatalogArtifactV1, CatalogCountsV1};
+
+/// Read the embedded binding without treating it as independent authority.
+pub(super) fn read_binding(
+    connection: &Connection,
+    artifact: CatalogArtifactV1,
+) -> Result<CatalogBindingV1> {
+    connection
+        .query_row(
+            "SELECT schema_version, scope_json, logical_digest_sha256,
+                    package_count, provide_count, requirement_group_count,
+                    requirement_atom_count, source_evidence_count
+             FROM catalog_metadata WHERE singleton = 1",
+            [],
+            |row| {
+                let schema_version: i64 = row.get(0)?;
+                if schema_version != i64::from(CATALOG_CONTENT_SCHEMA_V1) {
+                    return Err(conversion_error(
+                        0,
+                        format!("unsupported catalog schema {schema_version}"),
+                    ));
+                }
+                Ok(CatalogBindingV1 {
+                    scope: parse_json_column(row, 1)?,
+                    artifact,
+                    logical_digest_sha256: row.get(2)?,
+                    counts: CatalogCountsV1 {
+                        packages: read_u64(row, 3, "package count")?,
+                        provides: read_u64(row, 4, "provide count")?,
+                        requirement_groups: read_u64(row, 5, "requirement group count")?,
+                        requirement_atoms: read_u64(row, 6, "requirement atom count")?,
+                        source_evidence: read_u64(row, 7, "source evidence count")?,
+                    },
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| Error::InitError("catalog metadata singleton is missing".to_string()))
+}
 
 /// Opaque authority minted after a versioned durable owner proves that its
 /// exact binding was published only from a complete logical replay.
@@ -70,9 +112,10 @@ impl CatalogReader {
     /// forward a full logical verification of the exact same binding.
     ///
     /// This still checks file type, size, SHA-256, SQLite application/schema
-    /// identity, integrity, stored binding, relational counts, and foreign
-    /// keys at the new path. Only the redundant Rust row reconstruction and
-    /// logical re-digest are omitted.
+    /// identity, integrity, and stored binding at the new path. The exact-byte
+    /// proof carries the already-completed row cardinalities, foreign-key
+    /// rejection, and logical-row verification, so none of those relation
+    /// passes is repeated.
     pub(in crate::repository) fn open_verified_with_proof(
         path: impl AsRef<Path>,
         expected: &CatalogBindingV1,
@@ -87,10 +130,10 @@ impl CatalogReader {
     /// Reopen exact bytes covered by a versioned durable logical attestation.
     ///
     /// File type and sidecars, byte size and SHA-256, SQLite application/schema
-    /// identity and integrity, stored binding, relational counts, and foreign
-    /// keys are all checked at this path. The attestation permits omitting only
-    /// the normalized-row reconstruction and logical re-digest already required
-    /// by its publisher.
+    /// identity and integrity plus the stored binding are all checked at this
+    /// path. The exact-byte attestation carries the row cardinalities,
+    /// foreign-key rejection, and logical-row verification required by its
+    /// publisher, so none of those relation passes is repeated.
     pub(in crate::repository) fn open_verified_with_durable_attestation(
         path: impl AsRef<Path>,
         expected: &CatalogBindingV1,
