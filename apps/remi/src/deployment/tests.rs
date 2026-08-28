@@ -135,6 +135,95 @@ fn inspect_state_proves_exact_reconciled_source_authority() {
 }
 
 #[test]
+fn deployment_baseline_is_typed_bounded_and_self_measuring() {
+    let (_temp, options) = arrange();
+    prepare(&options).unwrap();
+
+    let config = RemiConfig::load(&options.config_path).unwrap();
+    let db_path = config.storage_root().join("metadata/conary.db");
+    let mut conn = rusqlite::Connection::open(&db_path).unwrap();
+    conary_core::db::schema::ensure_current(&conn).unwrap();
+    RepositoryManifest::load(&options.repository_manifest_target)
+        .unwrap()
+        .reconcile(&mut conn)
+        .unwrap();
+    drop(conn);
+
+    let baseline = inspect_baseline(&options.config_path).unwrap();
+    assert_eq!(baseline.baseline_schema_version, 1);
+    assert_eq!(baseline.schema_epoch, SCHEMA_EPOCH);
+    assert_eq!(baseline.schema_revision, SCHEMA_VERSION);
+    assert_eq!(baseline.configured_profiles, 3);
+    assert_eq!(baseline.candidate_profiles, 0);
+    assert_eq!(
+        baseline
+            .candidates
+            .iter()
+            .map(|candidate| (candidate.profile.as_str(), candidate.configured_sources))
+            .collect::<Vec<_>>(),
+        vec![("fedora-44", 2), ("ubuntu-26.04", 16), ("arch", 3)]
+    );
+    assert!(
+        baseline
+            .candidates
+            .iter()
+            .all(|candidate| candidate.identity.is_none())
+    );
+    assert!(baseline.measurement.sqlite_statements > 0);
+    assert_eq!(baseline.measurement.catalog_file_opens, 0);
+    assert_eq!(baseline.measurement.catalog_bytes_read, 0);
+
+    let rendered = baseline.into_pretty_json().unwrap();
+    let json = serde_json::from_str::<serde_json::Value>(&rendered).unwrap();
+    assert_eq!(
+        json["measurement"]["output_bytes"].as_u64().unwrap(),
+        u64::try_from(rendered.len() + 1).unwrap()
+    );
+    assert!(json.get("profiles").is_none());
+    assert!(json.get("universe").is_none());
+    assert!(json.get("signing_profiles").is_none());
+}
+
+#[test]
+fn deployment_baseline_candidate_proof_never_opens_catalog_files() {
+    use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
+
+    let fixture = ActiveCatalogFixture::new();
+    let revision = fixture.candidate(
+        "fedora-44",
+        1,
+        vec![package(
+            "fedora-44",
+            "bash",
+            "5.3",
+            "1",
+            Some("x86_64"),
+            42,
+            "deployment-baseline-bash",
+        )],
+    );
+    fs::remove_dir_all(fixture.catalog_dir()).unwrap();
+    let conn = fixture.connection();
+
+    let candidates = baseline::inspect_candidates(&conn, &[("fedora-44".to_string(), 2)])
+        .expect("baseline must use durable relational identity only");
+    let identity = candidates[0]
+        .identity
+        .as_ref()
+        .expect("private candidate identity");
+    assert_eq!(identity.profile_revision_sha256, revision);
+
+    let error = baseline::inspect_candidates(&conn, &[("fedora-44".to_string(), 3)])
+        .expect_err("changed configured-source count must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("contains 2 sources; configured authority contains 3"),
+        "unexpected source-count error: {error:#}"
+    );
+}
+
+#[test]
 fn deployment_population_comes_from_active_immutable_catalogs() {
     use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
 

@@ -109,6 +109,23 @@ fi
 if [[ "\${1:-}" == "deployment" && "\${2:-}" == "rollback" ]]; then
     exit 0
 fi
+if [[ "\${1:-}" == "deployment" && "\${2:-}" == "baseline" ]]; then
+    shift 2
+    config=""
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in
+            --config)
+                config="\$2"
+                shift 2
+                ;;
+            *)
+                exit 2
+                ;;
+        esac
+    done
+    printf '{"baseline_schema_version":1,"config":"%s"}\n' "\$config"
+    exit 0
+fi
 if [[ "\${1:-}" == "deployment" && "\${2:-}" == "inspect" ]]; then
     shift 2
     config=""
@@ -412,6 +429,33 @@ test_deploy_remi_uses_candidate_owned_transition() {
         run_helper "$fake_root" inspect-remi --require-something-vague
 }
 
+test_candidate_baseline_uses_exact_staged_binary_without_mutation() {
+    local fake_root="${tmpdir}/root-remi-baseline"
+    local bundle="${tmpdir}/remi-baseline.tar.gz"
+    local digest inspection
+    write_config "$fake_root"
+    make_fake_remi_bundle "$bundle" 0.8.0
+    digest="$(tar xOzf "$bundle" remi-0.8.0-linux-x64 | sha256sum | cut -d ' ' -f 1)"
+
+    inspection="$(run_helper "$fake_root" inspect-remi-candidate-baseline \
+        0.8.0 "$digest" "$bundle")"
+    jq -e \
+        --arg config "$fake_root/etc/conary/remi.toml" \
+        '.baseline_schema_version == 1 and .config == $config' \
+        <<<"$inspection" >/dev/null
+    test -f "$bundle"
+    test ! -e "$fake_root/usr/local/bin/remi"
+
+    expect_fail "candidate baseline digest mismatch" \
+        run_helper "$fake_root" inspect-remi-candidate-baseline \
+        0.8.0 \
+        0000000000000000000000000000000000000000000000000000000000000000 \
+        "$bundle"
+    expect_fail "candidate baseline version mismatch" \
+        run_helper "$fake_root" inspect-remi-candidate-baseline \
+        0.8.1 "$digest" "$bundle"
+}
+
 test_shared_conary_root_is_preserved_and_drift_fails_closed() {
     local fake_root="${tmpdir}/root-shared-contract"
     local before after
@@ -577,6 +621,7 @@ main() {
     test_publish_test_artifact_is_verified_atomic_and_idempotent
     test_publish_test_artifact_rejects_unverified_or_mutating_inputs
     test_deploy_remi_uses_candidate_owned_transition
+    test_candidate_baseline_uses_exact_staged_binary_without_mutation
     test_shared_conary_root_is_preserved_and_drift_fails_closed
     test_verify_ingress_requires_exact_deployed_bytes
     test_deploy_remi_rejects_malformed_authority_root

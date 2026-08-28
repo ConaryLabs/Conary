@@ -14,6 +14,8 @@ pub(crate) enum Command {
     Prepare(PrepareArgs),
     /// Restore a prepared deployment transition.
     Rollback(RollbackArgs),
+    /// Emit constant-cardinality read-only state for deployment fencing.
+    Baseline(BaselineArgs),
     /// Verify current schema and typed deployment completion state.
     Inspect(InspectArgs),
 }
@@ -60,6 +62,13 @@ pub(crate) struct RollbackArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct BaselineArgs {
+    /// Current Remi service configuration.
+    #[arg(long, default_value = "/etc/conary/remi.toml")]
+    config: PathBuf,
+}
+
+#[derive(Args)]
 pub(crate) struct InspectArgs {
     /// Current Remi service configuration.
     #[arg(long, default_value = "/etc/conary/remi.toml")]
@@ -92,6 +101,10 @@ pub(crate) fn run(command: Command) -> Result<()> {
             println!("{}", manifest.display());
         }
         Command::Rollback(args) => remi::deployment::rollback(&args.manifest)?,
+        Command::Baseline(args) => {
+            let baseline = remi::deployment::inspect_baseline(&args.config)?;
+            println!("{}", baseline.into_pretty_json()?);
+        }
         Command::Inspect(args) => {
             let state = remi::deployment::inspect_state(&args.config)?;
             println!("{}", serde_json::to_string_pretty(&state)?);

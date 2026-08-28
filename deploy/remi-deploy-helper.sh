@@ -25,6 +25,7 @@ usage:
   conary-remi-deploy publish-test-artifact <filename> <sha256> <staged-file>
   conary-remi-deploy install-helper <sha256> <helper>
   conary-remi-deploy inspect-remi [--require-private-candidates|--require-repopulated]
+  conary-remi-deploy inspect-remi-candidate-baseline <version> <sha256> <bundle.tar.gz>
   conary-remi-deploy inspect-remi-storage
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
   conary-remi-deploy verify-ingress
@@ -528,6 +529,36 @@ inspect_remi() {
     "$bin" "${args[@]}"
 }
 
+inspect_remi_candidate_baseline() {
+    local version="$1"
+    local expected_sha="$2"
+    local bundle
+    validate_version "$version"
+    validate_sha256 "$expected_sha"
+    bundle="$(real_tmp_path "$3")"
+    [[ -f "$bundle" && ! -L "$bundle" ]] || die "bundle path is not a plain file: $bundle"
+
+    local tmpdir member candidate occurrences actual_sha
+    tmpdir="$(mktemp -d /tmp/remi-baseline.XXXXXX)"
+    trap 'rm -rf "$tmpdir"' RETURN
+    member="remi-${version}-linux-x64"
+    candidate="${tmpdir}/${member}"
+    occurrences="$(tar tzf "$bundle" | awk -v expected="$member" '
+        $0 == expected { count += 1 }
+        END { print count + 0 }
+    ')" || die "could not inspect candidate bundle"
+    [[ "$occurrences" == "1" ]] ||
+        die "bundle must contain exactly one plain ${member}"
+    tar xOzf "$bundle" -- "$member" >"$candidate" ||
+        die "could not extract ${member} from candidate bundle"
+    chmod 0755 "$candidate"
+    actual_sha="$(sha256sum "$candidate" | cut -d ' ' -f 1)"
+    [[ "$actual_sha" == "$expected_sha" ]] || die "candidate Remi SHA-256 mismatch"
+    [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
+        die "candidate binary version does not match ${version}"
+    "$candidate" deployment baseline --config "$(root_path /etc/conary/remi.toml)"
+}
+
 inspect_remi_storage() {
     [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
     require_shared_conary_root
@@ -702,6 +733,10 @@ case "${1:-}" in
     inspect-remi)
         [[ $# -le 2 ]] || usage
         inspect_remi "${2:-}"
+        ;;
+    inspect-remi-candidate-baseline)
+        [[ $# -eq 4 ]] || usage
+        inspect_remi_candidate_baseline "$2" "$3" "$4"
         ;;
     inspect-remi-storage)
         [[ $# -eq 1 ]] || usage

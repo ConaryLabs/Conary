@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 43
-summary: Non-secret infrastructure, agent operations, release, coherent typed incomplete deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
+revision: 44
+summary: Non-secret infrastructure, agent operations, release, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -102,12 +102,20 @@ workflow.
   tag or release and is not a path for deploying an unmerged pull-request head.
 - Candidate deployment retains exactly one final typed inspection instead of
   emitting every incomplete poll. Private-candidate mode also retains the
-  pre-transition inspection used as its fencing baseline. That baseline may
-  contain an absent candidate only as one coherent typed state: null revision,
-  run, and completion identities, zero packages, and the exact latest fenced
-  refresh diagnosis. This is evidence of what the new binary must recover, not
-  candidate completion; half-present identities and missing or duplicate
-  public profiles fail before mutation. Each canonical
+  pre-transition inspection used as its fencing baseline. The workflow runs
+  that versioned read-only command from the exact staged binary after checking
+  its SHA-256, so a new baseline schema does not depend on the previously
+  installed binary. The baseline reads current schema, configured repository,
+  candidate-pointer, exact run-member, and latest-refresh rows only. It does
+  not open signing material, immutable catalogs, package rows, conversions, or
+  universe state. Its two-second budget and zero catalog opens/bytes are
+  fail-closed workflow predicates, and its output records wall/CPU/RSS, SQLite
+  statement and logical page-read work, and exact serialized bytes.
+- A baseline may contain an absent candidate only as a null identity plus the
+  exact latest fenced refresh diagnosis. This is evidence of what the new
+  binary must recover, not candidate completion; half-present identities,
+  changed candidate source membership, and missing or duplicate public
+  profiles fail before mutation. Each canonical
   public profile includes its current candidate plus the exact latest fenced
   refresh run, typed state and failure stage/category, member progress,
   raw-evidence SHA-256, and a bounded redacted diagnostic copy. The protected

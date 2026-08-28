@@ -144,3 +144,25 @@ fn native_oracle_input_accepts_only_exact_candidate_and_output_bindings() {
         );
     }
 }
+
+#[test]
+fn deployment_baseline_is_read_only_and_cannot_claim_completion() {
+    let output = run_remi(&["deployment", "baseline", "--help"]);
+
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--config"), "{stdout}");
+    for forbidden in [
+        "--require-private-candidates",
+        "--require-repopulated",
+        "--repository-manifest",
+        "--repository-keys-dir",
+        "--deployment-id",
+        "--max-concurrent",
+    ] {
+        assert!(
+            !stdout.contains(forbidden),
+            "forbidden {forbidden}: {stdout}"
+        );
+    }
+}
