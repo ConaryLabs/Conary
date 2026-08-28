@@ -70,6 +70,14 @@ done < <(
   done
 )
 
+while IFS=: read -r file line _; do
+  violations+=("${file}:${line}: composite-action description contains an unquoted mapping colon")
+done < <(
+  rg -n --no-heading -- \
+    "^[[:space:]]*description:[[:space:]]+[^\"'|>].*:[[:space:]]" \
+    .github/actions 2>/dev/null || true
+)
+
 shell_policy_action=".github/actions/setup-shell-policy-tools/action.yml"
 if [[ ! -f "$shell_policy_action" ]]; then
   violations+=("${shell_policy_action}: missing shared shell-policy bootstrap")

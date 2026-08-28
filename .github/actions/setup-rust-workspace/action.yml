@@ -10,7 +10,7 @@ inputs:
     required: false
     default: 1.98.0
   compiler-cache:
-    description: Exact compiler-cache role: off, writer, or reader.
+    description: "Exact compiler-cache role: off, writer, or reader."
     required: false
     default: "off"
 runs:

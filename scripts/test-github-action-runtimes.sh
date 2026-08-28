@@ -85,12 +85,14 @@ unsafe_shell_root="$tmpdir/unsafe-shell"
 unsafe_apt_root="$tmpdir/unsafe-apt"
 unsafe_source_root="$tmpdir/unsafe-source"
 unsafe_cache_root="$tmpdir/unsafe-cache"
+unsafe_action_yaml_root="$tmpdir/unsafe-action-yaml"
 write_fixture "$bad_root" "actions/checkout@v6"
 write_fixture "$good_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_shell_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_apt_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_source_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_cache_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+write_fixture "$unsafe_action_yaml_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 sed -i 's/if command -v rg >\/dev\/null; then/if false; then/' \
   "$unsafe_shell_root/.github/actions/setup-shell-policy-tools/action.yml"
 sed -i \
@@ -101,6 +103,9 @@ sed -i \
   "$unsafe_source_root/scripts/ci-install-ubuntu-packages.sh"
 sed -i 's/version: v0\.16\.0/version: latest/' \
   "$unsafe_cache_root/.github/actions/setup-rust-workspace/action.yml"
+sed -i \
+  's/description: "Exact compiler-cache role: off, writer, or reader\."/description: Exact compiler-cache role: off, writer, or reader./' \
+  "$unsafe_action_yaml_root/.github/actions/setup-rust-workspace/action.yml"
 
 if bash scripts/check-github-action-runtimes.sh "$bad_root" >"$tmpdir/bad.out" 2>"$tmpdir/bad.err"; then
   echo "expected unpinned action fixture to fail" >&2
@@ -174,6 +179,21 @@ if ! rg -q 'must install the pinned sccache implementation and version' \
   "$tmpdir/unsafe-cache.err"; then
   echo "expected failure to name the unpinned compiler cache" >&2
   cat "$tmpdir/unsafe-cache.err" >&2
+  exit 1
+fi
+
+if bash scripts/check-github-action-runtimes.sh "$unsafe_action_yaml_root" \
+  >"$tmpdir/unsafe-action-yaml.out" 2>"$tmpdir/unsafe-action-yaml.err"; then
+  echo "expected unquoted composite-action mapping fixture to fail" >&2
+  cat "$tmpdir/unsafe-action-yaml.out" >&2
+  cat "$tmpdir/unsafe-action-yaml.err" >&2
+  exit 1
+fi
+
+if ! rg -q 'composite-action description contains an unquoted mapping colon' \
+  "$tmpdir/unsafe-action-yaml.err"; then
+  echo "expected failure to name the invalid action-manifest description" >&2
+  cat "$tmpdir/unsafe-action-yaml.err" >&2
   exit 1
 fi
 
