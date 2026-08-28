@@ -276,7 +276,11 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
     cp "$REPO_ROOT/.github/workflows/build-remi-candidate.yml" "$repo/.github/workflows/build-remi-candidate.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-remi-candidate.yml" "$repo/.github/workflows/deploy-remi-candidate.yml"
+    cp "$REPO_ROOT/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml"
     cp "$REPO_ROOT/scripts/remi-candidate-artifact.sh" "$repo/scripts/remi-candidate-artifact.sh"
+    cp "$REPO_ROOT/scripts/verify-native-oracle-input-transport.py" \
+        "$repo/scripts/verify-native-oracle-input-transport.py"
     cp "$REPO_ROOT/scripts/timed-linker.sh" "$repo/scripts/timed-linker.sh"
     cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
         "$repo/deploy/remi-predeployment-inspection.jq"
@@ -309,6 +313,10 @@ create_release_policy_fixture() {
 
 test_bootstrap_installer_contract() {
     bash "$REPO_ROOT/scripts/test-install-conary-preview.sh"
+}
+
+test_native_oracle_transport_contract() {
+    python3 "$REPO_ROOT/scripts/test-native-oracle-input-transport.py"
 }
 
 replace_fixture_text_once() {
@@ -1413,6 +1421,45 @@ test_check_release_matrix_rejects_missing_candidate_failure_artifact() {
         "candidate deploy retains before-and-after sanitized inspection artifacts"
 }
 
+test_check_release_matrix_rejects_unprotected_native_oracle_source() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '              and .conclusion == "success"' \
+        '              and .conclusion == "failure"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export exact successful protected deployment source"
+}
+
+test_check_release_matrix_rejects_nonproduction_native_oracle_export() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '    environment: production' \
+        '    environment: staging'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export protected production operator boundary"
+}
+
+test_check_release_matrix_rejects_loose_native_oracle_transport() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/verify-native-oracle-input-transport.py" \
+        '        archive = tarfile.open(path, mode="r:")' \
+        '        archive = tarfile.open(path, mode="r:*")'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle transport strict tar, canonical manifest, inventory, and byte verification"
+}
+
 test_check_release_matrix_rejects_unverified_remi_suite_bundle() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1824,6 +1871,7 @@ test_check_release_matrix_rejects_single_static_site_deploy() {
 main() {
     local -a tests=(
         test_bootstrap_installer_contract
+        test_native_oracle_transport_contract
         test_resolve_tag_suite_canonical
         test_latest_version_from_list_uses_canonical_tags
         test_field_conary_test_deploy_mode
@@ -1895,6 +1943,9 @@ main() {
         test_check_release_matrix_rejects_missing_candidate_phase_evidence
         test_check_release_matrix_rejects_missing_candidate_storage_evidence
         test_check_release_matrix_rejects_missing_candidate_failure_artifact
+        test_check_release_matrix_rejects_unprotected_native_oracle_source
+        test_check_release_matrix_rejects_nonproduction_native_oracle_export
+        test_check_release_matrix_rejects_loose_native_oracle_transport
         test_check_release_matrix_rejects_unverified_remi_suite_bundle
         test_check_release_matrix_rejects_merge_validation_production_probes
         test_check_release_matrix_rejects_missing_post_deploy_remi_readiness

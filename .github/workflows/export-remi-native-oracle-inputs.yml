@@ -1,0 +1,289 @@
+name: export-remi-native-oracle-inputs
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_run_id:
+        description: "Successful private-candidate deployment run that owns the exact export inputs."
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: remi-native-oracle-input-export-production
+  cancel-in-progress: false
+
+jobs:
+  export:
+    name: export exact production native-oracle inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    steps:
+      - name: Check out protected export operator
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a protected-main workflow revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || {
+            echo "native-oracle export must be dispatched from main" >&2
+            exit 1
+          }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "export operator must already be merged into origin/main" >&2
+            exit 1
+          }
+
+      - name: Bind successful exact private-candidate deployment
+        id: deployment
+        env:
+          DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOYMENT_RUN_ID" =~ ^[0-9]+$ ]] || {
+            echo "deployment_run_id must be a decimal GitHub Actions run id" >&2
+            exit 1
+          }
+          source_run="$(gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${DEPLOYMENT_RUN_ID}")"
+          jq -e \
+            --argjson run_id "$DEPLOYMENT_RUN_ID" \
+            --arg repository "$GITHUB_REPOSITORY" '
+              .id == $run_id
+              and .event == "workflow_dispatch"
+              and .status == "completed"
+              and .conclusion == "success"
+              and .head_branch == "main"
+              and .head_repository.full_name == $repository
+              and (.head_sha | test("^[0-9a-f]{40}$"))
+              and (.path | startswith(".github/workflows/deploy-remi-candidate.yml"))
+            ' <<<"$source_run" >/dev/null || {
+              echo "source run is not an exact successful protected-main Remi deployment" >&2
+              exit 1
+            }
+          head_sha="$(jq -r '.head_sha' <<<"$source_run")"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact sanitized deployment inspection
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: remi-deployment-inspection-${{ inputs.deployment_run_id }}
+          path: ${{ runner.temp }}/deployment-inspection
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.deployment_run_id }}
+
+      - name: Reopen exact candidate identity from deployment evidence
+        id: candidates
+        env:
+          DEPLOYED_COMMIT_SHA: ${{ steps.deployment.outputs.head_sha }}
+          INSPECTION_DIR: ${{ runner.temp }}/deployment-inspection
+        shell: bash
+        run: |
+          set -euo pipefail
+          inspection="$INSPECTION_DIR/remi-deployment-inspection.json"
+          [[ -f "$inspection" && ! -L "$inspection" ]] || {
+            echo "deployment artifact has no plain final inspection" >&2
+            exit 1
+          }
+          jq -e \
+            --arg commit "$DEPLOYED_COMMIT_SHA" '
+              . as $inspection
+              | .deployment_evidence_schema_version == 2
+              and .inspection_available == true
+              and .deployment.commit_sha == $commit
+              and (.deployment.binary_sha256 | test("^[0-9a-f]{64}$"))
+              and .deployment.completion_mode == "private-candidates"
+              and .deployment.outcome == "complete"
+              and .deployment.failure_phase == null
+              and (.deployment.transition_completed_at | type == "number")
+              and (.candidates | map(.profile))
+                == ["fedora-44", "ubuntu-26.04", "arch"]
+              and all(.candidates[];
+                (.profile_revision_sha256 | test("^[0-9a-f]{64}$"))
+                and (.run_id | type == "string")
+                and (.packages | type == "number")
+                and .packages > 0
+                and (.configured_sources | type == "number")
+                and .configured_sources > 0
+                and .latest_refresh.run_id == .run_id
+                and .latest_refresh.state == "candidate"
+                and (.latest_refresh.finished_at | type == "number")
+                and (.latest_refresh.started_at
+                  > $inspection.deployment.transition_completed_at))
+            ' "$inspection" >/dev/null || {
+              echo "deployment evidence does not prove one exact complete private candidate set" >&2
+              exit 1
+          }
+          cp -- "$inspection" remi-deployment-inspection.json
+          {
+            echo "fedora=$(jq -r '.candidates[0].profile_revision_sha256' "$inspection")"
+            echo "ubuntu=$(jq -r '.candidates[1].profile_revision_sha256' "$inspection")"
+            echo "arch=$(jq -r '.candidates[2].profile_revision_sha256' "$inspection")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Export through the fixed production helper
+        id: export
+        env:
+          DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
+          FEDORA_CANDIDATE: ${{ steps.candidates.outputs.fedora }}
+          UBUNTU_CANDIDATE: ${{ steps.candidates.outputs.ubuntu }}
+          ARCH_CANDIDATE: ${{ steps.candidates.outputs.arch }}
+          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${REMI_SSH_KEY:-}" ]] || {
+            echo "REMI_SSH_KEY is required" >&2
+            exit 1
+          }
+          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
+          [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || {
+            echo "REMI_SSH_TARGET must be one explicit user and DNS host" >&2
+            exit 1
+          }
+          export_id="slice6-${DEPLOYMENT_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          remote_transport="/tmp/remi-native-oracle-input-${export_id}.tar"
+          local_transport="native-oracle-input-${export_id}.tar"
+          key="${RUNNER_TEMP}/remi-native-oracle-export-key"
+          remote_transport_possible=0
+          cleanup() {
+            status=$?
+            rm -f -- "$key"
+            if (( remote_transport_possible == 1 )); then
+              set +e
+              # Every interpolated remote value is typed above.
+              # shellcheck disable=SC2029
+              ssh "${ssh_opts[@]}" "$target" "rm -f -- '$remote_transport'" \
+                >/dev/null 2>&1
+              set -e
+            fi
+            return "$status"
+          }
+          trap cleanup EXIT
+
+          printf '%s\n' "$REMI_SSH_KEY" > "$key"
+          chmod 0600 "$key"
+          host="${target#*@}"
+          mkdir -p ~/.ssh
+          chmod 0700 ~/.ssh
+          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh_opts=(
+            -i "$key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o ServerAliveInterval=30
+            -o ServerAliveCountMax=6
+          )
+
+          ssh "${ssh_opts[@]}" "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          remote_transport_possible=1
+          export_report="$({
+            # Identity and digests are locally typed.
+            # shellcheck disable=SC2029
+            ssh "${ssh_opts[@]}" "$target" \
+              "sudo -n /usr/local/sbin/conary-remi-deploy export-native-oracle-inputs '$export_id' '$FEDORA_CANDIDATE' '$UBUNTU_CANDIDATE' '$ARCH_CANDIDATE'"
+          } 2>&1)" || {
+            printf '%s\n' "$export_report" >&2
+            exit 1
+          }
+          report_line="$(tail -n 1 <<<"$export_report")"
+          expected_prefix="Native oracle inputs: export=${export_id} transport=${remote_transport} sha256="
+          [[ "$report_line" =~ ^${expected_prefix}([0-9a-f]{64})$ ]] || {
+            echo "production helper returned malformed export evidence" >&2
+            exit 1
+          }
+          reported_sha256="${BASH_REMATCH[1]}"
+          scp "${ssh_opts[@]}" "${target}:${remote_transport}" "$local_transport"
+          observed_sha256="$(sha256sum "$local_transport" | cut -d ' ' -f 1)"
+          [[ "$observed_sha256" == "$reported_sha256" ]] || {
+            echo "native-oracle transport digest changed across SSH" >&2
+            exit 1
+          }
+          # The remote transport is derived from decimal ids.
+          # shellcheck disable=SC2029
+          ssh "${ssh_opts[@]}" "$target" "rm -f -- '$remote_transport'"
+          remote_transport_possible=0
+
+          python3 scripts/verify-native-oracle-input-transport.py \
+            --transport "$local_transport" \
+            --export-id "$export_id" \
+            --output-dir "${RUNNER_TEMP}/reopened-native-oracle-input" \
+            --evidence native-oracle-input-verification.json \
+            --expected-candidate "fedora-44=${FEDORA_CANDIDATE}" \
+            --expected-candidate "ubuntu-26.04=${UBUNTU_CANDIDATE}" \
+            --expected-candidate "arch=${ARCH_CANDIDATE}" \
+            >/dev/null
+          jq -e \
+            --arg export_id "$export_id" \
+            --arg transport_sha256 "$reported_sha256" '
+              .schema_version == 1
+              and .export_id == $export_id
+              and .transport.sha256 == $transport_sha256
+              and (.profiles | map(.profile))
+                == ["fedora-44", "ubuntu-26.04", "arch"]
+              and .counts.profiles == 3
+              and .counts.sources > 0
+              and .counts.objects > 0
+              and .counts.object_bytes > 0
+            ' native-oracle-input-verification.json >/dev/null
+          {
+            echo "export_id=$export_id"
+            echo "transport=$local_transport"
+            echo "transport_sha256=$reported_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact verified native-oracle inputs
+        id: upload
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: remi-native-oracle-input-${{ inputs.deployment_run_id }}-${{ github.run_id }}
+          path: |
+            ${{ steps.export.outputs.transport }}
+            native-oracle-input-verification.json
+            remi-deployment-inspection.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Record exact export handoff
+        env:
+          DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
+          DEPLOYED_COMMIT_SHA: ${{ steps.deployment.outputs.head_sha }}
+          EXPORT_ID: ${{ steps.export.outputs.export_id }}
+          TRANSPORT_SHA256: ${{ steps.export.outputs.transport_sha256 }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Values are injected by this step's env map.
+          # shellcheck disable=SC2153
+          {
+            echo "### Exact production native-oracle input handoff"
+            echo
+            echo "- deployment run: \`$DEPLOYMENT_RUN_ID\`"
+            echo "- deployed commit: \`$DEPLOYED_COMMIT_SHA\`"
+            echo "- export: \`$EXPORT_ID\`"
+            echo "- transport SHA-256: \`$TRANSPORT_SHA256\`"
+            echo "- GitHub artifact: \`$ARTIFACT_ID\`"
+            echo "- GitHub artifact digest: \`$ARTIFACT_DIGEST\`"
+            jq -r '.profiles[]
+              | "- \(.profile): `\(.profile_revision_sha256)`; "
+                + "\(.sources) sources / \(.objects) objects / \(.object_bytes) bytes"' \
+              native-oracle-input-verification.json
+          } >> "$GITHUB_STEP_SUMMARY"
