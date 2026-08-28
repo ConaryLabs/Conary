@@ -154,17 +154,27 @@ else
   }
 
   require_compiler_cache_match \
-    'compiler-cache:[\s\S]*default: "false"[\s\S]*COMPILER_CACHE_REQUEST: \$\{\{ inputs\.compiler-cache \}\}[\s\S]*== "true" \|\| "\$COMPILER_CACHE_REQUEST" == "false"' \
-    'must default off and reject non-boolean cache policy'
+    'compiler-cache:[\s\S]*default: "off"[\s\S]*COMPILER_CACHE_REQUEST: \$\{\{ inputs\.compiler-cache \}\}[\s\S]*off\|writer\|reader' \
+    'must default off and reject unknown cache roles'
+  # These policy regexes intentionally match literal shell variables.
+  # shellcheck disable=SC2016
   require_compiler_cache_match \
-    'SCCACHE_GHA_VERSION=\$namespace[\s\S]*SCCACHE_VERSION=0\.16\.0' \
-    'must bind the exact cache namespace and sccache version'
+    'namespace="protected-gnu-local-v1-\$\{identity\}"[\s\S]*exact_key="\$\{restore_prefix\}\$\{GITHUB_SHA\}"[\s\S]*CONARY_COMPILER_CACHE_NAMESPACE=\$namespace[\s\S]*SCCACHE_VERSION=0\.16\.0[\s\S]*SCCACHE_CACHE_SIZE=4G' \
+    'must bind exact source, policy, implementation, and size to the local cache'
+  require_compiler_cache_match \
+    'actions/cache@[0-9a-f]{40}[\s\S]*key: \$\{\{ steps\.compiler-cache-policy\.outputs\.exact_key \}\}[\s\S]*restore-keys: \$\{\{ steps\.compiler-cache-policy\.outputs\.restore_prefix \}\}[\s\S]*actions/cache/restore@[0-9a-f]{40}[\s\S]*fail-on-cache-miss: true' \
+    'must bulk-save one writable seed and fail closed on exact reader misses'
+  # shellcheck disable=SC2016
+  require_compiler_cache_match \
+    'writer\) local_mode=READ_WRITE[\s\S]*reader\) local_mode=READ_ONLY[\s\S]*SCCACHE_LOCAL_RW_MODE=\$local_mode' \
+    'must keep consumers read-only and the single primer writable'
   require_compiler_cache_match \
     'mozilla-actions/sccache-action@[0-9a-f]{40}[\s\S]*version: v0\.16\.0' \
     'must install the pinned sccache implementation and version'
   require_compiler_cache_match \
     'rustc=\%s[\s\S]*cargo=\%s[\s\S]*lock=\%s[\s\S]*target=\%s[\s\S]*cc=\%s[\s\S]*native_abi=\%s[\s\S]*rustflags=\%s[\s\S]*encoded_rustflags=\%s[\s\S]*incremental=\%s[\s\S]*dev_debug=\%s[\s\S]*test_debug=\%s' \
     'must bind toolchain, source dependency, native ABI, and codegen policy'
+  # shellcheck disable=SC2016
   require_compiler_cache_match \
     'echo "RUSTC_WRAPPER=\$SCCACHE_PATH" >> "\$GITHUB_ENV"[\s\S]*"\$SCCACHE_PATH" --zero-stats' \
     'must activate the exact cache executable and reset per-job evidence'
@@ -183,11 +193,75 @@ else
   }
 
   require_compiler_cache_summary_match \
-    'SCCACHE_GHA_VERSION:-[\s\S]*protected-gnu-v1-\[0-9a-f\]\{64\}' \
+    'CONARY_COMPILER_CACHE_NAMESPACE:-[\s\S]*protected-gnu-local-v1-\[0-9a-f\]\{64\}' \
     'must reject missing or non-exact protected namespaces'
   require_compiler_cache_summary_match \
-    '--show-stats --stats-format json[\s\S]*\.version == "0\.16\.0"[\s\S]*\.stats\.compile_requests[\s\S]*\.stats\.cache_hits\.counts[\s\S]*\.stats\.cache_misses\.counts[\s\S]*\.stats\.cache_errors\.counts[\s\S]*\.stats\.cache_writes[\s\S]*\.stats\.cache_read_errors[\s\S]*\.stats\.cache_write_errors[\s\S]*\.stats\.cache_timeouts' \
-    'must retain typed request, hit, miss, and error evidence from the pinned cache'
+    '--show-stats --stats-format json[\s\S]*\.version == "0\.16\.0"[\s\S]*startswith\("Local disk: "\)[\s\S]*\.stats\.compile_requests[\s\S]*\.stats\.cache_hits\.counts[\s\S]*\.stats\.cache_misses\.counts[\s\S]*\.stats\.cache_errors\.counts[\s\S]*\.stats\.cache_writes[\s\S]*\.stats\.cache_read_errors[\s\S]*\.stats\.cache_write_errors[\s\S]*\.stats\.cache_timeouts' \
+      'must retain typed request, hit, miss, and error evidence from the pinned cache'
+fi
+
+native_matrix_workflow=".github/workflows/pr-gate.yml"
+if [[ -f "$native_matrix_workflow" ]]; then
+  require_native_matrix_fixed() {
+    local needle="$1"
+    local description="$2"
+
+    if ! rg -q --fixed-strings -- "$needle" "$native_matrix_workflow"; then
+      violations+=("${native_matrix_workflow}: ${description}")
+    fi
+  }
+
+  for binding in \
+    "rustc=%s" \
+    "cargo=%s" \
+    "lock=%s" \
+    "target=x86_64-unknown-linux-musl" \
+    "cc=%s" \
+    "native_abi=%s" \
+    "builder=%s" \
+    "header_probe=%s" \
+    "action=%s" \
+    "features=default" \
+    "test_harness=true" \
+    "rustflags=%s" \
+    "encoded_rustflags=%s" \
+    "incremental=%s" \
+    "dev_debug=%s" \
+    "test_debug=%s"; do
+    require_native_matrix_fixed "$binding" \
+      "native matrix compiler-cache identity must bind ${binding}"
+  done
+  require_native_matrix_fixed \
+    'SCCACHE_CACHE_BACKEND: local-disk-bulk-v1' \
+    'native matrix compiler cache must use the local bulk backend'
+  # These fixed strings intentionally match literal workflow expressions.
+  # shellcheck disable=SC2016
+  require_native_matrix_fixed \
+    'SCCACHE_DIR: ${{ runner.temp }}/native-matrix-sccache' \
+    'native matrix compiler cache must use its bounded runner-local directory'
+  require_native_matrix_fixed \
+    'SCCACHE_LOCAL_RW_MODE: READ_WRITE' \
+    'native matrix producer must be the sole writable native cache owner'
+  # shellcheck disable=SC2016
+  require_native_matrix_fixed \
+    'namespace="native-matrix-musl-local-v1-${identity}"' \
+    'native matrix cache must use its exact policy identity'
+  # shellcheck disable=SC2016
+  require_native_matrix_fixed \
+    'exact_key="${restore_prefix}${GITHUB_SHA}"' \
+    'native matrix cache must bulk-save an exact source key'
+  require_native_matrix_fixed \
+    'uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
+    'native matrix cache restore must use the pinned split cache action'
+  require_native_matrix_fixed \
+    'uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
+    'native matrix cache save must use the pinned split cache action'
+  require_native_matrix_fixed \
+    "if: \${{ steps.native-cache-restore.outputs.cache-hit != 'true' }}" \
+    'native matrix cache must save only a new exact key'
+  if rg -q --fixed-strings 'SCCACHE_GHA_ENABLED' "$native_matrix_workflow"; then
+    violations+=("${native_matrix_workflow}: native matrix cache must not use the per-object GitHub backend")
+  fi
 fi
 
 while IFS=: read -r file line _; do

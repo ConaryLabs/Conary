@@ -53,7 +53,9 @@ git -C "$fixture" add Cargo.toml Cargo.lock .gitignore scripts .github
 git -C "$fixture" commit -qm 'test: seed fixture'
 commit="$(git -C "$fixture" rev-parse HEAD)"
 stats="$tmpdir/sccache-stats.json"
-printf '%s\n' '{"compile_requests":10,"cache_hits":9,"cache_misses":1}' >"$stats"
+printf '%s\n' \
+    '{"version":"0.16.0","cache_location":"Local disk: /tmp/native-matrix-sccache","stats":{"compile_requests":10,"cache_hits":{"counts":{"Rust":9}},"cache_misses":{"counts":{"Rust":1}},"cache_errors":{"counts":{}},"cache_writes":1,"cache_read_errors":0,"cache_write_errors":0,"cache_timeouts":0}}' \
+    >"$stats"
 metrics="$tmpdir/static-build-metrics.json"
 printf '%s\n' \
     '{"schema_version":1,"static_dependency_cache_hit":true,"static_dependency_ms":1,"static_runtime_build_ms":20,"library_test_build_ms":9,"with_test_harness":true}' \
@@ -73,12 +75,13 @@ package_once() {
         CARGO_INCREMENTAL=0 \
         CARGO_PROFILE_DEV_DEBUG=0 \
         CARGO_PROFILE_TEST_DEBUG=0 \
-        RUSTFLAGS= \
-        CARGO_ENCODED_RUSTFLAGS= \
+        RUSTFLAGS='' \
+        CARGO_ENCODED_RUSTFLAGS='' \
         SCCACHE_VERSION=0.16.0 \
-        SCCACHE_GHA_VERSION=native-matrix-musl-v1 \
+        SCCACHE_CACHE_BACKEND=local-disk-bulk-v1 \
+        SCCACHE_CACHE_NAMESPACE=native-matrix-musl-local-v1-0000000000000000000000000000000000000000000000000000000000000000 \
             scripts/native-matrix-artifact.sh package \
-                "$output" "$commit" 1234 10 20 30 "$stats" \
+                "$output" "$commit" 1234 10 20 0 30 "$stats" \
                 "$metrics"
     )
 }

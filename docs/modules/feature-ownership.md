@@ -1462,8 +1462,12 @@ and the one ignored container-contract test executable once as static musl
 binaries. Every distro cell downloads the same immutable artifact and verifies
 its exact commit, tree, lockfile, toolchain, flags, cache namespace, archive
 member list, and binary digests before reopening it; an absent, corrupt, or
-misattributed artifact fails the cell and never weakens a predicate. Compiler
-cache entries reduce work but are not artifact or test authority. Corpus cases
+misattributed artifact fails the cell and never weakens a predicate. The native
+producer bulk-restores and bulk-saves its exact-policy musl compiler cache
+around local compilation. The GNU compiler-cache primer likewise bulk-saves
+one bounded local seed under the exact commit; consumers require that seed and
+open it read-only. Cache entries reduce work but are not artifact or test
+authority. Corpus cases
 must carry versioned runtime evidence with exact role-tagged artifact digests,
 typed digest authority, target capabilities, and canonically ordered stage
 checkpoints; report aggregation uses typed stage/failure discriminants and

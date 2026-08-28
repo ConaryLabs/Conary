@@ -21,7 +21,7 @@ runs:
           echo "compiler-cache summary has no sccache executable" >&2
           exit 1
         }
-        [[ "${SCCACHE_GHA_VERSION:-}" =~ ^protected-gnu-v1-[0-9a-f]{64}$ ]] || {
+        [[ "${CONARY_COMPILER_CACHE_NAMESPACE:-}" =~ ^protected-gnu-local-v1-[0-9a-f]{64}$ ]] || {
           echo "compiler-cache summary has no exact protected namespace" >&2
           exit 1
         }
@@ -29,6 +29,7 @@ runs:
         "$SCCACHE_PATH" --show-stats --stats-format json > "$stats"
         jq -e '
           .version == "0.16.0"
+          and (.cache_location | startswith("Local disk: "))
           and (.stats.compile_requests | type == "number")
           and (.stats.cache_hits.counts | type == "object")
           and (.stats.cache_misses.counts | type == "object")
@@ -41,7 +42,7 @@ runs:
         {
           echo "### Rust compiler-cache result: $CACHE_PHASE"
           echo
-          echo "- namespace: \`${SCCACHE_GHA_VERSION}\`"
+          echo "- namespace: \`${CONARY_COMPILER_CACHE_NAMESPACE}\`"
           jq -r '
             "- compile_requests: `\(.stats.compile_requests)`\n"
             + "- cache_hits: `\([.stats.cache_hits.counts[]] | add // 0)`\n"

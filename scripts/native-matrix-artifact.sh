@@ -9,7 +9,8 @@ MANIFEST_NAME="native-matrix-artifact-manifest.json"
 STATS_NAME="sccache-stats.json"
 BUILD_METRICS_NAME="static-build-metrics.json"
 BUILD_COMMAND="bash scripts/build-static-conary.sh --with-test-harness"
-CACHE_NAMESPACE="native-matrix-musl-v1"
+CACHE_BACKEND="local-disk-bulk-v1"
+CACHE_NAMESPACE_PATTERN='^native-matrix-musl-local-v1-[0-9a-f]{64}$'
 CACHE_VERSION="0.16.0"
 ARTIFACT_PATHS=(
     "$TARGET/$PROFILE/conary"
@@ -20,7 +21,7 @@ ARTIFACT_PATHS=(
 usage() {
     cat >&2 <<'EOF'
 Usage:
-  scripts/native-matrix-artifact.sh package OUTPUT_DIR COMMIT RUN_ID SETUP_MS CACHE_SETUP_MS BUILD_MS SCCACHE_STATS BUILD_METRICS
+  scripts/native-matrix-artifact.sh package OUTPUT_DIR COMMIT RUN_ID SETUP_MS CACHE_SETUP_MS CACHE_SAVE_MS BUILD_MS SCCACHE_STATS BUILD_METRICS
   scripts/native-matrix-artifact.sh verify ARTIFACT_DIR COMMIT RUN_ID EVENT
 EOF
     exit 2
@@ -72,25 +73,38 @@ workspace_rust_version() {
 }
 
 package_artifact() {
-    [[ $# -eq 8 ]] || usage
+    [[ $# -eq 9 ]] || usage
     local output_dir="$1"
     local expected_commit="$2"
     local workflow_run_id="$3"
     local setup_ms="$4"
     local cache_setup_ms="$5"
-    local build_ms="$6"
-    local cache_stats="$7"
-    local build_metrics="$8"
+    local cache_save_ms="$6"
+    local build_ms="$7"
+    local cache_stats="$8"
+    local build_metrics="$9"
 
     require_commit "$expected_commit"
     require_uint workflow_run_id "$workflow_run_id"
     require_uint setup_ms "$setup_ms"
     require_uint cache_setup_ms "$cache_setup_ms"
+    require_uint cache_save_ms "$cache_save_ms"
     require_uint build_ms "$build_ms"
     require_regular_file "$cache_stats"
     require_regular_file "$build_metrics"
-    jq -e 'type == "object"' "$cache_stats" >/dev/null ||
-        fail "sccache statistics must be a JSON object"
+    jq -e --arg version "$CACHE_VERSION" '
+      .version == $version
+      and (.cache_location | startswith("Local disk: "))
+      and (.stats.compile_requests | type == "number")
+      and (.stats.cache_hits.counts | type == "object")
+      and (.stats.cache_misses.counts | type == "object")
+      and (.stats.cache_errors.counts | type == "object")
+      and (.stats.cache_writes | type == "number")
+      and (.stats.cache_read_errors | type == "number")
+      and (.stats.cache_write_errors | type == "number")
+      and (.stats.cache_timeouts | type == "number")
+    ' "$cache_stats" >/dev/null ||
+        fail "sccache statistics do not prove the protected local backend"
     jq -e '
       .schema_version == 1
       and (.static_dependency_cache_hit | type == "boolean")
@@ -130,6 +144,14 @@ package_artifact() {
         "${ARTIFACT_PATHS[@]}" | gzip --no-name >"$bundle"
     bundle_finished_ns="$(date -u +%s%N)"
     bundle_ms=$(( (bundle_finished_ns - bundle_started_ns) / 1000000 ))
+
+    local cache_backend cache_namespace
+    cache_backend="${SCCACHE_CACHE_BACKEND:-unknown}"
+    cache_namespace="${SCCACHE_CACHE_NAMESPACE:-unknown}"
+    [[ "$cache_backend" == "$CACHE_BACKEND" ]] ||
+        fail "compiler-cache backend is not the protected local bulk backend"
+    [[ "$cache_namespace" =~ $CACHE_NAMESPACE_PATTERN ]] ||
+        fail "compiler-cache namespace is not an exact native matrix identity"
 
     local rust_toolchain rustc_verbose rustc_verbose_sha cargo_verbose
     rust_toolchain="$(workspace_rust_version)"
@@ -173,11 +195,14 @@ package_artifact() {
         --arg cargo_incremental "${CARGO_INCREMENTAL:-}" \
         --arg cargo_profile_dev_debug "${CARGO_PROFILE_DEV_DEBUG:-}" \
         --arg cargo_profile_test_debug "${CARGO_PROFILE_TEST_DEBUG:-}" \
+        --arg build_command "$BUILD_COMMAND" \
         --arg sccache_version "${SCCACHE_VERSION:-unknown}" \
-        --arg sccache_gha_version "${SCCACHE_GHA_VERSION:-unknown}" \
+        --arg sccache_cache_backend "$cache_backend" \
+        --arg sccache_cache_namespace "$cache_namespace" \
         --argjson workflow_run_id "$workflow_run_id" \
         --argjson setup_ms "$setup_ms" \
         --argjson cache_setup_ms "$cache_setup_ms" \
+        --argjson cache_save_ms "$cache_save_ms" \
         --argjson build_ms "$build_ms" \
         --argjson bundle_ms "$bundle_ms" \
         --argjson bundle_bytes "$(file_size "$bundle")" \
@@ -207,7 +232,7 @@ package_artifact() {
               target: "x86_64-unknown-linux-musl",
               profile: "dev-and-test",
               features: "default",
-              command: "bash scripts/build-static-conary.sh --with-test-harness",
+              command: $build_command,
               rustflags: $rustflags,
               cargo_encoded_rustflags: $encoded_rustflags,
               cargo_incremental: $cargo_incremental,
@@ -215,7 +240,8 @@ package_artifact() {
               cargo_profile_test_debug: $cargo_profile_test_debug,
               static_libseccomp_version: "2.6.0",
               sccache_version: $sccache_version,
-              sccache_gha_version: $sccache_gha_version
+              sccache_cache_backend: $sccache_cache_backend,
+              sccache_cache_namespace: $sccache_cache_namespace
             },
             provenance: {
               repository: $repository,
@@ -246,6 +272,7 @@ package_artifact() {
             measurements: {
               dependency_setup_ms: $setup_ms,
               compiler_cache_setup_ms: $cache_setup_ms,
+              compiler_cache_save_ms: $cache_save_ms,
               artifact_build_ms: $build_ms,
               bundle_ms: $bundle_ms,
               static_dependency_cache_hit: $build_metrics[0].static_dependency_cache_hit,
@@ -323,7 +350,8 @@ verify_artifact() {
           and .build.cargo_profile_test_debug == "0"
           and .build.static_libseccomp_version == "2.6.0"
           and .build.sccache_version == "0.16.0"
-          and .build.sccache_gha_version == "native-matrix-musl-v1"
+          and .build.sccache_cache_backend == "local-disk-bulk-v1"
+          and (.build.sccache_cache_namespace | test("^native-matrix-musl-local-v1-[0-9a-f]{64}$"))
           and .provenance.repository == $repository
           and .provenance.workflow == "pr-gate"
           and .provenance.event == $event
@@ -342,6 +370,7 @@ verify_artifact() {
           and (.artifact.binaries | all((.sha256 | test("^[0-9a-f]{64}$")) and (.bytes > 0)))
           and (.measurements.dependency_setup_ms | type == "number")
           and (.measurements.compiler_cache_setup_ms | type == "number")
+          and (.measurements.compiler_cache_save_ms | type == "number")
           and (.measurements.artifact_build_ms | type == "number")
           and (.measurements.bundle_ms | type == "number")
           and (.measurements.static_dependency_cache_hit | type == "boolean")
@@ -358,8 +387,19 @@ verify_artifact() {
         fail "matrix compiler-cache statistics digest does not match its manifest"
     [[ "$(file_size "$stats")" == "$(jq -r '.artifact.compiler_cache_stats_bytes' "$manifest")" ]] ||
         fail "matrix compiler-cache statistics size does not match its manifest"
-    jq -e 'type == "object"' "$stats" >/dev/null ||
-        fail "matrix compiler-cache statistics are not a JSON object"
+    jq -e '
+      .version == "0.16.0"
+      and (.cache_location | startswith("Local disk: "))
+      and (.stats.compile_requests | type == "number")
+      and (.stats.cache_hits.counts | type == "object")
+      and (.stats.cache_misses.counts | type == "object")
+      and (.stats.cache_errors.counts | type == "object")
+      and (.stats.cache_writes | type == "number")
+      and (.stats.cache_read_errors | type == "number")
+      and (.stats.cache_write_errors | type == "number")
+      and (.stats.cache_timeouts | type == "number")
+    ' "$stats" >/dev/null ||
+        fail "matrix compiler-cache statistics do not prove the protected local backend"
     [[ "$(sha256_file "$build_metrics")" == "$(jq -r '.artifact.static_build_metrics_sha256' "$manifest")" ]] ||
         fail "matrix static-build metrics digest does not match its manifest"
     [[ "$(file_size "$build_metrics")" == "$(jq -r '.artifact.static_build_metrics_bytes' "$manifest")" ]] ||

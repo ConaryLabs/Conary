@@ -189,11 +189,18 @@ For the protected PR matrix, `--with-test-harness` also produces fully static
 binaries with exact source, toolchain, flag, cache-policy, and digest evidence;
 each isolated distro cell independently verifies and reopens that immutable
 artifact. The compiler cache only avoids repeated compilation and is never
-accepted as source or test authority. Compatible hosted-Ubuntu source jobs
+accepted as source or test authority. The native producer restores its bounded
+musl cache in one bulk transfer, writes locally during the build, stops the
+cache server, and bulk-saves a new exact-head seed; this avoids thousands of
+remote object requests on the producer's critical path. Compatible
+hosted-Ubuntu source jobs
 also share exact GNU compiler outputs through a namespace derived from the
 Rust/Cargo toolchain, lockfile, target, C compiler, native ABI, and effective
-codegen policy. Every such job records typed request, hit, miss, write, and
-error counts; cache contents never replace a job's own command or result.
+codegen policy. One primer writes a bounded local-disk sccache, bulk-saves it
+under the exact workflow commit, and must finish before every consumer restores
+that exact seed read-only. This avoids a per-object remote request storm while
+retaining typed request, hit, miss, write, and error counts for every job;
+cache contents never replace a job's own command or result.
 
 `scripts/build-qemu-guest-image.sh` builds such an image from a pinned official
 Fedora Cloud Base qcow2 plus provisioning, and `bash

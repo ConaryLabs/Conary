@@ -54,6 +54,7 @@ runs:
           jq -r '
             "- producer_dependency_setup_ms: `\(.measurements.dependency_setup_ms)`\n"
             + "- producer_compiler_cache_setup_ms: `\(.measurements.compiler_cache_setup_ms)`\n"
+            + "- producer_compiler_cache_save_ms: `\(.measurements.compiler_cache_save_ms)`\n"
             + "- producer_artifact_build_ms: `\(.measurements.artifact_build_ms)`\n"
             + "- producer_static_dependency_cache_hit: `\(.measurements.static_dependency_cache_hit)`\n"
             + "- producer_static_dependency_ms: `\(.measurements.static_dependency_ms)`\n"

@@ -65,6 +65,18 @@ struct GateJob {
 
 #[derive(Debug, Deserialize)]
 struct WorkspaceTestJob {
+    #[serde(default)]
+    needs: Option<String>,
+    #[serde(rename = "if", default)]
+    condition: Option<String>,
+    steps: Vec<WorkflowStep>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompilerCachePrimerJob {
+    name: String,
+    #[serde(rename = "timeout-minutes")]
+    timeout_minutes: u64,
     steps: Vec<WorkflowStep>,
 }
 
@@ -181,15 +193,28 @@ fn action_step<'a>(steps: &'a [WorkflowStep], action: &str) -> &'a WorkflowStep 
     matches[0]
 }
 
-fn assert_protected_compiler_cache(job: &WorkspaceTestJob, phase: &str) {
+fn assert_protected_compiler_cache_reader(job: &WorkspaceTestJob, phase: &str) {
+    assert_eq!(job.needs.as_deref(), Some("gnu-compiler-cache"));
+    assert_eq!(job.condition.as_deref(), Some("${{ always() }}"));
+
+    let require = named_step(&job.steps, "Require exact compiler-cache seed");
+    assert_eq!(
+        require.env.get("PRIMER_RESULT").map(String::as_str),
+        Some("${{ needs.gnu-compiler-cache.result }}")
+    );
+    assert_eq!(
+        require.run.as_deref(),
+        Some("test \"$PRIMER_RESULT\" = success")
+    );
+
     let setup = action_step(&job.steps, COMPILER_CACHE_SETUP_ACTION);
     assert_eq!(
         setup
             .with
             .get("compiler-cache")
             .and_then(serde_yaml::Value::as_str),
-        Some("true"),
-        "protected GNU job must opt into compiler reuse explicitly"
+        Some("reader"),
+        "protected GNU consumer must use the exact read-only cache"
     );
 
     let summary = action_step(&job.steps, COMPILER_CACHE_SUMMARY_ACTION);
@@ -201,6 +226,35 @@ fn assert_protected_compiler_cache(job: &WorkspaceTestJob, phase: &str) {
             .and_then(serde_yaml::Value::as_str),
         Some(phase),
         "compiler-cache evidence must use the exact protected phase"
+    );
+}
+
+fn assert_compiler_cache_primer(workflow: &Workflow, phase: &str) {
+    let job: CompilerCachePrimerJob = parse_job(workflow, "gnu-compiler-cache");
+    assert_eq!(job.name, "gnu-compiler-cache");
+    assert_eq!(job.timeout_minutes, 30);
+
+    let setup = action_step(&job.steps, COMPILER_CACHE_SETUP_ACTION);
+    assert_eq!(
+        setup
+            .with
+            .get("compiler-cache")
+            .and_then(serde_yaml::Value::as_str),
+        Some("writer")
+    );
+    let prime = named_step(&job.steps, "Prime exact workspace test compilation");
+    assert_eq!(
+        prime.run.as_deref(),
+        Some("cargo test --workspace --no-run --verbose")
+    );
+    let summary = action_step(&job.steps, COMPILER_CACHE_SUMMARY_ACTION);
+    assert_eq!(summary.condition.as_deref(), Some("${{ always() }}"));
+    assert_eq!(
+        summary
+            .with
+            .get("phase")
+            .and_then(serde_yaml::Value::as_str),
+        Some(phase)
     );
 }
 
@@ -252,7 +306,9 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
         ("CARGO_INCREMENTAL", "0"),
         ("CARGO_PROFILE_DEV_DEBUG", "0"),
         ("CARGO_PROFILE_TEST_DEBUG", "0"),
-        ("SCCACHE_GHA_VERSION", "native-matrix-musl-v1"),
+        ("SCCACHE_CACHE_BACKEND", "local-disk-bulk-v1"),
+        ("SCCACHE_CACHE_SIZE", "4G"),
+        ("SCCACHE_LOCAL_RW_MODE", "READ_WRITE"),
         ("SCCACHE_VERSION", "0.16.0"),
     ] {
         assert_eq!(
@@ -269,6 +325,74 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
             "producer must pin {key}"
         );
     }
+    assert_eq!(
+        job.env
+            .get("SCCACHE_DIR")
+            .and_then(serde_yaml::Value::as_str),
+        Some("${{ runner.temp }}/native-matrix-sccache")
+    );
+    assert!(!job.env.contains_key("SCCACHE_GHA_ENABLED"));
+
+    let cache_policy = named_step(&job.steps, "Bind exact native compiler-cache policy");
+    let cache_policy_run = cache_policy.run.as_deref().expect("native cache policy");
+    for binding in [
+        "rustc=%s",
+        "cargo=%s",
+        "lock=%s",
+        "target=x86_64-unknown-linux-musl",
+        "cc=%s",
+        "native_abi=%s",
+        "builder=%s",
+        "header_probe=%s",
+        "action=%s",
+        "features=default",
+        "test_harness=true",
+        "rustflags=%s",
+        "encoded_rustflags=%s",
+        "incremental=%s",
+        "dev_debug=%s",
+        "test_debug=%s",
+    ] {
+        assert!(
+            cache_policy_run.contains(binding),
+            "native cache identity must bind {binding}"
+        );
+    }
+    assert!(cache_policy_run.contains("native-matrix-musl-local-v1-${identity}"));
+    assert!(cache_policy_run.contains("${restore_prefix}${GITHUB_SHA}"));
+
+    let restore = action_step(
+        &job.steps,
+        "actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7",
+    );
+    assert_eq!(
+        restore.with.get("path").and_then(serde_yaml::Value::as_str),
+        Some("${{ runner.temp }}/native-matrix-sccache")
+    );
+    assert_eq!(
+        restore.with.get("key").and_then(serde_yaml::Value::as_str),
+        Some("${{ steps.native-cache-policy.outputs.exact_key }}")
+    );
+    assert_eq!(
+        restore
+            .with
+            .get("restore-keys")
+            .and_then(serde_yaml::Value::as_str),
+        Some("${{ steps.native-cache-policy.outputs.restore_prefix }}")
+    );
+
+    let save = action_step(
+        &job.steps,
+        "actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7",
+    );
+    assert_eq!(
+        save.condition.as_deref(),
+        Some("${{ steps.native-cache-restore.outputs.cache-hit != 'true' }}")
+    );
+    assert_eq!(
+        save.with.get("key").and_then(serde_yaml::Value::as_str),
+        Some("${{ steps.native-cache-policy.outputs.exact_key }}")
+    );
 
     let build = named_step(&job.steps, "Build all static matrix executables once");
     assert_eq!(
@@ -636,6 +760,7 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
 #[test]
 fn compatible_protected_jobs_share_compiler_outputs_with_typed_evidence() {
     let pr = load_workflow();
+    assert_compiler_cache_primer(&pr, "pr-gnu-cache-primer");
     for (job_id, phase) in [
         ("clippy", "pr-clippy"),
         ("workspace-tests", "pr-workspace-tests"),
@@ -644,10 +769,11 @@ fn compatible_protected_jobs_share_compiler_outputs_with_typed_evidence() {
         ("doctests", "pr-doctests"),
     ] {
         let job: WorkspaceTestJob = parse_job(&pr, job_id);
-        assert_protected_compiler_cache(&job, phase);
+        assert_protected_compiler_cache_reader(&job, phase);
     }
 
     let main = load_workflow_from(merge_validation_workflow_path());
+    assert_compiler_cache_primer(&main, "main-gnu-cache-primer");
     for (job_id, phase) in [
         ("clippy", "main-clippy"),
         ("workspace-tests", "main-workspace-tests"),
@@ -657,7 +783,7 @@ fn compatible_protected_jobs_share_compiler_outputs_with_typed_evidence() {
         ("local-smoke", "main-local-smoke"),
     ] {
         let job: WorkspaceTestJob = parse_job(&main, job_id);
-        assert_protected_compiler_cache(&job, phase);
+        assert_protected_compiler_cache_reader(&job, phase);
     }
 }
 

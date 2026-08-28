@@ -485,9 +485,14 @@ old process. That can fail with `Text file busy`.
   release until the candidate passes this gate and is tagged. Compatible GNU
   jobs may reuse compiler outputs through one exact-policy namespace derived
   from the toolchain, lockfile, target, native ABI, and codegen settings. Each
-  job still runs its complete command and retains typed cache hit, miss, write,
-  and error evidence; a cache is optimization, never test or artifact
-  authority.
+  workflow has one writable primer that bulk-saves a bounded local compiler
+  cache under the exact commit. Consumers fail on a missing seed, restore that
+  exact cache read-only, run their complete commands, and retain typed hit,
+  miss, write, and error evidence. The cache is optimization, never test or
+  artifact authority.
+  The protected native-matrix producer applies the same bulk-transfer model to
+  its distinct musl target and static dependency policy: it restores one prior
+  seed, compiles locally, stops sccache, and saves the new exact-head seed once.
 - `deploy-and-verify` consumes that serialized metadata instead of re-deriving
   product behavior locally. It deploys and proves Remi first, then stages and
   proves Conary release assets and static sites from the same suite bundle.
