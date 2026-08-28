@@ -14,8 +14,13 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+mod baseline;
 mod database_transition;
 mod refresh_diagnostics;
+pub use baseline::{
+    DeploymentBaseline, DeploymentBaselineCandidateIdentity, DeploymentBaselineCandidateState,
+    DeploymentBaselineMeasurement, inspect_baseline,
+};
 use database_transition::DatabaseTransition;
 pub use refresh_diagnostics::{
     DeploymentProfileRefreshState, DeploymentRefreshFailureCategory, DeploymentRefreshFailureStage,
@@ -289,36 +294,11 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
 
     let conn = conary_core::db::open_fast(&db_path)?;
     repository_manifest.verify_reconciled(&conn)?;
-    let configured_counts = repository_manifest
-        .repositories
-        .iter()
-        .filter(|definition| definition.enabled)
-        .filter(|definition| {
-            conary_core::repository::supported_profiles::profile_by_public_id(&definition.profile)
-                .is_some()
-        })
-        .fold(
-            BTreeMap::<String, usize>::new(),
-            |mut profiles, definition| {
-                *profiles.entry(definition.profile.clone()).or_default() += 1;
-                profiles
-            },
-        );
     let authority = crate::server::catalog_authority::CatalogAuthority::for_inspection(
         &db_path,
         config.storage_root().join("catalogs"),
     );
-    let configured = conary_core::repository::supported_profiles::public_profiles()
-        .iter()
-        .filter_map(|profile| {
-            configured_counts
-                .get(profile.id())
-                .map(|count| (profile.id().to_string(), *count))
-        })
-        .collect::<Vec<_>>();
-    if configured.len() != configured_counts.len() {
-        bail!("configured public profile authority disagrees with the support contract");
-    }
+    let configured = configured_public_profiles(&repository_manifest)?;
     let profiles = inspect_deployment_profiles(&conn, &authority, &configured)?;
     let candidates = inspect_deployment_candidates(&conn, &authority, &configured)?;
     let populated_profiles = profiles
@@ -360,6 +340,38 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         profiles,
         candidates,
     })
+}
+
+fn configured_public_profiles(
+    repository_manifest: &RepositoryManifest,
+) -> Result<Vec<(String, usize)>> {
+    let configured_counts = repository_manifest
+        .repositories
+        .iter()
+        .filter(|definition| definition.enabled)
+        .filter(|definition| {
+            conary_core::repository::supported_profiles::profile_by_public_id(&definition.profile)
+                .is_some()
+        })
+        .fold(
+            BTreeMap::<String, usize>::new(),
+            |mut profiles, definition| {
+                *profiles.entry(definition.profile.clone()).or_default() += 1;
+                profiles
+            },
+        );
+    let configured = conary_core::repository::supported_profiles::public_profiles()
+        .iter()
+        .filter_map(|profile| {
+            configured_counts
+                .get(profile.id())
+                .map(|count| (profile.id().to_string(), *count))
+        })
+        .collect::<Vec<_>>();
+    if configured.len() != configured_counts.len() {
+        bail!("configured public profile authority disagrees with the support contract");
+    }
+    Ok(configured)
 }
 
 fn inspect_deployment_profiles(

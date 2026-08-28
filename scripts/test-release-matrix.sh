@@ -1099,6 +1099,7 @@ remi_predeployment_inspection_fixture() {
         redactions: []
       };
       {
+        baseline_schema_version: 1,
         schema_epoch: "conary-current-v1",
         schema_revision: 53,
         configured_profiles: 3,
@@ -1107,33 +1108,44 @@ remi_predeployment_inspection_fixture() {
           {
             profile: "fedora-44",
             configured_sources: 2,
-            profile_revision_sha256:
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            run_id: "fedora-run",
-            completed_at: 12,
-            packages: 100904,
+            identity: {
+              profile_revision_sha256:
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              run_id: "fedora-run",
+              completed_at: 12
+            },
             latest_refresh: refresh("fedora-run"; 6; "candidate"; 2)
           },
           {
             profile: "ubuntu-26.04",
             configured_sources: 16,
-            profile_revision_sha256: null,
-            run_id: null,
-            completed_at: null,
-            packages: 0,
+            identity: null,
             latest_refresh: refresh("ubuntu-failed"; 6; "abandoned"; 0)
           },
           {
             profile: "arch",
             configured_sources: 3,
-            profile_revision_sha256:
-              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            run_id: "arch-run",
-            completed_at: 12,
-            packages: 15411,
+            identity: {
+              profile_revision_sha256:
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              run_id: "arch-run",
+              completed_at: 12
+            },
             latest_refresh: refresh("arch-run"; 5; "candidate"; 3)
           }
-        ]
+        ],
+        measurement: {
+          wall_time_micros: 12000,
+          user_cpu_micros: 4000,
+          system_cpu_micros: 2000,
+          max_rss_bytes: 10485760,
+          sqlite_statements: 84,
+          sqlite_page_cache_misses: 12,
+          sqlite_logical_read_bytes: 49152,
+          catalog_file_opens: 0,
+          catalog_bytes_read: 0,
+          output_bytes: 2048
+        }
       }
     '
 }
@@ -1146,13 +1158,21 @@ test_remi_predeployment_filter_accepts_typed_incomplete_baseline() {
     jq -e -f "$filter" <<<"$fixture" >/dev/null ||
         fail "typed incomplete predeployment baseline was rejected"
 
-    if jq '.candidates[1].run_id = "orphan-run"' <<<"$fixture" \
+    if jq '.candidates[1].identity = {run_id: "orphan-run"}' <<<"$fixture" \
         | jq -e -f "$filter" >/dev/null; then
         fail "half-present candidate identity passed predeployment validation"
     fi
     if jq '.candidates[1].profile = "arch"' <<<"$fixture" \
         | jq -e -f "$filter" >/dev/null; then
         fail "duplicate public profile passed predeployment validation"
+    fi
+    if jq '.measurement.catalog_file_opens = 1' <<<"$fixture" \
+        | jq -e -f "$filter" >/dev/null; then
+        fail "catalog-reading baseline passed predeployment validation"
+    fi
+    if jq '.measurement.wall_time_micros = 2000001' <<<"$fixture" \
+        | jq -e -f "$filter" >/dev/null; then
+        fail "over-budget baseline passed predeployment validation"
     fi
 }
 
@@ -1161,8 +1181,8 @@ test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/deploy/remi-predeployment-inspection.jq" \
-        '    .run_id == null' \
-        '    .run_id != null'
+        '  . == null or (' \
+        '  . != null or ('
 
     assert_check_release_matrix_fails \
         "$repo" \

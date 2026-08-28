@@ -99,7 +99,15 @@ jobs:
 
           target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
           mkdir -p ~/.ssh
-          trap 'rm -f ~/.ssh/remi_key' EXIT
+          cleanup_candidate_deploy() {
+            rm -f ~/.ssh/remi_key
+            if [[ -n "${ssh_opts:-}" && -n "${remote_bundle:-}" ]]; then
+              ssh $ssh_opts "$target" \
+                "rm -f -- '$remote_bundle' '${remote_repositories:-}' '${remote_helper:-}'" \
+                >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_candidate_deploy EXIT
           echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
           chmod 600 ~/.ssh/remi_key
           ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
@@ -114,6 +122,7 @@ jobs:
           scp $ssh_opts deploy/remi-deploy-helper.sh "${target}:${remote_helper}"
           ssh $ssh_opts "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha' '$remote_helper'"
+          scp $ssh_opts "$BUNDLE" "${target}:${remote_bundle}"
           ssh $ssh_opts "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi-storage" \
             > remi-predeployment-storage.json
@@ -136,12 +145,15 @@ jobs:
           ' remi-predeployment-storage.json >/dev/null
           if [[ "$COMPLETION_MODE" == "private-candidates" ]]; then
             ssh $ssh_opts "$target" \
-              "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi" \
+              "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi-candidate-baseline '$VERSION' '$BINARY_SHA256' '$remote_bundle'" \
               > remi-predeployment-inspection.json
             jq -e -f deploy/remi-predeployment-inspection.jq \
               remi-predeployment-inspection.json >/dev/null
+            baseline_bytes="$(wc -c < remi-predeployment-inspection.json)"
+            jq -e --argjson baseline_bytes "$baseline_bytes" \
+              '.measurement.output_bytes == $baseline_bytes' \
+              remi-predeployment-inspection.json >/dev/null
           fi
-          scp $ssh_opts "$BUNDLE" "${target}:${remote_bundle}"
           scp $ssh_opts deploy/remi-repositories.toml "${target}:${remote_repositories}"
           set +e
           ssh $ssh_opts "$target" bash -s \
@@ -572,6 +584,19 @@ jobs:
                     + "members \(.latest_refresh.candidate_members // 0)/\(.latest_refresh.run_members // 0); "
                     + "evidence `\(.latest_refresh.failure_evidence_sha256 // "none")`")
               ' remi-deployment-inspection.json
+              if [[ -s remi-predeployment-inspection.json \
+                && ! -L remi-predeployment-inspection.json ]]; then
+                echo
+                jq -r '
+                  "Predeployment baseline:",
+                  "- wall time: \(.measurement.wall_time_micros) us",
+                  "- CPU time: user \(.measurement.user_cpu_micros) us; system \(.measurement.system_cpu_micros) us",
+                  "- maximum RSS: \(.measurement.max_rss_bytes) bytes",
+                  "- SQLite work: \(.measurement.sqlite_statements) statements; \(.measurement.sqlite_page_cache_misses) page misses; \(.measurement.sqlite_logical_read_bytes) logical bytes",
+                  "- catalog work: \(.measurement.catalog_file_opens) opens; \(.measurement.catalog_bytes_read) bytes",
+                  "- output: \(.measurement.output_bytes) bytes"
+                ' remi-predeployment-inspection.json
+              fi
               if [[ -s remi-predeployment-inspection.json \
                 && ! -L remi-predeployment-inspection.json ]] \
                 && jq -e '.deployment.outcome == "complete" and .inspection_available' \
