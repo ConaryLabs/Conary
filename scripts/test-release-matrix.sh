@@ -1287,6 +1287,35 @@ test_remi_postdeployment_filter_scopes_fences_to_schema_authority() {
     fi
 }
 
+test_candidate_deploy_materializes_policy_across_candidate_history() {
+    local repo candidate_sha workflow_sha materialized
+    repo="$(mktemp -d "${TEST_RUN_ROOT}/workflow-authority.XXXXXX")"
+    git -C "$repo" init -q
+    git -C "$repo" config user.name "Conary Release Fixture"
+    git -C "$repo" config user.email "release-fixture@invalid.example"
+    mkdir -p "$repo/deploy"
+    printf '%s\n' candidate > "$repo/candidate-marker"
+    git -C "$repo" add candidate-marker
+    git -C "$repo" commit -q -m candidate
+    candidate_sha="$(git -C "$repo" rev-parse HEAD)"
+
+    cp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" \
+        "$repo/deploy/remi-postdeployment-fencing.jq"
+    git -C "$repo" add deploy/remi-postdeployment-fencing.jq
+    git -C "$repo" commit -q -m workflow-authority
+    workflow_sha="$(git -C "$repo" rev-parse HEAD)"
+    git -C "$repo" checkout -q --detach "$candidate_sha"
+    [[ ! -e "$repo/deploy/remi-postdeployment-fencing.jq" ]] ||
+        fail "older candidate fixture unexpectedly contains workflow fencing policy"
+
+    materialized="$(mktemp "${TEST_RUN_ROOT}/workflow-fencing.XXXXXX")"
+    git -C "$repo" show \
+        "${workflow_sha}:deploy/remi-postdeployment-fencing.jq" \
+        > "$materialized"
+    cmp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" "$materialized" ||
+        fail "exact workflow SHA did not materialize its fencing policy"
+}
+
 test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1467,6 +1496,19 @@ test_check_release_matrix_rejects_pretransition_candidate_run() {
     assert_check_release_matrix_fails \
         "$repo" \
         "candidate deploy requires post-transition candidate identity and advances fences only within one schema authority"
+}
+
+test_check_release_matrix_rejects_candidate_checkout_fencing_policy() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '              -f "$workflow_fencing_policy" \' \
+        '              -f deploy/remi-postdeployment-fencing.jq \'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "private candidate deploy evaluates post-transition fencing from the exact workflow authority, independent of the candidate checkout"
 }
 
 test_check_release_matrix_rejects_unbound_candidate_binary() {
@@ -2078,6 +2120,7 @@ main() {
         test_check_release_matrix_rejects_rehearsal_artifact_promotion
         test_remi_predeployment_filter_accepts_typed_incomplete_baseline
         test_remi_postdeployment_filter_scopes_fences_to_schema_authority
+        test_candidate_deploy_materializes_policy_across_candidate_history
         test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline
         test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
         test_check_release_matrix_rejects_unprotected_candidate_artifact
@@ -2092,6 +2135,7 @@ main() {
         test_check_release_matrix_rejects_all_profile_retry
         test_check_release_matrix_rejects_nonadvancing_candidate_fence
         test_check_release_matrix_rejects_pretransition_candidate_run
+        test_check_release_matrix_rejects_candidate_checkout_fencing_policy
         test_check_release_matrix_rejects_unbound_candidate_binary
         test_check_release_matrix_rejects_private_mode_public_readiness_claim
         test_check_release_matrix_rejects_untyped_candidate_baseline_failure
