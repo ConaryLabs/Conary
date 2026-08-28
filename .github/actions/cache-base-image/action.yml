@@ -12,6 +12,10 @@ inputs:
   distro:
     description: Test distro slug from the typed conary-test configuration.
     required: true
+  harness:
+    description: Verified conary-test executable used to resolve typed image configuration.
+    required: false
+    default: target/debug/conary-test
 runs:
   using: composite
   steps:
@@ -21,7 +25,12 @@ runs:
       run: |
         set -euo pipefail
 
-        ref="$(target/debug/conary-test images base-ref --distro '${{ inputs.distro }}')"
+        harness="${{ inputs.harness }}"
+        [[ -x "$harness" ]] || {
+          echo "verified static conary-test harness is missing: $harness" >&2
+          exit 1
+        }
+        ref="$("$harness" images base-ref --distro '${{ inputs.distro }}')"
         [[ "$ref" == *@sha256:* ]] || {
           echo "configured base image for ${{ inputs.distro }} is not digest-pinned: $ref" >&2
           exit 1

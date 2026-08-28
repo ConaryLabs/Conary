@@ -184,6 +184,12 @@ once, caches it, and produces a statically linked `conary` for
 that default to stage a specific binary. The build is debug profile and the
 binary is a test-staging artifact, not a release artifact. Distro container
 images stage the same artifact through `build_context = "static-binary"`.
+For the protected PR matrix, `--with-test-harness` also produces fully static
+`conary-test` and library-test executables. One producer packages those three
+binaries with exact source, toolchain, flag, cache-policy, and digest evidence;
+each isolated distro cell independently verifies and reopens that immutable
+artifact. The compiler cache only avoids repeated compilation and is never
+accepted as source or test authority.
 
 `scripts/build-qemu-guest-image.sh` builds such an image from a pinned official
 Fedora Cloud Base qcow2 plus provisioning, and `bash
@@ -705,8 +711,9 @@ in a clean selected root, rolls the update back, removes the restored package,
 and confirms the persisted native lifecycle bundle. The execution path uses
 only CCS operations after publication and therefore never consults a source
 package manager or its database at runtime.
-The `pr-gate` workflow builds each configured distro image first and then runs
-that focused manifest across `fedora44`, `ubuntu-26.04`, `arch`, the OpenRC
+The `pr-gate` workflow first verifies one exact-head static executable bundle,
+then builds each configured distro image and runs that focused manifest across
+`fedora44`, `ubuntu-26.04`, `arch`, the OpenRC
 `artix` lane, Linux Mint 22.3, and Pop!_OS 24.04. Together, the required lanes
 authenticate all three checked-in source-ABI traces and run the full 6x3
 Conary Cartesian product. Corpus target

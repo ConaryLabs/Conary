@@ -1419,7 +1419,9 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `apps/conary/tests/integration/remi/manifests/*`;
 `scripts/build-static-conary.sh`;
 `scripts/kernel-header-roots.sh`;
+`scripts/native-matrix-artifact.sh`;
 `.github/actions/build-static-conary/action.yml`;
+`.github/actions/restore-native-matrix-artifact/action.yml`;
 `.github/workflows/pr-gate.yml`.
 
 **Focused proof:** `cargo run -p conary-test -- list`;
@@ -1447,7 +1449,13 @@ need parser proof and migration or defaulting decisions. Suite names in
 selected by the typed `build_context` field, never by matching the distro key.
 The static choice fails closed rather than falling back to the host build, so an
 image build requires `scripts/build-static-conary.sh` to have produced its
-artifact first. Corpus cases
+artifact first. The protected PR matrix builds Conary, the integration CLI,
+and the one ignored container-contract test executable once as static musl
+binaries. Every distro cell downloads the same immutable artifact and verifies
+its exact commit, tree, lockfile, toolchain, flags, cache namespace, archive
+member list, and binary digests before reopening it; an absent, corrupt, or
+misattributed artifact fails the cell and never weakens a predicate. Compiler
+cache entries reduce work but are not artifact or test authority. Corpus cases
 must carry versioned runtime evidence with exact role-tagged artifact digests,
 typed digest authority, target capabilities, and canonically ordered stage
 checkpoints; report aggregation uses typed stage/failure discriminants and

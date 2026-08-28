@@ -18,6 +18,163 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  native-matrix-artifacts:
+    name: native-matrix-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_ENCODED_RUSTFLAGS: ""
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      RUSTFLAGS: ""
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: native-matrix-musl-v1
+      SCCACHE_VERSION: 0.16.0
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Bind the exact protected source
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "workflow commit must be a full lowercase SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || {
+            echo "producer checkout does not match the workflow commit" >&2
+            exit 1
+          }
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]] || {
+            echo "producer checkout is not clean" >&2
+            exit 1
+          }
+      - name: Start dependency setup clock
+        id: setup-start
+        run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          toolchain: 1.98.0
+      - name: Finish dependency setup clock
+        id: setup
+        env:
+          STARTED_NS: ${{ steps.setup-start.outputs.started_ns }}
+        run: |
+          finished_ns="$(date -u +%s%N)"
+          echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+      - name: Start compiler-cache setup clock
+        id: cache-start
+        run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
+      - name: Install bounded shared compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Finish compiler-cache setup clock
+        id: cache
+        env:
+          STARTED_NS: ${{ steps.cache-start.outputs.started_ns }}
+        run: |
+          set -euo pipefail
+          [[ -x "${SCCACHE_PATH:-}" ]] || {
+            echo "sccache action did not expose an executable" >&2
+            exit 1
+          }
+          echo "RUSTC_WRAPPER=$SCCACHE_PATH" >> "$GITHUB_ENV"
+          "$SCCACHE_PATH" --zero-stats
+          finished_ns="$(date -u +%s%N)"
+          echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+      - name: Start exact-head artifact build clock
+        id: build-start
+        run: |
+          metrics="${RUNNER_TEMP}/native-matrix-static-build-metrics.json"
+          echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
+          echo "metrics=$metrics" >> "$GITHUB_OUTPUT"
+          echo "CONARY_STATIC_BUILD_METRICS_PATH=$metrics" >> "$GITHUB_ENV"
+      - name: Build all static matrix executables once
+        uses: ./.github/actions/build-static-conary
+        with:
+          with-test-harness: "true"
+      - name: Finish exact-head artifact build clock
+        id: build
+        env:
+          STARTED_NS: ${{ steps.build-start.outputs.started_ns }}
+        run: |
+          set -euo pipefail
+          finished_ns="$(date -u +%s%N)"
+          stats="${RUNNER_TEMP}/native-matrix-sccache-stats.json"
+          metrics="${{ steps.build-start.outputs.metrics }}"
+          "$SCCACHE_PATH" --show-stats --stats-format json > "$stats"
+          jq -e 'type == "object"' "$stats" >/dev/null
+          jq -e '.schema_version == 1 and .with_test_harness == true' "$metrics" >/dev/null
+          echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+          echo "stats=$stats" >> "$GITHUB_OUTPUT"
+          echo "metrics=$metrics" >> "$GITHUB_OUTPUT"
+      - name: Package immutable exact-head matrix evidence
+        id: package
+        env:
+          BUILD_MS: ${{ steps.build.outputs.duration_ms }}
+          CACHE_SETUP_MS: ${{ steps.cache.outputs.duration_ms }}
+          CACHE_STATS: ${{ steps.build.outputs.stats }}
+          BUILD_METRICS: ${{ steps.build.outputs.metrics }}
+          SETUP_MS: ${{ steps.setup.outputs.duration_ms }}
+        run: |
+          set -euo pipefail
+          output_dir="${RUNNER_TEMP}/native-matrix-artifact"
+          manifest="$(scripts/native-matrix-artifact.sh package \
+            "$output_dir" "$GITHUB_SHA" "$GITHUB_RUN_ID" \
+            "$SETUP_MS" "$CACHE_SETUP_MS" "$BUILD_MS" "$CACHE_STATS" \
+            "$BUILD_METRICS")"
+          echo "directory=$output_dir" >> "$GITHUB_OUTPUT"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+      - name: Verify fresh exact-head matrix artifact
+        env:
+          ARTIFACT_DIR: ${{ steps.package.outputs.directory }}
+        run: |
+          scripts/native-matrix-artifact.sh verify \
+            "$ARTIFACT_DIR" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" \
+            > "${RUNNER_TEMP}/native-matrix-fresh-verification.json"
+          jq -e '.schema_version == 1' \
+            "${RUNNER_TEMP}/native-matrix-fresh-verification.json" >/dev/null
+      - name: Upload immutable exact-head matrix artifact
+        id: upload
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: native-matrix-${{ github.sha }}
+          path: |
+            ${{ steps.package.outputs.directory }}/native-matrix-artifact-manifest.json
+            ${{ steps.package.outputs.directory }}/native-matrix-artifacts.tar.gz
+            ${{ steps.package.outputs.directory }}/sccache-stats.json
+            ${{ steps.package.outputs.directory }}/static-build-metrics.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Summarize protected matrix build latency
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          MANIFEST: ${{ steps.package.outputs.manifest }}
+        run: |
+          {
+            echo "### Protected native matrix producer"
+            echo
+            echo "- commit: \`$GITHUB_SHA\`"
+            echo "- artifact_digest: \`$ARTIFACT_DIGEST\`"
+            jq -r '
+              "- dependency_setup_ms: `\(.measurements.dependency_setup_ms)`\n"
+              + "- compiler_cache_setup_ms: `\(.measurements.compiler_cache_setup_ms)`\n"
+              + "- artifact_build_ms: `\(.measurements.artifact_build_ms)`\n"
+              + "- static_dependency_cache_hit: `\(.measurements.static_dependency_cache_hit)`\n"
+              + "- static_dependency_ms: `\(.measurements.static_dependency_ms)`\n"
+              + "- static_runtime_build_ms: `\(.measurements.static_runtime_build_ms)`\n"
+              + "- library_test_build_ms: `\(.measurements.library_test_build_ms)`\n"
+              + "- bundle_ms: `\(.measurements.bundle_ms)`\n"
+              + "- bundle_bytes: `\(.artifact.bundle_bytes)`"
+            ' "$MANIFEST"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   workflow-runtime-policy:
     name: workflow-runtime-policy
     runs-on: ubuntu-latest
@@ -215,32 +372,46 @@ jobs:
     name: native-cross-source-lifecycle (${{ matrix.distro }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    needs: native-matrix-artifacts
     strategy:
       fail-fast: false
       matrix:
         distro: [fedora44, ubuntu-26.04, arch, artix, cachyos, opensuse-tumbleweed, linux-mint-22.3, pop-os-24.04]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/setup-rust-workspace
       - name: Require the hosted container runtime
         run: docker info
-      - uses: ./.github/actions/build-static-conary
-      - name: Build the lifecycle harness
-        run: cargo build -p conary -p conary-test
+      - name: Restore exact-head native matrix executables
+        uses: ./.github/actions/restore-native-matrix-artifact
+        with:
+          commit-sha: ${{ github.sha }}
+          run-id: ${{ github.run_id }}
+          event-name: ${{ github.event_name }}
       - uses: ./.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}
+          harness: target/x86_64-unknown-linux-musl/debug/conary-test
       - name: Build the ${{ matrix.distro }} test image
-        run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            images build --distro "${{ matrix.distro }}"
+          finished_ns="$(date -u +%s%N)"
+          echo "image_build_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Capture the native oracle and run Cartesian lifecycle parity
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite native-cross-source-lifecycle
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite native-cross-source-lifecycle
+          finished_ns="$(date -u +%s%N)"
+          echo "lifecycle_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify attributable corpus evidence
         run: |
           result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
@@ -250,12 +421,16 @@ jobs:
         if: ${{ matrix.distro == 'linux-mint-22.3' || matrix.distro == 'pop-os-24.04' }}
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite debian-derivative-acceptance
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite debian-derivative-acceptance
+          finished_ns="$(date -u +%s%N)"
+          echo "derivative_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify Debian derivative evidence
         if: ${{ matrix.distro == 'linux-mint-22.3' || matrix.distro == 'pop-os-24.04' }}
         run: |
@@ -298,12 +473,16 @@ jobs:
         if: ${{ matrix.distro == 'cachyos' || matrix.distro == 'opensuse-tumbleweed' }}
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite rolling-derivative-acceptance
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite rolling-derivative-acceptance
+          finished_ns="$(date -u +%s%N)"
+          echo "derivative_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify rolling derivative evidence
         if: ${{ matrix.distro == 'cachyos' || matrix.distro == 'opensuse-tumbleweed' }}
         run: |
@@ -348,32 +527,46 @@ jobs:
     name: native-daily-driver-corpus (${{ matrix.distro }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    needs: native-matrix-artifacts
     strategy:
       fail-fast: false
       matrix:
         distro: [fedora44, ubuntu-26.04, arch]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/setup-rust-workspace
       - name: Require the hosted container runtime
         run: docker info
-      - uses: ./.github/actions/build-static-conary
-      - name: Build the daily-driver harness
-        run: cargo build -p conary -p conary-test
+      - name: Restore exact-head native matrix executables
+        uses: ./.github/actions/restore-native-matrix-artifact
+        with:
+          commit-sha: ${{ github.sha }}
+          run-id: ${{ github.run_id }}
+          event-name: ${{ github.event_name }}
       - uses: ./.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}
+          harness: target/x86_64-unknown-linux-musl/debug/conary-test
       - name: Build the ${{ matrix.distro }} daily-driver image
-        run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            images build --distro "${{ matrix.distro }}"
+          finished_ns="$(date -u +%s%N)"
+          echo "image_build_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Run the attributable daily-driver corpus
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite phase4-native-daily-driver-corpus
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite phase4-native-daily-driver-corpus
+          finished_ns="$(date -u +%s%N)"
+          echo "daily_driver_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify daily-driver corpus evidence
         run: |
           result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
@@ -399,39 +592,57 @@ jobs:
     name: native-pm-parity (${{ matrix.distro }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    needs: native-matrix-artifacts
     strategy:
       fail-fast: false
       matrix:
         distro: [fedora44, ubuntu-26.04, arch]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/setup-rust-workspace
       - name: Require the hosted container runtime
         run: docker info
-      - uses: ./.github/actions/build-static-conary
-      - name: Build the native parity harness
-        run: cargo build -p conary -p conary-test
+      - name: Restore exact-head native matrix executables
+        uses: ./.github/actions/restore-native-matrix-artifact
+        with:
+          commit-sha: ${{ github.sha }}
+          run-id: ${{ github.run_id }}
+          event-name: ${{ github.event_name }}
       - uses: ./.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}
+          harness: target/x86_64-unknown-linux-musl/debug/conary-test
       - name: Build the ${{ matrix.distro }} native parity image
-        run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            images build --distro "${{ matrix.distro }}"
+          finished_ns="$(date -u +%s%N)"
+          echo "image_build_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Prove timed-out exec process groups are terminated and reaped
         env:
           CONARY_TEST_TIMEOUT_IMAGE: conary-test-${{ matrix.distro }}:latest
-        run: >-
-          cargo test -p conary-test
-          container::lifecycle::tests::timed_out_container_exec_terminates_and_reaps_process_group
-          -- --ignored --exact
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test-library-tests \
+            container::lifecycle::tests::timed_out_container_exec_terminates_and_reaps_process_group \
+            --ignored --exact
+          finished_ns="$(date -u +%s%N)"
+          echo "timeout_contract_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Run the full deterministic native parity suite
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite phase4-native-pm-parity
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite phase4-native-pm-parity
+          finished_ns="$(date -u +%s%N)"
+          echo "native_parity_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify full native parity evidence
         run: |
           result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"

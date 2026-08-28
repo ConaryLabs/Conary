@@ -8,6 +8,7 @@ use std::{
 };
 
 const MATRIX_JOB_ID: &str = "native-cross-source-lifecycle";
+const MATRIX_ARTIFACT_JOB_ID: &str = "native-matrix-artifacts";
 const MATRIX_GATE_ID: &str = "native-cross-source-lifecycle-gate";
 const STABLE_CHECK_CONTEXT: &str = "native-cross-source-lifecycle";
 const DAILY_DRIVER_JOB_ID: &str = "native-daily-driver-corpus";
@@ -31,6 +32,7 @@ struct MatrixJob {
     continue_on_error: bool,
     #[serde(rename = "if", default)]
     condition: Option<String>,
+    needs: String,
     strategy: MatrixStrategy,
     steps: Vec<WorkflowStep>,
 }
@@ -61,6 +63,15 @@ struct GateJob {
 
 #[derive(Debug, Deserialize)]
 struct WorkspaceTestJob {
+    steps: Vec<WorkflowStep>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MatrixArtifactJob {
+    name: String,
+    #[serde(rename = "timeout-minutes")]
+    timeout_minutes: u64,
+    env: BTreeMap<String, serde_yaml::Value>,
     steps: Vec<WorkflowStep>,
 }
 
@@ -102,6 +113,8 @@ struct WorkflowStep {
     condition: Option<String>,
     #[serde(default)]
     env: BTreeMap<String, String>,
+    #[serde(default)]
+    with: BTreeMap<String, serde_yaml::Value>,
 }
 
 fn workflow_path() -> PathBuf {
@@ -149,6 +162,110 @@ fn named_step<'a>(steps: &'a [WorkflowStep], name: &str) -> &'a WorkflowStep {
     matches[0]
 }
 
+fn assert_exact_head_artifact_consumer(job: &MatrixJob) {
+    assert_eq!(job.needs, MATRIX_ARTIFACT_JOB_ID);
+    let restore = named_step(&job.steps, "Restore exact-head native matrix executables");
+    assert_eq!(
+        restore.uses.as_deref(),
+        Some("./.github/actions/restore-native-matrix-artifact")
+    );
+    for (key, value) in [
+        ("commit-sha", "${{ github.sha }}"),
+        ("run-id", "${{ github.run_id }}"),
+        ("event-name", "${{ github.event_name }}"),
+    ] {
+        assert_eq!(
+            restore.with.get(key).and_then(serde_yaml::Value::as_str),
+            Some(value),
+            "artifact consumer must bind {key}"
+        );
+    }
+    assert!(
+        job.steps
+            .iter()
+            .all(|step| step.uses.as_deref() != Some("./.github/actions/setup-rust-workspace"))
+    );
+    assert!(
+        job.steps
+            .iter()
+            .all(|step| step.uses.as_deref() != Some("./.github/actions/build-static-conary"))
+    );
+    assert!(job.steps.iter().all(|step| {
+        !step.run.as_deref().is_some_and(|run| {
+            run.contains("cargo build")
+                || run.contains("cargo run -p conary-test")
+                || run.contains("cargo test -p conary-test")
+        })
+    }));
+}
+
+#[test]
+fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
+    let workflow = load_workflow();
+    let job: MatrixArtifactJob = parse_job(&workflow, MATRIX_ARTIFACT_JOB_ID);
+
+    assert_eq!(job.name, MATRIX_ARTIFACT_JOB_ID);
+    assert_eq!(job.timeout_minutes, 30);
+    for (key, expected) in [
+        ("CARGO_INCREMENTAL", "0"),
+        ("CARGO_PROFILE_DEV_DEBUG", "0"),
+        ("CARGO_PROFILE_TEST_DEBUG", "0"),
+        ("SCCACHE_GHA_VERSION", "native-matrix-musl-v1"),
+        ("SCCACHE_VERSION", "0.16.0"),
+    ] {
+        assert_eq!(
+            job.env.get(key).and_then(|value| match value {
+                serde_yaml::Value::String(value) => Some(value.as_str()),
+                serde_yaml::Value::Number(value) => Some(if value.as_u64() == Some(0) {
+                    "0"
+                } else {
+                    "unexpected"
+                }),
+                _ => None,
+            }),
+            Some(expected),
+            "producer must pin {key}"
+        );
+    }
+
+    let build = named_step(&job.steps, "Build all static matrix executables once");
+    assert_eq!(
+        build.uses.as_deref(),
+        Some("./.github/actions/build-static-conary")
+    );
+    assert_eq!(
+        build
+            .with
+            .get("with-test-harness")
+            .and_then(serde_yaml::Value::as_str),
+        Some("true")
+    );
+
+    let package = named_step(&job.steps, "Package immutable exact-head matrix evidence");
+    let package_run = package.run.as_deref().expect("artifact package command");
+    assert!(package_run.contains("native-matrix-artifact.sh package"));
+    assert!(package_run.contains("$GITHUB_SHA"));
+    assert!(package_run.contains("$GITHUB_RUN_ID"));
+
+    let verify = named_step(&job.steps, "Verify fresh exact-head matrix artifact");
+    assert!(
+        verify
+            .run
+            .as_deref()
+            .is_some_and(|run| run.contains("native-matrix-artifact.sh verify"))
+    );
+
+    let upload = named_step(&job.steps, "Upload immutable exact-head matrix artifact");
+    assert_eq!(
+        upload.uses.as_deref(),
+        Some("actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f")
+    );
+    assert_eq!(
+        upload.with.get("name").and_then(serde_yaml::Value::as_str),
+        Some("native-matrix-${{ github.sha }}")
+    );
+}
+
 #[test]
 fn native_cross_source_pr_gate_executes_every_supported_target_lane() {
     let workflow = load_workflow();
@@ -161,6 +278,7 @@ fn native_cross_source_pr_gate_executes_every_supported_target_lane() {
     assert_eq!(job.timeout_minutes, 90);
     assert!(!job.continue_on_error);
     assert_eq!(job.condition, None);
+    assert_exact_head_artifact_consumer(&job);
     assert!(!job.strategy.fail_fast);
     assert_eq!(
         job.strategy.matrix.distro,
@@ -181,19 +299,12 @@ fn native_cross_source_pr_gate_executes_every_supported_target_lane() {
     assert!(!runtime.continue_on_error);
     assert_eq!(runtime.condition, None);
 
-    let build = named_step(&job.steps, "Build the lifecycle harness");
-    assert_eq!(
-        build.run.as_deref(),
-        Some("cargo build -p conary -p conary-test")
-    );
-    assert!(!build.continue_on_error);
-    assert_eq!(build.condition, None);
-
     let image = named_step(&job.steps, "Build the ${{ matrix.distro }} test image");
-    assert_eq!(
-        image.run.as_deref(),
-        Some("cargo run -p conary-test -- images build --distro \"${{ matrix.distro }}\"")
-    );
+    assert!(image.run.as_deref().is_some_and(|run| {
+        run.contains("target/x86_64-unknown-linux-musl/debug/conary-test")
+            && run.contains("images build --distro \"${{ matrix.distro }}\"")
+            && run.contains("image_build_ms=")
+    }));
     assert!(!image.continue_on_error);
     assert_eq!(image.condition, None);
 
@@ -201,12 +312,11 @@ fn native_cross_source_pr_gate_executes_every_supported_target_lane() {
         &job.steps,
         "Capture the native oracle and run Cartesian lifecycle parity",
     );
-    assert_eq!(
-        run.run.as_deref(),
-        Some(
-            "cargo run -p conary-test -- run --distro \"${{ matrix.distro }}\" --phase 4 --suite native-cross-source-lifecycle"
-        )
-    );
+    assert!(run.run.as_deref().is_some_and(|command| {
+        command.contains("target/x86_64-unknown-linux-musl/debug/conary-test")
+            && command.contains("--suite native-cross-source-lifecycle")
+            && command.contains("lifecycle_execution_ms=")
+    }));
     assert_eq!(
         run.env.get("CONARY_TEST_REUSE_IMAGE").map(String::as_str),
         Some("1")
@@ -335,6 +445,7 @@ fn native_daily_driver_gate_executes_the_three_attributable_lanes() {
     assert_eq!(job.timeout_minutes, 90);
     assert!(!job.continue_on_error);
     assert_eq!(job.condition, None);
+    assert_exact_head_artifact_consumer(&job);
     assert!(!job.strategy.fail_fast);
     assert_eq!(
         job.strategy.matrix.distro,
@@ -345,12 +456,11 @@ fn native_daily_driver_gate_executes_the_three_attributable_lanes() {
     assert_eq!(runtime.run.as_deref(), Some("docker info"));
 
     let run = named_step(&job.steps, "Run the attributable daily-driver corpus");
-    assert_eq!(
-        run.run.as_deref(),
-        Some(
-            "cargo run -p conary-test -- run --distro \"${{ matrix.distro }}\" --phase 4 --suite phase4-native-daily-driver-corpus"
-        )
-    );
+    assert!(run.run.as_deref().is_some_and(|command| {
+        command.contains("target/x86_64-unknown-linux-musl/debug/conary-test")
+            && command.contains("--suite phase4-native-daily-driver-corpus")
+            && command.contains("daily_driver_execution_ms=")
+    }));
     assert_eq!(
         run.env.get("CONARY_TEST_REUSE_IMAGE").map(String::as_str),
         Some("1")
@@ -387,6 +497,7 @@ fn native_pm_parity_gate_runs_the_full_deterministic_suite_and_timeout_contract(
     assert_eq!(job.timeout_minutes, 90);
     assert!(!job.continue_on_error);
     assert_eq!(job.condition, None);
+    assert_exact_head_artifact_consumer(&job);
     assert!(!job.strategy.fail_fast);
     assert_eq!(
         job.strategy.matrix.distro,
@@ -405,16 +516,16 @@ fn native_pm_parity_gate_runs_the_full_deterministic_suite_and_timeout_contract(
         Some("conary-test-${{ matrix.distro }}:latest")
     );
     let timeout_run = timeout.run.as_deref().expect("timeout regression command");
+    assert!(timeout_run.contains("conary-test-library-tests"));
     assert!(timeout_run.contains("timed_out_container_exec_terminates_and_reaps_process_group"));
     assert!(timeout_run.contains("--ignored --exact"));
 
     let parity = named_step(&job.steps, "Run the full deterministic native parity suite");
-    assert_eq!(
-        parity.run.as_deref(),
-        Some(
-            "cargo run -p conary-test -- run --distro \"${{ matrix.distro }}\" --phase 4 --suite phase4-native-pm-parity"
-        )
-    );
+    assert!(parity.run.as_deref().is_some_and(|command| {
+        command.contains("target/x86_64-unknown-linux-musl/debug/conary-test")
+            && command.contains("--suite phase4-native-pm-parity")
+            && command.contains("native_parity_execution_ms=")
+    }));
     assert_eq!(
         parity
             .env

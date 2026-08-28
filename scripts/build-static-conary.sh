@@ -2,7 +2,7 @@
 # scripts/build-static-conary.sh
 set -euo pipefail
 
-# Build a fully static `conary` for x86_64-unknown-linux-musl.
+# Build fully static Conary integration artifacts for x86_64-unknown-linux-musl.
 #
 # Why this exists: the QEMU suites stage the host-built `conary` into a guest,
 # which couples the guest to the build host's glibc and to a matching
@@ -28,19 +28,23 @@ usage() {
 Usage: build-static-conary.sh [OPTIONS]
 
 Build a fully static `conary` for x86_64-unknown-linux-musl, suitable for
-staging into any Linux guest regardless of its glibc.
+staging into any Linux guest regardless of its glibc. The optional protected
+matrix mode also builds the host-side integration harness and its library test
+executable once for immutable artifact distribution to isolated CI jobs.
 
 Options:
   --cache-dir PATH   Where the static libseccomp is built and cached
                      (default: ${XDG_CACHE_HOME:-$HOME/.cache}/conary-static-deps)
   --rebuild-deps     Rebuild the cached static libseccomp even if present
+  --with-test-harness
+                     Also build static conary-test CLI and library-test binaries
   --print-path       After building, print the resulting binary path only
   --help             Show this help text
 
 Host requirements: a Rust toolchain with the x86_64-unknown-linux-musl target
 (`rustup target add x86_64-unknown-linux-musl`), `musl-gcc`, the Linux kernel
 UAPI headers (linux-libc-dev, kernel-headers, or linux-api-headers), plus
-curl, tar, make, and gperf.
+curl, tar, make, gperf, file, and jq.
 
 Debug profile only. Conary is pre-alpha and this binary is a test-staging
 artifact, not a release artifact.
@@ -50,6 +54,7 @@ EOF
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/conary-static-deps"
 REBUILD_DEPS="no"
 PRINT_PATH="no"
+WITH_TEST_HARNESS="no"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -63,6 +68,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --print-path)
             PRINT_PATH="yes"
+            shift
+            ;;
+        --with-test-harness)
+            WITH_TEST_HARNESS="yes"
             shift
             ;;
         --help|-h)
@@ -88,7 +97,7 @@ log() {
     fi
 }
 
-for tool in cargo rustc musl-gcc curl tar make gperf sha256sum; do
+for tool in cargo rustc musl-gcc curl tar make gperf sha256sum file jq; do
     command -v "$tool" >/dev/null || fail "host is missing required tool: $tool"
 done
 
@@ -114,7 +123,10 @@ if [[ "$REBUILD_DEPS" == "yes" ]]; then
     rm -rf "$PREFIX"
 fi
 
+dependency_started_ns="$(date -u +%s%N)"
+dependency_cache_hit="true"
 if [[ ! -f "$PREFIX/lib/libseccomp.a" ]]; then
+    dependency_cache_hit="false"
     log "building static libseccomp $LIBSECCOMP_VERSION for musl"
     BUILD_DIR="$(mktemp -d)"
     trap 'rm -rf "$BUILD_DIR"' EXIT
@@ -148,28 +160,97 @@ The cached download has been removed; re-run to fetch it again."
 else
     log "using cached static libseccomp at $PREFIX"
 fi
+dependency_finished_ns="$(date -u +%s%N)"
+dependency_ms=$(( (dependency_finished_ns - dependency_started_ns) / 1000000 ))
 
 repo_root="$(git rev-parse --show-toplevel)"
 
-log "building conary for $TARGET"
+log "building static integration artifacts for $TARGET"
+cargo_packages=(-p conary)
+if [[ "$WITH_TEST_HARNESS" == "yes" ]]; then
+    cargo_packages+=(-p conary-test)
+fi
+runtime_started_ns="$(date -u +%s%N)"
 (
     cd "$repo_root"
     LIBSECCOMP_LIB_PATH="$PREFIX/lib" \
     LIBSECCOMP_LINK_TYPE=static \
     CC_x86_64_unknown_linux_musl=musl-gcc \
     CFLAGS_x86_64_unknown_linux_musl="$KERNEL_HEADER_FLAGS" \
-        cargo build -p conary --target "$TARGET"
+        cargo build "${cargo_packages[@]}" --target "$TARGET" --locked
 )
+runtime_finished_ns="$(date -u +%s%N)"
+runtime_build_ms=$(( (runtime_finished_ns - runtime_started_ns) / 1000000 ))
+
+test_build_ms=0
+if [[ "$WITH_TEST_HARNESS" == "yes" ]]; then
+    test_started_ns="$(date -u +%s%N)"
+    test_executable="$(
+        (
+            cd "$repo_root"
+            LIBSECCOMP_LIB_PATH="$PREFIX/lib" \
+            LIBSECCOMP_LINK_TYPE=static \
+            CC_x86_64_unknown_linux_musl=musl-gcc \
+            CFLAGS_x86_64_unknown_linux_musl="$KERNEL_HEADER_FLAGS" \
+                cargo test -p conary-test --lib --target "$TARGET" --locked \
+                    --no-run --message-format=json-render-diagnostics |
+                jq -r '
+                    select(.reason == "compiler-artifact")
+                    | select(.target.name == "conary_test")
+                    | select(.profile.test == true)
+                    | .executable // empty
+                ' |
+                tail -n 1
+        )
+    )"
+    [[ -n "$test_executable" && -x "$test_executable" ]] ||
+        fail "cargo did not report the conary-test library test executable"
+    install -m 0755 "$test_executable" \
+        "${CARGO_TARGET_DIR:-$repo_root/target}/$TARGET/debug/conary-test-library-tests"
+    test_finished_ns="$(date -u +%s%N)"
+    test_build_ms=$(( (test_finished_ns - test_started_ns) / 1000000 ))
+fi
+
+if [[ -n "${CONARY_STATIC_BUILD_METRICS_PATH:-}" ]]; then
+    metrics_parent="$(dirname "$CONARY_STATIC_BUILD_METRICS_PATH")"
+    mkdir -p "$metrics_parent"
+    jq -n \
+        --argjson dependency_cache_hit "$dependency_cache_hit" \
+        --argjson dependency_ms "$dependency_ms" \
+        --argjson runtime_build_ms "$runtime_build_ms" \
+        --argjson test_build_ms "$test_build_ms" \
+        --arg with_test_harness "$WITH_TEST_HARNESS" '
+          {
+            schema_version: 1,
+            static_dependency_cache_hit: $dependency_cache_hit,
+            static_dependency_ms: $dependency_ms,
+            static_runtime_build_ms: $runtime_build_ms,
+            library_test_build_ms: $test_build_ms,
+            with_test_harness: ($with_test_harness == "yes")
+          }
+        ' > "$CONARY_STATIC_BUILD_METRICS_PATH"
+fi
 
 target_dir="${CARGO_TARGET_DIR:-$repo_root/target}"
 binary="$target_dir/$TARGET/debug/conary"
 [[ -x "$binary" ]] || fail "expected a binary at $binary"
 
+artifacts=("$binary")
+if [[ "$WITH_TEST_HARNESS" == "yes" ]]; then
+    artifacts+=(
+        "$target_dir/$TARGET/debug/conary-test"
+        "$target_dir/$TARGET/debug/conary-test-library-tests"
+    )
+fi
+
 # A dynamically linked result would silently reintroduce the coupling this
 # script exists to remove, so refuse to report success for one.
-if ! file "$binary" | grep -q 'static-pie linked\|statically linked'; then
-    fail "built binary is not statically linked: $(file "$binary")"
-fi
+for artifact in "${artifacts[@]}"; do
+    [[ -x "$artifact" ]] || fail "expected a binary at $artifact"
+    if ! file "$artifact" | grep -q 'static-pie linked\|statically linked'; then
+        fail "built binary is not statically linked: $(file "$artifact")"
+    fi
+done
 
 if [[ "$PRINT_PATH" == "yes" ]]; then
     printf '%s\n' "$binary"
@@ -178,7 +259,13 @@ fi
 
 echo
 echo "== result =="
-file "$binary"
-ldd "$binary" 2>&1 || true
+for artifact in "${artifacts[@]}"; do
+    file "$artifact"
+    ldd "$artifact" 2>&1 || true
+done
 "$binary" --version
+if [[ "$WITH_TEST_HARNESS" == "yes" ]]; then
+    "$target_dir/$TARGET/debug/conary-test" --version
+    "$target_dir/$TARGET/debug/conary-test-library-tests" --list >/dev/null
+fi
 echo "path: $binary"
