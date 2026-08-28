@@ -1336,6 +1336,7 @@ deployment, and prove installed or live behavior independently.
 `.github/workflows/deploy-remi-candidate.yml`;
 `.github/workflows/release-artifact-proof.yml`;
 `.github/actions/setup-rust-workspace/action.yml`;
+`.github/actions/summarize-rust-cache/action.yml`;
 `scripts/ci-install-ubuntu-packages.sh`;
 `scripts/check-github-action-runtimes.sh`;
 `scripts/test-github-action-runtimes.sh`;
@@ -1358,6 +1359,7 @@ static-site deployment, and production health proof.
 `.github/workflows/deploy-remi-candidate.yml`;
 `.github/workflows/release-artifact-proof.yml`;
 `.github/actions/setup-rust-workspace/action.yml`;
+`.github/actions/summarize-rust-cache/action.yml`;
 `.github/actions/test-generation-db-reflink/action.yml`;
 `scripts/ci-install-ubuntu-packages.sh`;
 `scripts/check-github-action-runtimes.sh`;
@@ -1425,7 +1427,9 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `apps/conary/tests/integration/remi/manifests/*`;
 `scripts/build-static-conary.sh`;
 `scripts/kernel-header-roots.sh`;
+`scripts/native-matrix-artifact.sh`;
 `.github/actions/build-static-conary/action.yml`;
+`.github/actions/restore-native-matrix-artifact/action.yml`;
 `.github/workflows/pr-gate.yml`.
 
 **Focused proof:** `cargo run -p conary-test -- list`;
@@ -1453,7 +1457,21 @@ need parser proof and migration or defaulting decisions. Suite names in
 selected by the typed `build_context` field, never by matching the distro key.
 The static choice fails closed rather than falling back to the host build, so an
 image build requires `scripts/build-static-conary.sh` to have produced its
-artifact first. Corpus cases
+artifact first. The protected PR matrix builds Conary, the integration CLI,
+and the one ignored container-contract test executable once as static musl
+binaries. Every distro cell downloads the same immutable artifact and verifies
+its exact commit, tree, lockfile, toolchain, flags, cache namespace, archive
+member list, and binary digests before reopening it; an absent, corrupt, or
+misattributed artifact fails the cell and never weakens a predicate. The native
+producer bulk-restores and bulk-saves its exact-policy musl compiler cache
+around local compilation. A verified bundle may be reused only by another
+attempt of the same workflow run at the same exact commit, and is verified and
+reopened before build setup is skipped. The GNU compiler-cache primer likewise
+bulk-saves one bounded local seed under the exact commit; consumers require
+that seed and open it read-only. Compatible workspace test owners execute as
+parallel package/library/binary-and-integration shards behind the unchanged
+`workspace-tests` aggregate check. Cache entries reduce work but are not
+artifact or test authority. Corpus cases
 must carry versioned runtime evidence with exact role-tagged artifact digests,
 typed digest authority, target capabilities, and canonically ordered stage
 checkpoints; report aggregation uses typed stage/failure discriminants and

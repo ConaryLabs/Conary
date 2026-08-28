@@ -495,7 +495,23 @@ old process. That can fail with `Text file busy`.
 - `merge-validation` proves the current source tree through deterministic
   source, build, policy, and test checks. It must not probe mutable production
   endpoints, because production continues to serve the previously deployed
-  release until the candidate passes this gate and is tagged.
+  release until the candidate passes this gate and is tagged. Compatible GNU
+  jobs may reuse compiler outputs through one exact-policy namespace derived
+  from the toolchain, lockfile, target, native ABI, and codegen settings. Each
+  workflow has one writable primer that bulk-saves a bounded local compiler
+  cache under the exact commit. Consumers fail on a missing seed, restore that
+  exact cache read-only, run their complete commands, and retain typed hit,
+  miss, write, and error evidence. The cache is optimization, never test or
+  artifact authority.
+  The protected native-matrix producer applies the same bulk-transfer model to
+  its distinct musl target and static dependency policy: it restores one prior
+  seed, compiles locally, stops sccache, and saves the new exact-head seed once.
+  Once independently verified, the packaged static bundle is cached under the
+  exact workflow run and commit so a retry can verify and reopen it before
+  skipping setup and relinking. This reuse never crosses runs or source heads.
+  Workspace tests fan out by Conary, conary-core library, conary-core binary
+  and integration targets, and remaining workspace ownership, then converge on the stable
+  fail-closed `workspace-tests` check.
 - `deploy-and-verify` consumes that serialized metadata instead of re-deriving
   product behavior locally. It deploys and proves Remi first, then stages and
   proves Conary release assets and static sites from the same suite bundle.

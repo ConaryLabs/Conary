@@ -18,6 +18,307 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  native-matrix-artifacts:
+    name: native-matrix-artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_ENCODED_RUSTFLAGS: ""
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      RUSTFLAGS: ""
+      RUSTC_WRAPPER: sccache
+      SCCACHE_CACHE_BACKEND: local-disk-bulk-v1
+      SCCACHE_CACHE_SIZE: 4G
+      SCCACHE_LOCAL_RW_MODE: READ_WRITE
+      SCCACHE_VERSION: 0.16.0
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Bind the exact protected source
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "workflow commit must be a full lowercase SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || {
+            echo "producer checkout does not match the workflow commit" >&2
+            exit 1
+          }
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]] || {
+            echo "producer checkout is not clean" >&2
+            exit 1
+          }
+      - name: Restore exact prior-attempt native matrix artifact
+        id: native-artifact-restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/native-matrix-artifact
+          key: native-matrix-artifact-v1-${{ github.run_id }}-${{ github.sha }}
+      - name: Verify reusable exact-run matrix artifact
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit == 'true' }}
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/native-matrix-artifact
+        run: |
+          set -euo pipefail
+          scripts/native-matrix-artifact.sh verify \
+            "$ARTIFACT_DIR" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" \
+            > "${RUNNER_TEMP}/native-matrix-reused-verification.json"
+          jq -e '.schema_version == 1' \
+            "${RUNNER_TEMP}/native-matrix-reused-verification.json" >/dev/null
+      - name: Start dependency setup clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        id: setup-start
+        run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-rust-workspace
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        with:
+          toolchain: 1.98.0
+      - name: Finish dependency setup clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        id: setup
+        env:
+          STARTED_NS: ${{ steps.setup-start.outputs.started_ns }}
+        run: |
+          finished_ns="$(date -u +%s%N)"
+          echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+      - name: Install native matrix compiler inputs
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        run: >-
+          bash scripts/ci-install-ubuntu-packages.sh
+          musl-tools gperf linux-libc-dev
+      - name: Install the native matrix Rust target
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Start compiler-cache setup clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        id: cache-start
+        run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
+      - name: Bind exact native compiler-cache policy
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        id: native-cache-policy
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "native compiler-cache source must be a full lowercase SHA" >&2
+            exit 1
+          }
+          native_abi="$(
+            dpkg-query --show --showformat='${Package}=${Version}\n' \
+              gperf linux-libc-dev musl-dev musl-tools | LC_ALL=C sort
+          )"
+          identity="$(
+            {
+              printf 'schema=1\n'
+              printf 'rustc=%s\n' "$(rustc -vV)"
+              printf 'cargo=%s\n' "$(cargo -vV)"
+              printf 'lock=%s\n' "$(sha256sum Cargo.lock | cut -d ' ' -f 1)"
+              printf 'target=x86_64-unknown-linux-musl\n'
+              printf 'cc=%s\n' "$(musl-gcc --version | sed -n '1p')"
+              printf 'native_abi=%s\n' "$native_abi"
+              printf 'builder=%s\n' "$(sha256sum scripts/build-static-conary.sh | cut -d ' ' -f 1)"
+              printf 'header_probe=%s\n' "$(sha256sum scripts/kernel-header-roots.sh | cut -d ' ' -f 1)"
+              printf 'action=%s\n' "$(sha256sum .github/actions/build-static-conary/action.yml | cut -d ' ' -f 1)"
+              printf 'features=default\n'
+              printf 'test_harness=true\n'
+              printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
+              printf 'encoded_rustflags=%s\n' "${CARGO_ENCODED_RUSTFLAGS:-}"
+              printf 'incremental=%s\n' "${CARGO_INCREMENTAL:-}"
+              printf 'dev_debug=%s\n' "${CARGO_PROFILE_DEV_DEBUG:-}"
+              printf 'test_debug=%s\n' "${CARGO_PROFILE_TEST_DEBUG:-}"
+            } | sha256sum | cut -d ' ' -f 1
+          )"
+          namespace="native-matrix-musl-local-v1-${identity}"
+          restore_prefix="${namespace}-"
+          exact_key="${restore_prefix}${GITHUB_SHA}"
+          {
+            echo "SCCACHE_CACHE_NAMESPACE=$namespace"
+            echo "SCCACHE_DIR=$RUNNER_TEMP/native-matrix-sccache"
+          } >> "$GITHUB_ENV"
+          {
+            echo "exact_key=$exact_key"
+            echo "restore_prefix=$restore_prefix"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Native matrix compiler-cache identity"
+            echo
+            echo "- namespace: \`$namespace\`"
+            echo "- Cargo.lock_sha256: \`$(sha256sum Cargo.lock | cut -d ' ' -f 1)\`"
+            echo "- native_abi: \`$(tr '\n' ' ' <<<"$native_abi" | sed 's/ $//')\`"
+            echo "- target: \`x86_64-unknown-linux-musl\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Restore native compiler-cache seed
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        id: native-cache-restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/native-matrix-sccache
+          key: ${{ steps.native-cache-policy.outputs.exact_key }}
+          restore-keys: ${{ steps.native-cache-policy.outputs.restore_prefix }}
+      - name: Install bounded shared compiler cache
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+      - name: Finish compiler-cache setup clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        id: cache
+        env:
+          STARTED_NS: ${{ steps.cache-start.outputs.started_ns }}
+        run: |
+          set -euo pipefail
+          [[ -x "${SCCACHE_PATH:-}" ]] || {
+            echo "sccache action did not expose an executable" >&2
+            exit 1
+          }
+          if [[ -e "$SCCACHE_DIR" ]]; then
+            [[ -d "$SCCACHE_DIR" && ! -L "$SCCACHE_DIR" ]] || {
+              echo "native compiler cache must be a plain directory" >&2
+              exit 1
+            }
+          else
+            mkdir -p "$SCCACHE_DIR"
+          fi
+          echo "RUSTC_WRAPPER=$SCCACHE_PATH" >> "$GITHUB_ENV"
+          "$SCCACHE_PATH" --zero-stats
+          finished_ns="$(date -u +%s%N)"
+          echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+      - name: Start exact-head artifact build clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        id: build-start
+        run: |
+          metrics="${RUNNER_TEMP}/native-matrix-static-build-metrics.json"
+          echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
+          echo "metrics=$metrics" >> "$GITHUB_OUTPUT"
+          echo "CONARY_STATIC_BUILD_METRICS_PATH=$metrics" >> "$GITHUB_ENV"
+      - name: Build all static matrix executables once
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        uses: ./.github/actions/build-static-conary
+        with:
+          with-test-harness: "true"
+      - name: Finish exact-head artifact build clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        id: build
+        env:
+          STARTED_NS: ${{ steps.build-start.outputs.started_ns }}
+        run: |
+          set -euo pipefail
+          finished_ns="$(date -u +%s%N)"
+          stats="${RUNNER_TEMP}/native-matrix-sccache-stats.json"
+          metrics="${{ steps.build-start.outputs.metrics }}"
+          "$SCCACHE_PATH" --show-stats --stats-format json > "$stats"
+          jq -e 'type == "object"' "$stats" >/dev/null
+          jq -e '.schema_version == 1 and .with_test_harness == true' "$metrics" >/dev/null
+          echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+          echo "stats=$stats" >> "$GITHUB_OUTPUT"
+          echo "metrics=$metrics" >> "$GITHUB_OUTPUT"
+      - name: Stop native compiler cache before bulk save
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        run: |
+          "$SCCACHE_PATH" --stop-server
+      - name: Start native compiler-cache save clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}
+        id: cache-save-start
+        run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
+      - name: Save exact native compiler cache
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/native-matrix-sccache
+          key: ${{ steps.native-cache-policy.outputs.exact_key }}
+      - name: Finish native compiler-cache save clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}
+        id: cache-save
+        env:
+          STARTED_NS: ${{ steps.cache-save-start.outputs.started_ns }}
+        run: |
+          finished_ns="$(date -u +%s%N)"
+          echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+      - name: Record exact native compiler-cache reuse
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit == 'true' }}
+        id: cache-save-hit
+        run: echo "duration_ms=0" >> "$GITHUB_OUTPUT"
+      - name: Package immutable exact-head matrix evidence
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        id: package
+        env:
+          BUILD_MS: ${{ steps.build.outputs.duration_ms }}
+          CACHE_SAVE_MS: ${{ steps.cache-save.outputs.duration_ms || steps.cache-save-hit.outputs.duration_ms }}
+          CACHE_SETUP_MS: ${{ steps.cache.outputs.duration_ms }}
+          CACHE_STATS: ${{ steps.build.outputs.stats }}
+          BUILD_METRICS: ${{ steps.build.outputs.metrics }}
+          SETUP_MS: ${{ steps.setup.outputs.duration_ms }}
+        run: |
+          set -euo pipefail
+          output_dir="${RUNNER_TEMP}/native-matrix-artifact"
+          manifest="$(scripts/native-matrix-artifact.sh package \
+            "$output_dir" "$GITHUB_SHA" "$GITHUB_RUN_ID" \
+            "$SETUP_MS" "$CACHE_SETUP_MS" "$CACHE_SAVE_MS" "$BUILD_MS" \
+            "$CACHE_STATS" "$BUILD_METRICS")"
+          echo "directory=$output_dir" >> "$GITHUB_OUTPUT"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+      - name: Verify fresh exact-head matrix artifact
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/native-matrix-artifact
+        run: |
+          scripts/native-matrix-artifact.sh verify \
+            "$ARTIFACT_DIR" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" \
+            > "${RUNNER_TEMP}/native-matrix-fresh-verification.json"
+          jq -e '.schema_version == 1' \
+            "${RUNNER_TEMP}/native-matrix-fresh-verification.json" >/dev/null
+      - name: Save verified exact-run matrix artifact
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/native-matrix-artifact
+          key: native-matrix-artifact-v1-${{ github.run_id }}-${{ github.sha }}
+      - name: Upload immutable exact-head matrix artifact
+        id: upload
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: native-matrix-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-matrix-artifact/native-matrix-artifact-manifest.json
+            ${{ runner.temp }}/native-matrix-artifact/native-matrix-artifacts.tar.gz
+            ${{ runner.temp }}/native-matrix-artifact/sccache-stats.json
+            ${{ runner.temp }}/native-matrix-artifact/static-build-metrics.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Summarize protected matrix build latency
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_REUSED: ${{ steps.native-artifact-restore.outputs.cache-hit == 'true' }}
+          MANIFEST: ${{ runner.temp }}/native-matrix-artifact/native-matrix-artifact-manifest.json
+        run: |
+          {
+            echo "### Protected native matrix producer"
+            echo
+            echo "- commit: \`$GITHUB_SHA\`"
+            echo "- artifact_digest: \`$ARTIFACT_DIGEST\`"
+            echo "- exact_run_artifact_reused: \`$ARTIFACT_REUSED\`"
+            jq -r '
+              "- dependency_setup_ms: `\(.measurements.dependency_setup_ms)`\n"
+              + "- compiler_cache_setup_ms: `\(.measurements.compiler_cache_setup_ms)`\n"
+              + "- compiler_cache_save_ms: `\(.measurements.compiler_cache_save_ms)`\n"
+              + "- compiler_cache_backend: `\(.build.sccache_cache_backend)`\n"
+              + "- compiler_cache_namespace: `\(.build.sccache_cache_namespace)`\n"
+              + "- artifact_build_ms: `\(.measurements.artifact_build_ms)`\n"
+              + "- static_dependency_cache_hit: `\(.measurements.static_dependency_cache_hit)`\n"
+              + "- static_dependency_ms: `\(.measurements.static_dependency_ms)`\n"
+              + "- static_runtime_build_ms: `\(.measurements.static_runtime_build_ms)`\n"
+              + "- library_test_build_ms: `\(.measurements.library_test_build_ms)`\n"
+              + "- bundle_ms: `\(.measurements.bundle_ms)`\n"
+              + "- bundle_bytes: `\(.artifact.bundle_bytes)`"
+            ' "$MANIFEST"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   workflow-runtime-policy:
     name: workflow-runtime-policy
     runs-on: ubuntu-latest
@@ -107,27 +408,108 @@ jobs:
           python3 scripts/check-third-party-divergence.py
           python3 scripts/test-third-party-divergence.py
 
-  clippy:
-    name: clippy
+  gnu-compiler-cache:
+    name: gnu-compiler-cache
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/setup-rust-workspace
         with:
+          compiler-cache: writer
+      - name: Prime exact workspace test compilation
+        run: cargo test --workspace --no-run --verbose
+      - name: Retain compiler-cache primer evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: pr-gnu-cache-primer
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
           components: clippy
+          compiler-cache: reader
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Retain clippy compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: pr-clippy
+
+  workspace-test-shards:
+    name: workspace-test (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: conary
+          - shard: conary-core-repository
+          - shard: conary-core-remaining
+          - shard: conary-core-targets
+          - shard: remaining
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
+      - name: Enable exact ownership-test namespaces
+        uses: ./.github/actions/setup-exact-ownership-tests
+      - name: Run workspace test shard
+        env:
+          TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          case "$TEST_SHARD" in
+            conary) cargo test -p conary --verbose ;;
+            conary-core-repository) cargo test -p conary-core --lib repository:: --verbose ;;
+            conary-core-remaining)
+              cargo test -p conary-core --lib --verbose -- --skip repository::
+              ;;
+            conary-core-targets) cargo test -p conary-core --bins --test '*' --verbose ;;
+            remaining)
+              cargo test --workspace --exclude conary-test \
+                --exclude conary --exclude conary-core --verbose
+              ;;
+            *)
+              echo "unknown workspace test shard: $TEST_SHARD" >&2
+              exit 1
+              ;;
+          esac
+      - name: Retain workspace-shard compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: pr-workspace-${{ matrix.shard }}
 
   workspace-tests:
     name: workspace-tests
     runs-on: ubuntu-latest
+    needs: workspace-test-shards
+    if: ${{ always() }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/setup-rust-workspace
-      - name: Enable exact ownership-test namespaces
-        uses: ./.github/actions/setup-exact-ownership-tests
-      - name: Run workspace tests
-        run: cargo test --workspace --exclude conary-test --verbose
+      - name: Require every workspace test shard
+        env:
+          SHARDS_RESULT: ${{ needs.workspace-test-shards.result }}
+        run: test "$SHARDS_RESULT" = success
 
   alpm-parity-producer:
     name: alpm-parity-producer
@@ -197,50 +579,90 @@ jobs:
     name: generation-db-reflink
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
       - uses: ./.github/actions/test-generation-db-reflink
+      - name: Retain generation-test compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: pr-generation-db-reflink
 
   conary-test-crate:
     name: conary-test-crate
     runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
       - name: Test conary-test
         run: cargo test -p conary-test --verbose
+      - name: Retain conary-test compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: pr-conary-test
 
   native-cross-source-lifecycle:
     name: native-cross-source-lifecycle (${{ matrix.distro }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    needs: native-matrix-artifacts
     strategy:
       fail-fast: false
       matrix:
         distro: [fedora44, ubuntu-26.04, arch, artix, cachyos, opensuse-tumbleweed, linux-mint-22.3, pop-os-24.04]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/setup-rust-workspace
       - name: Require the hosted container runtime
         run: docker info
-      - uses: ./.github/actions/build-static-conary
-      - name: Build the lifecycle harness
-        run: cargo build -p conary -p conary-test
+      - name: Restore exact-head native matrix executables
+        uses: ./.github/actions/restore-native-matrix-artifact
+        with:
+          commit-sha: ${{ github.sha }}
+          run-id: ${{ github.run_id }}
+          event-name: ${{ github.event_name }}
       - uses: ./.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}
+          harness: target/x86_64-unknown-linux-musl/debug/conary-test
       - name: Build the ${{ matrix.distro }} test image
-        run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            images build --distro "${{ matrix.distro }}"
+          finished_ns="$(date -u +%s%N)"
+          echo "image_build_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Capture the native oracle and run Cartesian lifecycle parity
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite native-cross-source-lifecycle
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite native-cross-source-lifecycle
+          finished_ns="$(date -u +%s%N)"
+          echo "lifecycle_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify attributable corpus evidence
         run: |
           result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
@@ -250,12 +672,16 @@ jobs:
         if: ${{ matrix.distro == 'linux-mint-22.3' || matrix.distro == 'pop-os-24.04' }}
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite debian-derivative-acceptance
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite debian-derivative-acceptance
+          finished_ns="$(date -u +%s%N)"
+          echo "derivative_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify Debian derivative evidence
         if: ${{ matrix.distro == 'linux-mint-22.3' || matrix.distro == 'pop-os-24.04' }}
         run: |
@@ -298,12 +724,16 @@ jobs:
         if: ${{ matrix.distro == 'cachyos' || matrix.distro == 'opensuse-tumbleweed' }}
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite rolling-derivative-acceptance
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite rolling-derivative-acceptance
+          finished_ns="$(date -u +%s%N)"
+          echo "derivative_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify rolling derivative evidence
         if: ${{ matrix.distro == 'cachyos' || matrix.distro == 'opensuse-tumbleweed' }}
         run: |
@@ -348,32 +778,46 @@ jobs:
     name: native-daily-driver-corpus (${{ matrix.distro }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    needs: native-matrix-artifacts
     strategy:
       fail-fast: false
       matrix:
         distro: [fedora44, ubuntu-26.04, arch]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/setup-rust-workspace
       - name: Require the hosted container runtime
         run: docker info
-      - uses: ./.github/actions/build-static-conary
-      - name: Build the daily-driver harness
-        run: cargo build -p conary -p conary-test
+      - name: Restore exact-head native matrix executables
+        uses: ./.github/actions/restore-native-matrix-artifact
+        with:
+          commit-sha: ${{ github.sha }}
+          run-id: ${{ github.run_id }}
+          event-name: ${{ github.event_name }}
       - uses: ./.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}
+          harness: target/x86_64-unknown-linux-musl/debug/conary-test
       - name: Build the ${{ matrix.distro }} daily-driver image
-        run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            images build --distro "${{ matrix.distro }}"
+          finished_ns="$(date -u +%s%N)"
+          echo "image_build_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Run the attributable daily-driver corpus
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite phase4-native-daily-driver-corpus
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite phase4-native-daily-driver-corpus
+          finished_ns="$(date -u +%s%N)"
+          echo "daily_driver_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify daily-driver corpus evidence
         run: |
           result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
@@ -399,39 +843,57 @@ jobs:
     name: native-pm-parity (${{ matrix.distro }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    needs: native-matrix-artifacts
     strategy:
       fail-fast: false
       matrix:
         distro: [fedora44, ubuntu-26.04, arch]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/setup-rust-workspace
       - name: Require the hosted container runtime
         run: docker info
-      - uses: ./.github/actions/build-static-conary
-      - name: Build the native parity harness
-        run: cargo build -p conary -p conary-test
+      - name: Restore exact-head native matrix executables
+        uses: ./.github/actions/restore-native-matrix-artifact
+        with:
+          commit-sha: ${{ github.sha }}
+          run-id: ${{ github.run_id }}
+          event-name: ${{ github.event_name }}
       - uses: ./.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}
+          harness: target/x86_64-unknown-linux-musl/debug/conary-test
       - name: Build the ${{ matrix.distro }} native parity image
-        run: cargo run -p conary-test -- images build --distro "${{ matrix.distro }}"
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            images build --distro "${{ matrix.distro }}"
+          finished_ns="$(date -u +%s%N)"
+          echo "image_build_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Prove timed-out exec process groups are terminated and reaped
         env:
           CONARY_TEST_TIMEOUT_IMAGE: conary-test-${{ matrix.distro }}:latest
-        run: >-
-          cargo test -p conary-test
-          container::lifecycle::tests::timed_out_container_exec_terminates_and_reaps_process_group
-          -- --ignored --exact
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test-library-tests \
+            container::lifecycle::tests::timed_out_container_exec_terminates_and_reaps_process_group \
+            --ignored --exact
+          finished_ns="$(date -u +%s%N)"
+          echo "timeout_contract_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Run the full deterministic native parity suite
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-        run: >-
-          cargo run -p conary-test --
-          run
-          --distro "${{ matrix.distro }}"
-          --phase 4
-          --suite phase4-native-pm-parity
+        run: |
+          set -euo pipefail
+          started_ns="$(date -u +%s%N)"
+          target/x86_64-unknown-linux-musl/debug/conary-test \
+            run \
+            --distro "${{ matrix.distro }}" \
+            --phase 4 \
+            --suite phase4-native-pm-parity
+          finished_ns="$(date -u +%s%N)"
+          echo "native_parity_execution_ms=$(( (finished_ns - started_ns) / 1000000 ))" >> "$GITHUB_STEP_SUMMARY"
       - name: Verify full native parity evidence
         run: |
           result="apps/conary/tests/integration/remi/results/${{ matrix.distro }}-phase4.json"
@@ -455,11 +917,24 @@ jobs:
   doctests:
     name: doctests
     runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
       - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
       - name: Run doctests
         run: cargo test --doc --workspace --verbose
+      - name: Retain doctest compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: pr-doctests
 
   dependency-review:
     name: dependency-review

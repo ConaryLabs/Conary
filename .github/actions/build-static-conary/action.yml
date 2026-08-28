@@ -2,6 +2,11 @@ name: build-static-conary
 description: >-
   Build the static x86_64-unknown-linux-musl Conary artifact that distro test
   images stage, so no image depends on the runner's glibc or libseccomp.
+inputs:
+  with-test-harness:
+    description: Build the static conary-test CLI and library-test executable too.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -23,4 +28,15 @@ runs:
       run: bash scripts/test-build-static-conary.sh
     - name: Build the static Conary artifact
       shell: bash
-      run: bash scripts/build-static-conary.sh
+      env:
+        WITH_TEST_HARNESS: ${{ inputs.with-test-harness }}
+      run: |
+        set -euo pipefail
+        args=()
+        if [[ "$WITH_TEST_HARNESS" == "true" ]]; then
+          args+=(--with-test-harness)
+        elif [[ "$WITH_TEST_HARNESS" != "false" ]]; then
+          echo "with-test-harness must be true or false" >&2
+          exit 1
+        fi
+        bash scripts/build-static-conary.sh "${args[@]}"
