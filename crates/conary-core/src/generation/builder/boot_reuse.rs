@@ -70,7 +70,7 @@ pub(super) fn resolve_reusable_boot_assets(
         initramfs,
         efi_bootloader,
         _sysroot_workspace: None,
-        staging: RuntimeBootAssetStaging::Reuse(verified),
+        staging: RuntimeBootAssetStaging::Reuse(Box::new(verified)),
     }))
 }
 

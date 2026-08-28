@@ -32,7 +32,7 @@ pub(super) struct RuntimeBootAssetSources {
 #[derive(Debug)]
 pub(super) enum RuntimeBootAssetStaging {
     Copy,
-    Reuse(VerifiedGenerationBootAssets),
+    Reuse(Box<VerifiedGenerationBootAssets>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
