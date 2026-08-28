@@ -35,6 +35,17 @@ fn live_regular(path: &str, content: &[u8], mode: u32) -> LiveRootFile {
     }
 }
 
+fn live_regular_for_current_user(path: &str, content: &[u8], mode: u32) -> LiveRootFile {
+    let mut file = live_regular(path, content, mode);
+    let uid = u64::from(unsafe { libc::geteuid() });
+    let gid = u64::from(unsafe { libc::getegid() });
+    file.node.source.user = PayloadIdentity::Numeric { id: uid };
+    file.node.source.group = PayloadIdentity::Numeric { id: gid };
+    file.node.uid = uid;
+    file.node.gid = gid;
+    file
+}
+
 fn live_symlink(path: &str, target: &str, mode: u32) -> LiveRootFile {
     LiveRootFile {
         path: path.to_string(),
@@ -141,9 +152,14 @@ fn disposable_overlay_removal_uses_no_external_recovery_authority() {
     let stats = tx
         .apply_remove_paths(&["/usr/bin/fixture".to_string()])
         .unwrap();
-    tx.commit().unwrap();
+    let durability = tx.durability_metrics();
+    tx.rollback().unwrap();
 
     assert_eq!(stats.files_removed, 1);
+    assert_eq!(durability.file_syncs, 0);
+    assert_eq!(durability.directory_syncs, 0);
+    assert_eq!(durability.deferred_file_syncs, 0);
+    assert_eq!(durability.deferred_directory_syncs, 1);
     assert!(!root.join("usr/bin/fixture").exists());
     assert!(!runtime.join("live-root-journals").exists());
     assert!(
@@ -152,6 +168,92 @@ fn disposable_overlay_removal_uses_no_external_recovery_authority() {
             .join(format!("{tx_uuid}.backups"))
             .exists()
     );
+}
+
+#[test]
+fn disposable_overlay_defers_leaf_durability_to_filesystem_freeze() {
+    let temp = TempDir::new().unwrap();
+    let runtime = temp.path().join("runtime");
+    let root = temp.path().join("overlay-root");
+    fs::create_dir_all(root.join("usr/bin")).unwrap();
+
+    let mut tx = LiveRootTransaction::begin_disposable_overlay(
+        &runtime,
+        &root,
+        Uuid::new_v4().to_string(),
+        "install fixture",
+    )
+    .unwrap();
+    tx.apply_install_files(&[live_regular_for_current_user(
+        "/usr/bin/fixture",
+        b"fixture",
+        0o755,
+    )])
+    .unwrap();
+
+    assert_eq!(fs::read(root.join("usr/bin/fixture")).unwrap(), b"fixture");
+    assert_eq!(
+        tx.durability_metrics(),
+        LiveRootDurabilityMetrics {
+            file_syncs: 0,
+            directory_syncs: 0,
+            deferred_file_syncs: 1,
+            deferred_directory_syncs: 1,
+        }
+    );
+    tx.rollback().unwrap();
+}
+
+#[test]
+fn journaled_root_retains_immediate_leaf_durability() {
+    let temp = TempDir::new().unwrap();
+    let runtime = temp.path().join("runtime");
+    let root = temp.path().join("root");
+    fs::create_dir_all(root.join("usr/bin")).unwrap();
+
+    let mut tx = LiveRootTransaction::begin(
+        &runtime,
+        &root,
+        Uuid::new_v4().to_string(),
+        "install fixture",
+    )
+    .unwrap();
+    tx.apply_install_files(&[live_regular_for_current_user(
+        "/usr/bin/fixture",
+        b"fixture",
+        0o755,
+    )])
+    .unwrap();
+
+    assert_eq!(
+        tx.durability_metrics(),
+        LiveRootDurabilityMetrics {
+            file_syncs: 1,
+            directory_syncs: 1,
+            deferred_file_syncs: 0,
+            deferred_directory_syncs: 0,
+        }
+    );
+    tx.commit().unwrap();
+}
+
+#[test]
+fn disposable_overlay_cannot_use_the_immediate_commit_surface() {
+    let temp = TempDir::new().unwrap();
+    let runtime = temp.path().join("runtime");
+    let root = temp.path().join("overlay-root");
+    fs::create_dir_all(&root).unwrap();
+
+    let tx = LiveRootTransaction::begin_disposable_overlay(
+        &runtime,
+        &root,
+        Uuid::new_v4().to_string(),
+        "commit fixture",
+    )
+    .unwrap();
+    let error = tx.commit().unwrap_err().to_string();
+
+    assert!(error.contains("filesystem-freeze boundary"));
 }
 
 #[test]

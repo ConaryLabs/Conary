@@ -103,6 +103,7 @@ fn live_root_transaction_from_journal(
             .collect(),
         modified_directories: journal.modified_directories,
         recovery: LiveRootRecovery::Journaled,
+        durability: MutationDurability::immediate(),
         committed: false,
     }
 }

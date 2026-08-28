@@ -6,11 +6,7 @@ use conary_core::generation::root_manifest::{apply_resolved_payload_metadata, ca
 use conary_core::payload::{PayloadNodeKind, ResolvedPayloadNode};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::CString;
-use std::fs::{self, File, OpenOptions};
-use std::io;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::net::UnixListener;
+use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 
 mod content;
@@ -18,6 +14,8 @@ mod durability;
 mod path;
 mod recovery;
 pub(crate) use content::LiveRootContent;
+use content::create_live_root_leaf;
+pub(crate) use durability::DeferredOverlayDurability;
 use durability::*;
 pub(crate) use path::target_path;
 pub(crate) use recovery::recover_pending_journals;
@@ -75,6 +73,7 @@ pub(crate) struct LiveRootTransaction {
     removed_dirs: Vec<PathBuf>,
     modified_directories: Vec<DirectoryMetadataRecord>,
     recovery: LiveRootRecovery,
+    durability: MutationDurability,
     committed: bool,
 }
 
@@ -136,6 +135,10 @@ impl LiveRootTransaction {
         }
         let operation = operation.into();
         let journal_path = journal_dir.join(format!("{tx_uuid}.json"));
+        let durability = match recovery {
+            LiveRootRecovery::Journaled => MutationDurability::immediate(),
+            LiveRootRecovery::DisposableOverlay => MutationDurability::filesystem_freeze(),
+        };
         let transaction = Self {
             root: root.to_path_buf(),
             journal_path,
@@ -146,6 +149,7 @@ impl LiveRootTransaction {
             removed_dirs: Vec::new(),
             modified_directories: Vec::new(),
             recovery,
+            durability,
             committed: false,
         };
         transaction.write_journal("pending")?;
@@ -223,7 +227,9 @@ impl LiveRootTransaction {
             let target = selected_root_target_path(&self.root, &file.path)?;
             apply_resolved_payload_metadata(&target, &file.node)
                 .with_context(|| format!("Failed to apply metadata for {}", file.path))?;
-            sync_directory(&target)?;
+            self.durability
+                .sync_directory(&target)
+                .with_context(|| format!("Failed to sync {}", target.display()))?;
             self.write_journal("in_progress")?;
         }
         Ok(stats)
@@ -254,12 +260,12 @@ impl LiveRootTransaction {
                     self.created_paths.push(target.clone());
                 }
                 self.write_journal("in_progress")?;
-                create_dir_and_sync(&target)?;
+                self.durability.create_dir(&target)?;
                 stats.dirs_created += 1;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 self.backup_existing(&target)?;
-                create_dir_and_sync(&target)?;
+                self.durability.create_dir(&target)?;
                 stats.dirs_created += 1;
             }
             Err(error) => {
@@ -283,10 +289,11 @@ impl LiveRootTransaction {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        create_live_root_leaf(&self.root, &temp, file)?;
+        create_live_root_leaf(&self.root, &temp, file, &mut self.durability)?;
         apply_resolved_payload_metadata(&temp, &file.node)
             .with_context(|| format!("Failed to apply metadata for {}", file.path))?;
-        rename_and_sync(&temp, &target)
+        self.durability
+            .rename(&temp, &target)
             .with_context(|| format!("Failed to move payload node {}", target.display()))?;
         stats.files_written += 1;
         self.write_journal("in_progress")
@@ -320,7 +327,7 @@ impl LiveRootTransaction {
                 self.removed_dirs.push(dir.clone());
             }
             self.write_journal("in_progress")?;
-            match remove_dir_and_sync(&dir) {
+            match self.durability.remove_dir(&dir) {
                 Ok(()) => stats.dirs_removed += 1,
                 Err(error)
                     if matches!(
@@ -386,6 +393,11 @@ impl LiveRootTransaction {
     }
 
     pub(crate) fn commit(mut self) -> Result<()> {
+        if self.recovery == LiveRootRecovery::DisposableOverlay {
+            bail!(
+                "disposable selected-root mutation must commit through its filesystem-freeze boundary"
+            );
+        }
         if let Err(error) = self.mark_committed_for_recovery() {
             self.committed = true;
             self.cleanup_transaction_files().with_context(|| {
@@ -400,6 +412,20 @@ impl LiveRootTransaction {
         self.committed = true;
         self.cleanup_transaction_files()?;
         Ok(())
+    }
+
+    pub(crate) fn commit_for_filesystem_freeze(mut self) -> Result<DeferredOverlayDurability> {
+        if self.recovery != LiveRootRecovery::DisposableOverlay {
+            bail!("journaled live-root mutation cannot commit through a disposable freeze");
+        }
+        let durability = self.durability.finish_for_filesystem_freeze()?;
+        self.committed = true;
+        Ok(durability)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn durability_metrics(&self) -> LiveRootDurabilityMetrics {
+        self.durability.metrics()
     }
 
     fn ensure_parent(&mut self, target: &Path, stats: &mut LiveRootStats) -> Result<()> {
@@ -424,7 +450,7 @@ impl LiveRootTransaction {
                         self.created_paths.push(full.clone());
                     }
                     self.write_journal("in_progress")?;
-                    create_dir_and_sync(&full)?;
+                    self.durability.create_dir(&full)?;
                     stats.dirs_created += 1;
                 }
                 Err(error) => {
@@ -443,7 +469,7 @@ impl LiveRootTransaction {
                     "disposable selected-root leaf {} became a directory",
                     target.display()
                 ),
-                Ok(_) => remove_file_and_sync(target).map_err(Into::into),
+                Ok(_) => self.durability.remove_file(target).map_err(Into::into),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(error) => Err(error.into()),
             };
@@ -740,90 +766,6 @@ fn verify_preserved_reference(root: &Path, reference: &LiveRootFile) -> Result<(
 fn path_parent_above_root(path: &str) -> Option<&Path> {
     let parent = Path::new(path).parent()?;
     (parent != Path::new("/") && !parent.as_os_str().is_empty()).then_some(parent)
-}
-
-fn create_live_root_leaf(root: &Path, path: &Path, file: &LiveRootFile) -> Result<()> {
-    match &file.node.source.kind {
-        PayloadNodeKind::Regular { .. } => {
-            let mut output = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .with_context(|| format!("Failed to create {}", path.display()))?;
-            file.content
-                .copy_verified_to(&mut output)
-                .with_context(|| format!("Failed to write {}", path.display()))?;
-            output
-                .sync_all()
-                .with_context(|| format!("Failed to sync {}", path.display()))?;
-        }
-        PayloadNodeKind::Symlink { target } => {
-            std::os::unix::fs::symlink(target, path)
-                .with_context(|| format!("Failed to create symlink {}", path.display()))?;
-        }
-        PayloadNodeKind::Hardlink { target, .. } => {
-            let target = selected_root_target_path(root, target)?;
-            let metadata = fs::symlink_metadata(&target).with_context(|| {
-                format!(
-                    "payload hardlink {} target is unavailable: {}",
-                    file.path,
-                    target.display()
-                )
-            })?;
-            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-                bail!(
-                    "payload hardlink {} target is not a regular file: {}",
-                    file.path,
-                    target.display()
-                );
-            }
-            fs::hard_link(&target, path).with_context(|| {
-                format!(
-                    "Failed to create hardlink {} to {}",
-                    path.display(),
-                    target.display()
-                )
-            })?;
-        }
-        PayloadNodeKind::BlockDevice { major, minor } => {
-            create_live_root_device(path, libc::S_IFBLK, *major, *minor)?;
-        }
-        PayloadNodeKind::CharacterDevice { major, minor } => {
-            create_live_root_device(path, libc::S_IFCHR, *major, *minor)?;
-        }
-        PayloadNodeKind::Fifo => {
-            let c_path = c_path(path)?;
-            if unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) } != 0 {
-                return Err(io::Error::last_os_error())
-                    .with_context(|| format!("Failed to create FIFO {}", path.display()));
-            }
-        }
-        PayloadNodeKind::Socket => {
-            let socket = UnixListener::bind(path)
-                .with_context(|| format!("Failed to create socket {}", path.display()))?;
-            drop(socket);
-        }
-        PayloadNodeKind::Directory => unreachable!("directories use apply_directory"),
-    }
-    Ok(())
-}
-
-fn create_live_root_device(path: &Path, kind: libc::mode_t, major: u64, minor: u64) -> Result<()> {
-    let major = libc::c_uint::try_from(major)
-        .with_context(|| format!("device major is not representable at {}", path.display()))?;
-    let minor = libc::c_uint::try_from(minor)
-        .with_context(|| format!("device minor is not representable at {}", path.display()))?;
-    let c_path = c_path(path)?;
-    if unsafe { libc::mknod(c_path.as_ptr(), kind | 0o600, libc::makedev(major, minor)) } != 0 {
-        return Err(io::Error::last_os_error())
-            .with_context(|| format!("Failed to create device {}", path.display()));
-    }
-    Ok(())
-}
-
-fn c_path(path: &Path) -> Result<CString> {
-    CString::new(path.as_os_str().as_bytes())
-        .with_context(|| format!("filesystem path contains NUL: {}", path.display()))
 }
 
 fn reject_existing_directory_target(target: &Path) -> Result<()> {

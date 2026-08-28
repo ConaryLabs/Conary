@@ -138,8 +138,8 @@ pub use label::{
 };
 #[allow(unused_imports)]
 pub(crate) use live_root::{
-    LiveRootContent, LiveRootFile, LiveRootStats, LiveRootTransaction, recover_pending_journals,
-    target_path,
+    DeferredOverlayDurability, LiveRootContent, LiveRootFile, LiveRootStats, LiveRootTransaction,
+    recover_pending_journals, target_path,
 };
 pub use model::{
     ApplyOptions, cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_lock,

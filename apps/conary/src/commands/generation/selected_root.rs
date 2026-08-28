@@ -374,18 +374,21 @@ impl SelectedRootSession {
         debt: &GenerationPublication,
     ) -> Result<SelectedRootSnapshot> {
         let result = (|| {
-            self.transaction
+            let transaction = self
+                .transaction
                 .take()
-                .context("selected-root transaction already completed")?
-                .commit()?;
+                .context("selected-root transaction already completed")?;
             let cas = CasStore::new(runtime_root.objects_dir())?;
             let snapshot = match &mut self.backing {
                 SelectedRootBacking::Overlay(overlay) => {
-                    let mut delta = overlay.freeze_and_decode(conn, self.prior_snapshot, &cas)?;
+                    let durability = transaction.commit_for_filesystem_freeze()?;
+                    let mut delta =
+                        overlay.freeze_and_decode(conn, self.prior_snapshot, &cas, durability)?;
                     self.deferred_ima.restore_into_delta(&mut delta)?;
                     self.prior_snapshot.apply_delta(conn, &delta)?
                 }
                 SelectedRootBacking::Materialized => {
+                    transaction.commit()?;
                     let mut captured = scan_selected_root(&self.selected_root, &cas)?;
                     self.deferred_ima.restore_into(&mut captured)?;
                     SelectedRootSnapshot::capture(conn, &captured)?
@@ -402,11 +405,15 @@ impl SelectedRootSession {
     }
 
     pub(crate) fn rollback(&mut self) -> Result<()> {
-        let transaction_result = if let Some(transaction) = self.transaction.take() {
-            // The merged root is disposable. Completing the journal and
-            // discarding the upper is both safer and cheaper than replaying
-            // path-by-path restoration into a tree that cannot be published.
-            transaction.commit()
+        let transaction_result = if let Some(mut transaction) = self.transaction.take() {
+            // Every selected root is disposable. An overlay has no recovery
+            // journal to complete; a materialized fallback retains its prior
+            // behavior of completing that journal before the tree is removed.
+            if matches!(&self.backing, SelectedRootBacking::Overlay(_)) {
+                transaction.rollback()
+            } else {
+                transaction.commit()
+            }
         } else {
             Ok(())
         };
