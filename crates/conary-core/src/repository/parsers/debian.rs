@@ -12,7 +12,7 @@ use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
     AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedProjectionInputV1,
     AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
-    RepositorySnapshotSink,
+    RepositorySnapshotSink, SourceCandidatePreflightOutcome,
 };
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
@@ -417,10 +417,25 @@ impl RepositoryParser for DebianParser {
                 &packages_path,
                 &format!("Debian Packages metadata {}", packages_path.display()),
             )?;
-            stanza::parse_packages(std::io::BufReader::new(decoder), |entry| {
-                sink.preflight_package(self.package_from_entry(repo_url, entry)?)
-            })?;
-            sink.begin_source_candidate()?;
+            let preflight_package_count =
+                stanza::parse_packages(std::io::BufReader::new(decoder), |entry| {
+                    sink.preflight_package(self.package_from_entry(repo_url, entry)?)
+                })?;
+            match sink.begin_source_candidate()? {
+                SourceCandidatePreflightOutcome::CompleteProjection { .. } => {
+                    sink.authenticated_object(packages_object, &packages_path)?;
+                    info!(
+                        "Parsed {preflight_package_count} packages from Debian repository in one authenticated metadata pass"
+                    );
+                    return Ok(snapshot);
+                }
+                SourceCandidatePreflightOutcome::ReplayAuthenticatedMetadata => {}
+                SourceCandidatePreflightOutcome::ArchFragmentsReplayed => {
+                    return Err(Error::InternalError(
+                        "Debian parser received an ALPM preflight replay outcome".to_string(),
+                    ));
+                }
+            }
         }
         let decoder = common::open_metadata_decoder(
             &packages_path,

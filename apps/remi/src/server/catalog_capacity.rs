@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use conary_core::repository::catalog::{
     CatalogCopyScratchV1, CatalogFinalizationScratchV2, CatalogMetadataScratchV1,
     CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
-    CatalogProfileCandidateScratchV1, CatalogScratchAdmission, CatalogScratchCapacityError,
-    CatalogSourceCandidateScratchV1,
+    CatalogProfileCandidateScratchV1, CatalogProjectionSpoolScratchV1, CatalogScratchAdmission,
+    CatalogScratchCapacityError, CatalogSourceCandidateScratchV1,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -105,6 +105,20 @@ impl CatalogScratchAdmission for CatalogScratchCoordinator {
         &self,
         work_directory: &Path,
         requirement: CatalogMetadataStreamScratchV1,
+    ) -> conary_core::Result<Box<dyn CatalogMetadataStreamAdmission>> {
+        requirement.validate()?;
+        filesystem_identity(work_directory)?;
+        Ok(Box::new(CatalogMetadataStreamCoordinator {
+            path: work_directory.to_path_buf(),
+            probe: Arc::clone(&self.probe),
+            state: Arc::clone(&self.state),
+        }))
+    }
+
+    fn stream_projection_spool(
+        &self,
+        work_directory: &Path,
+        requirement: CatalogProjectionSpoolScratchV1,
     ) -> conary_core::Result<Box<dyn CatalogMetadataStreamAdmission>> {
         requirement.validate()?;
         filesystem_identity(work_directory)?;

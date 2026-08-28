@@ -8,7 +8,7 @@
 use super::{
     ArchPackageFragmentKind, AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole,
     AuthenticatedProjectionInputV1, AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata,
-    RepositoryParser, RepositorySnapshotSink,
+    RepositoryParser, RepositorySnapshotSink, SourceCandidatePreflightOutcome,
 };
 use crate::error::{Error, Result};
 use crate::repository::catalog::{CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1};
@@ -433,50 +433,64 @@ impl RepositoryParser for ArchParser {
             info!("Reused cached Arch repository projection");
             return Ok(snapshot);
         }
-        if sink.requires_source_candidate_preflight() {
+        let arch_fragments_replayed = if sink.requires_source_candidate_preflight() {
             preflight::preflight_database(self, repo_url, &database_file, sink)?;
-            sink.begin_source_candidate()?;
-        }
-        let decoder = super::common::open_metadata_decoder(
-            &database_file,
-            &format!("Arch repository database {}", database_file.display()),
-        )?;
-        let mut archive = Archive::new(decoder);
-        for entry in archive.entries()? {
-            let mut entry = entry
-                .map_err(|e| Error::ParseError(format!("Failed to read tarball entry: {}", e)))?;
+            match sink.begin_source_candidate()? {
+                SourceCandidatePreflightOutcome::ArchFragmentsReplayed => true,
+                SourceCandidatePreflightOutcome::ReplayAuthenticatedMetadata => false,
+                SourceCandidatePreflightOutcome::CompleteProjection { .. } => {
+                    return Err(Error::InternalError(
+                        "Arch parser received a complete non-ALPM preflight replay outcome"
+                            .to_string(),
+                    ));
+                }
+            }
+        } else {
+            false
+        };
+        if !arch_fragments_replayed {
+            let decoder = super::common::open_metadata_decoder(
+                &database_file,
+                &format!("Arch repository database {}", database_file.display()),
+            )?;
+            let mut archive = Archive::new(decoder);
+            for entry in archive.entries()? {
+                let mut entry = entry.map_err(|e| {
+                    Error::ParseError(format!("Failed to read tarball entry: {}", e))
+                })?;
 
-            let path = entry
-                .path()
-                .map_err(|e| Error::ParseError(format!("Invalid path in tarball: {}", e)))?;
+                let path = entry
+                    .path()
+                    .map_err(|e| Error::ParseError(format!("Invalid path in tarball: {}", e)))?;
 
-            let path_str = path.to_str().ok_or_else(|| {
-                Error::ParseError("Arch repository entry path is not valid UTF-8".to_string())
-            })?;
+                let path_str = path.to_str().ok_or_else(|| {
+                    Error::ParseError("Arch repository entry path is not valid UTF-8".to_string())
+                })?;
 
-            if let Some(dir) = path_str.split('/').next().filter(|dir| !dir.is_empty()) {
-                let dir_key = dir.to_string();
+                if let Some(dir) = path_str.split('/').next().filter(|dir| !dir.is_empty()) {
+                    let dir_key = dir.to_string();
 
-                if path_str.ends_with("/desc") {
-                    let mut content = String::new();
-                    entry.read_to_string(&mut content).map_err(|e| {
-                        Error::ParseError(format!("Failed to read desc file: {}", e))
-                    })?;
-                    sink.stage_arch_package_fragment(
-                        dir_key,
-                        ArchPackageFragmentKind::Desc,
-                        content,
-                    )?;
-                } else if path_str.ends_with("/depends") {
-                    let mut content = String::new();
-                    entry.read_to_string(&mut content).map_err(|e| {
-                        Error::ParseError(format!("Failed to read depends file: {}", e))
-                    })?;
-                    sink.stage_arch_package_fragment(
-                        dir_key,
-                        ArchPackageFragmentKind::Depends,
-                        content,
-                    )?;
+                    if path_str.ends_with("/desc") {
+                        let mut content = String::new();
+                        entry.read_to_string(&mut content).map_err(|e| {
+                            Error::ParseError(format!("Failed to read desc file: {}", e))
+                        })?;
+                        sink.stage_arch_package_fragment(
+                            dir_key,
+                            ArchPackageFragmentKind::Desc,
+                            content,
+                        )?;
+                    } else if path_str.ends_with("/depends") {
+                        let mut content = String::new();
+                        entry.read_to_string(&mut content).map_err(|e| {
+                            Error::ParseError(format!("Failed to read depends file: {}", e))
+                        })?;
+                        sink.stage_arch_package_fragment(
+                            dir_key,
+                            ArchPackageFragmentKind::Depends,
+                            content,
+                        )?;
+                    }
                 }
             }
         }

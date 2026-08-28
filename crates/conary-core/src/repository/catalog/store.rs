@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
 
 use super::contract::{validate_identity, validate_sha256};
@@ -124,12 +124,6 @@ CREATE TABLE catalog_provides (
     CHECK ((version IS NULL) = (version_relation IS NULL))
 ) STRICT, WITHOUT ROWID;
 
-CREATE INDEX catalog_provides_capability
-    ON catalog_provides(capability, kind, package_key_sha256, ordinal);
-CREATE INDEX catalog_provides_raw
-    ON catalog_provides(raw, package_key_sha256, ordinal)
-    WHERE raw IS NOT NULL AND raw != '';
-
 CREATE TABLE catalog_requirement_groups (
     package_key_sha256 TEXT NOT NULL REFERENCES catalog_packages(package_key_sha256) ON DELETE CASCADE,
     ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
@@ -158,6 +152,14 @@ CREATE TABLE catalog_requirement_atoms (
 
 CREATE INDEX catalog_requirement_atoms_capability
     ON catalog_requirement_atoms(capability, kind, package_key_sha256, group_ordinal, ordinal);
+"#;
+
+pub(super) const CATALOG_PROVIDE_INDEX_SCHEMA: &str = r#"
+CREATE INDEX catalog_provides_capability
+    ON catalog_provides(capability, kind, package_key_sha256, ordinal);
+CREATE INDEX catalog_provides_raw
+    ON catalog_provides(raw, package_key_sha256, ordinal)
+    WHERE raw IS NOT NULL AND raw != '';
 "#;
 
 const INSERT_PACKAGE: &str = r#"
@@ -645,38 +647,35 @@ fn insert_package_base_with_policy(
     } else {
         INSERT_PACKAGE.to_string()
     };
-    let inserted = connection.execute(
-        &sql,
-        params![
-            &package.package_key_sha256,
-            origin_kind,
-            member_ordinal,
-            source_identity,
-            repository_identity,
-            snapshot,
-            &package.source_profile,
-            &package.name,
-            &package.version,
-            &package.package_release,
-            &package.architecture,
-            package.debian_multi_arch.map(DebianMultiArch::as_str),
-            &package.description,
-            &package.checksum,
-            checked_i64(package.size, "package size")?,
-            &package.download_url,
-            &package.metadata,
-            if package.is_security_update {
-                1_i64
-            } else {
-                0_i64
-            },
-            &package.severity,
-            &package.cve_ids,
-            &package.advisory_id,
-            &package.advisory_url,
-            package.version_scheme.as_str(),
-        ],
-    )?;
+    let inserted = connection.prepare_cached(&sql)?.execute(params![
+        &package.package_key_sha256,
+        origin_kind,
+        member_ordinal,
+        source_identity,
+        repository_identity,
+        snapshot,
+        &package.source_profile,
+        &package.name,
+        &package.version,
+        &package.package_release,
+        &package.architecture,
+        package.debian_multi_arch.map(DebianMultiArch::as_str),
+        &package.description,
+        &package.checksum,
+        checked_i64(package.size, "package size")?,
+        &package.download_url,
+        &package.metadata,
+        if package.is_security_update {
+            1_i64
+        } else {
+            0_i64
+        },
+        &package.severity,
+        &package.cve_ids,
+        &package.advisory_id,
+        &package.advisory_url,
+        package.version_scheme.as_str(),
+    ])?;
     Ok(inserted == 1)
 }
 
@@ -686,12 +685,14 @@ fn insert_provide(
     ordinal: i64,
     provide: &CatalogProvideRecordV1,
 ) -> Result<()> {
-    connection.execute(
-        "INSERT INTO catalog_provides (
+    connection
+        .prepare_cached(
+            "INSERT INTO catalog_provides (
              package_key_sha256, ordinal, capability, version, version_relation,
              kind, raw, version_scheme, architecture_qualifier_json, provenance_json
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![
+        )?
+        .execute(params![
             package_key_sha256,
             ordinal,
             &provide.capability,
@@ -702,8 +703,7 @@ fn insert_provide(
             provide.version_scheme.as_str(),
             canonical_json_string(&provide.architecture_qualifier)?,
             canonical_json_string(&provide.provenance)?,
-        ],
-    )?;
+        ])?;
     Ok(())
 }
 
@@ -713,12 +713,14 @@ fn insert_requirement_group(
     group_ordinal: i64,
     group: &CatalogRequirementGroupV1,
 ) -> Result<()> {
-    connection.execute(
-        "INSERT INTO catalog_requirement_groups (
+    connection
+        .prepare_cached(
+            "INSERT INTO catalog_requirement_groups (
                  package_key_sha256, ordinal, kind, behavior, description,
                  native_text, expression_json
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
+        )?
+        .execute(params![
             package_key_sha256,
             group_ordinal,
             &group.kind,
@@ -726,15 +728,16 @@ fn insert_requirement_group(
             &group.description,
             &group.native_text,
             &group.expression_json,
-        ],
-    )?;
+        ])?;
     for (ordinal, atom) in group.atoms.iter().enumerate() {
-        connection.execute(
-            "INSERT INTO catalog_requirement_atoms (
+        connection
+            .prepare_cached(
+                "INSERT INTO catalog_requirement_atoms (
                      package_key_sha256, group_ordinal, ordinal, capability,
                      version_constraint, kind, dependency_type, raw
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
+            )?
+            .execute(params![
                 package_key_sha256,
                 group_ordinal,
                 checked_ordinal(ordinal, "requirement atom")?,
@@ -743,8 +746,7 @@ fn insert_requirement_group(
                 &atom.kind,
                 &atom.dependency_type,
                 &atom.raw,
-            ],
-        )?;
+            ])?;
     }
     Ok(())
 }
@@ -765,34 +767,15 @@ fn insert_provides(
     Ok(())
 }
 
-pub(super) fn package_by_key(
-    connection: &Connection,
-    scope: &CatalogScopeV1,
-    package_key_sha256: &str,
-) -> Result<CatalogPackageRecordV1> {
-    let mut package = connection
-        .query_row(
-            &format!("{SELECT_PACKAGES} WHERE package_key_sha256 = ?1"),
-            [package_key_sha256],
-            package_from_row,
-        )
-        .optional()?
-        .ok_or_else(|| Error::NotFound(format!("catalog package key {package_key_sha256}")))?;
-    package.provides = load_provides(connection, package_key_sha256)?;
-    package.requirement_groups = load_requirement_groups(connection, package_key_sha256)?;
-    package.validate(scope)?;
-    Ok(package)
-}
-
 pub(super) fn replace_package_provides(
     connection: &Connection,
-    package: &CatalogPackageRecordV1,
+    package_key_sha256: &str,
+    provides: &[CatalogProvideRecordV1],
 ) -> Result<()> {
-    connection.execute(
-        "DELETE FROM catalog_provides WHERE package_key_sha256 = ?1",
-        [&package.package_key_sha256],
-    )?;
-    insert_provides(connection, &package.package_key_sha256, &package.provides)
+    connection
+        .prepare_cached("DELETE FROM catalog_provides WHERE package_key_sha256 = ?1")?
+        .execute([package_key_sha256])?;
+    insert_provides(connection, package_key_sha256, provides)
 }
 
 fn package_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CatalogPackageRecordV1> {
@@ -862,8 +845,11 @@ fn package_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CatalogPackageR
     })
 }
 
-fn load_provides(connection: &Connection, key: &str) -> Result<Vec<CatalogProvideRecordV1>> {
-    let mut statement = connection.prepare(
+pub(super) fn load_provides(
+    connection: &Connection,
+    key: &str,
+) -> Result<Vec<CatalogProvideRecordV1>> {
+    let mut statement = connection.prepare_cached(
         "SELECT capability, version, version_relation, kind, raw, version_scheme,
                 architecture_qualifier_json, provenance_json
          FROM catalog_provides

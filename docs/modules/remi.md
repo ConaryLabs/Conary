@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 91
-summary: Document causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 92
+summary: Document admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -99,9 +99,15 @@ every authenticated metadata-object fact; the immutable sink transfers those
 verified bytes into the source candidate before parser work-file cleanup.
 Fedora primary/filelists XML, Debian Packages stanzas, ALPM archive records,
 and eopkg Package XML are authenticated into private files and decoded one
-record at a time. The sink inserts directly into the source-catalog candidate;
-Fedora pkgid joins and ALPM desc/depends pairing use private indexed SQLite
-state. Candidate logical hashing, count validation, reopen verification,
+record at a time. On the capacity-preflight path, the immutable sink writes
+those normalized records into one length-framed, SHA-256-bound private spool;
+every positive chunk is admitted before its write. After the complete catalog
+growth bound is reserved, Fedora, Debian, and eopkg replay those records without
+decoding the native metadata again. ALPM replays its exact desc/depends
+fragments without reopening or walking the archive, then performs its one
+normalization pass from the paired fragments. Fedora pkgid joins and ALPM
+desc/depends pairing use private indexed SQLite state. Candidate logical
+hashing, count validation, reopen verification,
 source/profile bundle binding, exact cache materialization, and profile
 composition iterate in canonical database order. They retain one scalar package record,
 one normalized provide row, or one complete requirement group at a time; a
@@ -374,13 +380,13 @@ Arch repository databases may publish each package's desc and depends records
 out of order. Before candidate creation, its read-only pass accounts for each
 exact raw fragment, each desc projection, and every separately published
 depends relation group without assuming archive order. After growth admission,
-the replay stages those exact fragments in a strict transient
+the common normalized spool replays those exact fragments into a strict transient
 table inside the private catalog candidate transaction, rejects duplicate and
 orphan fragments, replays complete pairs in source-directory order, and drops
 the table before finalization. The compatibility sink performs the same typed
-pairing in its existing in-memory state. No separate Arch SQLite spool or
-sidecar is created; its pages remain in the candidate high-water mark consumed
-by finalization admission.
+pairing in its existing in-memory state. No Arch-specific SQLite spool or
+sidecar is created; transient fragment pages remain in the candidate high-water
+mark consumed by finalization admission.
 Arch database signatures and eopkg index digest sidecars authenticate exact
 completed bytes but publish no signed size before download. Each parser binds a
 typed stream subject to the exact metadata role and repository-relative source
@@ -397,17 +403,25 @@ These construction admissions are independent of the serving readiness floor.
 Before a fresh native source candidate file exists, Fedora, Debian, Arch, and
 eopkg parsers make a bounded read-only pass over the already authenticated
 metadata. The immutable sink canonicalizes the same normalized package facts
-used by replay and includes Fedora filelist provides plus Arch separately
-ordered requirement groups. `CatalogSourceCandidateScratchV1` allocates those
-exact canonical projection bytes once for destination payload and once for
+used by candidate construction and includes Fedora filelist provides plus Arch
+separately ordered requirement groups. It retains those facts in the common
+run-local projection spool so candidate construction does not repeat the native
+parser pass; the staged byte count and in-process digest are verified during
+replay, and every exit removes the spool.
+`CatalogSourceCandidateScratchV1` allocates those exact canonical projection
+bytes once for destination payload and once for
 B-tree repacking, the fixed schema roots and one 4096-byte page per package,
 and a full candidate-database rollback-journal ceiling. On an exact projection
 cache hit, the independently reopened artifact bytes and its bound package
 count replace that parser preflight. Remi reserves the complete sum through the
-shared candidate-filesystem ledger before the writer creates SQLite. The lease
-survives replay and committed metadata/evidence; after file and parent sync the
-writer proves the actual database remains below the admitted ceiling, releases
-the growth lease, and only then requests page-derived finalization scratch. A
+shared candidate-filesystem ledger before the writer creates SQLite. Fedora
+supplemental file capabilities bulk-load with the final capability and raw
+query indexes absent; exact pkgid joins retain their construction-only package
+index, and finalization builds each deferred query index once before hashing or
+publication. The lease survives replay and committed metadata/evidence; after
+file and parent sync the writer proves the actual database remains below the
+admitted ceiling, releases the growth lease, and only then requests
+page-derived finalization scratch. A
 one-byte-short refusal leaves no native candidate file. Profile candidates use
 the corresponding ordered-member contract described above.
 

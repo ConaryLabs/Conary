@@ -24,6 +24,9 @@ pub const CATALOG_METADATA_SCRATCH_SCHEMA_V1: u32 = 1;
 /// Current schema for metadata whose exact size is admitted while streaming.
 pub const CATALOG_METADATA_STREAM_SCRATCH_SCHEMA_V1: u32 = 1;
 
+/// Current schema for a normalized parser-projection spool admitted while streaming.
+pub const CATALOG_PROJECTION_SPOOL_SCRATCH_SCHEMA_V1: u32 = 1;
+
 /// Current schema for profile-candidate construction admission.
 pub const CATALOG_PROFILE_CANDIDATE_SCRATCH_SCHEMA_V1: u32 = 1;
 
@@ -35,6 +38,38 @@ pub const CATALOG_SQLITE_PAGE_SIZE_V1: u64 = 4096;
 
 /// Fixed table and index roots created by catalog schema 1 before package rows.
 pub const CATALOG_SQLITE_SCHEMA_PAGE_COUNT_V1: u64 = 16;
+
+/// One private normalized-projection stream whose exact size is learned while parsing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogProjectionSpoolScratchV1 {
+    /// Contract schema version.
+    pub schema_version: u32,
+    /// Run-local relative path used only until the admitted candidate is populated.
+    pub source_path: String,
+}
+
+impl CatalogProjectionSpoolScratchV1 {
+    /// Bind the private spool path before any normalized projection bytes are staged.
+    pub fn new(source_path: impl Into<String>) -> Result<Self> {
+        let requirement = Self {
+            schema_version: CATALOG_PROJECTION_SPOOL_SCRATCH_SCHEMA_V1,
+            source_path: source_path.into(),
+        };
+        requirement.validate()?;
+        Ok(requirement)
+    }
+
+    /// Reject superseded schemas and paths outside the private work directory.
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != CATALOG_PROJECTION_SPOOL_SCRATCH_SCHEMA_V1 {
+            return Err(crate::Error::ConfigError(
+                "catalog projection spool scratch evidence has an invalid schema".to_string(),
+            ));
+        }
+        validate_relative_source_path(&self.source_path)
+    }
+}
 
 /// One authenticated metadata stream whose exact served size is learned only
 /// as bytes arrive.
@@ -675,6 +710,13 @@ pub trait CatalogScratchAdmission: Send + Sync {
         requirement: CatalogMetadataStreamScratchV1,
     ) -> Result<Box<dyn CatalogMetadataStreamAdmission>>;
 
+    /// Admit private normalized projection chunks before each spool write.
+    fn stream_projection_spool(
+        &self,
+        work_directory: &Path,
+        requirement: CatalogProjectionSpoolScratchV1,
+    ) -> Result<Box<dyn CatalogMetadataStreamAdmission>>;
+
     /// Reserve the exact additional bytes and retain them in the returned lease.
     fn reserve_finalization(
         &self,
@@ -884,6 +926,19 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn projection_spool_requirement_is_run_local_and_versioned() {
+        let requirement =
+            CatalogProjectionSpoolScratchV1::new("normalized-projection-v1.spool").unwrap();
+        requirement.validate().unwrap();
+
+        assert!(CatalogProjectionSpoolScratchV1::new("../projection.spool").is_err());
+        assert!(CatalogProjectionSpoolScratchV1::new("/tmp/projection.spool").is_err());
+        let mut superseded = requirement;
+        superseded.schema_version += 1;
+        assert!(superseded.validate().is_err());
     }
 
     #[test]

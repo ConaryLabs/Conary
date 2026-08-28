@@ -51,7 +51,8 @@ impl AuthenticatedProjectionInputV1 {
 }
 
 /// Exact parser-level identity used to join authenticated child projections.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SnapshotPackageIdentity {
     pub name: String,
     pub version: String,
@@ -61,7 +62,8 @@ pub struct SnapshotPackageIdentity {
 }
 
 /// Authenticated child relation that must cover the complete package corpus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SnapshotPackageJoin {
     RpmFilelists,
 }
@@ -83,7 +85,8 @@ pub struct SnapshotProvideUpdate {
 }
 
 /// One source-native fragment in an Arch repository database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ArchPackageFragmentKind {
     Desc,
     Depends,
@@ -95,6 +98,20 @@ pub struct ArchPackageRecord {
     pub directory: String,
     pub desc: String,
     pub depends: Option<String>,
+}
+
+/// Work remaining after a sink admits and begins one source candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceCandidatePreflightOutcome {
+    /// The parser must decode the authenticated native input again into the writer.
+    ReplayAuthenticatedMetadata,
+    /// The sink replayed a normalized spool and the complete projection is populated.
+    CompleteProjection {
+        /// Exact child-projection merge result observed while populating the candidate.
+        provide_update: SnapshotProvideUpdate,
+    },
+    /// The sink replayed ALPM fragments; the parser must drain and normalize them once.
+    ArchFragmentsReplayed,
 }
 
 #[derive(Debug, Default)]
@@ -202,8 +219,8 @@ pub trait RepositorySnapshotSink {
     }
 
     /// Reserve the complete preflight bound and create the private source candidate.
-    fn begin_source_candidate(&mut self) -> Result<()> {
-        Ok(())
+    fn begin_source_candidate(&mut self) -> Result<SourceCandidatePreflightOutcome> {
+        Ok(SourceCandidatePreflightOutcome::ReplayAuthenticatedMetadata)
     }
 
     /// Admit one complete native package projection.

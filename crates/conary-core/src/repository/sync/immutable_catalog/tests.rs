@@ -1,18 +1,22 @@
 // crates/conary-core/src/repository/sync/immutable_catalog/tests.rs
 
 use super::*;
-use crate::db::models::{RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode};
+use crate::db::models::{
+    NativeSourceEcosystem, NativeSourceStream, RepositoryPolicyScope, RepositorySourcePolicy,
+    RepositoryUpdateMode,
+};
 use crate::repository::catalog::{
     CATALOG_FILE_NAME, CatalogCopyScratchV1, CatalogFinalizationScratchV2,
     CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1, CatalogMetadataStreamAdmission,
-    CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogScopeV1,
-    CatalogScratchAdmission, CatalogScratchCapacityError, CatalogSourceCandidateScratchV1,
-    CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1, write_catalog_candidate,
-    write_source_catalog_manifest,
+    CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogProjectionSpoolScratchV1,
+    CatalogScopeV1, CatalogScratchAdmission, CatalogScratchCapacityError,
+    CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1,
+    write_catalog_candidate, write_source_catalog_manifest,
 };
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::parsers::PackageMetadata;
 use crate::repository::sync::synced_package_row;
+use crate::repository::sync::types::SyncedPackageRow;
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
@@ -25,6 +29,7 @@ struct RecordingAdmission {
     finalizations: Mutex<Vec<CatalogFinalizationScratchV2>>,
     metadata: Mutex<Vec<CatalogMetadataScratchV1>>,
     streams: Mutex<Vec<CatalogMetadataStreamScratchV1>>,
+    projection_spools: Mutex<Vec<CatalogProjectionSpoolScratchV1>>,
     stream_chunks: Arc<Mutex<Vec<u64>>>,
     lease_drops: Arc<AtomicUsize>,
     refuse_source: bool,
@@ -88,6 +93,17 @@ impl CatalogScratchAdmission for RecordingAdmission {
         requirement: CatalogMetadataStreamScratchV1,
     ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
         self.streams.lock().unwrap().push(requirement);
+        Ok(Box::new(RecordingStreamAdmission(Arc::clone(
+            &self.stream_chunks,
+        ))))
+    }
+
+    fn stream_projection_spool(
+        &self,
+        _work_directory: &Path,
+        requirement: CatalogProjectionSpoolScratchV1,
+    ) -> Result<Box<dyn CatalogMetadataStreamAdmission>> {
+        self.projection_spools.lock().unwrap().push(requirement);
         Ok(Box::new(RecordingStreamAdmission(Arc::clone(
             &self.stream_chunks,
         ))))
@@ -244,6 +260,7 @@ fn immutable_sink_retains_metadata_lease_until_work_files_are_removed() {
         finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
+        projection_spools: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::clone(&lease_drops),
         refuse_source: false,
@@ -283,6 +300,7 @@ fn immutable_sink_routes_unknown_length_metadata_to_stream_admission() {
         finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
+        projection_spools: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::new(AtomicUsize::new(0)),
         refuse_source: false,
@@ -312,6 +330,7 @@ fn native_candidate_admission_precedes_file_creation_and_refusal_leaves_no_file(
         finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
+        projection_spools: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::new(AtomicUsize::new(0)),
         refuse_source: false,
@@ -320,7 +339,7 @@ fn native_candidate_admission_precedes_file_creation_and_refusal_leaves_no_file(
     let mut sink =
         NativeCatalogSnapshotSink::create(&repository, &candidate, None, Some(admission.clone()))
             .unwrap();
-    let package = PackageMetadata::new(
+    let mut package = PackageMetadata::new(
         "bash".to_string(),
         "5.2.37-1".to_string(),
         "c".repeat(64),
@@ -329,30 +348,23 @@ fn native_candidate_admission_precedes_file_creation_and_refusal_leaves_no_file(
         RepositoryDependencyFlavor::Rpm,
         VersionScheme::Rpm,
     );
+    let transient_projection = "x".repeat(128 * 1024);
+    package.description = Some(transient_projection.clone());
 
     sink.preflight_package(package.clone()).unwrap();
-    let transient_fragment = "x".repeat(128 * 1024);
-    sink.preflight_arch_package_fragment(
-        "bash-5.2.37-1",
-        ArchPackageFragmentKind::Desc,
-        &transient_fragment,
-    )
-    .unwrap();
     assert!(!candidate.exists());
-    sink.begin_source_candidate().unwrap();
+    assert_eq!(
+        sink.begin_source_candidate().unwrap(),
+        SourceCandidatePreflightOutcome::CompleteProjection {
+            provide_update: SnapshotProvideUpdate::default(),
+        }
+    );
     assert!(candidate.exists());
     let requirement = admission.source_candidates.lock().unwrap()[0];
     assert_eq!(requirement.package_count, 1);
-    assert!(requirement.canonical_projection_bytes > transient_fragment.len() as u64);
-    sink.stage_arch_package_fragment(
-        "bash-5.2.37-1".to_string(),
-        ArchPackageFragmentKind::Desc,
-        transient_fragment,
-    )
-    .unwrap();
-    assert!(sink.take_arch_package_record().unwrap().is_some());
-    assert!(sink.take_arch_package_record().unwrap().is_none());
-    sink.package(package).unwrap();
+    assert!(requirement.canonical_projection_bytes > transient_projection.len() as u64);
+    assert_eq!(admission.projection_spools.lock().unwrap().len(), 1);
+    assert!(!admission.stream_chunks.lock().unwrap().is_empty());
     let authenticated_bytes = b"x";
     let authenticated_path = sink.work_directory.path().join("rpm-primary");
     std::fs::write(&authenticated_path, authenticated_bytes).unwrap();
@@ -379,6 +391,7 @@ fn native_candidate_admission_precedes_file_creation_and_refusal_leaves_no_file(
         finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
+        projection_spools: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::new(AtomicUsize::new(0)),
         refuse_source: true,
@@ -441,6 +454,7 @@ fn authenticated_root_churn_reuses_exact_child_projection_and_binds_new_root() {
         finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
+        projection_spools: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::new(AtomicUsize::new(0)),
         refuse_source: false,
@@ -543,6 +557,7 @@ fn exact_registered_source_reuse_creates_no_candidate_catalog_or_scratch_reserva
         finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
+        projection_spools: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::new(AtomicUsize::new(0)),
         refuse_source: false,
@@ -593,6 +608,7 @@ fn changed_authenticated_root_does_not_reuse_registered_source() {
         finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
+        projection_spools: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::new(AtomicUsize::new(0)),
         refuse_source: false,
@@ -633,6 +649,7 @@ fn corrupted_registered_source_fails_closed_without_candidate_fallback() {
         finalizations: Mutex::new(Vec::new()),
         metadata: Mutex::new(Vec::new()),
         streams: Mutex::new(Vec::new()),
+        projection_spools: Mutex::new(Vec::new()),
         stream_chunks: Arc::new(Mutex::new(Vec::new())),
         lease_drops: Arc::new(AtomicUsize::new(0)),
         refuse_source: false,
