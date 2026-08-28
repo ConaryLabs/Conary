@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 84
-summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 85
+summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -139,12 +139,17 @@ cardinalities, and explicit missing-package/group rejection, so neither the
 Rust row reconstruction, table-count scans, nor SQLite's foreign-key relation
 scan is repeated for unchanged bytes.
 
-Native projection cache schema 2 also makes that logical proof durable without
-making cache bytes an independent package authority. Publication requires the
-process-local full-replay proof and writes a canonical attestation bound to the
-exact catalog binding. A later hit first re-derives the complete cache key from
-the authenticated root and children plus stream, parser-projection, and catalog
-schema identities. It then checks the canonical manifest and attestation,
+Native projection cache manifest schema 3 and key schema 2 also make that
+logical proof durable without making cache bytes an independent package
+authority. Publication requires the process-local full-replay proof and writes
+a canonical attestation bound to the exact catalog binding. A later hit first
+re-derives the complete projection identity from the stream, parser-projection,
+and catalog schema identities plus every authenticated child
+role/path/digest/size and typed root-derived parser bound. The top-level
+authenticated root is verified before lookup and remains exact authority in the
+new source manifest, but its signature, timestamp, and other wrapper-only bytes
+do not invalidate an unchanged normalized projection. It then checks the
+canonical manifest and attestation,
 regular-file and sidecar policy, byte SHA-256 and size, SQLite
 application/schema identity and integrity, the complete stored binding, and
 exact source evidence. Only after those checks does it mint a new process-local
@@ -198,14 +203,18 @@ no compatibility reader, upstream refetch fallback, or parallel source
 authority.
 
 Normalized source projections may be reused from
-`<storage.root>/cache/native-projections/<key-sha256>/`. Cache schema 1 binds
-the exact stream-binding SHA-256, authenticated root digest and size, ordered
-child role/path/digest/size set, parser projection version, catalog schema,
-and verified catalog binding. A miss reparses. A tampered, mixed, or
-noncanonical entry is removed from this exact cache namespace and cannot become
-package authority. Cache candidates are private, synchronized, and atomically
-renamed; a cache fault fails the private refresh and leaves the active profile
-pointer unchanged.
+`<storage.root>/cache/native-projections/<key-sha256>/`. Cache key schema 2
+binds the exact stream-binding SHA-256, ordered child role/path/digest/size set,
+any authenticated decoded-length bound consumed by the parser, parser
+projection version, catalog schema, and verified catalog binding. Every parser
+supplies at least one authenticated child. The independently verified
+top-level root is deliberately not a projection-byte identity: wrapper-only
+root churn can produce a new exact source manifest over unchanged catalog
+bytes. A changed child or root-derived parser bound misses and reparses. A
+tampered, mixed, or noncanonical entry is removed from this exact cache
+namespace and cannot become package authority. Cache candidates are private,
+synchronized, and atomically renamed; a cache fault fails the private refresh
+and leaves the active profile pointer unchanged.
 
 Construction is private beneath `catalog-candidates/<run-id>/`. Candidate
 SQLite integrity, schema, ordering, counts, logical digest, and source

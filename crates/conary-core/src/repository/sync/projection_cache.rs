@@ -16,26 +16,26 @@ use crate::repository::catalog::{
     CatalogSourceEvidenceV1, CatalogVerificationProofV1,
 };
 use crate::repository::parsers::{
-    AuthenticatedMetadataObject, AuthenticatedSnapshotIdentity,
-    REPOSITORY_SNAPSHOT_PROJECTION_VERSION,
+    AuthenticatedProjectionInputV1, REPOSITORY_SNAPSHOT_PROJECTION_VERSION,
 };
 
-const CACHE_KEY_SCHEMA_VERSION: u32 = 1;
-const CACHE_MANIFEST_SCHEMA_VERSION: u32 = 2;
+const CACHE_KEY_SCHEMA_VERSION: u32 = 2;
+const CACHE_MANIFEST_SCHEMA_VERSION: u32 = 3;
 const LOGICAL_ATTESTATION_SCHEMA_VERSION: u32 = 1;
 const MANIFEST_FILE_NAME: &str = "projection.json";
 const MAX_MANIFEST_SIZE: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProjectionCacheKeyV1 {
+struct ProjectionCacheKeyV2 {
+    // The authenticated root selects and authenticates these child inputs. Its
+    // projection-affecting bounds live in each typed input, while wrapper-only
+    // bytes remain bound into the new source manifest rather than this key.
     cache_schema_version: u32,
     parser_projection_version: u32,
     catalog_schema_version: u32,
     stream_binding_sha256: String,
-    authenticated_root_sha256: String,
-    authenticated_root_size: u64,
-    authenticated_objects: Vec<AuthenticatedMetadataObject>,
+    authenticated_inputs: Vec<AuthenticatedProjectionInputV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,9 +76,9 @@ impl ProjectionCacheLogicalAttestationV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProjectionCacheManifestV2 {
+struct ProjectionCacheManifestV3 {
     schema_version: u32,
-    key: ProjectionCacheKeyV1,
+    key: ProjectionCacheKeyV2,
     catalog: CatalogBindingV1,
     logical_attestation: ProjectionCacheLogicalAttestationV1,
 }
@@ -127,10 +127,9 @@ impl ProjectionCache {
 
     pub(super) fn lookup(
         &self,
-        snapshot: &AuthenticatedSnapshotIdentity,
-        objects: &[AuthenticatedMetadataObject],
+        inputs: &[AuthenticatedProjectionInputV1],
     ) -> Result<Option<CatalogReader>> {
-        let key = self.key(snapshot, objects)?;
+        let key = self.key(inputs)?;
         let entry = self.entry_path(&key)?;
         if !entry.try_exists()? {
             return Ok(None);
@@ -215,28 +214,25 @@ impl ProjectionCache {
     #[cfg(test)]
     pub(super) fn publish(
         &self,
-        snapshot: &AuthenticatedSnapshotIdentity,
-        objects: &[AuthenticatedMetadataObject],
+        inputs: &[AuthenticatedProjectionInputV1],
         catalog: &CatalogBindingV1,
         candidate_path: &Path,
     ) -> Result<()> {
         let verified = CatalogReader::open_verified(candidate_path, catalog)?;
-        self.publish_verified(snapshot, objects, catalog, candidate_path, &verified)
+        self.publish_verified(inputs, catalog, candidate_path, &verified)
     }
 
     /// Publish a candidate whose exact binding already passed a complete
     /// logical replay in this process.
     pub(super) fn publish_verified(
         &self,
-        snapshot: &AuthenticatedSnapshotIdentity,
-        objects: &[AuthenticatedMetadataObject],
+        inputs: &[AuthenticatedProjectionInputV1],
         catalog: &CatalogBindingV1,
         candidate_path: &Path,
         verified: &CatalogReader,
     ) -> Result<()> {
         self.publish_inner(
-            snapshot,
-            objects,
+            inputs,
             catalog,
             candidate_path,
             verified.verification_proof()?,
@@ -245,13 +241,12 @@ impl ProjectionCache {
 
     fn publish_inner(
         &self,
-        snapshot: &AuthenticatedSnapshotIdentity,
-        objects: &[AuthenticatedMetadataObject],
+        inputs: &[AuthenticatedProjectionInputV1],
         catalog: &CatalogBindingV1,
         candidate_path: &Path,
         proof: &CatalogVerificationProofV1,
     ) -> Result<()> {
-        let key = self.key(snapshot, objects)?;
+        let key = self.key(inputs)?;
         let entry = self.entry_path(&key)?;
         if entry.try_exists()? {
             self.lookup_exact_inner(&entry, &key, Some(proof))?;
@@ -268,7 +263,7 @@ impl ProjectionCache {
                     .to_string(),
             ));
         }
-        let manifest = ProjectionCacheManifestV2 {
+        let manifest = ProjectionCacheManifestV3 {
             schema_version: CACHE_MANIFEST_SCHEMA_VERSION,
             key: key.clone(),
             catalog: catalog.clone(),
@@ -335,14 +330,14 @@ impl ProjectionCache {
         result
     }
 
-    fn lookup_exact(&self, entry: &Path, key: &ProjectionCacheKeyV1) -> Result<CatalogReader> {
+    fn lookup_exact(&self, entry: &Path, key: &ProjectionCacheKeyV2) -> Result<CatalogReader> {
         self.lookup_exact_inner(entry, key, None)
     }
 
     fn lookup_exact_inner(
         &self,
         entry: &Path,
-        key: &ProjectionCacheKeyV1,
+        key: &ProjectionCacheKeyV2,
         proof: Option<&CatalogVerificationProofV1>,
     ) -> Result<CatalogReader> {
         require_direct_child(&self.root, entry)?;
@@ -359,7 +354,7 @@ impl ProjectionCache {
             )));
         }
         let bytes = fs::read(&manifest_path)?;
-        let manifest: ProjectionCacheManifestV2 = serde_json::from_slice(&bytes)?;
+        let manifest: ProjectionCacheManifestV3 = serde_json::from_slice(&bytes)?;
         if manifest.schema_version != CACHE_MANIFEST_SCHEMA_VERSION {
             return Err(Error::ConflictError(format!(
                 "native projection cache has unsupported manifest schema {}",
@@ -393,13 +388,13 @@ impl ProjectionCache {
             )?,
         };
         let expected_evidence = key
-            .authenticated_objects
+            .authenticated_inputs
             .iter()
-            .map(|object| CatalogSourceEvidenceV1::AuthenticatedObject {
-                role: object.role.clone(),
-                source_path: object.source_path.clone(),
-                sha256: object.sha256.clone(),
-                size: object.size,
+            .map(|input| CatalogSourceEvidenceV1::AuthenticatedObject {
+                role: input.object.role.clone(),
+                source_path: input.object.source_path.clone(),
+                sha256: input.object.sha256.clone(),
+                size: input.object.size,
             })
             .collect::<Vec<_>>();
         if reader.source_evidence()? != expected_evidence {
@@ -411,40 +406,37 @@ impl ProjectionCache {
         Ok(reader)
     }
 
-    fn key(
-        &self,
-        snapshot: &AuthenticatedSnapshotIdentity,
-        objects: &[AuthenticatedMetadataObject],
-    ) -> Result<ProjectionCacheKeyV1> {
-        let mut authenticated_objects = objects.to_vec();
-        authenticated_objects.sort_by(|left, right| {
-            left.role
-                .cmp(&right.role)
-                .then_with(|| left.source_path.cmp(&right.source_path))
+    fn key(&self, inputs: &[AuthenticatedProjectionInputV1]) -> Result<ProjectionCacheKeyV2> {
+        let mut authenticated_inputs = inputs.to_vec();
+        if authenticated_inputs.is_empty() {
+            return Err(Error::ConflictError(
+                "native projection cache requires at least one authenticated child object"
+                    .to_string(),
+            ));
+        }
+        authenticated_inputs.sort_by(|left, right| {
+            left.object
+                .role
+                .cmp(&right.object.role)
+                .then_with(|| left.object.source_path.cmp(&right.object.source_path))
         });
-        for pair in authenticated_objects.windows(2) {
-            if pair[0].role == pair[1].role {
+        for pair in authenticated_inputs.windows(2) {
+            if pair[0].object.role == pair[1].object.role {
                 return Err(Error::ConflictError(
                     "native projection cache key repeats an authenticated child role".to_string(),
                 ));
             }
         }
-        Ok(ProjectionCacheKeyV1 {
+        Ok(ProjectionCacheKeyV2 {
             cache_schema_version: CACHE_KEY_SCHEMA_VERSION,
             parser_projection_version: REPOSITORY_SNAPSHOT_PROJECTION_VERSION,
             catalog_schema_version: CATALOG_CONTENT_SCHEMA_V1,
             stream_binding_sha256: self.stream_binding_sha256.clone(),
-            authenticated_root_sha256: snapshot.sha256().to_string(),
-            authenticated_root_size: snapshot.size().ok_or_else(|| {
-                Error::ConfigError(
-                    "native projection cache requires an exact authenticated root size".to_string(),
-                )
-            })?,
-            authenticated_objects,
+            authenticated_inputs,
         })
     }
 
-    fn entry_path(&self, key: &ProjectionCacheKeyV1) -> Result<PathBuf> {
+    fn entry_path(&self, key: &ProjectionCacheKeyV2) -> Result<PathBuf> {
         let bytes = crate::json::canonical_json(key).map_err(Error::ConfigError)?;
         Ok(self.root.join(crate::hash::sha256(&bytes)))
     }
@@ -540,6 +532,7 @@ mod tests {
         CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
         logical_verification_passes_for_test,
     };
+    use crate::repository::parsers::AuthenticatedMetadataObject;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -627,8 +620,7 @@ mod tests {
     struct Fixture {
         _root: tempfile::TempDir,
         cache: ProjectionCache,
-        snapshot: AuthenticatedSnapshotIdentity,
-        objects: Vec<AuthenticatedMetadataObject>,
+        inputs: Vec<AuthenticatedProjectionInputV1>,
         candidate: PathBuf,
         binding: CatalogBindingV1,
     }
@@ -662,33 +654,42 @@ mod tests {
         Fixture {
             _root: root,
             cache,
-            snapshot: AuthenticatedSnapshotIdentity::for_bytes(b"authenticated release"),
-            objects: vec![object],
+            inputs: vec![AuthenticatedProjectionInputV1::exact_object(object)],
             candidate,
             binding,
         }
     }
 
     #[test]
-    fn exact_projection_key_reopens_verified_catalog_without_native_input() {
+    fn exact_child_projection_key_reopens_verified_catalog_without_native_input() {
         let fixture = fixture();
         fixture
             .cache
-            .publish(
-                &fixture.snapshot,
-                &fixture.objects,
-                &fixture.binding,
-                &fixture.candidate,
-            )
+            .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
             .unwrap();
 
         let reader = fixture
             .cache
-            .lookup(&fixture.snapshot, &fixture.objects)
+            .lookup(&fixture.inputs)
             .unwrap()
             .expect("exact cache key should hit");
         assert_eq!(reader.binding(), &fixture.binding);
         assert!(reader.packages().unwrap().is_empty());
+    }
+
+    #[test]
+    fn root_independent_key_requires_an_authenticated_child() {
+        let fixture = fixture();
+        let error = match fixture.cache.lookup(&[]) {
+            Err(error) => error,
+            Ok(_) => panic!("an empty authenticated child set must fail"),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("requires at least one authenticated child object")
+        );
+        assert_eq!(fs::read_dir(&fixture.cache.root).unwrap().count(), 0);
     }
 
     #[test]
@@ -698,8 +699,7 @@ mod tests {
         fixture
             .cache
             .publish_verified(
-                &fixture.snapshot,
-                &fixture.objects,
+                &fixture.inputs,
                 &fixture.binding,
                 &fixture.candidate,
                 &verified,
@@ -709,7 +709,7 @@ mod tests {
 
         let reader = fixture
             .cache
-            .lookup(&fixture.snapshot, &fixture.objects)
+            .lookup(&fixture.inputs)
             .unwrap()
             .expect("verified publication must remain a normal durable cache hit");
         assert_eq!(reader.binding(), &fixture.binding);
@@ -726,18 +726,9 @@ mod tests {
         let fixture = fixture();
         fixture
             .cache
-            .publish(
-                &fixture.snapshot,
-                &fixture.objects,
-                &fixture.binding,
-                &fixture.candidate,
-            )
+            .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
             .unwrap();
-        let reader = fixture
-            .cache
-            .lookup(&fixture.snapshot, &fixture.objects)
-            .unwrap()
-            .unwrap();
+        let reader = fixture.cache.lookup(&fixture.inputs).unwrap().unwrap();
 
         let existing = fixture._root.path().join("existing.sqlite");
         fs::write(&existing, b"belongs to another operation").unwrap();
@@ -779,12 +770,7 @@ mod tests {
         )
         .unwrap();
         cache
-            .publish(
-                &fixture.snapshot,
-                &fixture.objects,
-                &fixture.binding,
-                &fixture.candidate,
-            )
+            .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
             .unwrap();
 
         let copies = admission.copies.lock().unwrap();
@@ -799,12 +785,7 @@ mod tests {
         assert_eq!(admission.lease_drops.load(Ordering::SeqCst), 1);
 
         cache
-            .publish(
-                &fixture.snapshot,
-                &fixture.objects,
-                &fixture.binding,
-                &fixture.candidate,
-            )
+            .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
             .unwrap();
         assert_eq!(admission.copies.lock().unwrap().len(), 1);
         assert_eq!(admission.lease_drops.load(Ordering::SeqCst), 1);
@@ -821,12 +802,7 @@ mod tests {
         )
         .unwrap();
         let error = cache
-            .publish(
-                &fixture.snapshot,
-                &fixture.objects,
-                &fixture.binding,
-                &fixture.candidate,
-            )
+            .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
             .unwrap_err();
         let Error::CatalogScratchCapacity(error) = error else {
             panic!("expected typed catalog capacity refusal");
@@ -838,43 +814,33 @@ mod tests {
     }
 
     #[test]
-    fn altered_child_role_digest_or_source_binding_cannot_reuse_projection() {
+    fn altered_child_or_root_derived_projection_input_cannot_reuse_projection() {
         let fixture = fixture();
         fixture
             .cache
-            .publish(
-                &fixture.snapshot,
-                &fixture.objects,
-                &fixture.binding,
-                &fixture.candidate,
-            )
+            .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
             .unwrap();
 
-        let mut changed_digest = fixture.objects.clone();
-        changed_digest[0].sha256 = "c".repeat(64);
+        let mut changed_digest = fixture.inputs.clone();
+        changed_digest[0].object.sha256 = "c".repeat(64);
+        assert!(fixture.cache.lookup(&changed_digest).unwrap().is_none());
+        let mut changed_role = fixture.inputs.clone();
+        changed_role[0].object.role = SourceMetadataObjectRoleV1::RpmPrimary;
+        assert!(fixture.cache.lookup(&changed_role).unwrap().is_none());
+        let mut changed_path = fixture.inputs.clone();
+        changed_path[0].object.source_path = "universe/binary-amd64/Packages.xz".to_string();
+        assert!(fixture.cache.lookup(&changed_path).unwrap().is_none());
+        let mut changed_decoded_size = fixture.inputs.clone();
+        changed_decoded_size[0].authenticated_decoded_size = Some(456);
         assert!(
             fixture
                 .cache
-                .lookup(&fixture.snapshot, &changed_digest)
-                .unwrap()
-                .is_none()
-        );
-        let mut changed_role = fixture.objects.clone();
-        changed_role[0].role = SourceMetadataObjectRoleV1::RpmPrimary;
-        assert!(
-            fixture
-                .cache
-                .lookup(&fixture.snapshot, &changed_role)
+                .lookup(&changed_decoded_size)
                 .unwrap()
                 .is_none()
         );
         let other_binding = ProjectionCache::open(&fixture.cache.root, &"d".repeat(64)).unwrap();
-        assert!(
-            other_binding
-                .lookup(&fixture.snapshot, &fixture.objects)
-                .unwrap()
-                .is_none()
-        );
+        assert!(other_binding.lookup(&fixture.inputs).unwrap().is_none());
     }
 
     #[test]
@@ -882,20 +848,12 @@ mod tests {
         let fixture = fixture();
         fixture
             .cache
-            .publish(
-                &fixture.snapshot,
-                &fixture.objects,
-                &fixture.binding,
-                &fixture.candidate,
-            )
+            .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
             .unwrap();
-        let key = fixture
-            .cache
-            .key(&fixture.snapshot, &fixture.objects)
-            .unwrap();
+        let key = fixture.cache.key(&fixture.inputs).unwrap();
         let entry = fixture.cache.entry_path(&key).unwrap();
         let manifest_path = entry.join(MANIFEST_FILE_NAME);
-        let mut manifest: ProjectionCacheManifestV2 =
+        let mut manifest: ProjectionCacheManifestV3 =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         manifest.schema_version = 1;
         fs::write(
@@ -904,13 +862,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            fixture
-                .cache
-                .lookup(&fixture.snapshot, &fixture.objects)
-                .unwrap()
-                .is_none()
-        );
+        assert!(fixture.cache.lookup(&fixture.inputs).unwrap().is_none());
         assert!(!entry.exists());
     }
 
@@ -919,20 +871,12 @@ mod tests {
         let fixture = fixture();
         fixture
             .cache
-            .publish(
-                &fixture.snapshot,
-                &fixture.objects,
-                &fixture.binding,
-                &fixture.candidate,
-            )
+            .publish(&fixture.inputs, &fixture.binding, &fixture.candidate)
             .unwrap();
-        let key = fixture
-            .cache
-            .key(&fixture.snapshot, &fixture.objects)
-            .unwrap();
+        let key = fixture.cache.key(&fixture.inputs).unwrap();
         let entry = fixture.cache.entry_path(&key).unwrap();
         let manifest_path = entry.join(MANIFEST_FILE_NAME);
-        let mut manifest: ProjectionCacheManifestV2 =
+        let mut manifest: ProjectionCacheManifestV3 =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         manifest.logical_attestation.catalog_binding_sha256 = "0".repeat(64);
         fs::write(
@@ -941,13 +885,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            fixture
-                .cache
-                .lookup(&fixture.snapshot, &fixture.objects)
-                .unwrap()
-                .is_none()
-        );
+        assert!(fixture.cache.lookup(&fixture.inputs).unwrap().is_none());
         assert!(!entry.exists());
     }
 }

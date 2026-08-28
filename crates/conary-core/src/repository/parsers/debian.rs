@@ -10,8 +10,9 @@ mod stanza;
 
 use super::common::{self, MAX_PACKAGE_SIZE};
 use super::{
-    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
-    ChecksumType, PackageMetadata, RepositoryParser, RepositorySnapshotSink,
+    AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedProjectionInputV1,
+    AuthenticatedSnapshotIdentity, ChecksumType, PackageMetadata, RepositoryParser,
+    RepositorySnapshotSink,
 };
 use crate::error::{Error, Result};
 use crate::repository::client::RepositoryClient;
@@ -404,7 +405,9 @@ impl RepositoryParser for DebianParser {
 
         let (packages_path, snapshot, packages_object) =
             self.download_packages_file(repo_url, sink).await?;
-        if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&packages_object))? {
+        let projection_input =
+            AuthenticatedProjectionInputV1::exact_object(packages_object.clone());
+        if sink.reuse_cached_projection(&snapshot, std::slice::from_ref(&projection_input))? {
             sink.authenticated_object(packages_object, &packages_path)?;
             info!("Reused cached Debian repository projection");
             return Ok(snapshot);
