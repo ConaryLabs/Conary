@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 83
-summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 84
+summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -153,6 +153,18 @@ computed table cardinalities, and orphan rejection, so cache lookup does not
 replay any complete relation pass.
 The schema hard cut makes older cache entries misses; separately loaded bundles
 and signed artifacts retain their own verification authorities.
+
+Operational resource identity is the canonical source- or profile-manifest
+SHA-256. The catalog artifact SHA-256 is a separately verified byte identity,
+not a uniqueness key: a newly authenticated upstream root may produce a new
+immutable source manifest while its exact authenticated children and normalized
+catalog projection remain byte-identical. Schema 54 permits both resources to
+bind those same bytes. Registration still compares complete immutable metadata
+for an exact resource replay, and profile membership, reader pins, reachability,
+GC deletion intents, and bundle paths remain keyed by the manifest resource
+SHA-256. Changing provenance is therefore recorded instead of discarded, while
+projection reuse cannot fail merely because the resulting catalog bytes already
+exist under another exact manifest.
 
 After every source is authenticated and staged, refresh derives the complete
 ordered `ProfileSourceMemberV2` contract from those verified source manifests
@@ -531,7 +543,7 @@ Promotion writes and synchronizes every referenced object and the signed
 reopens the complete bundle, then uses one immediate transaction to publish
 every selected candidate run, advance every changed public-profile pointer,
 insert the evidence-bound universe revision, and advance
-`remi_active_universe_revision`. Schema 53 stores the exact canonical
+`remi_active_universe_revision`. Schema 54 stores the exact canonical
 `RemiPromotionEvidenceV1` and `RemiConversionCrawlV4` digests on that universe
 revision. A catalog, proof, CAS, signed-metadata, fence, canonical-map,
 transaction, or reopen fault leaves the complete previous public state
@@ -758,7 +770,7 @@ disposition is valid only when that validation-origin revision differs from
 the report's current revision; flipping a current validation to invented reuse
 fails report reopen. Missing, repeated, reordered, contract-drifted,
 unattempted, corrupt, or failed outcomes prevent success. The proof ledger and
-per-revision bindings are one schema-53 database authority and publish
+per-revision bindings are one schema-54 database authority and publish
 atomically. The writer syncs an atomic staged report, reopens the published
 bytes, rejects noncanonical or unknown input, and compares the complete
 reopened value before the command may report success. A structurally valid

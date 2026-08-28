@@ -1010,9 +1010,13 @@ CREATE TABLE remi_catalog_resources (
                 AND trim(source_profile) = source_profile
                 AND source_profile NOT IN ('.', '..')
                 AND source_profile NOT GLOB '*[^A-Za-z0-9._-]*'),
-            UNIQUE(resource_kind, source_profile, resource_sha256),
-            UNIQUE(resource_kind, artifact_sha256)
+            UNIQUE(resource_kind, source_profile, resource_sha256)
         );
+-- Resource identity is the exact manifest SHA-256, not the catalog byte hash.
+-- Distinct authenticated roots may produce distinct immutable source manifests
+-- over one byte-identical normalized projection. Artifact lookup is therefore
+-- indexed but deliberately non-unique; reachability and GC remain scoped to
+-- resource_sha256 and its exact content-addressed bundle.
 CREATE INDEX idx_remi_catalog_resources_profile
             ON remi_catalog_resources(source_profile, resource_kind, created_at DESC);
 CREATE INDEX idx_remi_catalog_resources_artifact

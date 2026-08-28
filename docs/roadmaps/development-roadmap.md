@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-27
-revision: 31
+last_updated: 2026-08-28
+revision: 32
 summary: Track Conary's signed-universe launch gate, daily-driver floor, synchronized preview release, and external tester milestone
 proof_baseline: "W7/#110 closed through PR #487; immutable v0.16.1 remains historical release evidence rather than tester authority; #598 owns first complete signed public universe; external tester result remains 0/10"
 current_milestone: first external tester loop
@@ -790,7 +790,7 @@ then superseded by the post-hard-cut package authority suite. The latest exact
 immutable release evidence is synchronized `v0.16.1` at
 `0fb961bacc6360107506371b16b7f0345ba6f927`. It remains historical release
 authority, not current production or tester authority: the signed-universe
-architecture advanced to schema 53 after that tag. #639 will establish the
+architecture advanced to schema 54 after that tag. #639 will establish the
 next exact release/deployment proof. The tester pin remains unassigned and the
 external milestone remains 0/10.
 

@@ -409,6 +409,53 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_root_change_can_register_same_projection_artifact() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let source = source_manifest();
+        let profile = profile_manifest(&source);
+        register_profile_catalog_revision(&conn, std::slice::from_ref(&source), &profile, 100)
+            .unwrap();
+
+        let mut alias = source.clone();
+        alias.authenticated_root.sha256 = digest('1');
+        assert_ne!(
+            alias.manifest_sha256().unwrap(),
+            source.manifest_sha256().unwrap()
+        );
+        assert_eq!(alias.catalog, source.catalog);
+        let mut alias_profile = profile_manifest(&alias);
+        alias_profile.catalog.sha256 = digest('2');
+        alias_profile.logical_digest_sha256 = digest('3');
+
+        register_profile_catalog_revision(&conn, std::slice::from_ref(&alias), &alias_profile, 200)
+            .unwrap();
+
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM remi_catalog_resources
+                 WHERE resource_kind = 'source_snapshot' AND artifact_sha256 = ?1",
+                [&source.catalog.sha256],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM remi_catalog_resources", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            4
+        );
+        assert!(
+            RemiCatalogResource::find_by_sha256(&conn, &alias.manifest_sha256().unwrap())
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
     fn mixed_member_registration_writes_nothing() {
         let conn = Connection::open_in_memory().unwrap();
         ensure_current(&conn).unwrap();
