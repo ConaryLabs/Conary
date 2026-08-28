@@ -268,12 +268,15 @@ create_release_policy_fixture() {
         "$repo/packaging/rpm" \
         "$repo/packaging/deb" \
         "$repo/packaging/arch" \
-        "$repo/packaging/ccs"
+        "$repo/packaging/ccs" \
+        "$repo/deploy"
     cp "$REPO_ROOT/Cargo.toml" "$repo/Cargo.toml"
     cp "$REPO_ROOT/scripts/release-matrix.sh" "$repo/scripts/release-matrix.sh"
     cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-remi-candidate.yml" "$repo/.github/workflows/deploy-remi-candidate.yml"
+    cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
+        "$repo/deploy/remi-predeployment-inspection.jq"
     cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
     cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
@@ -1078,6 +1081,94 @@ test_check_release_matrix_rejects_rehearsal_artifact_promotion() {
     assert_check_release_matrix_fails "$repo" "manual deployment must not promote rehearsal artifacts"
 }
 
+remi_predeployment_inspection_fixture() {
+    jq -n '
+      def refresh($run; $epoch; $state; $candidate_members): {
+        run_id: $run,
+        fencing_epoch: $epoch,
+        state: $state,
+        started_at: 10,
+        heartbeat_at: 11,
+        finished_at: 12,
+        failure_stage: null,
+        failure_category: null,
+        failure_evidence_sha256: null,
+        failure_diagnostic: null,
+        run_members: 2,
+        candidate_members: $candidate_members,
+        redactions: []
+      };
+      {
+        schema_epoch: "conary-current-v1",
+        schema_revision: 53,
+        configured_profiles: 3,
+        candidate_profiles: 2,
+        candidates: [
+          {
+            profile: "fedora-44",
+            configured_sources: 2,
+            profile_revision_sha256:
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            run_id: "fedora-run",
+            completed_at: 12,
+            packages: 100904,
+            latest_refresh: refresh("fedora-run"; 6; "candidate"; 2)
+          },
+          {
+            profile: "ubuntu-26.04",
+            configured_sources: 16,
+            profile_revision_sha256: null,
+            run_id: null,
+            completed_at: null,
+            packages: 0,
+            latest_refresh: refresh("ubuntu-failed"; 6; "abandoned"; 0)
+          },
+          {
+            profile: "arch",
+            configured_sources: 3,
+            profile_revision_sha256:
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            run_id: "arch-run",
+            completed_at: 12,
+            packages: 15411,
+            latest_refresh: refresh("arch-run"; 5; "candidate"; 3)
+          }
+        ]
+      }
+    '
+}
+
+test_remi_predeployment_filter_accepts_typed_incomplete_baseline() {
+    local fixture filter
+    fixture="$(remi_predeployment_inspection_fixture)"
+    filter="$REPO_ROOT/deploy/remi-predeployment-inspection.jq"
+
+    jq -e -f "$filter" <<<"$fixture" >/dev/null ||
+        fail "typed incomplete predeployment baseline was rejected"
+
+    if jq '.candidates[1].run_id = "orphan-run"' <<<"$fixture" \
+        | jq -e -f "$filter" >/dev/null; then
+        fail "half-present candidate identity passed predeployment validation"
+    fi
+    if jq '.candidates[1].profile = "arch"' <<<"$fixture" \
+        | jq -e -f "$filter" >/dev/null; then
+        fail "duplicate public profile passed predeployment validation"
+    fi
+}
+
+test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-predeployment-inspection.jq" \
+        '    .run_id == null' \
+        '    .run_id != null'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "candidate deploy baseline must distinguish an absent candidate"
+}
+
 test_check_release_matrix_rejects_ambiguous_candidate_completion_mode() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1710,6 +1801,8 @@ main() {
         test_check_release_matrix_rejects_mutable_artifact_proof
         test_check_release_matrix_rejects_moving_artifact_proof_toolchain
         test_check_release_matrix_rejects_rehearsal_artifact_promotion
+        test_remi_predeployment_filter_accepts_typed_incomplete_baseline
+        test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline
         test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
         test_check_release_matrix_rejects_unforced_post_deploy_candidates

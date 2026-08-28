@@ -138,22 +138,8 @@ jobs:
             ssh $ssh_opts "$target" \
               "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi" \
               > remi-predeployment-inspection.json
-            jq -e '
-              (.schema_epoch | type == "string")
-              and (.schema_revision | type == "number")
-              and (.candidates | type == "array")
-              and all(.candidates[];
-                (.profile == "fedora-44"
-                  or .profile == "ubuntu-26.04"
-                  or .profile == "arch")
-                and (.profile_revision_sha256 | type == "string")
-                and (.run_id | type == "string")
-                and (.latest_refresh == null or
-                  ((.latest_refresh.run_id | type == "string")
-                  and (.latest_refresh.fencing_epoch | type == "number")
-                  and (.latest_refresh.started_at | type == "number")))
-              )
-            ' remi-predeployment-inspection.json >/dev/null
+            jq -e -f deploy/remi-predeployment-inspection.jq \
+              remi-predeployment-inspection.json >/dev/null
           fi
           scp $ssh_opts "$BUNDLE" "${target}:${remote_bundle}"
           scp $ssh_opts deploy/remi-repositories.toml "${target}:${remote_repositories}"
