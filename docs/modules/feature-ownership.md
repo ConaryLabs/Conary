@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 84
-summary: Route feature ownership through trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+revision: 85
+summary: Route feature ownership through trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, typed Remi refresh coordination, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1152,6 +1152,9 @@ release uploads, and static test fixtures through Remi.
 `apps/remi/src/server/mod.rs`;
 `apps/remi/src/server/admin_service.rs`;
 `apps/remi/src/server/admin_service/refresh.rs`;
+`apps/remi/src/server/publication_coordinator.rs`;
+`apps/remi/src/server/publication_scheduler.rs`;
+`apps/remi/src/server/handlers/admin/refresh.rs`;
 `apps/remi/src/server/repository_manifest.rs`;
 `deploy/remi-repositories.toml`;
 `crates/conary-core/src/db/current_schema/sql/remi.sql`;

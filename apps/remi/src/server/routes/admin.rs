@@ -282,35 +282,7 @@ async fn refresh_upstream(
     State(state): State<Arc<RwLock<ServerState>>>,
     Query(query): Query<admin_handlers::RefreshQuery>,
 ) -> Response {
-    let result = match query.profile.as_deref() {
-        Some(profile) => {
-            crate::server::admin_service::refresh_profile_repositories(&state, profile, query.force)
-                .await
-        }
-        None => crate::server::admin_service::refresh_repositories(&state, query.force).await,
-    };
-    match result {
-        Ok(batch) => {
-            admin_handlers::refresh_batch_response(
-                &state,
-                query.force,
-                query.profile.as_deref(),
-                batch,
-            )
-            .await
-        }
-        Err(e) => {
-            tracing::error!("Upstream refresh failed: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "status": "error",
-                    "message": e.to_string(),
-                })),
-            )
-                .into_response()
-        }
-    }
+    admin_handlers::refresh_repos_inner(&state, query).await
 }
 
 #[cfg(test)]

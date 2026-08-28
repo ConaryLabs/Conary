@@ -1230,7 +1230,23 @@ remi_postdeployment_fencing_fixture() {
       {
         schema_epoch: "conary-current-v1",
         schema_revision: $schema_revision,
-        deployment: {transition_completed_at: 20},
+        deployment: {
+          transition_completed_at: 20,
+          repository_refreshes: [{
+            generation: 1,
+            scope: {kind: "all"},
+            force: false,
+            started_at: 21,
+            finished_at: 24,
+            coalesced: true,
+            status: "complete",
+            synced: 22,
+            skipped: 0,
+            failed: 0,
+            successful_profiles: ["arch", "fedora-44", "solus", "ubuntu-26.04"],
+            failed_profiles: []
+          }]
+        },
         candidates: [
           candidate("fedora-44"; "fedora-final"; $fedora_epoch; 2),
           candidate("ubuntu-26.04"; "ubuntu-final"; $ubuntu_epoch; 16),
@@ -1270,10 +1286,26 @@ test_remi_postdeployment_filter_scopes_fences_to_schema_authority() {
         <<<"$final" >/dev/null ||
         fail "fresh post-transition schema fences were compared to retired authority"
 
-    if jq '.candidates[0].latest_refresh.started_at = 20' <<<"$final" \
+    if jq '.candidates[0].latest_refresh.finished_at = 20' <<<"$final" \
         | jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
             >/dev/null; then
-        fail "pre-transition candidate run passed postdeployment validation"
+        fail "pre-transition candidate completion passed postdeployment validation"
+    fi
+    if jq '.deployment.repository_refreshes = []' <<<"$final" \
+        | jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
+            >/dev/null; then
+        fail "candidate set without a typed refresh generation passed postdeployment validation"
+    fi
+    if jq '.deployment.repository_refreshes[0].finished_at = 20' <<<"$final" \
+        | jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
+            >/dev/null; then
+        fail "pre-transition refresh generation passed postdeployment validation"
+    fi
+    if jq '.deployment.repository_refreshes[0].successful_profiles -= ["fedora-44"]' \
+        <<<"$final" \
+        | jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
+            >/dev/null; then
+        fail "candidate absent from the retained refresh result passed postdeployment validation"
     fi
     if jq '.candidates[0].latest_refresh.run_id = "different-run"' <<<"$final" \
         | jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
@@ -1438,12 +1470,38 @@ test_check_release_matrix_rejects_unforced_post_deploy_candidates() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        "'http://127.0.0.1:8081/v1/admin/refresh?force=true'" \
-        "'http://127.0.0.1:8081/v1/admin/refresh?force=false'"
+        'refresh?force=true&accept_completed_after=${transition_completed_at}' \
+        'refresh?force=false&accept_completed_after=${transition_completed_at}'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "private candidate deploy forces one bounded post-transition refresh"
+        "private candidate deploy coalesces one bounded post-transition refresh"
+}
+
+test_check_release_matrix_rejects_missing_refresh_causal_floor() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        'refresh?force=true&accept_completed_after=${transition_completed_at}' \
+        'refresh?force=true'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "private candidate deploy coalesces one bounded post-transition refresh"
+}
+
+test_check_release_matrix_rejects_untyped_refresh_coalescing_result() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '                  and (.coalesced | type == "boolean")' \
+        '                  and true'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "private candidate deploy coalesces one bounded post-transition refresh"
 }
 
 test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority() {
@@ -1482,10 +1540,10 @@ test_check_release_matrix_rejects_nonadvancing_candidate_fence() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "candidate deploy requires post-transition candidate identity and advances fences only within one schema authority"
+        "candidate deploy requires a typed post-transition refresh generation, candidate completion, and advances fences only within one schema authority"
 }
 
-test_check_release_matrix_rejects_pretransition_candidate_run() {
+test_check_release_matrix_rejects_pretransition_candidate_completion() {
     local repo
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
@@ -1495,7 +1553,7 @@ test_check_release_matrix_rejects_pretransition_candidate_run() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "candidate deploy requires post-transition candidate identity and advances fences only within one schema authority"
+        "candidate deploy requires a typed post-transition refresh generation, candidate completion, and advances fences only within one schema authority"
 }
 
 test_check_release_matrix_rejects_candidate_checkout_fencing_policy() {
@@ -1573,7 +1631,7 @@ test_check_release_matrix_rejects_missing_candidate_phase_evidence() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "candidate deploy retains typed phase timing and early-failure evidence"
+        "candidate deploy retains typed refresh generations, phase timing, and early-failure evidence"
 }
 
 test_check_release_matrix_rejects_missing_candidate_storage_evidence() {
@@ -2131,10 +2189,12 @@ main() {
         test_check_release_matrix_rejects_loose_artifact_latency_budget
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
         test_check_release_matrix_rejects_unforced_post_deploy_candidates
+        test_check_release_matrix_rejects_missing_refresh_causal_floor
+        test_check_release_matrix_rejects_untyped_refresh_coalescing_result
         test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority
         test_check_release_matrix_rejects_all_profile_retry
         test_check_release_matrix_rejects_nonadvancing_candidate_fence
-        test_check_release_matrix_rejects_pretransition_candidate_run
+        test_check_release_matrix_rejects_pretransition_candidate_completion
         test_check_release_matrix_rejects_candidate_checkout_fencing_policy
         test_check_release_matrix_rejects_unbound_candidate_binary
         test_check_release_matrix_rejects_private_mode_public_readiness_claim

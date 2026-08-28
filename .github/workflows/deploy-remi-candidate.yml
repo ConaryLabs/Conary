@@ -250,7 +250,7 @@ jobs:
                 --arg completion_mode "$COMPLETION_MODE" \
                 --argjson duration_ms "$baseline_duration_ms" '
                   {
-                    deployment_evidence_schema_version: 2,
+                    deployment_evidence_schema_version: 3,
                     inspection_available: false,
                     deployment: {
                       commit_sha: $commit_sha,
@@ -259,6 +259,7 @@ jobs:
                       outcome: "failure",
                       failure_phase: "predeployment-candidate-baseline",
                       transition_completed_at: null,
+                      repository_refreshes: [],
                       phases: [{
                         name: "predeployment-candidate-baseline",
                         outcome: "failure",
@@ -285,6 +286,7 @@ jobs:
             deployment_outcome=failure
             failure_phase=""
             phase_events='[]'
+            repository_refreshes='[]'
             active_phase=""
             phase_started_ns=0
             evidence_emitted=0
@@ -311,6 +313,32 @@ jobs:
               phase_started_ns=0
             }
 
+            record_refresh_evidence() {
+              local response="$1"
+              repository_refreshes="$(jq -c --argjson refresh "$response" '
+                . + [{
+                  generation: $refresh.refresh_generation,
+                  scope: $refresh.refresh_scope,
+                  force: $refresh.refresh_force,
+                  started_at: $refresh.refresh_started_at,
+                  finished_at: $refresh.refresh_finished_at,
+                  coalesced: $refresh.coalesced,
+                  status: $refresh.status,
+                  synced: $refresh.synced,
+                  skipped: $refresh.skipped,
+                  failed: $refresh.failed,
+                  successful_profiles: (
+                    [$refresh.results[].source_profile | select(type == "string")]
+                    | unique
+                  ),
+                  failed_profiles: (
+                    [$refresh.failures[].source_profile | select(type == "string")]
+                    | unique
+                  )
+                }]
+              ' <<<"$repository_refreshes")"
+            }
+
             emit_inspection() {
               local inspection="$1"
               local inspection_available="$2"
@@ -322,9 +350,10 @@ jobs:
                 --arg failure_phase "$failure_phase" \
                 --argjson inspection_available "$inspection_available" \
                 --argjson transition_completed_at "$transition_completed_at" \
+                --argjson repository_refreshes "$repository_refreshes" \
                 --argjson phases "$phase_events" '
                   . + {
-                    deployment_evidence_schema_version: 2,
+                    deployment_evidence_schema_version: 3,
                     inspection_available: $inspection_available,
                     deployment: {
                       commit_sha: $commit_sha,
@@ -335,6 +364,7 @@ jobs:
                         if $failure_phase == "" then null else $failure_phase end
                       ),
                       transition_completed_at: $transition_completed_at,
+                      repository_refreshes: $repository_refreshes,
                       phases: $phases
                     }
                   }
@@ -390,17 +420,26 @@ jobs:
               private-candidates)
                 requirement=--require-private-candidates
                 description="post-deploy private profile candidates"
-                sleep 1
                 start_phase forced-refresh-all
                 set +e
                 refresh="$(curl --fail-with-body --silent --show-error \
                   --connect-timeout 30 --max-time 7200 --request POST \
-                  'http://127.0.0.1:8081/v1/admin/refresh?force=true')"
+                  "http://127.0.0.1:8081/v1/admin/refresh?force=true&accept_completed_after=${transition_completed_at}")"
                 refresh_status=$?
                 set -e
-                if (( refresh_status != 0 )) || ! jq -e '
+                if (( refresh_status != 0 )) || ! jq -e \
+                  --argjson transition_completed_at "$transition_completed_at" '
                   .force == true
                   and .profile == null
+                  and (.refresh_generation | type == "number")
+                  and .refresh_generation >= 1
+                  and .refresh_scope == {kind: "all"}
+                  and (.refresh_force | type == "boolean")
+                  and (.refresh_started_at | type == "number")
+                  and (.refresh_finished_at | type == "number")
+                  and .refresh_finished_at >= .refresh_started_at
+                  and .refresh_finished_at > $transition_completed_at
+                  and (.coalesced | type == "boolean")
                   and (.synced | type == "number")
                   and (.skipped | type == "number")
                   and (.failed | type == "number")
@@ -422,8 +461,9 @@ jobs:
                     <<<"$refresh" >&2 || true
                   exit 1
                 fi
+                record_refresh_evidence "$refresh"
                 finish_phase complete
-                jq -c '{status, force, synced, skipped, failed}' \
+                jq -c '{status, force, refresh_generation, coalesced, synced, skipped, failed}' \
                   <<<"$refresh" >&2
                 mapfile -t retry_profiles < <(jq -r '
                   [.failures[].source_profile
@@ -446,9 +486,19 @@ jobs:
                     "http://127.0.0.1:8081/v1/admin/refresh?force=true&profile=${profile}")"
                   scoped_status=$?
                   set -e
-                  if (( scoped_status != 0 )) || ! jq -e --arg profile "$profile" '
+                  if (( scoped_status != 0 )) || ! jq -e --arg profile "$profile" \
+                    --argjson transition_completed_at "$transition_completed_at" '
                     .force == true
                     and .profile == $profile
+                    and (.refresh_generation | type == "number")
+                    and .refresh_generation >= 1
+                    and .refresh_scope == {kind: "profile", profile: $profile}
+                    and .refresh_force == true
+                    and (.refresh_started_at | type == "number")
+                    and (.refresh_finished_at | type == "number")
+                    and .refresh_finished_at >= .refresh_started_at
+                    and .refresh_finished_at > $transition_completed_at
+                    and .coalesced == false
                     and .status == "complete"
                     and .failed == 0
                     and (.results | length) > 0
@@ -461,8 +511,9 @@ jobs:
                       <<<"$scoped_refresh" >&2 || true
                     exit 1
                   fi
+                  record_refresh_evidence "$scoped_refresh"
                   finish_phase complete
-                  jq -c '{status, force, profile, synced, skipped, failed}' \
+                  jq -c '{status, force, profile, refresh_generation, coalesced, synced, skipped, failed}' \
                     <<<"$scoped_refresh" >&2
                 done
                 start_phase private-candidate-inspection
@@ -539,7 +590,7 @@ jobs:
               --arg completion_mode "$COMPLETION_MODE" \
               --argjson inspection_available "$inspection_available" '
                 . + {
-                  deployment_evidence_schema_version: 2,
+                  deployment_evidence_schema_version: 3,
                   inspection_available: $inspection_available,
                   deployment: {
                     commit_sha: $commit_sha,
@@ -548,6 +599,7 @@ jobs:
                     outcome: "failure",
                     failure_phase: "remote-session-or-transport",
                     transition_completed_at: null,
+                    repository_refreshes: [],
                     phases: []
                   }
                 }
@@ -595,7 +647,7 @@ jobs:
             --arg expected_binary "$BINARY_SHA256" \
             --arg expected_mode "$COMPLETION_MODE" \
             --arg expected_outcome "$expected_outcome" '
-            .deployment_evidence_schema_version == 2
+            .deployment_evidence_schema_version == 3
             and .deployment.commit_sha == $expected_commit
             and .deployment.binary_sha256 == $expected_binary
             and .deployment.completion_mode == $expected_mode
@@ -611,10 +663,30 @@ jobs:
               .inspection_available == true
               and .deployment.failure_phase == null
               and (.deployment.transition_completed_at | type == "number")
+              and (.deployment.transition_completed_at as $transition_completed_at
+              | if $expected_mode == "private-candidates" then
+                (.deployment.repository_refreshes | type == "array")
+                and (.deployment.repository_refreshes | length) >= 1
+                and all(.deployment.repository_refreshes[];
+                  (.generation | type == "number")
+                  and .generation >= 1
+                  and (.scope.kind == "all" or .scope.kind == "profile")
+                  and (.force | type == "boolean")
+                  and (.started_at | type == "number")
+                  and (.finished_at | type == "number")
+                  and .finished_at >= .started_at
+                  and .finished_at > $transition_completed_at
+                  and (.coalesced | type == "boolean")
+                  and (.successful_profiles | type == "array")
+                  and (.failed_profiles | type == "array"))
+              else
+                .deployment.repository_refreshes == []
+              end)
             else
               (.deployment.failure_phase | type == "string")
               and (.deployment.transition_completed_at == null
                 or (.deployment.transition_completed_at | type == "number"))
+              and (.deployment.repository_refreshes | type == "array")
             end)
             and (if .inspection_available then
               (.schema_epoch | type == "string")

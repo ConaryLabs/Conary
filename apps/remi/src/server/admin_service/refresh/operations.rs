@@ -17,6 +17,9 @@ use crate::server::ServerState;
 use crate::server::database_writer::DatabaseWriter;
 
 use super::super::{ServiceError, blocking_anyhow, db_path, profile_refresh, publication};
+use crate::server::publication_coordinator::{
+    RepositoryRefreshAdmission, RepositoryRefreshExecution, RepositoryRefreshScope,
+};
 
 enum RepoRefreshPlan {
     Missing,
@@ -162,14 +165,18 @@ async fn sync_repo_uncoordinated(
 }
 
 /// Synchronize all enabled repositories.
-pub async fn refresh_repositories(
+pub(crate) async fn refresh_repositories(
     state: &Arc<RwLock<ServerState>>,
     force: bool,
-) -> Result<RepoRefreshBatch, ServiceError> {
-    let _publication_guard = publication::guard(state).await;
-    let result = refresh_repositories_uncoordinated(state, force).await;
-    record_repository_readiness(state, &result).await;
-    result
+    accept_completed_after: Option<i64>,
+) -> Result<RepositoryRefreshExecution, ServiceError> {
+    refresh_repositories_coordinated(
+        state,
+        RepositoryRefreshScope::All,
+        force,
+        accept_completed_after,
+    )
+    .await
 }
 
 /// Synchronize only one exact configured native source profile.
@@ -177,20 +184,73 @@ pub async fn refresh_repositories(
 /// This is the retry boundary for a partial all-profile ceremony. It never
 /// refreshes legacy repositories, deactivates another profile, or upgrades the
 /// global publication-readiness phase from a profile-local result.
-pub async fn refresh_profile_repositories(
+pub(crate) async fn refresh_profile_repositories(
     state: &Arc<RwLock<ServerState>>,
     source_profile: &str,
     force: bool,
-) -> Result<RepoRefreshBatch, ServiceError> {
-    let _publication_guard = publication::guard(state).await;
-    refresh_repositories_scoped_uncoordinated(state, force, Some(source_profile)).await
+) -> Result<RepositoryRefreshExecution, ServiceError> {
+    refresh_repositories_coordinated(
+        state,
+        RepositoryRefreshScope::Profile(source_profile.to_string()),
+        force,
+        None,
+    )
+    .await
+}
+
+async fn refresh_repositories_coordinated(
+    state: &Arc<RwLock<ServerState>>,
+    scope: RepositoryRefreshScope,
+    force: bool,
+    accept_completed_after: Option<i64>,
+) -> Result<RepositoryRefreshExecution, ServiceError> {
+    let coordinator = state.read().await.publication_coordinator.clone();
+    match coordinator
+        .admit_repository_refresh(scope.clone(), force, accept_completed_after)
+        .await
+    {
+        RepositoryRefreshAdmission::Coalesced(execution) => {
+            if scope == RepositoryRefreshScope::All {
+                record_repository_readiness(state, Ok(&execution.batch)).await;
+            }
+            Ok(execution)
+        }
+        RepositoryRefreshAdmission::Execute(permit) => {
+            let result = match &scope {
+                RepositoryRefreshScope::All => {
+                    refresh_repositories_uncoordinated(state, force).await
+                }
+                RepositoryRefreshScope::Profile(profile) => {
+                    refresh_repositories_scoped_uncoordinated(state, force, Some(profile)).await
+                }
+            };
+            match result {
+                Ok(batch) => {
+                    let (publication_guard, execution) = permit.complete(batch);
+                    if scope == RepositoryRefreshScope::All {
+                        record_repository_readiness(state, Ok(&execution.batch)).await;
+                    }
+                    drop(publication_guard);
+                    Ok(execution)
+                }
+                Err(error) => {
+                    let publication_guard = permit.fail();
+                    if scope == RepositoryRefreshScope::All {
+                        record_repository_readiness(state, Err(&error)).await;
+                    }
+                    drop(publication_guard);
+                    Err(error)
+                }
+            }
+        }
+    }
 }
 
 async fn record_repository_readiness(
     state: &Arc<RwLock<ServerState>>,
-    result: &Result<RepoRefreshBatch, ServiceError>,
+    result: Result<&RepoRefreshBatch, &ServiceError>,
 ) {
-    let outcome = match result.as_ref().map(RepoRefreshBatch::state) {
+    let outcome = match result.map(RepoRefreshBatch::state) {
         Ok(RepoRefreshBatchState::Complete) => {
             crate::server::readiness::PublicationPhaseState::Complete
         }

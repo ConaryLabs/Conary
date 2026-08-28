@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 50
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
+revision: 51
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -135,9 +135,14 @@ workflow.
   completion fails. It does not expose service logs, generic shell access,
   credentials, bearer tokens, private-key paths, or host-local paths, and
   diagnostics do not satisfy the candidate publication predicate.
-- Candidate deployment evidence records each remote phase and its wall time:
+- Candidate deployment evidence schema 3 records each remote phase and its wall time:
   database transition/restart, ingress verification, all-profile refresh,
   each exact-profile retry, completion inspection, and final ingress proof.
+  It also retains every accepted repository-refresh generation with exact
+  scope, producer force policy, start/finish time, coalescing disposition,
+  aggregate state, and successful/failed profile sets. Candidate completion is
+  bounded by one of those exact generations rather than inferred from elapsed
+  workflow time.
   An early remote or transport failure still produces a sanitized typed
   failure envelope and attempts one read-only final inspection; it never turns
   missing diagnostics into a successful deployment. Before and after the
@@ -177,8 +182,9 @@ workflow.
 - After liveness succeeds, the deployment job proves the predicate selected by
   its explicit completion mode. `private-candidates` records every public
   profile's pre-transition fencing epoch, invokes the loopback-only forced
-  refresh endpoint after the new binary starts, requires a typed successful
-  refresh response, then calls `conary-remi-deploy inspect-remi
+  refresh endpoint after the new binary starts with the exact transition
+  completion timestamp as its causal floor, requires a typed successful
+  refresh generation, then calls `conary-remi-deploy inspect-remi
   --require-private-candidates` once. Success means every configured public
   profile has an exact current, durable, nonempty private candidate whose
   immutable bundle and fenced repository bindings were reopened and
@@ -186,8 +192,14 @@ workflow.
   Arch fencing epoch to be strictly newer than its recorded baseline. A hard
   schema transition starts a new fencing authority, so its positive fresh
   epochs are not ordered against the retired database. Both paths require each
-  accepted terminal candidate run to match its candidate and to have started
-  after the recorded binary transition. Candidate-tier Solus
+  accepted terminal candidate run to match its candidate, finish after the
+  recorded binary transition, and fall within an exact refresh generation that
+  names that profile as successful. If the new process's startup all-profile
+  refresh finishes after the floor with a complete zero-skip batch, the queued
+  forced request consumes that retained result and performs no second source
+  refresh. Pre-floor, scoped, partial, failed, cancelled, or skipped work is
+  never eligible; intervening repository mutations invalidate the retained
+  result, and a force call without a floor always executes. Candidate-tier Solus
   is incidental to the all-repository refresh: its success cannot satisfy and
   its typed failure cannot block that public-profile completion contract.
   Private-candidate completion proves no active pointer and accepts structured

@@ -7,6 +7,7 @@ mod chunk_gc;
 mod events;
 mod federation;
 mod r2_durability;
+mod refresh;
 mod repos;
 pub mod test_data;
 mod tokens;
@@ -17,6 +18,7 @@ pub use chunk_gc::*;
 pub use events::*;
 pub use federation::*;
 pub use r2_durability::*;
+pub use refresh::*;
 pub use repos::*;
 pub use tokens::*;
 

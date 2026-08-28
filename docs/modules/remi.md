@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 89
-summary: Document linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 90
+summary: Document typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -457,11 +457,13 @@ seconds; the deployment workflow contains no compilation path. The protected
 private-candidate deployment workflow then adds causal evidence that the static
 predicate intentionally does not own: it records the pre-transition
 inspection, starts the exact merged binary, invokes the loopback-only forced
-refresh endpoint, validates the typed completion response, retries only exact
+refresh endpoint with the deployment transition completion as its causal floor,
+validates the typed generation/completion/coalescing response, retries only exact
 failed public profiles through the typed `profile` scope, and requires the
 final Fedora, Ubuntu, and Arch fencing epochs to be strictly newer than their
-recorded baselines and each terminal run to have started after the recorded
-binary transition. The final evidence binds the exact merged commit, built
+recorded baselines. Each terminal run must finish after the recorded binary
+transition and be bounded by a retained refresh generation that names its
+profile as successful. The final evidence binds the exact merged commit, built
 binary SHA-256, completion mode, and transition timestamp; the before-and-after
 sanitized inspections are retained. Before that read, the root helper extracts
 the staged binary and verifies its exact version and SHA-256 without opening
@@ -479,8 +481,9 @@ reports wall/CPU/RSS, SQLite statement and logical page-read work, zero catalog
 opens/bytes, and output size. The protected workflow rejects a baseline over
 two seconds or any nonzero catalog access before mutation. A profile without a
 candidate contributes a null identity and its latest refresh fence but never
-satisfies the strict post-transition candidate predicate. Evidence schema 2
-also records the typed outcome, causal failure phase, and duration of every
+satisfies the strict post-transition candidate predicate. Evidence schema 3
+also records the typed refresh generations plus the outcome, causal failure
+phase, and duration of every
 completed or failed remote phase. A failed pre-deployment baseline is retained
 as `predeployment-candidate-baseline` with its measured duration rather than an
 empty or misclassified transport artifact. An early remote-session or transport
@@ -501,11 +504,22 @@ the exact same ordered revision set. Retired mutable Remi package rows are not
 deployment evidence, and neither predicate grants publication authority.
 
 `apps/remi/src/server/publication_scheduler.rs` owns startup publication order
-and both periodic clocks; one process-local publication coordinator also
+and both periodic clocks; `apps/remi/src/server/publication_coordinator.rs`
+owns one process-local publication coordinator that also
 serializes background cycles, repository-admin mutations, MCP canonical cycles,
 and package cache-miss readiness/reservation decisions. Their network, parsing,
 and mutation phases therefore cannot invalidate one another's publication
-decision. A queued coordinator waiter releases its server-state read guard
+decision. Every all/profile refresh receives a monotonic process-local
+generation, exact scope, producer force policy, timestamps, and terminal batch
+or incomplete/error disposition. A deployment force request may provide
+`accept_completed_after`; after acquiring the same exclusion lock it consumes
+the newest exact all-profile generation only when that batch completed strictly
+after the floor, is complete, and contains zero skipped sources. This closes
+the missed-wakeup window without treating a startup no-op, partial result,
+failed generation, profile retry, or older process as forced-refresh evidence.
+A repository create, update, delete, or single-source sync invalidates the
+retained batch before mutating, and a force request without a floor always
+executes. A queued coordinator waiter releases its server-state read guard
 before awaiting ownership, so the current cycle can record readiness through
 the state write boundary. The narrower database writer serializes only their SQLite mutation
 phases, including catalog-pointer, canonical-cache, and exact-map commits. The process-wide root
@@ -537,6 +551,10 @@ digest and integrity verification for each package.
 Both internal and external `POST /v1/admin/refresh` routes use the same response
 projection: HTTP 200 means every source completed or was current, 207 carries a
 mixed success/failure batch, and 502 means every configured source failed.
+Every response includes the exact producer generation, scope, force policy,
+start/finish timestamps, and `coalesced` disposition. The optional positive
+Unix `accept_completed_after` parameter is valid only with `force=true` on the
+all-profile route; other combinations are HTTP 400.
 Omitting `profile` selects every configured source. Supplying one exact
 configured native profile selects only that profile and no legacy repository;
 it is the retry boundary after a partial batch and cannot upgrade global
@@ -549,7 +567,9 @@ current profile revision. Result and failure arrays are sorted by exact reposito
 so concurrent completion order is not API order.
 
 `apps/remi/src/server/admin_service/refresh.rs` owns the batch state, typed
-per-source results, and bounded concurrent collection. `server/mod.rs` owns the
+per-source results, and bounded concurrent collection.
+`apps/remi/src/server/handlers/admin/refresh.rs` owns refresh query validation
+and the shared typed HTTP projection. `server/mod.rs` owns the
 exact-profile handoff from successful refresh results into configured prewarm
 jobs; `apps/remi/src/server/prewarm/scheduler.rs` owns their bounded fair
 execution and complete outcome collection. HTTP handlers only publish events

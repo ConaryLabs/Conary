@@ -24,6 +24,14 @@ def same_fencing_authority($before; $final):
       and ($final.schema_epoch | type == "string")
       and ($final.schema_revision | type == "number")
       and ($final.deployment.transition_completed_at | type == "number")
+      and ($final.deployment.repository_refreshes | type == "array")
+      and ($final.deployment.repository_refreshes | length) >= 1
+      and ($final.deployment.repository_refreshes[0]
+        | .scope == {kind: "all"}
+          and (.generation | type == "number")
+          and .generation >= 1
+          and (.finished_at | type == "number")
+          and .finished_at > $final.deployment.transition_completed_at)
       and all(public_profiles[];
         . as $profile
         | ([
@@ -41,8 +49,17 @@ def same_fencing_authority($before; $final):
               and (.latest_refresh.fencing_epoch > 0)
               and (.latest_refresh.started_at | type == "number")
               and (.latest_refresh.finished_at | type == "number")
-              and (.latest_refresh.started_at
+              and (.latest_refresh.finished_at
                 > $final.deployment.transition_completed_at))
+          and ($matches[0] as $candidate
+            | any($final.deployment.repository_refreshes[];
+                (.generation | type == "number")
+                and (.started_at | type == "number")
+                and (.finished_at | type == "number")
+                and .finished_at > $final.deployment.transition_completed_at
+                and (.successful_profiles | index($profile)) != null
+                and $candidate.latest_refresh.started_at >= .started_at
+                and $candidate.latest_refresh.finished_at <= .finished_at))
           and (
             if same_fencing_authority($before; $final) then
               fencing_epoch($final; $profile)

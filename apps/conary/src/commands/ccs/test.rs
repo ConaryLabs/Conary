@@ -86,12 +86,20 @@ esac
     let sysusers = write_test_interface(
         &interfaces,
         "systemd-sysusers",
-        "if [ \"${1:-}\" = \"--version\" ]; then printf 'systemd 257\\n'; fi\n",
+        r#"case "${1:-}" in
+    --version) printf 'systemd 257\n' ;;
+    *) while IFS= read -r _line; do :; done ;;
+esac
+"#,
     )?;
     let tmpfiles = write_test_interface(
         &interfaces,
         "systemd-tmpfiles",
-        "if [ \"${1:-}\" = \"--version\" ]; then printf 'systemd 257\\n'; fi\n",
+        r#"case "${1:-}" in
+    --version) printf 'systemd 257\n' ;;
+    *) while IFS= read -r _line; do :; done ;;
+esac
+"#,
     )?;
     let sysctl = write_test_interface(
         &interfaces,

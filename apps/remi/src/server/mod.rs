@@ -53,6 +53,7 @@ mod promotion_evidence;
 mod promotion_proof;
 pub(crate) mod public_universe;
 pub mod publication;
+mod publication_coordinator;
 mod publication_scheduler;
 pub mod r2;
 pub mod r2_durability;
@@ -236,7 +237,7 @@ pub struct ServerState {
     pub config: ServerConfig,
     pub(crate) database_writer: database_writer::DatabaseWriter,
     pub(crate) catalog_authority: catalog_authority::CatalogAuthority,
-    pub(crate) publication_coordinator: Arc<Mutex<()>>,
+    pub(crate) publication_coordinator: Arc<publication_coordinator::PublicationCoordinator>,
     pub(crate) catalog_gc_coordinator: Arc<Mutex<()>>,
     pub(crate) catalog_scratch_coordinator: Arc<catalog_capacity::CatalogScratchCoordinator>,
     pub(crate) publication_readiness: readiness::PublicationReadiness,
@@ -309,7 +310,8 @@ impl ServerState {
             config.catalog_dir.clone(),
             database_writer.clone(),
         );
-        let publication_coordinator = Arc::new(Mutex::new(()));
+        let publication_coordinator =
+            Arc::new(publication_coordinator::PublicationCoordinator::default());
         let catalog_gc_coordinator = Arc::new(Mutex::new(()));
         let catalog_scratch_coordinator =
             Arc::new(catalog_capacity::CatalogScratchCoordinator::default());
