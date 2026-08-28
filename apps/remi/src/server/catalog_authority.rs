@@ -219,24 +219,75 @@ impl CatalogAuthority {
         &self,
         selection: &ProfileRevisionSelection,
     ) -> Result<PinnedProfileCatalog> {
-        let pin_id = uuid::Uuid::new_v4().to_string();
-        let selection = selection.clone();
+        let mut pinned = self.open_selected_profiles(std::slice::from_ref(selection))?;
+        pinned.pop().ok_or_else(|| {
+            anyhow::anyhow!("selected profile batch returned no pinned catalog reader")
+        })
+    }
+
+    /// Pin one complete exact revision set atomically before reopening any
+    /// catalog bytes.
+    ///
+    /// This is the multi-profile export boundary: a slow verification of the
+    /// first catalog cannot leave a later selected revision exposed to GC or
+    /// candidate supersession before its reader pin exists.
+    pub(crate) fn open_selected_profiles(
+        &self,
+        selections: &[ProfileRevisionSelection],
+    ) -> Result<Vec<PinnedProfileCatalog>> {
+        let requests = selections
+            .iter()
+            .map(|selection| (uuid::Uuid::new_v4().to_string(), selection.clone()))
+            .collect::<Vec<_>>();
         let resolved = self.database_writer.execute(|| {
             let conn = open_runtime_db(&self.db_path).with_context(|| {
-                format!(
-                    "open Remi operational database for selected profile '{}' revision {}",
-                    selection.source_profile, selection.profile_revision_sha256
-                )
+                "open Remi operational database for exact selected profile set".to_string()
             })?;
             let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate)
-                .context("acquire exact catalog reader-pin transaction")?;
-            let resolved = resolve_profile_selection(&tx, &self.catalog_dir, selection.clone())?;
-            insert_reader_pin(&tx, &pin_id, &resolved.selection)?;
-            tx.commit().context("commit exact catalog reader pin")?;
+                .context("acquire exact catalog reader-pin set transaction")?;
+            let mut resolved = Vec::with_capacity(requests.len());
+            for (pin_id, selection) in &requests {
+                let profile = resolve_profile_selection(&tx, &self.catalog_dir, selection.clone())
+                    .with_context(|| {
+                        format!(
+                            "resolve selected profile '{}' revision {} for atomic reader pinning",
+                            selection.source_profile, selection.profile_revision_sha256
+                        )
+                    })?;
+                insert_reader_pin(&tx, pin_id, &profile.selection)?;
+                resolved.push((pin_id.clone(), profile));
+            }
+            tx.commit().context("commit exact catalog reader-pin set")?;
             Ok::<_, anyhow::Error>(resolved)
         })?;
 
-        self.open_pinned_resolution(pin_id, resolved)
+        let mut opened = Vec::with_capacity(resolved.len());
+        let mut remaining = resolved.into_iter();
+        while let Some((pin_id, resolved)) = remaining.next() {
+            let selection = resolved.selection.clone();
+            match self.open_cached_resolution(resolved).with_context(|| {
+                format!(
+                    "open atomically pinned profile '{}' revision {}",
+                    selection.source_profile, selection.profile_revision_sha256
+                )
+            }) {
+                Ok(mut profile) => {
+                    profile.pin = Some(self.reader_pin(pin_id));
+                    opened.push(profile);
+                }
+                Err(error) => {
+                    let mut release = vec![self.reader_pin(pin_id)];
+                    release.extend(remaining.map(|(pin_id, _resolved)| self.reader_pin(pin_id)));
+                    release.extend(opened.iter_mut().filter_map(|profile| profile.pin.take()));
+                    drop(opened);
+                    for pin in release {
+                        release_reader_pin_now(&pin.db_path, &pin.pin_id, &pin.database_writer);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Ok(opened)
     }
 
     /// Reopen an exact registered revision without a durable reader pin.
@@ -268,17 +319,21 @@ impl CatalogAuthority {
     ) -> Result<PinnedProfileCatalog> {
         match self.open_cached_resolution(resolved) {
             Ok(mut pinned) => {
-                pinned.pin = Some(ReaderPin {
-                    db_path: self.db_path.clone(),
-                    pin_id,
-                    database_writer: self.database_writer.clone(),
-                });
+                pinned.pin = Some(self.reader_pin(pin_id));
                 Ok(pinned)
             }
             Err(error) => {
                 release_reader_pin(&self.db_path, &pin_id, &self.database_writer);
                 Err(error)
             }
+        }
+    }
+
+    fn reader_pin(&self, pin_id: String) -> ReaderPin {
+        ReaderPin {
+            db_path: self.db_path.clone(),
+            pin_id,
+            database_writer: self.database_writer.clone(),
         }
     }
 

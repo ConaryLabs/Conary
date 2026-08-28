@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 48
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
+revision: 49
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -208,8 +208,14 @@ workflow.
   caller and artifact handoff. Its only input is a successful
   `deploy-remi-candidate` run in `private-candidates` mode. It reopens that
   run's sanitized inspection, requires the exact ordered Fedora, Ubuntu, and
-  Arch revisions, invokes the fixed helper operation through the production
-  SSH boundary, and removes only the staged `/tmp` transport after download.
+  Arch revisions, and shares the non-cancelling `deploy-and-verify` concurrency
+  group with release and candidate deployments. A deployment-triggered
+  candidate replacement cannot race the multi-profile pin/export window. The
+  typed operator also inserts reader pins for the complete three-profile set in
+  one operational transaction before it reopens any catalog bytes, so a slow
+  earlier reopen cannot expose a later selected resource to concurrent GC. The
+  workflow invokes the fixed helper operation through the production SSH
+  boundary and removes only the staged `/tmp` transport after download.
   The runner independently rejects unsafe tar members, noncanonical or
   duplicate-key JSON, revision/source digest drift, incomplete object
   inventories, and wrong-sized or digest-mismatched metadata. The seven-day
