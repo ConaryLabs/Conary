@@ -27,7 +27,7 @@ use crate::server::catalog_authority::{
 };
 use crate::server::catalog_capacity::CatalogScratchCoordinator;
 use crate::server::catalog_refresh::{
-    PublishedProfileCatalog, StagedProfileCatalog, cleanup_candidate_run,
+    ProfileSourceStageInput, PublishedProfileCatalog, StagedProfileCatalog, cleanup_candidate_run,
     finish_staged_profile_catalog, plan_profile_sources, profile_revision_matches_contract,
     publish_staged_profile_catalog, stage_profile_sources,
 };
@@ -312,12 +312,14 @@ async fn stage_profile_catalog_with_heartbeat(
         let sources = stage_profile_sources(
             &run.run_id,
             source_profile,
-            repositories,
+            ProfileSourceStageInput {
+                repositories,
+                reusable_sources,
+            },
             &roots.keyring_dir,
             &roots.catalog_candidate_dir,
             &roots.projection_cache_dir,
             roots.catalog_scratch_coordinator.clone(),
-            reusable_sources,
         )
         .await?;
         let reusable = reusable_profile_catalog(roots, source_profile, sources.members()).await?;

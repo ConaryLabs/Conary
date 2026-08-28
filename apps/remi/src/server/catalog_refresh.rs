@@ -65,6 +65,13 @@ pub struct ProfileSourcePlan {
     pub repository: Repository,
 }
 
+/// Exact configured repositories plus bounded registered-reuse candidates for
+/// one private source-staging operation.
+pub struct ProfileSourceStageInput {
+    pub repositories: Vec<Repository>,
+    pub reusable_sources: BTreeMap<String, DurableSourceCatalogReuseV1>,
+}
+
 /// One source bundle published before its containing profile can activate.
 pub struct PublishedSourceCatalog {
     pub ordinal: u32,
@@ -284,13 +291,16 @@ pub fn plan_profile_sources(
 pub async fn stage_profile_sources(
     run_id: &str,
     profile: &str,
-    repositories: Vec<Repository>,
+    input: ProfileSourceStageInput,
     keyring_dir: &Path,
     catalog_candidate_root: &Path,
     projection_cache_root: &Path,
     scratch_admission: Arc<dyn CatalogScratchAdmission>,
-    reusable_sources: BTreeMap<String, DurableSourceCatalogReuseV1>,
 ) -> Result<StagedProfileSources> {
+    let ProfileSourceStageInput {
+        repositories,
+        reusable_sources,
+    } = input;
     let plans = plan_profile_sources(profile, repositories)?;
     let planned_identities = plans
         .iter()
