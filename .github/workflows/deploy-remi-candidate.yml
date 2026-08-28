@@ -203,15 +203,55 @@ jobs:
             and .transition_backups.allocated_bytes >= 0
           ' remi-predeployment-storage.json >/dev/null
           if [[ "$COMPLETION_MODE" == "private-candidates" ]]; then
+            baseline_started_ns="$(date -u +%s%N)"
+            set +e
             ssh $ssh_opts "$target" \
               "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi-candidate-baseline '$VERSION' '$BINARY_SHA256' '$remote_bundle'" \
               > remi-predeployment-inspection.json
-            jq -e -f deploy/remi-predeployment-inspection.jq \
-              remi-predeployment-inspection.json >/dev/null
-            baseline_bytes="$(wc -c < remi-predeployment-inspection.json)"
-            jq -e --argjson baseline_bytes "$baseline_bytes" \
-              '.measurement.output_bytes == $baseline_bytes' \
-              remi-predeployment-inspection.json >/dev/null
+            baseline_status=$?
+            set -e
+            baseline_valid=false
+            if (( baseline_status == 0 )) \
+              && jq -e -f deploy/remi-predeployment-inspection.jq \
+                remi-predeployment-inspection.json >/dev/null; then
+              baseline_bytes="$(wc -c < remi-predeployment-inspection.json)"
+              if jq -e --argjson baseline_bytes "$baseline_bytes" \
+                '.measurement.output_bytes == $baseline_bytes' \
+                remi-predeployment-inspection.json >/dev/null; then
+                baseline_valid=true
+              fi
+            fi
+            if [[ "$baseline_valid" != true ]]; then
+              baseline_finished_ns="$(date -u +%s%N)"
+              baseline_duration_ms=$((
+                (baseline_finished_ns - baseline_started_ns) / 1000000
+              ))
+              jq -n -c \
+                --arg commit_sha "$CANDIDATE_SHA" \
+                --arg binary_sha256 "$BINARY_SHA256" \
+                --arg completion_mode "$COMPLETION_MODE" \
+                --argjson duration_ms "$baseline_duration_ms" '
+                  {
+                    deployment_evidence_schema_version: 2,
+                    inspection_available: false,
+                    deployment: {
+                      commit_sha: $commit_sha,
+                      binary_sha256: $binary_sha256,
+                      completion_mode: $completion_mode,
+                      outcome: "failure",
+                      failure_phase: "predeployment-candidate-baseline",
+                      transition_completed_at: null,
+                      phases: [{
+                        name: "predeployment-candidate-baseline",
+                        outcome: "failure",
+                        duration_ms: $duration_ms
+                      }]
+                    }
+                  }
+                ' > remi-deployment-inspection.json
+              echo "predeployment candidate baseline failed with status ${baseline_status}" >&2
+              exit 1
+            fi
           fi
           scp $ssh_opts deploy/remi-repositories.toml "${target}:${remote_repositories}"
           set +e

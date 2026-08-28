@@ -556,7 +556,16 @@ inspect_remi_candidate_baseline() {
     [[ "$actual_sha" == "$expected_sha" ]] || die "candidate Remi SHA-256 mismatch"
     [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
         die "candidate binary version does not match ${version}"
-    "$candidate" deployment baseline --config "$(root_path /etc/conary/remi.toml)"
+    local installed baseline_owner
+    installed="$(root_path /usr/local/bin/remi)"
+    if [[ -e "$installed" || -L "$installed" ]]; then
+        [[ -f "$installed" && ! -L "$installed" && -x "$installed" ]] ||
+            die "installed Remi baseline owner is not a plain executable: $installed"
+        baseline_owner="$installed"
+    else
+        baseline_owner="$candidate"
+    fi
+    "$baseline_owner" deployment baseline --config "$(root_path /etc/conary/remi.toml)"
 }
 
 inspect_remi_storage() {

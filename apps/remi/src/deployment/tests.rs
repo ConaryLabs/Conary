@@ -135,6 +135,22 @@ fn inspect_state_proves_exact_reconciled_source_authority() {
 }
 
 #[test]
+fn deployment_baseline_requires_existing_database_without_creating_it() {
+    let (_temp, options) = arrange();
+    prepare(&options).unwrap();
+
+    let config = RemiConfig::load(&options.config_path).unwrap();
+    let db_path = config.storage_root().join("metadata/conary.db");
+    assert!(!db_path.exists());
+    let error = inspect_baseline(&options.config_path).unwrap_err();
+    assert!(
+        error.to_string().contains("Remi database is missing"),
+        "unexpected missing-database error: {error:#}"
+    );
+    assert!(!db_path.exists());
+}
+
+#[test]
 fn deployment_baseline_is_typed_bounded_and_self_measuring() {
     let (_temp, options) = arrange();
     prepare(&options).unwrap();
