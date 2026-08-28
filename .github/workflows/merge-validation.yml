@@ -153,11 +153,19 @@ jobs:
         with:
           phase: main-clippy
 
-  workspace-tests:
-    name: workspace-tests
+  workspace-test-shards:
+    name: workspace-test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: gnu-compiler-cache
     if: ${{ always() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: conary
+          - shard: conary-core-lib
+          - shard: conary-core-targets
+          - shard: remaining
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Require exact compiler-cache seed
@@ -169,13 +177,40 @@ jobs:
           compiler-cache: reader
       - name: Enable exact ownership-test namespaces
         uses: ./.github/actions/setup-exact-ownership-tests
-      - name: Run workspace tests
-        run: cargo test --workspace --exclude conary-test --verbose
-      - name: Retain workspace-test compiler-cache evidence
+      - name: Run workspace test shard
+        env:
+          TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          case "$TEST_SHARD" in
+            conary) cargo test -p conary --verbose ;;
+            conary-core-lib) cargo test -p conary-core --lib --verbose ;;
+            conary-core-targets) cargo test -p conary-core --bins --test '*' --verbose ;;
+            remaining)
+              cargo test --workspace --exclude conary-test \
+                --exclude conary --exclude conary-core --verbose
+              ;;
+            *)
+              echo "unknown workspace test shard: $TEST_SHARD" >&2
+              exit 1
+              ;;
+          esac
+      - name: Retain workspace-shard compiler-cache evidence
         if: ${{ always() }}
         uses: ./.github/actions/summarize-rust-cache
         with:
-          phase: main-workspace-tests
+          phase: main-workspace-${{ matrix.shard }}
+
+  workspace-tests:
+    name: workspace-tests
+    runs-on: ubuntu-latest
+    needs: workspace-test-shards
+    if: ${{ always() }}
+    steps:
+      - name: Require every workspace test shard
+        env:
+          SHARDS_RESULT: ${{ needs.workspace-test-shards.result }}
+        run: test "$SHARDS_RESULT" = success
 
   alpm-parity-producer:
     name: alpm-parity-producer

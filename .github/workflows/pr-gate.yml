@@ -54,13 +54,33 @@ jobs:
             echo "producer checkout is not clean" >&2
             exit 1
           }
+      - name: Restore exact prior-attempt native matrix artifact
+        id: native-artifact-restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/native-matrix-artifact
+          key: native-matrix-artifact-v1-${{ github.run_id }}-${{ github.sha }}
+      - name: Verify reusable exact-run matrix artifact
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit == 'true' }}
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/native-matrix-artifact
+        run: |
+          set -euo pipefail
+          scripts/native-matrix-artifact.sh verify \
+            "$ARTIFACT_DIR" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" \
+            > "${RUNNER_TEMP}/native-matrix-reused-verification.json"
+          jq -e '.schema_version == 1' \
+            "${RUNNER_TEMP}/native-matrix-reused-verification.json" >/dev/null
       - name: Start dependency setup clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         id: setup-start
         run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup-rust-workspace
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         with:
           toolchain: 1.98.0
       - name: Finish dependency setup clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         id: setup
         env:
           STARTED_NS: ${{ steps.setup-start.outputs.started_ns }}
@@ -68,15 +88,19 @@ jobs:
           finished_ns="$(date -u +%s%N)"
           echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
       - name: Install native matrix compiler inputs
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         run: >-
           bash scripts/ci-install-ubuntu-packages.sh
           musl-tools gperf linux-libc-dev
       - name: Install the native matrix Rust target
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         run: rustup target add x86_64-unknown-linux-musl
       - name: Start compiler-cache setup clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         id: cache-start
         run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
       - name: Bind exact native compiler-cache policy
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         id: native-cache-policy
         run: |
           set -euo pipefail
@@ -129,6 +153,7 @@ jobs:
             echo "- target: \`x86_64-unknown-linux-musl\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Restore native compiler-cache seed
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         id: native-cache-restore
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -136,10 +161,12 @@ jobs:
           key: ${{ steps.native-cache-policy.outputs.exact_key }}
           restore-keys: ${{ steps.native-cache-policy.outputs.restore_prefix }}
       - name: Install bounded shared compiler cache
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.16.0
       - name: Finish compiler-cache setup clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         id: cache
         env:
           STARTED_NS: ${{ steps.cache-start.outputs.started_ns }}
@@ -162,6 +189,7 @@ jobs:
           finished_ns="$(date -u +%s%N)"
           echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
       - name: Start exact-head artifact build clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         id: build-start
         run: |
           metrics="${RUNNER_TEMP}/native-matrix-static-build-metrics.json"
@@ -169,10 +197,12 @@ jobs:
           echo "metrics=$metrics" >> "$GITHUB_OUTPUT"
           echo "CONARY_STATIC_BUILD_METRICS_PATH=$metrics" >> "$GITHUB_ENV"
       - name: Build all static matrix executables once
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         uses: ./.github/actions/build-static-conary
         with:
           with-test-harness: "true"
       - name: Finish exact-head artifact build clock
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         id: build
         env:
           STARTED_NS: ${{ steps.build-start.outputs.started_ns }}
@@ -188,20 +218,21 @@ jobs:
           echo "stats=$stats" >> "$GITHUB_OUTPUT"
           echo "metrics=$metrics" >> "$GITHUB_OUTPUT"
       - name: Stop native compiler cache before bulk save
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         run: |
           "$SCCACHE_PATH" --stop-server
       - name: Start native compiler-cache save clock
-        if: ${{ steps.native-cache-restore.outputs.cache-hit != 'true' }}
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}
         id: cache-save-start
         run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
       - name: Save exact native compiler cache
-        if: ${{ steps.native-cache-restore.outputs.cache-hit != 'true' }}
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ${{ runner.temp }}/native-matrix-sccache
           key: ${{ steps.native-cache-policy.outputs.exact_key }}
       - name: Finish native compiler-cache save clock
-        if: ${{ steps.native-cache-restore.outputs.cache-hit != 'true' }}
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}
         id: cache-save
         env:
           STARTED_NS: ${{ steps.cache-save-start.outputs.started_ns }}
@@ -209,10 +240,11 @@ jobs:
           finished_ns="$(date -u +%s%N)"
           echo "duration_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
       - name: Record exact native compiler-cache reuse
-        if: ${{ steps.native-cache-restore.outputs.cache-hit == 'true' }}
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit == 'true' }}
         id: cache-save-hit
         run: echo "duration_ms=0" >> "$GITHUB_OUTPUT"
       - name: Package immutable exact-head matrix evidence
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         id: package
         env:
           BUILD_MS: ${{ steps.build.outputs.duration_ms }}
@@ -231,37 +263,46 @@ jobs:
           echo "directory=$output_dir" >> "$GITHUB_OUTPUT"
           echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
       - name: Verify fresh exact-head matrix artifact
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
         env:
-          ARTIFACT_DIR: ${{ steps.package.outputs.directory }}
+          ARTIFACT_DIR: ${{ runner.temp }}/native-matrix-artifact
         run: |
           scripts/native-matrix-artifact.sh verify \
             "$ARTIFACT_DIR" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" \
             > "${RUNNER_TEMP}/native-matrix-fresh-verification.json"
           jq -e '.schema_version == 1' \
             "${RUNNER_TEMP}/native-matrix-fresh-verification.json" >/dev/null
+      - name: Save verified exact-run matrix artifact
+        if: ${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ runner.temp }}/native-matrix-artifact
+          key: native-matrix-artifact-v1-${{ github.run_id }}-${{ github.sha }}
       - name: Upload immutable exact-head matrix artifact
         id: upload
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: native-matrix-${{ github.sha }}
           path: |
-            ${{ steps.package.outputs.directory }}/native-matrix-artifact-manifest.json
-            ${{ steps.package.outputs.directory }}/native-matrix-artifacts.tar.gz
-            ${{ steps.package.outputs.directory }}/sccache-stats.json
-            ${{ steps.package.outputs.directory }}/static-build-metrics.json
+            ${{ runner.temp }}/native-matrix-artifact/native-matrix-artifact-manifest.json
+            ${{ runner.temp }}/native-matrix-artifact/native-matrix-artifacts.tar.gz
+            ${{ runner.temp }}/native-matrix-artifact/sccache-stats.json
+            ${{ runner.temp }}/native-matrix-artifact/static-build-metrics.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
       - name: Summarize protected matrix build latency
         env:
           ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
-          MANIFEST: ${{ steps.package.outputs.manifest }}
+          ARTIFACT_REUSED: ${{ steps.native-artifact-restore.outputs.cache-hit == 'true' }}
+          MANIFEST: ${{ runner.temp }}/native-matrix-artifact/native-matrix-artifact-manifest.json
         run: |
           {
             echo "### Protected native matrix producer"
             echo
             echo "- commit: \`$GITHUB_SHA\`"
             echo "- artifact_digest: \`$ARTIFACT_DIGEST\`"
+            echo "- exact_run_artifact_reused: \`$ARTIFACT_REUSED\`"
             jq -r '
               "- dependency_setup_ms: `\(.measurements.dependency_setup_ms)`\n"
               + "- compiler_cache_setup_ms: `\(.measurements.compiler_cache_setup_ms)`\n"
@@ -407,11 +448,19 @@ jobs:
         with:
           phase: pr-clippy
 
-  workspace-tests:
-    name: workspace-tests
+  workspace-test-shards:
+    name: workspace-test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: gnu-compiler-cache
     if: ${{ always() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: conary
+          - shard: conary-core-lib
+          - shard: conary-core-targets
+          - shard: remaining
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Require exact compiler-cache seed
@@ -423,13 +472,40 @@ jobs:
           compiler-cache: reader
       - name: Enable exact ownership-test namespaces
         uses: ./.github/actions/setup-exact-ownership-tests
-      - name: Run workspace tests
-        run: cargo test --workspace --exclude conary-test --verbose
-      - name: Retain workspace-test compiler-cache evidence
+      - name: Run workspace test shard
+        env:
+          TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          case "$TEST_SHARD" in
+            conary) cargo test -p conary --verbose ;;
+            conary-core-lib) cargo test -p conary-core --lib --verbose ;;
+            conary-core-targets) cargo test -p conary-core --bins --test '*' --verbose ;;
+            remaining)
+              cargo test --workspace --exclude conary-test \
+                --exclude conary --exclude conary-core --verbose
+              ;;
+            *)
+              echo "unknown workspace test shard: $TEST_SHARD" >&2
+              exit 1
+              ;;
+          esac
+      - name: Retain workspace-shard compiler-cache evidence
         if: ${{ always() }}
         uses: ./.github/actions/summarize-rust-cache
         with:
-          phase: pr-workspace-tests
+          phase: pr-workspace-${{ matrix.shard }}
+
+  workspace-tests:
+    name: workspace-tests
+    runs-on: ubuntu-latest
+    needs: workspace-test-shards
+    if: ${{ always() }}
+    steps:
+      - name: Require every workspace test shard
+        env:
+          SHARDS_RESULT: ${{ needs.workspace-test-shards.result }}
+        run: test "$SHARDS_RESULT" = success
 
   alpm-parity-producer:
     name: alpm-parity-producer

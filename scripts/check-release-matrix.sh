@@ -297,9 +297,13 @@ for workflow in "$pr_workflow" "$merge_workflow" "$release_build"; do
     require_literal_count "$workflow" 'uses: ./.github/actions/setup-exact-ownership-tests' 1 'shared exact ownership setup'
     forbid_match "$workflow" 'apparmor_restrict_unprivileged_userns|unshare --user' 'inline exact ownership namespace setup'
 done
+namespace_before_shards_pattern="uses: \\./\\.github/actions/setup-exact-ownership-tests[\\s\\S]*conary\\) cargo test -p conary --verbose[\\s\\S]*conary-core-lib\\) cargo test -p conary-core --lib --verbose[\\s\\S]*conary-core-targets\\) cargo test -p conary-core --bins --test '\\*' --verbose[\\s\\S]*cargo test --workspace --exclude conary-test[\\s\\S]*--exclude conary --exclude conary-core --verbose"
+require_job_match "$pr_workflow" workspace-test-shards "$namespace_before_shards_pattern" 'PR workspace test shards and ownership setup order'
+require_job_match "$merge_workflow" workspace-test-shards "$namespace_before_shards_pattern" 'merge workspace test shards and ownership setup order'
+workspace_aggregate_pattern='needs: workspace-test-shards[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*SHARDS_RESULT: \$\{\{ needs\.workspace-test-shards\.result \}\}[\s\S]*test "\$SHARDS_RESULT" = success'
+require_job_match "$pr_workflow" workspace-tests "$workspace_aggregate_pattern" 'PR stable workspace aggregate gate'
+require_job_match "$merge_workflow" workspace-tests "$workspace_aggregate_pattern" 'merge stable workspace aggregate gate'
 namespace_before_tests_pattern='uses: \./\.github/actions/setup-exact-ownership-tests[\s\S]*cargo test --workspace --exclude conary-test --verbose'
-require_job_match "$pr_workflow" workspace-tests "$namespace_before_tests_pattern" 'PR workspace tests exact ownership setup order'
-require_job_match "$merge_workflow" workspace-tests "$namespace_before_tests_pattern" 'merge workspace tests exact ownership setup order'
 require_job_match "$release_build" workspace-validation "$namespace_before_tests_pattern" 'release workspace validation exact ownership setup order'
 alpm_parity_pattern="${arch_release_image}[\s\S]*DisableDownloadTimeout[\s\S]*${arch_archive_pattern}[\s\S]*rustup default 1\.98\.0[\s\S]*cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose[\s\S]*cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle --bin conary-alpm-resolution-oracle -- -D warnings"
 require_job_match "$pr_workflow" alpm-parity-producer "$alpm_parity_pattern" 'hosted PR ALPM parity producer proof'

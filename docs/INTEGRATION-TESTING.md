@@ -201,6 +201,14 @@ under the exact workflow commit, and must finish before every consumer restores
 that exact seed read-only. This avoids a per-object remote request storm while
 retaining typed request, hit, miss, write, and error counts for every job;
 cache contents never replace a job's own command or result.
+After a producer has packaged and independently verified the exact static
+bundle, it also retains that bundle under the workflow run ID and tested commit.
+A retry of that same run verifies and reopens those exact bytes before skipping
+toolchain setup and relinking; a different run or source commit cannot reuse
+them. Workspace tests run as parallel Conary, conary-core library, conary-core
+binary/integration-target, and remaining-workspace shards behind the stable fail-closed
+`workspace-tests` aggregate rather than serializing every test owner in one
+runner.
 
 `scripts/build-qemu-guest-image.sh` builds such an image from a pinned official
 Fedora Cloud Base qcow2 plus provisioning, and `bash

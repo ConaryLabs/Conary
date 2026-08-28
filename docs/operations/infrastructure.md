@@ -493,6 +493,12 @@ old process. That can fail with `Text file busy`.
   The protected native-matrix producer applies the same bulk-transfer model to
   its distinct musl target and static dependency policy: it restores one prior
   seed, compiles locally, stops sccache, and saves the new exact-head seed once.
+  Once independently verified, the packaged static bundle is cached under the
+  exact workflow run and commit so a retry can verify and reopen it before
+  skipping setup and relinking. This reuse never crosses runs or source heads.
+  Workspace tests fan out by Conary, conary-core library, conary-core binary
+  and integration targets, and remaining workspace ownership, then converge on the stable
+  fail-closed `workspace-tests` check.
 - `deploy-and-verify` consumes that serialized metadata instead of re-deriving
   product behavior locally. It deploys and proves Remi first, then stages and
   proves Conary release assets and static sites from the same suite bundle.

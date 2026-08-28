@@ -73,6 +73,34 @@ struct WorkspaceTestJob {
 }
 
 #[derive(Debug, Deserialize)]
+struct WorkspaceTestShardJob {
+    name: String,
+    needs: String,
+    #[serde(rename = "if")]
+    condition: String,
+    strategy: WorkspaceTestShardStrategy,
+    steps: Vec<WorkflowStep>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceTestShardStrategy {
+    #[serde(rename = "fail-fast")]
+    fail_fast: bool,
+    matrix: WorkspaceTestShardMatrix,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceTestShardMatrix {
+    include: Vec<WorkspaceTestShardLane>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceTestShardLane {
+    shard: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct CompilerCachePrimerJob {
     name: String,
     #[serde(rename = "timeout-minutes")]
@@ -360,9 +388,44 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
     assert!(cache_policy_run.contains("${restore_prefix}${GITHUB_SHA}"));
     assert!(cache_policy_run.contains("SCCACHE_DIR=$RUNNER_TEMP/native-matrix-sccache"));
 
-    let restore = action_step(
+    let artifact_restore = named_step(
         &job.steps,
-        "actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7",
+        "Restore exact prior-attempt native matrix artifact",
+    );
+    assert_eq!(
+        artifact_restore.uses.as_deref(),
+        Some("actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7")
+    );
+    assert_eq!(
+        artifact_restore
+            .with
+            .get("path")
+            .and_then(serde_yaml::Value::as_str),
+        Some("${{ runner.temp }}/native-matrix-artifact")
+    );
+    assert_eq!(
+        artifact_restore
+            .with
+            .get("key")
+            .and_then(serde_yaml::Value::as_str),
+        Some("native-matrix-artifact-v1-${{ github.run_id }}-${{ github.sha }}")
+    );
+    let reused_verify = named_step(&job.steps, "Verify reusable exact-run matrix artifact");
+    assert_eq!(
+        reused_verify.condition.as_deref(),
+        Some("${{ steps.native-artifact-restore.outputs.cache-hit == 'true' }}")
+    );
+    assert!(
+        reused_verify
+            .run
+            .as_deref()
+            .is_some_and(|run| run.contains("native-matrix-artifact.sh verify"))
+    );
+
+    let restore = named_step(&job.steps, "Restore native compiler-cache seed");
+    assert_eq!(
+        restore.uses.as_deref(),
+        Some("actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7")
     );
     assert_eq!(
         restore.with.get("path").and_then(serde_yaml::Value::as_str),
@@ -380,13 +443,16 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
         Some("${{ steps.native-cache-policy.outputs.restore_prefix }}")
     );
 
-    let save = action_step(
-        &job.steps,
-        "actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7",
+    let save = named_step(&job.steps, "Save exact native compiler cache");
+    assert_eq!(
+        save.uses.as_deref(),
+        Some("actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7")
     );
     assert_eq!(
         save.condition.as_deref(),
-        Some("${{ steps.native-cache-restore.outputs.cache-hit != 'true' }}")
+        Some(
+            "${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}"
+        )
     );
     assert_eq!(
         save.with.get("key").and_then(serde_yaml::Value::as_str),
@@ -405,12 +471,20 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
             .and_then(serde_yaml::Value::as_str),
         Some("true")
     );
+    assert_eq!(
+        build.condition.as_deref(),
+        Some("${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}")
+    );
 
     let package = named_step(&job.steps, "Package immutable exact-head matrix evidence");
     let package_run = package.run.as_deref().expect("artifact package command");
     assert!(package_run.contains("native-matrix-artifact.sh package"));
     assert!(package_run.contains("$GITHUB_SHA"));
     assert!(package_run.contains("$GITHUB_RUN_ID"));
+    assert_eq!(
+        package.condition.as_deref(),
+        Some("${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}")
+    );
 
     let verify = named_step(&job.steps, "Verify fresh exact-head matrix artifact");
     assert!(
@@ -418,6 +492,27 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
             .run
             .as_deref()
             .is_some_and(|run| run.contains("native-matrix-artifact.sh verify"))
+    );
+    assert_eq!(
+        verify.condition.as_deref(),
+        Some("${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}")
+    );
+
+    let artifact_save = named_step(&job.steps, "Save verified exact-run matrix artifact");
+    assert_eq!(
+        artifact_save.uses.as_deref(),
+        Some("actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7")
+    );
+    assert_eq!(
+        artifact_save.condition.as_deref(),
+        Some("${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}")
+    );
+    assert_eq!(
+        artifact_save
+            .with
+            .get("key")
+            .and_then(serde_yaml::Value::as_str),
+        Some("native-matrix-artifact-v1-${{ github.run_id }}-${{ github.sha }}")
     );
 
     let upload = named_step(&job.steps, "Upload immutable exact-head matrix artifact");
@@ -722,7 +817,29 @@ fn native_pm_parity_gate_runs_the_full_deterministic_suite_and_timeout_contract(
 #[test]
 fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     let workflow = load_workflow();
-    let job: WorkspaceTestJob = parse_job(&workflow, "workspace-tests");
+    let job: WorkspaceTestShardJob = parse_job(&workflow, "workspace-test-shards");
+
+    assert_eq!(job.name, "workspace-test (${{ matrix.shard }})");
+    assert_eq!(job.needs, "gnu-compiler-cache");
+    assert_eq!(job.condition, "${{ always() }}");
+    assert!(!job.strategy.fail_fast);
+    assert_eq!(
+        job.strategy.matrix.include,
+        [
+            WorkspaceTestShardLane {
+                shard: "conary".to_string(),
+            },
+            WorkspaceTestShardLane {
+                shard: "conary-core-lib".to_string(),
+            },
+            WorkspaceTestShardLane {
+                shard: "conary-core-targets".to_string(),
+            },
+            WorkspaceTestShardLane {
+                shard: "remaining".to_string(),
+            },
+        ]
+    );
 
     let namespace = named_step(&job.steps, "Enable exact ownership-test namespaces");
     assert_eq!(
@@ -733,7 +850,7 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     assert!(!namespace.continue_on_error);
     assert_eq!(namespace.condition, None);
 
-    let tests = named_step(&job.steps, "Run workspace tests");
+    let tests = named_step(&job.steps, "Run workspace test shard");
     let namespace_index = job
         .steps
         .iter()
@@ -742,18 +859,46 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     let tests_index = job
         .steps
         .iter()
-        .position(|step| step.name.as_deref() == Some("Run workspace tests"))
+        .position(|step| step.name.as_deref() == Some("Run workspace test shard"))
         .expect("workspace test step should exist");
     assert!(
         namespace_index < tests_index,
         "namespace setup must run before workspace tests"
     );
     assert_eq!(
-        tests.run.as_deref(),
-        Some("cargo test --workspace --exclude conary-test --verbose")
+        tests.env.get("TEST_SHARD").map(String::as_str),
+        Some("${{ matrix.shard }}")
     );
+    let command = tests.run.as_deref().expect("workspace shard dispatch");
+    for predicate in [
+        "conary) cargo test -p conary --verbose",
+        "conary-core-lib) cargo test -p conary-core --lib --verbose",
+        "conary-core-targets) cargo test -p conary-core --bins --test '*' --verbose",
+        "cargo test --workspace --exclude conary-test",
+        "--exclude conary --exclude conary-core --verbose",
+        "unknown workspace test shard",
+    ] {
+        assert!(
+            command.contains(predicate),
+            "workspace shards need {predicate}"
+        );
+    }
     assert!(!tests.continue_on_error);
     assert_eq!(tests.condition, None);
+
+    let aggregate: GateJob = parse_job(&workflow, "workspace-tests");
+    assert_eq!(aggregate.name, "workspace-tests");
+    assert_eq!(aggregate.condition, "${{ always() }}");
+    assert_eq!(aggregate.needs, "workspace-test-shards");
+    let require = named_step(&aggregate.steps, "Require every workspace test shard");
+    assert_eq!(
+        require.env.get("SHARDS_RESULT").map(String::as_str),
+        Some("${{ needs.workspace-test-shards.result }}")
+    );
+    assert_eq!(
+        require.run.as_deref(),
+        Some("test \"$SHARDS_RESULT\" = success")
+    );
 }
 
 #[test]
@@ -762,7 +907,6 @@ fn compatible_protected_jobs_share_compiler_outputs_with_typed_evidence() {
     assert_compiler_cache_primer(&pr, "pr-gnu-cache-primer");
     for (job_id, phase) in [
         ("clippy", "pr-clippy"),
-        ("workspace-tests", "pr-workspace-tests"),
         ("generation-db-reflink", "pr-generation-db-reflink"),
         ("conary-test-crate", "pr-conary-test"),
         ("doctests", "pr-doctests"),
@@ -770,12 +914,13 @@ fn compatible_protected_jobs_share_compiler_outputs_with_typed_evidence() {
         let job: WorkspaceTestJob = parse_job(&pr, job_id);
         assert_protected_compiler_cache_reader(&job, phase);
     }
+    let pr_shards: WorkspaceTestJob = parse_job(&pr, "workspace-test-shards");
+    assert_protected_compiler_cache_reader(&pr_shards, "pr-workspace-${{ matrix.shard }}");
 
     let main = load_workflow_from(merge_validation_workflow_path());
     assert_compiler_cache_primer(&main, "main-gnu-cache-primer");
     for (job_id, phase) in [
         ("clippy", "main-clippy"),
-        ("workspace-tests", "main-workspace-tests"),
         ("generation-db-reflink", "main-generation-db-reflink"),
         ("conary-test-crate", "main-conary-test"),
         ("doctests", "main-doctests"),
@@ -784,6 +929,8 @@ fn compatible_protected_jobs_share_compiler_outputs_with_typed_evidence() {
         let job: WorkspaceTestJob = parse_job(&main, job_id);
         assert_protected_compiler_cache_reader(&job, phase);
     }
+    let main_shards: WorkspaceTestJob = parse_job(&main, "workspace-test-shards");
+    assert_protected_compiler_cache_reader(&main_shards, "main-workspace-${{ matrix.shard }}");
 }
 
 #[test]

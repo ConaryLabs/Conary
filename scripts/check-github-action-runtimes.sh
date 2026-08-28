@@ -265,8 +265,20 @@ if [[ -f "$native_matrix_workflow" ]]; then
     'uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7' \
     'native matrix cache save must use the pinned split cache action'
   require_native_matrix_fixed \
-    "if: \${{ steps.native-cache-restore.outputs.cache-hit != 'true' }}" \
+    "if: \${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}" \
     'native matrix cache must save only a new exact key'
+  require_native_matrix_fixed \
+    'key: native-matrix-artifact-v1-${{ github.run_id }}-${{ github.sha }}' \
+    'native matrix artifact reuse must bind the exact workflow run and source'
+  require_native_matrix_fixed \
+    "if: \${{ steps.native-artifact-restore.outputs.cache-hit == 'true' }}" \
+    'native matrix artifact reuse must verify only a restored exact key'
+  require_native_matrix_fixed \
+    'Verify reusable exact-run matrix artifact' \
+    'native matrix artifact reuse must retain an explicit verification boundary'
+  require_native_matrix_fixed \
+    'Save verified exact-run matrix artifact' \
+    'native matrix artifact cache must be written only after fresh verification'
   if rg -q --fixed-strings 'SCCACHE_GHA_ENABLED' "$native_matrix_workflow"; then
     violations+=("${native_matrix_workflow}: native matrix cache must not use the per-object GitHub backend")
   fi
