@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
 revision: 91
-summary: Document causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+summary: Document causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -162,6 +162,23 @@ computed table cardinalities, and orphan rejection, so cache lookup does not
 replay any complete relation pass.
 The schema hard cut makes older cache entries misses; separately loaded bundles
 and signed artifacts retain their own verification authorities.
+
+Before projection-cache materialization, refresh also resolves the latest
+successful private-candidate and active profile manifests through the durable
+resource registry. A planned member may offer its exact registered
+`SourceSnapshotV1` and canonical bundle path as a reuse candidate. That offer
+does not establish freshness: the native parser independently authenticates
+the current top-level root and every projection-affecting child, rebuilds the
+complete source authority, and accepts reuse only when it is byte-for-byte the
+registered manifest authority. An exact match performs one registered durable
+bundle reopen, creates and reserves no source-candidate SQLite file, and
+carries that reader directly through profile composition and the already-
+published source boundary. The registered reopen repeats file type and
+sidecar, SHA-256 and size, SQLite schema/integrity, embedded binding, retained
+metadata, and exact directory checks; its versioned durable attestation avoids
+another normalized-relation replay. Changed authenticated identity takes the
+ordinary projection-cache or parser path. Missing, malformed, noncanonical, or
+tampered registered authority fails closed instead of becoming a cache miss.
 
 Operational resource identity is the canonical source- or profile-manifest
 SHA-256. The catalog artifact SHA-256 is a separately verified byte identity,

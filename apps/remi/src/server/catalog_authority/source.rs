@@ -4,12 +4,13 @@
 
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::{RemiCatalogResource, RemiCatalogResourceKind};
+use conary_core::repository::DurableSourceCatalogReuseV1;
 use conary_core::repository::catalog::{
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogReader, ProfileSourceMemberV2,
     SourceSnapshotV1, verify_source_catalog_bundle,
 };
 
-use super::{CatalogAuthority, PinnedProfileCatalog};
+use super::{CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection};
 use crate::server::open_runtime_db;
 
 struct VerifiedSourceCatalog {
@@ -23,7 +24,34 @@ pub(crate) struct VerifiedSourceBundle {
     pub(crate) bundle_path: std::path::PathBuf,
 }
 
+struct RegisteredSourceCatalog {
+    manifest: SourceSnapshotV1,
+    bundle_path: std::path::PathBuf,
+}
+
 impl CatalogAuthority {
+    /// Resolve every exact registered source below one selected profile
+    /// without opening catalog bytes. The native parser later accepts a
+    /// selection only after current authenticated metadata matches and then
+    /// performs the one complete durable reopen.
+    pub(crate) fn inspect_source_reuse_for_selection(
+        &self,
+        selection: &ProfileRevisionSelection,
+    ) -> Result<Vec<(u32, DurableSourceCatalogReuseV1)>> {
+        let inspected = self.inspect_selected_profile(selection)?;
+        let mut reusable = Vec::with_capacity(inspected.manifest.members.len());
+        for member in &inspected.manifest.members {
+            let registered =
+                self.resolve_registered_source_catalog(&selection.source_profile, member)?;
+            reusable.push((
+                member.ordinal,
+                DurableSourceCatalogReuseV1::new(registered.manifest, registered.bundle_path)
+                    .context("construct durable source reuse selection")?,
+            ));
+        }
+        Ok(reusable)
+    }
+
     /// Reopen one exact source member and retain its verified bundle path.
     ///
     /// Native-oracle materialization uses this path to consume retained
@@ -146,6 +174,26 @@ impl CatalogAuthority {
         pinned: &PinnedProfileCatalog,
         member: &ProfileSourceMemberV2,
     ) -> Result<VerifiedSourceCatalog> {
+        let registered = self.resolve_registered_source_catalog(pinned.source_profile(), member)?;
+        let reader = verify_source_catalog_bundle(&registered.bundle_path, &registered.manifest)
+            .with_context(|| {
+                format!(
+                    "verify durable source snapshot bundle {}",
+                    registered.bundle_path.display()
+                )
+            })?;
+        Ok(VerifiedSourceCatalog {
+            manifest: registered.manifest,
+            reader,
+            bundle_path: registered.bundle_path,
+        })
+    }
+
+    fn resolve_registered_source_catalog(
+        &self,
+        source_profile: &str,
+        member: &ProfileSourceMemberV2,
+    ) -> Result<RegisteredSourceCatalog> {
         let source_snapshot_sha256 = member.source_snapshot_sha256.clone();
         let db_path = self.db_path.clone();
         let resource = self.database_writer.execute(|| {
@@ -178,12 +226,12 @@ impl CatalogAuthority {
                 resource.resource_sha256
             );
         }
-        if resource.source_profile != pinned.source_profile() {
+        if resource.source_profile != source_profile {
             bail!(
                 "source snapshot {} belongs to '{}' instead of '{}'",
                 resource.resource_sha256,
                 resource.source_profile,
-                pinned.source_profile()
+                source_profile
             );
         }
 
@@ -193,7 +241,7 @@ impl CatalogAuthority {
             .manifest_sha256()
             .context("compute durable source snapshot digest")?;
         if manifest_digest != source_snapshot_sha256
-            || manifest.source_profile != pinned.source_profile()
+            || manifest.source_profile != source_profile
             || manifest.source_identity != member.source_identity
             || manifest.repository_identity != member.repository_identity
         {
@@ -224,15 +272,8 @@ impl CatalogAuthority {
             .catalog_dir
             .join("sources")
             .join(&source_snapshot_sha256);
-        let reader = verify_source_catalog_bundle(&bundle_path, &manifest).with_context(|| {
-            format!(
-                "verify durable source snapshot bundle {}",
-                bundle_path.display()
-            )
-        })?;
-        Ok(VerifiedSourceCatalog {
+        Ok(RegisteredSourceCatalog {
             manifest,
-            reader,
             bundle_path,
         })
     }

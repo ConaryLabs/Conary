@@ -2,7 +2,7 @@
 
 //! Private construction and durable publication of one immutable profile catalog.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -13,13 +13,15 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::Repository;
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, CatalogReader, CatalogScratchAdmission, ProfileCatalogMemberInputV2,
-    ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1, derive_profile_catalog_members,
-    publish_profile_catalog_bundle_verified, publish_source_catalog_bundle_verified,
+    CATALOG_FILE_NAME, CatalogReader, CatalogScopeV1, CatalogScratchAdmission,
+    ProfileCatalogMemberInputV2, ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1,
+    derive_profile_catalog_members, publish_profile_catalog_bundle_verified,
+    publish_source_catalog_bundle_verified,
     write_profile_catalog_candidate_verified_with_scratch_admission,
     write_profile_catalog_manifest_verified, write_source_catalog_manifest_verified,
 };
 use conary_core::repository::supported_profiles::ProfileSourceRole;
+use conary_core::repository::{DurableSourceCatalogReuseV1, SourceCatalogMaterializationV1};
 use futures::{StreamExt, stream::FuturesUnordered};
 
 use super::catalog_authority::PinnedProfileCatalog;
@@ -63,6 +65,13 @@ pub struct ProfileSourcePlan {
     pub repository: Repository,
 }
 
+/// Exact configured repositories plus bounded registered-reuse candidates for
+/// one private source-staging operation.
+pub struct ProfileSourceStageInput {
+    pub repositories: Vec<Repository>,
+    pub reusable_sources: BTreeMap<String, DurableSourceCatalogReuseV1>,
+}
+
 /// One source bundle published before its containing profile can activate.
 pub struct PublishedSourceCatalog {
     pub ordinal: u32,
@@ -81,6 +90,13 @@ pub struct StagedSourceCatalog {
     pub required: bool,
     pub manifest: SourceSnapshotV1,
     pub path: PathBuf,
+    artifact: StagedSourceArtifact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StagedSourceArtifact {
+    Candidate,
+    DurableReuse,
 }
 
 /// A private source candidate paired with the reader that proved its manifest
@@ -275,20 +291,50 @@ pub fn plan_profile_sources(
 pub async fn stage_profile_sources(
     run_id: &str,
     profile: &str,
-    repositories: Vec<Repository>,
+    input: ProfileSourceStageInput,
     keyring_dir: &Path,
     catalog_candidate_root: &Path,
     projection_cache_root: &Path,
     scratch_admission: Arc<dyn CatalogScratchAdmission>,
 ) -> Result<StagedProfileSources> {
+    let ProfileSourceStageInput {
+        repositories,
+        reusable_sources,
+    } = input;
     let plans = plan_profile_sources(profile, repositories)?;
+    let planned_identities = plans
+        .iter()
+        .map(|plan| {
+            plan.repository
+                .repository_identity
+                .as_ref()
+                .expect("planned repository identity")
+                .clone()
+        })
+        .collect::<BTreeSet<_>>();
+    let reusable_identities = reusable_sources.keys().cloned().collect::<BTreeSet<_>>();
+    if !reusable_identities.is_subset(&planned_identities) {
+        bail!(
+            "profile '{}' has reusable sources outside its exact plan: {:?}",
+            profile,
+            reusable_identities
+                .difference(&planned_identities)
+                .collect::<Vec<_>>()
+        );
+    }
     let candidate_run_dir = create_candidate_run_dir(catalog_candidate_root, run_id)?;
     let planned_sources = plans
         .into_iter()
         .map(|plan| {
             let candidate_directory = candidate_run_dir.join(format!("source-{:08}", plan.ordinal));
             create_private_directory(&candidate_directory, &candidate_run_dir)?;
-            Ok((plan, candidate_directory))
+            let repository_identity = plan
+                .repository
+                .repository_identity
+                .as_ref()
+                .expect("planned repository identity");
+            let reusable = reusable_sources.get(repository_identity).cloned();
+            Ok((plan, candidate_directory, reusable))
         })
         .collect::<Result<Vec<_>>>()?;
     let source_count = planned_sources.len();
@@ -297,7 +343,7 @@ pub async fn stage_profile_sources(
     let fetched = run_bounded_source_jobs_with(
         planned_sources,
         MAX_CONCURRENT_SOURCE_FETCHES,
-        |(plan, candidate_directory)| {
+        |(plan, candidate_directory, reusable)| {
             let keyring_dir = keyring_dir.to_path_buf();
             let projection_cache_root = projection_cache_root.to_path_buf();
             let scratch_admission = Arc::clone(&scratch_admission);
@@ -309,12 +355,13 @@ pub async fn stage_profile_sources(
                 let source_started = Instant::now();
                 let result = run_source_pipeline_on_blocking_worker(
                     move || {
-                        let candidate = conary_core::repository::stream_native_source_catalog_verified_with_scratch_admission_blocking(
+                        let candidate = conary_core::repository::stream_native_source_catalog_verified_blocking_with_reuse(
                             &plan.repository,
                             &keyring_dir,
                             &candidate_directory.join(CATALOG_FILE_NAME),
                             Some(&projection_cache_root),
                             scratch_admission,
+                            reusable,
                         )
                         .with_context(|| {
                             format!(
@@ -322,11 +369,22 @@ pub async fn stage_profile_sources(
                                 plan.repository.name
                             )
                         })?;
-                        let reader = write_source_catalog_manifest_verified(
-                            &candidate_directory,
-                            &candidate.manifest,
-                            candidate.reader,
-                        )?;
+                        let (path, artifact, reader) = match candidate.materialization {
+                            SourceCatalogMaterializationV1::PrivateCandidate
+                            | SourceCatalogMaterializationV1::ProjectionCacheCandidate => {
+                                let reader = write_source_catalog_manifest_verified(
+                                    &candidate_directory,
+                                    &candidate.manifest,
+                                    candidate.reader,
+                                )?;
+                                (candidate_directory, StagedSourceArtifact::Candidate, reader)
+                            }
+                            SourceCatalogMaterializationV1::DurableReuse { bundle_path } => (
+                                bundle_path,
+                                StagedSourceArtifact::DurableReuse,
+                                candidate.reader,
+                            ),
+                        };
                         Ok::<_, anyhow::Error>(VerifiedStagedSourceCatalog {
                             staged: StagedSourceCatalog {
                                 ordinal: plan.ordinal,
@@ -334,7 +392,8 @@ pub async fn stage_profile_sources(
                                 precedence: plan.precedence,
                                 required: plan.required,
                                 manifest: candidate.manifest,
-                                path: candidate_directory,
+                                path,
+                                artifact,
                             },
                             reader,
                         })
@@ -348,14 +407,34 @@ pub async fn stage_profile_sources(
                         repository_name
                     )
                 });
-                tracing::info!(
-                    source_profile,
-                    repository = repository_name,
-                    ordinal,
-                    elapsed_ms = source_started.elapsed().as_millis(),
-                    succeeded = result.is_ok(),
-                    "Native source pipeline worker completed"
-                );
+                if let Ok(source) = &result {
+                    tracing::info!(
+                        source_profile,
+                        repository = repository_name,
+                        ordinal,
+                        elapsed_ms = source_started.elapsed().as_millis(),
+                        succeeded = true,
+                        durable_source_reused =
+                            source.staged.artifact == StagedSourceArtifact::DurableReuse,
+                        candidate_catalog_bytes_materialized = if source.staged.artifact
+                            == StagedSourceArtifact::Candidate
+                        {
+                            source.staged.manifest.catalog.size
+                        } else {
+                            0
+                        },
+                        "Native source pipeline worker completed"
+                    );
+                } else {
+                    tracing::info!(
+                        source_profile,
+                        repository = repository_name,
+                        ordinal,
+                        elapsed_ms = source_started.elapsed().as_millis(),
+                        succeeded = false,
+                        "Native source pipeline worker completed"
+                    );
+                }
                 result
             }
         },
@@ -590,12 +669,23 @@ fn publish_staged_profile(
     }
     let mut published_sources = Vec::with_capacity(staged.sources.len());
     for (source, verification) in staged.sources.into_iter().zip(staged.source_verifications) {
-        let path = publish_source_catalog_bundle_verified(
-            &source.path,
-            catalog_root,
-            &source.manifest,
-            verification,
-        )?;
+        let path = match source.artifact {
+            StagedSourceArtifact::Candidate => publish_source_catalog_bundle_verified(
+                &source.path,
+                catalog_root,
+                &source.manifest,
+                verification,
+            )?,
+            StagedSourceArtifact::DurableReuse => {
+                require_registered_source_publication(
+                    &source.path,
+                    catalog_root,
+                    &source.manifest,
+                    &verification,
+                )?;
+                source.path.clone()
+            }
+        };
         published_sources.push(PublishedSourceCatalog {
             ordinal: source.ordinal,
             role: source.role,
@@ -644,6 +734,41 @@ fn publish_staged_profile(
         candidate_run_dir: staged.candidate_run_dir,
         _reused_profile_pin: reused_profile_pin,
     })
+}
+
+fn require_registered_source_publication(
+    bundle_path: &Path,
+    catalog_root: &Path,
+    manifest: &SourceSnapshotV1,
+    reader: &CatalogReader,
+) -> Result<()> {
+    let manifest_sha256 = manifest.manifest_sha256()?;
+    let expected_bundle = catalog_root.join("sources").join(&manifest_sha256);
+    if bundle_path != expected_bundle {
+        bail!(
+            "reused source snapshot {} resolved outside its canonical durable destination",
+            manifest_sha256
+        );
+    }
+    require_real_directory(bundle_path, "reused immutable source bundle")?;
+    let catalog_path = bundle_path.join(CATALOG_FILE_NAME).canonicalize()?;
+    if reader.path() != catalog_path
+        || reader.binding().scope
+            != (CatalogScopeV1::Source {
+                source_profile: manifest.source_profile.clone(),
+                source_identity: manifest.source_identity.clone(),
+                repository_identity: manifest.repository_identity.clone(),
+            })
+        || reader.binding().artifact != manifest.catalog
+        || reader.binding().logical_digest_sha256 != manifest.logical_digest_sha256
+        || reader.binding().counts != manifest.counts
+    {
+        bail!(
+            "reused source snapshot {} changed after its durable reopen",
+            manifest_sha256
+        );
+    }
+    Ok(())
 }
 
 fn create_candidate_run_dir(root: &Path, run_id: &str) -> Result<PathBuf> {
