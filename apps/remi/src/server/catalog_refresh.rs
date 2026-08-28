@@ -407,24 +407,34 @@ pub async fn stage_profile_sources(
                         repository_name
                     )
                 });
-                tracing::info!(
-                    source_profile,
-                    repository = repository_name,
-                    ordinal,
-                    elapsed_ms = source_started.elapsed().as_millis(),
-                    succeeded = result.is_ok(),
-                    durable_source_reused = result.as_ref().is_ok_and(|source| {
-                        source.staged.artifact == StagedSourceArtifact::DurableReuse
-                    }),
-                    candidate_catalog_bytes_materialized = result.as_ref().map_or(0, |source| {
-                        if source.staged.artifact == StagedSourceArtifact::Candidate {
+                if let Ok(source) = &result {
+                    tracing::info!(
+                        source_profile,
+                        repository = repository_name,
+                        ordinal,
+                        elapsed_ms = source_started.elapsed().as_millis(),
+                        succeeded = true,
+                        durable_source_reused =
+                            source.staged.artifact == StagedSourceArtifact::DurableReuse,
+                        candidate_catalog_bytes_materialized = if source.staged.artifact
+                            == StagedSourceArtifact::Candidate
+                        {
                             source.staged.manifest.catalog.size
                         } else {
                             0
-                        }
-                    }),
-                    "Native source pipeline worker completed"
-                );
+                        },
+                        "Native source pipeline worker completed"
+                    );
+                } else {
+                    tracing::info!(
+                        source_profile,
+                        repository = repository_name,
+                        ordinal,
+                        elapsed_ms = source_started.elapsed().as_millis(),
+                        succeeded = false,
+                        "Native source pipeline worker completed"
+                    );
+                }
                 result
             }
         },

@@ -332,6 +332,48 @@ fn registered_source_selection_resolves_every_exact_candidate_member() {
     }
 }
 
+#[test]
+fn malformed_registered_source_selection_fails_closed() {
+    let fixture = ActiveCatalogFixture::new();
+    let profile = "fedora-44";
+    let revision = fixture.candidate(profile, 1, Vec::new());
+    let selection = ProfileRevisionSelection {
+        source_profile: profile.to_string(),
+        profile_revision_sha256: revision.clone(),
+    };
+    let conn = fixture.connection();
+    let source_snapshot_sha256 = conn
+        .query_row(
+            "SELECT source_snapshot_sha256
+             FROM remi_profile_revision_members
+             WHERE profile_revision_sha256 = ?1
+             ORDER BY ordinal LIMIT 1",
+            [&revision],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    conn.execute_batch("DROP TRIGGER remi_catalog_resources_immutable")
+        .unwrap();
+    conn.execute(
+        "UPDATE remi_catalog_resources SET manifest_json = '{}'
+         WHERE resource_sha256 = ?1",
+        [&source_snapshot_sha256],
+    )
+    .unwrap();
+    drop(conn);
+
+    let error = fixture
+        .authority()
+        .inspect_source_reuse_for_selection(&selection)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("deserialize durable source snapshot manifest"),
+        "{error:#}"
+    );
+}
+
 #[derive(Default)]
 struct OverlapState {
     active: usize,
