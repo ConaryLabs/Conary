@@ -2,29 +2,27 @@
 
 //! Bounded construction of one deterministic standalone catalog candidate.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use super::store::{
-    CATALOG_APPLICATION_ID, CATALOG_SCHEMA, canonical_json_string, checked_i64, checked_ordinal,
-    create_private_file, digest_catalog_connection, hash_file, insert_package, package_by_key,
-    replace_package_provides, sync_parent, validate_candidate_path,
+    CATALOG_APPLICATION_ID, CATALOG_SCHEMA, create_private_file, insert_package, package_by_key,
+    replace_package_provides, validate_candidate_path,
 };
 use super::{
-    CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogBindingV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProvideRecordV1,
-    CatalogReader, CatalogScopeV1, CatalogScratchAdmission, CatalogSourceCandidateScratchV1,
-    CatalogSourceEvidenceV1,
+    CATALOG_CONTENT_SCHEMA_V1, CatalogPackageOriginV1, CatalogPackageRecordV1,
+    CatalogProfileCandidateScratchV1, CatalogProvideRecordV1, CatalogReader, CatalogScopeV1,
+    CatalogScratchAdmission, CatalogSourceCandidateScratchV1,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::RepositoryRequirementExpression;
 use crate::repository::parsers::{ArchPackageFragmentKind, ArchPackageRecord};
 
+mod finalization;
 mod lifecycle;
-use lifecycle::{read_positive_pragma, remove_candidate_files, table_exists};
+use lifecycle::{remove_candidate_files, table_exists};
 
 /// Private catalog writer that retains one normalized package at a time.
 pub struct CatalogCandidateWriter {
@@ -464,128 +462,6 @@ impl CatalogCandidateWriter {
         }))
     }
 
-    /// Bind exact source evidence, calculate the canonical logical identity by
-    /// ordered iteration, and reopen the resulting artifact before returning.
-    pub fn finish(
-        mut self,
-        source_evidence: Vec<CatalogSourceEvidenceV1>,
-    ) -> Result<CatalogBindingV1> {
-        let scope = self.scope.clone();
-        if table_exists(self.connection()?, "catalog_ingest_join_marks")? {
-            let unfinished: i64 = self.connection()?.query_row(
-                "SELECT count(*) FROM catalog_ingest_join_marks",
-                [],
-                |row| row.get(0),
-            )?;
-            if unfinished != 0 {
-                return Err(Error::ConflictError(format!(
-                    "catalog candidate has {unfinished} unfinished authenticated child join marks"
-                )));
-            }
-            self.connection()?
-                .execute_batch("DROP TABLE catalog_ingest_join_marks")?;
-        }
-        if table_exists(self.connection()?, "catalog_ingest_arch_fragments")? {
-            return Err(Error::ConflictError(
-                "catalog candidate has unfinished Arch package fragments".to_string(),
-            ));
-        }
-        self.connection()?
-            .execute_batch("DROP INDEX catalog_ingest_packages_checksum")?;
-        self.connection()?.execute_batch("COMMIT")?;
-
-        let (logical_digest_sha256, counts) =
-            digest_catalog_connection(self.connection()?, &scope, &source_evidence)?;
-
-        {
-            let connection = self.connection()?;
-            connection.execute_batch("BEGIN IMMEDIATE")?;
-            connection.execute(
-                "INSERT INTO catalog_metadata (
-                     singleton, schema_version, scope_json, logical_digest_sha256,
-                     package_count, provide_count, requirement_group_count,
-                     requirement_atom_count, source_evidence_count
-                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    i64::from(CATALOG_CONTENT_SCHEMA_V1),
-                    canonical_json_string(&scope)?,
-                    &logical_digest_sha256,
-                    checked_i64(counts.packages, "package count")?,
-                    checked_i64(counts.provides, "provide count")?,
-                    checked_i64(counts.requirement_groups, "requirement group count")?,
-                    checked_i64(counts.requirement_atoms, "requirement atom count")?,
-                    checked_i64(counts.source_evidence, "source evidence count")?,
-                ],
-            )?;
-            for (ordinal, evidence) in source_evidence.iter().enumerate() {
-                connection.execute(
-                    "INSERT INTO catalog_source_evidence (ordinal, evidence_json) VALUES (?1, ?2)",
-                    params![
-                        checked_ordinal(ordinal, "source evidence")?,
-                        canonical_json_string(evidence)?,
-                    ],
-                )?;
-            }
-            connection.execute_batch("COMMIT")?;
-        }
-        if self.growth_lease.is_some() {
-            std::fs::File::open(&self.path)?.sync_all()?;
-            sync_parent(&self.path)?;
-            let candidate_bytes = std::fs::metadata(&self.path)?.len();
-            let database_bytes_bound = self.database_bytes_bound.ok_or_else(|| {
-                Error::InternalError(
-                    "catalog candidate growth lease has no database byte bound".to_string(),
-                )
-            })?;
-            if candidate_bytes > database_bytes_bound {
-                return Err(Error::InternalError(format!(
-                    "catalog candidate used {candidate_bytes} database bytes above its admitted {database_bytes_bound}-byte bound"
-                )));
-            }
-            drop(self.growth_lease.take());
-            self.database_bytes_bound = None;
-        }
-        let connection = self.connection()?;
-        let page_size = read_positive_pragma(connection, "page_size")?;
-        let page_count = read_positive_pragma(connection, "page_count")?;
-        let scratch = super::CatalogFinalizationScratchV1::from_page_facts(page_size, page_count)?;
-        let _scratch_lease = self
-            .scratch_admission
-            .as_ref()
-            .map(|admission| admission.reserve_finalization(&self.path, scratch))
-            .transpose()?;
-        connection.execute_batch("VACUUM")?;
-        let integrity: String =
-            connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        if integrity != "ok" {
-            return Err(Error::InitError(format!(
-                "new catalog {} failed SQLite integrity_check: {integrity}",
-                self.path.display()
-            )));
-        }
-
-        self.connection
-            .take()
-            .expect("catalog candidate connection exists")
-            .close()
-            .map_err(|(_, error)| Error::Database(error))?;
-        std::fs::File::open(&self.path)?.sync_all()?;
-        sync_parent(&self.path)?;
-        let artifact = CatalogArtifactV1 {
-            sha256: hash_file(&self.path)?,
-            size: fs::metadata(&self.path)?.len(),
-        };
-        let binding = CatalogBindingV1 {
-            scope,
-            artifact,
-            logical_digest_sha256,
-            counts,
-        };
-        drop(CatalogReader::open_verified(&self.path, &binding)?);
-        self.complete = true;
-        Ok(binding)
-    }
-
     fn connection(&self) -> Result<&Connection> {
         self.connection.as_ref().ok_or_else(|| {
             Error::InternalError("catalog candidate writer has no open connection".to_string())
@@ -613,7 +489,7 @@ mod tests {
         CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
         CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogProfileCandidateScratchV1,
         CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
-        CatalogScratchCapacityError,
+        CatalogScratchCapacityError, CatalogSourceEvidenceV1,
     };
     use crate::repository::dependency_model::{
         ProvideArchitectureQualifier, ProvideVersionRelation, RepositoryRequirementClause,

@@ -159,6 +159,64 @@ fn verified_reader_rejects_tamper_and_manifest_count_drift() {
 }
 
 #[test]
+fn local_logical_proof_is_exact_non_persisted_and_still_rejects_byte_tamper() {
+    let directory = tempfile::tempdir().unwrap();
+    let original = directory.path().join("original.sqlite");
+    let copied = directory.path().join("copied.sqlite");
+    let content =
+        CatalogContentV1::new(source_scope(), evidence(), vec![package("bash", "a")]).unwrap();
+    let binding = write_catalog_candidate(&original, &content).unwrap();
+    let fully_verified = CatalogReader::open_verified(&original, &binding).unwrap();
+    let proof = fully_verified.verification_proof().unwrap().clone();
+
+    fs::copy(&original, &copied).unwrap();
+    let reopened = CatalogReader::open_verified_with_proof(&copied, &binding, &proof).unwrap();
+    assert_eq!(reopened.binding(), &binding);
+    assert_eq!(reopened.packages().unwrap(), content.packages);
+
+    let durable = CatalogDurableLogicalAttestationV1::new(&binding);
+    let durable_reopen =
+        CatalogReader::open_verified_with_durable_attestation(&copied, &binding, &durable).unwrap();
+    assert_eq!(durable_reopen.binding(), &binding);
+    assert!(durable_reopen.verification_proof().is_ok());
+
+    let mut wrong_binding = binding.clone();
+    wrong_binding.counts.packages += 1;
+    let error = CatalogReader::open_verified_with_proof(&copied, &wrong_binding, &proof)
+        .err()
+        .expect("logical proof must be bound to one exact catalog");
+    assert!(error.to_string().contains("exact artifact binding"));
+    let error =
+        CatalogReader::open_verified_with_durable_attestation(&copied, &wrong_binding, &durable)
+            .err()
+            .expect("durable logical attestation must be bound to one exact catalog");
+    assert!(error.to_string().contains("exact artifact binding"));
+
+    let signed_only = CatalogReader::open_verified_signed_artifact(&original, &binding).unwrap();
+    let error = signed_only
+        .verification_proof()
+        .expect_err("signed-artifact authority must not mint a local replay proof");
+    assert!(error.to_string().contains("no local logical replay proof"));
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&copied)
+        .unwrap();
+    file.seek(SeekFrom::Start(128)).unwrap();
+    file.write_all(&[0xff]).unwrap();
+    file.sync_all().unwrap();
+    let error = CatalogReader::open_verified_with_proof(&copied, &binding, &proof)
+        .err()
+        .expect("a carried logical proof must not bypass physical integrity");
+    assert!(error.to_string().contains("Checksum mismatch"));
+    let error = CatalogReader::open_verified_with_durable_attestation(&copied, &binding, &durable)
+        .err()
+        .expect("durable logical attestation must not bypass physical integrity");
+    assert!(error.to_string().contains("Checksum mismatch"));
+}
+
+#[test]
 fn candidate_build_does_not_touch_adjacent_operational_database() {
     let directory = tempfile::tempdir().unwrap();
     let operational = directory.path().join("conary.db");

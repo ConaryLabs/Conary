@@ -19,7 +19,7 @@ use conary_core::db::models::{
 };
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CatalogReader, ProfileRevisionV2,
-    verify_profile_catalog_bundle,
+    verify_profile_catalog_bundle, verify_registered_profile_catalog_bundle,
 };
 use parking_lot::{Mutex, MutexGuard};
 use rusqlite::Connection;
@@ -140,7 +140,8 @@ impl CatalogAuthority {
 
     /// Inspect one exact registered revision without opening or hashing its
     /// catalog contents. Callers may use these bounded facts to decide whether
-    /// a full independently reopened bundle is eligible for immutable reuse.
+    /// an exact registered, independently reopened bundle is eligible for
+    /// immutable reuse.
     pub(crate) fn inspect_selected_profile(
         &self,
         selection: &ProfileRevisionSelection,
@@ -294,13 +295,16 @@ impl CatalogAuthority {
             }
             _ => {
                 let reader = Arc::new(Mutex::new(
-                    verify_profile_catalog_bundle(&resolved.bundle_path, &resolved.manifest)
-                        .with_context(|| {
-                            format!(
-                                "verify selected profile catalog bundle {}",
-                                resolved.bundle_path.display()
-                            )
-                        })?,
+                    verify_registered_profile_catalog_bundle(
+                        &resolved.bundle_path,
+                        &resolved.manifest,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "verify selected profile catalog bundle {}",
+                            resolved.bundle_path.display()
+                        )
+                    })?,
                 ));
                 cache.insert(
                     profile,

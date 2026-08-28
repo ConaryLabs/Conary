@@ -847,7 +847,7 @@ fn bounded_source_and_profile_catalog_peak_rss() {
             writer.package(record).unwrap();
         }
         writer
-            .finish(vec![CatalogSourceEvidenceV1::AuthenticatedObject {
+            .finish_verified(vec![CatalogSourceEvidenceV1::AuthenticatedObject {
                 role: SourceMetadataObjectRoleV1::RpmPrimary,
                 source_path: "repodata/primary.xml.zst".to_string(),
                 sha256: digest(marker),
@@ -858,12 +858,10 @@ fn bounded_source_and_profile_catalog_peak_rss() {
 
     let first_path = directory.path().join("first.sqlite");
     let second_path = directory.path().join("second.sqlite");
-    let first_binding = build_source("fedora-everything-x86_64", 'a', &first_path);
-    let second_binding = build_source("fedora-updates-x86_64", 'b', &second_path);
+    let (first_binding, first_reader) = build_source("fedora-everything-x86_64", 'a', &first_path);
+    let (second_binding, second_reader) = build_source("fedora-updates-x86_64", 'b', &second_path);
     let first_manifest = source_manifest("fedora-everything-x86_64", 'a', &first_binding);
     let second_manifest = source_manifest("fedora-updates-x86_64", 'b', &second_binding);
-    let first_reader = CatalogReader::open_verified(&first_path, &first_binding).unwrap();
-    let second_reader = CatalogReader::open_verified(&second_path, &second_binding).unwrap();
     let profile = write_profile_catalog_candidate(
         directory.path().join("profile.sqlite"),
         "fedora-44",

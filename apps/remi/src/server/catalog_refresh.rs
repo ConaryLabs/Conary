@@ -12,9 +12,9 @@ use conary_core::db::models::Repository;
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CatalogReader, CatalogScratchAdmission, ProfileCatalogMemberInputV2,
     ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1, derive_profile_catalog_members,
-    publish_profile_catalog_bundle, publish_source_catalog_bundle,
-    write_profile_catalog_candidate_with_scratch_admission, write_profile_catalog_manifest,
-    write_source_catalog_manifest,
+    publish_profile_catalog_bundle_verified, publish_source_catalog_bundle_verified,
+    write_profile_catalog_candidate_verified_with_scratch_admission,
+    write_profile_catalog_manifest_verified, write_source_catalog_manifest_verified,
 };
 use conary_core::repository::supported_profiles::ProfileSourceRole;
 use futures::StreamExt;
@@ -73,7 +73,10 @@ pub struct StagedProfileSources {
 }
 
 enum StagedProfileArtifact {
-    Candidate(PathBuf),
+    Candidate {
+        directory: PathBuf,
+        verification: Box<CatalogReader>,
+    },
     Reused(Box<PinnedProfileCatalog>),
 }
 
@@ -83,6 +86,7 @@ pub struct StagedProfileCatalog {
     pub manifest: ProfileRevisionV2,
     pub sources: Vec<StagedSourceCatalog>,
     pub candidate_run_dir: PathBuf,
+    source_verifications: Vec<CatalogReader>,
     artifact: StagedProfileArtifact,
 }
 
@@ -264,8 +268,7 @@ pub async fn stage_profile_sources(
             let projection_cache_root = projection_cache_root.to_path_buf();
             let scratch_admission = Arc::clone(&scratch_admission);
             async move {
-                let manifest =
-                    conary_core::repository::stream_native_source_catalog_with_scratch_admission(
+                let candidate = conary_core::repository::stream_native_source_catalog_verified_with_scratch_admission(
                         &plan.repository,
                         &keyring_dir,
                         &candidate_directory.join(CATALOG_FILE_NAME),
@@ -279,14 +282,18 @@ pub async fn stage_profile_sources(
                             plan.repository.name
                         )
                     })?;
-                let reader = write_source_catalog_manifest(&candidate_directory, &manifest)?;
+                let reader = write_source_catalog_manifest_verified(
+                    &candidate_directory,
+                    &candidate.manifest,
+                    &candidate.reader,
+                )?;
                 Ok::<_, anyhow::Error>(VerifiedStagedSourceCatalog {
                     staged: StagedSourceCatalog {
                         ordinal: plan.ordinal,
                         role: plan.role,
                         precedence: plan.precedence,
                         required: plan.required,
-                        manifest,
+                        manifest: candidate.manifest,
                         path: candidate_directory,
                     },
                     reader,
@@ -391,29 +398,43 @@ fn stage_profile_candidate(
         None => {
             let profile_candidate_directory = candidate_run_dir.join("profile");
             create_private_directory(&profile_candidate_directory, &candidate_run_dir)?;
-            let manifest = write_profile_catalog_candidate_with_scratch_admission(
+            let candidate = write_profile_catalog_candidate_verified_with_scratch_admission(
                 profile_candidate_directory.join(CATALOG_FILE_NAME),
                 &profile,
                 PROFILE_CATALOG_PROJECTION_VERSION,
                 profile_member_inputs(&sources),
                 scratch_admission,
             )?;
+            let manifest = candidate.manifest;
             manifest.validate_member_contract()?;
-            write_profile_catalog_manifest(&profile_candidate_directory, &manifest)?;
+            let verification = write_profile_catalog_manifest_verified(
+                &profile_candidate_directory,
+                &manifest,
+                &candidate.reader,
+            )?;
             (
                 manifest,
-                StagedProfileArtifact::Candidate(profile_candidate_directory),
+                StagedProfileArtifact::Candidate {
+                    directory: profile_candidate_directory,
+                    verification: Box::new(verification),
+                },
             )
         }
     };
 
-    let staged_sources = sources.into_iter().map(|source| source.staged).collect();
+    let mut staged_sources = Vec::with_capacity(sources.len());
+    let mut source_verifications = Vec::with_capacity(sources.len());
+    for source in sources {
+        staged_sources.push(source.staged);
+        source_verifications.push(source.reader);
+    }
 
     Ok(StagedProfileCatalog {
         profile,
         manifest,
         sources: staged_sources,
         candidate_run_dir,
+        source_verifications,
         artifact,
     })
 }
@@ -435,9 +456,17 @@ fn publish_staged_profile(
     catalog_root: &Path,
 ) -> Result<PublishedProfileCatalog> {
     require_real_directory(catalog_root, "immutable catalog root")?;
+    if staged.sources.len() != staged.source_verifications.len() {
+        bail!("staged source verification count changed before publication");
+    }
     let mut published_sources = Vec::with_capacity(staged.sources.len());
-    for source in staged.sources {
-        let path = publish_source_catalog_bundle(&source.path, catalog_root, &source.manifest)?;
+    for (source, verification) in staged.sources.into_iter().zip(staged.source_verifications) {
+        let path = publish_source_catalog_bundle_verified(
+            &source.path,
+            catalog_root,
+            &source.manifest,
+            &verification,
+        )?;
         published_sources.push(PublishedSourceCatalog {
             ordinal: source.ordinal,
             role: source.role,
@@ -448,8 +477,16 @@ fn publish_staged_profile(
         });
     }
     let (path, reused_profile_pin) = match staged.artifact {
-        StagedProfileArtifact::Candidate(candidate) => (
-            publish_profile_catalog_bundle(&candidate, catalog_root, &staged.manifest)?,
+        StagedProfileArtifact::Candidate {
+            directory,
+            verification,
+        } => (
+            publish_profile_catalog_bundle_verified(
+                &directory,
+                catalog_root,
+                &staged.manifest,
+                &verification,
+            )?,
             None,
         ),
         StagedProfileArtifact::Reused(reused) => {

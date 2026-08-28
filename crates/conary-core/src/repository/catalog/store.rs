@@ -3,6 +3,8 @@
 //! Deterministic standalone SQLite storage for immutable repository catalogs.
 
 #[cfg(test)]
+use std::cell::Cell;
+#[cfg(test)]
 use std::fs::OpenOptions;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -23,6 +25,7 @@ use crate::repository::versioning::VersionScheme;
 
 mod stream;
 mod util;
+mod verification;
 pub(super) use stream::digest_catalog_connection;
 pub(super) use util::{
     canonical_json_string, checked_i64, checked_ordinal, create_private_file, hash_file,
@@ -31,8 +34,21 @@ pub(super) use util::{
 use util::{
     checked_sqlite_usize, conversion_error, parse_json_column, read_u64, reject_nonempty_sidecars,
 };
+pub(in crate::repository) use verification::{
+    CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1,
+};
 
 pub(super) const CATALOG_APPLICATION_ID: i64 = 0x434e_5259;
+
+#[cfg(test)]
+thread_local! {
+    static LOGICAL_VERIFICATION_PASSES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(in crate::repository) fn logical_verification_passes_for_test() -> usize {
+    LOGICAL_VERIFICATION_PASSES.get()
+}
 
 pub(super) const CATALOG_SCHEMA: &str = r#"
 CREATE TABLE catalog_metadata (
@@ -192,6 +208,7 @@ pub struct CatalogReader {
     path: PathBuf,
     binding: CatalogBindingV1,
     connection: Connection,
+    verification_proof: Option<CatalogVerificationProofV1>,
 }
 
 impl CatalogReader {
@@ -290,13 +307,15 @@ impl CatalogReader {
             )));
         }
         verify_relational_counts(&connection, expected.counts)?;
-        let reader = Self {
+        let mut reader = Self {
             path: canonical_path,
             binding: expected.clone(),
             connection,
+            verification_proof: None,
         };
         if verify_logical_content {
             reader.verify_logical_content()?;
+            reader.verification_proof = Some(CatalogVerificationProofV1::new(expected));
         }
         Ok(reader)
     }
@@ -403,6 +422,8 @@ impl CatalogReader {
     }
 
     fn verify_logical_content(&self) -> Result<()> {
+        #[cfg(test)]
+        LOGICAL_VERIFICATION_PASSES.set(LOGICAL_VERIFICATION_PASSES.get() + 1);
         let evidence = self.source_evidence()?;
         let (actual, counts) =
             digest_catalog_connection(&self.connection, &self.binding.scope, &evidence)?;

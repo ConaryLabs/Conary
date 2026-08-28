@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 80
-summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, single-pass private-stage catalog reader reuse, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 82
+summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -123,12 +123,32 @@ entire member replay. Exact duplicate identities still compare every intrinsic
 package and relation field; their indexed destination reads reuse cached
 statements and any disagreement fails the private candidate before publication.
 
-Source-manifest finalization returns the immutable reader that proved the
-catalog binding, and private staging carries that exact reader into profile
-composition instead of reopening and rehashing the same source catalog.
-Profile-manifest finalization likewise performs one private-stage binding
-proof. Durable source and profile publication still independently reopen and
-verify the complete bundle before and after its same-filesystem atomic rename.
+Candidate finalization calculates the deterministic logical digest and then
+performs one complete independent reopen. That full reopen mints an opaque,
+non-serializable process-local proof bound to the exact scope, byte SHA-256 and
+size, logical digest, and relation counts. Private staging carries that proof
+through source manifesting, projection-cache publication, profile composition,
+and profile manifesting instead of reconstructing and re-digesting the same
+rows a third or fourth time. Durable source and profile publication still
+independently reopen the complete bundle before and after its same-filesystem
+atomic rename; each reopen checks file type and sidecars, byte hash and size,
+SQLite application/schema identity and integrity, stored binding, relation
+counts, foreign keys, manifest evidence, and exact directory membership. Only
+the already-completed Rust row reconstruction and logical re-digest are
+omitted.
+
+Native projection cache schema 2 also makes that logical proof durable without
+making cache bytes an independent package authority. Publication requires the
+process-local full-replay proof and writes a canonical attestation bound to the
+exact catalog binding. A later hit first re-derives the complete cache key from
+the authenticated root and children plus stream, parser-projection, and catalog
+schema identities. It then checks the canonical manifest and attestation,
+regular-file and sidecar policy, byte SHA-256 and size, SQLite
+application/schema identity and integrity, stored binding, relation counts,
+foreign keys, and exact source evidence. Only after those checks does it mint a
+new process-local proof and omit the redundant normalized-row reconstruction.
+The schema hard cut makes older cache entries misses; separately loaded bundles
+and signed artifacts retain their own verification authorities.
 
 After every source is authenticated and staged, refresh derives the complete
 ordered `ProfileSourceMemberV2` contract from those verified source manifests
@@ -136,12 +156,19 @@ without visiting package rows. It inspects the latest successful private
 candidate and active revision manifests in that order. Exact profile,
 profile-projection version, ordinal, role, precedence, required state, source,
 repository, stream, and source-snapshot identity equality makes an existing
-immutable profile eligible for reuse. The selected bundle is then
-independently reopened and reader-pinned; the pin remains live until the new
-fenced run completes as a durable candidate. This path creates no profile
-candidate file and performs no profile-catalog reconstruction. Any changed
-member or projection version takes the normal private composition path, and a
-malformed registered selection fails instead of becoming reuse authority.
+immutable profile eligible for reuse. The selected V2 bundle is resolved
+through its exact durable registry entry and content-addressed canonical
+manifest, then independently reopened with the same physical, SQLite,
+integrity, binding, count, foreign-key, and member-evidence checks described
+above. V2 publication already required the complete logical replay, so this
+registered reopen carries that durable attestation instead of deserializing and
+re-digesting every row after each service restart. Externally supplied or
+unregistered bundles do not receive this authority. The reader pin remains live
+until the new fenced run completes as a durable candidate. This path creates no
+profile candidate file and performs no profile-catalog reconstruction. Any
+changed member or projection version takes the normal private composition path,
+and a malformed registered selection fails instead of becoming reuse
+authority.
 
 Fedora metadata acquisition is owned by
 `crates/conary-core/src/repository/parsers/fedora/metadata.rs`; the parent

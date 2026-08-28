@@ -6,13 +6,14 @@ use crate::repository::catalog::{
     CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
     ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
-    SourceStreamV1, write_catalog_candidate,
+    SourceStreamV1, logical_verification_passes_for_test, write_catalog_candidate,
 };
+use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::versioning::VersionScheme;
 use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 fn digest(byte: char) -> String {
     byte.to_string().repeat(64)
@@ -157,6 +158,51 @@ fn source_candidate(root: &Path, name: &str) -> (PathBuf, SourceSnapshotV1) {
     (candidate, manifest)
 }
 
+fn profile_content(source_snapshot_sha256: &str) -> CatalogContentV1 {
+    CatalogContentV1::new(
+        CatalogScopeV1::Profile {
+            profile: "fedora-44".to_string(),
+        },
+        vec![CatalogSourceEvidenceV1::SourceSnapshot {
+            member_ordinal: 0,
+            source_identity: "fedora-project".to_string(),
+            repository_identity: "fedora-everything-x86_64".to_string(),
+            source_snapshot_sha256: source_snapshot_sha256.to_string(),
+        }],
+        vec![package(CatalogPackageOriginV1::Profile {
+            member_ordinal: 0,
+            source_identity: "fedora-project".to_string(),
+            repository_identity: "fedora-everything-x86_64".to_string(),
+            source_snapshot_sha256: source_snapshot_sha256.to_string(),
+        })],
+    )
+    .unwrap()
+}
+
+fn profile_manifest(binding: &CatalogBindingV1, source_snapshot_sha256: &str) -> ProfileRevisionV2 {
+    ProfileRevisionV2 {
+        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        profile: "fedora-44".to_string(),
+        projection_version: 1,
+        members: vec![ProfileSourceMemberV2 {
+            ordinal: 0,
+            role: ProfileSourceRole::Base,
+            source_identity: "fedora-project".to_string(),
+            repository_identity: "fedora-everything-x86_64".to_string(),
+            stream: SourceStreamV1 {
+                kind: SourceStreamKindV1::Release,
+                identity: "44".to_string(),
+            },
+            precedence: 10,
+            required: true,
+            source_snapshot_sha256: source_snapshot_sha256.to_string(),
+        }],
+        catalog: binding.artifact.clone(),
+        logical_digest_sha256: binding.logical_digest_sha256.clone(),
+        counts: binding.counts,
+    }
+}
+
 #[test]
 fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
     let directory = tempfile::tempdir().unwrap();
@@ -185,6 +231,89 @@ fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
     assert_eq!(published.file_name().unwrap(), expected_identity.as_str());
     assert!(!candidate.exists());
     verify_source_catalog_bundle(&published, &manifest).unwrap();
+}
+
+#[test]
+fn registered_profile_bundle_reopen_uses_its_durable_v2_logical_attestation() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("profile");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidate).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+    let source_snapshot_sha256 = digest('8');
+    let binding = write_catalog_candidate(
+        candidate.join(CATALOG_FILE_NAME),
+        &profile_content(&source_snapshot_sha256),
+    )
+    .unwrap();
+    let manifest = profile_manifest(&binding, &source_snapshot_sha256);
+    write_profile_catalog_manifest(&candidate, &manifest).unwrap();
+    let published = publish_profile_catalog_bundle(&candidate, &catalogs, &manifest).unwrap();
+    let logical_passes_after_publication = logical_verification_passes_for_test();
+
+    let reader = verify_registered_profile_catalog_bundle(&published, &manifest).unwrap();
+    assert_eq!(reader.binding(), &binding);
+    assert!(reader.verification_proof().is_ok());
+    assert_eq!(
+        logical_verification_passes_for_test(),
+        logical_passes_after_publication,
+        "registered profile reopen must not replay normalized catalog rows"
+    );
+}
+
+#[test]
+fn local_logical_proof_survives_manifesting_and_atomic_publication() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("candidate");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidate).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+    let catalog_path = candidate.join(CATALOG_FILE_NAME);
+    let binding = write_catalog_candidate(&catalog_path, &source_content()).unwrap();
+    let manifest = source_manifest(&binding);
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
+    let verified = CatalogReader::open_verified(&catalog_path, &binding).unwrap();
+    let manifested =
+        write_source_catalog_manifest_verified(&candidate, &manifest, &verified).unwrap();
+
+    let published =
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, &manifested)
+            .unwrap();
+    assert!(!candidate.exists());
+    verify_source_catalog_bundle(&published, &manifest).unwrap();
+}
+
+#[test]
+fn local_logical_proof_never_bypasses_bundle_byte_binding() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidate = directory.path().join("candidate");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidate).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+    let catalog_path = candidate.join(CATALOG_FILE_NAME);
+    let binding = write_catalog_candidate(&catalog_path, &source_content()).unwrap();
+    let manifest = source_manifest(&binding);
+    retain_source_object(&candidate, &manifest.authenticated_objects[0]);
+    let verified = CatalogReader::open_verified(&catalog_path, &binding).unwrap();
+    let manifested =
+        write_source_catalog_manifest_verified(&candidate, &manifest, &verified).unwrap();
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&catalog_path)
+        .unwrap();
+    file.seek(SeekFrom::Start(128)).unwrap();
+    file.write_all(&[0xff]).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+
+    let error =
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, &manifested)
+            .unwrap_err();
+    assert!(error.to_string().contains("Checksum mismatch"));
+    assert!(candidate.exists());
+    assert!(!catalogs.join("sources").exists());
 }
 
 #[test]

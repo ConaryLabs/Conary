@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use super::contract::validate_storage_component;
+use super::store::{CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1};
 use super::{
     CatalogBindingV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, ProfileRevisionV2,
     SourceSnapshotV1,
@@ -56,6 +57,27 @@ pub fn write_source_catalog_manifest(
     Ok(reader)
 }
 
+/// Finalize a source bundle by reopening the exact candidate with a
+/// same-process logical verification proof.
+pub fn write_source_catalog_manifest_verified(
+    candidate_directory: impl AsRef<Path>,
+    manifest: &SourceSnapshotV1,
+    verified: &CatalogReader,
+) -> Result<CatalogReader> {
+    let candidate_directory = candidate_directory.as_ref();
+    manifest.validate()?;
+    let reader = verify_source_catalog_binding_with_proof(
+        candidate_directory,
+        manifest,
+        verified.verification_proof()?,
+    )?;
+    verify_source_metadata_directory(candidate_directory, manifest)?;
+    write_manifest(candidate_directory, manifest)?;
+    verify_exact_source_directory(candidate_directory)?;
+    verify_manifest_file(candidate_directory, manifest)?;
+    Ok(reader)
+}
+
 /// Finalize a private profile bundle and return the reader that proved its
 /// catalog binding.
 ///
@@ -74,6 +96,26 @@ pub fn write_profile_catalog_manifest(
     Ok(reader)
 }
 
+/// Finalize a profile bundle by reopening the exact candidate with a
+/// same-process logical verification proof.
+pub fn write_profile_catalog_manifest_verified(
+    candidate_directory: impl AsRef<Path>,
+    manifest: &ProfileRevisionV2,
+    verified: &CatalogReader,
+) -> Result<CatalogReader> {
+    let candidate_directory = candidate_directory.as_ref();
+    manifest.validate()?;
+    let reader = verify_profile_catalog_binding_with_proof(
+        candidate_directory,
+        manifest,
+        verified.verification_proof()?,
+    )?;
+    write_manifest(candidate_directory, manifest)?;
+    verify_exact_profile_directory(candidate_directory)?;
+    verify_manifest_file(candidate_directory, manifest)?;
+    Ok(reader)
+}
+
 pub fn verify_source_catalog_bundle(
     directory: impl AsRef<Path>,
     expected: &SourceSnapshotV1,
@@ -86,6 +128,19 @@ pub fn verify_source_catalog_bundle(
     Ok(reader)
 }
 
+fn verify_source_catalog_bundle_with_proof(
+    directory: &Path,
+    expected: &SourceSnapshotV1,
+    proof: &CatalogVerificationProofV1,
+) -> Result<CatalogReader> {
+    expected.validate()?;
+    verify_exact_source_directory(directory)?;
+    verify_manifest_file(directory, expected)?;
+    let reader = verify_source_catalog_binding_with_proof(directory, expected, proof)?;
+    verify_source_metadata_directory(directory, expected)?;
+    Ok(reader)
+}
+
 pub fn verify_profile_catalog_bundle(
     directory: impl AsRef<Path>,
     expected: &ProfileRevisionV2,
@@ -94,6 +149,36 @@ pub fn verify_profile_catalog_bundle(
     verify_exact_profile_directory(directory.as_ref())?;
     verify_manifest_file(directory.as_ref(), expected)?;
     verify_profile_catalog_binding(directory.as_ref(), expected)
+}
+
+/// Reopen a locally registered, content-addressed profile revision whose V2
+/// publisher already required a complete logical replay before publication.
+///
+/// The caller must first resolve the exact manifest digest through the durable
+/// profile registry. This function rechecks the canonical bundle manifest and
+/// every physical/schema/integrity/binding/count/foreign-key property, then
+/// carries the V2 publication attestation instead of reconstructing all rows.
+/// Unregistered or externally supplied bundles use
+/// [`verify_profile_catalog_bundle`] instead.
+pub fn verify_registered_profile_catalog_bundle(
+    directory: impl AsRef<Path>,
+    expected: &ProfileRevisionV2,
+) -> Result<CatalogReader> {
+    expected.validate()?;
+    verify_exact_profile_directory(directory.as_ref())?;
+    verify_manifest_file(directory.as_ref(), expected)?;
+    verify_profile_catalog_binding_with_durable_attestation(directory.as_ref(), expected)
+}
+
+fn verify_profile_catalog_bundle_with_proof(
+    directory: &Path,
+    expected: &ProfileRevisionV2,
+    proof: &CatalogVerificationProofV1,
+) -> Result<CatalogReader> {
+    expected.validate()?;
+    verify_exact_profile_directory(directory)?;
+    verify_manifest_file(directory, expected)?;
+    verify_profile_catalog_binding_with_proof(directory, expected, proof)
 }
 
 /// Move one exact parser-authenticated object into its source candidate.
@@ -167,6 +252,27 @@ pub fn publish_source_catalog_bundle(
         .map(PublishedCatalogBundle::into_path)
 }
 
+/// Publish a source bundle while carrying one exact in-process logical proof
+/// across the independent pre- and post-rename physical reopens.
+pub fn publish_source_catalog_bundle_verified(
+    candidate_directory: impl AsRef<Path>,
+    catalog_root: impl AsRef<Path>,
+    manifest: &SourceSnapshotV1,
+    verified: &CatalogReader,
+) -> Result<PathBuf> {
+    let candidate_directory = candidate_directory.as_ref();
+    let proof = verified.verification_proof()?;
+    verify_source_catalog_bundle_with_proof(candidate_directory, manifest, proof)?;
+    let parent = ensure_real_subdirectory(catalog_root.as_ref(), "sources")?;
+    publish_verified_directory(
+        candidate_directory,
+        &parent,
+        &manifest.manifest_sha256()?,
+        |path| verify_source_catalog_bundle_with_proof(path, manifest, proof).map(|_| ()),
+    )
+    .map(PublishedCatalogBundle::into_path)
+}
+
 /// Publish a source bundle and report whether this call created its immutable
 /// content-addressed destination.
 pub fn publish_source_catalog_bundle_with_provenance(
@@ -192,6 +298,29 @@ pub fn publish_profile_catalog_bundle(
 ) -> Result<PathBuf> {
     publish_profile_catalog_bundle_with_provenance(candidate_directory, catalog_root, manifest)
         .map(PublishedCatalogBundle::into_path)
+}
+
+/// Publish a profile bundle while carrying one exact in-process logical proof
+/// across the independent pre- and post-rename physical reopens.
+pub fn publish_profile_catalog_bundle_verified(
+    candidate_directory: impl AsRef<Path>,
+    catalog_root: impl AsRef<Path>,
+    manifest: &ProfileRevisionV2,
+    verified: &CatalogReader,
+) -> Result<PathBuf> {
+    let candidate_directory = candidate_directory.as_ref();
+    let proof = verified.verification_proof()?;
+    verify_profile_catalog_bundle_with_proof(candidate_directory, manifest, proof)?;
+    validate_storage_component(&manifest.profile, "profile catalog storage identity")?;
+    let profiles = ensure_real_subdirectory(catalog_root.as_ref(), "profiles")?;
+    let parent = ensure_real_subdirectory(&profiles, &manifest.profile)?;
+    publish_verified_directory(
+        candidate_directory,
+        &parent,
+        &manifest.manifest_sha256()?,
+        |path| verify_profile_catalog_bundle_with_proof(path, manifest, proof).map(|_| ()),
+    )
+    .map(PublishedCatalogBundle::into_path)
 }
 
 /// Publish a profile bundle and report whether this call created its
@@ -248,19 +377,110 @@ fn verify_source_catalog_binding(
     Ok(reader)
 }
 
+fn verify_source_catalog_binding_with_proof(
+    directory: &Path,
+    manifest: &SourceSnapshotV1,
+    proof: &CatalogVerificationProofV1,
+) -> Result<CatalogReader> {
+    let binding = CatalogBindingV1 {
+        scope: CatalogScopeV1::Source {
+            source_profile: manifest.source_profile.clone(),
+            source_identity: manifest.source_identity.clone(),
+            repository_identity: manifest.repository_identity.clone(),
+        },
+        artifact: manifest.catalog.clone(),
+        logical_digest_sha256: manifest.logical_digest_sha256.clone(),
+        counts: manifest.counts,
+    };
+    let reader = CatalogReader::open_verified_with_proof(
+        directory.join(CATALOG_FILE_NAME),
+        &binding,
+        proof,
+    )?;
+    verify_source_evidence(directory, manifest, &reader)?;
+    Ok(reader)
+}
+
 fn verify_profile_catalog_binding(
     directory: &Path,
     manifest: &ProfileRevisionV2,
 ) -> Result<CatalogReader> {
-    let binding = CatalogBindingV1 {
+    let binding = profile_catalog_binding(manifest);
+    let reader = CatalogReader::open_verified(directory.join(CATALOG_FILE_NAME), &binding)?;
+    verify_profile_evidence(directory, manifest, &reader)?;
+    Ok(reader)
+}
+
+fn verify_profile_catalog_binding_with_proof(
+    directory: &Path,
+    manifest: &ProfileRevisionV2,
+    proof: &CatalogVerificationProofV1,
+) -> Result<CatalogReader> {
+    let binding = profile_catalog_binding(manifest);
+    let reader = CatalogReader::open_verified_with_proof(
+        directory.join(CATALOG_FILE_NAME),
+        &binding,
+        proof,
+    )?;
+    verify_profile_evidence(directory, manifest, &reader)?;
+    Ok(reader)
+}
+
+fn verify_profile_catalog_binding_with_durable_attestation(
+    directory: &Path,
+    manifest: &ProfileRevisionV2,
+) -> Result<CatalogReader> {
+    let binding = profile_catalog_binding(manifest);
+    let attestation = CatalogDurableLogicalAttestationV1::new(&binding);
+    let reader = CatalogReader::open_verified_with_durable_attestation(
+        directory.join(CATALOG_FILE_NAME),
+        &binding,
+        &attestation,
+    )?;
+    verify_profile_evidence(directory, manifest, &reader)?;
+    Ok(reader)
+}
+
+fn profile_catalog_binding(manifest: &ProfileRevisionV2) -> CatalogBindingV1 {
+    CatalogBindingV1 {
         scope: CatalogScopeV1::Profile {
             profile: manifest.profile.clone(),
         },
         artifact: manifest.catalog.clone(),
         logical_digest_sha256: manifest.logical_digest_sha256.clone(),
         counts: manifest.counts,
-    };
-    let reader = CatalogReader::open_verified(directory.join(CATALOG_FILE_NAME), &binding)?;
+    }
+}
+
+fn verify_source_evidence(
+    directory: &Path,
+    manifest: &SourceSnapshotV1,
+    reader: &CatalogReader,
+) -> Result<()> {
+    let expected_evidence = manifest
+        .authenticated_objects
+        .iter()
+        .map(|object| CatalogSourceEvidenceV1::AuthenticatedObject {
+            role: object.role.clone(),
+            source_path: object.source_path.clone(),
+            sha256: object.sha256.clone(),
+            size: object.size,
+        })
+        .collect::<Vec<_>>();
+    if reader.source_evidence()? != expected_evidence {
+        return Err(Error::ConflictError(format!(
+            "source catalog {} evidence does not match its authenticated object manifest",
+            directory.display()
+        )));
+    }
+    Ok(())
+}
+
+fn verify_profile_evidence(
+    directory: &Path,
+    manifest: &ProfileRevisionV2,
+    reader: &CatalogReader,
+) -> Result<()> {
     let expected_evidence = manifest
         .members
         .iter()
@@ -277,7 +497,7 @@ fn verify_profile_catalog_binding(
             directory.display()
         )));
     }
-    Ok(reader)
+    Ok(())
 }
 
 fn write_manifest(directory: &Path, manifest: &impl serde::Serialize) -> Result<()> {

@@ -2,13 +2,50 @@
 
 //! Coordination and typed readiness outcomes for repository mutation surfaces.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use tokio::sync::{OwnedMutexGuard, RwLock};
 
 use super::{RepoRefreshResult, ServiceError};
 use crate::server::ServerState;
+use crate::server::catalog_refresh::StagedProfileCatalog;
 use crate::server::readiness::PublicationPhaseState;
+
+/// Send-safe immutable identity captured before staged catalog readers cross an
+/// async database boundary.
+pub(super) struct ProfilePublicationIntent {
+    pub(super) profile: String,
+    pub(super) candidate_sources: BTreeMap<i64, String>,
+    pub(super) profile_digest: String,
+}
+
+pub(super) fn staged_profile_intent(
+    staged: &StagedProfileCatalog,
+) -> Result<ProfilePublicationIntent, ServiceError> {
+    let candidate_sources = staged
+        .sources
+        .iter()
+        .map(|source| {
+            Ok((
+                i64::from(source.ordinal),
+                source
+                    .manifest
+                    .manifest_sha256()
+                    .map_err(ServiceError::from)?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, ServiceError>>()?;
+    let profile_digest = staged
+        .manifest
+        .manifest_sha256()
+        .map_err(ServiceError::from)?;
+    Ok(ProfilePublicationIntent {
+        profile: staged.profile.clone(),
+        candidate_sources,
+        profile_digest,
+    })
+}
 
 pub(super) async fn guard(state: &Arc<RwLock<ServerState>>) -> OwnedMutexGuard<()> {
     let coordinator = state.read().await.publication_coordinator.clone();
