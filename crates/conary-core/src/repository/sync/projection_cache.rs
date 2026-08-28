@@ -527,7 +527,7 @@ fn set_private_file_permissions(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::repository::catalog::{
-        CatalogCandidateWriter, CatalogFinalizationScratchV1, CatalogMetadataScratchV1,
+        CatalogCandidateWriter, CatalogFinalizationScratchV2, CatalogMetadataScratchV1,
         CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1, CatalogScopeV1,
         CatalogScratchCapacityError, SourceMetadataObjectRoleV1,
         logical_verification_passes_for_test,
@@ -586,7 +586,7 @@ mod tests {
         fn reserve_finalization(
             &self,
             _candidate_path: &Path,
-            _requirement: CatalogFinalizationScratchV1,
+            _requirement: CatalogFinalizationScratchV2,
         ) -> Result<Box<dyn Send>> {
             panic!("projection cache must not request finalization admission")
         }

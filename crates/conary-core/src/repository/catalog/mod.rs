@@ -26,11 +26,11 @@ pub use bundle::{
 };
 pub use candidate::CatalogCandidateWriter;
 pub use capacity::{
-    CATALOG_COPY_SCRATCH_SCHEMA_V1, CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1,
+    CATALOG_COPY_SCRATCH_SCHEMA_V1, CATALOG_FINALIZATION_SCRATCH_SCHEMA_V2,
     CATALOG_METADATA_SCRATCH_SCHEMA_V1, CATALOG_METADATA_STREAM_SCRATCH_SCHEMA_V1,
     CATALOG_PROFILE_CANDIDATE_SCRATCH_SCHEMA_V1, CATALOG_SOURCE_CANDIDATE_SCRATCH_SCHEMA_V1,
     CATALOG_SQLITE_PAGE_SIZE_V1, CATALOG_SQLITE_SCHEMA_PAGE_COUNT_V1, CatalogCopyScratchV1,
-    CatalogFinalizationScratchV1, CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1,
+    CatalogFinalizationScratchV2, CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1,
     CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
     CatalogProfileCandidateScratchV1, CatalogProfileMemberScratchV1, CatalogScratchAdmission,
     CatalogScratchCapacityError, CatalogSourceCandidateScratchV1,

@@ -485,7 +485,7 @@ impl Drop for CatalogCandidateWriter {
 mod tests {
     use super::*;
     use crate::repository::catalog::{
-        CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
+        CATALOG_FINALIZATION_SCRATCH_SCHEMA_V2, CatalogCopyScratchV1, CatalogFinalizationScratchV2,
         CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
         CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogProfileCandidateScratchV1,
         CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
@@ -500,7 +500,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct RecordingAdmission {
-        requirement: Mutex<Option<CatalogFinalizationScratchV1>>,
+        requirement: Mutex<Option<CatalogFinalizationScratchV2>>,
         lease_drops: Arc<AtomicUsize>,
         refuse: bool,
     }
@@ -549,7 +549,7 @@ mod tests {
         fn reserve_finalization(
             &self,
             _candidate_path: &Path,
-            requirement: CatalogFinalizationScratchV1,
+            requirement: CatalogFinalizationScratchV2,
         ) -> Result<Box<dyn Send>> {
             *self.requirement.lock().unwrap() = Some(requirement);
             if self.refuse {
@@ -878,7 +878,7 @@ mod tests {
         let requirement = admission.requirement.lock().unwrap().unwrap();
         assert_eq!(
             requirement.schema_version,
-            CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1
+            CATALOG_FINALIZATION_SCRATCH_SCHEMA_V2
         );
         assert_eq!(requirement.database_page_size, 4096);
         assert!(requirement.database_page_count > 0);
@@ -886,16 +886,17 @@ mod tests {
             requirement.database_bytes,
             requirement.database_page_size * requirement.database_page_count
         );
-        assert_eq!(requirement.temporary_copy_bytes, requirement.database_bytes);
-        assert_eq!(
-            requirement.rollback_journal_bytes,
-            requirement.database_bytes
-        );
+        assert_eq!(requirement.compacted_copy_bytes, requirement.database_bytes);
         assert_eq!(
             requirement.required_additional_bytes,
-            requirement.database_bytes * 2
+            requirement.database_bytes
         );
         assert_eq!(lease_drops.load(Ordering::SeqCst), 1);
+        let entries = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, vec![std::ffi::OsString::from("catalog.sqlite3")]);
     }
 
     #[test]
