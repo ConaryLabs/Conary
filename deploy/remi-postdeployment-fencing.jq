@@ -24,6 +24,12 @@ def same_fencing_authority($before; $final):
       and ($final.schema_epoch | type == "string")
       and ($final.schema_revision | type == "number")
       and ($final.deployment.transition_completed_at | type == "number")
+      and ($final.candidate_verification.mode == "publication_attested")
+      and ($final.candidate_verification.completed_after
+        == $final.deployment.transition_completed_at)
+      and ($final.candidate_verification.catalog_files_reopened == 0)
+      and ($final.candidate_verification.catalog_bytes_hashed == 0)
+      and ($final.candidate_verification.catalog_bytes_integrity_checked == 0)
       and ($final.deployment.repository_refreshes | type == "array")
       and ($final.deployment.repository_refreshes | length) >= 1
       and ($final.deployment.repository_refreshes[0]

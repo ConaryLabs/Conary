@@ -429,6 +429,13 @@ test_deploy_remi_uses_candidate_owned_transition() {
     run_helper "$fake_root" inspect-remi --require-private-candidates
     grep -Fx -- "--require-private-candidates" \
         "$fake_root/etc/conary/remi.toml.inspect-args" >/dev/null
+    run_helper "$fake_root" inspect-remi --require-private-candidates \
+        --accept-candidates-completed-after 123
+    grep -Fx -- "--require-private-candidates" \
+        "$fake_root/etc/conary/remi.toml.inspect-args" >/dev/null
+    grep -Fx -- "--accept-candidates-completed-after" \
+        "$fake_root/etc/conary/remi.toml.inspect-args" >/dev/null
+    grep -Fx -- "123" "$fake_root/etc/conary/remi.toml.inspect-args" >/dev/null
     run_helper "$fake_root" inspect-remi --require-repopulated
     grep -Fx -- "--require-repopulated" \
         "$fake_root/etc/conary/remi.toml.inspect-args" >/dev/null
@@ -445,6 +452,17 @@ test_deploy_remi_uses_candidate_owned_transition() {
         fail "Remi inspection diagnostics contaminated JSON stdout"
     expect_fail "unknown Remi inspection requirement" \
         run_helper "$fake_root" inspect-remi --require-something-vague
+    expect_fail "completion floor without private-candidate requirement" \
+        run_helper "$fake_root" inspect-remi --accept-candidates-completed-after 123
+    expect_fail "missing private-candidate completion floor" \
+        run_helper "$fake_root" inspect-remi --require-private-candidates \
+        --accept-candidates-completed-after
+    expect_fail "nonpositive private-candidate completion floor" \
+        run_helper "$fake_root" inspect-remi --require-private-candidates \
+        --accept-candidates-completed-after 0
+    expect_fail "conflicting Remi inspection requirements" \
+        run_helper "$fake_root" inspect-remi --require-private-candidates \
+        --require-repopulated
 }
 
 test_candidate_baseline_uses_exact_staged_binary_without_mutation() {
