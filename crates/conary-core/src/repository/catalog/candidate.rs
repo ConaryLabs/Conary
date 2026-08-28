@@ -624,18 +624,7 @@ mod tests {
             architecture_qualifier: ProvideArchitectureQualifier::Implicit,
             provenance: CapabilityProvenance::ExactIdentity,
         }];
-        provides.extend(paths.iter().map(|path| CatalogProvideRecordV1 {
-            capability: (*path).to_string(),
-            version: None,
-            version_relation: None,
-            kind: "file".to_string(),
-            raw: None,
-            version_scheme: VersionScheme::Rpm,
-            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
-            provenance: CapabilityProvenance::SourceDerivedFile {
-                format: SourcePackageFormat::Rpm,
-            },
-        }));
+        provides.extend(paths.iter().map(|path| rpm_file_provide(path)));
         let requirement_groups = required_path
             .map(|path| {
                 let clause = RepositoryRequirementClause::name_only(path.to_string());
@@ -683,6 +672,21 @@ mod tests {
             version_scheme: VersionScheme::Rpm,
             provides,
             requirement_groups,
+        }
+    }
+
+    fn rpm_file_provide(path: &str) -> CatalogProvideRecordV1 {
+        CatalogProvideRecordV1 {
+            capability: path.to_string(),
+            version: None,
+            version_relation: None,
+            kind: "file".to_string(),
+            raw: None,
+            version_scheme: VersionScheme::Rpm,
+            architecture_qualifier: ProvideArchitectureQualifier::Implicit,
+            provenance: CapabilityProvenance::SourceDerivedFile {
+                format: SourcePackageFormat::Rpm,
+            },
         }
     }
 
@@ -752,6 +756,48 @@ mod tests {
             "{details:?}"
         );
 
+        let provide_indexes = |connection: &Connection| {
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema
+                     WHERE type = 'index'
+                       AND name IN ('catalog_provides_capability', 'catalog_provides_raw')",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(provide_indexes(writer.connection().unwrap()), 2);
+        assert_eq!(
+            writer
+                .extend_package_provides(
+                    "rpm_filelists",
+                    "a",
+                    "alpha",
+                    "1-1",
+                    Some("x86_64"),
+                    vec![rpm_file_provide("/usr/bin/alpha")],
+                )
+                .unwrap(),
+            CatalogProvideMerge {
+                matched_packages: 1,
+                added: 1,
+                already_known: 0,
+            }
+        );
+        assert_eq!(provide_indexes(writer.connection().unwrap()), 0);
+        writer
+            .extend_package_provides(
+                "rpm_filelists",
+                "b",
+                "bravo",
+                "1-1",
+                Some("x86_64"),
+                vec![rpm_file_provide("/usr/bin/bravo")],
+            )
+            .unwrap();
+        writer.finish_package_join("rpm_filelists").unwrap();
+
         writer.finish(evidence()).unwrap();
         let reopened = Connection::open_with_flags(
             &path,
@@ -767,6 +813,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(published_indexes, 0);
+        assert_eq!(provide_indexes(&reopened), 2);
     }
 
     #[test]
