@@ -327,6 +327,24 @@ fn private_candidate_population_comes_from_the_exact_current_candidate() {
             .is_none()
     );
 
+    let completed_after = candidates[0].completed_at.unwrap() - 1;
+    let (attested, verification) = candidate_inspection::inspect_deployment_candidates(
+        &conn,
+        fixture.authority(),
+        &configured,
+        CandidateInspectionMode::PublicationAttested { completed_after },
+    )
+    .expect("inspect publication-attested private deployment candidate");
+    assert_eq!(attested, candidates);
+    assert_eq!(
+        verification.mode,
+        DeploymentCandidateVerificationMode::PublicationAttested
+    );
+    assert_eq!(verification.completed_after, Some(completed_after));
+    assert_eq!(verification.catalog_files_reopened, 0);
+    assert_eq!(verification.catalog_bytes_hashed, 0);
+    assert_eq!(verification.catalog_bytes_integrity_checked, 0);
+
     let catalog_path = fixture
         .catalog_dir()
         .join("profiles/fedora-44")
@@ -372,6 +390,14 @@ fn repopulation_requires_current_conversions_and_the_matching_signed_universe() 
         converted_packages: 1,
         candidate_profiles: 0,
         candidate_catalog_packages: 0,
+        candidate_verification: DeploymentCandidateVerification {
+            mode: DeploymentCandidateVerificationMode::FullReopen,
+            completed_after: None,
+            elapsed_micros: 0,
+            catalog_files_reopened: 0,
+            catalog_bytes_hashed: 0,
+            catalog_bytes_integrity_checked: 0,
+        },
         signing_profiles: vec!["fedora-44".to_string()],
         universe: Some(universe),
         profiles: vec![profile],
@@ -406,6 +432,14 @@ fn private_candidate_completion_rejects_active_only_and_empty_catalogs() {
         converted_packages: 1,
         candidate_profiles: 0,
         candidate_catalog_packages: 0,
+        candidate_verification: DeploymentCandidateVerification {
+            mode: DeploymentCandidateVerificationMode::FullReopen,
+            completed_after: None,
+            elapsed_micros: 0,
+            catalog_files_reopened: 0,
+            catalog_bytes_hashed: 0,
+            catalog_bytes_integrity_checked: 0,
+        },
         signing_profiles: vec!["fedora-44".to_string()],
         universe: None,
         profiles: vec![DeploymentProfileState {
@@ -435,6 +469,39 @@ fn private_candidate_completion_rejects_active_only_and_empty_catalogs() {
     state.candidate_catalog_packages = 1;
     state.candidates[0].packages = 1;
     assert!(state.private_candidates_complete());
+
+    state.candidate_verification = DeploymentCandidateVerification {
+        mode: DeploymentCandidateVerificationMode::PublicationAttested,
+        completed_after: Some(1),
+        elapsed_micros: 1,
+        catalog_files_reopened: 0,
+        catalog_bytes_hashed: 0,
+        catalog_bytes_integrity_checked: 0,
+    };
+    state.candidates[0].completed_at = Some(2);
+    state.candidates[0].latest_refresh = Some(DeploymentProfileRefreshState {
+        run_id: "run".to_string(),
+        fencing_epoch: 1,
+        state: DeploymentRefreshRunState::Candidate,
+        started_at: 2,
+        heartbeat_at: 2,
+        finished_at: Some(2),
+        failure_stage: None,
+        failure_category: None,
+        run_members: 1,
+        candidate_members: 1,
+        failure_evidence_sha256: None,
+        failure_diagnostic: None,
+        redactions: Vec::new(),
+    });
+    assert!(state.private_candidates_completed_after(1));
+    state.candidates[0].completed_at = Some(1);
+    state.candidates[0]
+        .latest_refresh
+        .as_mut()
+        .unwrap()
+        .finished_at = Some(1);
+    assert!(!state.private_candidates_completed_after(1));
 }
 
 #[test]

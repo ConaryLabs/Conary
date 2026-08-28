@@ -15,11 +15,18 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 mod baseline;
+mod candidate_inspection;
 mod database_transition;
 mod refresh_diagnostics;
 pub use baseline::{
     DeploymentBaseline, DeploymentBaselineCandidateIdentity, DeploymentBaselineCandidateState,
     DeploymentBaselineMeasurement, inspect_baseline,
+};
+use candidate_inspection::{
+    CandidateInspectionMode, inspect_deployment_candidates as inspect_candidates_with_mode,
+};
+pub use candidate_inspection::{
+    DeploymentCandidateState, DeploymentCandidateVerification, DeploymentCandidateVerificationMode,
 };
 use database_transition::DatabaseTransition;
 pub use refresh_diagnostics::{
@@ -41,6 +48,7 @@ pub struct DeploymentState {
     pub converted_packages: i64,
     pub candidate_profiles: usize,
     pub candidate_catalog_packages: u64,
+    pub candidate_verification: DeploymentCandidateVerification,
     pub signing_profiles: Vec<String>,
     pub universe: Option<DeploymentUniverseState>,
     pub profiles: Vec<DeploymentProfileState>,
@@ -54,17 +62,6 @@ pub struct DeploymentProfileState {
     pub profile_revision_sha256: Option<String>,
     pub packages: u64,
     pub converted_packages: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DeploymentCandidateState {
-    pub profile: String,
-    pub configured_sources: usize,
-    pub profile_revision_sha256: Option<String>,
-    pub run_id: Option<String>,
-    pub completed_at: Option<i64>,
-    pub packages: u64,
-    pub latest_refresh: Option<DeploymentProfileRefreshState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -104,6 +101,35 @@ impl DeploymentState {
                 .universe
                 .as_ref()
                 .is_some_and(|universe| universe.matches_active_profiles && universe.fresh)
+    }
+
+    /// Whether every private candidate was completed by a refresh causally
+    /// newer than the supplied deployment transition.
+    #[must_use]
+    pub fn private_candidates_completed_after(&self, completed_after: i64) -> bool {
+        self.private_candidates_complete()
+            && self.candidate_verification.mode
+                == DeploymentCandidateVerificationMode::PublicationAttested
+            && self.candidate_verification.completed_after == Some(completed_after)
+            && self.candidates.iter().all(|candidate| {
+                let (Some(run_id), Some(completed_at), Some(latest)) = (
+                    candidate.run_id.as_deref(),
+                    candidate.completed_at,
+                    candidate.latest_refresh.as_ref(),
+                ) else {
+                    return false;
+                };
+                let configured_sources = u64::try_from(candidate.configured_sources).ok();
+                completed_at > completed_after
+                    && latest.run_id == run_id
+                    && latest.state == DeploymentRefreshRunState::Candidate
+                    && latest.finished_at == Some(completed_at)
+                    && Some(latest.run_members) == configured_sources
+                    && Some(latest.candidate_members) == configured_sources
+                    && latest.failure_stage.is_none()
+                    && latest.failure_category.is_none()
+                    && latest.failure_evidence_sha256.is_none()
+            })
     }
 }
 
@@ -267,6 +293,29 @@ fn rollback_transition(transition: &TransitionManifest, manifest_path: &Path) ->
 /// This is a read-only evidence surface. Its result never proves that prepare,
 /// rollback, or another runtime mutation is safe to start.
 pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
+    inspect_state_with_candidate_verification(config_path, CandidateInspectionMode::FullReopen)
+}
+
+/// Inspect candidates completed after one exact deployment transition without
+/// repeating the complete catalog scans already required before candidate
+/// completion.
+pub fn inspect_recent_private_candidate_state(
+    config_path: &Path,
+    completed_after: i64,
+) -> Result<DeploymentState> {
+    if completed_after <= 0 {
+        bail!("private candidate completion floor must be a positive Unix timestamp");
+    }
+    inspect_state_with_candidate_verification(
+        config_path,
+        CandidateInspectionMode::PublicationAttested { completed_after },
+    )
+}
+
+fn inspect_state_with_candidate_verification(
+    config_path: &Path,
+    candidate_verification: CandidateInspectionMode,
+) -> Result<DeploymentState> {
     require_plain_file(config_path, "Remi config")?;
     let config = RemiConfig::load(config_path)?;
     config.validate()?;
@@ -300,7 +349,8 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
     );
     let configured = configured_public_profiles(&repository_manifest)?;
     let profiles = inspect_deployment_profiles(&conn, &authority, &configured)?;
-    let candidates = inspect_deployment_candidates(&conn, &authority, &configured)?;
+    let (candidates, candidate_verification) =
+        inspect_candidates_with_mode(&conn, &authority, &configured, candidate_verification)?;
     let populated_profiles = profiles
         .iter()
         .filter(|profile| profile.packages > 0)
@@ -335,6 +385,7 @@ pub fn inspect_state(config_path: &Path) -> Result<DeploymentState> {
         converted_packages,
         candidate_profiles,
         candidate_catalog_packages,
+        candidate_verification,
         signing_profiles,
         universe,
         profiles,
@@ -423,66 +474,19 @@ fn inspect_deployment_profiles(
     Ok(profiles)
 }
 
+#[cfg(test)]
 fn inspect_deployment_candidates(
     conn: &rusqlite::Connection,
     authority: &crate::server::catalog_authority::CatalogAuthority,
     configured: &[(String, usize)],
 ) -> Result<Vec<DeploymentCandidateState>> {
-    let mut candidates = Vec::with_capacity(configured.len());
-    for (profile, configured_sources) in configured {
-        let latest_refresh = refresh_diagnostics::latest_profile_refresh(conn, profile)?;
-        let candidate = conary_core::repository::current_profile_sync_candidate(conn, profile)?;
-        let Some(candidate) = candidate else {
-            candidates.push(DeploymentCandidateState {
-                profile: profile.clone(),
-                configured_sources: *configured_sources,
-                profile_revision_sha256: None,
-                run_id: None,
-                completed_at: None,
-                packages: 0,
-                latest_refresh,
-            });
-            continue;
-        };
-        let selection = crate::server::catalog_authority::ProfileRevisionSelection {
-            source_profile: candidate.source_profile.clone(),
-            profile_revision_sha256: candidate.profile_revision_sha256.clone(),
-        };
-        let inspection = authority
-            .verify_selected_profile(&selection)
-            .with_context(|| format!("inspect private immutable profile '{profile}'"))?;
-        inspection
-            .manifest
-            .validate_member_contract()
-            .with_context(|| format!("validate private profile '{profile}' member contract"))?;
-        if inspection.manifest.members.len() != *configured_sources {
-            bail!(
-                "private profile '{profile}' does not match its exact configured source authority"
-            );
-        }
-        conary_core::db::models::verify_private_profile_candidate_authority(
-            conn,
-            profile,
-            &candidate.profile_revision_sha256,
-            &candidate.run_id,
-        )
-        .with_context(|| format!("verify private profile '{profile}' repository authority"))?;
-        if conary_core::repository::current_profile_sync_candidate(conn, profile)?.as_ref()
-            != Some(&candidate)
-        {
-            bail!("private profile '{profile}' changed during deployment inspection");
-        }
-        candidates.push(DeploymentCandidateState {
-            profile: profile.clone(),
-            configured_sources: *configured_sources,
-            profile_revision_sha256: Some(candidate.profile_revision_sha256),
-            run_id: Some(candidate.run_id),
-            completed_at: Some(candidate.completed_at),
-            packages: inspection.manifest.counts.packages,
-            latest_refresh,
-        });
-    }
-    Ok(candidates)
+    inspect_candidates_with_mode(
+        conn,
+        authority,
+        configured,
+        CandidateInspectionMode::FullReopen,
+    )
+    .map(|(candidates, _verification)| candidates)
 }
 
 fn inspect_active_universe(
