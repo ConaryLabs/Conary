@@ -2,12 +2,18 @@
 
 //! Reopenable mutable-root content with exact SHA-256 and size authority.
 
+use super::LiveRootFile;
+use super::durability::MutationDurability;
+use super::path::selected_root_target_path;
 use anyhow::{Context, Result, bail};
 use conary_core::packages::payload::{PAYLOAD_IO_BUFFER_SIZE, PayloadSpool, ReopenablePayload};
-use conary_core::payload::PayloadContentAuthority;
+use conary_core::payload::{PayloadContentAuthority, PayloadNodeKind};
 use sha2::{Digest, Sha256};
-use std::fs::File;
-use std::io::{Read, Write};
+use std::ffi::CString;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::net::UnixListener;
 use std::path::Path;
 #[cfg(test)]
 use std::sync::Arc;
@@ -144,6 +150,95 @@ impl LiveRootContent {
         self.copy_verified_to(&mut content)?;
         Ok(content)
     }
+}
+
+pub(super) fn create_live_root_leaf(
+    root: &Path,
+    path: &Path,
+    file: &LiveRootFile,
+    durability: &mut MutationDurability,
+) -> Result<()> {
+    match &file.node.source.kind {
+        PayloadNodeKind::Regular { .. } => {
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .with_context(|| format!("Failed to create {}", path.display()))?;
+            file.content
+                .copy_verified_to(&mut output)
+                .with_context(|| format!("Failed to write {}", path.display()))?;
+            durability
+                .sync_file(&output)
+                .with_context(|| format!("Failed to sync {}", path.display()))?;
+        }
+        PayloadNodeKind::Symlink { target } => {
+            std::os::unix::fs::symlink(target, path)
+                .with_context(|| format!("Failed to create symlink {}", path.display()))?;
+        }
+        PayloadNodeKind::Hardlink { target, .. } => {
+            let target = selected_root_target_path(root, target)?;
+            let metadata = fs::symlink_metadata(&target).with_context(|| {
+                format!(
+                    "payload hardlink {} target is unavailable: {}",
+                    file.path,
+                    target.display()
+                )
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                bail!(
+                    "payload hardlink {} target is not a regular file: {}",
+                    file.path,
+                    target.display()
+                );
+            }
+            fs::hard_link(&target, path).with_context(|| {
+                format!(
+                    "Failed to create hardlink {} to {}",
+                    path.display(),
+                    target.display()
+                )
+            })?;
+        }
+        PayloadNodeKind::BlockDevice { major, minor } => {
+            create_live_root_device(path, libc::S_IFBLK, *major, *minor)?;
+        }
+        PayloadNodeKind::CharacterDevice { major, minor } => {
+            create_live_root_device(path, libc::S_IFCHR, *major, *minor)?;
+        }
+        PayloadNodeKind::Fifo => {
+            let c_path = c_path(path)?;
+            if unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) } != 0 {
+                return Err(io::Error::last_os_error())
+                    .with_context(|| format!("Failed to create FIFO {}", path.display()));
+            }
+        }
+        PayloadNodeKind::Socket => {
+            let socket = UnixListener::bind(path)
+                .with_context(|| format!("Failed to create socket {}", path.display()))?;
+            drop(socket);
+        }
+        PayloadNodeKind::Directory => unreachable!("directories use apply_directory"),
+    }
+    Ok(())
+}
+
+fn create_live_root_device(path: &Path, kind: libc::mode_t, major: u64, minor: u64) -> Result<()> {
+    let major = libc::c_uint::try_from(major)
+        .with_context(|| format!("device major is not representable at {}", path.display()))?;
+    let minor = libc::c_uint::try_from(minor)
+        .with_context(|| format!("device minor is not representable at {}", path.display()))?;
+    let c_path = c_path(path)?;
+    if unsafe { libc::mknod(c_path.as_ptr(), kind | 0o600, libc::makedev(major, minor)) } != 0 {
+        return Err(io::Error::last_os_error())
+            .with_context(|| format!("Failed to create device {}", path.display()));
+    }
+    Ok(())
+}
+
+fn c_path(path: &Path) -> Result<CString> {
+    CString::new(path.as_os_str().as_bytes())
+        .with_context(|| format!("filesystem path contains NUL: {}", path.display()))
 }
 
 fn copy_and_hash(

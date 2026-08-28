@@ -234,12 +234,13 @@ impl MountedSelectedRootOverlay {
     }
 
     pub fn freeze(mut self, upper: &Path) -> crate::Result<()> {
-        sync_filesystem(upper)?;
-        umount2(&self.target, MntFlags::empty()).map_err(|error| {
-            crate::Error::IoError(format!(
-                "failed to strictly unmount selected-root OverlayFS {}: {error}",
-                self.target.display()
-            ))
+        freeze_boundary(upper, sync_filesystem, || {
+            umount2(&self.target, MntFlags::empty()).map_err(|error| {
+                crate::Error::IoError(format!(
+                    "failed to strictly unmount selected-root OverlayFS {}: {error}",
+                    self.target.display()
+                ))
+            })
         })?;
         self.mounted = false;
         Ok(())
@@ -255,6 +256,15 @@ impl MountedSelectedRootOverlay {
         self.mounted = false;
         Ok(())
     }
+}
+
+fn freeze_boundary(
+    upper: &Path,
+    sync: impl FnOnce(&Path) -> crate::Result<()>,
+    unmount: impl FnOnce() -> crate::Result<()>,
+) -> crate::Result<()> {
+    sync(upper)?;
+    unmount()
 }
 
 impl Drop for MountedSelectedRootOverlay {
@@ -417,6 +427,74 @@ impl Drop for MountedOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn freeze_boundary_syncs_before_strict_unmount() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sync_events = Rc::clone(&events);
+        let unmount_events = Rc::clone(&events);
+
+        freeze_boundary(
+            Path::new("/upper"),
+            move |path| {
+                sync_events
+                    .borrow_mut()
+                    .push(format!("sync:{}", path.display()));
+                Ok(())
+            },
+            move || {
+                unmount_events.borrow_mut().push("unmount".to_string());
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(&*events.borrow(), &["sync:/upper", "unmount"]);
+    }
+
+    #[test]
+    fn freeze_boundary_never_unmounts_after_sync_failure() {
+        let unmounts = Rc::new(RefCell::new(0_u64));
+        let observed = Rc::clone(&unmounts);
+        let error = freeze_boundary(
+            Path::new("/upper"),
+            |_| Err(crate::Error::IoError("forced syncfs failure".to_string())),
+            move || {
+                *observed.borrow_mut() += 1;
+                Ok(())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("forced syncfs failure"));
+        assert_eq!(*unmounts.borrow(), 0);
+    }
+
+    #[test]
+    fn freeze_boundary_reports_strict_unmount_failure_after_sync() {
+        let syncs = Rc::new(RefCell::new(0_u64));
+        let observed = Rc::clone(&syncs);
+        let error = freeze_boundary(
+            Path::new("/upper"),
+            move |_| {
+                *observed.borrow_mut() += 1;
+                Ok(())
+            },
+            || {
+                Err(crate::Error::IoError(
+                    "forced strict unmount failure".to_string(),
+                ))
+            },
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("forced strict unmount failure"));
+        assert_eq!(*syncs.borrow(), 1);
+    }
 
     #[test]
     fn mount_data_is_exact_and_rejects_delimiter_paths() {

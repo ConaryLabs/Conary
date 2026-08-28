@@ -2,6 +2,7 @@
 
 //! Transaction-owned OverlayFS lifetime for a selected-root session.
 
+use crate::commands::DeferredOverlayDurability;
 use anyhow::{Context, Result};
 use conary_core::filesystem::CasStore;
 use conary_core::generation::artifact::GenerationArtifact;
@@ -157,12 +158,20 @@ impl SelectedRootOverlaySession {
         conn: &rusqlite::Connection,
         prior: SelectedRootSnapshot,
         cas: &CasStore,
+        durability: DeferredOverlayDurability,
     ) -> Result<SelectedRootManifestDelta> {
+        let metrics = durability.metrics();
         self.mounted
             .take()
             .context("selected-root OverlayFS session is already frozen")?
             .freeze(&self.upper)
             .context("failed to freeze selected-root OverlayFS session")?;
+        tracing::info!(
+            deferred_file_syncs = metrics.deferred_file_syncs,
+            deferred_directory_syncs = metrics.deferred_directory_syncs,
+            filesystem_freezes = 1_u64,
+            "froze deferred selected-root mutation authority"
+        );
         self.unmount_generation_lower()?;
         decode_selected_root_overlay_upper_indexed(
             &self.upper,
