@@ -82,6 +82,12 @@ fn command_performance_recorder_keeps_exact_identity_and_failure_metrics() {
     );
     assert_eq!(value["outcome"]["exit_code"], 7);
     assert!(value["outcome"]["signal"].is_null());
+    assert!(value["host"]["logical_cpus"].as_u64().unwrap() >= 1);
+    assert!(value["host"]["available_logical_cpus"].as_u64().unwrap() >= 1);
+    let cgroup = value["host"]["cgroup_v2"].as_object().unwrap();
+    assert!(cgroup.contains_key("cpu_max"));
+    assert!(cgroup.contains_key("cpuset_cpus_effective"));
+    assert!(cgroup.contains_key("memory_max"));
     for field in [
         "wall_ns",
         "user_cpu_ns",

@@ -22,6 +22,9 @@ cache state, sample number, resolved executable path, and executable SHA-256.
 Linux child-resource evidence includes wall and CPU time, peak RSS, page
 faults, block I/O operations, and context switches. Failed or signalled
 commands still produce evidence and retain their command outcome.
+Host evidence records both visible and affinity-available logical CPUs plus
+the cgroup-v2 CPU, cpuset, and memory ceilings, so a constrained runner cannot
+silently look like an implementation regression.
 
 Use one fresh recorder process and one output path per sample. The recorder
 refuses to replace an existing record. It deliberately does not infer whether

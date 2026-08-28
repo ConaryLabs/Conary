@@ -98,6 +98,20 @@ def memory_total_kib() -> int | None:
     return None
 
 
+def read_first_line(path: str) -> str | None:
+    try:
+        return Path(path).read_text(encoding="utf-8").splitlines()[0]
+    except (OSError, IndexError):
+        return None
+
+
+def available_logical_cpus() -> int | None:
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return None
+
+
 def additive_rusage(after: resource.struct_rusage, before: resource.struct_rusage) -> dict[str, int]:
     return {
         "user_cpu_ns": round((after.ru_utime - before.ru_utime) * 1_000_000_000),
@@ -192,8 +206,16 @@ def main() -> int:
             "os_id": os_release.get("ID"),
             "os_version_id": os_release.get("VERSION_ID"),
             "logical_cpus": os.cpu_count(),
+            "available_logical_cpus": available_logical_cpus(),
             "cpu_model": cpu_model(),
             "memory_total_kib": memory_total_kib(),
+            "cgroup_v2": {
+                "cpu_max": read_first_line("/sys/fs/cgroup/cpu.max"),
+                "cpuset_cpus_effective": read_first_line(
+                    "/sys/fs/cgroup/cpuset.cpus.effective"
+                ),
+                "memory_max": read_first_line("/sys/fs/cgroup/memory.max"),
+            },
         },
         "command": {
             "argv": args.command,
