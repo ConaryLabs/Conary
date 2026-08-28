@@ -3,7 +3,7 @@
 use super::*;
 use crate::db::models::{RepositoryPolicyScope, RepositorySourcePolicy, RepositoryUpdateMode};
 use crate::repository::catalog::{
-    CatalogCopyScratchV1, CatalogFinalizationScratchV1, CatalogMetadataObjectScratchV1,
+    CatalogCopyScratchV1, CatalogFinalizationScratchV2, CatalogMetadataObjectScratchV1,
     CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
     CatalogPackageOriginV1, CatalogScopeV1, CatalogScratchAdmission, CatalogScratchCapacityError,
     CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1,
@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 
 struct RecordingAdmission {
     source_candidates: Mutex<Vec<CatalogSourceCandidateScratchV1>>,
-    finalizations: Mutex<Vec<CatalogFinalizationScratchV1>>,
+    finalizations: Mutex<Vec<CatalogFinalizationScratchV2>>,
     metadata: Mutex<Vec<CatalogMetadataScratchV1>>,
     streams: Mutex<Vec<CatalogMetadataStreamScratchV1>>,
     stream_chunks: Arc<Mutex<Vec<u64>>>,
@@ -95,7 +95,7 @@ impl CatalogScratchAdmission for RecordingAdmission {
     fn reserve_finalization(
         &self,
         _candidate_path: &Path,
-        requirement: CatalogFinalizationScratchV1,
+        requirement: CatalogFinalizationScratchV2,
     ) -> Result<Box<dyn Send>> {
         self.finalizations.lock().unwrap().push(requirement);
         Ok(Box::new(RecordingLease(Arc::clone(&self.lease_drops))))

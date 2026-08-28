@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCopyScratchV1, CatalogFinalizationScratchV1,
+    CatalogArtifactV1, CatalogCopyScratchV1, CatalogFinalizationScratchV2,
     CatalogMetadataScratchV1, CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1,
     CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProfileMemberScratchV1,
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1,
@@ -91,7 +91,7 @@ impl CatalogScratchAdmission for ProfileAdmission {
     fn reserve_finalization(
         &self,
         _candidate_path: &Path,
-        _requirement: CatalogFinalizationScratchV1,
+        _requirement: CatalogFinalizationScratchV2,
     ) -> Result<Box<dyn Send>> {
         self.events.lock().unwrap().push("finalization-reserve");
         Ok(Box::new(EventLease {

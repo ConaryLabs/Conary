@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 87
-summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 88
+summary: Document build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -300,15 +300,21 @@ ceiling, releases the growth lease, and asks for the page-derived finalization
 lease below. A one-byte-short refusal leaves no profile candidate file.
 Before each source or profile catalog enters SQLite compaction, the catalog
 writer commits its private logical state and derives the exact current database
-bytes from SQLite's positive `page_size` and `page_count`. SQLite finalization
-may require two additional database-sized allocations while its temporary copy
-and rollback journal coexist with the original. Remi reserves that documented
-worst case against a process-local ledger keyed by the owning filesystem
-device, re-reading available space for every admission. Concurrent finalizers
-therefore cannot collectively reserve more than the filesystem reports
-available; the lease releases on success, error, cancellation unwind, or
-process restart. A one-byte-short refusal is a typed `storage_capacity` refresh
-failure before `VACUUM`, and candidate cleanup preserves the active revision.
+bytes from SQLite's positive `page_size` and `page_count`. Finalization writes
+one compacted `VACUUM INTO` output to a private same-directory sibling. Remi
+reserves one database-sized output against a process-local ledger keyed by the
+owning filesystem device, re-reading available space for every admission. It
+does not run in-place `VACUUM`, create a database-sized rollback journal, or
+copy the compacted pages back over the unpublished input. After output sync,
+the writer closes the input, atomically replaces it with the compacted file,
+synchronizes the directory, and subjects that exact path to the normal complete
+independent reopen. Structured logs record logical-digest, compaction, artifact
+hash, independent-reopen, and total finalization times with exact row and byte
+facts. Concurrent finalizers cannot collectively reserve more than the
+filesystem reports available; the lease releases on success, error,
+cancellation unwind, or process restart. A one-byte-short refusal is a typed
+`storage_capacity` refresh failure before compaction, and candidate cleanup
+preserves the active revision.
 When a newly finalized source catalog has no exact projection-cache entry, the
 cache derives another typed requirement from the verified catalog artifact size
 and the exact canonical cache-manifest bytes. It reserves those bytes on the

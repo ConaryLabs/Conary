@@ -13,7 +13,7 @@ use super::SourceMetadataObjectRoleV1;
 use super::contract::validate_relative_source_path;
 
 /// Current schema for exact SQLite catalog-finalization scratch evidence.
-pub const CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1: u32 = 1;
+pub const CATALOG_FINALIZATION_SCRATCH_SCHEMA_V2: u32 = 2;
 
 /// Current schema for exact immutable catalog-copy scratch evidence.
 pub const CATALOG_COPY_SCRATCH_SCHEMA_V1: u32 = 1;
@@ -550,7 +550,7 @@ impl CatalogCopyScratchV1 {
 /// private catalog alongside its current database file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CatalogFinalizationScratchV1 {
+pub struct CatalogFinalizationScratchV2 {
     /// Contract schema version.
     pub schema_version: u32,
     /// Positive SQLite page size read after committing catalog metadata.
@@ -559,17 +559,15 @@ pub struct CatalogFinalizationScratchV1 {
     pub database_page_count: u64,
     /// Exact committed database bytes before compaction.
     pub database_bytes: u64,
-    /// Conservative temporary-database allocation used by `VACUUM`.
-    pub temporary_copy_bytes: u64,
-    /// Conservative rollback-journal allocation while copying back.
-    pub rollback_journal_bytes: u64,
-    /// Sum of the two transient allocations required by `VACUUM`.
+    /// Conservative compacted-output allocation used by `VACUUM INTO`.
+    pub compacted_copy_bytes: u64,
+    /// Exact transient allocation required by `VACUUM INTO`.
     pub required_additional_bytes: u64,
 }
 
-impl CatalogFinalizationScratchV1 {
-    /// Derive SQLite's documented worst-case free-space requirement from
-    /// positive page facts read after committing the private candidate.
+impl CatalogFinalizationScratchV2 {
+    /// Derive the compacted-output free-space requirement from positive page
+    /// facts read after committing the private candidate.
     ///
     /// <https://www.sqlite.org/lang_vacuum.html#how_vacuum_works>
     pub fn from_page_facts(page_size: u64, page_count: u64) -> Result<Self> {
@@ -583,19 +581,13 @@ impl CatalogFinalizationScratchV1 {
                 "catalog finalization scratch-space arithmetic overflow".to_string(),
             )
         })?;
-        let required_additional_bytes = database_bytes.checked_mul(2).ok_or_else(|| {
-            crate::Error::IoError(
-                "catalog finalization scratch-space arithmetic overflow".to_string(),
-            )
-        })?;
         let requirement = Self {
-            schema_version: CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1,
+            schema_version: CATALOG_FINALIZATION_SCRATCH_SCHEMA_V2,
             database_page_size: page_size,
             database_page_count: page_count,
             database_bytes,
-            temporary_copy_bytes: database_bytes,
-            rollback_journal_bytes: database_bytes,
-            required_additional_bytes,
+            compacted_copy_bytes: database_bytes,
+            required_additional_bytes: database_bytes,
         };
         requirement.validate()?;
         Ok(requirement)
@@ -603,7 +595,7 @@ impl CatalogFinalizationScratchV1 {
 
     /// Reject contradictory or superseded scratch evidence.
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != CATALOG_FINALIZATION_SCRATCH_SCHEMA_V1
+        if self.schema_version != CATALOG_FINALIZATION_SCRATCH_SCHEMA_V2
             || self.database_page_size == 0
             || self.database_page_count == 0
         {
@@ -615,13 +607,9 @@ impl CatalogFinalizationScratchV1 {
         let expected_database = self
             .database_page_size
             .checked_mul(self.database_page_count);
-        let expected_required = self
-            .temporary_copy_bytes
-            .checked_add(self.rollback_journal_bytes);
         if expected_database != Some(self.database_bytes)
-            || self.temporary_copy_bytes != self.database_bytes
-            || self.rollback_journal_bytes != self.database_bytes
-            || expected_required != Some(self.required_additional_bytes)
+            || self.compacted_copy_bytes != self.database_bytes
+            || self.required_additional_bytes != self.database_bytes
         {
             return Err(crate::Error::ConfigError(
                 "catalog finalization scratch evidence contradicts its SQLite page facts"
@@ -691,7 +679,7 @@ pub trait CatalogScratchAdmission: Send + Sync {
     fn reserve_finalization(
         &self,
         candidate_path: &Path,
-        requirement: CatalogFinalizationScratchV1,
+        requirement: CatalogFinalizationScratchV2,
     ) -> Result<Box<dyn Send>>;
 
     /// Reserve an exact verified catalog and canonical manifest copy at the
@@ -717,6 +705,23 @@ mod tests {
             catalog_bytes: catalog_pages * CATALOG_SQLITE_PAGE_SIZE_V1,
             package_count,
         }
+    }
+
+    #[test]
+    fn finalization_requirement_admits_one_direct_compaction_output() {
+        let requirement = CatalogFinalizationScratchV2::from_page_facts(4096, 23).unwrap();
+
+        assert_eq!(
+            requirement.schema_version,
+            CATALOG_FINALIZATION_SCRATCH_SCHEMA_V2
+        );
+        assert_eq!(requirement.database_bytes, 23 * 4096);
+        assert_eq!(requirement.compacted_copy_bytes, 23 * 4096);
+        assert_eq!(requirement.required_additional_bytes, 23 * 4096);
+
+        let mut contradictory = requirement;
+        contradictory.compacted_copy_bytes += 1;
+        assert!(contradictory.validate().is_err());
     }
 
     #[test]
