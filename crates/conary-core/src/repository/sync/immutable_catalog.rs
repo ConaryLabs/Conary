@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tracing::info;
 
@@ -751,7 +751,15 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
             .finish()?
             .open()?;
         let stats = spool.stats();
-        while let Some(record) = spool.next()? {
+        let mut provide_update = SnapshotProvideUpdate::default();
+        let mut decode_elapsed = Duration::ZERO;
+        let mut write_elapsed = Duration::ZERO;
+        loop {
+            let decode_started = Instant::now();
+            let record = spool.next()?;
+            decode_elapsed += decode_started.elapsed();
+            let Some(record) = record else { break };
+            let write_started = Instant::now();
             match record {
                 ProjectionSpoolRecordV1::Package(package) => {
                     if self.preflight_is_arch {
@@ -770,7 +778,7 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
                         ));
                     }
                     let checksum = normalized_snapshot_checksum(&merge.identity);
-                    self.writer_mut()?.extend_package_provides(
+                    let update = self.writer_mut()?.extend_package_provides(
                         merge.join.as_str(),
                         &checksum,
                         &merge.identity.name,
@@ -778,6 +786,30 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
                         merge.identity.architecture.as_deref(),
                         merge.provides,
                     )?;
+                    provide_update.matched_packages = provide_update
+                        .matched_packages
+                        .checked_add(update.matched_packages)
+                        .ok_or_else(|| {
+                            Error::IoError(
+                                "normalized projection matched-package count overflow".to_string(),
+                            )
+                        })?;
+                    provide_update.added = provide_update
+                        .added
+                        .checked_add(update.added)
+                        .ok_or_else(|| {
+                            Error::IoError(
+                                "normalized projection added-provide count overflow".to_string(),
+                            )
+                        })?;
+                    provide_update.already_known = provide_update
+                        .already_known
+                        .checked_add(update.already_known)
+                        .ok_or_else(|| {
+                            Error::IoError(
+                                "normalized projection known-provide count overflow".to_string(),
+                            )
+                        })?;
                 }
                 ProjectionSpoolRecordV1::FinishJoin(join) => {
                     if self.preflight_is_arch {
@@ -801,19 +833,22 @@ impl RepositorySnapshotSink for NativeCatalogSnapshotSink {
                         .stage_arch_package_fragment(directory, kind, content)?;
                 }
             }
+            write_elapsed += write_started.elapsed();
         }
         info!(
             repository = %self.repository.name,
             spool_bytes = stats.bytes,
             spool_records = stats.records,
             package_count = self.preflight_package_count,
+            decode_ms = decode_elapsed.as_millis(),
+            candidate_write_ms = write_elapsed.as_millis(),
             elapsed_ms = replay_started.elapsed().as_millis(),
             "Normalized native projection spool replay completed"
         );
         if self.preflight_is_arch {
             Ok(SourceCandidatePreflightOutcome::ArchFragmentsReplayed)
         } else {
-            Ok(SourceCandidatePreflightOutcome::CompleteProjection)
+            Ok(SourceCandidatePreflightOutcome::CompleteProjection { provide_update })
         }
     }
 

@@ -12,8 +12,8 @@ use super::CatalogCandidateWriter;
 use super::lifecycle::{read_positive_pragma, table_exists};
 use crate::error::{Error, Result};
 use crate::repository::catalog::store::{
-    canonical_json_string, checked_i64, checked_ordinal, create_private_file,
-    digest_catalog_connection, hash_file, sync_parent,
+    CATALOG_PROVIDE_INDEX_SCHEMA, canonical_json_string, checked_i64, checked_ordinal,
+    create_private_file, digest_catalog_connection, hash_file, sync_parent,
 };
 use crate::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogBindingV1, CatalogFinalizationScratchV2,
@@ -55,6 +55,11 @@ impl CatalogCandidateWriter {
             return Err(Error::ConflictError(
                 "catalog candidate has unfinished Arch package fragments".to_string(),
             ));
+        }
+        if self.provide_indexes_deferred {
+            self.connection()?
+                .execute_batch(CATALOG_PROVIDE_INDEX_SCHEMA)?;
+            self.provide_indexes_deferred = false;
         }
         self.connection()?
             .execute_batch("DROP INDEX catalog_ingest_packages_checksum")?;

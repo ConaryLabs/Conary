@@ -76,7 +76,7 @@ pub enum CatalogSourceEvidenceV1 {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogProvideRecordV1 {
     pub capability: String,
@@ -258,7 +258,7 @@ impl CatalogPackageRecordV1 {
         if let Some(metadata) = &mut self.metadata {
             canonicalize_json_text(metadata, "catalog package metadata")?;
         }
-        canonical_sort(&mut self.provides)?;
+        canonicalize_provides(&mut self.provides)?;
         for group in &mut self.requirement_groups {
             canonicalize_json_text(
                 &mut group.expression_json,
@@ -451,7 +451,7 @@ impl CatalogPackageRecordV1 {
 }
 
 impl CatalogProvideRecordV1 {
-    fn validate(&self) -> Result<()> {
+    pub(in crate::repository) fn validate(&self) -> Result<()> {
         let kind = parse_capability_kind(&self.kind)?;
         validate_native_capability(&self.capability, "catalog provided capability", kind)?;
         ProvidedCapability {
@@ -875,6 +875,12 @@ fn canonical_sort<T: Serialize>(values: &mut Vec<T>) -> Result<()> {
     keyed.sort_by(|left, right| left.0.cmp(&right.0));
     *values = keyed.into_iter().map(|(_, value)| value).collect();
     Ok(())
+}
+
+pub(in crate::repository) fn canonicalize_provides(
+    provides: &mut Vec<CatalogProvideRecordV1>,
+) -> Result<()> {
+    canonical_sort(provides)
 }
 
 fn canonicalize_evidence(values: &mut [CatalogSourceEvidenceV1]) {

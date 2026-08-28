@@ -885,7 +885,7 @@ impl RepositoryParser for FedoraParser {
                     None
                 };
             match sink.begin_source_candidate()? {
-                SourceCandidatePreflightOutcome::CompleteProjection => {
+                SourceCandidatePreflightOutcome::CompleteProjection { provide_update } => {
                     sink.authenticated_object(primary_object, &primary_path)?;
                     match filelists_download {
                         Some((_, filelists_path, filelists_object, _)) => {
@@ -893,7 +893,7 @@ impl RepositoryParser for FedoraParser {
                             let ingest = preflight_filelists.expect("filelists preflight ran");
                             info!(
                                 "Ingested {} filelists package records: {} file capabilities added, {} already published by primary.xml",
-                                ingest.records, ingest.files_added, ingest.files_already_known
+                                ingest.records, provide_update.added, provide_update.already_known
                             );
                         }
                         None => sink.validate_rpm_primary_file_requirements(repo_url)?,

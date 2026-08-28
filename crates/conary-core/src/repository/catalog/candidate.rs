@@ -2,14 +2,16 @@
 
 //! Bounded construction of one deterministic standalone catalog candidate.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
+use super::record::canonicalize_provides;
 use super::store::{
-    CATALOG_APPLICATION_ID, CATALOG_SCHEMA, create_private_file, insert_package, package_by_key,
-    replace_package_provides, validate_candidate_path,
+    CATALOG_APPLICATION_ID, CATALOG_PROVIDE_INDEX_SCHEMA, CATALOG_SCHEMA, create_private_file,
+    insert_package, load_provides, replace_package_provides, validate_candidate_path,
 };
 use super::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogPackageOriginV1, CatalogPackageRecordV1,
@@ -32,6 +34,7 @@ pub struct CatalogCandidateWriter {
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
     growth_lease: Option<Box<dyn Send>>,
     database_bytes_bound: Option<u64>,
+    provide_indexes_deferred: bool,
     complete: bool,
 }
 
@@ -150,6 +153,7 @@ impl CatalogCandidateWriter {
              PRAGMA user_version = {CATALOG_CONTENT_SCHEMA_V1};"
         ))?;
         connection.execute_batch(CATALOG_SCHEMA)?;
+        connection.execute_batch(CATALOG_PROVIDE_INDEX_SCHEMA)?;
         // RPM filelists records join back to their primary package by the
         // authenticated package checksum. Keep that construction-only lookup
         // indexed: without it, one complete filelists document performs a
@@ -168,6 +172,7 @@ impl CatalogCandidateWriter {
             scratch_admission,
             growth_lease,
             database_bytes_bound,
+            provide_indexes_deferred: false,
             complete: false,
         })
     }
@@ -212,30 +217,31 @@ impl CatalogCandidateWriter {
         architecture: Option<&str>,
         provides: Vec<CatalogProvideRecordV1>,
     ) -> Result<CatalogProvideMerge> {
-        self.connection()?.execute_batch(
-            "CREATE TABLE IF NOT EXISTS catalog_ingest_join_marks (
-                 join_kind TEXT NOT NULL,
-                 package_key_sha256 TEXT NOT NULL
-                     REFERENCES catalog_packages(package_key_sha256) ON DELETE CASCADE,
-                 PRIMARY KEY (join_kind, package_key_sha256)
-             ) STRICT, WITHOUT ROWID;",
-        )?;
-        let primary = self
-            .connection()?
-            .query_row(
+        if !self.provide_indexes_deferred {
+            self.connection()?.execute_batch(
+                "DROP INDEX catalog_provides_capability;
+                 DROP INDEX catalog_provides_raw;
+                 CREATE TABLE catalog_ingest_join_marks (
+                     join_kind TEXT NOT NULL,
+                     package_key_sha256 TEXT NOT NULL
+                         REFERENCES catalog_packages(package_key_sha256) ON DELETE CASCADE,
+                     PRIMARY KEY (join_kind, package_key_sha256)
+                 ) STRICT, WITHOUT ROWID;",
+            )?;
+            self.provide_indexes_deferred = true;
+        }
+        let primary = self.connection()?.prepare_cached(
                 "SELECT package_key_sha256, name, version, architecture
                  FROM catalog_packages WHERE checksum = ?1
                  ORDER BY package_key_sha256 LIMIT 1",
-                [checksum],
-                |row| {
+            )?.query_row([checksum], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, Option<String>>(3)?,
                     ))
-                },
-            )
+                })
             .optional()?
             .ok_or_else(|| {
                 Error::ParseError(format!(
@@ -261,31 +267,36 @@ impl CatalogCandidateWriter {
                 "signed filelists.xml and primary.xml disagree on pkgid {checksum}: filelists {field} is '{child}' but primary {field} is '{primary}'"
             )));
         }
-        if let Err(error) = self.connection()?.execute(
-            "INSERT INTO catalog_ingest_join_marks (join_kind, package_key_sha256)
-             VALUES (?1, ?2)",
-            params![join, &package_key],
-        ) {
+        if let Err(error) = self
+            .connection()?
+            .prepare_cached(
+                "INSERT INTO catalog_ingest_join_marks (join_kind, package_key_sha256)
+                 VALUES (?1, ?2)",
+            )?
+            .execute(params![join, &package_key])
+        {
             return Err(Error::ConflictError(format!(
                 "authenticated child metadata repeats package {name} {version} ({checksum}): {error}"
             )));
         }
 
-        let mut package = package_by_key(self.connection()?, &self.scope, &package_key)?;
+        let mut package_provides = load_provides(self.connection()?, &package_key)?;
+        let mut known = package_provides.iter().cloned().collect::<HashSet<_>>();
         let mut result = CatalogProvideMerge {
             matched_packages: 1,
             ..CatalogProvideMerge::default()
         };
         for provide in provides {
-            if package.provides.contains(&provide) {
+            provide.validate()?;
+            if !known.insert(provide.clone()) {
                 result.already_known += 1;
             } else {
-                package.provides.push(provide);
+                package_provides.push(provide);
                 result.added += 1;
             }
         }
-        package.canonicalize_for_scope(&self.scope)?;
-        replace_package_provides(self.connection()?, &package)?;
+        canonicalize_provides(&mut package_provides)?;
+        replace_package_provides(self.connection()?, &package_key, &package_provides)?;
         Ok(result)
     }
 

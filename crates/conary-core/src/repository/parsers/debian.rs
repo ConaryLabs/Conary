@@ -422,7 +422,7 @@ impl RepositoryParser for DebianParser {
                     sink.preflight_package(self.package_from_entry(repo_url, entry)?)
                 })?;
             match sink.begin_source_candidate()? {
-                SourceCandidatePreflightOutcome::CompleteProjection => {
+                SourceCandidatePreflightOutcome::CompleteProjection { .. } => {
                     sink.authenticated_object(packages_object, &packages_path)?;
                     info!(
                         "Parsed {preflight_package_count} packages from Debian repository in one authenticated metadata pass"

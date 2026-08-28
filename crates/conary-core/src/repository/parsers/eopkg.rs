@@ -102,7 +102,7 @@ impl RepositoryParser for EopkgParser {
                 |package| sink.preflight_package(package),
             )?;
             match sink.begin_source_candidate()? {
-                SourceCandidatePreflightOutcome::CompleteProjection => {
+                SourceCandidatePreflightOutcome::CompleteProjection { .. } => {
                     sink.authenticated_object(index_object, &index_path)?;
                     info!(
                         "Parsed {preflight_package_count} packages from eopkg repository in one authenticated metadata pass"

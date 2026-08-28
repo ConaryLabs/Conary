@@ -106,7 +106,10 @@ pub enum SourceCandidatePreflightOutcome {
     /// The parser must decode the authenticated native input again into the writer.
     ReplayAuthenticatedMetadata,
     /// The sink replayed a normalized spool and the complete projection is populated.
-    CompleteProjection,
+    CompleteProjection {
+        /// Exact child-projection merge result observed while populating the candidate.
+        provide_update: SnapshotProvideUpdate,
+    },
     /// The sink replayed ALPM fragments; the parser must drain and normalize them once.
     ArchFragmentsReplayed,
 }

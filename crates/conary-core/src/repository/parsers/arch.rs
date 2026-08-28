@@ -438,7 +438,7 @@ impl RepositoryParser for ArchParser {
             match sink.begin_source_candidate()? {
                 SourceCandidatePreflightOutcome::ArchFragmentsReplayed => true,
                 SourceCandidatePreflightOutcome::ReplayAuthenticatedMetadata => false,
-                SourceCandidatePreflightOutcome::CompleteProjection => {
+                SourceCandidatePreflightOutcome::CompleteProjection { .. } => {
                     return Err(Error::InternalError(
                         "Arch parser received a complete non-ALPM preflight replay outcome"
                             .to_string(),

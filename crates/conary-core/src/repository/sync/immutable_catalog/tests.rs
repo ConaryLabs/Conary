@@ -355,7 +355,9 @@ fn native_candidate_admission_precedes_file_creation_and_refusal_leaves_no_file(
     assert!(!candidate.exists());
     assert_eq!(
         sink.begin_source_candidate().unwrap(),
-        SourceCandidatePreflightOutcome::CompleteProjection
+        SourceCandidatePreflightOutcome::CompleteProjection {
+            provide_update: SnapshotProvideUpdate::default(),
+        }
     );
     assert!(candidate.exists());
     let requirement = admission.source_candidates.lock().unwrap()[0];
