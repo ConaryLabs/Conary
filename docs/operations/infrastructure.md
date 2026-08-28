@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 46
-summary: Non-secret infrastructure, agent operations, release, build-once exact-main Remi candidates, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
+revision: 47
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, build-once exact-main Remi candidates, bounded persistent deployment transport, constant-time coherent typed deployment baselines, causally inspectable deployment completion, network-free exact native-oracle input export, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -508,7 +508,15 @@ old process. That can fail with `Text file busy`.
   cache under the exact commit. Consumers fail on a missing seed, restore that
   exact cache read-only, run their complete commands, and retain typed hit,
   miss, write, and error evidence. The cache is optimization, never test or
-  artifact authority.
+  artifact authority. GitHub scopes pull-request writes to that pull request's
+  merge ref, so trusted `merge-validation` also publishes GNU and native-matrix
+  snapshots from reviewed `main`. Later pull requests may read those
+  default-branch snapshots but cannot overwrite them; content-keyed compiler
+  objects miss only when their compilation inputs change. When a pull request
+  closes, `cleanup-pr-caches` enumerates and deletes only that
+  `refs/pull/<number>/merge` cache scope. Those snapshots cannot serve sibling
+  pull requests; removing them protects the bounded repository cache quota and
+  the reusable default-branch seeds without touching any other ref.
   The protected native-matrix producer applies the same bulk-transfer model to
   its distinct musl target and static dependency policy: it restores one prior
   seed, compiles locally, stops sccache, and saves the new exact-head seed once.

@@ -14,6 +14,7 @@ write_fixture() {
   mkdir -p \
     "$root/.github/workflows" \
     "$root/.github/actions/setup-rust-workspace" \
+    "$root/.github/actions/setup-native-matrix-compiler-cache" \
     "$root/.github/actions/summarize-rust-cache" \
     "$root/.github/actions/setup-shell-policy-tools" \
     "$root/.github/actions/build-static-conary" \
@@ -22,8 +23,12 @@ write_fixture() {
   cp scripts/ci-install-ubuntu-packages.sh "$root/scripts/"
   cp .github/actions/setup-rust-workspace/action.yml \
     "$root/.github/actions/setup-rust-workspace/action.yml"
+  cp .github/actions/setup-native-matrix-compiler-cache/action.yml \
+    "$root/.github/actions/setup-native-matrix-compiler-cache/action.yml"
   cp .github/actions/summarize-rust-cache/action.yml \
     "$root/.github/actions/summarize-rust-cache/action.yml"
+  cp .github/workflows/cleanup-pr-caches.yml \
+    "$root/.github/workflows/cleanup-pr-caches.yml"
   cat > "$root/.github/workflows/policy.yml" <<EOF
 name: policy
 on: workflow_dispatch
@@ -85,6 +90,8 @@ unsafe_shell_root="$tmpdir/unsafe-shell"
 unsafe_apt_root="$tmpdir/unsafe-apt"
 unsafe_source_root="$tmpdir/unsafe-source"
 unsafe_cache_root="$tmpdir/unsafe-cache"
+unsafe_native_cache_root="$tmpdir/unsafe-native-cache"
+unsafe_pr_cleanup_root="$tmpdir/unsafe-pr-cleanup"
 unsafe_action_yaml_root="$tmpdir/unsafe-action-yaml"
 write_fixture "$bad_root" "actions/checkout@v6"
 write_fixture "$good_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
@@ -92,6 +99,8 @@ write_fixture "$unsafe_shell_root" "actions/checkout@de0fac2e4500dabe0009e67214f
 write_fixture "$unsafe_apt_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_source_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_cache_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+write_fixture "$unsafe_native_cache_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+write_fixture "$unsafe_pr_cleanup_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_action_yaml_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 sed -i 's/if command -v rg >\/dev\/null; then/if false; then/' \
   "$unsafe_shell_root/.github/actions/setup-shell-policy-tools/action.yml"
@@ -103,6 +112,12 @@ sed -i \
   "$unsafe_source_root/scripts/ci-install-ubuntu-packages.sh"
 sed -i 's/version: v0\.16\.0/version: latest/' \
   "$unsafe_cache_root/.github/actions/setup-rust-workspace/action.yml"
+sed -i \
+  's#restore-keys: ${{ steps.policy.outputs.restore_prefix }}#restore-keys: native-matrix-musl-local-v1-#' \
+  "$unsafe_native_cache_root/.github/actions/setup-native-matrix-compiler-cache/action.yml"
+sed -i \
+  's#cache_ref="refs/pull/${PR_NUMBER}/merge"#cache_ref="refs/heads/main"#' \
+  "$unsafe_pr_cleanup_root/.github/workflows/cleanup-pr-caches.yml"
 sed -i \
   's/description: "Exact compiler-cache role: off, writer, or reader\."/description: Exact compiler-cache role: off, writer, or reader./' \
   "$unsafe_action_yaml_root/.github/actions/setup-rust-workspace/action.yml"
@@ -179,6 +194,36 @@ if ! rg -q 'must install the pinned sccache implementation and version' \
   "$tmpdir/unsafe-cache.err"; then
   echo "expected failure to name the unpinned compiler cache" >&2
   cat "$tmpdir/unsafe-cache.err" >&2
+  exit 1
+fi
+
+if bash scripts/check-github-action-runtimes.sh "$unsafe_native_cache_root" \
+  >"$tmpdir/unsafe-native-cache.out" 2>"$tmpdir/unsafe-native-cache.err"; then
+  echo "expected unbound native compiler-cache fixture to fail" >&2
+  cat "$tmpdir/unsafe-native-cache.out" >&2
+  cat "$tmpdir/unsafe-native-cache.err" >&2
+  exit 1
+fi
+
+if ! rg -q 'must restore a compatible policy seed across source heads' \
+  "$tmpdir/unsafe-native-cache.err"; then
+  echo "expected failure to name the unbound native compiler-cache restore" >&2
+  cat "$tmpdir/unsafe-native-cache.err" >&2
+  exit 1
+fi
+
+if bash scripts/check-github-action-runtimes.sh "$unsafe_pr_cleanup_root" \
+  >"$tmpdir/unsafe-pr-cleanup.out" 2>"$tmpdir/unsafe-pr-cleanup.err"; then
+  echo "expected broad pull-request cache cleanup fixture to fail" >&2
+  cat "$tmpdir/unsafe-pr-cleanup.out" >&2
+  cat "$tmpdir/unsafe-pr-cleanup.err" >&2
+  exit 1
+fi
+
+if ! rg -q 'must derive only the closed pull request merge ref' \
+  "$tmpdir/unsafe-pr-cleanup.err"; then
+  echo "expected failure to name the broadened cache cleanup ref" >&2
+  cat "$tmpdir/unsafe-pr-cleanup.err" >&2
   exit 1
 fi
 

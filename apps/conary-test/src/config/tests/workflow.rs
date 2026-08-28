@@ -19,10 +19,22 @@ const RELEASE_ARTIFACT_MATRIX_JOB_ID: &str = "native-package-lifecycle";
 const RELEASE_ARTIFACT_GATE_ID: &str = "release-artifact-proof";
 const COMPILER_CACHE_SETUP_ACTION: &str = "./.github/actions/setup-rust-workspace";
 const COMPILER_CACHE_SUMMARY_ACTION: &str = "./.github/actions/summarize-rust-cache";
+const NATIVE_COMPILER_CACHE_ACTION: &str = "./.github/actions/setup-native-matrix-compiler-cache";
 
 #[derive(Debug, Deserialize)]
 struct Workflow {
     jobs: BTreeMap<String, serde_yaml::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompositeAction {
+    runs: CompositeActionRuns,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompositeActionRuns {
+    using: String,
+    steps: Vec<WorkflowStep>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,6 +180,15 @@ fn load_workflow() -> Workflow {
 }
 
 fn load_workflow_from(path: PathBuf) -> Workflow {
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    serde_yaml::from_str(&source)
+        .unwrap_or_else(|error| panic!("parse {} as typed YAML: {error}", path.display()))
+}
+
+fn load_native_compiler_cache_action() -> CompositeAction {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.github/actions/setup-native-matrix-compiler-cache/action.yml");
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     serde_yaml::from_str(&source)
@@ -334,10 +355,6 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
         ("CARGO_INCREMENTAL", "0"),
         ("CARGO_PROFILE_DEV_DEBUG", "0"),
         ("CARGO_PROFILE_TEST_DEBUG", "0"),
-        ("SCCACHE_CACHE_BACKEND", "local-disk-bulk-v1"),
-        ("SCCACHE_CACHE_SIZE", "4G"),
-        ("SCCACHE_LOCAL_RW_MODE", "READ_WRITE"),
-        ("SCCACHE_VERSION", "0.16.0"),
     ] {
         assert_eq!(
             job.env.get(key).and_then(|value| match value {
@@ -359,7 +376,18 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
         "runner.temp is step-scoped and must be exported by the cache-policy step"
     );
 
-    let cache_policy = named_step(&job.steps, "Bind exact native compiler-cache policy");
+    let cache_setup = action_step(&job.steps, NATIVE_COMPILER_CACHE_ACTION);
+    assert_eq!(
+        cache_setup.condition.as_deref(),
+        Some("${{ steps.native-artifact-restore.outputs.cache-hit != 'true' }}")
+    );
+
+    let cache_action = load_native_compiler_cache_action();
+    assert_eq!(cache_action.runs.using, "composite");
+    let cache_policy = named_step(
+        &cache_action.runs.steps,
+        "Bind exact native compiler-cache policy",
+    );
     let cache_policy_run = cache_policy.run.as_deref().expect("native cache policy");
     for binding in [
         "rustc=%s",
@@ -370,7 +398,8 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
         "native_abi=%s",
         "builder=%s",
         "header_probe=%s",
-        "action=%s",
+        "build_action=%s",
+        "cache_action=%s",
         "features=default",
         "test_harness=true",
         "rustflags=%s",
@@ -386,6 +415,10 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
     }
     assert!(cache_policy_run.contains("native-matrix-musl-local-v1-${identity}"));
     assert!(cache_policy_run.contains("${restore_prefix}${GITHUB_SHA}"));
+    assert!(cache_policy_run.contains("SCCACHE_CACHE_BACKEND=local-disk-bulk-v1"));
+    assert!(cache_policy_run.contains("SCCACHE_CACHE_SIZE=4G"));
+    assert!(cache_policy_run.contains("SCCACHE_LOCAL_RW_MODE=READ_WRITE"));
+    assert!(cache_policy_run.contains("SCCACHE_VERSION=0.16.0"));
     assert!(cache_policy_run.contains("SCCACHE_DIR=$RUNNER_TEMP/native-matrix-sccache"));
 
     let artifact_restore = named_step(
@@ -422,7 +455,10 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
             .is_some_and(|run| run.contains("native-matrix-artifact.sh verify"))
     );
 
-    let restore = named_step(&job.steps, "Restore native compiler-cache seed");
+    let restore = named_step(
+        &cache_action.runs.steps,
+        "Restore native compiler-cache seed",
+    );
     assert_eq!(
         restore.uses.as_deref(),
         Some("actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7")
@@ -433,14 +469,14 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
     );
     assert_eq!(
         restore.with.get("key").and_then(serde_yaml::Value::as_str),
-        Some("${{ steps.native-cache-policy.outputs.exact_key }}")
+        Some("${{ steps.policy.outputs.exact_key }}")
     );
     assert_eq!(
         restore
             .with
             .get("restore-keys")
             .and_then(serde_yaml::Value::as_str),
-        Some("${{ steps.native-cache-policy.outputs.restore_prefix }}")
+        Some("${{ steps.policy.outputs.restore_prefix }}")
     );
 
     let save = named_step(&job.steps, "Save exact native compiler cache");
@@ -451,12 +487,12 @@ fn native_matrix_artifact_is_built_once_with_exact_source_and_cache_policy() {
     assert_eq!(
         save.condition.as_deref(),
         Some(
-            "${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache-restore.outputs.cache-hit != 'true' }}"
+            "${{ steps.native-artifact-restore.outputs.cache-hit != 'true' && steps.native-cache.outputs.cache_hit != 'true' }}"
         )
     );
     assert_eq!(
         save.with.get("key").and_then(serde_yaml::Value::as_str),
-        Some("${{ steps.native-cache-policy.outputs.exact_key }}")
+        Some("${{ steps.native-cache.outputs.exact_key }}")
     );
 
     let build = named_step(&job.steps, "Build all static matrix executables once");

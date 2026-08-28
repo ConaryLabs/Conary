@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 82
-summary: Route feature ownership through shared compiler caching with isolated build targets, build-once exact-main deployment artifacts, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+revision: 83
+summary: Route feature ownership through trusted-main compiler seeding, shared compiler caching with isolated build targets, build-once exact-main deployment artifacts, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -1331,6 +1331,8 @@ release authority, publish one immutable GitHub release, route serialized
 deployment, and prove installed or live behavior independently.
 
 **Start here:** `.github/workflows/release-build.yml`;
+`.github/workflows/merge-validation.yml`;
+`.github/workflows/cleanup-pr-caches.yml`;
 `.github/workflows/deploy-and-verify.yml`;
 `.github/workflows/build-remi-candidate.yml`;
 `.github/workflows/deploy-remi-candidate.yml`;
@@ -1354,6 +1356,8 @@ construction, GitHub tags and releases, self-update serving, Remi deployment,
 static-site deployment, and production health proof.
 
 **Paths:** `.github/workflows/release-build.yml`;
+`.github/workflows/merge-validation.yml`;
+`.github/workflows/cleanup-pr-caches.yml`;
 `.github/workflows/deploy-and-verify.yml`;
 `.github/workflows/build-remi-candidate.yml`;
 `.github/workflows/deploy-remi-candidate.yml`;
@@ -1429,6 +1433,7 @@ matrix job in `.github/workflows/pr-gate.yml`.
 `scripts/kernel-header-roots.sh`;
 `scripts/native-matrix-artifact.sh`;
 `.github/actions/build-static-conary/action.yml`;
+`.github/actions/setup-native-matrix-compiler-cache/action.yml`;
 `.github/actions/restore-native-matrix-artifact/action.yml`;
 `.github/workflows/pr-gate.yml`.
 
@@ -1464,7 +1469,9 @@ its exact commit, tree, lockfile, toolchain, flags, cache namespace, archive
 member list, and binary digests before reopening it; an absent, corrupt, or
 misattributed artifact fails the cell and never weakens a predicate. The native
 producer bulk-restores and bulk-saves its exact-policy musl compiler cache
-around local compilation. A verified bundle may be reused only by another
+around local compilation. Trusted `main` publishes a compatible native seed
+that pull requests may read but cannot overwrite; source changes still miss at
+the content-keyed compiler-object boundary. A verified bundle may be reused only by another
 attempt of the same workflow run at the same exact commit, and is verified and
 reopened before build setup is skipped. The GNU compiler-cache primer likewise
 bulk-saves one bounded local seed under the exact commit; consumers require

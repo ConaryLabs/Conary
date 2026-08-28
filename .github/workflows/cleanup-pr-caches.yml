@@ -1,0 +1,56 @@
+name: cleanup-pr-caches
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cleanup-pr-caches-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: cleanup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete only the closed pull request cache scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+            echo "pull request number must be a positive integer" >&2
+            exit 1
+          }
+          cache_ref="refs/pull/${PR_NUMBER}/merge"
+          [[ "$cache_ref" =~ ^refs/pull/[1-9][0-9]*/merge$ ]] || {
+            echo "refusing invalid pull request cache scope: $cache_ref" >&2
+            exit 1
+          }
+          mapfile -t cache_ids < <(
+            gh api --paginate --method GET "repos/${GH_REPO}/actions/caches" \
+              -f ref="$cache_ref" -f per_page=100 \
+              --jq '.actions_caches[].id'
+          )
+          deleted=0
+          for cache_id in "${cache_ids[@]}"; do
+            [[ "$cache_id" =~ ^[1-9][0-9]*$ ]] || {
+              echo "refusing invalid cache id in $cache_ref: $cache_id" >&2
+              exit 1
+            }
+            gh api --method DELETE "repos/${GH_REPO}/actions/caches/${cache_id}"
+            deleted=$((deleted + 1))
+          done
+          {
+            echo "### Pull request cache cleanup"
+            echo
+            echo "- ref: \`$cache_ref\`"
+            echo "- deleted: \`$deleted\`"
+            echo "- retained: default-branch and every other ref"
+          } >> "$GITHUB_STEP_SUMMARY"
