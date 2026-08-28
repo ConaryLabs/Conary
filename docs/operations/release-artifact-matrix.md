@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-28
-revision: 28
-summary: Record immutable v0.16.1 historical evidence, build-once exact-main Remi candidates, and the unassigned external tester authority
+revision: 29
+summary: Record immutable v0.16.1 historical evidence, build-once exact-main Remi candidates with bulk compiler reuse and attributable timings, and the unassigned external tester authority
 ---
 
 # Release Artifact Matrix
@@ -66,9 +66,12 @@ version-validation run and has no GitHub release; it was not moved or reused.
 
 Between suite releases, `.github/workflows/build-remi-candidate.yml` constructs
 one exact release-profile Remi artifact for every protected `main` commit. Its
-schema-v1 manifest binds the source tree, lockfile, toolchain, build command,
-flags, runner provenance, binary and deterministic bundle digests, compiler
-cache statistics, and phase/link timings. The candidate deployment lane accepts
+schema-v2 manifest binds the source tree, lockfile, toolchain, build command,
+flags, runner provenance, binary and deterministic bundle digests, bounded
+local-bulk compiler-cache policy and statistics, and attributable compiler,
+phase, and link timings. One compatible prior snapshot is restored in bulk,
+all compilation is local, and the completed exact-head snapshot is saved once;
+the cache remains an optimization rather than artifact authority. The candidate deployment lane accepts
 only a successful `push` artifact for the requested SHA on this repository's
 `main`, reopens and verifies the bundle, and enforces a 60-second
 locate/download/verify budget. It never compiles Remi itself. These artifacts

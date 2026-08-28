@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           verification="$(scripts/remi-candidate-artifact.sh verify \
             "$ARTIFACT_DIR" "$CANDIDATE_SHA" "$SOURCE_RUN_ID" push)"
-          jq -e '.schema_version == 1' <<<"$verification" >/dev/null
+          jq -e '.schema_version == 2' <<<"$verification" >/dev/null
           finished_ns="$(date -u +%s%N)"
           availability_ms=$(( (finished_ns - STARTED_NS) / 1000000 ))
           (( availability_ms <= 60000 )) || {
