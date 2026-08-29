@@ -17,10 +17,6 @@ use serde::{Deserialize, Serialize};
 use super::util::{conversion_error, parse_json_column, read_u64, reject_nonempty_sidecars};
 use super::{CATALOG_APPLICATION_ID, CATALOG_CONTENT_SCHEMA_V1, CatalogBindingV1, CatalogReader};
 use crate::error::{Error, Result};
-#[cfg(target_os = "linux")]
-use crate::filesystem::fsverity::{
-    FsVerityFileError, enable_and_measure_fsverity_file, measure_fsverity_file,
-};
 use crate::repository::catalog::{CatalogArtifactV1, CatalogCountsV1};
 
 /// Production evidence for the exact work one catalog reader performed while
@@ -299,31 +295,10 @@ fn open_sqlite_anchor(file: &File, _display_path: &Path) -> Result<Connection> {
     Ok(connection)
 }
 
-#[cfg(target_os = "linux")]
 fn measure_registered_fsverity(file: &File, expected_digest_sha256: &str) -> Result<()> {
-    super::validate_sha256(
-        expected_digest_sha256,
-        "registered catalog fs-verity digest",
-    )?;
-    let measurement = measure_fsverity_file(file).map_err(|error| {
-        Error::ConflictError(format!(
-            "registered catalog fs-verity measurement failed closed: {error}"
-        ))
-    })?;
-    let actual = hex::encode(measurement.digest);
-    if actual != expected_digest_sha256 {
-        return Err(Error::ChecksumMismatch {
-            expected: expected_digest_sha256.to_string(),
-            actual,
-        });
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn measure_registered_fsverity(_file: &File, _expected_digest_sha256: &str) -> Result<()> {
+    let _ = (file, expected_digest_sha256);
     Err(Error::ConfigError(
-        "linux_fs_verity_v1 catalog authority is unavailable on this platform".to_string(),
+        "linux_fs_verity_v1 catalog authority was retired before schema 55 shipped".to_string(),
     ))
 }
 
@@ -564,31 +539,8 @@ impl CatalogReader {
         } = self;
         drop(connection);
 
-        #[cfg(target_os = "linux")]
-        {
-            match enable_and_measure_fsverity_file(&file_anchor) {
-                Ok(result) => {
-                    file_anchor.sync_all()?;
-                    Ok(CatalogPhysicalSealOutcomeV1::LinuxFsVerityV1 {
-                        digest_sha256: hex::encode(result.measurement.digest),
-                    })
-                }
-                Err(FsVerityFileError::IoctlUnavailable { .. })
-                | Err(FsVerityFileError::NotSupported { .. }) => {
-                    Ok(CatalogPhysicalSealOutcomeV1::FullScanFilesystemUnsupported)
-                }
-                Err(error) => Err(Error::IoError(format!(
-                    "seal fully verified catalog {} with fs-verity: {error}",
-                    path.display()
-                ))),
-            }
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = (path, file_anchor);
-            Ok(CatalogPhysicalSealOutcomeV1::FullScanPlatformUnsupported)
-        }
+        let _ = (path, file_anchor);
+        Ok(CatalogPhysicalSealOutcomeV1::FullScanPlatformUnsupported)
     }
 
     pub(in crate::repository) fn verification_proof(&self) -> Result<&CatalogVerificationProofV1> {
