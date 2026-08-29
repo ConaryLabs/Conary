@@ -357,11 +357,12 @@ symlink or non-directory at either boundary still fails closed.
 After the schema-55 hard cut, only cleanup of an exact unregistered terminal
 run candidate may also recognize the retired schema-54 two-file profile layout
 and its exact source layout with `native-metadata/`. Registered schema-55
-deletion intents remain current-layout-only. Extra entries, malformed current
-proof sidecars, symlinks, and noncanonical native metadata still fail closed.
-Retired layouts never become serving, reuse, readiness, inspection, or
-publication authority; all of those paths require the current portable proof
-sidecar and its persisted physical attestation.
+deletion intents remain current-layout-only. Extra entries, malformed proof
+geometry, manifest/digest mismatches, symlinks, invalid native-metadata names,
+and non-regular metadata objects still fail closed. Retired layouts never
+become serving, reuse, readiness, inspection, or publication authority; all of
+those paths require the current portable proof sidecar and its persisted
+physical attestation.
 Concurrent profile refreshes share one narrow catalog-collection coordinator,
 so their plan, filesystem removal, and acknowledgement phases cannot consume
 the same deletion intent while source retrieval, parsing, and catalog

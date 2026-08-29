@@ -327,7 +327,7 @@ fn remove_exact_bundle(
             path.display()
         );
     }
-    validate_exact_bundle_deletion_layout(&path, kind, deletion_policy)?;
+    validate_exact_bundle_deletion_layout(&path, kind, resource_sha256, deletion_policy)?;
     if fs::symlink_metadata(&tombstone).is_ok() {
         bail!(
             "catalog deletion target {} and tombstone {} both exist",
@@ -452,6 +452,7 @@ fn require_digest(value: &str, label: &str) -> Result<()> {
 fn validate_exact_bundle_deletion_layout(
     path: &Path,
     kind: RemiCatalogResourceKind,
+    resource_sha256: &str,
     deletion_policy: CatalogBundleDeletionPolicy,
 ) -> Result<()> {
     let mut names = fs::read_dir(path)?
@@ -492,6 +493,21 @@ fn validate_exact_bundle_deletion_layout(
                 child.display()
             );
         }
+    }
+    let manifest_path = path.join(CATALOG_MANIFEST_FILE_NAME);
+    let mut manifest_file = File::open(&manifest_path)
+        .with_context(|| format!("open catalog deletion manifest {}", manifest_path.display()))?;
+    let manifest_sha256 = conary_core::hash::hash_reader(
+        conary_core::hash::HashAlgorithm::Sha256,
+        &mut manifest_file,
+    )
+    .with_context(|| format!("hash catalog deletion manifest {}", manifest_path.display()))?
+    .value;
+    if manifest_sha256 != resource_sha256 {
+        bail!(
+            "catalog deletion manifest {} does not match its journaled resource digest",
+            manifest_path.display()
+        );
     }
     if has_portable_manifest {
         let portable_path = path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
