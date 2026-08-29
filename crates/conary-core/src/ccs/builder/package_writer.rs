@@ -202,7 +202,7 @@ fn write_v3_ccs_package_with_open<'a>(
     };
 
     let objects_dir = temp_dir.path().join("objects");
-    let object_store = crate::filesystem::CasStore::new(&objects_dir)?;
+    let object_store = crate::filesystem::EphemeralObjectStore::new(&objects_dir)?;
     for file in &data.files {
         if !authority.components.contains_key(&file.component) {
             anyhow::bail!("missing component {}", file.component);
@@ -226,7 +226,7 @@ fn write_v3_ccs_package_with_open<'a>(
 
 fn write_file_objects(
     file: &crate::ccs::v3::schema::FileAuthorityV3,
-    object_store: &crate::filesystem::CasStore,
+    object_store: &crate::filesystem::EphemeralObjectStore,
     mut reader: Box<dyn std::io::Read + '_>,
 ) -> Result<()> {
     use crate::ccs::v3::schema::FileContentLayoutV3;
