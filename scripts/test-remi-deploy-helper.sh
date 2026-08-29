@@ -1119,7 +1119,31 @@ test_conversion_benchmark_rejects_non_xfs_before_downtime() {
     [[ "$status" == "1" ]] ||
         fail "non-XFS benchmark preflight returned status $status instead of 1"
     assert_benchmark_failure_envelope \
-        "$stdout_file" "$stderr_file" work-root-authority 1 not-stopped "$fake_root"
+        "$stdout_file" "$stderr_file" work-root-filesystem 1 not-stopped "$fake_root"
+    [[ ! -s "$fake_root/service-log" ]]
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ ! -e "$fake_root/work/remi-conversion-benchmarks/$run_id" ]]
+    [[ ! -e "/tmp/remi-conversion-benchmark-${run_id}.json" ]]
+}
+
+test_conversion_benchmark_rejects_work_layout_mode_drift_before_downtime() {
+    local run_id="benchmark-work-mode-drift-$$"
+    local fake_root="${tmpdir}/root-${run_id}"
+    local stdout_file="${tmpdir}/${run_id}.stdout"
+    local stderr_file="${tmpdir}/${run_id}.stderr"
+    local status
+    make_benchmark_fixture "$fake_root" "$run_id"
+    chmod 0775 "$fake_root/work"
+
+    set +e
+    run_valid_conversion_benchmark "$fake_root" "$run_id" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" == "1" ]] ||
+        fail "work-layout benchmark preflight returned status $status instead of 1"
+    assert_benchmark_failure_envelope \
+        "$stdout_file" "$stderr_file" work-root-layout 1 not-stopped "$fake_root"
     [[ ! -s "$fake_root/service-log" ]]
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
     [[ ! -e "$fake_root/work/remi-conversion-benchmarks/$run_id" ]]
@@ -1129,12 +1153,22 @@ test_conversion_benchmark_rejects_non_xfs_before_downtime() {
 test_conversion_benchmark_rejects_distinct_xfs_device_before_downtime() {
     local run_id="benchmark-distinct-xfs-device-$$"
     local fake_root="${tmpdir}/root-${run_id}"
+    local stdout_file="${tmpdir}/${run_id}.stdout"
+    local stderr_file="${tmpdir}/${run_id}.stderr"
+    local status
     make_benchmark_fixture "$fake_root" "$run_id"
 
+    set +e
     CONARY_FAKE_FILESYSTEM_DEVICE=101 \
         CONARY_FAKE_WORK_FILESYSTEM_DEVICE=202 \
-        expect_fail "conversion benchmark on a distinct XFS device" \
-        run_valid_conversion_benchmark "$fake_root" "$run_id"
+        run_valid_conversion_benchmark "$fake_root" "$run_id" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" == "1" ]] ||
+        fail "distinct-device benchmark preflight returned status $status instead of 1"
+    assert_benchmark_failure_envelope \
+        "$stdout_file" "$stderr_file" work-root-device 1 not-stopped "$fake_root"
     [[ ! -s "$fake_root/service-log" ]]
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
     [[ ! -e "$fake_root/work/remi-conversion-benchmarks/$run_id" ]]
@@ -1338,6 +1372,7 @@ main() {
     test_conversion_benchmark_rejects_unbound_or_public_raw_evidence
     test_conversion_benchmark_restart_and_health_fail_closed
     test_conversion_benchmark_rejects_non_xfs_before_downtime
+    test_conversion_benchmark_rejects_work_layout_mode_drift_before_downtime
     test_conversion_benchmark_rejects_distinct_xfs_device_before_downtime
     test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets
     test_install_helper_requires_exact_digest

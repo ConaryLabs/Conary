@@ -797,7 +797,8 @@ benchmark_emit_failure() {
 
     case "$stage" in
         request-validation|runtime-authority|systemctl-authority|account-identity|\
-        binary-config-authority|live-root-authority|work-root-authority|\
+        binary-config-authority|live-root-authority|work-root-layout|\
+        work-root-separation|work-root-filesystem|work-root-device|\
         benchmark-root-authority|input-target-authority|source-authentication|\
         binary-authentication|private-config-copy|private-source-copy|\
         service-active|service-stop|benchmark-command|raw-report-validation|\
@@ -815,7 +816,8 @@ benchmark_emit_failure() {
     fi
     case "$stage" in
         request-validation|runtime-authority|systemctl-authority|account-identity|\
-        binary-config-authority|live-root-authority|work-root-authority|\
+        binary-config-authority|live-root-authority|work-root-layout|\
+        work-root-separation|work-root-filesystem|work-root-device|\
         benchmark-root-authority|input-target-authority|source-authentication|\
         binary-authentication|private-config-copy|private-source-copy|service-active)
             [[ "$service_outcome" == "not-stopped" ]] || stage=internal
@@ -1017,7 +1019,7 @@ benchmark_remi_conversion() {
         die "live Remi root is not on XFS: $live_real"
     live_device="$(benchmark_filesystem_device "$live_real")"
 
-    BENCHMARK_FAILURE_STAGE=work-root-authority
+    BENCHMARK_FAILURE_STAGE=work-root-layout
     [[ -d "$work_container" && ! -L "$work_container" ]] ||
         die "benchmark XFS container is not a plain directory: $work_container"
     [[ "$(stat -c '%u' "$work_container")" == "$control_uid" ]] ||
@@ -1029,14 +1031,20 @@ benchmark_remi_conversion() {
         die "benchmark XFS container must not be group/world writable: $work_container"
     work_real="$(realpath -e "$work_container")" ||
         die "could not resolve benchmark XFS container"
+
+    BENCHMARK_FAILURE_STAGE=work-root-separation
     [[ "$work_real" != "$live_real" \
         && "$work_real" != "$live_real"/* \
         && "$live_real" != "$work_real"/* ]] ||
         die "benchmark XFS container overlaps the live Remi root"
     [[ "$(stat -c '%d:%i' "$work_real")" != "$(stat -c '%d:%i' "$live_real")" ]] ||
         die "benchmark XFS container aliases the live Remi root"
+
+    BENCHMARK_FAILURE_STAGE=work-root-filesystem
     [[ "$(benchmark_filesystem_type "$work_real")" == "xfs" ]] ||
         die "benchmark XFS container is not on XFS: $work_real"
+
+    BENCHMARK_FAILURE_STAGE=work-root-device
     work_device="$(benchmark_filesystem_device "$work_real")"
     [[ "$work_device" == "$live_device" ]] ||
         die "benchmark XFS container is not on the live Remi filesystem device: $work_real"

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-29
-revision: 55
+last_updated: 2026-08-30
+revision: 56
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -310,6 +310,12 @@ workflow.
   service-restoration outcome. The workflow validates that envelope, binds it
   to the exact deployment, workflow, binary, profile, revision, package, and
   source identities, and may retain only that path-free JSON record. The
+  `/work` preflight uses four path-free leaves: `work-root-layout` covers its
+  plain-directory, ownership, mode, and resolution contract;
+  `work-root-separation` covers non-overlap and non-aliasing with the live
+  Remi root; `work-root-filesystem` requires XFS; and `work-root-device`
+  requires the same filesystem device as the live root. None retains the
+  observed path, identity, mode, filesystem value, or device identifier. The
   helper writes the envelope on an isolated stdout channel while all free-form
   diagnostics remain on private stderr. Missing, duplicate, malformed, or
   unknown envelopes fail closed with an unproven service outcome. Private
