@@ -637,22 +637,31 @@ mod tests {
             second
         );
         assert_eq!(verified.objects().len(), 2);
-        assert_eq!(
-            verified.metrics(),
-            VerifiedObjectBatchMetrics {
-                incoming_bytes_hashed: (first.len() + second.len()) as u64,
-                persistent_bytes_written: (first.len() + second.len()) as u64,
-                objects_hashed: 2,
-                hits: 0,
-                misses: 2,
-                race_losers: 0,
-                staged_data_barriers: 1,
-                canonical_name_barriers: 1,
-                fallback_object_syncs: 0,
-                fallback_directory_syncs: 0,
-                canonical_bytes_reread: 0,
-            }
-        );
+        let expected_metrics = VerifiedObjectBatchMetrics {
+            incoming_bytes_hashed: (first.len() + second.len()) as u64,
+            persistent_bytes_written: (first.len() + second.len()) as u64,
+            objects_hashed: 2,
+            hits: 0,
+            misses: 2,
+            race_losers: 0,
+            staged_data_barriers: 1,
+            canonical_name_barriers: 1,
+            fallback_object_syncs: 0,
+            fallback_directory_syncs: 0,
+            canonical_bytes_reread: 0,
+        };
+        #[cfg(not(target_os = "linux"))]
+        let expected_metrics = {
+            let touched_shards = [first_hash[..2].to_string(), second_hash[..2].to_string()]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .len() as u64;
+            let mut expected_metrics = expected_metrics;
+            expected_metrics.fallback_object_syncs = 2;
+            expected_metrics.fallback_directory_syncs = touched_shards + 1;
+            expected_metrics
+        };
+        assert_eq!(verified.metrics(), expected_metrics);
     }
 
     #[test]
