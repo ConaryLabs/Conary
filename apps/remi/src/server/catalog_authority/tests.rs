@@ -561,6 +561,49 @@ fn repeated_revision_open_reuses_one_verified_catalog_reader() {
 }
 
 #[test]
+fn cached_profile_reader_revalidates_canonical_path_before_reuse() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture
+        .root
+        .path()
+        .join("replaced-cached-reader-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let retained = authority
+        .open_active_profile(PROFILE)
+        .expect("seed exact profile reader cache");
+    let replacement = fixture.root.path().join("replacement-profile.sqlite");
+    fs::copy(&revision.artifact_path, &replacement).expect("copy replacement catalog inode");
+    fs::rename(&replacement, &revision.artifact_path).expect("replace canonical catalog inode");
+
+    let error = authority
+        .open_active_profile(PROFILE)
+        .expect_err("new request must reject replaced cached catalog path");
+
+    assert!(
+        format!("{error:#}").contains("changed while its file descriptor was opened"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(retained.profile_revision_sha256(), revision.digest);
+    assert_eq!(
+        retained
+            .reader()
+            .source_evidence()
+            .expect("retained profile descriptor remains readable")
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn active_profile_selection_reads_only_the_operational_pointer() {
     let fixture = fixture();
     let revision = add_revision(&fixture, 'a', 1);

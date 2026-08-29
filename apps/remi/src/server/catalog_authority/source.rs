@@ -274,6 +274,7 @@ impl CatalogAuthority {
                         source_snapshot_sha256
                     );
                 }
+                cached.reader.lock().require_path_unchanged()?;
                 Arc::clone(&cached.reader)
             }
             _ => {
@@ -482,10 +483,12 @@ fn source_package_matches_profile(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::sync::Arc;
 
     use super::*;
     use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
+    use conary_core::repository::catalog::CATALOG_FILE_NAME;
 
     fn active_source(
         fixture: &ActiveCatalogFixture,
@@ -523,6 +526,40 @@ mod tests {
         assert!(Arc::ptr_eq(&first.reader, &second.reader));
         assert_eq!(first.manifest, second.manifest);
         assert_eq!(first.bundle_path, second.bundle_path);
+    }
+
+    #[test]
+    fn cached_source_reader_revalidates_canonical_path_before_reuse() {
+        let fixture = ActiveCatalogFixture::new();
+        let (pinned, member) = active_source(&fixture, 1);
+        let retained = fixture
+            .authority()
+            .verified_source_catalog(&pinned, &member)
+            .expect("seed exact source reader cache");
+        let artifact_path = retained.bundle_path.join(CATALOG_FILE_NAME);
+        let replacement = fixture.catalog_dir().join("replacement-source.sqlite");
+        fs::copy(&artifact_path, &replacement).expect("copy replacement source catalog inode");
+        fs::rename(&replacement, &artifact_path).expect("replace canonical source catalog inode");
+
+        let error = fixture
+            .authority()
+            .verified_source_catalog(&pinned, &member)
+            .err()
+            .expect("new request must reject replaced cached source catalog path");
+
+        assert!(
+            format!("{error:#}").contains("changed while its file descriptor was opened"),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(
+            retained
+                .reader
+                .lock()
+                .source_evidence()
+                .expect("retained source descriptor remains readable")
+                .len(),
+            1
+        );
     }
 
     #[test]

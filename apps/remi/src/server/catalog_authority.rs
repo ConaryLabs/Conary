@@ -413,6 +413,7 @@ impl CatalogAuthority {
                 if cached.profile_revision_sha256 == revision
                     && cached.physical_attestation == resolved.physical_attestation =>
             {
+                cached.reader.lock().require_path_unchanged()?;
                 Arc::clone(&cached.reader)
             }
             Some(cached) if cached.profile_revision_sha256 == revision => {

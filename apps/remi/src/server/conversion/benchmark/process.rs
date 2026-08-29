@@ -132,7 +132,7 @@ impl RawProcessUsage {
                 before.io.storage_write_bytes,
                 "storage write bytes",
             )?,
-            cancelled_write_bytes: checked_delta(
+            cancelled_write_bytes: checked_nonmonotonic_delta(
                 self.io.cancelled_write_bytes,
                 before.io.cancelled_write_bytes,
                 "cancelled write bytes",
@@ -169,6 +169,10 @@ struct ProcessIo {
 impl ProcessIo {
     fn capture() -> Result<Self> {
         let contents = fs::read_to_string("/proc/self/io").context("read process I/O counters")?;
+        Self::parse(&contents)
+    }
+
+    fn parse(contents: &str) -> Result<Self> {
         let mut observed = Self::default();
         let mut seen = [false; 7];
         for line in contents.lines() {
@@ -207,6 +211,11 @@ fn checked_delta(after: u64, before: u64, label: &str) -> Result<u64> {
     after
         .checked_sub(before)
         .with_context(|| format!("process {label} counter regressed"))
+}
+
+fn checked_nonmonotonic_delta(after: u64, before: u64, label: &str) -> Result<i64> {
+    i64::try_from(i128::from(after) - i128::from(before))
+        .with_context(|| format!("process {label} delta exceeds i64"))
 }
 
 fn timeval_us(value: libc::timeval) -> Result<u64> {
@@ -281,6 +290,44 @@ fn process_thread_counts() -> Result<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const IO_SAMPLE: &str = "rchar: 11\n\
+wchar: 12\n\
+syscr: 13\n\
+syscw: 14\n\
+read_bytes: 15\n\
+write_bytes: 16\n\
+cancelled_write_bytes: 17\n";
+
+    #[test]
+    fn process_io_parses_cancelled_write_counter() {
+        let io = ProcessIo::parse(IO_SAMPLE).expect("parse process I/O sample");
+
+        assert_eq!(io.cancelled_write_bytes, 17);
+    }
+
+    #[test]
+    fn cancelled_write_delta_may_regress() {
+        assert_eq!(
+            checked_nonmonotonic_delta(4096, 12_288, "cancelled write bytes")
+                .expect("cancelled writes are a signed non-monotonic counter"),
+            -8192
+        );
+    }
+
+    #[test]
+    fn signed_cancelled_write_delta_round_trips_through_report_json() {
+        let expected = ConversionBenchmarkProcessUsage {
+            cancelled_write_bytes: -8192,
+            ..ConversionBenchmarkProcessUsage::default()
+        };
+
+        let encoded = serde_json::to_vec(&expected).expect("encode signed process evidence");
+        let decoded: ConversionBenchmarkProcessUsage =
+            serde_json::from_slice(&encoded).expect("decode signed process evidence");
+
+        assert_eq!(decoded, expected);
+    }
 
     #[test]
     fn process_usage_probe_reports_strict_endpoint_evidence() {

@@ -145,7 +145,7 @@ pub struct ConversionBenchmarkProcessUsage {
     pub write_syscalls: u64,
     pub storage_read_bytes: u64,
     pub storage_write_bytes: u64,
-    pub cancelled_write_bytes: u64,
+    pub cancelled_write_bytes: i64,
     pub voluntary_context_switches: u64,
     pub involuntary_context_switches: u64,
     pub thread_count_start: u64,
