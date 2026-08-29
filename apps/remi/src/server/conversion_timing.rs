@@ -1,12 +1,13 @@
 // apps/remi/src/server/conversion_timing.rs
 //! Timing evidence for Remi package conversion.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 use conary_core::filesystem::VerifiedObjectBatchMetrics;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversionSourceIdentity {
     pub source_profile: String,
     pub version: String,
@@ -15,7 +16,8 @@ pub struct ConversionSourceIdentity {
     pub declared_size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversionR2Work {
     pub head_requests: u64,
     pub hits: u64,
@@ -24,9 +26,13 @@ pub struct ConversionR2Work {
     pub bytes_written: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversionWorkMetrics {
     pub downloaded_bytes: u64,
+    pub admitted_local_bytes: u64,
+    pub repository_checksum_bytes_hashed: u64,
+    pub source_artifact_bytes: u64,
     pub source_bytes_hashed: u64,
     pub ccs_output_bytes: u64,
     pub signed_object_count: u64,
@@ -59,10 +65,11 @@ impl ConversionWorkMetrics {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionPhase {
     PackageLookup,
+    LocalArtifactAdmission,
     Download,
     Checksum,
     CacheLookup,
@@ -76,19 +83,22 @@ pub enum ConversionPhase {
     Persistence,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversionPhaseTiming {
     pub phase: ConversionPhase,
     pub duration_ms: u128,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversionSkippedPhase {
     pub phase: ConversionPhase,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversionTimingReport {
     pub distro: String,
     pub package: String,
@@ -101,7 +111,7 @@ pub struct ConversionTimingReport {
     pub work: ConversionWorkMetrics,
     pub total_ms: u128,
     pub success: bool,
-    #[serde(skip)]
+    #[serde(skip, default = "Instant::now")]
     started_at: Instant,
 }
 

@@ -5,44 +5,81 @@ use crate::server::conversion_timing::ConversionTimingReport;
 use conary_core::ccs::convert::ScriptletBundleSummary;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-pub const CONVERSION_BENCHMARK_SCHEMA_V1: u32 = 1;
+pub const CONVERSION_BENCHMARK_SCHEMA_V2: u32 = 2;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ConversionBenchmarkSampleClass {
-    Small,
-    Median,
-    Large,
-    Explicit,
+pub enum ConversionBenchmarkSelectionKind {
+    Active,
+    Pinned,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ConversionBenchmarkSample {
-    pub class: ConversionBenchmarkSampleClass,
-    pub package: String,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkAuthority {
+    pub selection_kind: ConversionBenchmarkSelectionKind,
+    pub source_profile: String,
+    pub profile_revision_sha256: String,
+    pub profile_catalog_sha256: String,
+    pub profile_catalog_bytes: u64,
+    pub profile_logical_digest_sha256: String,
+    pub source_snapshot_sha256: String,
+    pub source_identity: String,
+    pub repository_identity: String,
+    pub source_parser_config_sha256: String,
+    pub source_trust_policy_sha256: String,
+    pub authenticated_metadata_objects: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkSubject {
+    pub package_key_sha256: String,
+    pub name: String,
     pub version: String,
+    pub package_release: String,
     pub architecture: Option<String>,
-    pub source_checksum: String,
+    pub repository_checksum: String,
     pub source_size_bytes: u64,
+    pub source_artifact_sha256: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkRootIdentity {
+    pub role: String,
+    pub path: String,
+    pub device_id: u64,
+    pub filesystem_type: String,
+    pub block_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ConversionBenchmarkEnvironment {
     pub hardware_label: String,
     pub remi_version: String,
     pub source_commit: String,
     pub source_dirty: bool,
+    pub binary_path: String,
+    pub binary_sha256: String,
     pub os_release: String,
     pub kernel_release: String,
     pub cpu_model: String,
     pub logical_cpus: usize,
     pub memory_bytes: u64,
+    pub roots: Vec<ConversionBenchmarkRootIdentity>,
 }
 
 impl ConversionBenchmarkEnvironment {
-    pub fn capture(hardware_label: String) -> Self {
+    pub fn capture(
+        hardware_label: String,
+        binary_path: &Path,
+        binary_sha256: String,
+        roots: Vec<ConversionBenchmarkRootIdentity>,
+    ) -> Self {
         Self {
             hardware_label,
             remi_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -50,6 +87,8 @@ impl ConversionBenchmarkEnvironment {
                 .unwrap_or("unknown")
                 .to_string(),
             source_dirty: option_env!("CONARY_GIT_DIRTY") == Some("true"),
+            binary_path: binary_path.display().to_string(),
+            binary_sha256,
             os_release: os_release(),
             kernel_release: read_trimmed("/proc/sys/kernel/osrelease"),
             cpu_model: cpu_model(),
@@ -57,8 +96,97 @@ impl ConversionBenchmarkEnvironment {
                 .map(std::num::NonZeroUsize::get)
                 .unwrap_or(1),
             memory_bytes: memory_bytes(),
+            roots,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConversionBenchmarkConfig {
+    pub source_config_path: PathBuf,
+    pub work_root: PathBuf,
+    pub output_path: PathBuf,
+    pub source_profile: String,
+    pub profile_revision_sha256: Option<String>,
+    pub package_key_sha256: String,
+    pub source_artifact: PathBuf,
+    pub hardware_label: String,
+    pub iterations: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkProcessUsage {
+    pub wall_time_us: u64,
+    pub user_cpu_us: u64,
+    pub system_cpu_us: u64,
+    pub peak_rss_bytes: u64,
+    pub minor_faults: u64,
+    pub major_faults: u64,
+    pub block_input_operations: u64,
+    pub block_output_operations: u64,
+    pub voluntary_context_switches: u64,
+    pub involuntary_context_switches: u64,
+    pub maximum_thread_count: u64,
+    pub maximum_runnable_threads: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkView {
+    pub executed: bool,
+    pub duration_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkViews {
+    pub conversion_core: ConversionBenchmarkView,
+    pub end_to_end: ConversionBenchmarkView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkOutputProof {
+    pub ccs_sha256: String,
+    pub ccs_size_bytes: u64,
+    pub transport_sha256: String,
+    pub signed_object_set_sha256: String,
+    pub signed_object_count: u64,
+    pub signed_object_bytes: u64,
+    pub independent_reopen_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConversionBenchmarkOutcome {
+    Success {
+        cache_state: String,
+        timing: ConversionTimingReport,
+        output: ConversionBenchmarkOutputProof,
+    },
+    Failure {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkEvidence {
+    pub iteration: usize,
+    pub process: ConversionBenchmarkProcessUsage,
+    pub views: ConversionBenchmarkViews,
+    pub outcome: ConversionBenchmarkOutcome,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkReportV2 {
+    pub schema_version: u32,
+    pub environment: ConversionBenchmarkEnvironment,
+    pub authority: ConversionBenchmarkAuthority,
+    pub subject: ConversionBenchmarkSubject,
+    pub repetitions: Vec<ConversionBenchmarkEvidence>,
 }
 
 fn read_trimmed(path: &str) -> String {
@@ -138,22 +266,6 @@ impl From<&ScriptletBundleSummary> for ScriptletPackageMetadata {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ConversionBenchmarkEvidence {
-    pub schema_version: u32,
-    pub environment: ConversionBenchmarkEnvironment,
-    pub sample: ConversionBenchmarkSample,
-    pub iteration: usize,
-    pub distro: String,
-    pub package: String,
-    pub version: Option<String>,
-    pub cache_state: String,
-    pub r2_configured: bool,
-    pub timing: Option<ConversionTimingReport>,
-    pub converted: bool,
-    pub error: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,7 +310,13 @@ mod tests {
 
     #[test]
     fn benchmark_environment_captures_reproducibility_identity() {
-        let environment = ConversionBenchmarkEnvironment::capture("fixture-runner".to_string());
+        let executable = std::env::current_exe().unwrap();
+        let environment = ConversionBenchmarkEnvironment::capture(
+            "fixture-runner".to_string(),
+            &executable,
+            "a".repeat(64),
+            Vec::new(),
+        );
         assert_eq!(environment.hardware_label, "fixture-runner");
         assert_eq!(environment.remi_version, env!("CARGO_PKG_VERSION"));
         assert!(!environment.source_commit.is_empty());

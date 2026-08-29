@@ -181,10 +181,9 @@ impl ConversionService {
         selection: &ProfileRevisionSelection,
         expected: CatalogPackageRecordV1,
     ) -> Result<PinnedConversionSource> {
-        let profile = conary_core::repository::supported_profiles::profile_by_public_id(
-            &selection.source_profile,
-        )
-        .ok_or_else(|| anyhow!("unsupported public profile: {}", selection.source_profile))?;
+        let profile =
+            conary_core::repository::supported_profiles::profile_by_id(&selection.source_profile)
+                .ok_or_else(|| anyhow!("unsupported exact profile: {}", selection.source_profile))?;
         let catalog_authority = self.catalog_authority.as_ref().ok_or_else(|| {
             anyhow!("repository conversion requires an immutable profile catalog authority")
         })?;

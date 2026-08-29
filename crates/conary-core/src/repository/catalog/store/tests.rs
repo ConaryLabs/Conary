@@ -117,7 +117,21 @@ fn catalog_artifact_is_independent_of_input_order() {
     let reader = CatalogReader::open_verified(&left_path, &left).unwrap();
     assert_eq!(reader.packages().unwrap(), left_content.packages);
     assert_eq!(reader.source_evidence().unwrap(), evidence());
-    assert_eq!(reader.find_packages_by_name("bash").unwrap().len(), 1);
+    let bash = reader.find_packages_by_name("bash").unwrap();
+    assert_eq!(bash.len(), 1);
+    assert_eq!(
+        reader
+            .find_package_by_key(&bash[0].package_key_sha256)
+            .unwrap(),
+        Some(bash[0].clone())
+    );
+    assert!(
+        reader
+            .find_package_by_key(&"f".repeat(64))
+            .unwrap()
+            .is_none()
+    );
+    assert!(reader.find_package_by_key("not-a-digest").is_err());
     assert!(reader.contains_package_name("bash").unwrap());
     assert!(!reader.contains_package_name("Bash").unwrap());
     assert!(!reader.contains_package_name("missing").unwrap());

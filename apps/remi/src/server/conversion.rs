@@ -15,6 +15,8 @@ pub(crate) mod test_support;
 mod types;
 mod workflow;
 
+pub use benchmark::run_conversion_benchmark_from_config;
+
 use crate::server::catalog_authority::CatalogAuthority;
 use crate::server::database_writer::DatabaseWriter;
 use crate::server::publication_coordinator::PublicationCoordinator;
@@ -22,8 +24,11 @@ use crate::server::{BoundedCache, R2Store};
 use std::path::PathBuf;
 use std::sync::Arc;
 pub use types::{
-    CONVERSION_BENCHMARK_SCHEMA_V1, ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence,
-    ConversionBenchmarkSample, ConversionBenchmarkSampleClass, ScriptletPackageMetadata,
+    CONVERSION_BENCHMARK_SCHEMA_V2, ConversionBenchmarkAuthority, ConversionBenchmarkConfig,
+    ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV2,
+    ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSubject,
+    ConversionBenchmarkView, ConversionBenchmarkViews, ScriptletPackageMetadata,
     ServerConversionResult,
 };
 

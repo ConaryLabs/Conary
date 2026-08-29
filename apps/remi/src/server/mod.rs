@@ -78,8 +78,12 @@ pub use cache::ChunkCache;
 pub use catalog_authority::ProfileRevisionSelection;
 pub use config::RemiConfig;
 pub use conversion::{
-    ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkSample,
-    ConversionBenchmarkSampleClass, ConversionService, ServerConversionResult,
+    CONVERSION_BENCHMARK_SCHEMA_V2, ConversionBenchmarkAuthority, ConversionBenchmarkConfig,
+    ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV2,
+    ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSubject,
+    ConversionBenchmarkView, ConversionBenchmarkViews, ConversionService, ServerConversionResult,
+    run_conversion_benchmark_from_config,
 };
 pub use conversion_crawl::{
     CCS_ARTIFACT_REOPEN_PROOF_SCHEMA_V1, CCS_TARGET_COMPATIBILITY_PROOF_SCHEMA_V1,

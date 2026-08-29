@@ -264,57 +264,37 @@ struct ProfileValueBinding {
 
 #[derive(Args)]
 struct ConversionBenchmarkArgs {
-    /// Database path
-    #[arg(long, default_value = "/var/lib/conary/conary.db")]
-    db: String,
-
-    /// Path to chunk storage directory
-    #[arg(long, default_value = "/var/lib/conary/data/chunks")]
-    chunk_dir: String,
-
-    /// Path to cache/scratch directory
-    #[arg(long, default_value = "/var/lib/conary/data/cache")]
-    cache_dir: String,
-
-    /// Directory containing per-distro TUF authority keys
+    /// Deployed Remi configuration owning the source database, catalogs, and keys.
     #[arg(long)]
-    repository_keys_dir: Option<PathBuf>,
+    config: PathBuf,
 
-    /// Distribution to benchmark (fedora-44, ubuntu-26.04, arch)
+    /// New isolated directory that receives every benchmark mutation and report.
     #[arg(long)]
-    distro: String,
+    work_root: PathBuf,
 
-    /// Package names to benchmark. Repeat the flag for multiple packages.
-    #[arg(long = "package")]
-    packages: Vec<String>,
+    /// Exact known profile ID (fedora-44, ubuntu-26.04, arch, or candidate solus).
+    #[arg(long)]
+    profile: String,
+
+    /// Exact registered private profile revision; omit to select the active revision.
+    #[arg(long)]
+    revision: Option<String>,
+
+    /// Exact immutable catalog package-key SHA-256.
+    #[arg(long)]
+    package_key: String,
+
+    /// Local native artifact authenticated against the exact catalog package.
+    #[arg(long)]
+    source_artifact: PathBuf,
 
     /// Stable operator-defined identity for the benchmark hardware.
     #[arg(long)]
     hardware_label: String,
 
-    /// Runs per exact package subject. Two records cold and warm behavior.
+    /// Runs over one isolated state. The first is cold; every successor must be an exact hot hit.
     #[arg(long, default_value = "2")]
     iterations: usize,
-
-    /// Emit JSON lines instead of pretty JSON.
-    #[arg(long)]
-    jsonl: bool,
-
-    /// Optional R2 endpoint. When omitted, R2 write-through timing is recorded as skipped.
-    #[arg(long)]
-    r2_endpoint: Option<String>,
-
-    /// Optional R2 bucket name.
-    #[arg(long, default_value = "conary-chunks")]
-    r2_bucket: String,
-
-    /// Optional R2 key prefix.
-    #[arg(long, default_value = "chunks/")]
-    r2_prefix: String,
-
-    /// Optional R2 region string.
-    #[arg(long, default_value = "auto")]
-    r2_region: String,
 }
 
 #[derive(Subcommand)]
@@ -693,80 +673,41 @@ pub(crate) fn parse_candidate(
 }
 
 fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()> {
-    anyhow::ensure!(args.iterations > 0, "--iterations must be at least 1");
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async move {
-        let r2_store = if let Some(endpoint) = args.r2_endpoint.clone() {
-            let config = remi::server::r2::R2Config {
-                endpoint,
-                bucket: args.r2_bucket.clone(),
-                prefix: args.r2_prefix.clone(),
-                region: args.r2_region.clone(),
-            };
-            Some(std::sync::Arc::new(remi::server::R2Store::new(&config)?))
-        } else {
-            None
-        };
-
-        let service = remi::server::ConversionService::new(
-            PathBuf::from(args.chunk_dir),
-            PathBuf::from(args.cache_dir),
-            PathBuf::from(args.db),
-            r2_store,
-        )
-        .with_repository_keys_dir(args.repository_keys_dir);
-
-        let samples = if args.packages.is_empty() {
-            service.benchmark_size_class_samples(&args.distro).await?
-        } else {
-            let mut samples = Vec::with_capacity(args.packages.len());
-            for package in &args.packages {
-                samples.push(
-                    service
-                        .benchmark_explicit_sample(&args.distro, package)
-                        .await?,
-                );
-            }
-            samples
-        };
-
-        let environment =
-            remi::server::ConversionBenchmarkEnvironment::capture(args.hardware_label.clone());
-
-        for sample in samples {
-            for iteration in 1..=args.iterations {
-                let result = service
-                    .benchmark_package_conversion(&args.distro, &sample, iteration, &environment)
-                    .await;
-
-                match result {
-                    Ok(evidence) => {
-                        if args.jsonl {
-                            println!("{}", serde_json::to_string(&evidence)?);
-                        } else {
-                            println!("{}", serde_json::to_string_pretty(&evidence)?);
-                        }
-                    }
-                    Err(err) => {
-                        let evidence = serde_json::json!({
-                            "schema_version": 1,
-                            "environment": &environment,
-                            "sample": &sample,
-                            "iteration": iteration,
-                            "distro": &args.distro,
-                            "converted": false,
-                            "error": err.to_string(),
-                        });
-                        if args.jsonl {
-                            println!("{}", serde_json::to_string(&evidence)?);
-                        } else {
-                            println!("{}", serde_json::to_string_pretty(&evidence)?);
-                        }
-                    }
-                }
-            }
-        }
-
+    let config = RemiConfig::load(&args.config)?;
+    let output_path = args.work_root.join("conversion-benchmark-v2.json");
+    let benchmark = remi::server::ConversionBenchmarkConfig {
+        source_config_path: args.config,
+        work_root: args.work_root,
+        output_path: output_path.clone(),
+        source_profile: args.profile,
+        profile_revision_sha256: args.revision,
+        package_key_sha256: args.package_key,
+        source_artifact: args.source_artifact,
+        hardware_label: args.hardware_label,
+        iterations: args.iterations,
+    };
+    conary_bootstrap::run_with_runtime(move || async move {
+        let report = remi::server::run_conversion_benchmark_from_config(&config, benchmark).await?;
+        let failures = report
+            .repetitions
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.outcome,
+                    remi::server::ConversionBenchmarkOutcome::Failure { .. }
+                )
+            })
+            .count();
+        println!(
+            "Conversion benchmark complete: {} repetition(s), {} failure(s)",
+            report.repetitions.len(),
+            failures
+        );
+        println!("Evidence: {}", output_path.display());
+        anyhow::ensure!(
+            failures == 0,
+            "conversion benchmark recorded {failures} failure(s)"
+        );
         Ok(())
     })
 }

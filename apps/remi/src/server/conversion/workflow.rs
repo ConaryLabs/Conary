@@ -39,6 +39,11 @@ enum ConversionSourceSelection {
     },
 }
 
+enum ConversionArtifactSelection {
+    Download,
+    AuthenticatedLocal(PathBuf),
+}
+
 impl ConversionService {
     fn record_source_identity(
         timing: &mut ConversionTimingReport,
@@ -78,6 +83,7 @@ impl ConversionService {
             version,
             architecture,
             ConversionSourceSelection::Active,
+            ConversionArtifactSelection::Download,
         )
         .await
     }
@@ -96,6 +102,7 @@ impl ConversionService {
             version,
             architecture,
             ConversionSourceSelection::Pinned(selection),
+            ConversionArtifactSelection::Download,
         )
         .await
     }
@@ -118,6 +125,38 @@ impl ConversionService {
                 selection,
                 package: Box::new(package),
             },
+            ConversionArtifactSelection::Download,
+        )
+        .await
+    }
+
+    pub(crate) async fn convert_benchmark_catalog_package_from_selection_async(
+        &self,
+        package: CatalogPackageRecordV1,
+        selection: ProfileRevisionSelection,
+        source_artifact: PathBuf,
+    ) -> Result<super::ServerConversionResult> {
+        let profile =
+            conary_core::repository::supported_profiles::profile_by_id(&selection.source_profile)
+                .ok_or_else(|| {
+                anyhow!(
+                    "benchmark profile '{}' is not a known source profile",
+                    selection.source_profile
+                )
+            })?;
+        let name = package.name.clone();
+        let version = package.version.clone();
+        let architecture = package.architecture.clone();
+        self.convert_package_with_selection_async(
+            profile.remi_route_slug(),
+            &name,
+            Some(&version),
+            architecture.as_deref(),
+            ConversionSourceSelection::Exact {
+                selection,
+                package: Box::new(package),
+            },
+            ConversionArtifactSelection::AuthenticatedLocal(source_artifact),
         )
         .await
     }
@@ -129,6 +168,7 @@ impl ConversionService {
         version: Option<&str>,
         architecture: Option<&str>,
         selection: ConversionSourceSelection,
+        artifact: ConversionArtifactSelection,
     ) -> Result<super::ServerConversionResult> {
         let mut timing = ConversionTimingReport::new(distro, package_name, version);
         let result = self
@@ -138,6 +178,7 @@ impl ConversionService {
                 version,
                 architecture,
                 selection,
+                artifact,
                 &mut timing,
             )
             .await;
@@ -172,6 +213,7 @@ impl ConversionService {
         version: Option<&str>,
         architecture: Option<&str>,
         selection: ConversionSourceSelection,
+        artifact: ConversionArtifactSelection,
         timing: &mut ConversionTimingReport,
     ) -> Result<super::ServerConversionResult> {
         info!(
@@ -180,7 +222,29 @@ impl ConversionService {
         );
 
         let started = Instant::now();
-        let source_feed = Self::public_feed_for_route(distro)?;
+        let source_feed = match &selection {
+            ConversionSourceSelection::Exact { selection, .. } => {
+                let profile = conary_core::repository::supported_profiles::profile_by_id(
+                    &selection.source_profile,
+                )
+                .ok_or_else(|| {
+                    anyhow!(
+                        "unsupported exact source profile '{}'",
+                        selection.source_profile
+                    )
+                })?;
+                if profile.remi_route_slug() != distro {
+                    return Err(anyhow!(
+                        "selected catalog profile '{}' uses route '{}' instead of '{}'",
+                        profile.id(),
+                        profile.remi_route_slug(),
+                        distro
+                    ));
+                }
+                profile
+            }
+            _ => Self::public_feed_for_route(distro)?,
+        };
         let source = match selection {
             ConversionSourceSelection::Exact { selection, package } => {
                 if selection.source_profile != source_feed.id() {
@@ -233,6 +297,18 @@ impl ConversionService {
 
         let source_checksum = source.repo_pkg.checksum.clone();
         let profile_revision_sha256 = source.profile_revision_sha256().to_string();
+        let local_artifact = match artifact {
+            ConversionArtifactSelection::Download => None,
+            ConversionArtifactSelection::AuthenticatedLocal(path) => {
+                let started = Instant::now();
+                let path = Self::admit_local_source_artifact(&path, &source.repo_pkg)?;
+                timing.record(ConversionPhase::LocalArtifactAdmission, started.elapsed());
+                timing.work.admitted_local_bytes = u64::try_from(source.repo_pkg.size)
+                    .context("repository package size is negative")?;
+                timing.work.repository_checksum_bytes_hashed = timing.work.admitted_local_bytes;
+                Some(path)
+            }
+        };
         let started = Instant::now();
         if let Some(existing) = self
             .cached_conversion_result_async(
@@ -255,16 +331,31 @@ impl ConversionService {
             .unwrap_or_else(|_| self.cache_dir.clone());
         let temp_dir = TempDir::new_in(&cache_dir).context("Failed to create temp directory")?;
 
-        let started = Instant::now();
-        let (source, pkg_path) = self
-            .download_package_async(PackageDownloadRequest {
-                source,
-                dest_dir: temp_dir.path(),
-            })
-            .await
-            .map_err(|e| anyhow!("Failed to download package: {}", e))?;
-        timing.record(ConversionPhase::Download, started.elapsed());
-        timing.work.downloaded_bytes = tokio::fs::metadata(&pkg_path).await?.len();
+        let uses_local_artifact = local_artifact.is_some();
+        let (source, pkg_path) = if let Some(path) = local_artifact {
+            timing.record_skipped(
+                ConversionPhase::Download,
+                "authenticated local source artifact; network transfer did not run",
+            );
+            (source, path)
+        } else {
+            let started = Instant::now();
+            let downloaded = self
+                .download_package_async(PackageDownloadRequest {
+                    source,
+                    dest_dir: temp_dir.path(),
+                })
+                .await
+                .map_err(|e| anyhow!("Failed to download package: {}", e))?;
+            timing.record(ConversionPhase::Download, started.elapsed());
+            downloaded
+        };
+        let source_artifact_bytes = tokio::fs::metadata(&pkg_path).await?.len();
+        timing.work.source_artifact_bytes = source_artifact_bytes;
+        if !uses_local_artifact {
+            timing.work.downloaded_bytes = source_artifact_bytes;
+            timing.work.repository_checksum_bytes_hashed = source_artifact_bytes;
+        }
         Self::record_source_identity(timing, source.source_profile(), &source.repo_pkg)?;
         info!("Downloaded to: {:?}", pkg_path);
 
@@ -275,7 +366,7 @@ impl ConversionService {
                 .await
                 .map_err(|e| anyhow!("checksum task panicked: {e}"))??;
         timing.record(ConversionPhase::Checksum, started.elapsed());
-        timing.work.source_bytes_hashed = timing.work.downloaded_bytes;
+        timing.work.source_bytes_hashed = source_artifact_bytes;
 
         let parse_service = self.clone();
         let source_profile = source.source_profile().to_string();
@@ -349,6 +440,39 @@ impl ConversionService {
         ] {
             timing.record_skipped(phase, "cache hit; phase did not run");
         }
+    }
+
+    fn admit_local_source_artifact(
+        path: &std::path::Path,
+        package: &RepositoryPackage,
+    ) -> Result<PathBuf> {
+        let metadata = std::fs::symlink_metadata(path)
+            .with_context(|| format!("inspect benchmark source artifact {}", path.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(anyhow!(
+                "benchmark source artifact {} must be a regular non-symlink file",
+                path.display()
+            ));
+        }
+        let expected_size =
+            u64::try_from(package.size).context("repository package size is negative")?;
+        if metadata.len() != expected_size {
+            return Err(anyhow!(
+                "benchmark source artifact {} has {} bytes; immutable catalog requires {}",
+                path.display(),
+                metadata.len(),
+                expected_size
+            ));
+        }
+        conary_core::repository::verify_checksum(path, &package.checksum).with_context(|| {
+            format!(
+                "authenticate benchmark source artifact {} against immutable catalog checksum {}",
+                path.display(),
+                package.checksum
+            )
+        })?;
+        path.canonicalize()
+            .with_context(|| format!("canonicalize benchmark source artifact {}", path.display()))
     }
 
     fn log_conversion_timing(timing: &ConversionTimingReport) {
