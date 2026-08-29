@@ -22,7 +22,7 @@ pub mod schema;
 use crate::error::{Error, Result};
 use rusqlite::{Connection, OpenFlags};
 use std::fs::File;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -66,11 +66,17 @@ fn database_wal_path(path: &Path) -> std::path::PathBuf {
 
 fn validate_wal_file(path: &Path) -> Result<()> {
     let wal_path = database_wal_path(path);
-    if !wal_path.exists() {
-        return Ok(());
-    }
+    let file = match File::open(&wal_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
 
-    let metadata = std::fs::metadata(&wal_path)?;
+    validate_open_wal_file(&wal_path, file)
+}
+
+fn validate_open_wal_file(wal_path: &Path, mut file: File) -> Result<()> {
+    let metadata = file.metadata()?;
     if metadata.len() == 0 {
         return Ok(());
     }
@@ -83,7 +89,6 @@ fn validate_wal_file(path: &Path) -> Result<()> {
     }
 
     let mut header = [0_u8; 4];
-    let mut file = File::open(&wal_path)?;
     file.read_exact(&mut header)?;
     let magic = u32::from_be_bytes(header);
     if !SQLITE_WAL_MAGIC_BE.contains(&magic) {
@@ -391,5 +396,44 @@ mod tests {
 
         let err = open(&db_path).unwrap_err().to_string();
         assert!(err.contains("WAL appears corrupted") || err.contains("WAL"));
+    }
+
+    #[test]
+    fn wal_validation_accepts_missing_and_empty_sidecars() {
+        let directory = tempfile::tempdir().unwrap();
+        let db_path = directory.path().join("conary.db");
+        let wal_path = database_wal_path(&db_path);
+
+        validate_wal_file(&db_path).unwrap();
+        std::fs::write(&wal_path, []).unwrap();
+        validate_wal_file(&db_path).unwrap();
+    }
+
+    #[test]
+    fn wal_validation_uses_the_open_descriptor_after_unlink() {
+        let directory = tempfile::tempdir().unwrap();
+        let wal_path = directory.path().join("conary.db-wal");
+        let mut bytes = [0_u8; SQLITE_WAL_HEADER_SIZE as usize];
+        bytes[..4].copy_from_slice(&SQLITE_WAL_MAGIC_BE[0].to_be_bytes());
+        std::fs::write(&wal_path, bytes).unwrap();
+
+        let file = File::open(&wal_path).unwrap();
+        std::fs::remove_file(&wal_path).unwrap();
+
+        validate_open_wal_file(&wal_path, file).unwrap();
+    }
+
+    #[test]
+    fn wal_validation_rejects_a_full_header_with_invalid_magic() {
+        let directory = tempfile::tempdir().unwrap();
+        let db_path = directory.path().join("conary.db");
+        std::fs::write(
+            database_wal_path(&db_path),
+            [0_u8; SQLITE_WAL_HEADER_SIZE as usize],
+        )
+        .unwrap();
+
+        let error = validate_wal_file(&db_path).unwrap_err().to_string();
+        assert!(error.contains("invalid header"), "{error}");
     }
 }
