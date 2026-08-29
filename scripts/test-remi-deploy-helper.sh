@@ -191,7 +191,8 @@ set -euo pipefail
 printf '%s\n' "$@" >"$CONARY_FAKE_BENCHMARK_ARGS"
 [[ "$(cat "$CONARY_FAKE_SERVICE_STATE")" == "stopped" ]]
 if [[ "${CONARY_FAKE_BENCHMARK_FAIL:-0}" == "1" ]]; then
-    exit 41
+    echo "private benchmark diagnostic: /private/remi/source.native" >&2
+    exit "${CONARY_FAKE_BENCHMARK_STATUS:-41}"
 fi
 shift
 work_root=""
@@ -212,6 +213,9 @@ mkdir -m 0700 "$work_root"
 raw="${work_root}/conversion-benchmark-v3.json"
 public="${work_root}/conversion-benchmark-public-v1.json"
 printf '%s\n' '{"schema_version":3}' >"$raw"
+if [[ "${CONARY_FAKE_BAD_RAW_SCHEMA:-0}" == "1" ]]; then
+    printf '%s\n' '{"schema_version":2}' >"$raw"
+fi
 chmod "${CONARY_FAKE_RAW_REPORT_MODE:-0600}" "$raw"
 raw_sha256="$(sha256sum "$raw" | cut -d ' ' -f 1)"
 raw_bytes="$(stat -c '%s' "$raw")"
@@ -235,6 +239,12 @@ jq -n \
     }
 ' >"$public"
 chmod 0600 "$public"
+if [[ "${CONARY_FAKE_BENCHMARK_TRANSPORT_COLLISION:-0}" == "1" ]]; then
+    run_id="$(basename "$(dirname "$work_root")")"
+    transport="/tmp/remi-conversion-benchmark-${run_id}.json"
+    echo "private transport diagnostic: $transport" >&2
+    printf 'collision\n' >"$transport"
+fi
 EOF
     chmod 0755 "$bin"
 }
@@ -257,7 +267,10 @@ case "${1:-}" in
         ;;
     start)
         [[ "${2:-}" == "remi" && $# -eq 2 ]]
-        [[ ! -e "$CONARY_FAKE_FAIL_START" ]]
+        if [[ -e "$CONARY_FAKE_FAIL_START" ]]; then
+            echo "private restart diagnostic: $CONARY_FAKE_FAIL_START" >&2
+            exit 37
+        fi
         printf 'active\n' >"$CONARY_FAKE_SERVICE_STATE"
         ;;
     *) exit 2 ;;
@@ -324,7 +337,10 @@ run_benchmark_helper() {
     CONARY_FAKE_FAIL_START="${fake_root}/fail-start" \
     CONARY_FAKE_BENCHMARK_ARGS="${fake_root}/benchmark-args" \
     CONARY_FAKE_BENCHMARK_FAIL="${CONARY_FAKE_BENCHMARK_FAIL:-0}" \
+    CONARY_FAKE_BENCHMARK_STATUS="${CONARY_FAKE_BENCHMARK_STATUS:-41}" \
+    CONARY_FAKE_BENCHMARK_TRANSPORT_COLLISION="${CONARY_FAKE_BENCHMARK_TRANSPORT_COLLISION:-0}" \
     CONARY_FAKE_BAD_PUBLIC_BINDING="${CONARY_FAKE_BAD_PUBLIC_BINDING:-0}" \
+    CONARY_FAKE_BAD_RAW_SCHEMA="${CONARY_FAKE_BAD_RAW_SCHEMA:-0}" \
     CONARY_FAKE_RAW_REPORT_MODE="${CONARY_FAKE_RAW_REPORT_MODE:-0600}" \
         bash "$helper" benchmark-remi-conversion "$@"
 }
@@ -341,6 +357,44 @@ expect_fail() {
 
     if [[ "$status" -eq 0 ]]; then
         fail "$description unexpectedly succeeded"
+    fi
+}
+
+assert_benchmark_failure_envelope() {
+    local stdout_file="$1"
+    local stderr_file="$2"
+    local expected_stage="$3"
+    local expected_status="$4"
+    local expected_service_outcome="$5"
+    local forbidden="$6"
+    local expected_json expected_record expected_file actual_record actual_json
+    expected_json="$(printf \
+        '{"schema_version":1,"stage":"%s","status":%s,"service_outcome":"%s"}' \
+        "$expected_stage" "$expected_status" "$expected_service_outcome")"
+    expected_record="Conversion benchmark failure: ${expected_json}"
+    expected_file="${tmpdir}/expected-${expected_stage}-${expected_status}.stdout"
+    printf '%s\n' "$expected_record" >"$expected_file"
+    cmp -s "$stdout_file" "$expected_file" ||
+        fail "benchmark failure stdout was not exactly one canonical record"
+    IFS= read -r actual_record <"$stdout_file"
+    actual_json="${actual_record#Conversion benchmark failure: }"
+    jq -e \
+        --arg stage "$expected_stage" \
+        --argjson status "$expected_status" \
+        --arg service_outcome "$expected_service_outcome" '
+        type == "object"
+        and (keys_unsorted == ["schema_version", "stage", "status", "service_outcome"])
+        and .schema_version == 1
+        and .stage == $stage
+        and .status == $status
+        and .service_outcome == $service_outcome
+    ' <<<"$actual_json" >/dev/null ||
+        fail "benchmark failure envelope is not the exact typed schema"
+    grep -F -- "$forbidden" "$stderr_file" >/dev/null ||
+        fail "benchmark failure fixture did not expose its private diagnostic"
+    if grep -F -- "$forbidden" "$stdout_file" >/dev/null \
+        || grep -F -- / "$stdout_file" >/dev/null; then
+        fail "benchmark failure envelope disclosed a path or private diagnostic"
     fi
 }
 
@@ -897,11 +951,95 @@ test_conversion_benchmark_uses_fixed_paths_arguments_and_service_sequence() {
 test_conversion_benchmark_failure_restarts_without_publication() {
     local run_id="benchmark-command-failure-$$"
     local fake_root="${tmpdir}/root-${run_id}"
+    local stdout_file="${tmpdir}/${run_id}.stdout"
+    local stderr_file="${tmpdir}/${run_id}.stderr"
+    local status
     make_benchmark_fixture "$fake_root" "$run_id"
 
+    set +e
     CONARY_FAKE_BENCHMARK_FAIL=1 \
-        expect_fail "failed conversion benchmark" \
-        run_valid_conversion_benchmark "$fake_root" "$run_id"
+        run_valid_conversion_benchmark "$fake_root" "$run_id" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" == "41" ]] ||
+        fail "failed conversion benchmark returned status $status instead of 41"
+    assert_benchmark_failure_envelope \
+        "$stdout_file" "$stderr_file" benchmark-command 41 restored \
+        /private/remi/source.native
+    assert_benchmark_service_sequence "$fake_root"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ ! -e "/tmp/remi-conversion-benchmark-${run_id}.json" ]]
+}
+
+test_conversion_benchmark_reserves_ssh_failure_status() {
+    local run_id="benchmark-status-255-$$"
+    local fake_root="${tmpdir}/root-${run_id}"
+    local stdout_file="${tmpdir}/${run_id}.stdout"
+    local stderr_file="${tmpdir}/${run_id}.stderr"
+    local status
+    make_benchmark_fixture "$fake_root" "$run_id"
+
+    set +e
+    CONARY_FAKE_BENCHMARK_FAIL=1 \
+        CONARY_FAKE_BENCHMARK_STATUS=255 \
+        run_valid_conversion_benchmark "$fake_root" "$run_id" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" == "254" ]] ||
+        fail "reserved benchmark status returned $status instead of 254"
+    assert_benchmark_failure_envelope \
+        "$stdout_file" "$stderr_file" internal 254 restored \
+        /private/remi/source.native
+    assert_benchmark_service_sequence "$fake_root"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ ! -e "/tmp/remi-conversion-benchmark-${run_id}.json" ]]
+}
+
+test_conversion_benchmark_transport_failure_reports_restored_service() {
+    local run_id="benchmark-transport-failure-$$"
+    local fake_root="${tmpdir}/root-${run_id}"
+    local stdout_file="${tmpdir}/${run_id}.stdout"
+    local stderr_file="${tmpdir}/${run_id}.stderr"
+    local transport="/tmp/remi-conversion-benchmark-${run_id}.json"
+    local status
+    make_benchmark_fixture "$fake_root" "$run_id"
+
+    set +e
+    CONARY_FAKE_BENCHMARK_TRANSPORT_COLLISION=1 \
+        run_valid_conversion_benchmark "$fake_root" "$run_id" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" == "1" ]] ||
+        fail "failed benchmark transport publication returned status $status instead of 1"
+    assert_benchmark_failure_envelope \
+        "$stdout_file" "$stderr_file" transport-publication 1 restored "$transport"
+    assert_benchmark_service_sequence "$fake_root"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ "$(cat "$transport")" == "collision" ]]
+}
+
+test_conversion_benchmark_raw_schema_failure_reports_raw_stage() {
+    local run_id="benchmark-raw-schema-failure-$$"
+    local fake_root="${tmpdir}/root-${run_id}"
+    local stdout_file="${tmpdir}/${run_id}.stdout"
+    local stderr_file="${tmpdir}/${run_id}.stderr"
+    local status
+    make_benchmark_fixture "$fake_root" "$run_id"
+
+    set +e
+    CONARY_FAKE_BAD_RAW_SCHEMA=1 \
+        run_valid_conversion_benchmark "$fake_root" "$run_id" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" == "1" ]] ||
+        fail "invalid raw benchmark report returned status $status instead of 1"
+    assert_benchmark_failure_envelope \
+        "$stdout_file" "$stderr_file" raw-report-validation 1 restored \
+        "invalid schema"
     assert_benchmark_service_sequence "$fake_root"
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
     [[ ! -e "/tmp/remi-conversion-benchmark-${run_id}.json" ]]
@@ -933,11 +1071,22 @@ test_conversion_benchmark_rejects_unbound_or_public_raw_evidence() {
 test_conversion_benchmark_restart_and_health_fail_closed() {
     local run_id="benchmark-restart-failure-$$"
     local fake_root="${tmpdir}/root-${run_id}"
+    local stdout_file="${tmpdir}/${run_id}.stdout"
+    local stderr_file="${tmpdir}/${run_id}.stderr"
+    local status
     make_benchmark_fixture "$fake_root" "$run_id"
     : >"$fake_root/fail-start"
 
-    expect_fail "failed benchmark service restart" \
-        run_valid_conversion_benchmark "$fake_root" "$run_id"
+    set +e
+    run_valid_conversion_benchmark "$fake_root" "$run_id" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" == "1" ]] ||
+        fail "failed benchmark service restoration returned status $status instead of 1"
+    assert_benchmark_failure_envelope \
+        "$stdout_file" "$stderr_file" service-restore 1 restore-failed \
+        "$fake_root/fail-start"
     assert_benchmark_recovery_retry_sequence "$fake_root"
     [[ "$(cat "$fake_root/service-state")" == "stopped" ]]
     [[ ! -e "/tmp/remi-conversion-benchmark-${run_id}.json" ]]
@@ -956,11 +1105,21 @@ test_conversion_benchmark_restart_and_health_fail_closed() {
 test_conversion_benchmark_rejects_non_xfs_before_downtime() {
     local run_id="benchmark-non-xfs-$$"
     local fake_root="${tmpdir}/root-${run_id}"
+    local stdout_file="${tmpdir}/${run_id}.stdout"
+    local stderr_file="${tmpdir}/${run_id}.stderr"
+    local status
     make_benchmark_fixture "$fake_root" "$run_id"
 
+    set +e
     CONARY_FAKE_WORK_FILESYSTEM_TYPE=ext4 \
-        expect_fail "non-XFS conversion benchmark work carrier" \
-        run_valid_conversion_benchmark "$fake_root" "$run_id"
+        run_valid_conversion_benchmark "$fake_root" "$run_id" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" == "1" ]] ||
+        fail "non-XFS benchmark preflight returned status $status instead of 1"
+    assert_benchmark_failure_envelope \
+        "$stdout_file" "$stderr_file" work-root-authority 1 not-stopped "$fake_root"
     [[ ! -s "$fake_root/service-log" ]]
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
     [[ ! -e "$fake_root/work/remi-conversion-benchmarks/$run_id" ]]
@@ -1173,6 +1332,9 @@ main() {
     test_export_native_oracle_inputs_uses_exact_public_candidates
     test_conversion_benchmark_uses_fixed_paths_arguments_and_service_sequence
     test_conversion_benchmark_failure_restarts_without_publication
+    test_conversion_benchmark_reserves_ssh_failure_status
+    test_conversion_benchmark_transport_failure_reports_restored_service
+    test_conversion_benchmark_raw_schema_failure_reports_raw_stage
     test_conversion_benchmark_rejects_unbound_or_public_raw_evidence
     test_conversion_benchmark_restart_and_health_fail_closed
     test_conversion_benchmark_rejects_non_xfs_before_downtime

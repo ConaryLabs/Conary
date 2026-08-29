@@ -346,10 +346,13 @@ jobs:
           REVISION: ${{ steps.authority.outputs.revision }}
           SOURCE_SHA256: ${{ inputs.source_sha256 }}
           SOURCE_SIZE_BYTES: ${{ inputs.source_size_bytes }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
+          export LC_ALL=C
           [[ -n "${REMI_SSH_KEY:-}" ]] || {
             echo "REMI_SSH_KEY is required" >&2
             exit 1
@@ -369,14 +372,15 @@ jobs:
               exit 1
             }
           done
-          [[ "$DEPLOYMENT_RUN_ID" =~ ^[0-9]+$ \
-            && "$GITHUB_RUN_ID" =~ ^[0-9]+$ \
-            && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || {
+          [[ "$DEPLOYMENT_RUN_ID" =~ ^[1-9][0-9]*$ \
+            && "$WORKFLOW_RUN_ID" =~ ^[1-9][0-9]*$ \
+            && "$WORKFLOW_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ \
+            && "$REMI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
               echo "benchmark run identity is malformed" >&2
               exit 1
           }
 
-          benchmark_id="${DEPLOYMENT_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          benchmark_id="${DEPLOYMENT_RUN_ID}-${WORKFLOW_RUN_ID}-${WORKFLOW_RUN_ATTEMPT}"
           remote_source="/tmp/remi-conversion-source-${benchmark_id}.native"
           remote_transport="/tmp/remi-conversion-benchmark-${benchmark_id}.json"
           remote_helper="/tmp/remi-deploy-helper-${benchmark_id}"
@@ -385,7 +389,10 @@ jobs:
           helper="${RUNNER_TEMP}/remi-deploy-helper-${benchmark_id}"
           key="${RUNNER_TEMP}/remi-conversion-benchmark-key"
           known_hosts="${RUNNER_TEMP}/remi-conversion-benchmark-known-hosts"
+          helper_stdout="${RUNNER_TEMP}/remi-conversion-benchmark-helper.stdout"
           helper_stderr="${RUNNER_TEMP}/remi-conversion-benchmark-helper.stderr"
+          failure_record="remi-conversion-benchmark-failure-v1.json"
+          failure_record_next="${failure_record}.next"
           remote_cleanup_possible=0
           cleanup() {
             status=$?
@@ -397,11 +404,19 @@ jobs:
                 "rm -f -- '$remote_source' '$remote_transport' '$remote_helper'" \
                 >/dev/null 2>&1
             fi
-            rm -f -- "$key" "$known_hosts" "$helper" "$helper_stderr" "$local_source"
+            rm -f -- \
+              "$key" \
+              "$known_hosts" \
+              "$helper" \
+              "$helper_stdout" \
+              "$helper_stderr" \
+              "$failure_record_next" \
+              "$local_source"
             set -e
             return "$status"
           }
           trap cleanup EXIT
+          rm -f -- "$failure_record" "$failure_record_next"
 
           [[ -f "$local_source" && ! -L "$local_source" ]] || {
             echo "authenticated runner source artifact disappeared" >&2
@@ -453,33 +468,309 @@ jobs:
           scp "${ssh_opts[@]}" "$local_source" "${target}:${remote_source}"
 
           # Every interpolated helper argument is typed above.
+          rm -f -- "$helper_stdout" "$helper_stderr"
+          set +e
           # shellcheck disable=SC2029
-          if ! helper_stdout="$(ssh "${ssh_opts[@]}" "$target" \
+          ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy benchmark-remi-conversion '$benchmark_id' '$BINARY_SHA256' '$PROFILE' '$REVISION' '$PACKAGE_KEY_SHA256' '$SOURCE_SHA256' '$SOURCE_SIZE_BYTES'" \
-            2>"$helper_stderr")"; then
-            echo "fixed production conversion benchmark operation failed" >&2
-            exit 1
-          fi
-          rm -f -- "$helper_stderr"
-          report_line="$(tail -n 1 <<<"$helper_stdout")"
-          read -r label operation run_field transport_field sha_field bytes_field extra \
-            <<<"$report_line"
-          [[ "$label" == "Conversion" \
-            && "$operation" == "benchmark:" \
-            && "$run_field" == "run=${benchmark_id}" \
-            && "$transport_field" == "transport=${remote_transport}" \
-            && "$sha_field" =~ ^sha256=([0-9a-f]{64})$ \
-            && "$bytes_field" =~ ^bytes=([1-9][0-9]*)$ \
-            && -z "${extra:-}" ]] || {
-              echo "production helper returned malformed benchmark evidence" >&2
+            >"$helper_stdout" 2>"$helper_stderr"
+          helper_status=$?
+          set -e
+          [[ -f "$helper_stdout" && ! -L "$helper_stdout" \
+            && -f "$helper_stderr" && ! -L "$helper_stderr" ]] || {
+              rm -f -- "$helper_stdout" "$helper_stderr"
+              echo "production helper did not return isolated regular output" >&2
               exit 1
           }
-          reported_sha256="${sha_field#sha256=}"
-          reported_bytes="${bytes_field#bytes=}"
-          (( reported_bytes <= 16 * 1024 * 1024 )) || {
-            echo "benchmark public transport exceeds the 16 MiB evidence limit" >&2
+          rm -f -- "$helper_stderr"
+          [[ ! -e "$helper_stderr" ]] || {
+            echo "private production helper diagnostics were not removed" >&2
             exit 1
           }
+
+          stdout_shape_valid=false
+          helper_record=""
+          if stdout_bytes="$(stat -c %s -- "$helper_stdout")" \
+            && [[ "$stdout_bytes" =~ ^[1-9][0-9]{0,3}$ ]] \
+            && (( stdout_bytes <= 4096 )) \
+            && [[ "$(wc -l < "$helper_stdout")" == "1" ]] \
+            && grep -aEx '[ -~]+' "$helper_stdout" >/dev/null; then
+              IFS= read -r helper_record < "$helper_stdout"
+              if (( ${#helper_record} + 1 == stdout_bytes )); then
+                stdout_shape_valid=true
+              fi
+          fi
+
+          success_record_valid=false
+          reported_sha256=""
+          reported_bytes=""
+          if (( helper_status == 0 )) && [[ "$stdout_shape_valid" == "true" ]]; then
+            label=""
+            operation=""
+            run_field=""
+            transport_field=""
+            sha_field=""
+            bytes_field=""
+            extra=""
+            read -r label operation run_field transport_field sha_field bytes_field extra \
+              <<<"$helper_record"
+            if [[ "$label" == "Conversion" \
+              && "$operation" == "benchmark:" \
+              && "$run_field" == "run=${benchmark_id}" \
+              && "$transport_field" == "transport=${remote_transport}" \
+              && "$sha_field" =~ ^sha256=[0-9a-f]{64}$ \
+              && "$bytes_field" =~ ^bytes=[1-9][0-9]{0,7}$ \
+              && -z "$extra" ]]; then
+                reported_sha256="${sha_field#sha256=}"
+                reported_bytes="${bytes_field#bytes=}"
+                expected_success_record="Conversion benchmark: run=${benchmark_id} transport=${remote_transport} sha256=${reported_sha256} bytes=${reported_bytes}"
+                if [[ "$helper_record" == "$expected_success_record" ]] \
+                  && (( 10#$reported_bytes <= 16 * 1024 * 1024 )); then
+                    success_record_valid=true
+                fi
+            fi
+          fi
+
+          helper_envelope_valid=false
+          failure_stage="helper-envelope-invalid"
+          helper_status_json=null
+          service_outcome=""
+          envelope_prefix='Conversion benchmark failure: '
+          if (( helper_status >= 1 && helper_status <= 254 )) \
+            && [[ "$stdout_shape_valid" == "true" \
+              && "$helper_record" == "$envelope_prefix"* ]]; then
+              envelope_json="${helper_record:${#envelope_prefix}}"
+              if canonical_envelope="$(jq -cer \
+                --argjson observed_status "$helper_status" '
+                  def early_stage:
+                    . == "request-validation"
+                    or . == "runtime-authority"
+                    or . == "systemctl-authority"
+                    or . == "account-identity"
+                    or . == "binary-config-authority"
+                    or . == "live-root-authority"
+                    or . == "work-root-authority"
+                    or . == "benchmark-root-authority"
+                    or . == "input-target-authority"
+                    or . == "source-authentication"
+                    or . == "binary-authentication"
+                    or . == "private-config-copy"
+                    or . == "private-source-copy"
+                    or . == "service-active";
+                  def stopped_stage:
+                    . == "service-stop"
+                    or . == "benchmark-command"
+                    or . == "raw-report-validation"
+                    or . == "public-sidecar-validation"
+                    or . == "service-restore";
+                  def allowed_stage:
+                    early_stage
+                    or stopped_stage
+                    or . == "transport-publication"
+                    or . == "internal";
+                  def allowed_outcome:
+                    . == "not-stopped"
+                    or . == "restored"
+                    or . == "restore-failed";
+                  def stage_outcome($outcome):
+                    if early_stage then $outcome == "not-stopped"
+                    elif stopped_stage then
+                      $outcome == "restored" or $outcome == "restore-failed"
+                    elif . == "transport-publication" then $outcome == "restored"
+                    elif . == "internal" then ($outcome | allowed_outcome)
+                    else false
+                    end;
+                  if type == "object"
+                    and (keys | sort)
+                      == ["schema_version", "service_outcome", "stage", "status"]
+                    and .schema_version == 1
+                    and (.stage | type == "string" and allowed_stage)
+                    and (.status | type == "number"
+                      and floor == . and . >= 1 and . <= 254)
+                    and .status == $observed_status
+                    and (.service_outcome | type == "string" and allowed_outcome)
+                    and (.stage as $stage | .service_outcome as $outcome
+                      | $stage | stage_outcome($outcome))
+                  then {
+                    schema_version: .schema_version,
+                    stage: .stage,
+                    status: .status,
+                    service_outcome: .service_outcome
+                  }
+                  else error("invalid conversion benchmark helper failure envelope")
+                  end
+                ' <<<"$envelope_json" 2>/dev/null)" \
+                && [[ "$canonical_envelope" == "$envelope_json" ]]; then
+                  helper_envelope_valid=true
+                  failure_stage="$(jq -er '.stage' <<<"$canonical_envelope")"
+                  helper_status_json="$helper_status"
+                  service_outcome="$(jq -er '.service_outcome' <<<"$canonical_envelope")"
+              fi
+          fi
+
+          rm -f -- "$helper_stdout"
+          [[ ! -e "$helper_stdout" ]] || {
+            echo "production helper output was not removed after validation" >&2
+            exit 1
+          }
+
+          if (( helper_status != 0 )) || [[ "$success_record_valid" != "true" ]]; then
+            jq -cne \
+              --arg benchmark_id "$benchmark_id" \
+              --arg binary_sha256 "$BINARY_SHA256" \
+              --arg binary_version "$REMI_VERSION" \
+              --arg deployed_commit_sha "$DEPLOYED_COMMIT_SHA" \
+              --argjson deployment_run_id "$DEPLOYMENT_RUN_ID" \
+              --arg failure_stage "$failure_stage" \
+              --argjson helper_envelope_valid "$helper_envelope_valid" \
+              --arg helper_sha256 "$helper_sha256" \
+              --argjson helper_status "$helper_status_json" \
+              --argjson ssh_status "$helper_status" \
+              --arg package_key_sha256 "$PACKAGE_KEY_SHA256" \
+              --arg profile "$PROFILE" \
+              --arg revision "$REVISION" \
+              --arg service_outcome "$service_outcome" \
+              --arg source_sha256 "$SOURCE_SHA256" \
+              --argjson source_size_bytes "$SOURCE_SIZE_BYTES" \
+              --arg workflow_commit_sha "$WORKFLOW_SHA" \
+              --argjson workflow_run_attempt "$WORKFLOW_RUN_ATTEMPT" \
+              --argjson workflow_run_id "$WORKFLOW_RUN_ID" '
+                {
+                  schema_version: 1,
+                  evidence_class: "conversion-benchmark-failure",
+                  benchmark_id: $benchmark_id,
+                  deployment: {
+                    run_id: $deployment_run_id,
+                    commit_sha: $deployed_commit_sha,
+                    binary_sha256: $binary_sha256,
+                    binary_version: $binary_version
+                  },
+                  workflow: {
+                    commit_sha: $workflow_commit_sha,
+                    helper_sha256: $helper_sha256,
+                    run_id: $workflow_run_id,
+                    run_attempt: $workflow_run_attempt
+                  },
+                  request: {
+                    profile: $profile,
+                    profile_revision_sha256: $revision,
+                    package_key_sha256: $package_key_sha256,
+                    source_artifact_sha256: $source_sha256,
+                    source_size_bytes: $source_size_bytes
+                  },
+                  failure: {
+                    stage: $failure_stage,
+                    ssh_status: $ssh_status,
+                    helper_status: $helper_status,
+                    service_outcome:
+                      (if $helper_envelope_valid then $service_outcome else null end),
+                    helper_envelope_valid: $helper_envelope_valid
+                  }
+                }
+              ' > "$failure_record_next"
+            chmod 0600 "$failure_record_next"
+            jq -e '
+              def sha256: type == "string" and test("^[0-9a-f]{64}$");
+              def commit: type == "string" and test("^[0-9a-f]{40}$");
+              def early_stage:
+                . == "request-validation"
+                or . == "runtime-authority"
+                or . == "systemctl-authority"
+                or . == "account-identity"
+                or . == "binary-config-authority"
+                or . == "live-root-authority"
+                or . == "work-root-authority"
+                or . == "benchmark-root-authority"
+                or . == "input-target-authority"
+                or . == "source-authentication"
+                or . == "binary-authentication"
+                or . == "private-config-copy"
+                or . == "private-source-copy"
+                or . == "service-active";
+              def stopped_stage:
+                . == "service-stop"
+                or . == "benchmark-command"
+                or . == "raw-report-validation"
+                or . == "public-sidecar-validation"
+                or . == "service-restore";
+              def helper_stage:
+                early_stage
+                or stopped_stage
+                or . == "transport-publication"
+                or . == "internal";
+              def allowed_outcome:
+                . == "not-stopped"
+                or . == "restored"
+                or . == "restore-failed";
+              def stage_outcome($outcome):
+                if early_stage then $outcome == "not-stopped"
+                elif stopped_stage then
+                  $outcome == "restored" or $outcome == "restore-failed"
+                elif . == "transport-publication" then $outcome == "restored"
+                elif . == "internal" then ($outcome | allowed_outcome)
+                else false
+                end;
+              (keys | sort)
+                == ["benchmark_id", "deployment", "evidence_class", "failure", "request", "schema_version", "workflow"]
+              and .schema_version == 1
+              and .evidence_class == "conversion-benchmark-failure"
+              and (.benchmark_id | type == "string"
+                and test("^[1-9][0-9]*-[1-9][0-9]*-[1-9][0-9]*$"))
+              and (.deployment | keys | sort)
+                == ["binary_sha256", "binary_version", "commit_sha", "run_id"]
+              and (.deployment.run_id | type == "number" and floor == . and . > 0)
+              and (.deployment.commit_sha | commit)
+              and (.deployment.binary_sha256 | sha256)
+              and (.deployment.binary_version | type == "string"
+                and test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))
+              and (.workflow | keys | sort)
+                == ["commit_sha", "helper_sha256", "run_attempt", "run_id"]
+              and (.workflow.commit_sha | commit)
+              and (.workflow.helper_sha256 | sha256)
+              and (.workflow.run_id | type == "number" and floor == . and . > 0)
+              and (.workflow.run_attempt | type == "number" and floor == . and . > 0)
+              and (.request | keys | sort)
+                == ["package_key_sha256", "profile", "profile_revision_sha256", "source_artifact_sha256", "source_size_bytes"]
+              and (.request.profile == "fedora-44"
+                or .request.profile == "ubuntu-26.04"
+                or .request.profile == "arch")
+              and (.request.profile_revision_sha256 | sha256)
+              and (.request.package_key_sha256 | sha256)
+              and (.request.source_artifact_sha256 | sha256)
+              and (.request.source_size_bytes | type == "number"
+                and floor == . and . > 0 and . <= 8589934592)
+              and (.failure | keys | sort)
+                == ["helper_envelope_valid", "helper_status", "service_outcome", "ssh_status", "stage"]
+              and ((.failure.helper_envelope_valid | type) == "boolean")
+              and (.failure.ssh_status | type == "number"
+                and floor == . and . >= 0 and . <= 255)
+              and (if .failure.helper_envelope_valid
+                then (.failure.helper_status | type == "number"
+                    and floor == . and . >= 1 and . <= 254)
+                  and .failure.helper_status == .failure.ssh_status
+                  and (.failure.stage | type == "string" and helper_stage)
+                  and (.failure.service_outcome | type == "string" and allowed_outcome)
+                  and (.failure.stage as $stage
+                    | .failure.service_outcome as $outcome
+                    | $stage | stage_outcome($outcome))
+                else .failure.stage == "helper-envelope-invalid"
+                  and .failure.helper_status == null
+                  and .failure.service_outcome == null
+                end)
+              and all(.. | strings;
+                length <= 4096
+                and (contains("/") | not)
+                and (contains("\\") | not)
+                and (test("[[:cntrl:]]") | not))
+            ' "$failure_record_next" >/dev/null || {
+              echo "conversion benchmark failure evidence is invalid" >&2
+              exit 1
+            }
+            mv -- "$failure_record_next" "$failure_record"
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+            echo "fixed production conversion benchmark operation failed" >&2
+            exit 0
+          fi
 
           scp "${ssh_opts[@]}" "${target}:${remote_transport}" "$local_transport"
           [[ -f "$local_transport" && ! -L "$local_transport" ]] || {
@@ -595,6 +886,7 @@ jobs:
 
           cp -- "$local_transport" remi-conversion-benchmark-public-v1.json
           {
+            echo "result=success"
             echo "benchmark_id=$benchmark_id"
             echo "public_sha256=$reported_sha256"
             echo "public_bytes=$reported_bytes"
@@ -602,7 +894,18 @@ jobs:
             echo "raw_bytes=$(jq -er '.raw_report.size_bytes' "$local_transport")"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Upload public-sanitized benchmark failure evidence
+        if: ${{ steps.benchmark.outputs.result == 'failure' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: remi-conversion-benchmark-failure-${{ inputs.deployment_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: remi-conversion-benchmark-failure-v1.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
       - name: Upload public-sanitized benchmark evidence
+        if: ${{ steps.benchmark.outputs.result == 'success' }}
         id: upload
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -617,6 +920,7 @@ jobs:
           retention-days: 30
 
       - name: Record exact production benchmark evidence
+        if: ${{ steps.benchmark.outputs.result == 'success' }}
         env:
           ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
@@ -650,3 +954,17 @@ jobs:
                 + "end to end \(.views.end_to_end.duration_ms) ms"' \
               remi-conversion-benchmark-public-v1.json
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail closed on unsuccessful benchmark result
+        if: ${{ always() && steps.benchmark.outputs.result != 'success' }}
+        env:
+          BENCHMARK_RESULT: ${{ steps.benchmark.outputs.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BENCHMARK_RESULT" == "failure" ]] || {
+            echo "conversion benchmark completed without one typed result" >&2
+            exit 1
+          }
+          echo "fixed production conversion benchmark operation failed" >&2
+          exit 1

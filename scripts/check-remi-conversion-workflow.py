@@ -135,8 +135,10 @@ EXPECTED_STEP_ORDER = [
     "Reopen exact deployment and candidate identities",
     "Acquire and authenticate exact source bytes",
     "Run through the fixed production helper",
+    "Upload public-sanitized benchmark failure evidence",
     "Upload public-sanitized benchmark evidence",
     "Record exact production benchmark evidence",
+    "Fail closed on unsuccessful benchmark result",
 ]
 
 # These are SHA-256 digests of the effective YAML `run` scalar bytes, after safe
@@ -152,9 +154,11 @@ REVIEWED_RUN_BLOCK_SHA256 = {
     "Acquire and authenticate exact source bytes":
         "4e8c8e91fb4b79803aed47afc34c1e51034f7e9ccc45a23fd213df924c6d0856",
     "Run through the fixed production helper":
-        "557e739d0b770d4bd7bfd2d258c0dbf438a62e79cb097e5c6f5cabad6f730269",
+        "b6974801833f94576938f0527a4d5e04ebfac0d7b8894bd1da1589e7b6550450",
     "Record exact production benchmark evidence":
         "17ff81cf0aae3f4570683185a35839228f7b7623643bd79ade0a51b498670d0a",
+    "Fail closed on unsuccessful benchmark result":
+        "9097f565c79005bd7cb2b3d928f284c1606c6d28203e48d85222006af4239b15",
 }
 
 RUN_BLOCK_ERRORS = {
@@ -170,6 +174,8 @@ RUN_BLOCK_ERRORS = {
         "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority",
     "Record exact production benchmark evidence":
         "conversion benchmark public-only summary authority",
+    "Fail closed on unsuccessful benchmark result":
+        "conversion benchmark typed terminal failure result",
 }
 
 EXPECTED_RUN_ENV = {
@@ -209,6 +215,8 @@ EXPECTED_RUN_ENV = {
         "REVISION": "${{ steps.authority.outputs.revision }}",
         "SOURCE_SHA256": "${{ inputs.source_sha256 }}",
         "SOURCE_SIZE_BYTES": "${{ inputs.source_size_bytes }}",
+        "WORKFLOW_RUN_ATTEMPT": "${{ github.run_attempt }}",
+        "WORKFLOW_RUN_ID": "${{ github.run_id }}",
         "WORKFLOW_SHA": "${{ github.workflow_sha }}",
     },
     "Record exact production benchmark evidence": {
@@ -224,6 +232,16 @@ EXPECTED_RUN_ENV = {
         "RAW_SHA256": "${{ steps.benchmark.outputs.raw_sha256 }}",
         "REVISION": "${{ steps.authority.outputs.revision }}",
     },
+    "Fail closed on unsuccessful benchmark result": {
+        "BENCHMARK_RESULT": "${{ steps.benchmark.outputs.result }}",
+    },
+}
+
+EXPECTED_RUN_IF = {
+    "Record exact production benchmark evidence":
+        "${{ steps.benchmark.outputs.result == 'success' }}",
+    "Fail closed on unsuccessful benchmark result":
+        "${{ always() && steps.benchmark.outputs.result != 'success' }}",
 }
 
 EXPECTED_RUN_IDS = {
@@ -347,8 +365,46 @@ def validate_action_steps(steps: dict[str, dict[str, Any]]) -> None:
         "conversion benchmark exact successful protected deployment source",
     )
 
+    failure_upload = steps["Upload public-sanitized benchmark failure evidence"]
+    exact_keys(
+        failure_upload,
+        {"name", "if", "uses", "with"},
+        "conversion benchmark failure upload step",
+    )
+    require(
+        failure_upload["if"] == "${{ steps.benchmark.outputs.result == 'failure' }}",
+        "conversion benchmark mutually exclusive result publication",
+    )
+    require(
+        failure_upload["uses"]
+        == "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f",
+        "conversion benchmark failure-only retained evidence",
+    )
+    require(
+        exact_mapping(
+            failure_upload["with"],
+            "conversion benchmark failure upload inputs",
+        )
+        == {
+            "name": "remi-conversion-benchmark-failure-${{ inputs.deployment_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}",
+            "path": "remi-conversion-benchmark-failure-v1.json",
+            "if-no-files-found": "error",
+            "compression-level": 0,
+            "retention-days": 30,
+        },
+        "conversion benchmark failure-only retained evidence",
+    )
+
     upload = steps["Upload public-sanitized benchmark evidence"]
-    exact_keys(upload, {"name", "id", "uses", "with"}, "conversion benchmark upload step")
+    exact_keys(
+        upload,
+        {"name", "if", "id", "uses", "with"},
+        "conversion benchmark upload step",
+    )
+    require(
+        upload["if"] == "${{ steps.benchmark.outputs.result == 'success' }}",
+        "conversion benchmark mutually exclusive result publication",
+    )
     require(upload["id"] == "upload", "conversion benchmark public-only retained evidence")
     require(
         upload["uses"] == "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f",
@@ -391,8 +447,12 @@ def validate_run_steps(steps: dict[str, dict[str, Any]]) -> None:
         expected_id = EXPECTED_RUN_IDS.get(name)
         if expected_id is not None:
             expected_keys.add("id")
+        expected_condition = EXPECTED_RUN_IF.get(name)
+        if expected_condition is not None:
+            expected_keys.add("if")
         exact_keys(step, expected_keys, f"conversion benchmark run step {name}")
         require(step.get("id") == expected_id, RUN_BLOCK_ERRORS[name])
+        require(step.get("if") == expected_condition, RUN_BLOCK_ERRORS[name])
         require(step["shell"] == "bash", RUN_BLOCK_ERRORS[name])
         env = exact_mapping(step["env"], f"conversion benchmark run environment {name}")
         environment_error = RUN_BLOCK_ERRORS[name]
