@@ -9,6 +9,7 @@ use super::{
     REPORT_FILE_NAME, conversion_core_duration, rollback_failed_publication, sync_parent,
     validate_sha256,
 };
+use crate::server::conversion_timing::{ConversionPhase, DURABLE_CAS_FUSED_SKIP_REASON};
 use anyhow::{Context, Result, anyhow, ensure};
 use conary_core::repository::catalog::{portable_chunk_count_v1, portable_manifest_size_v1};
 use std::collections::BTreeSet;
@@ -207,6 +208,7 @@ fn validate_completed_conversion(
                 && work.source_bytes_hashed == report.subject.source_size_bytes,
             "cold benchmark source-artifact work contradicts the exact subject size"
         );
+        validate_cold_fused_cas(timing)?;
     } else {
         ensure!(
             !repetition.views.conversion_core.executed && core_duration == 0,
@@ -218,6 +220,55 @@ fn validate_completed_conversion(
             timing.work
         );
     }
+    Ok(())
+}
+
+fn validate_cold_fused_cas(
+    timing: &crate::server::conversion_timing::ConversionTimingReport,
+) -> Result<()> {
+    let work = &timing.work;
+    let expected_cas_barriers = u64::from(work.signed_object_count > 0);
+    ensure!(
+        work.independent_transport_reopen_object_bytes_hashed == work.signed_object_bytes
+            && work.cas_incoming_bytes_hashed == work.signed_object_bytes
+            && work.cas_persistent_bytes_written == work.signed_object_bytes
+            && work.cas_objects_hashed == work.signed_object_count
+            && work.cas_hits == 0
+            && work.cas_misses == work.signed_object_count
+            && work.cas_race_losers == 0
+            && work.cas_staged_data_barriers == expected_cas_barriers
+            && work.cas_canonical_name_barriers == expected_cas_barriers
+            && work.cas_canonical_bytes_reread == 0,
+        "cold benchmark did not stream its exact signed object set once into the empty durable CAS"
+    );
+    ensure!(
+        timing
+            .phases
+            .iter()
+            .filter(|phase| phase.phase == ConversionPhase::IndependentTransportReopen)
+            .count()
+            == 1
+            && !timing
+                .skipped_phases
+                .iter()
+                .any(|phase| phase.phase == ConversionPhase::IndependentTransportReopen)
+            && !timing
+                .phases
+                .iter()
+                .any(|phase| phase.phase == ConversionPhase::DurableCasIngestion)
+            && timing
+                .skipped_phases
+                .iter()
+                .filter(|phase| phase.phase == ConversionPhase::DurableCasIngestion)
+                .all(|phase| phase.reason == DURABLE_CAS_FUSED_SKIP_REASON)
+            && timing
+                .skipped_phases
+                .iter()
+                .filter(|phase| phase.phase == ConversionPhase::DurableCasIngestion)
+                .count()
+                == 1,
+        "cold benchmark did not record one fused independent reopen into durable CAS"
+    );
     Ok(())
 }
 
@@ -673,6 +724,14 @@ mod tests {
                 ConversionPhase::NativeArchiveParseAndSpool,
                 Duration::from_millis(7),
             );
+            timing.record(
+                ConversionPhase::IndependentTransportReopen,
+                Duration::from_millis(2),
+            );
+            timing.record_skipped(
+                ConversionPhase::DurableCasIngestion,
+                DURABLE_CAS_FUSED_SKIP_REASON,
+            );
             timing.work.admitted_local_bytes = 5;
             timing.work.repository_checksum_bytes_hashed = 5;
             timing.work.source_artifact_bytes = 5;
@@ -686,6 +745,12 @@ mod tests {
             timing.work.signed_object_bytes = 17;
             timing.work.immediate_converter_reopen_object_bytes_hashed = 17;
             timing.work.independent_transport_reopen_object_bytes_hashed = 17;
+            timing.work.cas_incoming_bytes_hashed = 17;
+            timing.work.cas_persistent_bytes_written = 17;
+            timing.work.cas_objects_hashed = 2;
+            timing.work.cas_misses = 2;
+            timing.work.cas_staged_data_barriers = 1;
+            timing.work.cas_canonical_name_barriers = 1;
             timing.total_ms = 11;
         } else {
             timing.total_ms = 3;
@@ -857,6 +922,17 @@ mod tests {
             validate_report(&tampered).is_err(),
             "retained conversion views must remain bound to timing evidence"
         );
+        let mut tampered = report.clone();
+        let ConversionBenchmarkOutcome::IndependentOutputReopenFailure { timing, .. } =
+            &mut tampered.repetitions[0].outcome
+        else {
+            unreachable!()
+        };
+        timing.work.cas_incoming_bytes_hashed -= 1;
+        assert!(
+            validate_report(&tampered).is_err(),
+            "retained cold conversion evidence must prove the fused verified-CAS pass"
+        );
 
         let root = tempfile::tempdir().expect("create report publication root");
         let path = root.path().join(REPORT_FILE_NAME);
@@ -960,6 +1036,52 @@ mod tests {
             unreachable!()
         };
         timing.work.complete_archive_hash_bytes -= 1;
+        assert!(validate_report(&report).is_err());
+    }
+
+    #[test]
+    fn rejects_a_second_cas_pass_or_inconsistent_direct_cas_work() {
+        let mut report = valid_report();
+        let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+        else {
+            unreachable!()
+        };
+        timing.record(
+            ConversionPhase::DurableCasIngestion,
+            Duration::from_millis(1),
+        );
+        assert!(validate_report(&report).is_err());
+
+        let mut report = valid_report();
+        let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+        else {
+            unreachable!()
+        };
+        timing.work.cas_incoming_bytes_hashed -= 1;
+        assert!(validate_report(&report).is_err());
+
+        let mut report = valid_report();
+        let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+        else {
+            unreachable!()
+        };
+        timing
+            .skipped_phases
+            .iter_mut()
+            .find(|phase| phase.phase == ConversionPhase::DurableCasIngestion)
+            .unwrap()
+            .reason = "fixture claims an unfused CAS pass".to_string();
+        assert!(validate_report(&report).is_err());
+
+        let mut report = valid_report();
+        let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+        else {
+            unreachable!()
+        };
+        timing.record_skipped(
+            ConversionPhase::IndependentTransportReopen,
+            "fixture contradicts the executed fused phase",
+        );
         assert!(validate_report(&report).is_err());
     }
 

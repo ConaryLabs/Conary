@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-28
-revision: 3
+last_updated: 2026-08-29
+revision: 4
 summary: Record commit-bound reproducible performance evidence, exact command resource metrics, and measured Remi optimization results
 ---
 
@@ -32,6 +32,17 @@ a cache is cold or warm; the benchmark driver owns and proves that setup before
 passing the label. Network bytes, CAS work, SQLite statements, durability
 calls, complete-root scans, and internal phase timing remain separate typed
 counters rather than estimates derived from elapsed time.
+
+Remi conversion schema v3 treats independent signed-archive authentication and
+permanent verified-CAS admission as one fused physical pass. Its full elapsed
+time is recorded once under `independent_transport_reopen`;
+`durable_cas_ingestion` is skipped because there is no later object-source
+pass solely for CAS insertion. The archive-authentication and CAS incoming-byte
+counters both describe the shared object SHA-256 pass and must not be summed.
+Cold isolated evidence requires every signed object byte to be persistently
+written once, while exact hot conversion evidence remains all-zero because it
+does not execute conversion or storage work. Required chunk-reconstruction
+validation remains inside the independent verification boundary.
 
 ## Remi conversion baseline: 2026-08-15
 

@@ -1444,8 +1444,8 @@ Implementation ownership lives in child modules:
 - `conversion/metadata.rs`: safe CCS filenames, profile-backed parser dispatch,
   metadata construction, catalog package identity application, and typed
   provide comparison.
-- `conversion/storage.rs`: signed CCS verification, exact local CAS object
-  persistence, and missing-only optional R2 write-through.
+- `conversion/storage.rs`: signed CCS verification streamed directly into the
+  permanent local CAS, followed by missing-only optional R2 write-through.
 - `conversion/persistence.rs`: converted-package rows, cache-hit
   reconstruction, current-summary validation, and ready-result construction.
 - `conversion_crawl.rs`: bounded full-profile orchestration and canonical
@@ -1535,6 +1535,16 @@ process resource counters, and retains phase timings and deterministic work
 counters. Successful cold evidence independently reopens the signed transport
 and hashes the complete CCS archive; the report records the CCS, transport,
 and canonical signed-object-set identities and byte counts.
+
+The independent transport reopen streams signed object bytes directly into the
+permanent verified-CAS batch. Schema v3 attributes that fused wall time once to
+`independent_transport_reopen` and records `durable_cas_ingestion` as skipped
+with the fixed reason that no post-verification object pass ran. The
+`independent_transport_reopen_object_bytes_hashed` and
+`cas_incoming_bytes_hashed` counters therefore describe the same physical hash
+pass and must agree with the signed object byte count; they are not additive.
+An isolated cold benchmark starts with an empty CAS, so its missing-object
+bytes are written once behind one staged-data and one canonical-name barrier.
 
 The first successful repetition must be `cold`. Every later successful
 repetition must be an exact `hot` hit with no conversion-core work. Failures

@@ -452,11 +452,11 @@ impl ConversionService {
             .await?;
         timing.record(
             ConversionPhase::IndependentTransportReopen,
-            stored_transport.verification_duration,
+            stored_transport.verification_and_cas_duration,
         );
-        timing.record(
+        timing.record_skipped(
             ConversionPhase::DurableCasIngestion,
-            stored_transport.cas_duration,
+            crate::server::conversion_timing::DURABLE_CAS_FUSED_SKIP_REASON,
         );
         timing.work.independent_transport_reopen_ccs_bytes = timing.work.ccs_output_bytes;
         let reopened_object_bytes =

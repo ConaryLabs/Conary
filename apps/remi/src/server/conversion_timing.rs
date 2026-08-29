@@ -6,6 +6,13 @@ use std::time::{Duration, Instant};
 
 use conary_core::filesystem::VerifiedObjectBatchMetrics;
 
+/// Schema-v3 keeps the historical phase name while the implementation streams
+/// independent archive verification directly into permanent CAS. Recording the
+/// retired second phase as skipped prevents the fused work from being counted
+/// twice in benchmark interpretation.
+pub(crate) const DURABLE_CAS_FUSED_SKIP_REASON: &str =
+    "fused into independent transport reopen; no post-verification object pass";
+
 /// Encode exact duration values inside the portable JSON integer range.
 /// `u64` milliseconds span roughly 585 million years, so overflow is an
 /// invalid timing record rather than a value to truncate or stringify.
