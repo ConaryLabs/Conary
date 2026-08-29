@@ -267,7 +267,7 @@ fn process_thread_counts() -> Result<(u64, u64)> {
         // that remained readable long enough to yield one coherent sample.
         let stat = match fs::read_to_string(entry.path().join("stat")) {
             Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if task_record_vanished(&error) => continue,
             Err(error) => return Err(error.into()),
         };
         let state = stat
@@ -285,6 +285,10 @@ fn process_thread_counts() -> Result<(u64, u64)> {
         }
     }
     Ok((threads, runnable))
+}
+
+fn task_record_vanished(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
 }
 
 #[cfg(test)]
@@ -327,6 +331,19 @@ cancelled_write_bytes: 17\n";
             serde_json::from_slice(&encoded).expect("decode signed process evidence");
 
         assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn vanished_task_errors_are_ignored_without_hiding_other_proc_failures() {
+        assert!(task_record_vanished(&std::io::Error::from_raw_os_error(
+            libc::ENOENT
+        )));
+        assert!(task_record_vanished(&std::io::Error::from_raw_os_error(
+            libc::ESRCH
+        )));
+        assert!(!task_record_vanished(&std::io::Error::from_raw_os_error(
+            libc::EACCES
+        )));
     }
 
     #[test]
