@@ -2,6 +2,7 @@
 //! Offline immutable-authority conversion benchmark operator.
 
 mod process;
+mod public_projection;
 mod report;
 
 use super::{
@@ -26,6 +27,7 @@ use conary_core::repository::catalog::{
     ProfileRevisionV2, SourceSnapshotV1,
 };
 use process::ProcessUsageProbe;
+use public_projection::{PUBLIC_REPORT_FILE_NAME, publish_and_reopen_public_report};
 use report::{publish_and_reopen_report, validate_report};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::ffi::CString;
@@ -177,6 +179,17 @@ pub async fn run_conversion_benchmark_from_config(
     };
     validate_report(&report)?;
     publish_and_reopen_report(&expected_output, &report)?;
+    if report.repetitions.iter().all(|repetition| {
+        matches!(
+            &repetition.outcome,
+            ConversionBenchmarkOutcome::Success { .. }
+        )
+    }) {
+        publish_and_reopen_public_report(
+            &expected_output,
+            &work_root.join(PUBLIC_REPORT_FILE_NAME),
+        )?;
+    }
     drop(runtime_lock);
     Ok(report)
 }
@@ -872,6 +885,39 @@ fn sync_parent(path: &Path) -> Result<()> {
         File::open(parent)?.sync_all()?;
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct PublishedInode {
+    device: u64,
+    inode: u64,
+}
+
+impl PublishedInode {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+
+    fn matches(self, metadata: &fs::Metadata) -> bool {
+        metadata.file_type().is_file()
+            && metadata.dev() == self.device
+            && metadata.ino() == self.inode
+    }
+}
+
+fn rollback_failed_publication(path: &Path, temporary: &Path, published: Option<PublishedInode>) {
+    if let Some(published) = published
+        && fs::symlink_metadata(path)
+            .map(|metadata| published.matches(&metadata))
+            .unwrap_or(false)
+    {
+        let _ = fs::remove_file(path);
+    }
+    let _ = fs::remove_file(temporary);
+    let _ = sync_parent(path);
 }
 
 fn unix_seconds() -> Result<i64> {

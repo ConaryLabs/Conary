@@ -7,9 +7,13 @@ cd "$repo_root"
 workspace_manifest="Cargo.toml"
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
+site_deploy_workflow=".github/workflows/deploy-site.yml"
 candidate_build_workflow=".github/workflows/build-remi-candidate.yml"
 candidate_deploy_workflow=".github/workflows/deploy-remi-candidate.yml"
 native_oracle_export_workflow=".github/workflows/export-remi-native-oracle-inputs.yml"
+conversion_benchmark_workflow=".github/workflows/remi-conversion-benchmark.yml"
+r2_durability_workflow=".github/workflows/remi-r2-durability.yml"
+conversion_workflow_checker="scripts/check-remi-conversion-workflow.py"
 native_oracle_transport_verifier="scripts/verify-native-oracle-input-transport.py"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
 candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
@@ -154,8 +158,12 @@ for required_file in \
     "$workspace_manifest" \
     "$release_build" \
     "$deploy_workflow" \
+    "$site_deploy_workflow" \
     "$candidate_build_workflow" \
     "$candidate_deploy_workflow" \
+    "$conversion_benchmark_workflow" \
+    "$r2_durability_workflow" \
+    "$conversion_workflow_checker" \
     "$candidate_predeployment_filter" \
     "$candidate_postdeployment_filter" \
     "$candidate_artifact_script" \
@@ -448,6 +456,7 @@ require_job_match "$native_oracle_export_workflow" export 'actions/download-arti
 require_job_match "$native_oracle_export_workflow" export 'conary-remi-deploy export-native-oracle-inputs[\s\S]*FEDORA_CANDIDATE[\s\S]*UBUNTU_CANDIDATE[\s\S]*ARCH_CANDIDATE[\s\S]*sha256sum "\$local_transport"[\s\S]*verify-native-oracle-input-transport\.py[\s\S]*--expected-candidate "fedora-44=\$\{FEDORA_CANDIDATE\}"[\s\S]*--expected-candidate "ubuntu-26\.04=\$\{UBUNTU_CANDIDATE\}"[\s\S]*--expected-candidate "arch=\$\{ARCH_CANDIDATE\}"' 'native-oracle export fixed helper and independent exact transport verification'
 require_job_match "$native_oracle_export_workflow" export 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f[\s\S]*native-oracle-input-verification\.json[\s\S]*remi-deployment-inspection\.json[\s\S]*compression-level: 0[\s\S]*retention-days: 7' 'native-oracle export exact short-lived handoff artifact'
 forbid_match "$native_oracle_export_workflow" 'bash -s|/v1/admin|conversion-crawl|promotion-(prove|activate)|sudo -n (bash|sh)|rm -rf' 'native-oracle export generic or mutating authority'
+python3 -I "$conversion_workflow_checker" .
 require_match "$native_oracle_transport_verifier" 'object_pairs_hook=reject_duplicate_key[\s\S]*canonical_json\(value\) != data[\s\S]*tarfile\.open\(path, mode="r:"\)[\s\S]*member\.isdir\(\) or member\.isreg\(\)[\s\S]*hashlib\.sha256\(data\)\.hexdigest\(\) != digest[\s\S]*set\(members\) != expected_names' 'native-oracle transport strict tar, canonical manifest, inventory, and byte verification'
 require_match "$native_oracle_transport_verifier" 'PUBLIC_PROFILES = \("fedora-44", "ubuntu-26\.04", "arch"\)[\s\S]*digest_json\(value\) != expected_digest[\s\S]*digest_json\(revision\) != observed_digest[\s\S]*observed_inventory != expected_inventory' 'native-oracle transport exact candidate, revision, source, and inventory bindings'
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'obsolete public verify URL'

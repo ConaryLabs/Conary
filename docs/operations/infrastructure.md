@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-28
-revision: 53
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, and current remote development tooling
+last_updated: 2026-08-29
+revision: 54
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS conversion benchmarking, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -100,6 +100,13 @@ workflow.
   and uses the same recoverable helper and source manifest. Dispatch must choose
   either `private-candidates` or `active-repopulation` completion. It creates no
   tag or release and is not a path for deploying an unmerged pull-request head.
+- Every protected workflow that can mutate the shared production host, stop or
+  probe Remi, pin its catalogs, or inspect/mutate its R2 authority uses the same
+  non-cancelling `deploy-and-verify` concurrency group: `deploy-and-verify`,
+  `deploy-remi-candidate`, `deploy-site`,
+  `export-remi-native-oracle-inputs`, `remi-conversion-benchmark`, and
+  `remi-r2-durability`. A stopped-service benchmark therefore cannot overlap a
+  deploy, frontend probe, native-oracle export, or durability operation.
 - Candidate deployment uses one fail-closed SSH option contract for every
   remote command and transfer: authentication is noninteractive, initial
   connection time is bounded, and protocol keepalives cover long refresh and
@@ -254,14 +261,60 @@ workflow.
   public-sanitized verification record, and the source deployment inspection;
   it grants no native-oracle production, conversion, proof, or activation
   authority.
+- Exact production conversion measurements use the protected
+  `remi-conversion-benchmark` workflow. Dispatch names one successful
+  `deploy-remi-candidate` run, a public profile, an immutable package key, and
+  an exact registered profile revision, and the exact size and SHA-256 of a
+  credential-free HTTPS source artifact. The workflow derives the deployed
+  commit and binary digest from the deployment inspection and candidate
+  manifest. The explicit revision digest lets two deployed binaries reopen the
+  same retained immutable authority even when a later refresh changes the
+  current candidate; Remi rejects an unregistered or mismatched revision before
+  conversion. Source bytes are downloaded and authenticated on the hosted
+  runner, transferred to one derived `/tmp` name, and never retained as an
+  Actions artifact. The production environment supplies the private key and an
+  exact `REMI_SSH_KNOWN_HOSTS` pin; the workflow rejects an entry that does not
+  bind the selected production host and never performs live host-key discovery.
+- The workflow installs the helper from its already-merged workflow authority
+  and calls only `benchmark-remi-conversion` with typed identities. The helper
+  reauthenticates the installed binary, configuration, and source bytes,
+  requires the live and isolated benchmark roots to be distinct directories on
+  the same XFS carrier, makes private trusted configuration and source copies
+  on that carrier, and runs exactly two pinned-revision iterations as `conary`.
+  `/work/remi-conversion-benchmarks` is the fixed plain mode-0700
+  `conary:conary` parent on XFS and outside `/conary`. When it is absent, the
+  helper creates it only after proving `/work` is plain and on the same XFS
+  carrier as `/conary`; when it
+  exists, the helper validates rather than repairs its ownership, mode, type,
+  location, and filesystem. It requires the service to be active before the
+  operation, stops it only after every preflight succeeds, and has trap-backed
+  restart and liveness recovery on success, benchmark failure, or signal.
+  Every retained benchmark-state mutation stays under a new
+  `/work/remi-conversion-benchmarks/<run-id>` root outside `/conary`; repeated
+  identities and preexisting transports fail closed.
+- The complete schema-v3 report remains mode 0600 on the production host. The
+  authenticated caller receives only `conversion-benchmark-public-v1.json`: a
+  strict Rust-produced projection that binds the exact raw-report byte count
+  and SHA-256, preserves authority, timing, process, VFS, work, and output
+  counters, and removes binary paths, root paths and device IDs, free-form
+  failure text, and skipped-phase explanations. The workflow independently
+  binds that projection to the deployment and dispatch identities, requires one
+  successful cold and one hot repetition with equal proof digests and
+  byte/count geometry, and preserves each repetition's independently measured
+  reopen and complete-hash duration. Every reported root must prove XFS. The
+  workflow retains the public projection, source-byte verification, candidate
+  manifest, and deployment inspection for 30 days. It never uploads the raw
+  report, source bytes, source URL, SSH material, or host-local paths.
 - Production R2 inventory and backfill use the manually dispatched
   `remi-r2-durability` workflow after its exact `commit_sha` is merged into
   `main` and deployed. The protected job enters through the normal Remi SSH
   boundary and calls the typed operation on the loopback-only admin listener;
-  it does not copy an admin bearer token off the host. `plan` is read-only.
-  `apply` fails unless a fresh post-upload R2 listing proves complete, and the
-  retained artifact is aggregate `public-sanitized` evidence with diagnostic
-  samples removed.
+  it does not copy an admin bearer token off the host. The workflow shares the
+  non-cancelling `deploy-and-verify` concurrency group, so neither its read nor
+  mutation phase can overlap a deployment or a stopped-service benchmark.
+  `plan` is read-only. `apply` fails unless a fresh post-upload R2 listing proves
+  complete, and the retained artifact is aggregate `public-sanitized` evidence
+  with diagnostic samples removed.
 - After completeness is established, `[r2].enabled = true` is the single
   authority switch: startup requires usable R2 configuration, public chunk
   reads use presigned redirects, and local chunks are an R2-verified LRU cache
@@ -307,7 +360,9 @@ workflow.
   repository-held production key. The workflow runs the relevant frontend
   checks, verifies the selected public home content and Remi API when
   applicable, and always verifies the branded status-aware 404 after a main
-  site deployment.
+  site deployment. It shares the non-cancelling `deploy-and-verify` concurrency
+  group so publication and its Remi probes cannot overlap any other production
+  host transition or stopped-service benchmark.
 - `deploy/configure-site-routing.sh` owns the host-side transition from the old
   SPA fallback to static routing. It requires one unambiguous nginx server for
   `conary.io` rooted at `/conary/site`, backs up the config, changes missing

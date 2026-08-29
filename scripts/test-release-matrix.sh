@@ -275,10 +275,17 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/scripts/release-matrix.sh" "$repo/scripts/release-matrix.sh"
     cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
+    cp "$REPO_ROOT/.github/workflows/deploy-site.yml" "$repo/.github/workflows/deploy-site.yml"
     cp "$REPO_ROOT/.github/workflows/build-remi-candidate.yml" "$repo/.github/workflows/build-remi-candidate.yml"
     cp "$REPO_ROOT/.github/workflows/deploy-remi-candidate.yml" "$repo/.github/workflows/deploy-remi-candidate.yml"
     cp "$REPO_ROOT/.github/workflows/export-remi-native-oracle-inputs.yml" \
         "$repo/.github/workflows/export-remi-native-oracle-inputs.yml"
+    cp "$REPO_ROOT/.github/workflows/remi-conversion-benchmark.yml" \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml"
+    cp "$REPO_ROOT/.github/workflows/remi-r2-durability.yml" \
+        "$repo/.github/workflows/remi-r2-durability.yml"
+    cp "$REPO_ROOT/scripts/check-remi-conversion-workflow.py" \
+        "$repo/scripts/check-remi-conversion-workflow.py"
     cp "$REPO_ROOT/scripts/remi-candidate-artifact.sh" "$repo/scripts/remi-candidate-artifact.sh"
     cp "$REPO_ROOT/scripts/verify-native-oracle-input-transport.py" \
         "$repo/scripts/verify-native-oracle-input-transport.py"
@@ -1785,6 +1792,308 @@ test_check_release_matrix_rejects_loose_native_oracle_transport() {
         "native-oracle transport strict tar, canonical manifest, inventory, and byte verification"
 }
 
+test_check_release_matrix_rejects_unserialized_site_deployment() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-site.yml" \
+        '  group: deploy-and-verify' \
+        '  group: deploy-site-production'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "site deployment serialized with production host authority"
+}
+
+test_check_release_matrix_rejects_unserialized_r2_durability() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-r2-durability.yml" \
+        '  group: deploy-and-verify' \
+        '  group: remi-r2-durability-production'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "R2 durability serialized with production host authority"
+}
+
+test_check_release_matrix_rejects_unprotected_conversion_benchmark_source() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '              and .conclusion == "success"' \
+        '              and .conclusion == "failure"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark exact successful protected deployment source"
+}
+
+test_check_release_matrix_rejects_nonproduction_conversion_benchmark() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '    environment: production' \
+        $'    environment: staging\n    # environment: production'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark protected merged-main operator boundary"
+}
+
+test_check_release_matrix_rejects_unserialized_conversion_benchmark() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '  group: deploy-and-verify' \
+        $'  group: remi-conversion-benchmark-production\n  # group: deploy-and-verify'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark serialized with deployment and verification"
+}
+
+test_check_release_matrix_rejects_raw_conversion_benchmark_upload() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '            remi-conversion-benchmark-public-v1.json' \
+        $'            remi-conversion-benchmark-public-v1.json\n            conversion-benchmark-v3.json'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark public-only retained evidence"
+}
+
+test_check_release_matrix_rejects_non_xfs_conversion_benchmark_evidence() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                and .filesystem_type == "0x58465342"' \
+        '                and .filesystem_type == "ext4"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_unbound_conversion_benchmark_revision() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          REQUESTED_REVISION: ${{ inputs.profile_revision_sha256 }}' \
+        '          REQUESTED_REVISION: ${{ inputs.package_key_sha256 }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark explicit comparable registered revision"
+}
+
+test_check_release_matrix_rejects_unprotected_conversion_benchmark_operator_checkout() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]] || {' \
+        '          [[ "$(git rev-parse HEAD^)" == "$WORKFLOW_SHA" ]] || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark protected merged-main operator boundary"
+}
+
+test_check_release_matrix_rejects_variable_conversion_benchmark_transport() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          remote_transport="/tmp/remi-conversion-benchmark-${benchmark_id}.json"' \
+        '          remote_transport="/tmp/remi-conversion-benchmark-${benchmark_id}-raw.json"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_timing_as_hot_output_identity() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                independent_transport_reopen_bytes,' \
+        $'                independent_transport_reopen_bytes,\n                independent_transport_reopen_ms,'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_partial_xfs_conversion_benchmark_proof() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '              and all(.environment.roots[];' \
+        '              and any(.environment.roots[];'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_fractional_conversion_benchmark_timing() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                  | type == "number" and . >= 0 and floor == .)' \
+        '                  | type == "number" and . >= 0)'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_extra_conversion_benchmark_upload() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        $'            remi-candidate-manifest.json\n          if-no-files-found: error' \
+        $'            remi-candidate-manifest.json\n            unexpected-benchmark-debug.json\n          if-no-files-found: error'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark public-only retained evidence"
+}
+
+test_check_release_matrix_requires_pinned_conversion_benchmark_host() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KEY }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark pinned production SSH host identity"
+}
+
+test_check_release_matrix_rejects_live_conversion_benchmark_host_discovery() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          ssh_opts=(' \
+        $'          ssh-keyscan "$host" >> "$known_hosts"\n          ssh_opts=('
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_commented_conversion_benchmark_permissions() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '  actions: read' \
+        $'  actions: write\n  # actions: read'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark read-only permissions"
+}
+
+test_check_release_matrix_rejects_commented_conversion_benchmark_input() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        $'      profile_revision_sha256:\n        description: Exact registered profile revision to hold constant across benchmark runs.\n        required: true' \
+        $'      profile_revision_sha256:\n        description: Exact registered profile revision to hold constant across benchmark runs.\n        required: false\n        # required: true'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark typed dispatch inputs"
+}
+
+test_check_release_matrix_rejects_commented_conversion_benchmark_checkout_ref() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          ref: ${{ github.workflow_sha }}' \
+        $'          ref: ${{ github.sha }}\n          # ref: ${{ github.workflow_sha }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark exact workflow-revision checkout ref"
+}
+
+test_check_release_matrix_rejects_commented_conversion_benchmark_host_pin() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          if ! ssh-keygen -F "$host" -f "$known_hosts" >/dev/null; then' \
+        $'          if ! true; then\n            # if ! ssh-keygen -F "$host" -f "$known_hosts" >/dev/null; then'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_duplicate_conversion_benchmark_authority() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    cat >> "$repo/.github/workflows/remi-conversion-benchmark.yml" <<'YAML'
+
+concurrency:
+  group: deploy-and-verify
+  cancel-in-progress: false
+YAML
+
+    assert_check_release_matrix_fails "$repo" "duplicate key 'concurrency'"
+}
+
+test_check_release_matrix_rejects_aliased_conversion_benchmark_authority() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        'concurrency:' \
+        'concurrency: &shared_concurrency'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "forbidden YAML anchors or aliases"
+}
+
+test_conversion_workflow_checker_fails_without_pyyaml() {
+    local repo output status
+    repo="$(create_release_policy_fixture)"
+
+    set +e
+    output="$(python3 -I -S "$REPO_ROOT/scripts/check-remi-conversion-workflow.py" "$repo" 2>&1)"
+    status=$?
+    set -e
+
+    [[ "$status" -ne 0 ]] || fail "conversion workflow checker passed without PyYAML"
+    assert_contains \
+        "$output" \
+        "python3-yaml is required for structural GitHub workflow policy" \
+        "missing PyYAML failure must be explicit"
+}
+
 test_check_release_matrix_rejects_unverified_remi_suite_bundle() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2285,6 +2594,29 @@ main() {
         test_check_release_matrix_rejects_nonproduction_native_oracle_export
         test_check_release_matrix_rejects_unserialized_native_oracle_export
         test_check_release_matrix_rejects_loose_native_oracle_transport
+        test_check_release_matrix_rejects_unserialized_site_deployment
+        test_check_release_matrix_rejects_unserialized_r2_durability
+        test_check_release_matrix_rejects_unprotected_conversion_benchmark_source
+        test_check_release_matrix_rejects_nonproduction_conversion_benchmark
+        test_check_release_matrix_rejects_unserialized_conversion_benchmark
+        test_check_release_matrix_rejects_raw_conversion_benchmark_upload
+        test_check_release_matrix_rejects_non_xfs_conversion_benchmark_evidence
+        test_check_release_matrix_rejects_unbound_conversion_benchmark_revision
+        test_check_release_matrix_rejects_unprotected_conversion_benchmark_operator_checkout
+        test_check_release_matrix_rejects_variable_conversion_benchmark_transport
+        test_check_release_matrix_rejects_timing_as_hot_output_identity
+        test_check_release_matrix_rejects_partial_xfs_conversion_benchmark_proof
+        test_check_release_matrix_rejects_fractional_conversion_benchmark_timing
+        test_check_release_matrix_rejects_extra_conversion_benchmark_upload
+        test_check_release_matrix_requires_pinned_conversion_benchmark_host
+        test_check_release_matrix_rejects_live_conversion_benchmark_host_discovery
+        test_check_release_matrix_rejects_commented_conversion_benchmark_permissions
+        test_check_release_matrix_rejects_commented_conversion_benchmark_input
+        test_check_release_matrix_rejects_commented_conversion_benchmark_checkout_ref
+        test_check_release_matrix_rejects_commented_conversion_benchmark_host_pin
+        test_check_release_matrix_rejects_duplicate_conversion_benchmark_authority
+        test_check_release_matrix_rejects_aliased_conversion_benchmark_authority
+        test_conversion_workflow_checker_fails_without_pyyaml
         test_check_release_matrix_rejects_unverified_remi_suite_bundle
         test_check_release_matrix_rejects_merge_validation_production_probes
         test_check_release_matrix_rejects_missing_post_deploy_remi_readiness

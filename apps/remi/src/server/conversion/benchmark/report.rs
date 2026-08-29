@@ -5,14 +5,16 @@ use super::{
     CONVERSION_BENCHMARK_SCHEMA_V3, ConversionBenchmarkCatalogAuthority,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkEvidence,
     ConversionBenchmarkOutcome, ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage,
-    ConversionBenchmarkReportV3, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, REPORT_FILE_NAME,
-    conversion_core_duration, sync_parent, validate_sha256,
+    ConversionBenchmarkReportV3, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, PublishedInode,
+    REPORT_FILE_NAME, conversion_core_duration, rollback_failed_publication, sync_parent,
+    validate_sha256,
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use conary_core::repository::catalog::{portable_chunk_count_v1, portable_manifest_size_v1};
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 pub(super) fn validate_report(report: &ConversionBenchmarkReportV3) -> Result<()> {
@@ -428,34 +430,131 @@ pub(super) fn publish_and_reopen_report(
     path: &Path,
     report: &ConversionBenchmarkReportV3,
 ) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            return Err(anyhow!(
+                "benchmark report already exists: {}",
+                path.display()
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let parent = path
+        .parent()
+        .context("benchmark report path has no parent")?;
+    let parent_metadata = fs::symlink_metadata(parent)
+        .with_context(|| format!("inspect benchmark report parent {}", parent.display()))?;
     ensure!(
-        !path.exists(),
-        "benchmark report already exists: {}",
-        path.display()
+        parent_metadata.file_type().is_dir() && !parent_metadata.file_type().is_symlink(),
+        "benchmark report parent must be a plain directory"
     );
-    let bytes = serde_json::to_vec_pretty(report)?;
+
+    let mut bytes = serde_json::to_vec_pretty(report)?;
+    bytes.push(b'\n');
     let temporary =
         path.with_file_name(format!(".{REPORT_FILE_NAME}.{}.tmp", uuid::Uuid::new_v4()));
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    output.write_all(&bytes)?;
-    output.write_all(b"\n")?;
-    output.sync_all()?;
-    drop(output);
-    fs::rename(&temporary, path)?;
-    sync_parent(path)?;
+    let mut linked_inode = None;
+    let publication = (|| -> Result<PublishedInode> {
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        output.set_permissions(fs::Permissions::from_mode(0o600))?;
+        output.write_all(&bytes)?;
+        output.sync_all()?;
+        let staged_metadata = output.metadata()?;
+        let staged_inode = PublishedInode::from_metadata(&staged_metadata);
 
-    let reopened_bytes = fs::read(path)?;
-    let reopened: ConversionBenchmarkReportV3 = serde_json::from_slice(&reopened_bytes)
-        .context("strictly reopen published conversion benchmark schema v3")?;
-    validate_report(&reopened)?;
-    ensure!(
-        serde_json::to_value(&reopened)? == serde_json::to_value(report)?,
-        "reopened conversion benchmark report changed value"
-    );
-    Ok(())
+        match fs::hard_link(&temporary, path) {
+            Ok(()) => linked_inode = Some(staged_inode),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(anyhow!(
+                    "benchmark report already exists: {}",
+                    path.display()
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+        let published_metadata = fs::symlink_metadata(path)?;
+        ensure!(
+            published_metadata.file_type().is_file()
+                && published_metadata.dev() == staged_metadata.dev()
+                && published_metadata.ino() == staged_metadata.ino()
+                && published_metadata.nlink() == 2
+                && published_metadata.mode() & 0o7777 == 0o600,
+            "published benchmark report is not the private staged file"
+        );
+        fs::remove_file(&temporary)?;
+        let final_metadata = fs::symlink_metadata(path)?;
+        ensure!(
+            final_metadata.file_type().is_file()
+                && final_metadata.dev() == staged_metadata.dev()
+                && final_metadata.ino() == staged_metadata.ino()
+                && final_metadata.nlink() == 1
+                && final_metadata.mode() & 0o7777 == 0o600,
+            "published benchmark report retained an unexpected link"
+        );
+        sync_parent(path)?;
+        Ok(staged_inode)
+    })();
+    let published_inode = match publication {
+        Ok(published_inode) => published_inode,
+        Err(error) => {
+            rollback_failed_publication(path, &temporary, linked_inode);
+            return Err(error);
+        }
+    };
+
+    let reopen = (|| -> Result<()> {
+        let named_metadata = fs::symlink_metadata(path)?;
+        let mut reopened_input = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)?;
+        let opened_metadata = reopened_input.metadata()?;
+        ensure!(
+            named_metadata.file_type().is_file()
+                && named_metadata.dev() == opened_metadata.dev()
+                && named_metadata.ino() == opened_metadata.ino()
+                && opened_metadata.nlink() == 1
+                && opened_metadata.mode() & 0o7777 == 0o600,
+            "published benchmark report changed before durable reopen"
+        );
+        let read_limit = u64::try_from(bytes.len())
+            .context("published benchmark report size exceeds u64")?
+            .saturating_add(1);
+        let mut reopened_bytes = Vec::with_capacity(bytes.len());
+        (&mut reopened_input)
+            .take(read_limit)
+            .read_to_end(&mut reopened_bytes)?;
+        let current_metadata = fs::symlink_metadata(path)?;
+        ensure!(
+            current_metadata.file_type().is_file()
+                && current_metadata.dev() == opened_metadata.dev()
+                && current_metadata.ino() == opened_metadata.ino()
+                && current_metadata.nlink() == 1
+                && current_metadata.mode() & 0o7777 == 0o600,
+            "published benchmark report changed during durable reopen"
+        );
+        ensure!(
+            reopened_bytes == bytes,
+            "reopened conversion benchmark report changed bytes"
+        );
+        let reopened: ConversionBenchmarkReportV3 = serde_json::from_slice(&reopened_bytes)
+            .context("strictly reopen published conversion benchmark schema v3")?;
+        validate_report(&reopened)?;
+        ensure!(
+            serde_json::to_value(&reopened)? == serde_json::to_value(report)?,
+            "reopened conversion benchmark report changed value"
+        );
+        Ok(())
+    })();
+    if reopen.is_err() {
+        rollback_failed_publication(path, &temporary, Some(published_inode));
+    }
+    reopen
 }
 
 #[cfg(test)]
@@ -470,6 +569,7 @@ mod tests {
         ConversionPhase, ConversionSourceIdentity, ConversionTimingReport,
     };
     use conary_core::repository::catalog::CatalogVerificationEvidenceV1;
+    use std::os::unix::fs::symlink;
     use std::time::Duration;
 
     fn valid_process_usage() -> ConversionBenchmarkProcessUsage {
@@ -694,6 +794,33 @@ mod tests {
     #[test]
     fn accepts_fully_bound_cold_and_hot_repetition_evidence() {
         validate_report(&valid_report()).unwrap();
+    }
+
+    #[test]
+    fn raw_report_publication_never_overwrites_existing_targets() {
+        let root = tempfile::tempdir().unwrap();
+        let regular_path = root.path().join("existing-raw.json");
+        fs::write(&regular_path, b"existing raw evidence").unwrap();
+        let error = publish_and_reopen_report(&regular_path, &valid_report())
+            .expect_err("existing raw report must not be replaced");
+        assert!(error.to_string().contains("already exists"));
+        assert_eq!(fs::read(&regular_path).unwrap(), b"existing raw evidence");
+
+        let dangling_path = root.path().join("dangling-raw.json");
+        symlink("missing-raw-target", &dangling_path).unwrap();
+        let error = publish_and_reopen_report(&dangling_path, &valid_report())
+            .expect_err("dangling raw target must not be replaced");
+        assert!(error.to_string().contains("already exists"));
+        assert!(
+            fs::symlink_metadata(&dangling_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(&dangling_path).unwrap(),
+            Path::new("missing-raw-target")
+        );
     }
 
     #[test]
