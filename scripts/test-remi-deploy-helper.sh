@@ -1126,7 +1126,7 @@ test_conversion_benchmark_rejects_non_xfs_before_downtime() {
     [[ ! -e "/tmp/remi-conversion-benchmark-${run_id}.json" ]]
 }
 
-test_conversion_benchmark_rejects_work_layout_mode_drift_before_downtime() {
+test_conversion_benchmark_rejects_work_mode_drift_before_downtime() {
     local run_id="benchmark-work-mode-drift-$$"
     local fake_root="${tmpdir}/root-${run_id}"
     local stdout_file="${tmpdir}/${run_id}.stdout"
@@ -1141,12 +1141,37 @@ test_conversion_benchmark_rejects_work_layout_mode_drift_before_downtime() {
     status=$?
     set -e
     [[ "$status" == "1" ]] ||
-        fail "work-layout benchmark preflight returned status $status instead of 1"
+        fail "work-mode benchmark preflight returned status $status instead of 1"
     assert_benchmark_failure_envelope \
-        "$stdout_file" "$stderr_file" work-root-layout 1 not-stopped "$fake_root"
+        "$stdout_file" "$stderr_file" work-root-mode 1 not-stopped "$fake_root"
     [[ ! -s "$fake_root/service-log" ]]
     [[ "$(cat "$fake_root/service-state")" == "active" ]]
     [[ ! -e "$fake_root/work/remi-conversion-benchmarks/$run_id" ]]
+    [[ ! -e "/tmp/remi-conversion-benchmark-${run_id}.json" ]]
+}
+
+test_conversion_benchmark_rejects_work_type_before_downtime() {
+    local run_id="benchmark-symlink-work-$$"
+    local fake_root="${tmpdir}/root-${run_id}"
+    local stdout_file="${tmpdir}/${run_id}.stdout"
+    local stderr_file="${tmpdir}/${run_id}.stderr"
+    local status
+    make_benchmark_fixture "$fake_root" "$run_id"
+    rmdir "$fake_root/work"
+    ln -s "$fake_root/conary" "$fake_root/work"
+
+    set +e
+    run_valid_conversion_benchmark "$fake_root" "$run_id" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" == "1" ]] ||
+        fail "work-type benchmark preflight returned status $status instead of 1"
+    assert_benchmark_failure_envelope \
+        "$stdout_file" "$stderr_file" work-root-type 1 not-stopped "$fake_root"
+    [[ ! -s "$fake_root/service-log" ]]
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ ! -e "$fake_root/conary/remi-conversion-benchmarks/$run_id" ]]
     [[ ! -e "/tmp/remi-conversion-benchmark-${run_id}.json" ]]
 }
 
@@ -1270,14 +1295,6 @@ test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets() {
     expect_fail "symlinked benchmark configuration" \
         run_valid_conversion_benchmark "$fake_root" "$run_id"
 
-    run_id="benchmark-symlink-work-$$"
-    fake_root="${tmpdir}/root-${run_id}"
-    make_benchmark_fixture "$fake_root" "$run_id"
-    rmdir "$fake_root/work"
-    ln -s "$fake_root/conary" "$fake_root/work"
-    expect_fail "symlinked benchmark XFS container" \
-        run_valid_conversion_benchmark "$fake_root" "$run_id"
-
     run_id="benchmark-existing-run-$$"
     fake_root="${tmpdir}/root-${run_id}"
     make_benchmark_fixture "$fake_root" "$run_id"
@@ -1310,7 +1327,6 @@ test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets() {
         "${tmpdir}/root-benchmark-invalid-source-$$" \
         "${tmpdir}/root-benchmark-symlink-source-$$" \
         "${tmpdir}/root-benchmark-symlink-config-$$" \
-        "${tmpdir}/root-benchmark-symlink-work-$$" \
         "${tmpdir}/root-benchmark-existing-run-$$" \
         "${tmpdir}/root-benchmark-existing-transport-$$" \
         "${tmpdir}/root-benchmark-insecure-root-$$"; do
@@ -1372,7 +1388,8 @@ main() {
     test_conversion_benchmark_rejects_unbound_or_public_raw_evidence
     test_conversion_benchmark_restart_and_health_fail_closed
     test_conversion_benchmark_rejects_non_xfs_before_downtime
-    test_conversion_benchmark_rejects_work_layout_mode_drift_before_downtime
+    test_conversion_benchmark_rejects_work_mode_drift_before_downtime
+    test_conversion_benchmark_rejects_work_type_before_downtime
     test_conversion_benchmark_rejects_distinct_xfs_device_before_downtime
     test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets
     test_install_helper_requires_exact_digest
