@@ -122,10 +122,10 @@ iterate_separator_out="$(
     cd "$fixture"
     env -u RUSTC_WRAPPER -u SCCACHE_DIR -u CARGO_TARGET_DIR \
         PATH="$fake_bin:$PATH" \
-        "$script" iterate -- test -p conary -- --nocapture 2>&1
+        "$script" iterate -- test -p conary -- --profile downstream --release 2>&1
 )"
 assert_contains "$iterate_separator_out" \
-    'cargo-argv=<test><--profile><fast-release><-p><conary><--><--nocapture>'
+    'cargo-argv=<test><--profile><fast-release><-p><conary><--><--profile><downstream><--release>'
 
 if iterate_release_out="$(
     cd "$fixture"

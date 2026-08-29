@@ -201,6 +201,7 @@ case "$action" in
                 ;;
         esac
         for argument in "$@"; do
+            [[ "$argument" == "--" ]] && break
             case "$argument" in
                 --release|--profile|--profile=*)
                     fail "iterate owns --profile fast-release; remove: $argument"
