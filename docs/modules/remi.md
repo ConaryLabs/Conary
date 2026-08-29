@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
-revision: 94
-summary: Document batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 95
+summary: Document the strict isolated schema-v2 conversion benchmark, batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -1384,8 +1384,9 @@ Implementation ownership lives in child modules:
   timing.
 - `conversion/types.rs`: public conversion result DTOs, scriptlet package
   metadata projection, and conversion benchmark evidence records.
-- `conversion/benchmark.rs`: benchmark sampling, scan-only scriptlet evidence,
-  and benchmark conversion wrappers.
+- `conversion/benchmark.rs`: exact immutable-authority subject admission,
+  isolated benchmark-state construction, strict schema-v2 measurement, and
+  atomic report publication and reopen.
 - `conversion/lookup.rs`: exact immutable-catalog package selection, verified
   source-snapshot binding, prepared key-material lookup, and upstream download.
 - `conversion/metadata.rs`: safe CCS filenames, profile-backed parser dispatch,
@@ -1418,58 +1419,62 @@ listing or lifecycle-summary behavior changes, also run `cargo test -p remi`.
 
 ## Conversion Benchmark Evidence
 
-Remi includes a local benchmark command for measuring exact cold and warm
-conversion work before making public latency claims. With no `--package`
-arguments, it selects three distinct, not-currently-converted records from one
-pinned active profile catalog: the smallest positive-size artifact, the median
-artifact by size, and the largest artifact. The emitted source checksum,
-version, architecture, and byte size pin the subjects selected from that exact
-immutable profile revision.
+Remi includes a strict, network-independent benchmark command for measuring one
+exact native artifact's cold conversion and exact hot-cache path before making
+latency claims. The caller supplies an immutable-catalog package key and the
+corresponding local artifact. Remi admits the artifact only when its size,
+digest, package identity, exact profile revision, source snapshot, parser
+configuration, trust policy, and repository identity agree with the deployed
+catalog authority. Omit `--revision` to select the active revision; provide it
+to benchmark a registered private revision.
 
 ```bash
-cargo run -p remi -- conversion-benchmark \
-  --db /var/lib/conary/conary.db \
-  --chunk-dir /var/lib/conary/data/chunks \
-  --cache-dir /var/lib/conary/data/cache \
-  --distro fedora \
-  --hardware-label remi-production-i7-8700-raid1 \
-  --iterations 2 \
-  --jsonl
+cargo run -p remi --release -- conversion-benchmark \
+  --config /etc/conary/remi.toml \
+  --work-root /var/tmp/remi-conversion-fedora-example \
+  --profile fedora-44 \
+  --revision <registered-profile-revision-sha256> \
+  --package-key <immutable-catalog-package-key-sha256> \
+  --source-artifact /var/tmp/example.rpm \
+  --hardware-label remi-production-i7-8700-xfs \
+  --iterations 2
 ```
 
-Explicit repeated `--package` arguments replace automatic size-class
-selection. An explicit package may already be converted, so its records are a
-cold baseline only when `cache_state` says `cold`; the tool never relabels a
-hot result. Each sample is resolved to one exact version and architecture
-before its iterations start, and the run fails if that source identity changes
-between selection and conversion.
+`--work-root` must name a new directory outside the live Remi storage root.
+The command snapshots the operational SQLite database, clears runtime
+conversion/cache state in that copy, stages the admitted source artifact, and
+places every mutation below the work root. Deployed catalogs, signing keys, and
+the source database remain read-only authorities; the benchmark cannot warm or
+otherwise mutate live conversion state. Use a distinct new work root for every
+subject and revision being compared.
 
-Schema-v1 evidence records the operator-defined hardware label, Remi version,
-source commit and dirty state, OS, kernel, CPU model, logical CPU count, and
-memory size. A commit-worthy baseline requires an exact `source_commit`,
-`source_dirty: false`, and the full JSONL output. Per-sample evidence separates
-phase latency from deterministic work: downloaded and hashed source bytes,
-CCS and signed-object sizes, verified-CAS hits, misses, bytes, staged-data and
-canonical-name barriers, and explicit fallback syncs, plus R2 HEAD hits/misses,
-PUT count, and bytes written. These counters
-are regression inputs; they do not weaken verification or storage authority.
-The first committed small/median/multi-GiB baseline and its measured
-optimization are recorded in [performance evidence](../performance/README.md).
+The strict `conversion-benchmark-v2.json` report records the exact binary path
+and digest, source commit and dirty state, Remi and host identity, CPU and
+memory, and the device, filesystem, and block size for every authority and
+scratch root. It pins the full profile/source authority and subject identity.
+Each repetition separates `conversion_core` from `end_to_end`, records process
+wall/user/system time, peak RSS, faults, block I/O, context switches, and thread
+and runnable-thread maxima, and retains phase timings and deterministic work
+counters. Successful cold evidence independently reopens the signed transport
+and hashes the complete CCS archive; the report records the CCS, transport,
+and canonical signed-object-set identities and byte counts.
 
-When benchmark R2 arguments are omitted, benchmark JSON records the historical
-schema-v1 phase name `r2_write_through` as skipped. To measure cloud durability,
-pass `--r2-endpoint`, `--r2-bucket`,
-`--r2-prefix`, and `--r2-region` with `CONARY_R2_ACCESS_KEY` and
-`CONARY_R2_SECRET_KEY` set in the environment.
+The first repetition must be `cold`. Every successor must be an exact `hot`
+hit with no conversion-core work. Schema-v2 validation rejects inconsistent
+authority, iteration, cache-state, timing, or output proof before atomically
+publishing the report, then deserializes and compares the durable report before
+success. A commit-worthy baseline uses a clean exact source commit, preserves
+the complete JSON report, and compares identical authority, subject,
+environment, and signed-object-set identities. The recorded counters are
+regression evidence; they do not weaken conversion verification or storage
+authority. Performance baselines and measured optimizations live in
+[performance evidence](../performance/README.md).
 
-The benchmark runs the real conversion contract and writes CCS/CAS cache,
-conversion-database, and optional R2 state through the normal service path.
-Use a copied database plus scratch cache/chunk paths and a benchmark R2 prefix
-for experiments. Point it at live state only when the resulting conversions
-and cache warming are intentional operator actions.
-The former scan-only corpus tokenizer was removed because line splitting and
-manual command lists duplicated the formal shell/parser pipeline and produced
-non-authoritative evidence that required ongoing heuristic maintenance.
+The isolated harness exercises local verified-CAS durability separately from
+cloud publication. `r2_write_through` is therefore recorded as skipped with a
+typed reason; the command has no R2 credentials or destination arguments.
+Cloud durability performance requires a separate benchmark against an
+explicitly isolated R2 prefix.
 
 ## Chunk Garbage Collection
 
