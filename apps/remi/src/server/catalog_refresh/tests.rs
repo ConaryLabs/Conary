@@ -2,13 +2,13 @@
 
 use super::*;
 use conary_core::db::models::{
-    NativeSourceEcosystem, NativeSourceStream, RepositoryPolicyScope, RepositorySourcePolicy,
-    RepositoryUpdateMode,
+    NativeSourceEcosystem, NativeSourceStream, RemiCatalogResource, RepositoryPolicyScope,
+    RepositorySourcePolicy, RepositoryUpdateMode,
 };
 use conary_core::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,
     ProfileSourceMemberV2, SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
-    verify_source_catalog_bundle,
+    verify_registered_source_catalog_bundle,
 };
 use conary_core::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
@@ -224,9 +224,13 @@ fn profile_reuse_requires_the_complete_member_and_projection_contract() {
     ));
 }
 
-#[test]
-fn exact_reuse_skips_profile_candidate_construction() {
-    let fixture = ActiveCatalogFixture::new();
+fn stage_exact_reuse(
+    fixture: &ActiveCatalogFixture,
+) -> (
+    StagedProfileCatalog,
+    RemiCatalogPhysicalAttestation,
+    tempfile::TempDir,
+) {
     let profile = "fedora-44";
     let revision = fixture.candidate(profile, 1, Vec::new());
     let selection = ProfileRevisionSelection {
@@ -237,27 +241,28 @@ fn exact_reuse_skips_profile_candidate_construction() {
         .authority()
         .open_selected_profile(&selection)
         .expect("open exact reusable profile");
+    let expected_profile_physical = reusable.physical_attestation().clone();
     let members = reusable.manifest().members.clone();
     let conn = fixture.connection();
     let sources = members
         .iter()
         .map(|member| {
-            let manifest_json = conn
-                .query_row(
-                    "SELECT manifest_json FROM remi_catalog_resources
-                     WHERE resource_sha256 = ?1 AND resource_kind = 'source_snapshot'",
-                    [&member.source_snapshot_sha256],
-                    |row| row.get::<_, String>(0),
-                )
-                .expect("read exact source manifest");
+            let resource =
+                RemiCatalogResource::find_by_sha256(&conn, &member.source_snapshot_sha256)
+                    .expect("read exact source resource")
+                    .expect("registered exact source resource");
             let manifest: SourceSnapshotV1 =
-                serde_json::from_str(&manifest_json).expect("parse exact source manifest");
+                serde_json::from_str(&resource.manifest_json).expect("parse exact source manifest");
             let path = fixture
                 .catalog_dir()
                 .join("sources")
                 .join(&member.source_snapshot_sha256);
-            let reader =
-                verify_source_catalog_bundle(&path, &manifest).expect("reopen exact source bundle");
+            let reader = verify_registered_source_catalog_bundle(
+                &path,
+                &manifest,
+                &resource.physical_attestation.portable_manifest,
+            )
+            .expect("reopen exact source bundle");
             VerifiedStagedSourceCatalog {
                 staged: StagedSourceCatalog {
                     ordinal: member.ordinal,
@@ -266,7 +271,11 @@ fn exact_reuse_skips_profile_candidate_construction() {
                     required: member.required,
                     manifest,
                     path,
-                    artifact: StagedSourceArtifact::DurableReuse,
+                    artifact: StagedSourceArtifact::DurableReuse {
+                        portable_manifest_attestation: resource
+                            .physical_attestation
+                            .portable_manifest,
+                    },
                 },
                 reader,
             }
@@ -280,26 +289,69 @@ fn exact_reuse_skips_profile_candidate_construction() {
             profile: profile.to_string(),
             members,
             sources,
-            candidate_run_dir: candidate_run_dir.clone(),
+            candidate_run_dir,
             scratch_admission: Arc::new(CatalogScratchCoordinator::default()),
         },
         Some(reusable),
     )
     .expect("reuse exact profile");
+    (staged, expected_profile_physical, candidate_root)
+}
+
+#[test]
+fn exact_reuse_skips_profile_candidate_construction() {
+    let fixture = ActiveCatalogFixture::new();
+    let (staged, expected_profile_physical, _candidate_root) = stage_exact_reuse(&fixture);
+    let candidate_run_dir = staged.candidate_run_dir.clone();
+    let conn = fixture.connection();
 
     assert!(matches!(staged.artifact, StagedProfileArtifact::Reused(_)));
     assert!(!candidate_run_dir.join("profile").exists());
     let published = publish_staged_profile(staged, fixture.catalog_dir())
         .expect("retain exact registered source and profile publications");
+    assert_eq!(published.physical_attestation, expected_profile_physical);
     assert_eq!(published.sources.len(), published.manifest.members.len());
     assert!(published.sources.iter().all(|source| {
-        source.path
-            == fixture
-                .catalog_dir()
-                .join("sources")
-                .join(source.manifest.manifest_sha256().unwrap())
+        let source_digest = source.manifest.manifest_sha256().unwrap();
+        let registered = RemiCatalogResource::find_by_sha256(&conn, &source_digest)
+            .unwrap()
+            .unwrap();
+        source.path == fixture.catalog_dir().join("sources").join(&source_digest)
+            && source.physical_attestation == registered.physical_attestation
     }));
     assert!(!candidate_run_dir.join("profile").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn exact_reuse_rejects_catalog_inode_replacement_before_publication_handoff() {
+    for target in ["source", "profile"] {
+        let fixture = ActiveCatalogFixture::new();
+        let (staged, _, candidate_root) = stage_exact_reuse(&fixture);
+        let catalog_path = match target {
+            "source" => staged.sources[0].path.join(CATALOG_FILE_NAME),
+            "profile" => fixture
+                .catalog_dir()
+                .join("profiles")
+                .join(&staged.manifest.profile)
+                .join(staged.manifest.manifest_sha256().unwrap())
+                .join(CATALOG_FILE_NAME),
+            _ => unreachable!(),
+        };
+        let replacement = candidate_root
+            .path()
+            .join(format!("{target}-replacement.sqlite"));
+        std::fs::copy(&catalog_path, &replacement).expect("copy exact replacement catalog");
+        std::fs::rename(&replacement, &catalog_path).expect("replace registered catalog inode");
+
+        let error = publish_staged_profile(staged, fixture.catalog_dir())
+            .err()
+            .expect("inode replacement must invalidate durable reuse handoff");
+        assert!(
+            format!("{error:#}").contains("changed"),
+            "{target}: {error:#}"
+        );
+    }
 }
 
 #[test]
@@ -366,10 +418,10 @@ fn malformed_registered_source_selection_fails_closed() {
         .authority()
         .inspect_source_reuse_for_selection(&selection)
         .unwrap_err();
+    let evidence = format!("{error:#}");
     assert!(
-        error
-            .to_string()
-            .contains("deserialize durable source snapshot manifest"),
+        evidence.contains("resolve durable source snapshot resource")
+            && evidence.contains("Checksum mismatch"),
         "{error:#}"
     );
 }

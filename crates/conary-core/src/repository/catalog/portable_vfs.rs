@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use rusqlite::ffi;
 use rusqlite::{Connection, OpenFlags};
+use serde::{Deserialize, Serialize};
 
 use super::portable_integrity::PortableChunkManifestV1;
 use crate::error::{Error, Result};
@@ -30,7 +31,8 @@ const VERIFIED_CHUNK_CACHE_BYTES: usize = 8 * 1024 * 1024;
 /// These counters describe attempted and completed work, not authority.  They
 /// are atomically readable so production evidence can sample them without
 /// changing SQLite's connection ownership.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PortableVfsMetricsV1 {
     pub read_calls: u64,
     pub requested_bytes: u64,

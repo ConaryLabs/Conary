@@ -14,12 +14,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::{
-    RemiActiveProfileRevision, RemiCatalogResource, RemiCatalogResourceKind,
-    RemiProfileRevisionPin, RemiRevisionPinKind, RemiRuntimeSession,
+    RemiActiveProfileRevision, RemiCatalogPhysicalAttestation, RemiCatalogResource,
+    RemiCatalogResourceKind, RemiProfileRevisionPin, RemiRevisionPinKind, RemiRuntimeSession,
 };
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CatalogReader, ProfileRevisionV2,
-    SourceSnapshotV1, verify_profile_catalog_bundle, verify_registered_profile_catalog_bundle,
+    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CATALOG_PORTABLE_MANIFEST_FILE_NAME,
+    CatalogReader, ProfileRevisionV2, read_portable_chunk_manifest_v1,
+    verify_registered_profile_catalog_bundle, verify_registered_profile_catalog_bundle_complete,
 };
 use parking_lot::{Mutex, MutexGuard};
 use rusqlite::Connection;
@@ -39,18 +40,12 @@ pub struct CatalogAuthority {
     catalog_dir: PathBuf,
     database_writer: DatabaseWriter,
     verified_readers: Arc<Mutex<BTreeMap<String, CachedProfileReader>>>,
-    verified_source_readers: Arc<Mutex<BTreeMap<String, CachedSourceReader>>>,
+    verified_source_readers: Arc<Mutex<source::SourceReaderCache>>,
 }
 
 struct CachedProfileReader {
     profile_revision_sha256: String,
-    reader: Arc<Mutex<CatalogReader>>,
-}
-
-struct CachedSourceReader {
-    source_profile: String,
-    manifest: SourceSnapshotV1,
-    bundle_path: PathBuf,
+    physical_attestation: RemiCatalogPhysicalAttestation,
     reader: Arc<Mutex<CatalogReader>>,
 }
 
@@ -115,6 +110,30 @@ impl CatalogAuthority {
         catalog_dir: impl Into<PathBuf>,
     ) -> Self {
         Self::from_paths(db_path, catalog_dir, DatabaseWriter::default())
+    }
+
+    /// Resolve only the current operational pointer for one profile.
+    ///
+    /// This deliberately performs no catalog filesystem inspection or proof
+    /// validation. Callers that need a reader must pass the returned exact
+    /// selection through one of the registered catalog open methods.
+    pub(crate) fn active_profile_selection(
+        &self,
+        source_profile: &str,
+    ) -> Result<ProfileRevisionSelection> {
+        let flags =
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(&self.db_path, flags).with_context(|| {
+            format!("open Remi operational database to select profile '{source_profile}'")
+        })?;
+        let pointer = RemiActiveProfileRevision::find(&conn, source_profile)
+            .context("resolve active Remi profile revision pointer")?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "profile '{source_profile}' has no active immutable catalog revision"
+                )
+            })?;
+        Ok(ProfileRevisionSelection::from(&pointer))
     }
 
     /// Inspect the active pointer, strict manifest, and bounded filesystem
@@ -188,6 +207,42 @@ impl CatalogAuthority {
         let verified = open_resolved_profile(resolved)?;
         Ok(SelectedProfileInspection {
             manifest: verified.manifest().clone(),
+        })
+    }
+
+    /// Completely verify one exact registered revision for an explicit
+    /// inspection or repair boundary. This authenticates the registered proof
+    /// artifact, then independently hashes the complete catalog, runs SQLite
+    /// integrity, validates the stored binding, and replays logical authority.
+    /// Serving callers must use the portable registered reopen above.
+    pub(crate) fn verify_selected_profile_complete(
+        &self,
+        selection: &ProfileRevisionSelection,
+    ) -> Result<SelectedProfileInspection> {
+        let flags =
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(&self.db_path, flags).with_context(|| {
+            format!(
+                "open Remi operational database to completely inspect profile '{}' revision {}",
+                selection.source_profile, selection.profile_revision_sha256
+            )
+        })?;
+        let resolved = resolve_profile_selection(&conn, &self.catalog_dir, selection.clone())?;
+        inspect_resolved_profile_files(&resolved)?;
+        let reader = verify_registered_profile_catalog_bundle_complete(
+            &resolved.bundle_path,
+            &resolved.manifest,
+            &resolved.physical_attestation.portable_manifest,
+        )
+        .with_context(|| {
+            format!(
+                "completely verify selected profile catalog bundle {}",
+                resolved.bundle_path.display()
+            )
+        })?;
+        drop(reader);
+        Ok(SelectedProfileInspection {
+            manifest: resolved.manifest,
         })
     }
 
@@ -354,14 +409,24 @@ impl CatalogAuthority {
         let revision = resolved.selection.profile_revision_sha256.clone();
         let mut cache = self.verified_readers.lock();
         let reader = match cache.get(&profile) {
-            Some(cached) if cached.profile_revision_sha256 == revision => {
+            Some(cached)
+                if cached.profile_revision_sha256 == revision
+                    && cached.physical_attestation == resolved.physical_attestation =>
+            {
                 Arc::clone(&cached.reader)
+            }
+            Some(cached) if cached.profile_revision_sha256 == revision => {
+                bail!(
+                    "cached profile revision {} portable attestation disagrees with its registered resource",
+                    revision
+                );
             }
             _ => {
                 let reader = Arc::new(Mutex::new(
                     verify_registered_profile_catalog_bundle(
                         &resolved.bundle_path,
                         &resolved.manifest,
+                        &resolved.physical_attestation.portable_manifest,
                     )
                     .with_context(|| {
                         format!(
@@ -374,6 +439,7 @@ impl CatalogAuthority {
                     profile,
                     CachedProfileReader {
                         profile_revision_sha256: revision,
+                        physical_attestation: resolved.physical_attestation.clone(),
                         reader: Arc::clone(&reader),
                     },
                 );
@@ -383,24 +449,28 @@ impl CatalogAuthority {
         Ok(PinnedProfileCatalog {
             selection: resolved.selection,
             manifest: resolved.manifest,
+            physical_attestation: resolved.physical_attestation,
             reader: Some(reader),
             pin: None,
         })
     }
 
-    pub(crate) fn remember_verified_profile_reader(
+    /// Drop the cache-owned reference for one exact profile bundle after
+    /// filesystem removal. Any in-flight pinned reader retains its own `Arc`.
+    pub(crate) fn evict_removed_profile_catalog(
         &self,
         source_profile: &str,
         profile_revision_sha256: &str,
-        reader: CatalogReader,
-    ) {
-        self.verified_readers.lock().insert(
-            source_profile.to_string(),
-            CachedProfileReader {
-                profile_revision_sha256: profile_revision_sha256.to_string(),
-                reader: Arc::new(Mutex::new(reader)),
-            },
-        );
+    ) -> bool {
+        let mut cache = self.verified_readers.lock();
+        if cache
+            .get(source_profile)
+            .is_some_and(|cached| cached.profile_revision_sha256 == profile_revision_sha256)
+        {
+            cache.remove(source_profile);
+            return true;
+        }
+        false
     }
 
     #[cfg(test)]
@@ -424,12 +494,14 @@ impl CatalogAuthority {
 
 /// An owned, exact-revision profile catalog reader.
 ///
-/// `CatalogReader` is opened with SQLite's immutable, read-only URI. The
-/// pointer and manifest are copied into this handle so the profile revision
-/// identity remains available after operational SQLite changes.
+/// `CatalogReader` owns an authenticated portable-VFS connection over a
+/// retained read-only descriptor. The pointer and manifest are copied into
+/// this handle so the profile revision identity remains available after
+/// operational SQLite changes.
 pub struct PinnedProfileCatalog {
     selection: ProfileRevisionSelection,
     manifest: ProfileRevisionV2,
+    physical_attestation: RemiCatalogPhysicalAttestation,
     reader: Option<Arc<Mutex<CatalogReader>>>,
     pin: Option<ReaderPin>,
 }
@@ -465,9 +537,22 @@ impl PinnedProfileCatalog {
         manifest: ProfileRevisionV2,
         reader: CatalogReader,
     ) -> Self {
+        let chunk_count =
+            conary_core::repository::catalog::portable_chunk_count_v1(manifest.catalog.size)
+                .expect("fixture catalog chunk count");
+        let physical_attestation = RemiCatalogPhysicalAttestation::new(
+            conary_core::repository::catalog::PortableManifestAttestationV1 {
+                sha256: "a".repeat(64),
+                size: conary_core::repository::catalog::portable_manifest_size_v1(chunk_count)
+                    .expect("fixture portable manifest size"),
+            },
+            manifest.catalog.size,
+        )
+        .expect("fixture portable attestation");
         Self {
             selection: ProfileRevisionSelection::from(&pointer),
             manifest,
+            physical_attestation,
             reader: Some(Arc::new(Mutex::new(reader))),
             pin: None,
         }
@@ -509,6 +594,12 @@ impl PinnedProfileCatalog {
     #[must_use]
     pub fn manifest(&self) -> &ProfileRevisionV2 {
         &self.manifest
+    }
+
+    /// The exact persisted portable physical authority for this revision.
+    #[must_use]
+    pub fn physical_attestation(&self) -> &RemiCatalogPhysicalAttestation {
+        &self.physical_attestation
     }
 
     /// The verified immutable catalog reader.
@@ -582,6 +673,7 @@ struct ResolvedProfileCatalog {
     selection: ProfileRevisionSelection,
     manifest: ProfileRevisionV2,
     bundle_path: PathBuf,
+    physical_attestation: RemiCatalogPhysicalAttestation,
 }
 
 fn resolve_active_profile(
@@ -708,6 +800,7 @@ fn resolve_profile_selection(
         selection,
         manifest,
         bundle_path,
+        physical_attestation: resource.physical_attestation,
     })
 }
 
@@ -742,8 +835,14 @@ fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfi
         selection,
         manifest,
         bundle_path,
+        physical_attestation,
     } = resolved;
-    let reader = verify_profile_catalog_bundle(&bundle_path, &manifest).with_context(|| {
+    let reader = verify_registered_profile_catalog_bundle(
+        &bundle_path,
+        &manifest,
+        &physical_attestation.portable_manifest,
+    )
+    .with_context(|| {
         format!(
             "verify active profile catalog bundle {}",
             bundle_path.display()
@@ -753,6 +852,7 @@ fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfi
     Ok(PinnedProfileCatalog {
         selection,
         manifest,
+        physical_attestation,
         reader: Some(Arc::new(Mutex::new(reader))),
         pin: None,
     })
@@ -776,9 +876,13 @@ fn inspect_resolved_profile_files(resolved: &ResolvedProfileCatalog) -> Result<(
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     names.sort();
-    let mut expected_names = [CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME]
-        .map(std::ffi::OsString::from)
-        .to_vec();
+    let mut expected_names = [
+        CATALOG_FILE_NAME,
+        CATALOG_MANIFEST_FILE_NAME,
+        CATALOG_PORTABLE_MANIFEST_FILE_NAME,
+    ]
+    .map(std::ffi::OsString::from)
+    .to_vec();
     expected_names.sort();
     if names != expected_names {
         bail!(
@@ -821,6 +925,37 @@ fn inspect_resolved_profile_files(resolved: &ResolvedProfileCatalog) -> Result<(
             resolved.manifest.catalog.size
         );
     }
+
+    let portable_manifest_path = resolved
+        .bundle_path
+        .join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
+    let portable_manifest_metadata = fs::symlink_metadata(&portable_manifest_path)?;
+    if portable_manifest_metadata.file_type().is_symlink() || !portable_manifest_metadata.is_file()
+    {
+        bail!(
+            "active profile portable manifest {} must be a regular file",
+            portable_manifest_path.display()
+        );
+    }
+    if portable_manifest_metadata.len() != resolved.physical_attestation.portable_manifest.size {
+        bail!(
+            "active profile portable manifest {} has {} bytes; expected {}",
+            portable_manifest_path.display(),
+            portable_manifest_metadata.len(),
+            resolved.physical_attestation.portable_manifest.size
+        );
+    }
+    read_portable_chunk_manifest_v1(
+        &portable_manifest_path,
+        &resolved.physical_attestation.portable_manifest,
+        &resolved.manifest.catalog,
+    )
+    .with_context(|| {
+        format!(
+            "authenticate active profile portable manifest {}",
+            portable_manifest_path.display()
+        )
+    })?;
     Ok(())
 }
 

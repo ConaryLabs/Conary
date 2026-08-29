@@ -183,6 +183,45 @@ fn post_open_unread_chunk_tamper_fails_before_query_data_returns() {
     assert!(reader.metrics().integrity_failures > 0);
 }
 
+#[cfg(unix)]
+#[test]
+fn post_open_cached_chunk_mutation_keeps_serving_authenticated_bytes() {
+    let fixture = CatalogFixture::with_text("authenticated-cache");
+    let reader = fixture.open();
+    let offset = 128;
+    let mut expected = [0_u8; 1];
+    assert!(
+        !reader
+            .file
+            .read(offset, &mut expected)
+            .expect("prime exact authenticated chunk")
+    );
+    let before = reader.metrics();
+
+    let carrier = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fixture.path)
+        .expect("open carrier for cached-chunk mutation");
+    carrier
+        .write_at(&[expected[0] ^ 0xff], offset)
+        .expect("mutate cached carrier chunk");
+    carrier.sync_all().expect("sync cached-chunk mutation");
+
+    let mut observed = [0_u8; 1];
+    assert!(
+        !reader
+            .file
+            .read(offset, &mut observed)
+            .expect("read retained authenticated chunk")
+    );
+    assert_eq!(observed, expected);
+    let after = reader.metrics();
+    assert!(after.cache_hits > before.cache_hits);
+    assert_eq!(after.authenticated_chunks, before.authenticated_chunks);
+    assert_eq!(after.integrity_failures, 0);
+}
+
 #[test]
 fn mismatched_manifest_refuses_the_sqlite_open() {
     let expected = CatalogFixture::with_text("alpha");

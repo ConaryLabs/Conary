@@ -79,7 +79,7 @@ pub(super) fn inspect_deployment_candidates(
         let inspection = match verification {
             CandidateInspectionMode::FullReopen => {
                 let inspection = authority
-                    .verify_selected_profile(&selection)
+                    .verify_selected_profile_complete(&selection)
                     .with_context(|| format!("inspect private immutable profile '{profile}'"))?;
                 catalog_files_reopened = catalog_files_reopened
                     .checked_add(1)

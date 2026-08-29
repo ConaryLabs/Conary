@@ -2,13 +2,17 @@
 //! Offline immutable-authority conversion benchmark operator.
 
 mod process;
+mod report;
 
 use super::{
-    CONVERSION_BENCHMARK_SCHEMA_V2, ConversionBenchmarkAuthority, ConversionBenchmarkConfig,
+    CONVERSION_BENCHMARK_SCHEMA_V3, ConversionBenchmarkAuthority,
+    ConversionBenchmarkCatalogAuthority, ConversionBenchmarkCatalogQuery,
+    ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkConfig,
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
-    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV2,
-    ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSubject,
-    ConversionBenchmarkView, ConversionBenchmarkViews, ConversionService,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV3,
+    ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSetup,
+    ConversionBenchmarkSubject, ConversionBenchmarkView, ConversionBenchmarkViews,
+    ConversionService,
 };
 use crate::server::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
 use crate::server::config::RemiConfig;
@@ -16,23 +20,23 @@ use crate::server::database_writer::DatabaseWriter;
 use crate::server::profile_catalog::ProfileCatalog;
 use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use conary_core::db::models::RemiRuntimeSession;
+use conary_core::db::models::{RemiCatalogPhysicalAttestation, RemiRuntimeSession};
 use conary_core::repository::catalog::{
-    CatalogPackageRecordV1, ProfileRevisionV2, SourceSnapshotV1,
+    CatalogPackageRecordV1, CatalogReader, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1,
+    ProfileRevisionV2, SourceSnapshotV1,
 };
 use process::ProcessUsageProbe;
+use report::{publish_and_reopen_report, validate_report};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
-use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const REPORT_FILE_NAME: &str = "conversion-benchmark-v2.json";
+const REPORT_FILE_NAME: &str = "conversion-benchmark-v3.json";
 
 /// Run one network-independent conversion benchmark against a coherent copy
 /// of the deployed operational database and the deployed immutable catalogs.
@@ -40,10 +44,12 @@ const REPORT_FILE_NAME: &str = "conversion-benchmark-v2.json";
 pub async fn run_conversion_benchmark_from_config(
     remi_config: &RemiConfig,
     config: ConversionBenchmarkConfig,
-) -> Result<ConversionBenchmarkReportV2> {
+) -> Result<ConversionBenchmarkReportV3> {
+    let prepare_probe = ProcessUsageProbe::start()?;
     validate_request(&config)?;
     remi_config.validate()?;
     let server = remi_config.to_server_config()?;
+    let runtime_lock = acquire_benchmark_runtime_storage(remi_config, &server)?;
     let repository_keys_dir = server
         .release_publish
         .repository_keys_dir
@@ -85,18 +91,21 @@ pub async fn run_conversion_benchmark_from_config(
         &config.source_profile,
         config.profile_revision_sha256.as_deref(),
     )?;
-    let (profile_manifest, package, source_snapshot) =
-        resolve_subject(&catalog_authority, &selection, &config.package_key_sha256)?;
-    admit_staged_subject(&staged_source, &package)?;
+    let prepare_process = prepare_probe.finish()?;
+    let resolved = resolve_subject(&catalog_authority, &selection, &config.package_key_sha256)?;
+    let finalize_probe = ProcessUsageProbe::start()?;
+    admit_staged_subject(&staged_source, &resolved.package)?;
     let source_artifact_sha256 = sha256_file(&staged_source)?;
 
     let authority = benchmark_authority(
         selection_kind,
         &selection,
-        &profile_manifest,
-        &source_snapshot,
+        &resolved.profile_manifest,
+        &resolved.profile_physical_attestation,
+        &resolved.source_snapshot,
+        &resolved.source_physical_attestation,
     )?;
-    let subject = benchmark_subject(&package, source_artifact_sha256);
+    let subject = benchmark_subject(&resolved.package, source_artifact_sha256);
 
     let binary_path = std::env::current_exe()
         .context("resolve running Remi benchmark executable")?
@@ -129,6 +138,13 @@ pub async fn run_conversion_benchmark_from_config(
         &selection.source_profile,
         RepositorySigningRole::Targets,
     )?);
+    let finalize_process = finalize_probe.finish()?;
+    let setup = ConversionBenchmarkSetup {
+        prepare: prepare_process,
+        profile: resolved.profile_setup.clone(),
+        source: resolved.source_setup.clone(),
+        finalize: finalize_process,
+    };
 
     let mut repetitions = Vec::with_capacity(config.iterations);
     for iteration in 1..=config.iterations {
@@ -136,7 +152,7 @@ pub async fn run_conversion_benchmark_from_config(
             run_iteration(
                 &service,
                 &selection,
-                &package,
+                &resolved.package,
                 &staged_source,
                 Arc::clone(&signing_key),
                 iteration,
@@ -145,16 +161,27 @@ pub async fn run_conversion_benchmark_from_config(
         );
     }
 
-    let report = ConversionBenchmarkReportV2 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V2,
+    let report = ConversionBenchmarkReportV3 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V3,
         environment,
         authority,
+        setup,
         subject,
         repetitions,
     };
     validate_report(&report)?;
     publish_and_reopen_report(&expected_output, &report)?;
+    drop(runtime_lock);
     Ok(report)
+}
+
+fn acquire_benchmark_runtime_storage(
+    remi_config: &RemiConfig,
+    server: &crate::server::ServerConfig,
+) -> Result<crate::server::runtime_lock::RuntimeRootLock> {
+    crate::server::acquire_existing_runtime_storage(remi_config, server).context(
+        "acquire exclusive Remi runtime-root authority for benchmark; the service must be stopped",
+    )
 }
 
 fn validate_request(config: &ConversionBenchmarkConfig) -> Result<()> {
@@ -273,22 +300,42 @@ fn resolve_selection(
                 profile_revision_sha256: profile_revision_sha256.to_string(),
             },
         )),
-        None => {
-            let active = authority.inspect_active_profile(source_profile)?;
-            Ok((
-                ConversionBenchmarkSelectionKind::Active,
-                ProfileRevisionSelection::from(&active.pointer),
-            ))
-        }
+        None => Ok((
+            ConversionBenchmarkSelectionKind::Active,
+            authority.active_profile_selection(source_profile)?,
+        )),
     }
+}
+
+struct ResolvedBenchmarkSubject {
+    profile_manifest: ProfileRevisionV2,
+    profile_physical_attestation: RemiCatalogPhysicalAttestation,
+    source_snapshot: SourceSnapshotV1,
+    source_physical_attestation: RemiCatalogPhysicalAttestation,
+    package: CatalogPackageRecordV1,
+    profile_setup: ConversionBenchmarkCatalogSetup,
+    source_setup: ConversionBenchmarkCatalogSetup,
 }
 
 fn resolve_subject(
     authority: &CatalogAuthority,
     selection: &ProfileRevisionSelection,
     package_key_sha256: &str,
-) -> Result<(ProfileRevisionV2, CatalogPackageRecordV1, SourceSnapshotV1)> {
+) -> Result<ResolvedBenchmarkSubject> {
+    let profile_reopen_probe = ProcessUsageProbe::start()?;
     let pinned = authority.open_selected_profile(selection)?;
+    let (profile_verification, profile_reopen_vfs) = {
+        let reader = pinned.reader();
+        catalog_reopen_snapshot(&reader)?
+    };
+    let profile_reopen_process = profile_reopen_probe.finish()?;
+    let profile_reopen = ConversionBenchmarkCatalogReopen {
+        process: profile_reopen_process,
+        verification: profile_verification,
+        vfs: profile_reopen_vfs,
+    };
+
+    let profile_query_probe = ProcessUsageProbe::start()?;
     let package = ProfileCatalog::new(&pinned)
         .find_package_record_by_key(package_key_sha256)?
         .ok_or_else(|| {
@@ -303,8 +350,59 @@ fn resolve_subject(
         package.source_profile == selection.source_profile,
         "benchmark package source profile contradicts selected authority"
     );
+    let profile_query_vfs = {
+        let reader = pinned.reader();
+        reader
+            .portable_vfs_metrics()
+            .context("registered benchmark profile query lost its portable VFS metrics")?
+    };
+    let profile_query_process = profile_query_probe.finish()?;
+    let profile_query =
+        catalog_query_evidence(profile_reopen.vfs, profile_query_vfs, profile_query_process)?;
+
+    let source_reopen_probe = ProcessUsageProbe::start()?;
+    let source = authority.open_source_catalog_for_package(&pinned, &package)?;
+    let (source_verification, source_reopen_vfs) = {
+        let reader = source.reader();
+        catalog_reopen_snapshot(&reader)?
+    };
+    let source_reopen_process = source_reopen_probe.finish()?;
+    let source_reopen = ConversionBenchmarkCatalogReopen {
+        process: source_reopen_process,
+        verification: source_verification,
+        vfs: source_reopen_vfs,
+    };
+
+    let source_query_probe = ProcessUsageProbe::start()?;
     let source_snapshot = authority.source_snapshot_for_package(&pinned, &package)?;
-    Ok((pinned.manifest().clone(), package, source_snapshot))
+    ensure!(
+        source_snapshot == *source.manifest(),
+        "benchmark source snapshot changed after its measured registered reopen"
+    );
+    let source_query_vfs = {
+        let reader = source.reader();
+        reader
+            .portable_vfs_metrics()
+            .context("registered benchmark source query lost its portable VFS metrics")?
+    };
+    let source_query_process = source_query_probe.finish()?;
+    let source_query =
+        catalog_query_evidence(source_reopen.vfs, source_query_vfs, source_query_process)?;
+    Ok(ResolvedBenchmarkSubject {
+        profile_manifest: pinned.manifest().clone(),
+        profile_physical_attestation: pinned.physical_attestation().clone(),
+        source_snapshot,
+        source_physical_attestation: source.physical_attestation().clone(),
+        package,
+        profile_setup: ConversionBenchmarkCatalogSetup {
+            reopen: profile_reopen,
+            query: profile_query,
+        },
+        source_setup: ConversionBenchmarkCatalogSetup {
+            reopen: source_reopen,
+            query: source_query,
+        },
+    })
 }
 
 fn admit_staged_subject(path: &Path, package: &CatalogPackageRecordV1) -> Result<()> {
@@ -328,7 +426,9 @@ fn benchmark_authority(
     selection_kind: ConversionBenchmarkSelectionKind,
     selection: &ProfileRevisionSelection,
     profile: &ProfileRevisionV2,
+    profile_physical_attestation: &RemiCatalogPhysicalAttestation,
     source: &SourceSnapshotV1,
+    source_physical_attestation: &RemiCatalogPhysicalAttestation,
 ) -> Result<ConversionBenchmarkAuthority> {
     let profile_digest = profile.manifest_sha256()?;
     ensure!(
@@ -339,16 +439,116 @@ fn benchmark_authority(
     Ok(ConversionBenchmarkAuthority {
         selection_kind,
         source_profile: selection.source_profile.clone(),
-        profile_revision_sha256: selection.profile_revision_sha256.clone(),
-        profile_catalog_sha256: profile.catalog.sha256.clone(),
-        profile_catalog_bytes: profile.catalog.size,
-        profile_logical_digest_sha256: profile.logical_digest_sha256.clone(),
-        source_snapshot_sha256,
+        profile: benchmark_catalog_authority(
+            selection.profile_revision_sha256.clone(),
+            &profile.catalog,
+            &profile.logical_digest_sha256,
+            profile_physical_attestation,
+        ),
+        source: benchmark_catalog_authority(
+            source_snapshot_sha256,
+            &source.catalog,
+            &source.logical_digest_sha256,
+            source_physical_attestation,
+        ),
         source_identity: source.source_identity.clone(),
         repository_identity: source.repository_identity.clone(),
         source_parser_config_sha256: source.provenance.parser_config_sha256.clone(),
         source_trust_policy_sha256: source.provenance.trust_policy_sha256.clone(),
         authenticated_metadata_objects: source.authenticated_objects.len() as u64,
+    })
+}
+
+fn benchmark_catalog_authority(
+    resource_sha256: String,
+    artifact: &conary_core::repository::catalog::CatalogArtifactV1,
+    logical_digest_sha256: &str,
+    physical_attestation: &RemiCatalogPhysicalAttestation,
+) -> ConversionBenchmarkCatalogAuthority {
+    ConversionBenchmarkCatalogAuthority {
+        resource_sha256,
+        artifact_sha256: artifact.sha256.clone(),
+        artifact_bytes: artifact.size,
+        logical_digest_sha256: logical_digest_sha256.to_string(),
+        portable_manifest_sha256: physical_attestation.portable_manifest.sha256.clone(),
+        portable_manifest_bytes: physical_attestation.portable_manifest.size,
+        portable_chunk_size: physical_attestation.chunk_size,
+        portable_chunk_count: physical_attestation.chunk_count,
+    }
+}
+
+fn catalog_reopen_snapshot(
+    reader: &CatalogReader,
+) -> Result<(
+    conary_core::repository::catalog::CatalogVerificationEvidenceV1,
+    PortableVfsMetricsV1,
+)> {
+    let vfs = reader
+        .portable_vfs_metrics()
+        .context("registered benchmark catalog did not use the portable authenticated VFS")?;
+    Ok((*reader.verification_evidence(), vfs))
+}
+
+fn catalog_query_evidence(
+    before: PortableVfsMetricsV1,
+    after: PortableVfsMetricsV1,
+    process: ConversionBenchmarkProcessUsage,
+) -> Result<ConversionBenchmarkCatalogQuery> {
+    Ok(ConversionBenchmarkCatalogQuery {
+        process,
+        vfs: portable_vfs_delta(after, before)?,
+    })
+}
+
+fn portable_vfs_delta(
+    after: PortableVfsMetricsV1,
+    before: PortableVfsMetricsV1,
+) -> Result<PortableVfsMetricsV1> {
+    let delta = |after: u64, before: u64, label: &str| {
+        after
+            .checked_sub(before)
+            .with_context(|| format!("portable VFS {label} counter regressed"))
+    };
+    Ok(PortableVfsMetricsV1 {
+        read_calls: delta(after.read_calls, before.read_calls, "read calls")?,
+        requested_bytes: delta(
+            after.requested_bytes,
+            before.requested_bytes,
+            "requested bytes",
+        )?,
+        returned_bytes: delta(
+            after.returned_bytes,
+            before.returned_bytes,
+            "returned bytes",
+        )?,
+        chunk_accesses: delta(
+            after.chunk_accesses,
+            before.chunk_accesses,
+            "chunk accesses",
+        )?,
+        cache_hits: delta(after.cache_hits, before.cache_hits, "cache hits")?,
+        cache_misses: delta(after.cache_misses, before.cache_misses, "cache misses")?,
+        carrier_bytes_requested: delta(
+            after.carrier_bytes_requested,
+            before.carrier_bytes_requested,
+            "carrier bytes requested",
+        )?,
+        authenticated_chunks: delta(
+            after.authenticated_chunks,
+            before.authenticated_chunks,
+            "authenticated chunks",
+        )?,
+        authenticated_bytes: delta(
+            after.authenticated_bytes,
+            before.authenticated_bytes,
+            "authenticated bytes",
+        )?,
+        short_reads: delta(after.short_reads, before.short_reads, "short reads")?,
+        integrity_failures: delta(
+            after.integrity_failures,
+            before.integrity_failures,
+            "integrity failures",
+        )?,
     })
 }
 
@@ -392,22 +592,16 @@ async fn run_iteration(
                 .take()
                 .context("conversion benchmark result omitted timing evidence")?;
             let views = benchmark_views(&result.cache_state, &timing)?;
-            match independently_reopen_output(&result, signing_key.as_ref()) {
-                Ok(output) => (
-                    views,
-                    ConversionBenchmarkOutcome::Success {
-                        cache_state: result.cache_state,
-                        timing: Box::new(timing),
-                        output,
-                    },
-                ),
-                Err(error) => (
-                    views,
-                    ConversionBenchmarkOutcome::Failure {
-                        error: format!("independent benchmark output reopen failed: {error:#}"),
-                    },
-                ),
-            }
+            let output = independently_reopen_output(&result, signing_key.as_ref())
+                .context("independent benchmark output reopen failed")?;
+            (
+                views,
+                ConversionBenchmarkOutcome::Success {
+                    cache_state: result.cache_state,
+                    timing: Box::new(timing),
+                    output,
+                },
+            )
         }
         Err(error) => (
             ConversionBenchmarkViews {
@@ -438,26 +632,7 @@ fn benchmark_views(
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
 ) -> Result<ConversionBenchmarkViews> {
-    let core_duration = timing
-        .phases
-        .iter()
-        .filter(|phase| {
-            matches!(
-                phase.phase,
-                crate::server::conversion_timing::ConversionPhase::NativeArchiveParseAndSpool
-                    | crate::server::conversion_timing::ConversionPhase::ArtifactIdentityAndAuthorityValidation
-                    | crate::server::conversion_timing::ConversionPhase::MetadataLifecycleAndAuthorityProjection
-                    | crate::server::conversion_timing::ConversionPhase::PayloadReferenceDerivation
-                    | crate::server::conversion_timing::ConversionPhase::OutputWorkspacePreparation
-                    | crate::server::conversion_timing::ConversionPhase::ControlProjectionAndSigning
-                    | crate::server::conversion_timing::ConversionPhase::PayloadObjectEmission
-                    | crate::server::conversion_timing::ConversionPhase::ArchiveAssemblyAndGzip
-                    | crate::server::conversion_timing::ConversionPhase::ImmediateConverterReopen
-                    | crate::server::conversion_timing::ConversionPhase::NativeProvenanceProjection
-            )
-        })
-        .map(|phase| phase.duration_ms)
-        .sum();
+    let core_duration = conversion_core_duration(timing)?;
     let core_executed = match cache_state {
         "cold" => true,
         "hot" => false,
@@ -479,6 +654,34 @@ fn benchmark_views(
             duration_ms: timing.total_ms,
         },
     })
+}
+
+fn conversion_core_duration(
+    timing: &crate::server::conversion_timing::ConversionTimingReport,
+) -> Result<u128> {
+    timing
+        .phases
+        .iter()
+        .filter(|phase| {
+            matches!(
+                phase.phase,
+                crate::server::conversion_timing::ConversionPhase::NativeArchiveParseAndSpool
+                    | crate::server::conversion_timing::ConversionPhase::ArtifactIdentityAndAuthorityValidation
+                    | crate::server::conversion_timing::ConversionPhase::MetadataLifecycleAndAuthorityProjection
+                    | crate::server::conversion_timing::ConversionPhase::PayloadReferenceDerivation
+                    | crate::server::conversion_timing::ConversionPhase::OutputWorkspacePreparation
+                    | crate::server::conversion_timing::ConversionPhase::ControlProjectionAndSigning
+                    | crate::server::conversion_timing::ConversionPhase::PayloadObjectEmission
+                    | crate::server::conversion_timing::ConversionPhase::ArchiveAssemblyAndGzip
+                    | crate::server::conversion_timing::ConversionPhase::ImmediateConverterReopen
+                    | crate::server::conversion_timing::ConversionPhase::NativeProvenanceProjection
+            )
+        })
+        .try_fold(0_u128, |total, phase| {
+            total
+                .checked_add(phase.duration_ms)
+                .context("conversion-core duration overflow")
+        })
 }
 
 fn independently_reopen_output(
@@ -533,142 +736,6 @@ fn independently_reopen_output(
         independent_complete_archive_hash_ms,
         independent_complete_archive_hash_bytes: ccs_size_bytes,
     })
-}
-
-fn validate_report(report: &ConversionBenchmarkReportV2) -> Result<()> {
-    ensure!(
-        report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V2,
-        "conversion benchmark schema {} is unsupported",
-        report.schema_version
-    );
-    ensure!(
-        !report.repetitions.is_empty(),
-        "conversion benchmark report has no repetitions"
-    );
-    validate_sha256(
-        &report.authority.profile_revision_sha256,
-        "profile revision SHA-256",
-    )?;
-    validate_sha256(
-        &report.authority.source_snapshot_sha256,
-        "source snapshot SHA-256",
-    )?;
-    validate_sha256(&report.subject.package_key_sha256, "package key SHA-256")?;
-    validate_sha256(
-        &report.subject.source_artifact_sha256,
-        "source artifact SHA-256",
-    )?;
-    ensure!(
-        report.authority.source_profile
-            == conary_core::repository::supported_profiles::profile_by_id(
-                &report.authority.source_profile,
-            )
-            .map(|profile| profile.id())
-            .unwrap_or_default(),
-        "benchmark report names an unknown source profile"
-    );
-
-    let mut roles = BTreeSet::new();
-    for root in &report.environment.roots {
-        ensure!(
-            roles.insert(root.role.as_str()),
-            "repeated root role '{}'",
-            root.role
-        );
-        ensure!(!root.path.is_empty(), "root '{}' has no path", root.role);
-    }
-
-    let mut successful_cold_seen = false;
-    for (index, repetition) in report.repetitions.iter().enumerate() {
-        ensure!(
-            repetition.iteration == index + 1,
-            "conversion benchmark repetitions are not sequential"
-        );
-        if let ConversionBenchmarkOutcome::Success {
-            cache_state,
-            timing,
-            output,
-        } = &repetition.outcome
-        {
-            let expected_cache = if successful_cold_seen { "hot" } else { "cold" };
-            ensure!(
-                cache_state == expected_cache,
-                "benchmark iteration {} is '{}'; expected '{}'",
-                repetition.iteration,
-                cache_state,
-                expected_cache
-            );
-            let source = timing
-                .source
-                .as_ref()
-                .context("successful benchmark timing omitted source identity")?;
-            ensure!(
-                source.source_profile == report.authority.source_profile
-                    && source.version == report.subject.version
-                    && source.architecture == report.subject.architecture
-                    && source.checksum == report.subject.repository_checksum
-                    && source.declared_size_bytes == report.subject.source_size_bytes,
-                "successful benchmark timing contradicts report subject"
-            );
-            validate_sha256(&output.ccs_sha256, "output CCS SHA-256")?;
-            validate_sha256(&output.transport_sha256, "transport SHA-256")?;
-            validate_sha256(
-                &output.signed_object_set_sha256,
-                "signed object set SHA-256",
-            )?;
-            if !successful_cold_seen {
-                ensure!(
-                    repetition.views.conversion_core.executed,
-                    "cold benchmark did not execute conversion core"
-                );
-                successful_cold_seen = true;
-            } else {
-                ensure!(
-                    !repetition.views.conversion_core.executed
-                        && repetition.views.conversion_core.duration_ms == 0,
-                    "hot benchmark executed conversion core"
-                );
-                ensure!(
-                    timing.work
-                        == crate::server::conversion_timing::ConversionWorkMetrics::default(),
-                    "hot benchmark recorded conversion or persistence work: {:#?}",
-                    timing.work
-                );
-            }
-        }
-    }
-    Ok(())
-}
-
-fn publish_and_reopen_report(path: &Path, report: &ConversionBenchmarkReportV2) -> Result<()> {
-    ensure!(
-        !path.exists(),
-        "benchmark report already exists: {}",
-        path.display()
-    );
-    let bytes = serde_json::to_vec_pretty(report)?;
-    let temporary =
-        path.with_file_name(format!(".{REPORT_FILE_NAME}.{}.tmp", uuid::Uuid::new_v4()));
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    output.write_all(&bytes)?;
-    output.write_all(b"\n")?;
-    output.sync_all()?;
-    drop(output);
-    fs::rename(&temporary, path)?;
-    sync_parent(path)?;
-
-    let reopened_bytes = fs::read(path)?;
-    let reopened: ConversionBenchmarkReportV2 = serde_json::from_slice(&reopened_bytes)
-        .context("strictly reopen published conversion benchmark schema v2")?;
-    validate_report(&reopened)?;
-    ensure!(
-        serde_json::to_value(&reopened)? == serde_json::to_value(report)?,
-        "reopened conversion benchmark report changed value"
-    );
-    Ok(())
 }
 
 fn environment_roots(roots: &[(&str, &Path)]) -> Result<Vec<ConversionBenchmarkRootIdentity>> {
@@ -791,65 +858,4 @@ fn unix_seconds() -> Result<i64> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn strict_schema_rejects_unknown_top_level_fields() {
-        let value = serde_json::json!({
-            "schema_version": 2,
-            "environment": {
-                "hardware_label": "fixture",
-                "remi_version": "0",
-                "source_commit": "fixture",
-                "source_dirty": false,
-                "binary_path": "/fixture/remi",
-                "binary_sha256": "a".repeat(64),
-                "os_release": "fixture",
-                "kernel_release": "fixture",
-                "cpu_model": "fixture",
-                "logical_cpus": 1,
-                "memory_bytes": 1,
-                "roots": []
-            },
-            "authority": {
-                "selection_kind": "active",
-                "source_profile": "fedora-44",
-                "profile_revision_sha256": "a".repeat(64),
-                "profile_catalog_sha256": "b".repeat(64),
-                "profile_catalog_bytes": 1,
-                "profile_logical_digest_sha256": "c".repeat(64),
-                "source_snapshot_sha256": "d".repeat(64),
-                "source_identity": "fixture",
-                "repository_identity": "fixture",
-                "source_parser_config_sha256": "e".repeat(64),
-                "source_trust_policy_sha256": "f".repeat(64),
-                "authenticated_metadata_objects": 1
-            },
-            "subject": {
-                "package_key_sha256": "1".repeat(64),
-                "name": "fixture",
-                "version": "1",
-                "package_release": "1",
-                "architecture": "x86_64",
-                "repository_checksum": "sha256:fixture",
-                "source_size_bytes": 1,
-                "source_artifact_sha256": "2".repeat(64)
-            },
-            "repetitions": [],
-            "legacy_v1_field": true
-        });
-        let error = serde_json::from_value::<ConversionBenchmarkReportV2>(value).unwrap_err();
-        assert!(error.to_string().contains("unknown field"), "{error}");
-    }
-
-    #[test]
-    fn canonical_hashes_are_normalized_to_schema_sha256_values() {
-        let digest = "a".repeat(64);
-        assert_eq!(
-            bare_sha256(&format!("sha256:{digest}"), "fixture").unwrap(),
-            digest
-        );
-        assert!(bare_sha256(&digest, "fixture").is_err());
-    }
-}
+mod tests;

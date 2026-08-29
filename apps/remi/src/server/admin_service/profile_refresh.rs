@@ -688,7 +688,21 @@ async fn finalize_profile(
         .iter()
         .map(|source| source.manifest.clone())
         .collect::<Vec<_>>();
+    let mut source_physical_attestations = BTreeMap::new();
+    for source in &published.sources {
+        if let Some(existing) = source_physical_attestations.insert(
+            source.manifest.catalog.sha256.clone(),
+            source.physical_attestation.clone(),
+        ) && existing != source.physical_attestation
+        {
+            return Err(ServiceError::Internal(format!(
+                "published source aliases for catalog artifact {} carry unequal portable attestations",
+                source.manifest.catalog.sha256
+            )));
+        }
+    }
     let profile_manifest = published.manifest.clone();
+    let profile_physical_attestation = published.physical_attestation.clone();
     let repository_ids = plans
         .iter()
         .map(|plan| {
@@ -704,7 +718,9 @@ async fn finalize_profile(
                 conary_core::db::models::register_profile_catalog_revision(
                     &conn,
                     &source_manifests,
+                    &source_physical_attestations,
                     &profile_manifest,
+                    profile_physical_attestation,
                     unix_seconds()?,
                 )?;
                 complete_profile_sync_candidate(&conn, &run)?;
@@ -843,6 +859,7 @@ async fn collect_catalog_garbage(
         roots.db_path.clone(),
         roots.catalog_dir.clone(),
         roots.database_writer.clone(),
+        roots.catalog_authority.clone(),
     )
     .await
     .map_err(|error| ServiceError::Internal(format!("exact catalog collection failed: {error:#}")))

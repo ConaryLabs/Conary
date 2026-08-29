@@ -2,24 +2,86 @@
 
 //! Exact durable source-catalog authority below one pinned profile revision.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use conary_core::db::models::{RemiCatalogResource, RemiCatalogResourceKind};
+use conary_core::db::models::{
+    RemiCatalogPhysicalAttestation, RemiCatalogResource, RemiCatalogResourceKind,
+};
 use conary_core::repository::DurableSourceCatalogReuseV1;
 use conary_core::repository::catalog::{
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogReader, ProfileSourceMemberV2,
-    SourceSnapshotV1, verify_registered_source_catalog_bundle,
+    SourceSnapshotV1, SourceStreamKindV1, verify_registered_source_catalog_bundle,
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 
-use super::{CachedSourceReader, CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection};
+use super::{CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection};
 use crate::server::open_runtime_db;
 
-struct VerifiedSourceCatalog {
+pub(super) type SourceReaderCache = BTreeMap<SourceCatalogSlot, CachedSourceReader>;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct SourceCatalogSlot {
+    source_profile: String,
+    source_identity: String,
+    repository_identity: String,
+    stream_kind: SourceCatalogStreamKind,
+    stream_identity: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SourceCatalogStreamKind {
+    Release,
+    Channel,
+    Rolling,
+}
+
+impl SourceCatalogSlot {
+    fn from_manifest(manifest: &SourceSnapshotV1) -> Self {
+        Self {
+            source_profile: manifest.source_profile.clone(),
+            source_identity: manifest.source_identity.clone(),
+            repository_identity: manifest.repository_identity.clone(),
+            stream_kind: match manifest.stream.kind {
+                SourceStreamKindV1::Release => SourceCatalogStreamKind::Release,
+                SourceStreamKindV1::Channel => SourceCatalogStreamKind::Channel,
+                SourceStreamKindV1::Rolling => SourceCatalogStreamKind::Rolling,
+            },
+            stream_identity: manifest.stream.identity.clone(),
+        }
+    }
+}
+
+pub(super) struct CachedSourceReader {
+    resource_sha256: String,
+    manifest: SourceSnapshotV1,
+    bundle_path: std::path::PathBuf,
+    physical_attestation: RemiCatalogPhysicalAttestation,
+    reader: Arc<Mutex<CatalogReader>>,
+}
+
+pub(crate) struct VerifiedSourceCatalog {
     manifest: SourceSnapshotV1,
     reader: Arc<Mutex<CatalogReader>>,
     bundle_path: std::path::PathBuf,
+    physical_attestation: RemiCatalogPhysicalAttestation,
+}
+
+impl VerifiedSourceCatalog {
+    #[must_use]
+    pub(crate) fn manifest(&self) -> &SourceSnapshotV1 {
+        &self.manifest
+    }
+
+    #[must_use]
+    pub(crate) fn physical_attestation(&self) -> &RemiCatalogPhysicalAttestation {
+        &self.physical_attestation
+    }
+
+    pub(crate) fn reader(&self) -> MutexGuard<'_, CatalogReader> {
+        self.reader.lock()
+    }
 }
 
 pub(crate) struct VerifiedSourceBundle {
@@ -30,13 +92,14 @@ pub(crate) struct VerifiedSourceBundle {
 struct RegisteredSourceCatalog {
     manifest: SourceSnapshotV1,
     bundle_path: std::path::PathBuf,
+    physical_attestation: RemiCatalogPhysicalAttestation,
 }
 
 impl CatalogAuthority {
     /// Resolve every exact registered source below one selected profile
     /// without opening catalog bytes. The native parser later accepts a
     /// selection only after current authenticated metadata matches and then
-    /// performs the one complete durable reopen.
+    /// performs one authenticated registered reopen.
     pub(crate) fn inspect_source_reuse_for_selection(
         &self,
         selection: &ProfileRevisionSelection,
@@ -48,8 +111,12 @@ impl CatalogAuthority {
                 self.resolve_registered_source_catalog(&selection.source_profile, member)?;
             reusable.push((
                 member.ordinal,
-                DurableSourceCatalogReuseV1::new(registered.manifest, registered.bundle_path)
-                    .context("construct durable source reuse selection")?,
+                DurableSourceCatalogReuseV1::new(
+                    registered.manifest,
+                    registered.bundle_path,
+                    registered.physical_attestation.portable_manifest,
+                )
+                .context("construct durable source reuse selection")?,
             ));
         }
         Ok(reusable)
@@ -83,20 +150,13 @@ impl CatalogAuthority {
         })
     }
 
-    /// Resolve the exact source snapshot that authenticated a package in one
-    /// pinned profile revision.
-    ///
-    /// The profile catalog carries only the source-member identity and the
-    /// content address of the source snapshot. This method resolves that
-    /// address through durable operational resource metadata, then verifies
-    /// the immutable source bundle before returning its owned manifest. No
-    /// operational package, provide, or requirement rows participate in the
-    /// lookup.
-    pub fn source_snapshot_for_package(
+    /// Resolve and reopen the exact registered source catalog that owns one
+    /// profile package without running the package-row matching query.
+    pub(crate) fn open_source_catalog_for_package(
         &self,
         pinned: &PinnedProfileCatalog,
         package: &CatalogPackageRecordV1,
-    ) -> Result<SourceSnapshotV1> {
+    ) -> Result<VerifiedSourceCatalog> {
         if package.source_profile != pinned.source_profile() {
             bail!(
                 "profile '{}' package '{}' carries source profile '{}'",
@@ -151,7 +211,28 @@ impl CatalogAuthority {
             );
         }
 
-        let verified = self.verified_source_catalog(pinned, member)?;
+        self.verified_source_catalog(pinned, member)
+    }
+
+    /// Resolve the exact source snapshot that authenticated a package in one
+    /// pinned profile revision.
+    ///
+    /// The profile catalog carries only the source-member identity and the
+    /// content address of the source snapshot. This method resolves that
+    /// address through durable operational resource metadata, then verifies
+    /// the immutable source bundle before returning its owned manifest. No
+    /// operational package, provide, or requirement rows participate in the
+    /// lookup.
+    pub fn source_snapshot_for_package(
+        &self,
+        pinned: &PinnedProfileCatalog,
+        package: &CatalogPackageRecordV1,
+    ) -> Result<SourceSnapshotV1> {
+        let verified = self.open_source_catalog_for_package(pinned, package)?;
+        let source_snapshot_sha256 = verified
+            .manifest
+            .manifest_sha256()
+            .context("compute reopened source snapshot digest")?;
         let matching_source_packages = verified
             .reader
             .lock()
@@ -180,12 +261,13 @@ impl CatalogAuthority {
     ) -> Result<VerifiedSourceCatalog> {
         let registered = self.resolve_registered_source_catalog(pinned.source_profile(), member)?;
         let source_snapshot_sha256 = member.source_snapshot_sha256.clone();
+        let slot = SourceCatalogSlot::from_manifest(&registered.manifest);
         let mut cache = self.verified_source_readers.lock();
-        let reader = match cache.get(&source_snapshot_sha256) {
-            Some(cached) => {
-                if cached.source_profile != pinned.source_profile()
-                    || cached.manifest != registered.manifest
+        let reader = match cache.get(&slot) {
+            Some(cached) if cached.resource_sha256 == source_snapshot_sha256 => {
+                if cached.manifest != registered.manifest
                     || cached.bundle_path != registered.bundle_path
+                    || cached.physical_attestation != registered.physical_attestation
                 {
                     bail!(
                         "cached source snapshot {} authority disagrees with its pinned registered bundle",
@@ -194,11 +276,12 @@ impl CatalogAuthority {
                 }
                 Arc::clone(&cached.reader)
             }
-            None => {
+            _ => {
                 let reader = Arc::new(Mutex::new(
                     verify_registered_source_catalog_bundle(
                         &registered.bundle_path,
                         &registered.manifest,
+                        &registered.physical_attestation.portable_manifest,
                     )
                     .with_context(|| {
                         format!(
@@ -208,11 +291,12 @@ impl CatalogAuthority {
                     })?,
                 ));
                 cache.insert(
-                    source_snapshot_sha256,
+                    slot,
                     CachedSourceReader {
-                        source_profile: pinned.source_profile().to_string(),
+                        resource_sha256: source_snapshot_sha256,
                         manifest: registered.manifest.clone(),
                         bundle_path: registered.bundle_path.clone(),
+                        physical_attestation: registered.physical_attestation.clone(),
                         reader: Arc::clone(&reader),
                     },
                 );
@@ -223,6 +307,7 @@ impl CatalogAuthority {
             manifest: registered.manifest,
             reader,
             bundle_path: registered.bundle_path,
+            physical_attestation: registered.physical_attestation,
         })
     }
 
@@ -312,7 +397,38 @@ impl CatalogAuthority {
         Ok(RegisteredSourceCatalog {
             manifest,
             bundle_path,
+            physical_attestation: resource.physical_attestation,
         })
+    }
+
+    /// Drop the cache-owned reference for one source bundle after exact
+    /// filesystem removal. Readers already handed to in-flight requests keep
+    /// their own `Arc` and retained descriptor until those requests finish.
+    pub(crate) fn evict_removed_source_catalog(
+        &self,
+        source_profile: &str,
+        resource_sha256: &str,
+    ) -> bool {
+        let mut cache = self.verified_source_readers.lock();
+        let previous_len = cache.len();
+        cache.retain(|slot, cached| {
+            slot.source_profile != source_profile || cached.resource_sha256 != resource_sha256
+        });
+        cache.len() != previous_len
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_verified_source_reader_for_test(
+        &self,
+        source_profile: &str,
+        resource_sha256: &str,
+    ) -> bool {
+        self.verified_source_readers
+            .lock()
+            .iter()
+            .any(|(slot, cached)| {
+                slot.source_profile == source_profile && cached.resource_sha256 == resource_sha256
+            })
     }
 }
 
@@ -410,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn successor_snapshot_cannot_reuse_predecessor_reader() {
+    fn successor_snapshot_replaces_cache_owned_predecessor_reader() {
         let fixture = ActiveCatalogFixture::new();
         let (first_pin, first_member) = active_source(&fixture, 1);
         let first = fixture
@@ -430,6 +546,18 @@ mod tests {
         );
         assert!(!Arc::ptr_eq(&first.reader, &second.reader));
         assert_ne!(first.manifest, second.manifest);
+        assert_eq!(fixture.authority().verified_source_readers.lock().len(), 1);
+        assert_eq!(Arc::strong_count(&first.reader), 1);
+        assert_eq!(Arc::strong_count(&second.reader), 2);
+        let cached = fixture.authority().verified_source_readers.lock();
+        assert_eq!(
+            cached
+                .values()
+                .next()
+                .expect("successor cache entry")
+                .resource_sha256,
+            second_member.source_snapshot_sha256
+        );
     }
 
     #[test]
@@ -444,8 +572,15 @@ mod tests {
             .authority()
             .verified_source_readers
             .lock()
-            .get_mut(&member.source_snapshot_sha256)
+            .get_mut(&SourceCatalogSlot::from_manifest(
+                &fixture
+                    .authority()
+                    .resolve_registered_source_catalog(pinned.source_profile(), &member)
+                    .expect("resolve cached source")
+                    .manifest,
+            ))
             .expect("cached source reader")
+            .manifest
             .source_profile = "ubuntu-26.04".to_string();
 
         let error = fixture
@@ -453,6 +588,39 @@ mod tests {
             .verified_source_catalog(&pinned, &member)
             .err()
             .expect("mismatched cached authority must fail");
+        assert!(error.to_string().contains("cached source snapshot"));
+        assert!(error.to_string().contains("authority disagrees"));
+    }
+
+    #[test]
+    fn cached_source_reader_fails_closed_on_physical_attestation_mismatch() {
+        let fixture = ActiveCatalogFixture::new();
+        let (pinned, member) = active_source(&fixture, 1);
+        fixture
+            .authority()
+            .verified_source_catalog(&pinned, &member)
+            .expect("seed exact source reader cache");
+        fixture
+            .authority()
+            .verified_source_readers
+            .lock()
+            .get_mut(&SourceCatalogSlot::from_manifest(
+                &fixture
+                    .authority()
+                    .resolve_registered_source_catalog(pinned.source_profile(), &member)
+                    .expect("resolve cached source")
+                    .manifest,
+            ))
+            .expect("cached source reader")
+            .physical_attestation
+            .portable_manifest
+            .sha256 = "b".repeat(64);
+
+        let error = fixture
+            .authority()
+            .verified_source_catalog(&pinned, &member)
+            .err()
+            .expect("mismatched cached physical attestation must fail");
         assert!(error.to_string().contains("cached source snapshot"));
         assert!(error.to_string().contains("authority disagrees"));
     }

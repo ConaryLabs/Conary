@@ -13,6 +13,11 @@ fn seed_profile_resource(conn: &Connection, source_profile: &str) -> String {
         artifact_size: 1,
         logical_digest_sha256: conary_core::hash::sha256(format!("logical-{revision}").as_bytes()),
         manifest_json,
+        physical_attestation:
+            crate::server::catalog_authority::test_support::physical_attestation_for_test(
+                1,
+                revision.as_bytes(),
+            ),
         durable: true,
         created_at: 1,
     }

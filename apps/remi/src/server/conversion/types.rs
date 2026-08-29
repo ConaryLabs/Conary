@@ -3,11 +3,12 @@
 
 use crate::server::conversion_timing::ConversionTimingReport;
 use conary_core::ccs::convert::ScriptletBundleSummary;
+use conary_core::repository::catalog::{CatalogVerificationEvidenceV1, PortableVfsMetricsV1};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const CONVERSION_BENCHMARK_SCHEMA_V2: u32 = 2;
+pub const CONVERSION_BENCHMARK_SCHEMA_V3: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -21,16 +22,27 @@ pub enum ConversionBenchmarkSelectionKind {
 pub struct ConversionBenchmarkAuthority {
     pub selection_kind: ConversionBenchmarkSelectionKind,
     pub source_profile: String,
-    pub profile_revision_sha256: String,
-    pub profile_catalog_sha256: String,
-    pub profile_catalog_bytes: u64,
-    pub profile_logical_digest_sha256: String,
-    pub source_snapshot_sha256: String,
+    pub profile: ConversionBenchmarkCatalogAuthority,
+    pub source: ConversionBenchmarkCatalogAuthority,
     pub source_identity: String,
     pub repository_identity: String,
     pub source_parser_config_sha256: String,
     pub source_trust_policy_sha256: String,
     pub authenticated_metadata_objects: u64,
+}
+
+/// Exact registered resource, catalog artifact, and portable proof authority.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkCatalogAuthority {
+    pub resource_sha256: String,
+    pub artifact_sha256: String,
+    pub artifact_bytes: u64,
+    pub logical_digest_sha256: String,
+    pub portable_manifest_sha256: String,
+    pub portable_manifest_bytes: u64,
+    pub portable_chunk_size: u32,
+    pub portable_chunk_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -120,15 +132,62 @@ pub struct ConversionBenchmarkProcessUsage {
     pub wall_time_us: u64,
     pub user_cpu_us: u64,
     pub system_cpu_us: u64,
-    pub peak_rss_bytes: u64,
+    pub rss_start_bytes: u64,
+    pub rss_end_bytes: u64,
+    pub process_lifetime_peak_rss_bytes: u64,
     pub minor_faults: u64,
     pub major_faults: u64,
     pub block_input_operations: u64,
     pub block_output_operations: u64,
+    pub logical_read_bytes: u64,
+    pub logical_write_bytes: u64,
+    pub read_syscalls: u64,
+    pub write_syscalls: u64,
+    pub storage_read_bytes: u64,
+    pub storage_write_bytes: u64,
+    pub cancelled_write_bytes: u64,
     pub voluntary_context_switches: u64,
     pub involuntary_context_switches: u64,
-    pub maximum_thread_count: u64,
-    pub maximum_runnable_threads: u64,
+    pub thread_count_start: u64,
+    pub thread_count_end: u64,
+    pub runnable_threads_start: u64,
+    pub runnable_threads_end: u64,
+}
+
+/// Work performed by one fresh registered catalog reopen before query work.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkCatalogReopen {
+    pub process: ConversionBenchmarkProcessUsage,
+    pub verification: CatalogVerificationEvidenceV1,
+    pub vfs: PortableVfsMetricsV1,
+}
+
+/// Work demanded after each registered open to resolve the exact benchmark
+/// subject. VFS metrics are deltas from the owning reader, not cumulative
+/// connection totals.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkCatalogQuery {
+    pub process: ConversionBenchmarkProcessUsage,
+    pub vfs: PortableVfsMetricsV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkCatalogSetup {
+    pub reopen: ConversionBenchmarkCatalogReopen,
+    pub query: ConversionBenchmarkCatalogQuery,
+}
+
+/// Complete pre-conversion work plus separately attributable catalog work.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionBenchmarkSetup {
+    pub prepare: ConversionBenchmarkProcessUsage,
+    pub profile: ConversionBenchmarkCatalogSetup,
+    pub source: ConversionBenchmarkCatalogSetup,
+    pub finalize: ConversionBenchmarkProcessUsage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,10 +246,11 @@ pub struct ConversionBenchmarkEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConversionBenchmarkReportV2 {
+pub struct ConversionBenchmarkReportV3 {
     pub schema_version: u32,
     pub environment: ConversionBenchmarkEnvironment,
     pub authority: ConversionBenchmarkAuthority,
+    pub setup: ConversionBenchmarkSetup,
     pub subject: ConversionBenchmarkSubject,
     pub repetitions: Vec<ConversionBenchmarkEvidence>,
 }

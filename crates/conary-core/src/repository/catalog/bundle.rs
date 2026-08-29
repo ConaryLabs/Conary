@@ -10,34 +10,29 @@ use std::path::{Path, PathBuf};
 use super::contract::validate_storage_component;
 use super::store::{CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1};
 use super::{
-    CatalogBindingV1, CatalogPhysicalSealOutcomeV1, CatalogReader, CatalogScopeV1,
-    CatalogSourceEvidenceV1, ProfileRevisionV2, SourceSnapshotV1,
+    CatalogArtifactV1, CatalogBindingV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1,
+    PortableChunkManifestV1, PortableIntegrityError, PortableManifestAttestationV1,
+    ProfileRevisionV2, SourceSnapshotV1, read_portable_chunk_manifest_v1,
+    write_portable_chunk_manifest_v1,
 };
 use crate::error::{Error, Result};
 
+mod publication;
+
+use publication::publish_verified_directory_for_registration;
+
 pub const CATALOG_FILE_NAME: &str = "catalog.sqlite";
 pub const CATALOG_MANIFEST_FILE_NAME: &str = "manifest.json";
+pub const CATALOG_PORTABLE_MANIFEST_FILE_NAME: &str = "catalog.sqlite.chunks-v1";
 pub const SOURCE_METADATA_DIRECTORY_NAME: &str = "native-metadata";
 
-/// The durable filesystem result of publishing one immutable catalog bundle.
-///
-/// `newly_created` is the publication provenance needed by a caller that may
-/// have to roll back a larger publication. A false value means the exact
-/// content-addressed destination already existed and was verified; callers
-/// must never remove that destination as part of their rollback.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublishedCatalogBundle {
-    pub path: PathBuf,
-    pub newly_created: bool,
-}
-
-/// A durable catalog publication paired with the exact same-file physical
-/// seal that its operational registry must persist.
+/// A durable catalog publication paired with its exact portable-manifest
+/// attestation for operational registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishedVerifiedCatalogBundle {
     pub path: PathBuf,
     pub newly_created: bool,
-    pub physical_seal: CatalogPhysicalSealOutcomeV1,
+    pub portable_manifest_attestation: PortableManifestAttestationV1,
 }
 
 impl AsRef<Path> for PublishedVerifiedCatalogBundle {
@@ -51,13 +46,6 @@ impl std::ops::Deref for PublishedVerifiedCatalogBundle {
 
     fn deref(&self) -> &Self::Target {
         &self.path
-    }
-}
-
-impl PublishedCatalogBundle {
-    /// Consume the publication result and return its destination path.
-    pub fn into_path(self) -> PathBuf {
-        self.path
     }
 }
 
@@ -143,43 +131,47 @@ pub fn verify_source_catalog_bundle(
     Ok(reader)
 }
 
-/// Reopen a locally registered, content-addressed source snapshot whose
-/// publisher already required a complete logical replay before registration.
+/// Completely verify a registered source bundle after authenticating its
+/// portable sidecar against exact persisted physical authority.
 ///
-/// The durable registry owner must first validate the canonical manifest,
-/// resource metadata, and exact source-snapshot identity. This function then
-/// repeats the complete filesystem, byte hash, SQLite schema/integrity,
-/// embedded-binding, and retained-metadata checks without replaying every
-/// normalized relation through Rust values.
-pub fn verify_registered_source_catalog_bundle(
+/// Publication, promotion, and repair use this explicit path when they must
+/// repeat the whole artifact hash, SQLite integrity check, and logical replay.
+pub fn verify_registered_source_catalog_bundle_complete(
     directory: impl AsRef<Path>,
     expected: &SourceSnapshotV1,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
+    let directory = directory.as_ref();
     expected.validate()?;
-    verify_exact_source_directory(directory.as_ref())?;
-    verify_manifest_file(directory.as_ref(), expected)?;
-    let reader =
-        verify_source_catalog_binding_with_durable_attestation(directory.as_ref(), expected)?;
-    verify_source_metadata_directory(directory.as_ref(), expected)?;
+    verify_exact_registered_source_directory(directory)?;
+    verify_manifest_file(directory, expected)?;
+    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)?;
+    let reader = verify_source_catalog_binding(directory, expected)?;
+    verify_source_metadata_directory(directory, expected)?;
     Ok(reader)
 }
 
-/// Reopen a registered source bundle through its persisted fs-verity identity.
-/// Candidate and externally supplied bundles cannot enter this path.
-pub fn verify_registered_source_catalog_bundle_with_fsverity(
+/// Reopen one registered source snapshot through its exact portable manifest.
+pub fn verify_registered_source_catalog_bundle(
     directory: impl AsRef<Path>,
     expected: &SourceSnapshotV1,
-    digest_sha256: &str,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
+    let directory = directory.as_ref();
     expected.validate()?;
-    verify_exact_source_directory(directory.as_ref())?;
-    verify_manifest_file(directory.as_ref(), expected)?;
-    let reader = verify_source_catalog_binding_with_registered_fsverity(
-        directory.as_ref(),
-        expected,
-        digest_sha256,
+    verify_exact_registered_source_directory(directory)?;
+    verify_manifest_file(directory, expected)?;
+    let portable_manifest = read_registered_portable_manifest(
+        directory,
+        portable_manifest_attestation,
+        &expected.catalog,
     )?;
-    verify_source_metadata_directory(directory.as_ref(), expected)?;
+    let reader = verify_source_catalog_binding_with_registered_portable(
+        directory,
+        expected,
+        portable_manifest,
+    )?;
+    verify_source_metadata_directory(directory, expected)?;
     Ok(reader)
 }
 
@@ -187,10 +179,12 @@ fn verify_source_catalog_bundle_with_proof(
     directory: &Path,
     expected: &SourceSnapshotV1,
     proof: &CatalogVerificationProofV1,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
     expected.validate()?;
-    verify_exact_source_directory(directory)?;
+    verify_exact_registered_source_directory(directory)?;
     verify_manifest_file(directory, expected)?;
+    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)?;
     let reader = verify_source_catalog_binding_with_proof(directory, expected, proof)?;
     verify_source_metadata_directory(directory, expected)?;
     Ok(reader)
@@ -206,53 +200,52 @@ pub fn verify_profile_catalog_bundle(
     verify_profile_catalog_binding(directory.as_ref(), expected)
 }
 
-/// Reopen a locally registered, content-addressed profile revision whose V2
-/// publisher already required a complete logical replay before publication.
+/// Completely verify a registered profile bundle after authenticating its
+/// portable sidecar against exact persisted physical authority.
 ///
-/// The caller must first resolve the exact manifest digest through the durable
-/// profile registry. This function rechecks the canonical bundle manifest and
-/// every physical/schema/integrity and embedded-binding property, then carries
-/// the V2 publication attestation instead of counting, reconstructing, or
-/// foreign-key-scanning all rows. The exact artifact binding carries the
-/// publisher's completed logical replay, row cardinalities, and explicit
-/// orphan rejection.
-/// Unregistered or externally supplied bundles use
-/// [`verify_profile_catalog_bundle`] instead.
+/// Publication, promotion, and repair use this explicit path when they must
+/// repeat the whole artifact hash, SQLite integrity check, and logical replay.
+pub fn verify_registered_profile_catalog_bundle_complete(
+    directory: impl AsRef<Path>,
+    expected: &ProfileRevisionV2,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
+) -> Result<CatalogReader> {
+    let directory = directory.as_ref();
+    expected.validate()?;
+    verify_exact_registered_profile_directory(directory)?;
+    verify_manifest_file(directory, expected)?;
+    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)?;
+    verify_profile_catalog_binding(directory, expected)
+}
+
+/// Reopen one registered profile revision through its exact portable manifest.
 pub fn verify_registered_profile_catalog_bundle(
     directory: impl AsRef<Path>,
     expected: &ProfileRevisionV2,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
+    let directory = directory.as_ref();
     expected.validate()?;
-    verify_exact_profile_directory(directory.as_ref())?;
-    verify_manifest_file(directory.as_ref(), expected)?;
-    verify_profile_catalog_binding_with_durable_attestation(directory.as_ref(), expected)
-}
-
-/// Reopen a registered profile bundle through its persisted fs-verity identity.
-/// Candidate and externally supplied bundles cannot enter this path.
-pub fn verify_registered_profile_catalog_bundle_with_fsverity(
-    directory: impl AsRef<Path>,
-    expected: &ProfileRevisionV2,
-    digest_sha256: &str,
-) -> Result<CatalogReader> {
-    expected.validate()?;
-    verify_exact_profile_directory(directory.as_ref())?;
-    verify_manifest_file(directory.as_ref(), expected)?;
-    verify_profile_catalog_binding_with_registered_fsverity(
-        directory.as_ref(),
-        expected,
-        digest_sha256,
-    )
+    verify_exact_registered_profile_directory(directory)?;
+    verify_manifest_file(directory, expected)?;
+    let portable_manifest = read_registered_portable_manifest(
+        directory,
+        portable_manifest_attestation,
+        &expected.catalog,
+    )?;
+    verify_profile_catalog_binding_with_registered_portable(directory, expected, portable_manifest)
 }
 
 fn verify_profile_catalog_bundle_with_proof(
     directory: &Path,
     expected: &ProfileRevisionV2,
     proof: &CatalogVerificationProofV1,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
     expected.validate()?;
-    verify_exact_profile_directory(directory)?;
+    verify_exact_registered_profile_directory(directory)?;
     verify_manifest_file(directory, expected)?;
+    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)?;
     verify_profile_catalog_binding_with_proof(directory, expected, proof)
 }
 
@@ -318,15 +311,6 @@ pub fn source_metadata_object_path(
     Ok(path)
 }
 
-pub fn publish_source_catalog_bundle(
-    candidate_directory: impl AsRef<Path>,
-    catalog_root: impl AsRef<Path>,
-    manifest: &SourceSnapshotV1,
-) -> Result<PathBuf> {
-    publish_source_catalog_bundle_with_provenance(candidate_directory, catalog_root, manifest)
-        .map(PublishedCatalogBundle::into_path)
-}
-
 /// Publish a source bundle by consuming its exact candidate reader, then
 /// independently reopening the durable destination after atomic rename.
 pub fn publish_source_catalog_bundle_verified(
@@ -341,41 +325,24 @@ pub fn publish_source_catalog_bundle_verified(
     verify_exact_source_directory(candidate_directory)?;
     verify_manifest_file(candidate_directory, manifest)?;
     let proof = verified.verification_proof()?.clone();
-    drop(verified);
+    let portable_manifest = verified.into_portable_chunk_manifest()?;
+    let portable_manifest_attestation = write_portable_chunk_manifest_v1(
+        &candidate_directory.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME),
+        &portable_manifest,
+    )
+    .map_err(portable_integrity_error)?;
+    verify_exact_registered_source_directory(candidate_directory)?;
     let parent = ensure_real_subdirectory(catalog_root.as_ref(), "sources")?;
     publish_verified_directory_for_registration(
         candidate_directory,
         &parent,
         &manifest.manifest_sha256()?,
-        |path| verify_source_catalog_bundle_with_proof(path, manifest, &proof),
+        portable_manifest_attestation,
+        |path, attestation| {
+            verify_source_catalog_bundle_with_proof(path, manifest, &proof, attestation)
+        },
+        |path, attestation| verify_registered_source_catalog_bundle(path, manifest, attestation),
     )
-}
-
-/// Publish a source bundle and report whether this call created its immutable
-/// content-addressed destination.
-pub fn publish_source_catalog_bundle_with_provenance(
-    candidate_directory: impl AsRef<Path>,
-    catalog_root: impl AsRef<Path>,
-    manifest: &SourceSnapshotV1,
-) -> Result<PublishedCatalogBundle> {
-    let candidate_directory = candidate_directory.as_ref();
-    verify_source_catalog_bundle(candidate_directory, manifest)?;
-    let parent = ensure_real_subdirectory(catalog_root.as_ref(), "sources")?;
-    publish_verified_directory(
-        candidate_directory,
-        &parent,
-        &manifest.manifest_sha256()?,
-        |path| verify_source_catalog_bundle(path, manifest).map(|_| ()),
-    )
-}
-
-pub fn publish_profile_catalog_bundle(
-    candidate_directory: impl AsRef<Path>,
-    catalog_root: impl AsRef<Path>,
-    manifest: &ProfileRevisionV2,
-) -> Result<PathBuf> {
-    publish_profile_catalog_bundle_with_provenance(candidate_directory, catalog_root, manifest)
-        .map(PublishedCatalogBundle::into_path)
 }
 
 /// Publish a profile bundle by consuming its exact candidate reader, then
@@ -392,7 +359,13 @@ pub fn publish_profile_catalog_bundle_verified(
     verify_exact_profile_directory(candidate_directory)?;
     verify_manifest_file(candidate_directory, manifest)?;
     let proof = verified.verification_proof()?.clone();
-    drop(verified);
+    let portable_manifest = verified.into_portable_chunk_manifest()?;
+    let portable_manifest_attestation = write_portable_chunk_manifest_v1(
+        &candidate_directory.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME),
+        &portable_manifest,
+    )
+    .map_err(portable_integrity_error)?;
+    verify_exact_registered_profile_directory(candidate_directory)?;
     validate_storage_component(&manifest.profile, "profile catalog storage identity")?;
     let profiles = ensure_real_subdirectory(catalog_root.as_ref(), "profiles")?;
     let parent = ensure_real_subdirectory(&profiles, &manifest.profile)?;
@@ -400,28 +373,32 @@ pub fn publish_profile_catalog_bundle_verified(
         candidate_directory,
         &parent,
         &manifest.manifest_sha256()?,
-        |path| verify_profile_catalog_bundle_with_proof(path, manifest, &proof),
+        portable_manifest_attestation,
+        |path, attestation| {
+            verify_profile_catalog_bundle_with_proof(path, manifest, &proof, attestation)
+        },
+        |path, attestation| verify_registered_profile_catalog_bundle(path, manifest, attestation),
     )
 }
 
-/// Publish a profile bundle and report whether this call created its
-/// immutable content-addressed destination.
-pub fn publish_profile_catalog_bundle_with_provenance(
-    candidate_directory: impl AsRef<Path>,
-    catalog_root: impl AsRef<Path>,
-    manifest: &ProfileRevisionV2,
-) -> Result<PublishedCatalogBundle> {
-    let candidate_directory = candidate_directory.as_ref();
-    verify_profile_catalog_bundle(candidate_directory, manifest)?;
-    validate_storage_component(&manifest.profile, "profile catalog storage identity")?;
-    let profiles = ensure_real_subdirectory(catalog_root.as_ref(), "profiles")?;
-    let parent = ensure_real_subdirectory(&profiles, &manifest.profile)?;
-    publish_verified_directory(
-        candidate_directory,
-        &parent,
-        &manifest.manifest_sha256()?,
-        |path| verify_profile_catalog_bundle(path, manifest).map(|_| ()),
+fn read_registered_portable_manifest(
+    directory: &Path,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
+    expected_artifact: &CatalogArtifactV1,
+) -> Result<PortableChunkManifestV1> {
+    read_portable_chunk_manifest_v1(
+        &directory.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME),
+        portable_manifest_attestation,
+        expected_artifact,
     )
+    .map_err(portable_integrity_error)
+}
+
+fn portable_integrity_error(error: PortableIntegrityError) -> Error {
+    match error {
+        PortableIntegrityError::Io(error) => Error::Io(error),
+        error => Error::ConflictError(error.to_string()),
+    }
 }
 
 fn verify_source_catalog_binding(
@@ -544,65 +521,35 @@ fn verify_profile_catalog_binding_with_proof(
     Ok(reader)
 }
 
-fn verify_profile_catalog_binding_with_durable_attestation(
+fn verify_profile_catalog_binding_with_registered_portable(
     directory: &Path,
     manifest: &ProfileRevisionV2,
+    portable_manifest: PortableChunkManifestV1,
 ) -> Result<CatalogReader> {
     let binding = profile_catalog_binding(manifest);
     let attestation = CatalogDurableLogicalAttestationV1::new(&binding);
-    let reader = CatalogReader::open_verified_with_durable_attestation(
+    let reader = CatalogReader::open_registered_portable(
         directory.join(CATALOG_FILE_NAME),
         &binding,
         &attestation,
+        portable_manifest,
     )?;
     verify_profile_evidence(directory, manifest, &reader)?;
     Ok(reader)
 }
 
-fn verify_profile_catalog_binding_with_registered_fsverity(
-    directory: &Path,
-    manifest: &ProfileRevisionV2,
-    digest_sha256: &str,
-) -> Result<CatalogReader> {
-    let binding = profile_catalog_binding(manifest);
-    let attestation = CatalogDurableLogicalAttestationV1::new(&binding);
-    let reader = CatalogReader::open_verified_with_registered_fsverity(
-        directory.join(CATALOG_FILE_NAME),
-        &binding,
-        &attestation,
-        digest_sha256,
-    )?;
-    verify_profile_evidence(directory, manifest, &reader)?;
-    Ok(reader)
-}
-
-fn verify_source_catalog_binding_with_durable_attestation(
+fn verify_source_catalog_binding_with_registered_portable(
     directory: &Path,
     manifest: &SourceSnapshotV1,
+    portable_manifest: PortableChunkManifestV1,
 ) -> Result<CatalogReader> {
     let binding = source_catalog_binding(manifest);
     let attestation = CatalogDurableLogicalAttestationV1::new(&binding);
-    let reader = CatalogReader::open_verified_with_durable_attestation(
+    let reader = CatalogReader::open_registered_portable(
         directory.join(CATALOG_FILE_NAME),
         &binding,
         &attestation,
-    )?;
-    verify_source_evidence(directory, manifest, &reader)?;
-    Ok(reader)
-}
-
-fn verify_source_catalog_binding_with_registered_fsverity(
-    directory: &Path,
-    manifest: &SourceSnapshotV1,
-    digest_sha256: &str,
-) -> Result<CatalogReader> {
-    let binding = source_catalog_binding(manifest);
-    let attestation = CatalogDurableLogicalAttestationV1::new(&binding);
-    let reader = CatalogReader::open_verified_with_registered_fsverity(
-        directory.join(CATALOG_FILE_NAME),
-        &binding,
-        &attestation,
-        digest_sha256,
+        portable_manifest,
     )?;
     verify_source_evidence(directory, manifest, &reader)?;
     Ok(reader)
@@ -735,116 +682,6 @@ where
     Ok(())
 }
 
-fn publish_verified_directory<F>(
-    candidate: &Path,
-    parent: &Path,
-    identity: &str,
-    verify: F,
-) -> Result<PublishedCatalogBundle>
-where
-    F: Fn(&Path) -> Result<()>,
-{
-    require_real_directory(candidate)?;
-    require_real_directory(parent)?;
-    let destination = parent.join(identity);
-    match fs::symlink_metadata(&destination) {
-        Ok(_) => {
-            verify(&destination)?;
-            return Ok(PublishedCatalogBundle {
-                path: destination,
-                newly_created: false,
-            });
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    require_same_filesystem(candidate, parent)?;
-    fs::rename(candidate, &destination).map_err(|error| {
-        Error::IoError(format!(
-            "atomically publish catalog {} as {}: {error}",
-            candidate.display(),
-            destination.display()
-        ))
-    })?;
-    if let Err(error) = sync_directory(parent).and_then(|()| verify(&destination)) {
-        return Err(cleanup_failed_publication(&destination, error));
-    }
-    Ok(PublishedCatalogBundle {
-        path: destination,
-        newly_created: true,
-    })
-}
-
-fn publish_verified_directory_for_registration<F>(
-    candidate: &Path,
-    parent: &Path,
-    identity: &str,
-    verify: F,
-) -> Result<PublishedVerifiedCatalogBundle>
-where
-    F: Fn(&Path) -> Result<CatalogReader>,
-{
-    require_real_directory(candidate)?;
-    require_real_directory(parent)?;
-    let destination = parent.join(identity);
-    match fs::symlink_metadata(&destination) {
-        Ok(_) => {
-            let physical_seal = verify(&destination)?.seal_registered_physical_integrity()?;
-            return Ok(PublishedVerifiedCatalogBundle {
-                path: destination,
-                newly_created: false,
-                physical_seal,
-            });
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    require_same_filesystem(candidate, parent)?;
-    fs::rename(candidate, &destination).map_err(|error| {
-        Error::IoError(format!(
-            "atomically publish catalog {} as {}: {error}",
-            candidate.display(),
-            destination.display()
-        ))
-    })?;
-    let sealed = sync_directory(parent)
-        .and_then(|()| verify(&destination))
-        .and_then(CatalogReader::seal_registered_physical_integrity);
-    let physical_seal = match sealed {
-        Ok(seal) => seal,
-        Err(error) => return Err(cleanup_failed_publication(&destination, error)),
-    };
-    Ok(PublishedVerifiedCatalogBundle {
-        path: destination,
-        newly_created: true,
-        physical_seal,
-    })
-}
-
-/// Remove only the destination created by the immediately preceding rename.
-///
-/// Existing destinations take the early return above and never reach this
-/// helper. Refuse to remove anything that is no longer a real directory; that
-/// keeps a replacement symlink or regular file out of the cleanup blast
-/// radius.
-fn cleanup_failed_publication(destination: &Path, publication_error: Error) -> Error {
-    let cleanup_result = (|| -> Result<()> {
-        require_real_directory(destination)?;
-        fs::remove_dir_all(destination)?;
-        if let Some(parent) = destination.parent() {
-            sync_directory(parent)?;
-        }
-        Ok(())
-    })();
-    match cleanup_result {
-        Ok(()) => publication_error,
-        Err(cleanup_error) => Error::IoError(format!(
-            "catalog publication failed after creating {}; cleanup also failed ({cleanup_error}); the newly-created destination may remain: {publication_error}",
-            destination.display()
-        )),
-    }
-}
-
 fn verify_exact_source_directory(directory: &Path) -> Result<()> {
     verify_exact_directory_entries(
         directory,
@@ -857,11 +694,36 @@ fn verify_exact_source_directory(directory: &Path) -> Result<()> {
     )
 }
 
+fn verify_exact_registered_source_directory(directory: &Path) -> Result<()> {
+    verify_exact_directory_entries(
+        directory,
+        &[
+            CATALOG_FILE_NAME,
+            CATALOG_MANIFEST_FILE_NAME,
+            CATALOG_PORTABLE_MANIFEST_FILE_NAME,
+            SOURCE_METADATA_DIRECTORY_NAME,
+        ],
+        "registered source catalog bundle",
+    )
+}
+
 fn verify_exact_profile_directory(directory: &Path) -> Result<()> {
     verify_exact_directory_entries(
         directory,
         &[CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME],
         "profile catalog bundle",
+    )
+}
+
+fn verify_exact_registered_profile_directory(directory: &Path) -> Result<()> {
+    verify_exact_directory_entries(
+        directory,
+        &[
+            CATALOG_FILE_NAME,
+            CATALOG_MANIFEST_FILE_NAME,
+            CATALOG_PORTABLE_MANIFEST_FILE_NAME,
+        ],
+        "registered profile catalog bundle",
     )
 }
 

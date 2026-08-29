@@ -23,7 +23,8 @@ use conary_core::recipe::hermetic::{
 };
 use conary_core::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2,
-    ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
+    PortableManifestAttestationV1, ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1,
+    SourceStreamV1, portable_chunk_count_v1, portable_manifest_size_v1,
 };
 use conary_core::repository::universe::{
     REMI_UNIVERSE_SCHEMA_V2, RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2,
@@ -236,8 +237,19 @@ impl M4cFixture {
         let manifest_json =
             String::from_utf8(conary_core::json::canonical_json(&universe).unwrap()).unwrap();
         let conn = conary_core::db::open_fast(&self.db_path).unwrap();
+        let catalog_size = universe.profiles[0].revision.catalog.size;
+        let chunk_count = portable_chunk_count_v1(catalog_size).unwrap();
+        let physical_attestation = conary_core::db::models::RemiCatalogPhysicalAttestation::new(
+            PortableManifestAttestationV1 {
+                sha256: conary_core::hash::sha256(b"m4c-profile-portable-manifest"),
+                size: portable_manifest_size_v1(chunk_count).unwrap(),
+            },
+            catalog_size,
+        )
+        .unwrap();
         conary_core::db::models::RemiCatalogResource::from_profile_revision(
             &universe.profiles[0].revision,
+            physical_attestation,
             1,
         )
         .unwrap()

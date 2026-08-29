@@ -570,14 +570,16 @@ mod tests {
     #[test]
     fn signed_metadata_fault_preserves_private_candidates() {
         let fixture = PromotionFixture::new();
-        let (_, _, mut candidate, _, _) = fixture.plan();
+        let (profiles, _, mut candidate, _, _) = fixture.plan();
+        let physical_attestations =
+            promotion_profile_physical_attestations(&profiles).expect("profile attestations");
         candidate.timestamp_bytes = b"{}\n".to_vec();
 
         let error = publish_candidate_files(
             &fixture.config.catalog_candidate_dir,
             &fixture.config.catalog_dir,
             &candidate,
-            Some(fixture.catalogs.authority()),
+            &physical_attestations,
         )
         .expect_err("tampered signed metadata must fail");
         assert!(format!("{error:#}").contains("timestamp"), "{error:#}");
@@ -606,11 +608,13 @@ mod tests {
     fn mid_transaction_candidate_loss_rolls_back_every_pointer() {
         let fixture = PromotionFixture::new();
         let (profiles, canonical, candidate, evidence_sha256, crawl_sha256) = fixture.plan();
+        let physical_attestations =
+            promotion_profile_physical_attestations(&profiles).expect("profile attestations");
         let bundle = publish_candidate_files(
             &fixture.config.catalog_candidate_dir,
             &fixture.config.catalog_dir,
             &candidate,
-            Some(fixture.catalogs.authority()),
+            &physical_attestations,
         )
         .expect("publish fixture signed bundle");
         let conn = fixture.catalogs.connection();

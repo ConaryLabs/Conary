@@ -3,7 +3,9 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use super::*;
-use crate::repository::catalog::SourceMetadataObjectRoleV1;
+use crate::repository::catalog::{
+    PORTABLE_CHUNK_SIZE_V1, SourceMetadataObjectRoleV1, portable_manifest_size_v1,
+};
 use crate::repository::dependency_model::{
     ProvideArchitectureQualifier, RepositoryRequirementClause, RepositoryRequirementExpression,
 };
@@ -190,7 +192,7 @@ fn local_logical_proof_is_exact_non_persisted_and_still_rejects_byte_tamper() {
 
     let durable = CatalogDurableLogicalAttestationV1::new(&binding);
     let durable_reopen =
-        CatalogReader::open_verified_with_durable_attestation(&copied, &binding, &durable).unwrap();
+        CatalogReader::open_verified_projection_cache_entry(&copied, &binding, &durable).unwrap();
     assert_eq!(durable_reopen.binding(), &binding);
     assert!(durable_reopen.verification_proof().is_ok());
 
@@ -201,7 +203,7 @@ fn local_logical_proof_is_exact_non_persisted_and_still_rejects_byte_tamper() {
         .expect("logical proof must be bound to one exact catalog");
     assert!(error.to_string().contains("exact artifact binding"));
     let error =
-        CatalogReader::open_verified_with_durable_attestation(&copied, &wrong_binding, &durable)
+        CatalogReader::open_verified_projection_cache_entry(&copied, &wrong_binding, &durable)
             .err()
             .expect("durable logical attestation must be bound to one exact catalog");
     assert!(error.to_string().contains("exact artifact binding"));
@@ -224,10 +226,152 @@ fn local_logical_proof_is_exact_non_persisted_and_still_rejects_byte_tamper() {
         .err()
         .expect("a carried logical proof must not bypass physical integrity");
     assert!(error.to_string().contains("Checksum mismatch"));
-    let error = CatalogReader::open_verified_with_durable_attestation(&copied, &binding, &durable)
+    let error = CatalogReader::open_verified_projection_cache_entry(&copied, &binding, &durable)
         .err()
-        .expect("durable logical attestation must not bypass physical integrity");
+        .expect("projection-cache logical attestation must not bypass physical integrity");
     assert!(error.to_string().contains("Checksum mismatch"));
+}
+
+#[test]
+fn registered_reader_uses_only_portable_authenticated_reads() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("catalog.sqlite");
+    let content =
+        CatalogContentV1::new(source_scope(), evidence(), vec![package("bash", "a")]).unwrap();
+    let binding = write_catalog_candidate(&path, &content).unwrap();
+
+    let logical_before_candidate = logical_verification_passes_for_test();
+    let candidate = CatalogReader::open_verified(&path, &binding).unwrap();
+    assert_eq!(
+        logical_verification_passes_for_test(),
+        logical_before_candidate + 1
+    );
+    assert!(candidate.portable_vfs_metrics().is_none());
+    assert_eq!(
+        candidate
+            .verification_evidence()
+            .portable_manifest_validation_passes,
+        0
+    );
+    assert_eq!(
+        candidate
+            .verification_evidence()
+            .portable_manifest_validation_bytes,
+        0
+    );
+    let portable_manifest = candidate.into_portable_chunk_manifest().unwrap();
+    let portable_manifest_bytes =
+        portable_manifest_size_v1(portable_manifest.chunk_count()).unwrap();
+    let durable = CatalogDurableLogicalAttestationV1::new(&binding);
+
+    let logical_before_registered = logical_verification_passes_for_test();
+    let registered =
+        CatalogReader::open_registered_portable(&path, &binding, &durable, portable_manifest)
+            .unwrap();
+    assert_eq!(
+        logical_verification_passes_for_test(),
+        logical_before_registered
+    );
+    assert_eq!(registered.binding(), &binding);
+    assert_eq!(registered.packages().unwrap(), content.packages);
+    assert!(registered.verification_proof().is_ok());
+
+    let evidence = registered.verification_evidence();
+    assert_eq!(evidence.userspace_sha256_passes, 0);
+    assert_eq!(evidence.userspace_sha256_bytes, 0);
+    assert_eq!(evidence.portable_manifest_validation_passes, 1);
+    assert_eq!(
+        evidence.portable_manifest_validation_bytes,
+        portable_manifest_bytes
+    );
+    assert_eq!(evidence.sqlite_integrity_passes, 0);
+    assert_eq!(evidence.sqlite_integrity_bytes_covered, 0);
+    assert_eq!(evidence.logical_replay_passes, 0);
+    assert_eq!(evidence.stored_binding_checks, 1);
+    let metrics = registered
+        .portable_vfs_metrics()
+        .expect("registered reader must expose authenticated VFS work");
+    assert!(metrics.read_calls > 0);
+    assert!(metrics.authenticated_chunks > 0);
+    assert_eq!(metrics.integrity_failures, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn registered_reader_query_reports_post_open_unread_chunk_failure_detail() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("catalog.sqlite");
+    let marker = "post-open-unread-portable-chunk-744";
+    let mut target = package("zzzz-portable-tamper-target", "target");
+    target.description = Some(format!(
+        "{}{}",
+        "padding".repeat(PORTABLE_CHUNK_SIZE_V1 as usize / 2),
+        marker.repeat(PORTABLE_CHUNK_SIZE_V1 as usize / marker.len() + 1)
+    ));
+    let content = CatalogContentV1::new(source_scope(), evidence(), vec![target]).unwrap();
+    let binding = write_catalog_candidate(&path, &content).unwrap();
+    let catalog_bytes = fs::read(&path).unwrap();
+    let marker_offset = catalog_bytes
+        .windows(marker.len())
+        .rposition(|bytes| bytes == marker.as_bytes())
+        .expect("target description marker must be retained in SQLite bytes");
+    let mutation_offset = marker_offset + marker.len() / 2;
+    let chunk_index = mutation_offset as u64 / u64::from(PORTABLE_CHUNK_SIZE_V1);
+    assert!(
+        chunk_index > 1,
+        "target marker must be outside open-time header chunks"
+    );
+
+    let candidate = CatalogReader::open_verified(&path, &binding).unwrap();
+    let portable_manifest = candidate.into_portable_chunk_manifest().unwrap();
+    assert!(chunk_index < portable_manifest.chunk_count());
+    let durable = CatalogDurableLogicalAttestationV1::new(&binding);
+    let registered =
+        CatalogReader::open_registered_portable(&path, &binding, &durable, portable_manifest)
+            .unwrap();
+
+    let mut carrier = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    carrier
+        .seek(SeekFrom::Start(mutation_offset as u64))
+        .unwrap();
+    let mut original = [0_u8; 1];
+    carrier.read_exact(&mut original).unwrap();
+    carrier
+        .seek(SeekFrom::Start(mutation_offset as u64))
+        .unwrap();
+    carrier.write_all(&[original[0] ^ 0xff]).unwrap();
+    carrier.sync_all().unwrap();
+
+    let error = registered
+        .find_packages_by_name("zzzz-portable-tamper-target")
+        .expect_err("an unread mutated chunk must fail before returning package authority");
+    let detail = error.to_string();
+    assert!(matches!(error, Error::ConflictError(_)), "{detail}");
+    assert!(
+        detail.contains("portable catalog authenticated read failed (Authentication")
+            && detail.contains(&format!("chunk Some({chunk_index})"))
+            && detail.contains(&format!("portable catalog chunk {chunk_index} SHA-256")),
+        "{detail}"
+    );
+}
+
+#[test]
+fn portable_manifest_build_requires_a_logically_verified_candidate() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("catalog.sqlite");
+    let content =
+        CatalogContentV1::new(source_scope(), evidence(), vec![package("bash", "a")]).unwrap();
+    let binding = write_catalog_candidate(&path, &content).unwrap();
+
+    let signed_only = CatalogReader::open_verified_signed_artifact(&path, &binding).unwrap();
+    let error = signed_only
+        .into_portable_chunk_manifest()
+        .expect_err("signed-only candidate must not mint portable chunk authority");
+    assert!(error.to_string().contains("no local logical replay proof"));
 }
 
 #[test]

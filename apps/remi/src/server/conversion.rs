@@ -24,12 +24,14 @@ use crate::server::{BoundedCache, R2Store};
 use std::path::PathBuf;
 use std::sync::Arc;
 pub use types::{
-    CONVERSION_BENCHMARK_SCHEMA_V2, ConversionBenchmarkAuthority, ConversionBenchmarkConfig,
+    CONVERSION_BENCHMARK_SCHEMA_V3, ConversionBenchmarkAuthority,
+    ConversionBenchmarkCatalogAuthority, ConversionBenchmarkCatalogQuery,
+    ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkConfig,
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
-    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV2,
-    ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSubject,
-    ConversionBenchmarkView, ConversionBenchmarkViews, ScriptletPackageMetadata,
-    ServerConversionResult,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV3,
+    ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSetup,
+    ConversionBenchmarkSubject, ConversionBenchmarkView, ConversionBenchmarkViews,
+    ScriptletPackageMetadata, ServerConversionResult,
 };
 
 /// Conversion service for Remi

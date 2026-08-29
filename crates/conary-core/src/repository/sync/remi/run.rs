@@ -713,9 +713,18 @@ mod tests {
                 "INSERT INTO remi_catalog_resources (
                      resource_sha256, resource_kind, source_profile,
                      artifact_sha256, artifact_size, logical_digest_sha256,
-                     manifest_json, durable, created_at
-                 ) VALUES (?1, ?2, 'fedora-44', ?3, 1, ?4, '{}', 1, 1)",
-                params![resource_digest, kind, resource_digest, digest('d')],
+                     manifest_json, portable_manifest_sha256,
+                     portable_manifest_size, portable_chunk_size,
+                     portable_chunk_count, durable, created_at
+                 ) VALUES (?1, ?2, 'fedora-44', ?3, 1, ?4, '{}', ?5,
+                           96, 65536, 1, 1, 1)",
+                params![
+                    resource_digest,
+                    kind,
+                    resource_digest,
+                    digest('d'),
+                    digest('c')
+                ],
             )
             .unwrap();
         }
