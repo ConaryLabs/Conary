@@ -200,18 +200,12 @@ impl ConversionService {
 
         match result {
             Ok(mut result) => {
-                timing.work.ccs_output_bytes = result.total_size;
-                timing.work.signed_object_count = result.transport.objects.len() as u64;
-                timing.work.signed_object_bytes =
-                    result
-                        .transport
-                        .objects
-                        .iter()
-                        .try_fold(0_u64, |total, object| {
-                            total
-                                .checked_add(object.size)
-                                .context("signed conversion object byte count overflow")
-                        })?;
+                Self::record_result_output_work(
+                    &mut timing,
+                    &result.cache_state,
+                    result.total_size,
+                    result.transport.objects.iter().map(|object| object.size),
+                )?;
                 timing.finish(true);
                 Self::log_conversion_timing(&timing);
                 result.timing = Some(timing);
@@ -223,6 +217,32 @@ impl ConversionService {
                 Err(err)
             }
         }
+    }
+
+    fn record_result_output_work(
+        timing: &mut ConversionTimingReport,
+        cache_state: &str,
+        total_size: u64,
+        object_sizes: impl IntoIterator<Item = u64>,
+    ) -> Result<()> {
+        if cache_state == "hot" {
+            return Ok(());
+        }
+
+        timing.work.ccs_output_bytes = total_size;
+        let mut signed_object_count = 0_u64;
+        let mut signed_object_bytes = 0_u64;
+        for size in object_sizes {
+            signed_object_count = signed_object_count
+                .checked_add(1)
+                .context("signed conversion object count overflow")?;
+            signed_object_bytes = signed_object_bytes
+                .checked_add(size)
+                .context("signed conversion object byte count overflow")?;
+        }
+        timing.work.signed_object_count = signed_object_count;
+        timing.work.signed_object_bytes = signed_object_bytes;
+        Ok(())
     }
 
     async fn convert_package_async_inner(
@@ -708,6 +728,7 @@ impl ConversionService {
 mod tests {
     use super::super::test_support::production_rust_sources;
     use super::ConversionService;
+    use crate::server::conversion_timing::{ConversionTimingReport, ConversionWorkMetrics};
 
     #[test]
     fn remi_server_conversion_paths_do_not_block_on_async_work() {
@@ -725,5 +746,20 @@ mod tests {
         let feed =
             ConversionService::public_feed_for_route("fedora").expect("fedora repository feed");
         assert_eq!(feed.id(), "fedora-44");
+    }
+
+    #[test]
+    fn exact_hot_result_records_no_conversion_output_work() {
+        let mut hot = ConversionTimingReport::new("arch", "fixture", None);
+        ConversionService::record_result_output_work(&mut hot, "hot", 23, [7, 11])
+            .expect("record exact-hot output");
+        assert_eq!(hot.work, ConversionWorkMetrics::default());
+
+        let mut cold = ConversionTimingReport::new("arch", "fixture", None);
+        ConversionService::record_result_output_work(&mut cold, "cold", 23, [7, 11])
+            .expect("record cold output");
+        assert_eq!(cold.work.ccs_output_bytes, 23);
+        assert_eq!(cold.work.signed_object_count, 2);
+        assert_eq!(cold.work.signed_object_bytes, 18);
     }
 }

@@ -629,12 +629,10 @@ fn validate_report(report: &ConversionBenchmarkReportV2) -> Result<()> {
                     "hot benchmark executed conversion core"
                 );
                 ensure!(
-                    timing.work.downloaded_bytes == 0
-                        && timing.work.admitted_local_bytes == 0
-                        && timing.work.repository_checksum_bytes_hashed == 0
-                        && timing.work.source_artifact_bytes == 0
-                        && timing.work.source_bytes_hashed == 0,
-                    "hot benchmark transferred, admitted, or hashed source bytes"
+                    timing.work
+                        == crate::server::conversion_timing::ConversionWorkMetrics::default(),
+                    "hot benchmark recorded conversion or persistence work: {:#?}",
+                    timing.work
                 );
             }
         }
