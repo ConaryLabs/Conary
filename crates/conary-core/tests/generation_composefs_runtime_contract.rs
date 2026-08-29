@@ -201,39 +201,53 @@ fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
         .expect("failed to read generation/builder/rebuild.rs");
     let artifact_rs = fs::read_to_string(core_source("generation/artifact.rs"))
         .expect("failed to read generation/artifact.rs");
+    let artifact_cas_rs = fs::read_to_string(core_source("generation/artifact/cas.rs"))
+        .expect("failed to read generation/artifact/cas.rs");
 
     for (label, source) in [
         ("create.rs", create_rs.as_str()),
         ("rebuild.rs", rebuild_rs.as_str()),
     ] {
         assert!(
-            source.contains(
-                "verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;"
-            ),
+            source.contains("let cas_presence =")
+                && source.contains(
+                    "verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;"
+                ),
             "{label} must check CAS object presence and size without rehashing every adopted object"
         );
         assert!(
-            source.contains("cas_verification: CasObjectVerification::AlreadyVerified"),
-            "{label} must reuse the checked CAS set instead of hashing every object a second time"
+            source.contains(
+                "cas_verification: CasObjectVerification::VerifiedPresence(cas_presence)"
+            ),
+            "{label} must pass the exact checked CAS proof into artifact writing"
         );
     }
     assert!(
-        artifact_rs.contains("CasObjectVerification::AlreadyVerified")
-            && artifact_rs
-                .contains("pub(crate) fn verify_cas_object_files_exist_with_expected_sizes"),
-        "the artifact writer must have an explicit prechecked path that avoids duplicate deep CAS hashing"
+        artifact_rs.contains("CasObjectVerification::VerifiedPresence(proof)")
+            && artifact_rs.contains("proof.require_exact_match(&cas_dir, &cas_objects)?"),
+        "the artifact writer must consume the root-and-object-bound proof without another metadata walk"
+    );
+    assert!(
+        artifact_cas_rs.contains("pub(crate) fn verify_cas_object_presence")
+            && artifact_cas_rs.contains("canonical_cas_dir: PathBuf")
+            && artifact_cas_rs.contains("objects: Vec<CasObjectRef>"),
+        "only the CAS verifier must mint a proof bound to the canonical root and exact objects"
     );
     assert!(
         artifact_rs
-            .contains("load_generation_artifact_with_cas_verification(generation_dir, CasObjectVerification::Deep)")
-            && artifact_rs
-                .contains("CasObjectVerification::Deep => verify_cas_objects(&cas_dir, &cas_manifest.objects)?"),
+            .contains("load_generation_artifact_with_cas_verification(generation_dir, CasLoadVerification::Deep)")
+            && artifact_rs.contains(
+                "CasLoadVerification::Deep => verify_cas_objects(&cas_dir, &cas_manifest.objects)?"
+            ),
         "export/import artifact loading must remain the deep verification point"
     );
     assert!(
         artifact_rs.contains("pub fn load_generation_artifact_with_verified_cas")
-            && artifact_rs.contains("CasObjectVerification::AlreadyVerified"),
-        "local activation must validate the artifact contract without rehashing every CAS object"
+            && artifact_rs.contains("CasLoadVerification::PresenceAndSize")
+            && artifact_rs.contains(
+                "verify_cas_object_files_exist_with_expected_sizes(&cas_dir, &cas_manifest.objects)?"
+            ),
+        "local activation must independently reopen every CAS path and size without rehashing object bodies"
     );
 }
 

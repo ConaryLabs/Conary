@@ -312,7 +312,8 @@ fn build_generation_from_runtime_inputs(
         &runtime_inputs.generation,
         &runtime_inputs.state,
     ))?;
-    verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;
+    let cas_presence =
+        verify_runtime_generation_cas_object_presence(generations_root, &cas_objects)?;
     let result = build_erofs_image_from_root_manifest(&runtime_inputs.generation, &gen_dir)?;
     runtime_inputs.state.write_to(&gen_dir)?;
 
@@ -333,7 +334,7 @@ fn build_generation_from_runtime_inputs(
         architecture,
         erofs_path: &result.image_path,
         cas_base_rel: "../../objects",
-        cas_verification: CasObjectVerification::AlreadyVerified,
+        cas_verification: CasObjectVerification::VerifiedPresence(cas_presence),
         boot_assets,
         carrier_capabilities,
     })?;

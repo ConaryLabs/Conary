@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::generation::artifact::{
-    CasObjectRef, verify_cas_object_files_exist_with_expected_sizes,
+    CasObjectRef, VerifiedCasObjectPresence, verify_cas_object_presence,
 };
 use crate::generation::root_manifest::{GenerationRootManifest, MutableStateManifest};
 
@@ -29,9 +29,9 @@ pub(super) fn cas_objects_from_manifests(
 pub(super) fn verify_runtime_generation_cas_object_presence(
     generations_root: &Path,
     cas_objects: &[CasObjectRef],
-) -> crate::Result<()> {
+) -> crate::Result<VerifiedCasObjectPresence> {
     let artifact_root = artifact_root_for_generations_root(generations_root)?;
-    verify_cas_object_files_exist_with_expected_sizes(&artifact_root.join("objects"), cas_objects)
+    verify_cas_object_presence(&artifact_root.join("objects"), cas_objects)
 }
 
 pub(super) fn artifact_root_for_generations_root(
