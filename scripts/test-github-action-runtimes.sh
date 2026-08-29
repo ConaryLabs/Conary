@@ -59,10 +59,20 @@ runs:
   steps:
     - shell: bash
       run: |
+        missing_packages=()
         if command -v rg >/dev/null; then
-          exit 0
+          rg --version
+        else
+          missing_packages+=(ripgrep)
         fi
-        bash scripts/ci-install-ubuntu-packages.sh ripgrep
+        if python3 -I -c 'import yaml' >/dev/null 2>&1; then
+          python3 -I -c 'import yaml; print(yaml.__version__)'
+        else
+          missing_packages+=(python3-yaml)
+        fi
+        if [[ "${#missing_packages[@]}" -gt 0 ]]; then
+          bash scripts/ci-install-ubuntu-packages.sh "${missing_packages[@]}"
+        fi
 EOF
 
   cat > "$root/.github/actions/build-static-conary/action.yml" <<'EOF'
@@ -87,6 +97,7 @@ EOF
 bad_root="$tmpdir/bad"
 good_root="$tmpdir/good"
 unsafe_shell_root="$tmpdir/unsafe-shell"
+unsafe_python_yaml_root="$tmpdir/unsafe-python-yaml"
 unsafe_apt_root="$tmpdir/unsafe-apt"
 unsafe_source_root="$tmpdir/unsafe-source"
 unsafe_cache_root="$tmpdir/unsafe-cache"
@@ -96,6 +107,7 @@ unsafe_action_yaml_root="$tmpdir/unsafe-action-yaml"
 write_fixture "$bad_root" "actions/checkout@v6"
 write_fixture "$good_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_shell_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+write_fixture "$unsafe_python_yaml_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_apt_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_source_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 write_fixture "$unsafe_cache_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
@@ -104,6 +116,8 @@ write_fixture "$unsafe_pr_cleanup_root" "actions/checkout@de0fac2e4500dabe0009e6
 write_fixture "$unsafe_action_yaml_root" "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 sed -i 's/if command -v rg >\/dev\/null; then/if false; then/' \
   "$unsafe_shell_root/.github/actions/setup-shell-policy-tools/action.yml"
+sed -i 's/missing_packages+=(python3-yaml)/missing_packages+=(ripgrep)/' \
+  "$unsafe_python_yaml_root/.github/actions/setup-shell-policy-tools/action.yml"
 sed -i \
   's#bash scripts/ci-install-ubuntu-packages.sh libseccomp-dev#sudo apt-get update#' \
   "$unsafe_apt_root/.github/actions/setup-rust-workspace/action.yml"
@@ -149,6 +163,21 @@ if ! rg -q 'must reuse an existing rg before any apt operation' \
   "$tmpdir/unsafe-shell.err"; then
   echo "expected failure to name the missing existing-rg guard" >&2
   cat "$tmpdir/unsafe-shell.err" >&2
+  exit 1
+fi
+
+if bash scripts/check-github-action-runtimes.sh "$unsafe_python_yaml_root" \
+  >"$tmpdir/unsafe-python-yaml.out" 2>"$tmpdir/unsafe-python-yaml.err"; then
+  echo "expected missing PyYAML bootstrap fixture to fail" >&2
+  cat "$tmpdir/unsafe-python-yaml.out" >&2
+  cat "$tmpdir/unsafe-python-yaml.err" >&2
+  exit 1
+fi
+
+if ! rg -q 'must reuse or provision PyYAML for structural workflow policy' \
+  "$tmpdir/unsafe-python-yaml.err"; then
+  echo "expected failure to name the missing PyYAML bootstrap" >&2
+  cat "$tmpdir/unsafe-python-yaml.err" >&2
   exit 1
 fi
 

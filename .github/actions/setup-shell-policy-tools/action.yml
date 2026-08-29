@@ -1,17 +1,28 @@
 name: setup-shell-policy-tools
-description: Reuse ripgrep or install it from the canonical Ubuntu archive only
+description: Reuse ripgrep and PyYAML or install them from the canonical Ubuntu archive only
 
 runs:
   using: composite
   steps:
-    - name: Require ripgrep without consulting unrelated runner repositories
+    - name: Require shell and workflow policy tools from canonical Ubuntu
       shell: bash
       run: |
         set -euo pipefail
+        missing_packages=()
         if command -v rg >/dev/null; then
           rg --version | sed -n '1p'
-          exit 0
+        else
+          missing_packages+=(ripgrep)
         fi
 
-        bash scripts/ci-install-ubuntu-packages.sh ripgrep
+        if python3 -I -c 'import yaml' >/dev/null 2>&1; then
+          python3 -I -c 'import yaml; print(f"PyYAML {yaml.__version__}")'
+        else
+          missing_packages+=(python3-yaml)
+        fi
+
+        if [[ "${#missing_packages[@]}" -gt 0 ]]; then
+          bash scripts/ci-install-ubuntu-packages.sh "${missing_packages[@]}"
+        fi
         command -v rg >/dev/null
+        python3 -I -c 'import yaml'

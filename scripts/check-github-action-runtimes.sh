@@ -92,11 +92,14 @@ else
   }
 
   require_shell_policy_match \
-    'if command -v rg >/dev/null; then[\s\S]*exit 0' \
+    'if command -v rg >/dev/null; then[\s\S]*else[\s\S]*missing_packages\+=\(ripgrep\)' \
     'must reuse an existing rg before any apt operation'
   require_shell_policy_match \
-    'bash scripts/ci-install-ubuntu-packages\.sh ripgrep' \
-    'must delegate fallback installation to the shared Ubuntu package owner'
+    "python3 -I -c 'import yaml'[\s\S]*else[\s\S]*missing_packages\\+=\\(python3-yaml\\)" \
+    'must reuse or provision PyYAML for structural workflow policy'
+  require_shell_policy_match \
+    'bash scripts/ci-install-ubuntu-packages\.sh "\$\{missing_packages\[@\]\}"' \
+    'must delegate fallback policy-tool installation to the shared Ubuntu package owner'
 fi
 
 ubuntu_package_helper="scripts/ci-install-ubuntu-packages.sh"
