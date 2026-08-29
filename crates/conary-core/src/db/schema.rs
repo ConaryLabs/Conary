@@ -34,9 +34,10 @@ use tracing::info;
 /// exact catalog artifact bytes. Authenticated provenance remains part of the
 /// resource identity, while byte-identical normalized projections may be
 /// reused across upstream root churn.
-/// Revision 55 binds every registered immutable catalog resource to one closed
-/// host-local physical-integrity authority: an exact Linux fs-verity SHA-256
-/// measurement or a typed reason requiring the complete userspace scan.
+/// Revision 55 binds every registered immutable catalog resource to one
+/// filesystem-independent, fixed-chunk SHA-256 manifest. The compact manifest
+/// lets registered readers authenticate demanded bytes without repeating a
+/// complete catalog hash or SQLite integrity scan after every restart.
 /// Earlier pre-alpha databases must be rebuilt; no compatibility migration is
 /// provided.
 pub const SCHEMA_VERSION: i32 = 55;

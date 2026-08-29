@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
 revision: 96
-summary: Document host-local catalog physical attestation, the strict isolated schema-v2 conversion benchmark, batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+summary: Document filesystem-independent catalog chunk attestation, the strict isolated schema-v2 conversion benchmark, batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -179,10 +179,12 @@ complete source authority, and accepts reuse only when it is byte-for-byte the
 registered manifest authority. An exact match performs one registered durable
 bundle reopen, creates and reserves no source-candidate SQLite file, and
 carries that reader directly through profile composition and the already-
-published source boundary. The registered reopen repeats file type and
-sidecar, SHA-256 and size, SQLite schema/integrity, embedded binding, retained
-metadata, and exact directory checks; its versioned durable attestation avoids
-another normalized-relation replay. Changed authenticated identity takes the
+published source boundary. The registered reopen checks file type, exact
+directory membership, compact portable-manifest identity and size, SQLite
+application identity, embedded binding, and retained metadata. Its read-only
+VFS authenticates every demanded fixed-size chunk before SQLite receives it,
+so unchanged bytes inherit the publication-time structural and logical proof
+without another complete catalog or normalized-relation scan. Changed authenticated identity takes the
 ordinary projection-cache or parser path. Missing, malformed, noncanonical, or
 tampered registered authority fails closed instead of becoming a cache miss.
 
@@ -198,18 +200,17 @@ SHA-256. Changing provenance is therefore recorded instead of discarded, while
 projection reuse cannot fail merely because the resulting catalog bytes already
 exist under another exact manifest.
 
-Schema 55 also binds every registered resource row to one immutable host-local
-physical-attestation shape for the exact catalog artifact named by that
-manifest. `linux_fs_verity_v1` carries one lowercase SHA-256 fs-verity
-measurement. `full_scan_v1` carries no digest and exactly one closed reason:
-`filesystem_unsupported` for the recognized Linux `ENOTTY`/`EOPNOTSUPP`
-boundary, or `platform_unsupported` on non-Linux builds. The latter shape keeps
-the complete userspace byte hash and SQLite-integrity proof mandatory on every
-fresh reopen. Missing, mixed, unknown, malformed, operator-selected, or
-free-form shapes fail before registration; unexpected ioctl, permission,
-configuration, and measurement failures are refusals rather than fallback
-authority. This attestation remains local operational state and does not alter
-or compete with the signed source/profile manifest authority.
+Schema 55 also binds every registered resource row to one immutable,
+filesystem-independent physical attestation for the exact catalog artifact
+named by that manifest. It records the lowercase SHA-256 and exact size of a
+canonical portable chunk manifest, the fixed 65,536-byte v1 chunk size, and
+the exact chunk count implied by the artifact size. The manifest header binds
+those facts back to the ordinary catalog SHA-256, and each domain-separated
+chunk digest binds its position and actual length. Missing, malformed,
+mis-sized, stale, or artifact-mismatched attestations fail before
+registration. There is no filesystem-selected proof kind and no durable
+full-scan fallback. This attestation remains local operational state and does
+not alter or compete with the source/profile manifest authority.
 
 After every source is authenticated and staged, refresh derives the complete
 ordered `ProfileSourceMemberV2` contract from those verified source manifests

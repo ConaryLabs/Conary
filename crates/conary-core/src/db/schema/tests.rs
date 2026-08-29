@@ -123,62 +123,68 @@ fn revision_54_requires_rebuild_for_revision_55() {
 }
 
 #[test]
-fn catalog_resources_require_one_closed_physical_attestation_shape() {
+fn catalog_resources_require_one_portable_physical_attestation_shape() {
     let conn = Connection::open_in_memory().unwrap();
     ensure_current(&conn).unwrap();
     let column_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('remi_catalog_resources')
              WHERE name IN (
-                 'physical_attestation_kind', 'physical_attestation_sha256',
-                 'physical_attestation_reason'
+                 'portable_manifest_sha256', 'portable_manifest_size',
+                 'portable_chunk_size', 'portable_chunk_count'
              )",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(column_count, 3);
+    assert_eq!(column_count, 4);
 
-    let insert = |resource: char, kind: &str, digest: Option<&str>, reason: Option<&str>| {
+    let insert = |resource: char,
+                  artifact_size: i64,
+                  digest: &str,
+                  manifest_size: i64,
+                  chunk_size: i64,
+                  chunk_count: i64| {
         conn.execute(
             "INSERT INTO remi_catalog_resources (
                  resource_sha256, resource_kind, source_profile, artifact_sha256,
                  artifact_size, logical_digest_sha256, manifest_json,
-                 physical_attestation_kind, physical_attestation_sha256,
-                 physical_attestation_reason, durable, created_at
-             ) VALUES (?1, 'profile_revision', 'fedora-44', ?2, 1, ?3, '{}',
-                       ?4, ?5, ?6, 1, 1)",
+                 portable_manifest_sha256, portable_manifest_size,
+                 portable_chunk_size, portable_chunk_count, durable, created_at
+             ) VALUES (?1, 'profile_revision', 'fedora-44', ?2, ?3, ?4, '{}',
+                       ?5, ?6, ?7, ?8, 1, 1)",
             params![
                 resource.to_string().repeat(64),
                 "a".repeat(64),
+                artifact_size,
                 "b".repeat(64),
-                kind,
                 digest,
-                reason,
+                manifest_size,
+                chunk_size,
+                chunk_count,
             ],
         )
     };
 
-    assert!(insert('a', "linux_fs_verity_v1", Some(&"c".repeat(64)), None,).is_ok());
-    assert!(insert('b', "full_scan_v1", None, Some("filesystem_unsupported"),).is_ok());
-    for (resource, kind, digest, reason) in [
-        ('c', "linux_fs_verity_v1", None, None),
-        (
-            'd',
-            "linux_fs_verity_v1",
-            Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
-            Some("platform_unsupported"),
-        ),
-        (
-            'e',
-            "full_scan_v1",
-            Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
-            Some("filesystem_unsupported"),
-        ),
-        ('f', "full_scan_v1", None, Some("operator_override")),
-        ('0', "unknown_v1", None, Some("platform_unsupported")),
+    assert!(insert('a', 65_537, &"c".repeat(64), 128, 65_536, 2).is_ok());
+    for (resource, artifact_size, digest, manifest_size, chunk_size, chunk_count) in [
+        ('b', 65_537, "A".repeat(64), 128, 65_536, 2),
+        ('c', 65_537, "c".repeat(64), 127, 65_536, 2),
+        ('d', 65_537, "c".repeat(64), 128, 4096, 17),
+        ('e', 65_537, "c".repeat(64), 128, 65_536, 1),
+        ('f', 65_536, "c".repeat(64), 128, 65_536, 2),
     ] {
-        assert!(insert(resource, kind, digest, reason).is_err());
+        assert!(
+            insert(
+                resource,
+                artifact_size,
+                &digest,
+                manifest_size,
+                chunk_size,
+                chunk_count,
+            )
+            .is_err()
+        );
     }
 }
 

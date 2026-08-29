@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
 revision: 60
-summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and host-local physical attestation, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
+summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and filesystem-independent chunk attestation, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -711,14 +711,14 @@ observation. A resource is identified by that exact manifest SHA-256. Distinct
 authenticated manifests may bind one byte-identical normalized catalog
 artifact, while membership, reachability, deletion, and filesystem ownership
 remain scoped to each resource identity and exact bundle. Every registered
-resource also carries one closed host-local physical attestation bound beside
-that exact manifest and catalog artifact identity: either a versioned Linux
-fs-verity SHA-256 measurement or a versioned full-scan requirement with the
-typed reason `filesystem_unsupported` or `platform_unsupported`. Missing,
-mixed, malformed, free-form, or unknown proof shapes are rejected. The latter
-two states retain the complete userspace catalog hash and SQLite-integrity scan;
-ordinary I/O, permission, configuration, and malformed-measurement failures do
-not mint fallback authority.
+resource also carries one closed, filesystem-independent physical attestation
+bound beside that exact manifest and catalog artifact identity: the exact
+SHA-256 and size of a canonical fixed-chunk digest manifest plus the v1 chunk
+size and artifact-derived count. Registered catalog reads authenticate their
+covering chunks before SQLite receives bytes, while publication retains the
+complete structural and logical proof. Missing, malformed, mis-sized, stale,
+or artifact-mismatched attestations are rejected. There is no
+filesystem-selected proof kind and no durable complete-scan fallback.
 Repository freshness is four explicit facts: `last_checked_at` records a
 successful authenticated check, `last_changed_at` a different source revision,
 `last_validated_at` completed parser/catalog validation, and

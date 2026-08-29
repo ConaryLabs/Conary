@@ -1000,39 +1000,26 @@ CREATE TABLE remi_catalog_resources (
             logical_digest_sha256 TEXT NOT NULL,
             manifest_json TEXT NOT NULL
                 CHECK(json_valid(manifest_json) AND json_type(manifest_json) = 'object'),
-            -- Host-local physical integrity authority for the exact catalog
-            -- artifact named by this immutable manifest resource. A Linux
-            -- fs-verity measurement permits scan-free registered reopen;
-            -- the closed full-scan reasons retain the complete userspace
-            -- hash and SQLite-integrity proof on unsupported hosts.
-            physical_attestation_kind TEXT NOT NULL CHECK(
-                physical_attestation_kind IN ('linux_fs_verity_v1', 'full_scan_v1')
-            ),
-            physical_attestation_sha256 TEXT,
-            physical_attestation_reason TEXT,
+            -- One portable, filesystem-independent physical authority for
+            -- the exact catalog bytes. Publication binds this compact digest
+            -- manifest only after the same artifact passed the complete
+            -- structural and logical proof. Registered readers authenticate
+            -- every SQLite read through it on every supported filesystem.
+            portable_manifest_sha256 TEXT NOT NULL,
+            portable_manifest_size INTEGER NOT NULL CHECK(portable_manifest_size >= 64),
+            portable_chunk_size INTEGER NOT NULL CHECK(portable_chunk_size = 65536),
+            portable_chunk_count INTEGER NOT NULL CHECK(portable_chunk_count >= 0),
             durable INTEGER NOT NULL CHECK(durable IN (0, 1)),
             created_at INTEGER NOT NULL,
             CHECK(length(resource_sha256) = 64 AND resource_sha256 NOT GLOB '*[^0-9a-f]*'),
             CHECK(length(artifact_sha256) = 64 AND artifact_sha256 NOT GLOB '*[^0-9a-f]*'),
             CHECK(length(logical_digest_sha256) = 64
                 AND logical_digest_sha256 NOT GLOB '*[^0-9a-f]*'),
-            CHECK(
-                (
-                    physical_attestation_kind = 'linux_fs_verity_v1'
-                    AND physical_attestation_sha256 IS NOT NULL
-                    AND length(physical_attestation_sha256) = 64
-                    AND physical_attestation_sha256 NOT GLOB '*[^0-9a-f]*'
-                    AND physical_attestation_reason IS NULL
-                )
-                OR
-                (
-                    physical_attestation_kind = 'full_scan_v1'
-                    AND physical_attestation_sha256 IS NULL
-                    AND physical_attestation_reason IN (
-                        'filesystem_unsupported', 'platform_unsupported'
-                    )
-                )
-            ),
+            CHECK(length(portable_manifest_sha256) = 64
+                AND portable_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(portable_chunk_count = artifact_size / portable_chunk_size
+                + CASE WHEN artifact_size % portable_chunk_size = 0 THEN 0 ELSE 1 END),
+            CHECK(portable_manifest_size = 64 + portable_chunk_count * 32),
             CHECK(length(source_profile) BETWEEN 1 AND 255
                 AND trim(source_profile) = source_profile
                 AND source_profile NOT IN ('.', '..')

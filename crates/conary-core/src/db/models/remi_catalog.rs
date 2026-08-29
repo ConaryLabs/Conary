@@ -32,8 +32,8 @@ pub use gc::{
 };
 use resource::RESOURCE_COLUMNS;
 pub use resource::{
-    RemiCatalogFullScanReason, RemiCatalogPhysicalAttestation, RemiCatalogResource,
-    RemiCatalogResourceKind, register_profile_catalog_revision,
+    RemiCatalogPhysicalAttestation, RemiCatalogResource, RemiCatalogResourceKind,
+    register_profile_catalog_revision,
 };
 pub use session::RemiRuntimeSession;
 
@@ -392,9 +392,7 @@ mod tests {
             artifact_size: 4096,
             logical_digest_sha256: digest('c'),
             manifest_json: format!("{{\"resource\":\"{sha}\"}}"),
-            physical_attestation: RemiCatalogPhysicalAttestation::FullScanV1 {
-                reason: RemiCatalogFullScanReason::FilesystemUnsupported,
-            },
+            physical_attestation: RemiCatalogPhysicalAttestation::test_for_catalog_size(4096),
             durable,
             created_at: 100,
         }
