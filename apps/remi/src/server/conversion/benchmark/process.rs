@@ -30,6 +30,7 @@ impl ProcessUsageProbe {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(test, derive(Default))]
 struct RawProcessUsage {
     user_cpu_us: u64,
     system_cpu_us: u64,
@@ -46,9 +47,15 @@ struct RawProcessUsage {
     io: ProcessIo,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessRss {
+    current_bytes: u64,
+    lifetime_peak_bytes: u64,
+}
+
 impl RawProcessUsage {
     fn capture() -> Result<Self> {
-        let current_rss_bytes = process_rss_bytes()?;
+        let rss = ProcessRss::capture()?;
         let (thread_count, runnable_threads) = process_thread_counts()?;
         let io = ProcessIo::capture()?;
         let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
@@ -62,10 +69,8 @@ impl RawProcessUsage {
         Ok(Self {
             user_cpu_us: timeval_us(usage.ru_utime)?,
             system_cpu_us: timeval_us(usage.ru_stime)?,
-            current_rss_bytes,
-            lifetime_peak_rss_bytes: nonnegative(usage.ru_maxrss, "peak RSS")?
-                .checked_mul(1024)
-                .context("process lifetime peak RSS exceeds u64 bytes")?,
+            current_rss_bytes: rss.current_bytes,
+            lifetime_peak_rss_bytes: rss.lifetime_peak_bytes,
             minor_faults: nonnegative(usage.ru_minflt, "minor faults")?,
             major_faults: nonnegative(usage.ru_majflt, "major faults")?,
             block_input_operations: nonnegative(usage.ru_inblock, "block input operations")?,
@@ -89,7 +94,12 @@ impl RawProcessUsage {
             system_cpu_us: checked_delta(self.system_cpu_us, before.system_cpu_us, "system CPU")?,
             rss_start_bytes: before.current_rss_bytes,
             rss_end_bytes: self.current_rss_bytes,
-            process_lifetime_peak_rss_bytes: self.lifetime_peak_rss_bytes,
+            // Each coherent status sample guarantees HWM >= RSS. Preserve the
+            // greater HWM because Linux does not promise monotonicity between
+            // separate status snapshots.
+            process_lifetime_peak_rss_bytes: self
+                .lifetime_peak_rss_bytes
+                .max(before.lifetime_peak_rss_bytes),
             minor_faults: checked_delta(self.minor_faults, before.minor_faults, "minor faults")?,
             major_faults: checked_delta(self.major_faults, before.major_faults, "major faults")?,
             block_input_operations: checked_delta(
@@ -151,6 +161,29 @@ impl RawProcessUsage {
             thread_count_end: self.thread_count,
             runnable_threads_start: before.runnable_threads,
             runnable_threads_end: self.runnable_threads,
+        })
+    }
+}
+
+impl ProcessRss {
+    fn capture() -> Result<Self> {
+        // Keep the endpoint and high-water mark in one status snapshot. Linux
+        // exposes `getrusage().ru_maxrss` through different approximate RSS
+        // accounting, so it can be lower than a separately sampled `VmRSS`.
+        let contents = fs::read_to_string("/proc/self/status").context("read process RSS")?;
+        Self::parse(&contents)
+    }
+
+    fn parse(contents: &str) -> Result<Self> {
+        let current_bytes = parse_status_kib(contents, "VmRSS")?;
+        let lifetime_peak_bytes = parse_status_kib(contents, "VmHWM")?;
+        ensure!(
+            lifetime_peak_bytes >= current_bytes,
+            "/proc/self/status VmHWM is below VmRSS in one sample"
+        );
+        Ok(Self {
+            current_bytes,
+            lifetime_peak_bytes,
         })
     }
 }
@@ -236,25 +269,34 @@ where
     u64::try_from(value).with_context(|| format!("{label} exceeds u64"))
 }
 
-fn process_rss_bytes() -> Result<u64> {
-    let contents = fs::read_to_string("/proc/self/status").context("read process RSS")?;
+fn parse_status_kib(contents: &str, label: &str) -> Result<u64> {
     let mut values = contents
         .lines()
-        .filter_map(|line| line.strip_prefix("VmRSS:"));
-    let raw = values.next().context("/proc/self/status omitted VmRSS")?;
-    ensure!(values.next().is_none(), "/proc/self/status repeated VmRSS");
+        .filter_map(|line| line.split_once(':'))
+        .filter_map(|(name, value)| (name == label).then_some(value));
+    let raw = values
+        .next()
+        .with_context(|| format!("/proc/self/status omitted {label}"))?;
+    ensure!(
+        values.next().is_none(),
+        "/proc/self/status repeated {label}"
+    );
     let mut fields = raw.split_whitespace();
     let kib = fields
         .next()
-        .context("VmRSS omitted its numeric value")?
+        .with_context(|| format!("{label} omitted its numeric value"))?
         .parse::<u64>()
-        .context("parse VmRSS numeric value")?;
-    ensure!(fields.next() == Some("kB"), "VmRSS has an unexpected unit");
+        .with_context(|| format!("parse {label} numeric value"))?;
+    ensure!(
+        fields.next() == Some("kB"),
+        "{label} has an unexpected unit"
+    );
     ensure!(
         fields.next().is_none(),
-        "VmRSS has unexpected trailing fields"
+        "{label} has unexpected trailing fields"
     );
-    kib.checked_mul(1024).context("VmRSS exceeds u64 bytes")
+    kib.checked_mul(1024)
+        .with_context(|| format!("{label} exceeds u64 bytes"))
 }
 
 fn process_thread_counts() -> Result<(u64, u64)> {
@@ -344,6 +386,90 @@ cancelled_write_bytes: 17\n";
         assert!(!task_record_vanished(&std::io::Error::from_raw_os_error(
             libc::EACCES
         )));
+    }
+
+    #[test]
+    fn process_rss_parses_one_coherent_status_sample() {
+        let rss = ProcessRss::parse("Name:\tremi\nVmHWM:\t24 kB\nVmRSS:\t16 kB\n")
+            .expect("parse process RSS sample");
+
+        assert_eq!(
+            rss,
+            ProcessRss {
+                current_bytes: 16 * 1024,
+                lifetime_peak_bytes: 24 * 1024,
+            }
+        );
+    }
+
+    #[test]
+    fn process_rss_rejects_incomplete_or_incoherent_status_samples() {
+        for (sample, expected) in [
+            ("VmHWM:\t24 kB\n", "omitted VmRSS"),
+            ("VmRSS:\t16 kB\n", "omitted VmHWM"),
+            (
+                "VmHWM:\t24 kB\nVmRSS:\t16 kB\nVmRSS:\t16 kB\n",
+                "repeated VmRSS",
+            ),
+            (
+                "VmHWM:\t24 kB\nVmHWM:\t24 kB\nVmRSS:\t16 kB\n",
+                "repeated VmHWM",
+            ),
+            (
+                "VmHWM:\t24 kB\nVmRSS:\tnot-a-number kB\n",
+                "parse VmRSS numeric value",
+            ),
+            (
+                "VmHWM:\t24 KiB\nVmRSS:\t16 kB\n",
+                "VmHWM has an unexpected unit",
+            ),
+            (
+                "VmHWM:\t24 kB trailing\nVmRSS:\t16 kB\n",
+                "VmHWM has unexpected trailing fields",
+            ),
+            ("VmHWM:\t8 kB\nVmRSS:\t16 kB\n", "VmHWM is below VmRSS"),
+        ] {
+            let error = ProcessRss::parse(sample).expect_err("reject invalid process RSS sample");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for {sample:?}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn process_rss_rejects_byte_overflow() {
+        let sample = format!("VmHWM:\t{} kB\nVmRSS:\t16 kB\n", u64::MAX);
+        let error = ProcessRss::parse(&sample).expect_err("reject overflowing process RSS sample");
+
+        assert!(error.to_string().contains("VmHWM exceeds u64 bytes"));
+    }
+
+    #[test]
+    fn process_usage_delta_preserves_the_greatest_lifetime_peak_sample() {
+        for (before_rss, before_peak, after_rss, after_peak, expected) in [
+            (28 * 1024, 32 * 1024, 20 * 1024, 24 * 1024, 32 * 1024),
+            (16 * 1024, 24 * 1024, 20 * 1024, 48 * 1024, 48 * 1024),
+        ] {
+            let before = RawProcessUsage {
+                current_rss_bytes: before_rss,
+                lifetime_peak_rss_bytes: before_peak,
+                ..RawProcessUsage::default()
+            };
+            let after = RawProcessUsage {
+                current_rss_bytes: after_rss,
+                lifetime_peak_rss_bytes: after_peak,
+                ..RawProcessUsage::default()
+            };
+
+            let usage = after
+                .delta(before, Duration::ZERO)
+                .expect("compute process usage delta");
+
+            assert_eq!(usage.process_lifetime_peak_rss_bytes, expected);
+            assert!(usage.process_lifetime_peak_rss_bytes >= usage.rss_start_bytes);
+            assert!(usage.process_lifetime_peak_rss_bytes >= usage.rss_end_bytes);
+        }
     }
 
     #[test]
