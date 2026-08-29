@@ -46,6 +46,11 @@ fn exact_bundle(path: &Path, kind: RemiCatalogResourceKind) {
     }
 }
 
+fn retired_exact_bundle(path: &Path, kind: RemiCatalogResourceKind) {
+    exact_bundle(path, kind);
+    fs::remove_file(path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME)).unwrap();
+}
+
 #[tokio::test]
 async fn restart_recovery_fences_and_acknowledges_exact_expired_candidate() {
     let root = tempfile::tempdir().unwrap();
@@ -92,7 +97,7 @@ async fn restart_recovery_fences_and_acknowledges_exact_expired_candidate() {
 }
 
 #[test]
-fn exact_bundle_removal_refuses_unknown_or_symlinked_content() {
+fn terminal_bundle_removal_accepts_retired_layout_and_refuses_malformed_content() {
     let root = tempfile::tempdir().unwrap();
     let catalog_root = root.path().join("catalogs");
     fs::create_dir_all(catalog_root.join("sources")).unwrap();
@@ -110,10 +115,45 @@ fn exact_bundle_removal_refuses_unknown_or_symlinked_content() {
             RemiCatalogResourceKind::SourceSnapshot,
             "fedora-44",
             &exact_digest,
+            CatalogBundleDeletionPolicy::CurrentOnly,
         )
         .unwrap()
     );
     assert!(!exact.exists());
+
+    for (byte, kind) in [
+        ('7', RemiCatalogResourceKind::SourceSnapshot),
+        ('8', RemiCatalogResourceKind::ProfileRevision),
+    ] {
+        let retired_digest = digest(byte);
+        let retired = bundle_path(&catalog_root, kind, "fedora-44", &retired_digest);
+        if kind == RemiCatalogResourceKind::ProfileRevision {
+            fs::create_dir_all(retired.parent().unwrap()).unwrap();
+        }
+        retired_exact_bundle(&retired, kind);
+        assert!(
+            remove_exact_bundle(
+                &catalog_root,
+                kind,
+                "fedora-44",
+                &retired_digest,
+                CatalogBundleDeletionPolicy::CurrentOnly,
+            )
+            .is_err()
+        );
+        assert!(retired.exists());
+        assert!(
+            remove_exact_bundle(
+                &catalog_root,
+                kind,
+                "fedora-44",
+                &retired_digest,
+                CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54,
+            )
+            .unwrap()
+        );
+        assert!(!retired.exists());
+    }
 
     let malformed_digest = digest('b');
     let malformed = bundle_path(
@@ -130,10 +170,32 @@ fn exact_bundle_removal_refuses_unknown_or_symlinked_content() {
             RemiCatalogResourceKind::SourceSnapshot,
             "fedora-44",
             &malformed_digest,
+            CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54,
         )
         .is_err()
     );
     assert!(malformed.join("unexpected").exists());
+
+    let malformed_retired_digest = digest('6');
+    let malformed_retired = bundle_path(
+        &catalog_root,
+        RemiCatalogResourceKind::SourceSnapshot,
+        "fedora-44",
+        &malformed_retired_digest,
+    );
+    retired_exact_bundle(&malformed_retired, RemiCatalogResourceKind::SourceSnapshot);
+    fs::write(malformed_retired.join("unexpected"), b"evidence").unwrap();
+    assert!(
+        remove_exact_bundle(
+            &catalog_root,
+            RemiCatalogResourceKind::SourceSnapshot,
+            "fedora-44",
+            &malformed_retired_digest,
+            CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54,
+        )
+        .is_err()
+    );
+    assert!(malformed_retired.join("unexpected").exists());
 
     let malformed_portable_digest = digest('9');
     let malformed_portable = bundle_path(
@@ -154,6 +216,7 @@ fn exact_bundle_removal_refuses_unknown_or_symlinked_content() {
             RemiCatalogResourceKind::SourceSnapshot,
             "fedora-44",
             &malformed_portable_digest,
+            CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54,
         )
         .is_err()
     );
@@ -166,7 +229,7 @@ fn exact_bundle_removal_refuses_unknown_or_symlinked_content() {
         "fedora-44",
         &malformed_metadata_digest,
     );
-    exact_bundle(&malformed_metadata, RemiCatalogResourceKind::SourceSnapshot);
+    retired_exact_bundle(&malformed_metadata, RemiCatalogResourceKind::SourceSnapshot);
     fs::write(
         malformed_metadata
             .join(SOURCE_METADATA_DIRECTORY_NAME)
@@ -180,6 +243,7 @@ fn exact_bundle_removal_refuses_unknown_or_symlinked_content() {
             RemiCatalogResourceKind::SourceSnapshot,
             "fedora-44",
             &malformed_metadata_digest,
+            CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54,
         )
         .is_err()
     );
@@ -204,10 +268,34 @@ fn exact_bundle_removal_refuses_unknown_or_symlinked_content() {
                 RemiCatalogResourceKind::SourceSnapshot,
                 "fedora-44",
                 &linked_digest,
+                CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54,
             )
             .is_err()
         );
         assert!(target.exists());
+
+        let symlinked_proof_digest = digest('1');
+        let symlinked_proof = bundle_path(
+            &catalog_root,
+            RemiCatalogResourceKind::SourceSnapshot,
+            "fedora-44",
+            &symlinked_proof_digest,
+        );
+        exact_bundle(&symlinked_proof, RemiCatalogResourceKind::SourceSnapshot);
+        let portable_path = symlinked_proof.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
+        fs::remove_file(&portable_path).unwrap();
+        symlink(root.path().join("missing-portable-proof"), &portable_path).unwrap();
+        assert!(
+            remove_exact_bundle(
+                &catalog_root,
+                RemiCatalogResourceKind::SourceSnapshot,
+                "fedora-44",
+                &symlinked_proof_digest,
+                CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54,
+            )
+            .is_err()
+        );
+        assert!(symlinked_proof.exists());
 
         let redirected_root = root.path().join("redirected-catalogs");
         fs::create_dir(&redirected_root).unwrap();
@@ -223,6 +311,7 @@ fn exact_bundle_removal_refuses_unknown_or_symlinked_content() {
                 RemiCatalogResourceKind::SourceSnapshot,
                 "fedora-44",
                 &redirected_digest,
+                CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54,
             )
             .is_err()
         );
@@ -264,6 +353,7 @@ fn deletion_resumes_from_exact_gc_tombstone_after_rename() {
             RemiCatalogResourceKind::SourceSnapshot,
             "fedora-44",
             &resource_digest,
+            CatalogBundleDeletionPolicy::CurrentOnly,
         )
         .unwrap()
     );
@@ -283,6 +373,7 @@ fn absent_profile_namespace_is_idempotent_bundle_absence() {
             RemiCatalogResourceKind::ProfileRevision,
             "fedora-44",
             &digest('a'),
+            CatalogBundleDeletionPolicy::CurrentOnly,
         )
         .unwrap()
     );
@@ -346,6 +437,138 @@ async fn registered_unreachable_resources_are_journaled_removed_and_acknowledged
             .unwrap()
             .pending_deletions
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn matching_terminal_candidate_cannot_bypass_pending_current_layout() {
+    let root = tempfile::tempdir().unwrap();
+    let db_path = root.path().join("remi.db");
+    let catalog_root = root.path().join("catalogs");
+    fs::create_dir_all(catalog_root.join("sources")).unwrap();
+    fs::create_dir_all(catalog_root.join("profiles/fedora-44")).unwrap();
+    conary_core::db::init(&db_path).unwrap();
+    let resource = RemiCatalogResource {
+        resource_sha256: resource_digest('e'),
+        kind: RemiCatalogResourceKind::ProfileRevision,
+        source_profile: "fedora-44".to_string(),
+        artifact_sha256: digest('e'),
+        artifact_size: 7,
+        logical_digest_sha256: digest('d'),
+        manifest_json: "{\"resource\":\"e\"}".to_string(),
+        physical_attestation: physical_attestation(7, 'e'),
+        durable: true,
+        created_at: 1,
+    };
+    let conn = conary_core::db::open_fast(&db_path).unwrap();
+    resource.insert(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO repository_sync_runs (
+             run_id, source_profile, owner_instance_uuid, fencing_epoch,
+             candidate_profile_digest, state, started_at, heartbeat_at,
+             lease_expires_at, finished_at, failure_stage, failure_category,
+             failure_evidence
+         ) VALUES (?1, 'fedora-44', ?2, 1, ?3, 'abandoned', 1, 1, 1, 2,
+                   'publishing', 'internal', 'injected collision')",
+        rusqlite::params![
+            "10000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000001",
+            &resource.resource_sha256,
+        ],
+    )
+    .unwrap();
+    drop(conn);
+    let path = bundle_path(
+        &catalog_root,
+        resource.kind,
+        &resource.source_profile,
+        &resource.resource_sha256,
+    );
+    retired_exact_bundle(&path, resource.kind);
+
+    let database_writer = DatabaseWriter::default();
+    let catalog_authority = CatalogAuthority::from_paths(
+        db_path.clone(),
+        catalog_root.clone(),
+        database_writer.clone(),
+    );
+    let error = collect_catalog_garbage_uncoordinated(
+        db_path.clone(),
+        catalog_root,
+        database_writer,
+        catalog_authority,
+    )
+    .await
+    .expect_err("registered schema-55 deletion requires its portable proof");
+    assert!(
+        error
+            .to_string()
+            .contains("does not have a permitted exact bundle layout")
+    );
+    assert!(path.exists());
+
+    let conn = conary_core::db::open_fast(&db_path).unwrap();
+    let pending = plan_catalog_collection(&conn).unwrap().pending_deletions;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].resource_sha256, resource.resource_sha256);
+}
+
+#[tokio::test]
+async fn matching_terminal_candidate_cannot_remove_live_registered_resource() {
+    let fixture = ActiveCatalogFixture::new();
+    let profile_revision_sha256 = fixture.activate(
+        "fedora-44",
+        1,
+        vec![package(
+            "fedora-44",
+            "bash",
+            "5.3",
+            "1.fc44",
+            Some("x86_64"),
+            4,
+            "bash-rpm",
+        )],
+    );
+    let profile_path = fixture
+        .catalog_dir()
+        .join("profiles")
+        .join("fedora-44")
+        .join(&profile_revision_sha256);
+    fs::remove_file(profile_path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME)).unwrap();
+    let conn = conary_core::db::open_fast(fixture.db_path()).unwrap();
+    conn.execute(
+        "INSERT INTO repository_sync_runs (
+             run_id, source_profile, owner_instance_uuid, fencing_epoch,
+             candidate_profile_digest, state, started_at, heartbeat_at,
+             lease_expires_at, finished_at, failure_stage, failure_category,
+             failure_evidence
+         ) VALUES (?1, 'fedora-44', ?2, 2, ?3, 'abandoned', 2, 2, 2, 3,
+                   'publishing', 'internal', 'injected collision')",
+        rusqlite::params![
+            "20000000-0000-4000-8000-000000000002",
+            "00000000-0000-4000-8000-000000000002",
+            &profile_revision_sha256,
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let report = collect_catalog_garbage_uncoordinated(
+        fixture.db_path().to_path_buf(),
+        fixture.catalog_dir().to_path_buf(),
+        fixture.authority().database_writer_for_test(),
+        fixture.authority().clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.removed_bundles, 0);
+    assert!(profile_path.exists());
+
+    let conn = conary_core::db::open_fast(fixture.db_path()).unwrap();
+    assert!(
+        RemiCatalogResource::find_by_sha256(&conn, &profile_revision_sha256)
+            .unwrap()
+            .is_some()
     );
 }
 
@@ -530,7 +753,7 @@ async fn shared_coordinator_serializes_concurrent_collectors() {
 }
 
 #[tokio::test]
-async fn terminal_run_journal_removes_exact_unregistered_publication() {
+async fn terminal_run_journal_removes_exact_retired_unregistered_publication() {
     let root = tempfile::tempdir().unwrap();
     let db_path = root.path().join("remi.db");
     let catalog_root = root.path().join("catalogs");
@@ -591,8 +814,8 @@ async fn terminal_run_journal_removes_exact_unregistered_publication() {
         "fedora-44",
         &source_digest,
     );
-    exact_bundle(&profile_path, RemiCatalogResourceKind::ProfileRevision);
-    exact_bundle(&source_path, RemiCatalogResourceKind::SourceSnapshot);
+    retired_exact_bundle(&profile_path, RemiCatalogResourceKind::ProfileRevision);
+    retired_exact_bundle(&source_path, RemiCatalogResourceKind::SourceSnapshot);
 
     let database_writer = DatabaseWriter::default();
     let catalog_authority = CatalogAuthority::from_paths(
@@ -601,6 +824,18 @@ async fn terminal_run_journal_removes_exact_unregistered_publication() {
         database_writer.clone(),
     );
     let report = collect_catalog_garbage_uncoordinated(
+        db_path.clone(),
+        catalog_root.clone(),
+        database_writer.clone(),
+        catalog_authority.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.removed_bundles, 2);
+    assert!(!profile_path.exists());
+    assert!(!source_path.exists());
+
+    let replay = collect_catalog_garbage_uncoordinated(
         db_path,
         catalog_root,
         database_writer,
@@ -608,7 +843,6 @@ async fn terminal_run_journal_removes_exact_unregistered_publication() {
     )
     .await
     .unwrap();
-    assert_eq!(report.removed_bundles, 2);
-    assert!(!profile_path.exists());
-    assert!(!source_path.exists());
+    assert_eq!(replay.removed_bundles, 0);
+    assert_eq!(replay.acknowledged_deletions, 0);
 }
