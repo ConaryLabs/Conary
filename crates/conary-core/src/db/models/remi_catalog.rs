@@ -17,9 +17,7 @@ use crate::repository::supported_profiles::ProfileSourceRole;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::io;
 
-use validation::{
-    validate_canonical_manifest, validate_identity, validate_sha256, validate_storage_component,
-};
+use validation::{validate_identity, validate_sha256};
 
 #[cfg(test)]
 use activation::activate_profile_revision_at;
@@ -32,159 +30,19 @@ pub use gc::{
     RemiCatalogReachabilitySnapshot, RemiCatalogRunCandidate, acknowledge_catalog_deletion,
     delete_catalog_collection, list_catalog_deletion_intents, plan_catalog_collection,
 };
-pub use resource::register_profile_catalog_revision;
+use resource::RESOURCE_COLUMNS;
+pub use resource::{
+    RemiCatalogFullScanReason, RemiCatalogPhysicalAttestation, RemiCatalogResource,
+    RemiCatalogResourceKind, register_profile_catalog_revision,
+};
 pub use session::RemiRuntimeSession;
 
-const RESOURCE_COLUMNS: &str = "resource_sha256, resource_kind, source_profile, \
-    artifact_sha256, artifact_size, logical_digest_sha256, manifest_json, durable, created_at";
 const MEMBER_COLUMNS: &str = "profile_revision_sha256, ordinal, source_snapshot_sha256, \
     source_identity, repository_identity, stream_kind, stream_identity, role, precedence, required";
 const ACTIVE_COLUMNS: &str = "source_profile, profile_revision_sha256, fencing_epoch, \
     activation_run_id, owner_instance_uuid, activated_at";
 const PIN_COLUMNS: &str = "pin_id, source_profile, profile_revision_sha256, owner_kind, \
     owner_identity, runtime_session_id, pinned_at";
-
-/// The two resource classes that may be referenced by an activated profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RemiCatalogResourceKind {
-    SourceSnapshot,
-    ProfileRevision,
-}
-
-impl RemiCatalogResourceKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SourceSnapshot => "source_snapshot",
-            Self::ProfileRevision => "profile_revision",
-        }
-    }
-
-    fn from_db(value: &str, column: usize) -> rusqlite::Result<Self> {
-        match value {
-            "source_snapshot" => Ok(Self::SourceSnapshot),
-            "profile_revision" => Ok(Self::ProfileRevision),
-            other => Err(rusqlite::Error::FromSqlConversionFailure(
-                column,
-                rusqlite::types::Type::Text,
-                format!("invalid Remi catalog resource kind {other}").into(),
-            )),
-        }
-    }
-}
-
-/// One durable catalog artifact and the manifest metadata that binds it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemiCatalogResource {
-    /// SHA-256 of the canonical SourceSnapshotV1 or ProfileRevisionV2 manifest.
-    pub resource_sha256: String,
-    pub kind: RemiCatalogResourceKind,
-    pub source_profile: String,
-    /// SHA-256 of the standalone catalog SQLite file.
-    pub artifact_sha256: String,
-    pub artifact_size: i64,
-    pub logical_digest_sha256: String,
-    /// Canonical JSON bytes of the versioned manifest, stored as UTF-8 text.
-    pub manifest_json: String,
-    /// Set only after the artifact and its containing directory were durably
-    /// synchronized and the immutable publication path exists.
-    pub durable: bool,
-    pub created_at: i64,
-}
-
-impl RemiCatalogResource {
-    pub fn insert(&self, conn: &Connection) -> Result<()> {
-        self.validate()?;
-        conn.execute(
-            "INSERT INTO remi_catalog_resources (
-                 resource_sha256, resource_kind, source_profile, artifact_sha256,
-                 artifact_size, logical_digest_sha256, manifest_json, durable, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                &self.resource_sha256,
-                self.kind.as_str(),
-                &self.source_profile,
-                &self.artifact_sha256,
-                self.artifact_size,
-                &self.logical_digest_sha256,
-                &self.manifest_json,
-                self.durable as i64,
-                self.created_at,
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn find_by_sha256(conn: &Connection, resource_sha256: &str) -> Result<Option<Self>> {
-        validate_sha256(resource_sha256, "catalog resource SHA-256")?;
-        let sql = format!(
-            "SELECT {RESOURCE_COLUMNS} FROM remi_catalog_resources WHERE resource_sha256 = ?1"
-        );
-        conn.query_row(&sql, [resource_sha256], Self::from_row)
-            .optional()
-            .map_err(Into::into)
-    }
-
-    pub fn find_profile_revision(
-        conn: &Connection,
-        source_profile: &str,
-        resource_sha256: &str,
-    ) -> Result<Option<Self>> {
-        validate_identity(source_profile, "catalog source profile")?;
-        validate_sha256(resource_sha256, "profile revision SHA-256")?;
-        let sql = format!(
-            "SELECT {RESOURCE_COLUMNS} FROM remi_catalog_resources
-             WHERE resource_sha256 = ?1 AND resource_kind = 'profile_revision'
-               AND source_profile = ?2"
-        );
-        conn.query_row(
-            &sql,
-            params![resource_sha256, source_profile],
-            Self::from_row,
-        )
-        .optional()
-        .map_err(Into::into)
-    }
-
-    fn validate(&self) -> Result<()> {
-        validate_sha256(&self.resource_sha256, "catalog resource SHA-256")?;
-        validate_storage_component(&self.source_profile, "catalog source profile")?;
-        validate_sha256(&self.artifact_sha256, "catalog artifact SHA-256")?;
-        validate_sha256(&self.logical_digest_sha256, "catalog logical digest")?;
-        if self.artifact_size < 0 {
-            return Err(Error::ConfigError(
-                "catalog artifact size must not be negative".to_string(),
-            ));
-        }
-        if self.created_at < 0 {
-            return Err(Error::ConfigError(
-                "catalog resource creation time must not be negative".to_string(),
-            ));
-        }
-        validate_canonical_manifest(&self.manifest_json)?;
-        let manifest_sha256 = crate::hash::sha256(self.manifest_json.as_bytes());
-        if manifest_sha256 != self.resource_sha256 {
-            return Err(Error::ChecksumMismatch {
-                expected: self.resource_sha256.clone(),
-                actual: manifest_sha256,
-            });
-        }
-        Ok(())
-    }
-
-    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
-        Ok(Self {
-            resource_sha256: row.get(0)?,
-            kind: RemiCatalogResourceKind::from_db(&row.get::<_, String>(1)?, 1)?,
-            source_profile: row.get(2)?,
-            artifact_sha256: row.get(3)?,
-            artifact_size: row.get(4)?,
-            logical_digest_sha256: row.get(5)?,
-            manifest_json: row.get(6)?,
-            durable: row.get::<_, i64>(7)? != 0,
-            created_at: row.get(8)?,
-        })
-    }
-}
 
 /// The canonical ordered member binding inside one profile revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -534,6 +392,9 @@ mod tests {
             artifact_size: 4096,
             logical_digest_sha256: digest('c'),
             manifest_json: format!("{{\"resource\":\"{sha}\"}}"),
+            physical_attestation: RemiCatalogPhysicalAttestation::FullScanV1 {
+                reason: RemiCatalogFullScanReason::FilesystemUnsupported,
+            },
             durable,
             created_at: 100,
         }

@@ -3,8 +3,8 @@
 use super::*;
 use crate::ccs::convert::ScriptletBundleSummary;
 use crate::db::models::{
-    RemiCatalogResource, RemiCatalogResourceKind, RemiProfileRevisionPin, RemiRevisionPinKind,
-    Trove, TroveType,
+    RemiCatalogFullScanReason, RemiCatalogPhysicalAttestation, RemiCatalogResource,
+    RemiCatalogResourceKind, RemiProfileRevisionPin, RemiRevisionPinKind, Trove, TroveType,
 };
 use crate::db::testing::create_test_db;
 use rusqlite::Connection;
@@ -21,6 +21,9 @@ fn seed_profile_resource(conn: &Connection, profile: &str, manifest_json: &str) 
         artifact_size: 1,
         logical_digest_sha256: crate::hash::sha256(format!("logical-{revision}").as_bytes()),
         manifest_json: manifest_json.to_string(),
+        physical_attestation: RemiCatalogPhysicalAttestation::FullScanV1 {
+            reason: RemiCatalogFullScanReason::FilesystemUnsupported,
+        },
         durable: true,
         created_at: 1,
     }
@@ -379,6 +382,9 @@ fn conversion_row_and_exact_revision_pin_share_atomic_lifecycle() {
         artifact_size: 1,
         logical_digest_sha256: "d".repeat(64),
         manifest_json: manifest_json.to_string(),
+        physical_attestation: RemiCatalogPhysicalAttestation::FullScanV1 {
+            reason: RemiCatalogFullScanReason::FilesystemUnsupported,
+        },
         durable: true,
         created_at: 1,
     }
@@ -480,6 +486,9 @@ fn reconciling_a_stale_conversion_removes_its_exact_pin() {
         artifact_size: 1,
         logical_digest_sha256: "d".repeat(64),
         manifest_json: manifest_json.to_string(),
+        physical_attestation: RemiCatalogPhysicalAttestation::FullScanV1 {
+            reason: RemiCatalogFullScanReason::FilesystemUnsupported,
+        },
         durable: true,
         created_at: 1,
     }

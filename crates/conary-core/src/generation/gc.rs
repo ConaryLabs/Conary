@@ -370,8 +370,9 @@ fn should_skip_recent_object(path: &Path, now: SystemTime, grace_period: Duratio
 mod tests {
     use super::*;
     use crate::db::models::{
-        ConvertedPackage, FileEntry, RemiCatalogResource, RemiCatalogResourceKind, Repository,
-        RepositoryPackage, RepositoryProvide,
+        ConvertedPackage, FileEntry, RemiCatalogFullScanReason, RemiCatalogPhysicalAttestation,
+        RemiCatalogResource, RemiCatalogResourceKind, Repository, RepositoryPackage,
+        RepositoryProvide,
     };
     use crate::db::schema;
     use crate::payload::{PayloadContentAuthority, PayloadNode, ResolvedPayloadNode};
@@ -402,6 +403,9 @@ mod tests {
             artifact_size: 1,
             logical_digest_sha256: crate::hash::sha256(format!("logical-{revision}").as_bytes()),
             manifest_json,
+            physical_attestation: RemiCatalogPhysicalAttestation::FullScanV1 {
+                reason: RemiCatalogFullScanReason::FilesystemUnsupported,
+            },
             durable: true,
             created_at: 1,
         }

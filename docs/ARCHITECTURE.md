@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-28
-revision: 59
-summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and byte-identical artifact aliases, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
+last_updated: 2026-08-29
+revision: 60
+summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and host-local physical attestation, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -696,7 +696,7 @@ The operational schema is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 54 is a rebuild-only hard cut. Remi's operational database
+Schema revision 55 is a rebuild-only hard cut. Remi's operational database
 stores immutable-catalog resource metadata, ordered profile members, fenced
 active pointers, refresh runs, runtime sessions, and exact work/reader/
 conversion pins. Activated native package, provide, and requirement authority
@@ -710,7 +710,15 @@ immutable source manifests; repositories no longer retain a mutable latest-root
 observation. A resource is identified by that exact manifest SHA-256. Distinct
 authenticated manifests may bind one byte-identical normalized catalog
 artifact, while membership, reachability, deletion, and filesystem ownership
-remain scoped to each resource identity and exact bundle.
+remain scoped to each resource identity and exact bundle. Every registered
+resource also carries one closed host-local physical attestation bound beside
+that exact manifest and catalog artifact identity: either a versioned Linux
+fs-verity SHA-256 measurement or a versioned full-scan requirement with the
+typed reason `filesystem_unsupported` or `platform_unsupported`. Missing,
+mixed, malformed, free-form, or unknown proof shapes are rejected. The latter
+two states retain the complete userspace catalog hash and SQLite-integrity scan;
+ordinary I/O, permission, configuration, and malformed-measurement failures do
+not mint fallback authority.
 Repository freshness is four explicit facts: `last_checked_at` records a
 successful authenticated check, `last_changed_at` a different source revision,
 `last_validated_at` completed parser/catalog validation, and
@@ -770,10 +778,11 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 54 retains the immutable Remi source/profile resource graph and
+Schema revision 55 retains the immutable Remi source/profile resource graph and
 exact input-revision conversion pins, removes the false one-artifact-to-one-
-manifest constraint, and keeps check/change/validation/publication facts
-separate. Native parser schema 1 streams authenticated file-backed
+manifest constraint, binds each exact catalog to its host-local physical
+attestation, and keeps check/change/validation/publication facts separate.
+Native parser schema 1 streams authenticated file-backed
 children into private catalog candidates; exact normalized cache reuse binds
 the source stream, root, child roles and digests, parser version, and catalog
 schema. Private candidates are reopened and verified, synchronized, and

@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::db::models::{
-    RemiActiveProfileRevision, RemiProfileRevisionMember, RemiProfileRevisionPin,
-    RemiRevisionPinKind,
+    RemiActiveProfileRevision, RemiCatalogFullScanReason, RemiCatalogPhysicalAttestation,
+    RemiProfileRevisionMember, RemiProfileRevisionPin, RemiRevisionPinKind,
 };
 use crate::db::schema::ensure_current;
 
@@ -26,6 +26,9 @@ fn resource(byte: char, kind: RemiCatalogResourceKind) -> RemiCatalogResource {
         artifact_size: 4096,
         logical_digest_sha256: digest('c'),
         manifest_json: format!("{{\"resource\":\"{byte}\"}}"),
+        physical_attestation: RemiCatalogPhysicalAttestation::FullScanV1 {
+            reason: RemiCatalogFullScanReason::FilesystemUnsupported,
+        },
         durable: true,
         created_at: 100,
     }

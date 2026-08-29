@@ -12,7 +12,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 use tracing::info;
 
-/// Revision 54 of the current-only schema epoch.
+/// Revision 55 of the current-only schema epoch.
 ///
 /// Revision 45 makes registered Remi profile membership immutable and journals
 /// exact catalog filesystem deletions before resource metadata disappears.
@@ -34,9 +34,12 @@ use tracing::info;
 /// exact catalog artifact bytes. Authenticated provenance remains part of the
 /// resource identity, while byte-identical normalized projections may be
 /// reused across upstream root churn.
+/// Revision 55 binds every registered immutable catalog resource to one closed
+/// host-local physical-integrity authority: an exact Linux fs-verity SHA-256
+/// measurement or a typed reason requiring the complete userspace scan.
 /// Earlier pre-alpha databases must be rebuilt; no compatibility migration is
 /// provided.
-pub const SCHEMA_VERSION: i32 = 54;
+pub const SCHEMA_VERSION: i32 = 55;
 /// Stable identity that distinguishes this epoch from retired schema revisions.
 pub const SCHEMA_EPOCH: &str = "conary-current-v1";
 

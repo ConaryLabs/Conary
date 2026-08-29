@@ -1118,7 +1118,7 @@ remi_predeployment_inspection_fixture() {
       {
         baseline_schema_version: 1,
         schema_epoch: "conary-current-v1",
-        schema_revision: 54,
+        schema_revision: 55,
         configured_profiles: 3,
         candidate_profiles: 2,
         candidates: [
@@ -1271,7 +1271,7 @@ test_remi_postdeployment_filter_scopes_fences_to_schema_authority() {
     baseline_path="$(mktemp "${TEST_RUN_ROOT}/remi-baseline.XXXXXX")"
     printf '%s\n' "$baseline" > "$baseline_path"
 
-    final="$(remi_postdeployment_fencing_fixture 54 7 7 6)"
+    final="$(remi_postdeployment_fencing_fixture 55 7 7 6)"
     jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
         <<<"$final" >/dev/null ||
         fail "same-schema advancing fences were rejected"
@@ -1283,13 +1283,13 @@ test_remi_postdeployment_filter_scopes_fences_to_schema_authority() {
     fi
 
     baseline="$(jq \
-        '.schema_revision = 53
+        '.schema_revision = 54
           | .candidates[0].latest_refresh.fencing_epoch = 12
           | .candidates[1].latest_refresh.fencing_epoch = 13
           | .candidates[2].latest_refresh.fencing_epoch = 11' \
         <<<"$baseline")"
     printf '%s\n' "$baseline" > "$baseline_path"
-    final="$(remi_postdeployment_fencing_fixture 54 2 2 2)"
+    final="$(remi_postdeployment_fencing_fixture 55 2 2 2)"
     jq -e --slurpfile baseline "$baseline_path" -f "$filter" \
         <<<"$final" >/dev/null ||
         fail "fresh post-transition schema fences were compared to retired authority"

@@ -111,7 +111,8 @@ fn current_from_transaction(tx: &Transaction<'_>) -> Result<Option<RemiRuntimeSe
 mod tests {
     use super::*;
     use crate::db::models::{
-        RemiCatalogResource, RemiCatalogResourceKind, RemiProfileRevisionPin, RemiRevisionPinKind,
+        RemiCatalogFullScanReason, RemiCatalogPhysicalAttestation, RemiCatalogResource,
+        RemiCatalogResourceKind, RemiProfileRevisionPin, RemiRevisionPinKind,
     };
     use crate::db::schema::ensure_current;
     use rusqlite::params;
@@ -127,6 +128,9 @@ mod tests {
             artifact_size: 1,
             logical_digest_sha256: "b".repeat(64),
             manifest_json: manifest_json.to_string(),
+            physical_attestation: RemiCatalogPhysicalAttestation::FullScanV1 {
+                reason: RemiCatalogFullScanReason::FilesystemUnsupported,
+            },
             durable: true,
             created_at: 1,
         }

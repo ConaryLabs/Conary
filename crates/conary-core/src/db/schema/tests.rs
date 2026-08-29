@@ -98,7 +98,7 @@ fn ensure_current_is_idempotent_for_current_epoch() {
 }
 
 #[test]
-fn revision_45_requires_rebuild_for_revision_54() {
+fn revision_54_requires_rebuild_for_revision_55() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE schema_identity (
@@ -106,20 +106,80 @@ fn revision_45_requires_rebuild_for_revision_54() {
             revision INTEGER NOT NULL
         );
         INSERT INTO schema_identity (epoch, revision)
-            VALUES ('conary-current-v1', 45);
+            VALUES ('conary-current-v1', 54);
         CREATE TABLE schema_version (
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-        INSERT INTO schema_version (version) VALUES (45);",
+        INSERT INTO schema_version (version) VALUES (54);",
     )
     .unwrap();
 
     let error = ensure_current(&conn).unwrap_err();
     assert_eq!(
         error.to_string(),
-        "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 45; this pre-alpha build supports only schema epoch conary-current-v1 revision 54"
+        "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 54; this pre-alpha build supports only schema epoch conary-current-v1 revision 55"
     );
+}
+
+#[test]
+fn catalog_resources_require_one_closed_physical_attestation_shape() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    let column_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('remi_catalog_resources')
+             WHERE name IN (
+                 'physical_attestation_kind', 'physical_attestation_sha256',
+                 'physical_attestation_reason'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(column_count, 3);
+
+    let insert = |resource: char, kind: &str, digest: Option<&str>, reason: Option<&str>| {
+        conn.execute(
+            "INSERT INTO remi_catalog_resources (
+                 resource_sha256, resource_kind, source_profile, artifact_sha256,
+                 artifact_size, logical_digest_sha256, manifest_json,
+                 physical_attestation_kind, physical_attestation_sha256,
+                 physical_attestation_reason, durable, created_at
+             ) VALUES (?1, 'profile_revision', 'fedora-44', ?2, 1, ?3, '{}',
+                       ?4, ?5, ?6, 1, 1)",
+            params![
+                resource.to_string().repeat(64),
+                "a".repeat(64),
+                "b".repeat(64),
+                kind,
+                digest,
+                reason,
+            ],
+        )
+    };
+
+    assert!(insert('a', "linux_fs_verity_v1", Some(&"c".repeat(64)), None,).is_ok());
+    assert!(insert('b', "full_scan_v1", None, Some("filesystem_unsupported"),).is_ok());
+    for (resource, kind, digest, reason) in [
+        ('c', "linux_fs_verity_v1", None, None),
+        (
+            'd',
+            "linux_fs_verity_v1",
+            Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+            Some("platform_unsupported"),
+        ),
+        (
+            'e',
+            "full_scan_v1",
+            Some("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+            Some("filesystem_unsupported"),
+        ),
+        ('f', "full_scan_v1", None, Some("operator_override")),
+        ('0', "unknown_v1", None, Some("platform_unsupported")),
+    ] {
+        assert!(insert(resource, kind, digest, reason).is_err());
+    }
 }
 
 /// The revision, not the table text, is what separates the two provenance

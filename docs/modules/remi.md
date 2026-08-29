@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
-revision: 95
-summary: Document the strict isolated schema-v2 conversion benchmark, batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 96
+summary: Document host-local catalog physical attestation, the strict isolated schema-v2 conversion benchmark, batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -190,13 +190,26 @@ Operational resource identity is the canonical source- or profile-manifest
 SHA-256. The catalog artifact SHA-256 is a separately verified byte identity,
 not a uniqueness key: a newly authenticated upstream root may produce a new
 immutable source manifest while its exact authenticated children and normalized
-catalog projection remain byte-identical. Schema 54 permits both resources to
+catalog projection remain byte-identical. Schema 55 retains the ability for both resources to
 bind those same bytes. Registration still compares complete immutable metadata
 for an exact resource replay, and profile membership, reader pins, reachability,
 GC deletion intents, and bundle paths remain keyed by the manifest resource
 SHA-256. Changing provenance is therefore recorded instead of discarded, while
 projection reuse cannot fail merely because the resulting catalog bytes already
 exist under another exact manifest.
+
+Schema 55 also binds every registered resource row to one immutable host-local
+physical-attestation shape for the exact catalog artifact named by that
+manifest. `linux_fs_verity_v1` carries one lowercase SHA-256 fs-verity
+measurement. `full_scan_v1` carries no digest and exactly one closed reason:
+`filesystem_unsupported` for the recognized Linux `ENOTTY`/`EOPNOTSUPP`
+boundary, or `platform_unsupported` on non-Linux builds. The latter shape keeps
+the complete userspace byte hash and SQLite-integrity proof mandatory on every
+fresh reopen. Missing, mixed, unknown, malformed, operator-selected, or
+free-form shapes fail before registration; unexpected ioctl, permission,
+configuration, and measurement failures are refusals rather than fallback
+authority. This attestation remains local operational state and does not alter
+or compete with the signed source/profile manifest authority.
 
 After every source is authenticated and staged, refresh derives the complete
 ordered `ProfileSourceMemberV2` contract from those verified source manifests
@@ -658,7 +671,7 @@ Promotion writes and synchronizes every referenced object and the signed
 reopens the complete bundle, then uses one immediate transaction to publish
 every selected candidate run, advance every changed public-profile pointer,
 insert the evidence-bound universe revision, and advance
-`remi_active_universe_revision`. Schema 54 stores the exact canonical
+`remi_active_universe_revision`. Schema 55 stores the exact canonical
 `RemiPromotionEvidenceV1` and `RemiConversionCrawlV4` digests on that universe
 revision. A catalog, proof, CAS, signed-metadata, fence, canonical-map,
 transaction, or reopen fault leaves the complete previous public state
@@ -885,7 +898,7 @@ disposition is valid only when that validation-origin revision differs from
 the report's current revision; flipping a current validation to invented reuse
 fails report reopen. Missing, repeated, reordered, contract-drifted,
 unattempted, corrupt, or failed outcomes prevent success. The proof ledger and
-per-revision bindings are one schema-54 database authority and publish
+per-revision bindings are one schema-55 database authority and publish
 atomically. The writer syncs an atomic staged report, reopens the published
 bytes, rejects noncanonical or unknown input, and compares the complete
 reopened value before the command may report success. A structurally valid
