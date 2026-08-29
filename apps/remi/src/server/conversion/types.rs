@@ -135,6 +135,7 @@ pub struct ConversionBenchmarkProcessUsage {
 #[serde(deny_unknown_fields)]
 pub struct ConversionBenchmarkView {
     pub executed: bool,
+    #[serde(with = "crate::server::conversion_timing::json_u128")]
     pub duration_ms: u128,
 }
 
@@ -154,8 +155,10 @@ pub struct ConversionBenchmarkOutputProof {
     pub signed_object_set_sha256: String,
     pub signed_object_count: u64,
     pub signed_object_bytes: u64,
+    #[serde(with = "crate::server::conversion_timing::json_u128")]
     pub independent_transport_reopen_ms: u128,
     pub independent_transport_reopen_bytes: u64,
+    #[serde(with = "crate::server::conversion_timing::json_u128")]
     pub independent_complete_archive_hash_ms: u128,
     pub independent_complete_archive_hash_bytes: u64,
 }
@@ -324,6 +327,35 @@ mod tests {
         assert_eq!(environment.remi_version, env!("CARGO_PKG_VERSION"));
         assert!(!environment.source_commit.is_empty());
         assert!(environment.logical_cpus > 0);
+    }
+
+    #[test]
+    fn benchmark_duration_fields_strictly_round_trip_json() {
+        let view = ConversionBenchmarkView {
+            executed: true,
+            duration_ms: 17,
+        };
+        let encoded = serde_json::to_vec(&view).expect("serialize benchmark view");
+        let reopened: ConversionBenchmarkView =
+            serde_json::from_slice(&encoded).expect("reopen benchmark view");
+        assert_eq!(reopened, view);
+
+        let proof = ConversionBenchmarkOutputProof {
+            ccs_sha256: "a".repeat(64),
+            ccs_size_bytes: 23,
+            transport_sha256: "b".repeat(64),
+            signed_object_set_sha256: "c".repeat(64),
+            signed_object_count: 2,
+            signed_object_bytes: 19,
+            independent_transport_reopen_ms: 11,
+            independent_transport_reopen_bytes: 23,
+            independent_complete_archive_hash_ms: 7,
+            independent_complete_archive_hash_bytes: 23,
+        };
+        let encoded = serde_json::to_vec(&proof).expect("serialize output proof");
+        let reopened: ConversionBenchmarkOutputProof =
+            serde_json::from_slice(&encoded).expect("reopen output proof");
+        assert_eq!(reopened, proof);
     }
 
     #[test]

@@ -6,6 +6,28 @@ use std::time::{Duration, Instant};
 
 use conary_core::filesystem::VerifiedObjectBatchMetrics;
 
+/// Encode exact duration values inside the portable JSON integer range.
+/// `u64` milliseconds span roughly 585 million years, so overflow is an
+/// invalid timing record rather than a value to truncate or stringify.
+pub(crate) mod json_u128 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = u64::try_from(*value).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_u64(value)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        u64::deserialize(deserializer).map(u128::from)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConversionSourceIdentity {
@@ -193,6 +215,7 @@ pub enum ConversionNestedPhase {
 pub struct ConversionNestedPhaseTiming {
     pub phase: ConversionNestedPhase,
     pub included_in: ConversionPhase,
+    #[serde(with = "json_u128")]
     pub duration_ms: u128,
 }
 
@@ -200,6 +223,7 @@ pub struct ConversionNestedPhaseTiming {
 #[serde(deny_unknown_fields)]
 pub struct ConversionPhaseTiming {
     pub phase: ConversionPhase,
+    #[serde(with = "json_u128")]
     pub duration_ms: u128,
 }
 
@@ -223,6 +247,7 @@ pub struct ConversionTimingReport {
     pub nested_phases: Vec<ConversionNestedPhaseTiming>,
     pub skipped_phases: Vec<ConversionSkippedPhase>,
     pub work: ConversionWorkMetrics,
+    #[serde(with = "json_u128")]
     pub total_ms: u128,
     pub success: bool,
     #[serde(skip, default = "Instant::now")]
@@ -324,6 +349,29 @@ mod tests {
             value["skipped_phases"][0]["reason"],
             json!("r2 store not configured")
         );
+    }
+
+    #[test]
+    fn timing_report_strictly_round_trips_json_durations() {
+        let mut report = ConversionTimingReport::new("arch", "fixture", None);
+        report.record(
+            ConversionPhase::NativeArchiveParseAndSpool,
+            Duration::from_millis(11),
+        );
+        report.record_nested(
+            ConversionNestedPhase::TemporaryObjectDurability,
+            ConversionPhase::PayloadObjectEmission,
+            Duration::from_millis(7),
+        );
+        report.total_ms = 19;
+
+        let encoded = serde_json::to_vec(&report).expect("serialize timing report");
+        let reopened: ConversionTimingReport =
+            serde_json::from_slice(&encoded).expect("reopen timing report");
+
+        assert_eq!(reopened.phases[0].duration_ms, 11);
+        assert_eq!(reopened.nested_phases[0].duration_ms, 7);
+        assert_eq!(reopened.total_ms, 19);
     }
 
     #[test]
