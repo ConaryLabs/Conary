@@ -18,9 +18,9 @@ use conary_core::db::models::{
     RemiCatalogResourceKind, RemiProfileRevisionPin, RemiRevisionPinKind, RemiRuntimeSession,
 };
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CATALOG_PORTABLE_MANIFEST_FILE_NAME,
-    CatalogReader, ProfileRevisionV2, read_portable_chunk_manifest_v1,
-    verify_registered_profile_catalog_bundle, verify_registered_profile_catalog_bundle_complete,
+    CATALOG_FILE_NAME, CatalogReader, ProfileRevisionV2,
+    authenticate_registered_profile_catalog_layout, verify_registered_profile_catalog_bundle,
+    verify_registered_profile_catalog_bundle_complete,
 };
 use parking_lot::{Mutex, MutexGuard};
 use rusqlite::Connection;
@@ -413,8 +413,20 @@ impl CatalogAuthority {
                 if cached.profile_revision_sha256 == revision
                     && cached.physical_attestation == resolved.physical_attestation =>
             {
-                cached.reader.lock().require_path_unchanged()?;
-                Arc::clone(&cached.reader)
+                let reader = Arc::clone(&cached.reader);
+                drop(cache);
+                authenticate_registered_profile_catalog_layout(
+                    &resolved.bundle_path,
+                    &resolved.manifest,
+                    &resolved.physical_attestation.portable_manifest,
+                )
+                .with_context(|| {
+                    format!(
+                        "reauthenticate cached profile revision {revision} registered bundle layout and portable proof"
+                    )
+                })?;
+                reader.lock().require_path_unchanged()?;
+                reader
             }
             Some(cached) if cached.profile_revision_sha256 == revision => {
                 bail!(
@@ -860,55 +872,17 @@ fn open_resolved_profile(resolved: ResolvedProfileCatalog) -> Result<PinnedProfi
 }
 
 fn inspect_resolved_profile_files(resolved: &ResolvedProfileCatalog) -> Result<()> {
-    let directory_metadata = fs::symlink_metadata(&resolved.bundle_path).with_context(|| {
+    authenticate_registered_profile_catalog_layout(
+        &resolved.bundle_path,
+        &resolved.manifest,
+        &resolved.physical_attestation.portable_manifest,
+    )
+    .with_context(|| {
         format!(
-            "inspect active profile catalog directory {}",
+            "authenticate active profile portable manifest in {}",
             resolved.bundle_path.display()
         )
     })?;
-    if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
-        bail!(
-            "active profile catalog {} must be a real directory",
-            resolved.bundle_path.display()
-        );
-    }
-
-    let mut names = fs::read_dir(&resolved.bundle_path)?
-        .map(|entry| entry.map(|entry| entry.file_name()))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    names.sort();
-    let mut expected_names = [
-        CATALOG_FILE_NAME,
-        CATALOG_MANIFEST_FILE_NAME,
-        CATALOG_PORTABLE_MANIFEST_FILE_NAME,
-    ]
-    .map(std::ffi::OsString::from)
-    .to_vec();
-    expected_names.sort();
-    if names != expected_names {
-        bail!(
-            "active profile catalog {} contains an unexpected file set",
-            resolved.bundle_path.display()
-        );
-    }
-
-    let manifest_path = resolved.bundle_path.join(CATALOG_MANIFEST_FILE_NAME);
-    let manifest_metadata = fs::symlink_metadata(&manifest_path)?;
-    if manifest_metadata.file_type().is_symlink() || !manifest_metadata.is_file() {
-        bail!(
-            "active profile manifest {} must be a regular file",
-            manifest_path.display()
-        );
-    }
-    let expected_manifest = conary_core::json::canonical_json(&resolved.manifest)
-        .map_err(anyhow::Error::msg)
-        .context("canonicalize active profile manifest")?;
-    if fs::read(&manifest_path)? != expected_manifest {
-        bail!(
-            "active profile manifest {} disagrees with operational pointer authority",
-            manifest_path.display()
-        );
-    }
 
     let catalog_path = resolved.bundle_path.join(CATALOG_FILE_NAME);
     let catalog_metadata = fs::symlink_metadata(&catalog_path)?;
@@ -927,36 +901,6 @@ fn inspect_resolved_profile_files(resolved: &ResolvedProfileCatalog) -> Result<(
         );
     }
 
-    let portable_manifest_path = resolved
-        .bundle_path
-        .join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
-    let portable_manifest_metadata = fs::symlink_metadata(&portable_manifest_path)?;
-    if portable_manifest_metadata.file_type().is_symlink() || !portable_manifest_metadata.is_file()
-    {
-        bail!(
-            "active profile portable manifest {} must be a regular file",
-            portable_manifest_path.display()
-        );
-    }
-    if portable_manifest_metadata.len() != resolved.physical_attestation.portable_manifest.size {
-        bail!(
-            "active profile portable manifest {} has {} bytes; expected {}",
-            portable_manifest_path.display(),
-            portable_manifest_metadata.len(),
-            resolved.physical_attestation.portable_manifest.size
-        );
-    }
-    read_portable_chunk_manifest_v1(
-        &portable_manifest_path,
-        &resolved.physical_attestation.portable_manifest,
-        &resolved.manifest.catalog,
-    )
-    .with_context(|| {
-        format!(
-            "authenticate active profile portable manifest {}",
-            portable_manifest_path.display()
-        )
-    })?;
     Ok(())
 }
 

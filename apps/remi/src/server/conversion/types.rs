@@ -230,6 +230,11 @@ pub enum ConversionBenchmarkOutcome {
         timing: Box<ConversionTimingReport>,
         output: ConversionBenchmarkOutputProof,
     },
+    IndependentOutputReopenFailure {
+        cache_state: String,
+        timing: Box<ConversionTimingReport>,
+        error: String,
+    },
     Failure {
         error: String,
     },

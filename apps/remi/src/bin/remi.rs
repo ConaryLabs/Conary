@@ -692,9 +692,9 @@ fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()>
             .repetitions
             .iter()
             .filter(|record| {
-                matches!(
-                    record.outcome,
-                    remi::server::ConversionBenchmarkOutcome::Failure { .. }
+                !matches!(
+                    &record.outcome,
+                    remi::server::ConversionBenchmarkOutcome::Success { .. }
                 )
             })
             .count();

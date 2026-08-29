@@ -148,17 +148,23 @@ pub async fn run_conversion_benchmark_from_config(
 
     let mut repetitions = Vec::with_capacity(config.iterations);
     for iteration in 1..=config.iterations {
-        repetitions.push(
-            run_iteration(
-                &service,
-                &selection,
-                &resolved.package,
-                &staged_source,
-                Arc::clone(&signing_key),
-                iteration,
-            )
-            .await?,
+        let evidence = run_iteration(
+            &service,
+            &selection,
+            &resolved.package,
+            &staged_source,
+            Arc::clone(&signing_key),
+            iteration,
+        )
+        .await?;
+        let failed = !matches!(
+            &evidence.outcome,
+            ConversionBenchmarkOutcome::Success { .. }
         );
+        repetitions.push(evidence);
+        if failed {
+            break;
+        }
     }
 
     let report = ConversionBenchmarkReportV3 {
@@ -587,37 +593,13 @@ async fn run_iteration(
 
     let (views, outcome) = match conversion {
         Ok(mut result) => {
-            let timing = result
-                .timing
-                .take()
-                .context("conversion benchmark result omitted timing evidence")?;
-            let views = benchmark_views(&result.cache_state, &timing)?;
-            let output = independently_reopen_output(&result, signing_key.as_ref())
-                .context("independent benchmark output reopen failed")?;
-            (
-                views,
-                ConversionBenchmarkOutcome::Success {
-                    cache_state: result.cache_state,
-                    timing: Box::new(timing),
-                    output,
-                },
-            )
+            let cache_state = result.cache_state.clone();
+            let timing = result.timing.take();
+            postprocess_successful_conversion(cache_state, timing, || {
+                independently_reopen_output(&result, signing_key.as_ref())
+            })?
         }
-        Err(error) => (
-            ConversionBenchmarkViews {
-                conversion_core: ConversionBenchmarkView {
-                    executed: false,
-                    duration_ms: 0,
-                },
-                end_to_end: ConversionBenchmarkView {
-                    executed: false,
-                    duration_ms: 0,
-                },
-            },
-            ConversionBenchmarkOutcome::Failure {
-                error: format!("{error:#}"),
-            },
-        ),
+        Err(error) => conversion_failure_outcome(error),
     };
     let process = process_probe.finish()?;
     Ok(ConversionBenchmarkEvidence {
@@ -626,6 +608,51 @@ async fn run_iteration(
         views,
         outcome,
     })
+}
+
+fn postprocess_successful_conversion<F>(
+    cache_state: String,
+    timing: Option<crate::server::conversion_timing::ConversionTimingReport>,
+    reopen_output: F,
+) -> Result<(ConversionBenchmarkViews, ConversionBenchmarkOutcome)>
+where
+    F: FnOnce() -> Result<ConversionBenchmarkOutputProof>,
+{
+    let timing = timing.context("conversion benchmark result omitted timing evidence")?;
+    let views = benchmark_views(&cache_state, &timing)?;
+    let outcome = match reopen_output() {
+        Ok(output) => ConversionBenchmarkOutcome::Success {
+            cache_state,
+            timing: Box::new(timing),
+            output,
+        },
+        Err(error) => ConversionBenchmarkOutcome::IndependentOutputReopenFailure {
+            cache_state,
+            timing: Box::new(timing),
+            error: format!("independent benchmark output reopen failed: {error:#}"),
+        },
+    };
+    Ok((views, outcome))
+}
+
+fn conversion_failure_outcome(
+    error: anyhow::Error,
+) -> (ConversionBenchmarkViews, ConversionBenchmarkOutcome) {
+    (
+        ConversionBenchmarkViews {
+            conversion_core: ConversionBenchmarkView {
+                executed: false,
+                duration_ms: 0,
+            },
+            end_to_end: ConversionBenchmarkView {
+                executed: false,
+                duration_ms: 0,
+            },
+        },
+        ConversionBenchmarkOutcome::Failure {
+            error: format!("{error:#}"),
+        },
+    )
 }
 
 fn benchmark_views(

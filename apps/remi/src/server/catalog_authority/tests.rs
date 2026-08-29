@@ -604,6 +604,83 @@ fn cached_profile_reader_revalidates_canonical_path_before_reuse() {
 }
 
 #[test]
+fn cached_profile_reader_reauthenticates_portable_proof_before_reuse() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("cached-proof-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let retained = authority
+        .open_active_profile(PROFILE)
+        .expect("seed exact profile reader cache");
+    let mut proof = fs::read(&revision.portable_manifest_path).expect("read portable proof");
+    let offset = proof.len() / 2;
+    proof[offset] ^= 0xff;
+    let replacement = fixture.root.path().join("replacement-profile-proof");
+    fs::write(&replacement, proof).expect("write tampered replacement proof");
+    fs::rename(&replacement, &revision.portable_manifest_path)
+        .expect("replace canonical portable proof");
+
+    let error = authority
+        .open_active_profile(PROFILE)
+        .expect_err("new request must reject replaced portable proof");
+
+    assert!(
+        format!("{error:#}").contains("reauthenticate cached profile revision"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(
+        retained
+            .reader()
+            .source_evidence()
+            .expect("retained profile proof remains in memory")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn cached_profile_reader_revalidates_exact_registered_layout_before_reuse() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("cached-layout-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let retained = authority
+        .open_active_profile(PROFILE)
+        .expect("seed exact profile reader cache");
+    fs::write(
+        revision.bundle_dir.join("catalog.sqlite-wal"),
+        b"unexpected",
+    )
+    .expect("add unexpected registered bundle entry");
+
+    let error = authority
+        .open_active_profile(PROFILE)
+        .expect_err("new request must reject unexpected registered bundle entry");
+
+    assert!(
+        format!("{error:#}").contains("registered bundle layout and portable proof"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(retained.profile_revision_sha256(), revision.digest);
+}
+
+#[test]
 fn active_profile_selection_reads_only_the_operational_pointer() {
     let fixture = fixture();
     let revision = add_revision(&fixture, 'a', 1);

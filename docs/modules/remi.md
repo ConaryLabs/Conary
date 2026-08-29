@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
-revision: 99
-summary: Document filesystem-independent catalog chunk attestation and authenticated SQLite serving, the strict isolated schema-v3 conversion and registered-reopen benchmark with signed cancelled-write phase deltas, batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 100
+summary: Document filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, the strict isolated schema-v3 conversion and registered-reopen benchmark with signed cancelled-write phase deltas and terminal typed failure publication, batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -235,7 +235,16 @@ explicit orphan rejection, so this registered reopen carries that durable
 exact-byte attestation instead of counting, deserializing, re-digesting, or
 foreign-key-scanning every row after each service restart. Externally supplied
 or unregistered bundles do not receive this authority. The reader pin remains
-live until the new fenced run completes as a durable candidate. This path
+live until the new fenced run completes as a durable candidate. Every new
+request that reuses a process-cached registered reader reauthenticates the
+current canonical manifest, exact registered top-level layout, and portable
+proof, then proves that the open catalog descriptor still names the registered
+path inode before handing out the reader. Source reauthentication also proves
+that retained native metadata remains a real private directory boundary; it
+does not rescan metadata payloads. A reader already handed out retains its
+authenticated catalog descriptor and decoded proof, so a later bundle mutation
+fails new handoffs without invalidating the immutable bytes already pinned by
+an in-flight reader. This path
 creates no profile candidate file and performs no profile-catalog
 reconstruction. Any
 changed member or projection version takes the normal private composition path,
@@ -1520,7 +1529,16 @@ and canonical signed-object-set identities and byte counts.
 
 The first successful repetition must be `cold`. Every later successful
 repetition must be an exact `hot` hit with no conversion-core work. Failures
-remain typed evidence rather than being relabeled or silently retried.
+remain typed evidence rather than being relabeled or silently retried. The
+first failure terminates the repetition sequence, including a failure in the
+independent persisted-output reopen after conversion succeeds. A conversion
+failure carries zero unexecuted views; the distinct independent-output-reopen
+failure retains the completed conversion's cache state, timing, and executed
+views while omitting the output proof that could not be authenticated. Missing
+timing or contradictory cache/view evidence is a fatal harness-contract defect,
+not a valid repetition failure. The terminal failure is validated, atomically
+published, and independently reopened before the command reports its nonzero
+outcome.
 Schema-v3 validation rejects inconsistent authority, reopen evidence,
 iteration, cache-state, timing, or output proof before atomically publishing
 the report, then deserializes and compares the durable report before success.

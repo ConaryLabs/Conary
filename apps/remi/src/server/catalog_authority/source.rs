@@ -12,7 +12,8 @@ use conary_core::db::models::{
 use conary_core::repository::DurableSourceCatalogReuseV1;
 use conary_core::repository::catalog::{
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogReader, ProfileSourceMemberV2,
-    SourceSnapshotV1, SourceStreamKindV1, verify_registered_source_catalog_bundle,
+    SourceSnapshotV1, SourceStreamKindV1, authenticate_registered_source_catalog_layout,
+    verify_registered_source_catalog_bundle,
 };
 use parking_lot::{Mutex, MutexGuard};
 
@@ -274,8 +275,20 @@ impl CatalogAuthority {
                         source_snapshot_sha256
                     );
                 }
-                cached.reader.lock().require_path_unchanged()?;
-                Arc::clone(&cached.reader)
+                let reader = Arc::clone(&cached.reader);
+                drop(cache);
+                authenticate_registered_source_catalog_layout(
+                    &registered.bundle_path,
+                    &registered.manifest,
+                    &registered.physical_attestation.portable_manifest,
+                )
+                .with_context(|| {
+                    format!(
+                        "reauthenticate cached source snapshot {source_snapshot_sha256} registered bundle layout and portable proof"
+                    )
+                })?;
+                reader.lock().require_path_unchanged()?;
+                reader
             }
             _ => {
                 let reader = Arc::new(Mutex::new(
@@ -488,7 +501,9 @@ mod tests {
 
     use super::*;
     use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
-    use conary_core::repository::catalog::CATALOG_FILE_NAME;
+    use conary_core::repository::catalog::{
+        CATALOG_FILE_NAME, CATALOG_PORTABLE_MANIFEST_FILE_NAME,
+    };
 
     fn active_source(
         fixture: &ActiveCatalogFixture,
@@ -557,6 +572,40 @@ mod tests {
                 .lock()
                 .source_evidence()
                 .expect("retained source descriptor remains readable")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn cached_source_reader_reauthenticates_portable_proof_before_reuse() {
+        let fixture = ActiveCatalogFixture::new();
+        let (pinned, member) = active_source(&fixture, 1);
+        let retained = fixture
+            .authority()
+            .verified_source_catalog(&pinned, &member)
+            .expect("seed exact source reader cache");
+        let proof_path = retained
+            .bundle_path
+            .join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
+        fs::remove_file(&proof_path).expect("remove canonical source portable proof");
+
+        let error = fixture
+            .authority()
+            .verified_source_catalog(&pinned, &member)
+            .err()
+            .expect("new request must reject missing source portable proof");
+
+        assert!(
+            format!("{error:#}").contains("reauthenticate cached source snapshot"),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(
+            retained
+                .reader
+                .lock()
+                .source_evidence()
+                .expect("retained source proof remains in memory")
                 .len(),
             1
         );

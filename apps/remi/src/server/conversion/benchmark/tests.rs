@@ -4,6 +4,66 @@
 use super::*;
 use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
 
+fn successful_timing() -> crate::server::conversion_timing::ConversionTimingReport {
+    let mut timing = crate::server::conversion_timing::ConversionTimingReport::new(
+        "fedora",
+        "benchmark-fixture",
+        Some("1"),
+    );
+    timing.record(
+        crate::server::conversion_timing::ConversionPhase::NativeArchiveParseAndSpool,
+        std::time::Duration::from_millis(7),
+    );
+    timing.finish(true);
+    timing.total_ms = 11;
+    timing
+}
+
+#[test]
+fn independent_output_reopen_failure_remains_typed_iteration_evidence() {
+    let (views, outcome) =
+        postprocess_successful_conversion("cold".to_string(), Some(successful_timing()), || {
+            Err(anyhow::anyhow!("fixture CCS corruption"))
+        })
+        .expect("independent reopen failure remains reportable evidence");
+
+    assert!(views.conversion_core.executed);
+    assert_eq!(views.conversion_core.duration_ms, 7);
+    assert!(views.end_to_end.executed);
+    assert_eq!(views.end_to_end.duration_ms, 11);
+    let ConversionBenchmarkOutcome::IndependentOutputReopenFailure {
+        cache_state,
+        timing,
+        error,
+    } = outcome
+    else {
+        panic!("independent reopen failure was mislabeled");
+    };
+    assert_eq!(cache_state, "cold");
+    assert_eq!(timing.total_ms, 11);
+    assert!(
+        error.contains("independent benchmark output reopen failed: fixture CCS corruption"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn invalid_success_evidence_remains_fatal_without_reopen() {
+    let error = postprocess_successful_conversion("cold".to_string(), None, || {
+        panic!("missing timing must fail before output reopen")
+    })
+    .expect_err("missing timing must remain a fatal evidence defect");
+    assert!(error.to_string().contains("omitted timing evidence"));
+
+    let error = postprocess_successful_conversion(
+        "invented-cache-state".to_string(),
+        Some(successful_timing()),
+        || panic!("invalid cache state must fail before output reopen"),
+    )
+    .expect_err("invalid cache state must remain a fatal evidence defect");
+    assert!(error.to_string().contains("unknown cache state"));
+}
+
 #[test]
 fn schema_v3_vfs_query_delta_fails_closed_on_counter_regression() {
     assert!(

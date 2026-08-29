@@ -18,6 +18,7 @@ pub(in crate::repository) use bundle::retain_source_metadata_object;
 pub use bundle::{
     CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CATALOG_PORTABLE_MANIFEST_FILE_NAME,
     PublishedVerifiedCatalogBundle, SOURCE_METADATA_DIRECTORY_NAME,
+    authenticate_registered_profile_catalog_layout, authenticate_registered_source_catalog_layout,
     publish_profile_catalog_bundle_verified, publish_source_catalog_bundle_verified,
     source_metadata_object_path, verify_profile_catalog_bundle,
     verify_registered_profile_catalog_bundle, verify_registered_profile_catalog_bundle_complete,

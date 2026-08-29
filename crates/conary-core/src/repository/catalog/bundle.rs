@@ -131,6 +131,23 @@ pub fn verify_source_catalog_bundle(
     Ok(reader)
 }
 
+/// Authenticate a registered source catalog's exact top-level layout, typed
+/// manifest, native-metadata directory boundary, and portable proof without
+/// reading catalog or native-metadata payload bytes. Cached serving readers
+/// use this bounded handoff check before reuse.
+pub fn authenticate_registered_source_catalog_layout(
+    directory: impl AsRef<Path>,
+    expected: &SourceSnapshotV1,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
+) -> Result<PortableChunkManifestV1> {
+    let directory = directory.as_ref();
+    expected.validate()?;
+    verify_exact_registered_source_directory(directory)?;
+    require_private_metadata_directory(&directory.join(SOURCE_METADATA_DIRECTORY_NAME))?;
+    verify_manifest_file(directory, expected)?;
+    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)
+}
+
 /// Completely verify a registered source bundle after authenticating its
 /// portable sidecar against exact persisted physical authority.
 ///
@@ -142,10 +159,11 @@ pub fn verify_registered_source_catalog_bundle_complete(
     portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
     let directory = directory.as_ref();
-    expected.validate()?;
-    verify_exact_registered_source_directory(directory)?;
-    verify_manifest_file(directory, expected)?;
-    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)?;
+    authenticate_registered_source_catalog_layout(
+        directory,
+        expected,
+        portable_manifest_attestation,
+    )?;
     let reader = verify_source_catalog_binding(directory, expected)?;
     verify_source_metadata_directory(directory, expected)?;
     Ok(reader)
@@ -158,13 +176,10 @@ pub fn verify_registered_source_catalog_bundle(
     portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
     let directory = directory.as_ref();
-    expected.validate()?;
-    verify_exact_registered_source_directory(directory)?;
-    verify_manifest_file(directory, expected)?;
-    let portable_manifest = read_registered_portable_manifest(
+    let portable_manifest = authenticate_registered_source_catalog_layout(
         directory,
+        expected,
         portable_manifest_attestation,
-        &expected.catalog,
     )?;
     let reader = verify_source_catalog_binding_with_registered_portable(
         directory,
@@ -181,10 +196,11 @@ fn verify_source_catalog_bundle_with_proof(
     proof: &CatalogVerificationProofV1,
     portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
-    expected.validate()?;
-    verify_exact_registered_source_directory(directory)?;
-    verify_manifest_file(directory, expected)?;
-    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)?;
+    authenticate_registered_source_catalog_layout(
+        directory,
+        expected,
+        portable_manifest_attestation,
+    )?;
     let reader = verify_source_catalog_binding_with_proof(directory, expected, proof)?;
     verify_source_metadata_directory(directory, expected)?;
     Ok(reader)
@@ -200,6 +216,21 @@ pub fn verify_profile_catalog_bundle(
     verify_profile_catalog_binding(directory.as_ref(), expected)
 }
 
+/// Authenticate a registered profile bundle's exact layout, typed manifest,
+/// and portable proof without reading catalog payload bytes. Cached serving
+/// readers use this bounded handoff check before reuse.
+pub fn authenticate_registered_profile_catalog_layout(
+    directory: impl AsRef<Path>,
+    expected: &ProfileRevisionV2,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
+) -> Result<PortableChunkManifestV1> {
+    let directory = directory.as_ref();
+    expected.validate()?;
+    verify_exact_registered_profile_directory(directory)?;
+    verify_manifest_file(directory, expected)?;
+    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)
+}
+
 /// Completely verify a registered profile bundle after authenticating its
 /// portable sidecar against exact persisted physical authority.
 ///
@@ -211,10 +242,11 @@ pub fn verify_registered_profile_catalog_bundle_complete(
     portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
     let directory = directory.as_ref();
-    expected.validate()?;
-    verify_exact_registered_profile_directory(directory)?;
-    verify_manifest_file(directory, expected)?;
-    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)?;
+    authenticate_registered_profile_catalog_layout(
+        directory,
+        expected,
+        portable_manifest_attestation,
+    )?;
     verify_profile_catalog_binding(directory, expected)
 }
 
@@ -225,13 +257,10 @@ pub fn verify_registered_profile_catalog_bundle(
     portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
     let directory = directory.as_ref();
-    expected.validate()?;
-    verify_exact_registered_profile_directory(directory)?;
-    verify_manifest_file(directory, expected)?;
-    let portable_manifest = read_registered_portable_manifest(
+    let portable_manifest = authenticate_registered_profile_catalog_layout(
         directory,
+        expected,
         portable_manifest_attestation,
-        &expected.catalog,
     )?;
     verify_profile_catalog_binding_with_registered_portable(directory, expected, portable_manifest)
 }
@@ -242,10 +271,11 @@ fn verify_profile_catalog_bundle_with_proof(
     proof: &CatalogVerificationProofV1,
     portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<CatalogReader> {
-    expected.validate()?;
-    verify_exact_registered_profile_directory(directory)?;
-    verify_manifest_file(directory, expected)?;
-    read_registered_portable_manifest(directory, portable_manifest_attestation, &expected.catalog)?;
+    authenticate_registered_profile_catalog_layout(
+        directory,
+        expected,
+        portable_manifest_attestation,
+    )?;
     verify_profile_catalog_binding_with_proof(directory, expected, proof)
 }
 

@@ -86,12 +86,23 @@ pub(super) fn validate_report(report: &ConversionBenchmarkReportV3) -> Result<()
                     cold_output = Some(output.clone());
                 }
             }
+            ConversionBenchmarkOutcome::IndependentOutputReopenFailure {
+                cache_state,
+                timing,
+                error,
+            } => {
+                validate_terminal_failure(index, report.repetitions.len(), repetition, error)?;
+                let expected_cache = if cold_output.is_some() { "hot" } else { "cold" };
+                validate_completed_conversion(
+                    report,
+                    repetition,
+                    cache_state,
+                    timing,
+                    expected_cache,
+                )?;
+            }
             ConversionBenchmarkOutcome::Failure { error } => {
-                ensure!(
-                    !error.trim().is_empty(),
-                    "benchmark iteration {} has an empty failure",
-                    repetition.iteration
-                );
+                validate_terminal_failure(index, report.repetitions.len(), repetition, error)?;
                 ensure!(
                     !repetition.views.conversion_core.executed
                         && repetition.views.conversion_core.duration_ms == 0
@@ -106,15 +117,31 @@ pub(super) fn validate_report(report: &ConversionBenchmarkReportV3) -> Result<()
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn validate_successful_repetition(
+fn validate_terminal_failure(
+    index: usize,
+    repetition_count: usize,
+    repetition: &ConversionBenchmarkEvidence,
+    error: &str,
+) -> Result<()> {
+    ensure!(
+        index + 1 == repetition_count,
+        "failed benchmark iteration {} is not terminal",
+        repetition.iteration
+    );
+    ensure!(
+        !error.trim().is_empty(),
+        "benchmark iteration {} has an empty failure",
+        repetition.iteration
+    );
+    Ok(())
+}
+
+fn validate_completed_conversion(
     report: &ConversionBenchmarkReportV3,
     repetition: &ConversionBenchmarkEvidence,
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
-    output: &ConversionBenchmarkOutputProof,
     expected_cache: &str,
-    cold_output: Option<&ConversionBenchmarkOutputProof>,
 ) -> Result<()> {
     ensure!(
         cache_state == expected_cache,
@@ -125,7 +152,7 @@ fn validate_successful_repetition(
     );
     ensure!(
         timing.success,
-        "successful benchmark iteration {} carries failed timing evidence",
+        "completed benchmark iteration {} carries failed timing evidence",
         repetition.iteration
     );
     let profile = conary_core::repository::supported_profiles::profile_by_id(
@@ -136,19 +163,19 @@ fn validate_successful_repetition(
         timing.distro == profile.remi_route_slug()
             && timing.package == report.subject.name
             && timing.version.as_deref() == Some(report.subject.version.as_str()),
-        "successful benchmark timing route or package identity contradicts report subject"
+        "completed benchmark timing route or package identity contradicts report subject"
     );
     let source = timing
         .source
         .as_ref()
-        .context("successful benchmark timing omitted source identity")?;
+        .context("completed benchmark timing omitted source identity")?;
     ensure!(
         source.source_profile == report.authority.source_profile
             && source.version == report.subject.version
             && source.architecture == report.subject.architecture
             && source.checksum == report.subject.repository_checksum
             && source.declared_size_bytes == report.subject.source_size_bytes,
-        "successful benchmark timing contradicts report subject"
+        "completed benchmark timing contradicts report subject"
     );
 
     let core_duration = conversion_core_duration(timing)?;
@@ -165,6 +192,45 @@ fn validate_successful_repetition(
         repetition.iteration
     );
 
+    if expected_cache == "cold" {
+        ensure!(
+            repetition.views.conversion_core.executed,
+            "cold benchmark did not execute conversion core"
+        );
+        let work = &timing.work;
+        ensure!(
+            work.admitted_local_bytes == report.subject.source_size_bytes
+                && work.repository_checksum_bytes_hashed == report.subject.source_size_bytes
+                && work.source_artifact_bytes == report.subject.source_size_bytes
+                && work.source_bytes_hashed == report.subject.source_size_bytes,
+            "cold benchmark source-artifact work contradicts the exact subject size"
+        );
+    } else {
+        ensure!(
+            !repetition.views.conversion_core.executed && core_duration == 0,
+            "hot benchmark executed conversion core"
+        );
+        ensure!(
+            timing.work == crate::server::conversion_timing::ConversionWorkMetrics::default(),
+            "hot benchmark recorded conversion or persistence work: {:#?}",
+            timing.work
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_successful_repetition(
+    report: &ConversionBenchmarkReportV3,
+    repetition: &ConversionBenchmarkEvidence,
+    cache_state: &str,
+    timing: &crate::server::conversion_timing::ConversionTimingReport,
+    output: &ConversionBenchmarkOutputProof,
+    expected_cache: &str,
+    cold_output: Option<&ConversionBenchmarkOutputProof>,
+) -> Result<()> {
+    validate_completed_conversion(report, repetition, cache_state, timing, expected_cache)?;
+
     validate_sha256(&output.ccs_sha256, "output CCS SHA-256")?;
     validate_sha256(&output.transport_sha256, "transport SHA-256")?;
     validate_sha256(
@@ -179,18 +245,7 @@ fn validate_successful_repetition(
     );
 
     if expected_cache == "cold" {
-        ensure!(
-            repetition.views.conversion_core.executed,
-            "cold benchmark did not execute conversion core"
-        );
         let work = &timing.work;
-        ensure!(
-            work.admitted_local_bytes == report.subject.source_size_bytes
-                && work.repository_checksum_bytes_hashed == report.subject.source_size_bytes
-                && work.source_artifact_bytes == report.subject.source_size_bytes
-                && work.source_bytes_hashed == report.subject.source_size_bytes,
-            "cold benchmark source-artifact work contradicts the exact subject size"
-        );
         ensure!(
             work.ccs_output_bytes == output.ccs_size_bytes
                 && work.immediate_converter_reopen_ccs_bytes == output.ccs_size_bytes
@@ -207,16 +262,6 @@ fn validate_successful_repetition(
                 && work.independent_transport_reopen_object_bytes_hashed
                     == output.signed_object_bytes,
             "cold benchmark conversion work contradicts the signed object set"
-        );
-    } else {
-        ensure!(
-            !repetition.views.conversion_core.executed && core_duration == 0,
-            "hot benchmark executed conversion core"
-        );
-        ensure!(
-            timing.work == crate::server::conversion_timing::ConversionWorkMetrics::default(),
-            "hot benchmark recorded conversion or persistence work: {:#?}",
-            timing.work
         );
     }
 
@@ -649,6 +694,108 @@ mod tests {
     #[test]
     fn accepts_fully_bound_cold_and_hot_repetition_evidence() {
         validate_report(&valid_report()).unwrap();
+    }
+
+    #[test]
+    fn terminal_independent_reopen_failure_retains_validated_conversion_evidence() {
+        let mut report = valid_report();
+        let cold_success = report.repetitions[0].clone();
+        let ConversionBenchmarkOutcome::Success {
+            cache_state,
+            timing,
+            ..
+        } = cold_success.outcome.clone()
+        else {
+            unreachable!()
+        };
+        report.repetitions[0].outcome =
+            ConversionBenchmarkOutcome::IndependentOutputReopenFailure {
+                cache_state,
+                timing,
+                error: "independent benchmark output reopen failed: fixture corruption".to_string(),
+            };
+        report.repetitions[1] = cold_success;
+        report.repetitions[1].iteration = 2;
+        let error = validate_report(&report).expect_err("nonterminal failure must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "failed benchmark iteration 1 is not terminal"
+        );
+
+        report.repetitions.truncate(1);
+        validate_report(&report).expect("terminal reopen failure is valid typed evidence");
+        let mut tampered = report.clone();
+        tampered.repetitions[0].views.end_to_end.duration_ms += 1;
+        assert!(
+            validate_report(&tampered).is_err(),
+            "retained conversion views must remain bound to timing evidence"
+        );
+
+        let root = tempfile::tempdir().expect("create report publication root");
+        let path = root.path().join(REPORT_FILE_NAME);
+        publish_and_reopen_report(&path, &report)
+            .expect("publish and strictly reopen terminal reopen-failure report");
+        assert!(path.is_file());
+    }
+
+    #[test]
+    fn terminal_conversion_failure_requires_unexecuted_views() {
+        let mut report = valid_report();
+        report.repetitions.truncate(1);
+        report.repetitions[0].views = ConversionBenchmarkViews {
+            conversion_core: ConversionBenchmarkView {
+                executed: false,
+                duration_ms: 0,
+            },
+            end_to_end: ConversionBenchmarkView {
+                executed: false,
+                duration_ms: 0,
+            },
+        };
+        report.repetitions[0].outcome = ConversionBenchmarkOutcome::Failure {
+            error: "fixture conversion failure".to_string(),
+        };
+        validate_report(&report).expect("terminal conversion failure is valid typed evidence");
+        report.repetitions[0].views.end_to_end.executed = true;
+        assert!(validate_report(&report).is_err());
+    }
+
+    #[test]
+    fn terminal_hot_reopen_failure_requires_exact_completed_conversion_evidence() {
+        let mut report = valid_report();
+        let ConversionBenchmarkOutcome::Success {
+            cache_state,
+            timing,
+            ..
+        } = report.repetitions[1].outcome.clone()
+        else {
+            unreachable!()
+        };
+        report.repetitions[1].outcome =
+            ConversionBenchmarkOutcome::IndependentOutputReopenFailure {
+                cache_state,
+                timing,
+                error: "independent benchmark output reopen failed: fixture corruption".to_string(),
+            };
+        validate_report(&report).expect("terminal hot reopen failure retains exact evidence");
+
+        let mut wrong_cache = report.clone();
+        let ConversionBenchmarkOutcome::IndependentOutputReopenFailure { cache_state, .. } =
+            &mut wrong_cache.repetitions[1].outcome
+        else {
+            unreachable!()
+        };
+        *cache_state = "cold".to_string();
+        assert!(validate_report(&wrong_cache).is_err());
+
+        let mut failed_timing = report;
+        let ConversionBenchmarkOutcome::IndependentOutputReopenFailure { timing, .. } =
+            &mut failed_timing.repetitions[1].outcome
+        else {
+            unreachable!()
+        };
+        timing.success = false;
+        assert!(validate_report(&failed_timing).is_err());
     }
 
     #[test]
