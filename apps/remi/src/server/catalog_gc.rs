@@ -43,6 +43,12 @@ struct CatalogGcTargets {
     deleted_source_resources: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CatalogBundleDeletionPolicy {
+    CurrentOnly,
+    CurrentOrRetiredSchema54,
+}
+
 /// Fence expired refresh runs after the server has acquired exclusive runtime
 /// ownership, remove only their exact durable candidate paths, and acknowledge
 /// each absence so recovery remains bounded and replayable.
@@ -193,6 +199,7 @@ pub(crate) async fn collect_catalog_garbage_uncoordinated(
                     intent.resource_kind,
                     &intent.source_profile,
                     &intent.resource_sha256,
+                    CatalogBundleDeletionPolicy::CurrentOnly,
                     &catalog_authority,
                 )?);
                 acknowledged.push(intent);
@@ -203,6 +210,7 @@ pub(crate) async fn collect_catalog_garbage_uncoordinated(
                     candidate.resource_kind,
                     &candidate.source_profile,
                     &candidate.resource_sha256,
+                    CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54,
                     &catalog_authority,
                 )?);
             }
@@ -297,6 +305,7 @@ fn remove_exact_bundle(
     kind: RemiCatalogResourceKind,
     source_profile: &str,
     resource_sha256: &str,
+    deletion_policy: CatalogBundleDeletionPolicy,
 ) -> Result<bool> {
     require_storage_component(source_profile, "catalog deletion source profile")?;
     require_digest(resource_sha256, "catalog deletion resource digest")?;
@@ -318,7 +327,7 @@ fn remove_exact_bundle(
             path.display()
         );
     }
-    validate_exact_bundle_layout(&path, kind)?;
+    validate_exact_bundle_deletion_layout(&path, kind, resource_sha256, deletion_policy)?;
     if fs::symlink_metadata(&tombstone).is_ok() {
         bail!(
             "catalog deletion target {} and tombstone {} both exist",
@@ -346,9 +355,16 @@ fn remove_exact_bundle_and_evict_reader(
     kind: RemiCatalogResourceKind,
     source_profile: &str,
     resource_sha256: &str,
+    deletion_policy: CatalogBundleDeletionPolicy,
     catalog_authority: &CatalogAuthority,
 ) -> Result<bool> {
-    let removed = remove_exact_bundle(catalog_root, kind, source_profile, resource_sha256)?;
+    let removed = remove_exact_bundle(
+        catalog_root,
+        kind,
+        source_profile,
+        resource_sha256,
+        deletion_policy,
+    )?;
     match kind {
         RemiCatalogResourceKind::ProfileRevision => {
             catalog_authority.evict_removed_profile_catalog(source_profile, resource_sha256);
@@ -429,31 +445,46 @@ fn require_digest(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_exact_bundle_layout(path: &Path, kind: RemiCatalogResourceKind) -> Result<()> {
+/// Accept only the exact current bundle layout or the exact layout retired by
+/// the schema-55 hard cut. The retired shape is permitted only for an exact
+/// unregistered terminal run candidate; ordinary schema-55 deletion intents,
+/// serving, and reuse continue to require the current portable proof sidecar.
+fn validate_exact_bundle_deletion_layout(
+    path: &Path,
+    kind: RemiCatalogResourceKind,
+    resource_sha256: &str,
+    deletion_policy: CatalogBundleDeletionPolicy,
+) -> Result<()> {
     let mut names = fs::read_dir(path)?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::io::Result<Vec<_>>>()?;
     names.sort();
-    let mut expected = vec![
+    let mut retired_expected = vec![
         std::ffi::OsString::from(CATALOG_FILE_NAME),
         std::ffi::OsString::from(CATALOG_MANIFEST_FILE_NAME),
-        std::ffi::OsString::from(CATALOG_PORTABLE_MANIFEST_FILE_NAME),
     ];
     if kind == RemiCatalogResourceKind::SourceSnapshot {
-        expected.push(std::ffi::OsString::from(SOURCE_METADATA_DIRECTORY_NAME));
+        retired_expected.push(std::ffi::OsString::from(SOURCE_METADATA_DIRECTORY_NAME));
     }
-    expected.sort();
-    if names != expected {
+    retired_expected.sort();
+    let mut current_expected = retired_expected.clone();
+    current_expected.push(std::ffi::OsString::from(
+        CATALOG_PORTABLE_MANIFEST_FILE_NAME,
+    ));
+    current_expected.sort();
+    let has_portable_manifest = if names == current_expected {
+        true
+    } else if deletion_policy == CatalogBundleDeletionPolicy::CurrentOrRetiredSchema54
+        && names == retired_expected
+    {
+        false
+    } else {
         bail!(
-            "catalog deletion target {} does not have the exact immutable bundle layout",
+            "catalog deletion target {} does not have a permitted exact bundle layout",
             path.display()
         );
-    }
-    for name in [
-        CATALOG_FILE_NAME,
-        CATALOG_MANIFEST_FILE_NAME,
-        CATALOG_PORTABLE_MANIFEST_FILE_NAME,
-    ] {
+    };
+    for name in [CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME] {
         let child = path.join(name);
         let child_metadata = fs::symlink_metadata(&child)?;
         if child_metadata.file_type().is_symlink() || !child_metadata.file_type().is_file() {
@@ -463,17 +494,41 @@ fn validate_exact_bundle_layout(path: &Path, kind: RemiCatalogResourceKind) -> R
             );
         }
     }
-    let catalog_size = fs::metadata(path.join(CATALOG_FILE_NAME))?.len();
-    let expected_portable_size = portable_manifest_size_v1(portable_chunk_count_v1(catalog_size)?)?;
-    let portable_path = path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
-    let portable_size = fs::metadata(&portable_path)?.len();
-    if portable_size != expected_portable_size {
+    let manifest_path = path.join(CATALOG_MANIFEST_FILE_NAME);
+    let mut manifest_file = File::open(&manifest_path)
+        .with_context(|| format!("open catalog deletion manifest {}", manifest_path.display()))?;
+    let manifest_sha256 = conary_core::hash::hash_reader(
+        conary_core::hash::HashAlgorithm::Sha256,
+        &mut manifest_file,
+    )
+    .with_context(|| format!("hash catalog deletion manifest {}", manifest_path.display()))?
+    .value;
+    if manifest_sha256 != resource_sha256 {
         bail!(
-            "catalog deletion target portable manifest {} has {} bytes; expected {}",
-            portable_path.display(),
-            portable_size,
-            expected_portable_size
+            "catalog deletion manifest {} does not match its journaled resource digest",
+            manifest_path.display()
         );
+    }
+    if has_portable_manifest {
+        let portable_path = path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
+        let portable_metadata = fs::symlink_metadata(&portable_path)?;
+        if portable_metadata.file_type().is_symlink() || !portable_metadata.file_type().is_file() {
+            bail!(
+                "catalog deletion target child {} is not a regular file",
+                portable_path.display()
+            );
+        }
+        let catalog_size = fs::metadata(path.join(CATALOG_FILE_NAME))?.len();
+        let expected_portable_size =
+            portable_manifest_size_v1(portable_chunk_count_v1(catalog_size)?)?;
+        if portable_metadata.len() != expected_portable_size {
+            bail!(
+                "catalog deletion target portable manifest {} has {} bytes; expected {}",
+                portable_path.display(),
+                portable_metadata.len(),
+                expected_portable_size
+            );
+        }
     }
     if kind == RemiCatalogResourceKind::SourceSnapshot {
         validate_source_metadata_layout(&path.join(SOURCE_METADATA_DIRECTORY_NAME))?;
