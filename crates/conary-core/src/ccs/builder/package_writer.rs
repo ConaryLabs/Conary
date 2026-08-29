@@ -202,7 +202,7 @@ fn write_v3_ccs_package_with_open<'a>(
     };
 
     let objects_dir = temp_dir.path().join("objects");
-    let object_store = crate::filesystem::CasStore::new(&objects_dir)?;
+    let object_store = crate::filesystem::EphemeralObjectStore::new(&objects_dir)?;
     for file in &data.files {
         if !authority.components.contains_key(&file.component) {
             anyhow::bail!("missing component {}", file.component);
@@ -226,7 +226,7 @@ fn write_v3_ccs_package_with_open<'a>(
 
 fn write_file_objects(
     file: &crate::ccs::v3::schema::FileAuthorityV3,
-    object_store: &crate::filesystem::CasStore,
+    object_store: &crate::filesystem::EphemeralObjectStore,
     mut reader: Box<dyn std::io::Read + '_>,
 ) -> Result<()> {
     use crate::ccs::v3::schema::FileContentLayoutV3;
@@ -239,7 +239,7 @@ fn write_file_objects(
     })?;
     match &file.content_layout {
         FileContentLayoutV3::WholeObject => object_store
-            .store_reader_expected(reader.as_mut(), content.size, &content.sha256)
+            .store_reader_expected_with_metrics(reader.as_mut(), content.size, &content.sha256)
             .with_context(|| {
                 format!(
                     "payload for {} does not match signed v3 authority",
@@ -276,7 +276,7 @@ fn write_file_objects(
                     );
                 }
                 whole_hasher.update(&chunk.data);
-                object_store.store_reader_expected(
+                object_store.store_reader_expected_with_metrics(
                     &mut std::io::Cursor::new(&chunk.data),
                     u64::from(chunk.length),
                     &signed.sha256,

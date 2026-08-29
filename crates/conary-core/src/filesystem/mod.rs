@@ -18,12 +18,12 @@ pub mod selected_root;
 pub mod source_path;
 pub mod vfs;
 
-pub(crate) use cas::CasObjectLivenessLease;
 pub use cas::{
     CasObjectCollectionSession, CasStore, PrivateCasWriter, PrivateCopyBatch, VerifiedObjectBatch,
     VerifiedObjectBatchMetrics, VerifiedObjectDisposition, VerifiedObjectSet,
     is_temporary_object_name, object_path,
 };
+pub(crate) use cas::{CasObjectLivenessLease, EphemeralObjectStore};
 pub use path::{safe_join, sanitize_filename, sanitize_path};
 pub use source_path::{DeploymentPath, SourcePathBytes};
 pub use vfs::{NodeId, NodeKind, VfsNode, VfsStats, VfsTree};

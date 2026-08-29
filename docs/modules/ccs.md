@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-16
-revision: 65
-summary: Convert foreign packages through lossless source authority and typed native relation, lifecycle, and export contracts
+last_updated: 2026-08-29
+revision: 66
+summary: Convert foreign packages through lossless source authority, ephemeral exact archive staging, and typed native relation, lifecycle, and export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -37,6 +37,15 @@ Apply typed install prefix (default `/`) to source-root children
      |
   Output .ccs archive (tar.gz with MANIFEST + MANIFEST.toml + objects/)
 ```
+
+The archive writer stores exact payload objects below one operation-private
+temporary root. Each object is size- and SHA-256-checked and becomes visible
+under its content address only after a complete write. Those staging names are
+not durable CAS authority and are never synchronized per object or shard; a
+failure discards the complete root and cannot return an archive. Archive
+assembly and its caller-owned persistence and independent reopen are the
+separate durable boundary. Permanent transaction and repository CAS paths do
+not use this ephemeral API and retain their durability barriers.
 
 ## Key Types
 

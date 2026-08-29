@@ -23,11 +23,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use tracing::{debug, warn};
 
+mod ephemeral;
 mod liveness;
 mod stream;
 mod verified_batch;
 mod write_batch;
 
+pub(crate) use ephemeral::EphemeralObjectStore;
 pub use liveness::CasObjectCollectionSession;
 pub(crate) use liveness::CasObjectLivenessLease;
 pub use verified_batch::{
