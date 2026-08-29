@@ -19,7 +19,7 @@ use conary_core::db::models::{
 };
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CatalogReader, ProfileRevisionV2,
-    verify_profile_catalog_bundle, verify_registered_profile_catalog_bundle,
+    SourceSnapshotV1, verify_profile_catalog_bundle, verify_registered_profile_catalog_bundle,
 };
 use parking_lot::{Mutex, MutexGuard};
 use rusqlite::Connection;
@@ -39,10 +39,18 @@ pub struct CatalogAuthority {
     catalog_dir: PathBuf,
     database_writer: DatabaseWriter,
     verified_readers: Arc<Mutex<BTreeMap<String, CachedProfileReader>>>,
+    verified_source_readers: Arc<Mutex<BTreeMap<String, CachedSourceReader>>>,
 }
 
 struct CachedProfileReader {
     profile_revision_sha256: String,
+    reader: Arc<Mutex<CatalogReader>>,
+}
+
+struct CachedSourceReader {
+    source_profile: String,
+    manifest: SourceSnapshotV1,
+    bundle_path: PathBuf,
     reader: Arc<Mutex<CatalogReader>>,
 }
 
@@ -97,6 +105,7 @@ impl CatalogAuthority {
             catalog_dir: catalog_dir.into(),
             database_writer,
             verified_readers: Arc::new(Mutex::new(BTreeMap::new())),
+            verified_source_readers: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 

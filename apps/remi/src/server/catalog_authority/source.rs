@@ -2,20 +2,23 @@
 
 //! Exact durable source-catalog authority below one pinned profile revision.
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::{RemiCatalogResource, RemiCatalogResourceKind};
 use conary_core::repository::DurableSourceCatalogReuseV1;
 use conary_core::repository::catalog::{
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogReader, ProfileSourceMemberV2,
-    SourceSnapshotV1, verify_source_catalog_bundle,
+    SourceSnapshotV1, verify_registered_source_catalog_bundle,
 };
+use parking_lot::Mutex;
 
-use super::{CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection};
+use super::{CachedSourceReader, CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection};
 use crate::server::open_runtime_db;
 
 struct VerifiedSourceCatalog {
     manifest: SourceSnapshotV1,
-    reader: CatalogReader,
+    reader: Arc<Mutex<CatalogReader>>,
     bundle_path: std::path::PathBuf,
 }
 
@@ -151,6 +154,7 @@ impl CatalogAuthority {
         let verified = self.verified_source_catalog(pinned, member)?;
         let matching_source_packages = verified
             .reader
+            .lock()
             .find_packages_by_name(&package.name)
             .map_err(anyhow::Error::from)?
             .into_iter()
@@ -175,13 +179,46 @@ impl CatalogAuthority {
         member: &ProfileSourceMemberV2,
     ) -> Result<VerifiedSourceCatalog> {
         let registered = self.resolve_registered_source_catalog(pinned.source_profile(), member)?;
-        let reader = verify_source_catalog_bundle(&registered.bundle_path, &registered.manifest)
-            .with_context(|| {
-                format!(
-                    "verify durable source snapshot bundle {}",
-                    registered.bundle_path.display()
-                )
-            })?;
+        let source_snapshot_sha256 = member.source_snapshot_sha256.clone();
+        let mut cache = self.verified_source_readers.lock();
+        let reader = match cache.get(&source_snapshot_sha256) {
+            Some(cached) => {
+                if cached.source_profile != pinned.source_profile()
+                    || cached.manifest != registered.manifest
+                    || cached.bundle_path != registered.bundle_path
+                {
+                    bail!(
+                        "cached source snapshot {} authority disagrees with its pinned registered bundle",
+                        source_snapshot_sha256
+                    );
+                }
+                Arc::clone(&cached.reader)
+            }
+            None => {
+                let reader = Arc::new(Mutex::new(
+                    verify_registered_source_catalog_bundle(
+                        &registered.bundle_path,
+                        &registered.manifest,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "verify registered source snapshot bundle {}",
+                            registered.bundle_path.display()
+                        )
+                    })?,
+                ));
+                cache.insert(
+                    source_snapshot_sha256,
+                    CachedSourceReader {
+                        source_profile: pinned.source_profile().to_string(),
+                        manifest: registered.manifest.clone(),
+                        bundle_path: registered.bundle_path.clone(),
+                        reader: Arc::clone(&reader),
+                    },
+                );
+                reader
+            }
+        };
         Ok(VerifiedSourceCatalog {
             manifest: registered.manifest,
             reader,
@@ -325,4 +362,98 @@ fn source_package_matches_profile(
         && profile_package.version_scheme == source_package.version_scheme
         && profile_package.provides == source_package.provides
         && profile_package.requirement_groups == source_package.requirement_groups
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
+
+    fn active_source(
+        fixture: &ActiveCatalogFixture,
+        epoch: i64,
+    ) -> (PinnedProfileCatalog, ProfileSourceMemberV2) {
+        fixture.activate("fedora-44", epoch, Vec::new());
+        let pinned = fixture
+            .authority()
+            .open_active_profile("fedora-44")
+            .expect("open active fixture profile");
+        let member = pinned
+            .manifest()
+            .members
+            .first()
+            .expect("fixture profile source member")
+            .clone();
+        (pinned, member)
+    }
+
+    #[test]
+    fn repeated_registered_source_open_reuses_one_verified_reader() {
+        let fixture = ActiveCatalogFixture::new();
+        let (pinned, member) = active_source(&fixture, 1);
+
+        let first = fixture
+            .authority()
+            .verified_source_catalog(&pinned, &member)
+            .expect("first registered source open");
+        let second = fixture
+            .authority()
+            .clone()
+            .verified_source_catalog(&pinned, &member)
+            .expect("repeated registered source open");
+
+        assert!(Arc::ptr_eq(&first.reader, &second.reader));
+        assert_eq!(first.manifest, second.manifest);
+        assert_eq!(first.bundle_path, second.bundle_path);
+    }
+
+    #[test]
+    fn successor_snapshot_cannot_reuse_predecessor_reader() {
+        let fixture = ActiveCatalogFixture::new();
+        let (first_pin, first_member) = active_source(&fixture, 1);
+        let first = fixture
+            .authority()
+            .verified_source_catalog(&first_pin, &first_member)
+            .expect("open predecessor source");
+
+        let (second_pin, second_member) = active_source(&fixture, 2);
+        let second = fixture
+            .authority()
+            .verified_source_catalog(&second_pin, &second_member)
+            .expect("open successor source");
+
+        assert_ne!(
+            first_member.source_snapshot_sha256,
+            second_member.source_snapshot_sha256
+        );
+        assert!(!Arc::ptr_eq(&first.reader, &second.reader));
+        assert_ne!(first.manifest, second.manifest);
+    }
+
+    #[test]
+    fn cached_source_reader_fails_closed_on_authority_mismatch() {
+        let fixture = ActiveCatalogFixture::new();
+        let (pinned, member) = active_source(&fixture, 1);
+        fixture
+            .authority()
+            .verified_source_catalog(&pinned, &member)
+            .expect("seed exact source reader cache");
+        fixture
+            .authority()
+            .verified_source_readers
+            .lock()
+            .get_mut(&member.source_snapshot_sha256)
+            .expect("cached source reader")
+            .source_profile = "ubuntu-26.04".to_string();
+
+        let error = fixture
+            .authority()
+            .verified_source_catalog(&pinned, &member)
+            .err()
+            .expect("mismatched cached authority must fail");
+        assert!(error.to_string().contains("cached source snapshot"));
+        assert!(error.to_string().contains("authority disagrees"));
+    }
 }
