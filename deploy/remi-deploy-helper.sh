@@ -28,6 +28,7 @@ usage:
   conary-remi-deploy inspect-remi-candidate-baseline <version> <sha256> <bundle.tar.gz>
   conary-remi-deploy inspect-remi-storage
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
+  conary-remi-deploy benchmark-remi-conversion <run-id> <installed-binary-sha256> <profile> <revision-sha256> <package-key-sha256> <source-sha256> <source-size>
   conary-remi-deploy verify-ingress
   conary-remi-deploy verify-access
 USAGE
@@ -89,6 +90,22 @@ validate_export_id() {
     local export_id="$1"
     [[ "$export_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] ||
         die "invalid native-oracle export identity: $export_id"
+}
+
+validate_profile_id() {
+    local profile="$1"
+    case "$profile" in
+        fedora-44|ubuntu-26.04|arch) ;;
+        *) die "invalid benchmark profile: $profile" ;;
+    esac
+}
+
+validate_positive_size() {
+    local value="$1"
+    [[ "$value" =~ ^[1-9][0-9]{0,17}$ ]] ||
+        die "expected positive byte size, got: $value"
+    (( 10#$value <= 8 * 1024 * 1024 * 1024 )) ||
+        die "benchmark source exceeds the 8 GiB staging limit"
 }
 
 real_tmp_path() {
@@ -740,6 +757,366 @@ export_native_oracle_inputs() {
         "$export_id" "$transport" "$(sha256sum "$transport" | cut -d ' ' -f 1)"
 }
 
+BENCHMARK_REMI_STOPPED=0
+BENCHMARK_SYSTEMCTL=systemctl
+
+benchmark_systemctl() {
+    "$BENCHMARK_SYSTEMCTL" "$@"
+}
+
+benchmark_start_and_probe() {
+    if ! benchmark_systemctl start remi; then
+        echo "remi deploy helper: failed to restart Remi after conversion benchmark" >&2
+        return 1
+    fi
+    if [[ -z "$ROOT" ]]; then
+        sleep 2
+    fi
+    if ! curl -fsS --max-time 30 "$HEALTH_URL" >/dev/null; then
+        echo "remi deploy helper: Remi liveness check failed after conversion benchmark" >&2
+        return 1
+    fi
+    BENCHMARK_REMI_STOPPED=0
+}
+
+benchmark_restore_and_exit() {
+    local status="$1"
+    trap - EXIT INT TERM
+    if [[ "$BENCHMARK_REMI_STOPPED" == "1" ]]; then
+        if ! benchmark_start_and_probe; then
+            if (( status == 0 )); then
+                status=1
+            fi
+        fi
+    fi
+    exit "$status"
+}
+
+benchmark_filesystem_type() {
+    local path="$1"
+    local test_type="${CONARY_REMI_DEPLOY_TEST_FILESYSTEM_TYPE:-}"
+    local test_root_type="${CONARY_REMI_DEPLOY_TEST_ROOT_FILESYSTEM_TYPE:-$test_type}"
+    local test_work_type="${CONARY_REMI_DEPLOY_TEST_WORK_FILESYSTEM_TYPE:-$test_type}"
+    if [[ -n "$test_type" ]]; then
+        [[ -n "$ROOT" ]] || die "benchmark filesystem override requires a fake root"
+        [[ "$test_type" =~ ^[0-9A-Za-z._+-]+$ ]] ||
+            die "invalid benchmark filesystem test override"
+        [[ "$test_root_type" =~ ^[0-9A-Za-z._+-]+$ ]] ||
+            die "invalid benchmark root-filesystem test override"
+        [[ "$test_work_type" =~ ^[0-9A-Za-z._+-]+$ ]] ||
+            die "invalid benchmark work-filesystem test override"
+        case "$path" in
+            "$ROOT/conary"|"$ROOT/conary/"*) printf '%s' "$test_type" ;;
+            "$ROOT/work"|"$ROOT/work/"*) printf '%s' "$test_work_type" ;;
+            *) printf '%s' "$test_root_type" ;;
+        esac
+        return
+    fi
+    stat -f -c '%T' "$path" || die "could not inspect benchmark filesystem: $path"
+}
+
+benchmark_filesystem_device() {
+    local path="$1"
+    local test_device="${CONARY_REMI_DEPLOY_TEST_FILESYSTEM_DEVICE:-}"
+    local test_work_device="${CONARY_REMI_DEPLOY_TEST_WORK_FILESYSTEM_DEVICE:-$test_device}"
+    if [[ -n "$test_device" || -n "$test_work_device" ]]; then
+        [[ -n "$ROOT" ]] || die "benchmark filesystem-device override requires a fake root"
+        [[ "$test_device" =~ ^[0-9]+$ ]] ||
+            die "invalid benchmark filesystem-device test override"
+        [[ "$test_work_device" =~ ^[0-9]+$ ]] ||
+            die "invalid benchmark work-filesystem-device test override"
+        case "$path" in
+            "$ROOT/work"|"$ROOT/work/"*) printf '%s' "$test_work_device" ;;
+            *) printf '%s' "$test_device" ;;
+        esac
+        return
+    fi
+    stat -c '%d' "$path" || die "could not inspect benchmark filesystem device: $path"
+}
+
+require_secure_benchmark_file() {
+    local path="$1"
+    local label="$2"
+    local expected_uid="$3"
+    local require_executable="$4"
+    [[ -f "$path" && ! -L "$path" ]] || die "$label is not a plain file: $path"
+    [[ "$(stat -c '%u' "$path")" == "$expected_uid" ]] ||
+        die "$label has the wrong owner: $path"
+    local mode mode_value
+    mode="$(stat -c '%a' "$path")"
+    mode_value=$((8#$mode))
+    (( (mode_value & 0022) == 0 )) || die "$label must not be group/world writable: $path"
+    if [[ "$require_executable" == "1" ]]; then
+        [[ -x "$path" ]] || die "$label is not executable: $path"
+    fi
+}
+
+benchmark_remi_conversion() {
+    local run_id="$1"
+    local expected_binary_sha256="$2"
+    local profile="$3"
+    local revision_sha256="$4"
+    local package_key_sha256="$5"
+    local expected_source_sha256="$6"
+    local expected_source_size="$7"
+    validate_export_id "$run_id"
+    validate_sha256 "$expected_binary_sha256"
+    validate_profile_id "$profile"
+    validate_sha256 "$revision_sha256"
+    validate_sha256 "$package_key_sha256"
+    validate_sha256 "$expected_source_sha256"
+    validate_positive_size "$expected_source_size"
+    [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
+    [[ "$SKIP_RESTART" == "0" ]] ||
+        die "conversion benchmark may not skip Remi service restoration"
+    require_shared_conary_root
+
+    local test_systemctl="${CONARY_REMI_DEPLOY_TEST_SYSTEMCTL:-}"
+    if [[ -n "$test_systemctl" ]]; then
+        [[ -n "$ROOT" ]] || die "benchmark systemctl override requires a fake root"
+        [[ -f "$test_systemctl" && ! -L "$test_systemctl" && -x "$test_systemctl" ]] ||
+            die "benchmark systemctl test override is not a plain executable"
+        BENCHMARK_SYSTEMCTL="$(realpath -e "$test_systemctl")"
+    fi
+
+    local control_uid runtime_uid runtime_gid source_uid
+    if [[ -n "$ROOT" ]]; then
+        control_uid="$(id -u)"
+        runtime_uid="$(id -u)"
+        runtime_gid="$(id -g)"
+        source_uid="$(id -u)"
+    else
+        control_uid=0
+        runtime_uid="$(id -u conary)" || die "missing conary service account"
+        runtime_gid="$(id -g conary)" || die "missing conary service group"
+        source_uid="${SUDO_UID:-0}"
+        [[ "$source_uid" =~ ^[0-9]+$ ]] || die "invalid sudo caller identity"
+    fi
+
+    local bin config live_root work_container benchmark_parent run_root work_root
+    local staged_source trusted_config trusted_source raw_report public_sidecar transport
+    bin="$(root_path /usr/local/bin/remi)"
+    config="$(root_path /etc/conary/remi.toml)"
+    live_root="$(root_path /conary)"
+    work_container="$(root_path /work)"
+    benchmark_parent="${work_container}/remi-conversion-benchmarks"
+    run_root="${benchmark_parent}/${run_id}"
+    work_root="${run_root}/work"
+    staged_source="/tmp/remi-conversion-source-${run_id}.native"
+    trusted_config="${run_root}/remi.toml"
+    trusted_source="${run_root}/source.native"
+    raw_report="${work_root}/conversion-benchmark-v3.json"
+    public_sidecar="${work_root}/conversion-benchmark-public-v1.json"
+    transport="/tmp/remi-conversion-benchmark-${run_id}.json"
+
+    require_secure_benchmark_file "$bin" "installed Remi binary" "$control_uid" 1
+    require_secure_benchmark_file "$config" "Remi configuration" "$control_uid" 0
+    [[ "$(stat -c '%a' "$bin")" == "755" ]] ||
+        die "installed Remi binary must have exact mode 0755"
+    local config_gid config_mode config_mode_value
+    config_gid="$(stat -c '%g' "$config")"
+    config_mode="$(stat -c '%a' "$config")"
+    config_mode_value=$((8#$config_mode))
+    (( (config_mode_value & 0004) != 0 \
+        || ((config_mode_value & 0040) != 0 && config_gid == runtime_gid) )) ||
+        die "Remi configuration is not readable by the service account"
+    if [[ -z "$ROOT" ]]; then
+        runuser -u conary -- test -x "$bin" ||
+            die "installed Remi binary is not executable by the service account"
+        runuser -u conary -- test -r "$config" ||
+            die "Remi configuration is not readable by the service account"
+    fi
+    local live_real live_device work_real work_device benchmark_real benchmark_device
+    live_real="$(realpath -e "$live_root")" || die "could not resolve live Remi root"
+    [[ "$(benchmark_filesystem_type "$live_real")" == "xfs" ]] ||
+        die "live Remi root is not on XFS: $live_real"
+    live_device="$(benchmark_filesystem_device "$live_real")"
+
+    [[ -d "$work_container" && ! -L "$work_container" ]] ||
+        die "benchmark XFS container is not a plain directory: $work_container"
+    [[ "$(stat -c '%u' "$work_container")" == "$control_uid" ]] ||
+        die "benchmark XFS container has the wrong owner: $work_container"
+    local work_mode work_mode_value
+    work_mode="$(stat -c '%a' "$work_container")"
+    work_mode_value=$((8#$work_mode))
+    (( (work_mode_value & 0022) == 0 )) ||
+        die "benchmark XFS container must not be group/world writable: $work_container"
+    work_real="$(realpath -e "$work_container")" ||
+        die "could not resolve benchmark XFS container"
+    [[ "$work_real" != "$live_real" \
+        && "$work_real" != "$live_real"/* \
+        && "$live_real" != "$work_real"/* ]] ||
+        die "benchmark XFS container overlaps the live Remi root"
+    [[ "$(stat -c '%d:%i' "$work_real")" != "$(stat -c '%d:%i' "$live_real")" ]] ||
+        die "benchmark XFS container aliases the live Remi root"
+    [[ "$(benchmark_filesystem_type "$work_real")" == "xfs" ]] ||
+        die "benchmark XFS container is not on XFS: $work_real"
+    work_device="$(benchmark_filesystem_device "$work_real")"
+    [[ "$work_device" == "$live_device" ]] ||
+        die "benchmark XFS container is not on the live Remi filesystem device: $work_real"
+
+    if [[ ! -e "$benchmark_parent" && ! -L "$benchmark_parent" ]]; then
+        install_owned_dir 0700 "$benchmark_parent"
+    fi
+    [[ -d "$benchmark_parent" && ! -L "$benchmark_parent" ]] ||
+        die "benchmark root is not a plain directory: $benchmark_parent"
+    [[ "$(stat -c '%u' "$benchmark_parent")" == "$runtime_uid" ]] ||
+        die "benchmark root has the wrong owner: $benchmark_parent"
+    [[ "$(stat -c '%a' "$benchmark_parent")" == "700" ]] ||
+        die "benchmark root must have mode 0700: $benchmark_parent"
+
+    benchmark_real="$(realpath -e "$benchmark_parent")" || die "could not resolve benchmark root"
+    [[ "$benchmark_real" != "$live_real" \
+        && "$benchmark_real" != "$live_real"/* \
+        && "$live_real" != "$benchmark_real"/* ]] ||
+        die "benchmark root overlaps the live Remi root"
+    [[ "$(stat -c '%d:%i' "$benchmark_real")" != "$(stat -c '%d:%i' "$live_real")" ]] ||
+        die "benchmark root aliases the live Remi root"
+    [[ "$(benchmark_filesystem_type "$benchmark_real")" == "xfs" ]] ||
+        die "benchmark root is not on XFS: $benchmark_real"
+    benchmark_device="$(benchmark_filesystem_device "$benchmark_real")"
+    [[ "$benchmark_device" == "$live_device" ]] ||
+        die "benchmark root is not on the live Remi filesystem device: $benchmark_real"
+
+    [[ ! -e "$run_root" && ! -L "$run_root" ]] ||
+        die "conversion benchmark run already exists: $run_root"
+    [[ ! -e "$transport" && ! -L "$transport" ]] ||
+        die "conversion benchmark transport already exists: $transport"
+    require_secure_benchmark_file "$staged_source" "staged benchmark source" "$source_uid" 0
+    [[ "$(stat -c '%h' "$staged_source")" == "1" ]] ||
+        die "staged benchmark source must have exactly one link: $staged_source"
+    local config_sha256 observed_source_size observed_source_sha256 observed_binary_sha256
+    config_sha256="$(sha256sum "$config" | cut -d ' ' -f 1)"
+    observed_source_size="$(stat -c '%s' "$staged_source")"
+    [[ "$observed_source_size" == "$expected_source_size" ]] ||
+        die "staged benchmark source size mismatch"
+    observed_source_sha256="$(sha256sum "$staged_source" | cut -d ' ' -f 1)"
+    [[ "$observed_source_sha256" == "$expected_source_sha256" ]] ||
+        die "staged benchmark source SHA-256 mismatch"
+    [[ "$(stat -c '%s' "$staged_source")" == "$expected_source_size" ]] ||
+        die "staged benchmark source changed while being authenticated"
+    observed_binary_sha256="$(sha256sum "$bin" | cut -d ' ' -f 1)"
+    [[ "$observed_binary_sha256" == "$expected_binary_sha256" ]] ||
+        die "installed Remi binary SHA-256 mismatch"
+
+    mkdir -m 0700 "$run_root" || die "could not create benchmark run root: $run_root"
+    if [[ -z "$ROOT" ]]; then
+        chown conary:conary "$run_root"
+    fi
+    install_owned_file 0400 "$config" "$trusted_config"
+    require_secure_benchmark_file "$trusted_config" "trusted benchmark configuration" "$runtime_uid" 0
+    [[ "$(stat -c '%a' "$trusted_config")" == "400" ]] ||
+        die "trusted benchmark configuration must have mode 0400"
+    [[ "$(sha256sum "$trusted_config" | cut -d ' ' -f 1)" == "$config_sha256" \
+        && "$(sha256sum "$config" | cut -d ' ' -f 1)" == "$config_sha256" ]] ||
+        die "trusted benchmark configuration changed during private copy"
+    install_owned_file 0400 "$staged_source" "$trusted_source"
+    [[ -f "$trusted_source" && ! -L "$trusted_source" ]] ||
+        die "trusted benchmark source copy is not a plain file"
+    [[ "$(stat -c '%u' "$trusted_source")" == "$runtime_uid" ]] ||
+        die "trusted benchmark source copy has the wrong owner"
+    [[ "$(stat -c '%s' "$trusted_source")" == "$expected_source_size" ]] ||
+        die "trusted benchmark source copy size mismatch"
+    [[ "$(sha256sum "$trusted_source" | cut -d ' ' -f 1)" == "$expected_source_sha256" ]] ||
+        die "trusted benchmark source copy SHA-256 mismatch"
+
+    benchmark_systemctl is-active --quiet remi ||
+        die "Remi must be active before a production conversion benchmark"
+    trap 'benchmark_restore_and_exit "$?"' EXIT
+    trap 'benchmark_restore_and_exit 130' INT
+    trap 'benchmark_restore_and_exit 143' TERM
+    BENCHMARK_REMI_STOPPED=1
+    benchmark_systemctl stop remi || die "failed to stop Remi for conversion benchmark"
+
+    local command=(
+        "$bin" conversion-benchmark
+        --config "$trusted_config"
+        --work-root "$work_root"
+        --profile "$profile"
+        --revision "$revision_sha256"
+        --package-key "$package_key_sha256"
+        --source-artifact "$trusted_source"
+        --hardware-label remi-production-i7-8700-xfs
+        --iterations 2
+    )
+    local benchmark_status=0
+    if [[ -z "$ROOT" ]]; then
+        if runuser -u conary -- "${command[@]}" >&2; then
+            benchmark_status=0
+        else
+            benchmark_status=$?
+        fi
+    elif "${command[@]}" >&2; then
+        benchmark_status=0
+    else
+        benchmark_status=$?
+    fi
+    if (( benchmark_status != 0 )); then
+        echo "remi deploy helper: conversion benchmark failed with status ${benchmark_status}" >&2
+        exit "$benchmark_status"
+    fi
+
+    [[ -f "$raw_report" && ! -L "$raw_report" ]] ||
+        die "conversion benchmark omitted its plain raw report"
+    [[ "$(stat -c '%u' "$raw_report")" == "$runtime_uid" ]] ||
+        die "conversion benchmark raw report has the wrong owner"
+    [[ "$(stat -c '%a' "$raw_report")" == "600" ]] ||
+        die "conversion benchmark raw report must have mode 0600"
+    [[ -f "$public_sidecar" && ! -L "$public_sidecar" ]] ||
+        die "conversion benchmark omitted its plain public sidecar"
+    [[ "$(stat -c '%u' "$public_sidecar")" == "$runtime_uid" ]] ||
+        die "conversion benchmark public sidecar has the wrong owner"
+    [[ "$(stat -c '%a' "$public_sidecar")" == "600" ]] ||
+        die "conversion benchmark public sidecar must have mode 0600"
+
+    local raw_sha256 raw_bytes public_sha256 public_bytes
+    raw_sha256="$(sha256sum "$raw_report" | cut -d ' ' -f 1)"
+    raw_bytes="$(stat -c '%s' "$raw_report")"
+    (( raw_bytes > 0 )) || die "conversion benchmark raw report is empty"
+    jq -e '.schema_version == 3 and type == "object"' "$raw_report" >/dev/null ||
+        die "conversion benchmark raw report has an invalid schema"
+    jq -e \
+        --arg raw_sha256 "$raw_sha256" \
+        --argjson raw_bytes "$raw_bytes" '
+        type == "object"
+        and .schema_version == 1
+        and .raw_report.schema_version == 3
+        and .raw_report.sha256 == $raw_sha256
+        and .raw_report.size_bytes == $raw_bytes
+    ' "$public_sidecar" >/dev/null ||
+        die "conversion benchmark public sidecar does not bind the raw report"
+    public_sha256="$(sha256sum "$public_sidecar" | cut -d ' ' -f 1)"
+    public_bytes="$(stat -c '%s' "$public_sidecar")"
+    (( public_bytes > 0 )) || die "conversion benchmark public sidecar is empty"
+
+    if ! benchmark_start_and_probe; then
+        die "failed to restore Remi after conversion benchmark"
+    fi
+    trap - EXIT INT TERM
+
+    local transport_next transport_sha256 transport_bytes
+    transport_next="$(mktemp "/tmp/remi-conversion-benchmark-${run_id}.XXXXXX")"
+    trap 'rm -f "$transport_next"' EXIT
+    install -m 0600 "$public_sidecar" "$transport_next"
+    [[ "$(sha256sum "$transport_next" | cut -d ' ' -f 1)" == "$public_sha256" \
+        && "$(stat -c '%s' "$transport_next")" == "$public_bytes" ]] ||
+        die "conversion benchmark public sidecar changed during transport copy"
+    if [[ -z "$ROOT" ]]; then
+        chown "${SUDO_UID:-0}:${SUDO_GID:-0}" "$transport_next"
+    fi
+    if ! ln "$transport_next" "$transport"; then
+        die "conversion benchmark transport target appeared during publication: $transport"
+    fi
+    rm -f "$transport_next"
+    trap - EXIT
+    transport_sha256="$(sha256sum "$transport" | cut -d ' ' -f 1)"
+    transport_bytes="$(stat -c '%s' "$transport")"
+    [[ "$transport_sha256" == "$public_sha256" && "$transport_bytes" == "$public_bytes" ]] ||
+        die "conversion benchmark transport changed during publication"
+    printf 'Conversion benchmark: run=%s transport=%s sha256=%s bytes=%s\n' \
+        "$run_id" "$transport" "$transport_sha256" "$transport_bytes"
+}
+
 verify_access() {
     [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
     require_shared_conary_root
@@ -782,6 +1159,10 @@ case "${1:-}" in
     export-native-oracle-inputs)
         [[ $# -eq 5 ]] || usage
         export_native_oracle_inputs "$2" "$3" "$4" "$5"
+        ;;
+    benchmark-remi-conversion)
+        [[ $# -eq 8 ]] || usage
+        benchmark_remi_conversion "$2" "$3" "$4" "$5" "$6" "$7" "$8"
         ;;
     verify-ingress)
         [[ $# -eq 1 ]] || usage
