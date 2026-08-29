@@ -8,6 +8,7 @@ mod capacity;
 mod contract;
 mod parity;
 mod portable_integrity;
+mod portable_vfs;
 mod profile;
 mod record;
 pub(in crate::repository) mod source;
@@ -86,6 +87,9 @@ pub use portable_integrity::{
     PortableChunkRangeV1, PortableIntegrityError, PortableIntegrityResult,
     PortableManifestAttestationV1, portable_chunk_count_v1, portable_manifest_size_v1,
     read_portable_chunk_manifest_v1, write_portable_chunk_manifest_v1,
+};
+pub use portable_vfs::{
+    PortableCatalogConnection, PortableVfsFailureKindV1, PortableVfsFailureV1, PortableVfsMetricsV1,
 };
 pub use profile::{
     ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, VerifiedProfileCatalogCandidateV2,
