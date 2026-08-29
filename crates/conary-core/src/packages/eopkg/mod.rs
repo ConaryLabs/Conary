@@ -451,6 +451,10 @@ mod tests {
         assert_eq!(parsed.architecture(), Some("x86_64"));
         assert_eq!(parsed.files().len(), 1);
         assert_eq!(parsed.requirements().len(), 1);
+        let metrics = parsed.parse_metrics();
+        assert_eq!(metrics.payload_files_spooled, 1);
+        assert_eq!(metrics.payload_bytes_spooled, 5);
+        assert_eq!(metrics.payload_spool_file_syncs, 0);
         let mut content = Vec::new();
         parsed.package_payload().unwrap().files()[0]
             .open_content()

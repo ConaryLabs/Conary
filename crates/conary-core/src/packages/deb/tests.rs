@@ -65,7 +65,7 @@ fn deb_parse_metrics_distinguish_outer_and_inner_archive_work() {
     assert_eq!(metrics.intermediate_archive_file_syncs, 1);
     assert_eq!(metrics.payload_files_spooled, 1);
     assert_eq!(metrics.payload_bytes_spooled, 5);
-    assert_eq!(metrics.payload_spool_file_syncs, 1);
+    assert_eq!(metrics.payload_spool_file_syncs, 0);
     assert_eq!(metrics.payload_bytes_hashed, 10);
     assert!(metrics.source_archive_bytes_read > 0);
     assert!(metrics.decompressed_archive_bytes_read > 0);

@@ -527,7 +527,7 @@ fn spool_content<R: Read>(
     } else {
         copy_declared_payload(entry, &mut output, size, path)?
     };
-    output.sync_all()?;
+    drop(output);
     Ok((
         PayloadContentAuthority { sha256, size },
         spool.source(output_path),

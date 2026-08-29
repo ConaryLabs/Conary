@@ -162,7 +162,7 @@ pub(super) fn parse_package_payload_with_metrics(
         intermediate_archive_bytes_read: compressed_bytes.bytes(),
         payload_files_spooled,
         payload_bytes_spooled: required_bytes,
-        payload_spool_file_syncs: payload_files_spooled,
+        payload_spool_file_syncs: 0,
         payload_bytes_hashed,
         ..Default::default()
     })?;
@@ -817,10 +817,8 @@ fn read_regular_content(
         remaining -= chunk_size as u64;
     }
     discard_padding(reader, size, &format!("regular payload {path:?}"))?;
-    if let Some((file, _)) = &mut output {
-        file.sync_all()?;
-    }
-    let source = output.map(|(_, path)| {
+    let source = output.map(|(file, path)| {
+        drop(file);
         spool
             .expect("output exists only when a spool was supplied")
             .source(path)

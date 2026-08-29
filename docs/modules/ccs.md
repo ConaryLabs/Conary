@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
-revision: 67
-summary: Convert foreign packages through lossless source authority, ephemeral exact archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
+revision: 68
+summary: Convert foreign packages through lossless source authority, ephemeral exact native-payload and archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -565,6 +565,17 @@ buffers. Tar decoders enforce declared size per entry, then independently bound
 cumulative payload, archive entries, metadata, and framing overhead; those
 dimensions replace a guessed global decompression ceiling without weakening
 decompression-bomb resistance. `docs/specs/ccs-format-v3.md` owns the contract.
+
+RPM, Debian, Arch, and eopkg extraction retain regular payloads in a shared
+`PayloadSpool` lifetime backed by `Arc<TempDir>`. Each parser streams bounded
+declared bytes into a unique file while deriving the source-format and
+whole-file checksums, closes that file, and reopens it for chunking and signed
+CCS emission. These same-process files are not crash-recovery or package
+authority and are never synchronized per payload file; parse or conversion
+failure cannot commit their paths into CCS, permanent CAS, database, package,
+or generation authority. Benchmark work therefore reports the exact spooled
+file and byte counts with zero payload-spool durability calls. Independent CCS
+reopen and permanent-CAS durability remain later mandatory boundaries.
 
 Verification-only and dry-run callers use a temporary payload spool and do not
 create permanent CAS state. Mutating CCS install, restore, and repository-batch
