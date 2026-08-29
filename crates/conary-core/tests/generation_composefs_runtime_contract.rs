@@ -203,6 +203,11 @@ fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
         .expect("failed to read generation/artifact.rs");
     let artifact_cas_rs = fs::read_to_string(core_source("generation/artifact/cas.rs"))
         .expect("failed to read generation/artifact/cas.rs");
+    let proof_source = artifact_cas_rs
+        .split_once("pub struct VerifiedCasObjectPresence")
+        .and_then(|(_, source)| source.split_once("impl VerifiedCasObjectPresence"))
+        .map(|(source, _)| source)
+        .expect("failed to isolate VerifiedCasObjectPresence source");
 
     for (label, source) in [
         ("create.rs", create_rs.as_str()),
@@ -229,9 +234,10 @@ fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
     );
     assert!(
         artifact_cas_rs.contains("pub(crate) fn verify_cas_object_presence")
-            && artifact_cas_rs.contains("canonical_cas_dir: PathBuf")
-            && artifact_cas_rs.contains("objects: Vec<CasObjectRef>")
-            && artifact_cas_rs.contains("_liveness: CasObjectLivenessLease"),
+            && proof_source.contains("canonical_cas_dir: PathBuf")
+            && proof_source.contains("objects: &'objects [CasObjectRef]")
+            && proof_source.contains("_liveness: CasObjectLivenessLease")
+            && artifact_cas_rs.contains("if self.objects != objects"),
         "only the CAS verifier must mint a proof bound to the canonical root and exact objects while retaining collection exclusion"
     );
     assert!(
