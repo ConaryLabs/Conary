@@ -42,16 +42,6 @@ impl EphemeralObjectStore {
     /// root as disposable same-process staging and must not return object
     /// authority from it. The CCS archive writer is the sole production caller;
     /// its signed output archive is a separate persistence boundary.
-    pub(crate) fn store_reader_expected(
-        &self,
-        reader: &mut dyn Read,
-        expected_size: u64,
-        expected_sha256: &str,
-    ) -> Result<String> {
-        self.store_reader_expected_with_metrics(reader, expected_size, expected_sha256)
-            .map(|(sha256, _metrics)| sha256)
-    }
-
     pub(crate) fn store_reader_expected_with_metrics(
         &self,
         reader: &mut dyn Read,
@@ -240,17 +230,17 @@ mod tests {
 
         assert!(
             store
-                .store_reader_expected(&mut Cursor::new(bytes), 6, &sha256)
+                .store_reader_expected_with_metrics(&mut Cursor::new(bytes), 6, &sha256)
                 .is_err()
         );
         assert!(
             store
-                .store_reader_expected(&mut Cursor::new(bytes), 8, &sha256)
+                .store_reader_expected_with_metrics(&mut Cursor::new(bytes), 8, &sha256)
                 .is_err()
         );
         assert!(
             store
-                .store_reader_expected(
+                .store_reader_expected_with_metrics(
                     &mut Cursor::new(bytes),
                     bytes.len() as u64,
                     &"0".repeat(64),
@@ -272,7 +262,11 @@ mod tests {
 
         assert!(
             store
-                .store_reader_expected(&mut Cursor::new(bytes), bytes.len() as u64, &sha256,)
+                .store_reader_expected_with_metrics(
+                    &mut Cursor::new(bytes),
+                    bytes.len() as u64,
+                    &sha256,
+                )
                 .is_err()
         );
         assert_eq!(fs::read(path).unwrap(), b"wrong!!");
@@ -290,7 +284,11 @@ mod tests {
 
         assert!(
             store
-                .store_reader_expected(&mut Cursor::new(bytes), bytes.len() as u64, &sha256,)
+                .store_reader_expected_with_metrics(
+                    &mut Cursor::new(bytes),
+                    bytes.len() as u64,
+                    &sha256,
+                )
                 .is_err()
         );
         assert!(path.is_dir());

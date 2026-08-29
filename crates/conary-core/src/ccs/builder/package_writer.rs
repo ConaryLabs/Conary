@@ -239,7 +239,7 @@ fn write_file_objects(
     })?;
     match &file.content_layout {
         FileContentLayoutV3::WholeObject => object_store
-            .store_reader_expected(reader.as_mut(), content.size, &content.sha256)
+            .store_reader_expected_with_metrics(reader.as_mut(), content.size, &content.sha256)
             .with_context(|| {
                 format!(
                     "payload for {} does not match signed v3 authority",
@@ -276,7 +276,7 @@ fn write_file_objects(
                     );
                 }
                 whole_hasher.update(&chunk.data);
-                object_store.store_reader_expected(
+                object_store.store_reader_expected_with_metrics(
                     &mut std::io::Cursor::new(&chunk.data),
                     u64::from(chunk.length),
                     &signed.sha256,
