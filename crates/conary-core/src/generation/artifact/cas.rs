@@ -29,13 +29,13 @@ pub struct CasObjectRef {
 /// shared object-liveness lease; runtime builders keep it through completion so
 /// Conary garbage collection cannot invalidate the proof before publication.
 #[derive(Debug)]
-pub struct VerifiedCasObjectPresence {
+pub struct VerifiedCasObjectPresence<'objects> {
     canonical_cas_dir: PathBuf,
-    objects: Vec<CasObjectRef>,
+    objects: &'objects [CasObjectRef],
     _liveness: CasObjectLivenessLease,
 }
 
-impl VerifiedCasObjectPresence {
+impl VerifiedCasObjectPresence<'_> {
     pub(super) fn require_exact_match(
         &self,
         canonical_cas_dir: &Path,
@@ -64,7 +64,7 @@ pub enum CasObjectVerification<'a> {
     /// Reopen every authoritative CAS path and verify its recorded size.
     AlreadyVerified,
     /// Reuse one exact presence-and-size check under its retained liveness lease.
-    VerifiedPresence(&'a VerifiedCasObjectPresence),
+    VerifiedPresence(&'a VerifiedCasObjectPresence<'a>),
 }
 
 pub fn deduplicate_sort_cas_objects(
@@ -90,24 +90,33 @@ pub fn deduplicate_sort_cas_objects(
         .collect())
 }
 
-pub(crate) fn verify_cas_object_presence(
+pub(crate) fn verify_cas_object_presence<'objects>(
     cas_dir: &Path,
-    objects: &[CasObjectRef],
-) -> crate::Result<VerifiedCasObjectPresence> {
+    objects: &'objects [CasObjectRef],
+) -> crate::Result<VerifiedCasObjectPresence<'objects>> {
     let liveness = CasObjectLivenessLease::acquire(cas_dir)?;
     let canonical_cas_dir = liveness.canonical_objects_dir().to_path_buf();
-    let canonical_objects = deduplicate_sort_cas_objects(objects.to_vec())?;
-    if canonical_objects != objects {
-        return Err(crate::Error::ConflictError(
-            "CAS presence proof requires an exact deduplicated, sorted object set".to_string(),
-        ));
-    }
+    require_deduplicated_sorted_cas_objects(objects)?;
     verify_cas_object_files_exist_with_expected_sizes(&canonical_cas_dir, objects)?;
     Ok(VerifiedCasObjectPresence {
         canonical_cas_dir,
-        objects: objects.to_vec(),
+        objects,
         _liveness: liveness,
     })
+}
+
+fn require_deduplicated_sorted_cas_objects(objects: &[CasObjectRef]) -> crate::Result<()> {
+    let mut previous = None;
+    for object in objects {
+        validate_sha256_hex("CAS object sha256", &object.sha256)?;
+        if previous.is_some_and(|sha256: &str| sha256 >= object.sha256.as_str()) {
+            return Err(crate::Error::ConflictError(
+                "CAS presence proof requires an exact deduplicated, sorted object set".to_string(),
+            ));
+        }
+        previous = Some(object.sha256.as_str());
+    }
+    Ok(())
 }
 
 pub(crate) fn verify_cas_objects(cas_dir: &Path, objects: &[CasObjectRef]) -> crate::Result<()> {

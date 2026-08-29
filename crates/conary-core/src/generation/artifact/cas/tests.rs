@@ -66,11 +66,11 @@ impl WriterFixture {
         }
     }
 
-    fn presence_proof(&self) -> VerifiedCasObjectPresence {
+    fn presence_proof(&self) -> VerifiedCasObjectPresence<'_> {
         verify_cas_object_presence(&self.cas_dir, std::slice::from_ref(&self.object)).unwrap()
     }
 
-    fn write_with_proof(&self, proof: VerifiedCasObjectPresence) -> crate::Result<String> {
+    fn write_with_proof(&self, proof: VerifiedCasObjectPresence<'_>) -> crate::Result<String> {
         write_generation_artifact(ArtifactWriteInputs {
             generation_dir: &self.generation_dir,
             generation: 1,
