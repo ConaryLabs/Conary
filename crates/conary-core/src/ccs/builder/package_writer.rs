@@ -268,7 +268,7 @@ fn write_v3_ccs_package_with_open<'a>(
     metrics.control_projection_and_signing = control_started.elapsed();
 
     let objects_dir = temp_dir.path().join("objects");
-    let object_store = crate::filesystem::CasStore::new(&objects_dir)?;
+    let object_store = crate::filesystem::EphemeralObjectStore::new(&objects_dir)?;
     let emission_started = Instant::now();
     for file in &data.files {
         if !authority.components.contains_key(&file.component) {
@@ -326,7 +326,7 @@ fn write_v3_ccs_package_with_open<'a>(
 
 fn write_file_objects(
     file: &crate::ccs::v3::schema::FileAuthorityV3,
-    object_store: &crate::filesystem::CasStore,
+    object_store: &crate::filesystem::EphemeralObjectStore,
     mut reader: Box<dyn std::io::Read + '_>,
 ) -> Result<PayloadObjectEmissionMetrics> {
     use crate::ccs::v3::schema::FileContentLayoutV3;
