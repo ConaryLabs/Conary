@@ -583,6 +583,8 @@ and export raw/qcow2/ISO carriers.
 `crates/conary-core/src/generation/export.rs`;
 `crates/conary-core/src/generation/export/tests.rs`;
 `crates/conary-core/src/generation/artifact.rs`;
+`crates/conary-core/src/generation/artifact/cas.rs`;
+`crates/conary-core/src/generation/artifact/cas/tests.rs`;
 `crates/conary-core/src/generation/artifact/boot_reuse.rs`;
 `crates/conary-core/src/generation/artifact/tests.rs`;
 `crates/conary-core/src/ccs/hooks/capabilities.rs`;

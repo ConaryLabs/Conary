@@ -154,7 +154,8 @@ crates/conary-core/      Core library crate
     |   +-- root_manifest/scan.rs Selected-root capture and CAS ingestion
     |   +-- root_manifest/materialize.rs Exact typed-root reconstruction
     |   +-- root_manifest/composefs.rs Typed manifest to EROFS serialization
-    |   +-- artifact.rs  Generation artifact contract, CAS manifest, and boot assets
+    |   +-- artifact.rs  Generation artifact contract and boot assets
+    |   +-- artifact/cas.rs CAS manifest, exact presence proof, and verification
     |   +-- artifact/boot_reuse.rs Boot-only verification and immutable link staging
     |   +-- artifact/tests.rs Artifact contract and tamper-regression coverage
     |   +-- export.rs    Raw/qcow2 generation artifact disk export
@@ -596,7 +597,11 @@ builder/kernel.rs, and builder/sysroot.rs (runtime boot asset and sysroot
 materialization support), builder/root_validation.rs and
 builder/runtime_inputs.rs (self-contained runtime input validation), and
 root_manifest/composefs.rs (exact typed-root EROFS serialization). artifact.rs
-owns the exportable generation contract and boot assets, while
+owns the exportable generation contract and boot assets;
+artifact/cas.rs owns the CAS manifest and verification modes. Runtime builders
+perform one exact path-and-size preflight and pass its canonical-root and exact-
+object-set proof through artifact writing; the persisted artifact is still
+independently reopened before publication. Meanwhile,
 artifact/boot_reuse.rs reopens only a completed generation's boot contract and
 stages its verified immutable files without enumerating the payload CAS;
 the local verified-CAS artifact loader reopens every artifact and manifest

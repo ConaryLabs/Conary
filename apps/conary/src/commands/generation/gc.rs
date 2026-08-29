@@ -13,6 +13,7 @@ use crate::commands::changeset_metadata::parse_rollback_authority;
 use crate::commands::format_bytes;
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::GenerationPublication;
+use conary_core::filesystem::CasObjectCollectionSession;
 use conary_core::generation::gc::{CasReachability, gc_cas_objects};
 use conary_core::generation::mount::current_generation;
 use conary_core::generation::root_manifest::{GenerationRootManifest, MutableStateManifest};
@@ -49,6 +50,7 @@ pub(super) fn cmd_generation_gc_locked(
     runtime_root: &ConaryRuntimeRoot,
 ) -> Result<()> {
     let conn = crate::commands::open_db(db_path)?;
+    let collection = CasObjectCollectionSession::acquire(&runtime_root.objects_dir())?;
     let plan = build_gc_plan(keep, &conn, runtime_root)?;
 
     let mut removed_count = 0u64;
@@ -67,7 +69,7 @@ pub(super) fn cmd_generation_gc_locked(
         "Collected {removed_count} generation(s), freed {}.",
         format_bytes(freed_bytes)
     );
-    let stats = gc_cas_objects(&runtime_root.objects_dir(), &plan.live_cas_hashes)?;
+    let stats = gc_cas_objects(&collection, &plan.live_cas_hashes)?;
     if stats.objects_removed > 0 {
         println!(
             "CAS GC: removed {} of {} objects, freed {}.",

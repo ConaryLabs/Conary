@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use super::metadata::{GENERATION_METADATA_FILE, GenerationMetadata, generation_path};
@@ -12,9 +11,18 @@ use super::root_manifest::{
 };
 
 mod boot_reuse;
+mod cas;
 
 pub(crate) use boot_reuse::{
     VerifiedGenerationBootAssets, load_verified_generation_boot_assets, stage_reused_boot_assets,
+};
+pub use cas::{
+    CasManifest, CasObjectRef, CasObjectVerification, VerifiedCasObjectPresence,
+    deduplicate_sort_cas_objects,
+};
+pub(crate) use cas::{
+    verify_cas_object_files_exist_with_expected_sizes, verify_cas_object_presence,
+    verify_cas_objects,
 };
 
 pub const ARTIFACT_MANIFEST_FILE: &str = ".conary-artifact.json";
@@ -120,20 +128,6 @@ fn missing_generation_carrier_capabilities() -> GenerationCarrierCapabilities {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CasManifest {
-    pub version: u32,
-    pub generation: i64,
-    pub architecture: String,
-    pub objects: Vec<CasObjectRef>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CasObjectRef {
-    pub sha256: String,
-    pub size: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BootAssetsManifest {
     pub version: u32,
     pub generation: i64,
@@ -178,15 +172,9 @@ pub struct ArtifactWriteInputs<'a> {
     pub architecture: &'a str,
     pub erofs_path: &'a Path,
     pub cas_base_rel: &'a str,
-    pub cas_verification: CasObjectVerification,
+    pub cas_verification: CasObjectVerification<'a>,
     pub boot_assets: BootAssetsManifest,
     pub carrier_capabilities: GenerationCarrierCapabilities,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CasObjectVerification {
-    Deep,
-    AlreadyVerified,
 }
 
 pub fn stage_boot_assets(inputs: BootAssetSources<'_>) -> crate::Result<BootAssetsManifest> {
@@ -265,6 +253,9 @@ pub fn write_generation_artifact(inputs: ArtifactWriteInputs<'_>) -> crate::Resu
         CasObjectVerification::AlreadyVerified => {
             verify_cas_object_files_exist_with_expected_sizes(&cas_dir, &cas_objects)?
         }
+        CasObjectVerification::VerifiedPresence(proof) => {
+            proof.require_exact_match(&cas_dir, &cas_objects)?
+        }
     }
 
     let cas_manifest = CasManifest {
@@ -308,31 +299,8 @@ pub fn write_generation_artifact(inputs: ArtifactWriteInputs<'_>) -> crate::Resu
     Ok(sha256_bytes(&artifact_bytes))
 }
 
-pub fn deduplicate_sort_cas_objects(
-    objects: Vec<CasObjectRef>,
-) -> crate::Result<Vec<CasObjectRef>> {
-    let mut by_hash = BTreeMap::new();
-    for object in objects {
-        validate_sha256_hex("CAS object sha256", &object.sha256)?;
-        match by_hash.insert(object.sha256.clone(), object.size) {
-            Some(existing_size) if existing_size != object.size => {
-                return Err(crate::Error::ConflictError(format!(
-                    "CAS object {} has conflicting sizes: {existing_size} and {}",
-                    object.sha256, object.size
-                )));
-            }
-            _ => {}
-        }
-    }
-
-    Ok(by_hash
-        .into_iter()
-        .map(|(sha256, size)| CasObjectRef { sha256, size })
-        .collect())
-}
-
 pub fn load_generation_artifact(generation_dir: &Path) -> crate::Result<GenerationArtifact> {
-    load_generation_artifact_with_cas_verification(generation_dir, CasObjectVerification::Deep)
+    load_generation_artifact_with_cas_verification(generation_dir, CasLoadVerification::Deep)
 }
 
 /// Load a local generation whose CAS objects were verified when they entered the store.
@@ -347,13 +315,19 @@ pub fn load_generation_artifact_with_verified_cas(
 ) -> crate::Result<GenerationArtifact> {
     load_generation_artifact_with_cas_verification(
         generation_dir,
-        CasObjectVerification::AlreadyVerified,
+        CasLoadVerification::PresenceAndSize,
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CasLoadVerification {
+    Deep,
+    PresenceAndSize,
 }
 
 fn load_generation_artifact_with_cas_verification(
     generation_dir: &Path,
-    cas_verification: CasObjectVerification,
+    cas_verification: CasLoadVerification,
 ) -> crate::Result<GenerationArtifact> {
     if super::metadata::is_generation_pending(generation_dir) {
         return Err(crate::Error::NotFound(format!(
@@ -490,8 +464,8 @@ fn load_generation_artifact_with_cas_verification(
         &cas_manifest.architecture,
     )?;
     match cas_verification {
-        CasObjectVerification::Deep => verify_cas_objects(&cas_dir, &cas_manifest.objects)?,
-        CasObjectVerification::AlreadyVerified => {
+        CasLoadVerification::Deep => verify_cas_objects(&cas_dir, &cas_manifest.objects)?,
+        CasLoadVerification::PresenceAndSize => {
             verify_cas_object_files_exist_with_expected_sizes(&cas_dir, &cas_manifest.objects)?
         }
     }
@@ -660,69 +634,6 @@ fn validate_sha256_hex(field: &str, value: &str) -> crate::Result<()> {
         return Err(crate::Error::InvalidPath(format!(
             "{field} must be lowercase SHA-256 hex"
         )));
-    }
-    Ok(())
-}
-
-pub(crate) fn verify_cas_objects(cas_dir: &Path, objects: &[CasObjectRef]) -> crate::Result<()> {
-    let mut seen = HashSet::new();
-    for object in objects {
-        validate_sha256_hex("CAS object sha256", &object.sha256)?;
-        if !seen.insert(object.sha256.clone()) {
-            return Err(crate::Error::ConflictError(format!(
-                "duplicate CAS manifest entry for {}",
-                object.sha256
-            )));
-        }
-
-        let object_path = crate::filesystem::object_path(cas_dir, &object.sha256)?;
-        let metadata = std::fs::metadata(&object_path).map_err(|e| {
-            crate::Error::NotFound(format!(
-                "missing CAS object {} at {}: {e}",
-                object.sha256,
-                object_path.display()
-            ))
-        })?;
-        if metadata.len() != object.size {
-            return Err(crate::Error::InvalidPath(format!(
-                "CAS object {} size mismatch: expected {}, got {}",
-                object.sha256,
-                object.size,
-                metadata.len()
-            )));
-        }
-        let actual = sha256_file(&object_path)?;
-        if actual != object.sha256 {
-            return Err(crate::Error::ChecksumMismatch {
-                expected: format!("CAS object SHA-256 {}", object.sha256),
-                actual,
-            });
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn verify_cas_object_files_exist_with_expected_sizes(
-    cas_dir: &Path,
-    objects: &[CasObjectRef],
-) -> crate::Result<()> {
-    for object in objects {
-        let object_path = crate::filesystem::object_path(cas_dir, &object.sha256)?;
-        let metadata = std::fs::metadata(&object_path).map_err(|e| {
-            crate::Error::NotFound(format!(
-                "missing CAS object {} at {}: {e}",
-                object.sha256,
-                object_path.display()
-            ))
-        })?;
-        if metadata.len() != object.size {
-            return Err(crate::Error::InvalidPath(format!(
-                "CAS object {} size mismatch: expected {}, got {}",
-                object.sha256,
-                object.size,
-                metadata.len()
-            )));
-        }
     }
     Ok(())
 }
