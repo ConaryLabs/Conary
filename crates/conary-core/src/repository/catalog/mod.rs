@@ -7,6 +7,7 @@ mod candidate;
 mod capacity;
 mod contract;
 mod parity;
+mod portable_integrity;
 mod profile;
 mod record;
 pub(in crate::repository) mod source;
@@ -79,6 +80,12 @@ pub use parity::{
 pub use parity::{
     RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V1, RpmParityMemberInput,
     produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
+};
+pub use portable_integrity::{
+    PORTABLE_CHUNK_MANIFEST_SCHEMA_V1, PORTABLE_CHUNK_SIZE_V1, PortableChunkManifestV1,
+    PortableChunkRangeV1, PortableIntegrityError, PortableIntegrityResult,
+    PortableManifestAttestationV1, portable_chunk_count_v1, portable_manifest_size_v1,
+    read_portable_chunk_manifest_v1, write_portable_chunk_manifest_v1,
 };
 pub use profile::{
     ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, VerifiedProfileCatalogCandidateV2,
