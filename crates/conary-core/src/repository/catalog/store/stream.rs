@@ -49,50 +49,51 @@ impl CatalogReader {
                 "catalog row replay requires the exact source scope".to_string(),
             ));
         }
-        let mut packages = self
-            .connection
-            .prepare(&format!("{SELECT_PACKAGES} ORDER BY package_key_sha256"))?;
-        let mut provides = self.connection.prepare(SELECT_ORDERED_PROVIDES)?;
-        let mut groups = self.connection.prepare(SELECT_ORDERED_REQUIREMENT_GROUPS)?;
-        let mut atoms = self.connection.prepare(SELECT_ORDERED_REQUIREMENT_ATOMS)?;
-        let mut package_rows = packages.query([])?;
-        let provide_rows = provides.query([])?;
-        let group_rows = groups.query([])?;
-        let atom_rows = atoms.query([])?;
-        let mut relations = OrderedCatalogRelations::new(provide_rows, group_rows, atom_rows)?;
-        let mut sink = ProfileRelationSink::new(destination)?;
-        while let Some(row) = package_rows.next()? {
-            let mut package = package_from_row(row)?;
-            let source_key = package.package_key_sha256.clone();
-            relations.require_not_before_package(&source_key)?;
-            if let Some(origin) = profile_origin {
-                package.origin = origin.clone();
-            }
-            package.canonicalize_for_scope(destination_scope)?;
-            let destination_key = package.package_key_sha256.clone();
-            let inserted = if profile_origin.is_some() {
-                insert_profile_package_base_if_absent(destination, &package)?
-            } else {
-                insert_package_base(destination, &package)?;
-                true
-            };
-            if inserted {
-                relations.copy_package(&mut sink, &source_key, &destination_key)?;
-            } else {
-                let selected = destination.query_row(
-                    &format!("{SELECT_PACKAGES} WHERE package_key_sha256 = ?1"),
-                    [&destination_key],
-                    package_from_row,
-                )?;
-                let matches = selected.same_profile_base(&package)?
-                    && relations.package_matches(destination, &source_key, &destination_key)?;
-                if !matches {
-                    return Err(profile_duplicate_conflict(&selected, &package));
+        self.catalog_query(|connection| {
+            let mut packages =
+                connection.prepare(&format!("{SELECT_PACKAGES} ORDER BY package_key_sha256"))?;
+            let mut provides = connection.prepare(SELECT_ORDERED_PROVIDES)?;
+            let mut groups = connection.prepare(SELECT_ORDERED_REQUIREMENT_GROUPS)?;
+            let mut atoms = connection.prepare(SELECT_ORDERED_REQUIREMENT_ATOMS)?;
+            let mut package_rows = packages.query([])?;
+            let provide_rows = provides.query([])?;
+            let group_rows = groups.query([])?;
+            let atom_rows = atoms.query([])?;
+            let mut relations = OrderedCatalogRelations::new(provide_rows, group_rows, atom_rows)?;
+            let mut sink = ProfileRelationSink::new(destination)?;
+            while let Some(row) = package_rows.next()? {
+                let mut package = package_from_row(row)?;
+                let source_key = package.package_key_sha256.clone();
+                relations.require_not_before_package(&source_key)?;
+                if let Some(origin) = profile_origin {
+                    package.origin = origin.clone();
+                }
+                package.canonicalize_for_scope(destination_scope)?;
+                let destination_key = package.package_key_sha256.clone();
+                let inserted = if profile_origin.is_some() {
+                    insert_profile_package_base_if_absent(destination, &package)?
+                } else {
+                    insert_package_base(destination, &package)?;
+                    true
+                };
+                if inserted {
+                    relations.copy_package(&mut sink, &source_key, &destination_key)?;
+                } else {
+                    let selected = destination.query_row(
+                        &format!("{SELECT_PACKAGES} WHERE package_key_sha256 = ?1"),
+                        [&destination_key],
+                        package_from_row,
+                    )?;
+                    let matches = selected.same_profile_base(&package)?
+                        && relations.package_matches(destination, &source_key, &destination_key)?;
+                    if !matches {
+                        return Err(profile_duplicate_conflict(&selected, &package));
+                    }
                 }
             }
-        }
-        relations.finish()?;
-        Ok(())
+            relations.finish()?;
+            Ok(())
+        })
     }
 }
 

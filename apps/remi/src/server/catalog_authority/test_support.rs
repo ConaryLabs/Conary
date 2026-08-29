@@ -5,17 +5,19 @@
 use std::path::{Path, PathBuf};
 
 use conary_core::db::models::{
-    RemiCatalogResource, RemiCatalogResourceKind, RemiProfileRevisionMember, RemiRuntimeSession,
+    RemiCatalogPhysicalAttestation, RemiCatalogResource, RemiCatalogResourceKind,
+    RemiProfileRevisionMember, RemiRuntimeSession,
 };
 use conary_core::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CATALOG_FILE_NAME, CatalogArtifactV1, CatalogContentV1,
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1,
-    PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2, ProfileSourceMemberV2,
-    SOURCE_METADATA_DIRECTORY_NAME, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
-    SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceSnapshotV1,
-    SourceStreamKindV1, SourceStreamV1, publish_profile_catalog_bundle,
-    publish_source_catalog_bundle, write_catalog_candidate, write_profile_catalog_manifest,
-    write_source_catalog_manifest,
+    PROFILE_REVISION_SCHEMA_V2, PortableManifestAttestationV1, ProfileRevisionV2,
+    ProfileSourceMemberV2, SOURCE_METADATA_DIRECTORY_NAME, SOURCE_SNAPSHOT_SCHEMA_V1,
+    SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
+    SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1, portable_chunk_count_v1,
+    portable_manifest_size_v1, publish_profile_catalog_bundle_verified,
+    publish_source_catalog_bundle_verified, write_catalog_candidate,
+    write_profile_catalog_manifest, write_source_catalog_manifest,
 };
 use conary_core::repository::dependency_model::DebianMultiArch;
 use conary_core::repository::supported_profiles::ProfilePackageFormat;
@@ -29,8 +31,36 @@ use conary_core::repository::{
     RepositoryTrustPolicy, RpmMetadataAuthority,
 };
 
-use super::CatalogAuthority;
+use super::{CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection};
 use crate::server::database_writer::DatabaseWriter;
+
+impl CatalogAuthority {
+    /// Test-only unpinned cache open for exercising post-unlink cache lifetime.
+    pub(crate) fn open_unrooted_cached_profile_for_test(
+        &self,
+        selection: &ProfileRevisionSelection,
+    ) -> anyhow::Result<PinnedProfileCatalog> {
+        let conn = crate::server::open_runtime_db(&self.db_path)?;
+        let resolved =
+            super::resolve_profile_selection(&conn, &self.catalog_dir, selection.clone())?;
+        self.open_cached_resolution(resolved)
+    }
+}
+
+pub(crate) fn physical_attestation_for_test(
+    catalog_size: u64,
+    marker: &[u8],
+) -> RemiCatalogPhysicalAttestation {
+    let chunk_count = portable_chunk_count_v1(catalog_size).expect("fixture chunk count");
+    RemiCatalogPhysicalAttestation::new(
+        PortableManifestAttestationV1 {
+            sha256: conary_core::hash::sha256(marker),
+            size: portable_manifest_size_v1(chunk_count).expect("fixture portable manifest size"),
+        },
+        catalog_size,
+    )
+    .expect("fixture physical attestation")
+}
 
 pub(crate) struct ActiveCatalogFixture {
     root: tempfile::TempDir,
@@ -373,14 +403,21 @@ impl ActiveCatalogFixture {
                 &source_manifest.authenticated_objects[0],
                 &source_object_bytes,
             );
-            write_source_catalog_manifest(&source_candidate_dir, &source_manifest)
-                .expect("write source snapshot manifest");
-            publish_source_catalog_bundle(
+            let source_verification =
+                write_source_catalog_manifest(&source_candidate_dir, &source_manifest)
+                    .expect("write source snapshot manifest");
+            let source_publication = publish_source_catalog_bundle_verified(
                 &source_candidate_dir,
                 &self.catalog_dir,
                 &source_manifest,
+                source_verification,
             )
             .expect("publish source catalog");
+            let source_physical_attestation = RemiCatalogPhysicalAttestation::new(
+                source_publication.portable_manifest_attestation,
+                source_manifest.catalog.size,
+            )
+            .expect("construct source physical attestation");
             let source_snapshot_sha256 = source_manifest
                 .manifest_sha256()
                 .expect("hash source snapshot manifest");
@@ -400,7 +437,11 @@ impl ActiveCatalogFixture {
                 repository_identity,
                 source_snapshot_sha256: source_snapshot_sha256.clone(),
             });
-            source_manifests.push((source_snapshot_sha256, source_manifest));
+            source_manifests.push((
+                source_snapshot_sha256,
+                source_manifest,
+                source_physical_attestation,
+            ));
         }
         let primary_member = members.first().expect("fixture profile has a member");
         let packages = packages
@@ -440,9 +481,20 @@ impl ActiveCatalogFixture {
             logical_digest_sha256: binding.logical_digest_sha256.clone(),
             counts: binding.counts,
         };
-        write_profile_catalog_manifest(&candidate_dir, &manifest).expect("write profile manifest");
-        publish_profile_catalog_bundle(&candidate_dir, &self.catalog_dir, &manifest)
-            .expect("publish profile catalog");
+        let profile_verification = write_profile_catalog_manifest(&candidate_dir, &manifest)
+            .expect("write profile manifest");
+        let profile_publication = publish_profile_catalog_bundle_verified(
+            &candidate_dir,
+            &self.catalog_dir,
+            &manifest,
+            profile_verification,
+        )
+        .expect("publish profile catalog");
+        let profile_physical_attestation = RemiCatalogPhysicalAttestation::new(
+            profile_publication.portable_manifest_attestation,
+            manifest.catalog.size,
+        )
+        .expect("construct profile physical attestation");
 
         let profile_revision_sha256 = manifest.manifest_sha256().expect("hash profile revision");
         let profile_manifest_json = String::from_utf8(
@@ -458,7 +510,7 @@ impl ActiveCatalogFixture {
             SourceEcosystemV1::Alpm => ("alpm", "arch", "arch"),
             SourceEcosystemV1::Eopkg => ("eopkg", "eopkg", "eopkg"),
         };
-        for (member, (_, source_manifest)) in manifest.members.iter().zip(&source_manifests) {
+        for (member, (_, source_manifest, _)) in manifest.members.iter().zip(&source_manifests) {
             conn.execute(
                 "INSERT OR IGNORE INTO repository_source_policies (
                      source_identity, scope_kind, scope_identity, ecosystem,
@@ -510,7 +562,7 @@ impl ActiveCatalogFixture {
             )
             .expect("insert fixture repository row");
         }
-        for (source_snapshot_sha256, source_manifest) in &source_manifests {
+        for (source_snapshot_sha256, source_manifest, physical_attestation) in &source_manifests {
             let source_manifest_json = String::from_utf8(
                 conary_core::json::canonical_json(source_manifest)
                     .expect("serialize source snapshot manifest"),
@@ -525,6 +577,7 @@ impl ActiveCatalogFixture {
                     .expect("source artifact size fits"),
                 logical_digest_sha256: source_manifest.logical_digest_sha256.clone(),
                 manifest_json: source_manifest_json,
+                physical_attestation: physical_attestation.clone(),
                 durable: true,
                 created_at: fencing_epoch,
             }
@@ -539,6 +592,7 @@ impl ActiveCatalogFixture {
             artifact_size: i64::try_from(manifest.catalog.size).expect("artifact size fits"),
             logical_digest_sha256: manifest.logical_digest_sha256.clone(),
             manifest_json: profile_manifest_json,
+            physical_attestation: profile_physical_attestation,
             durable: true,
             created_at: fencing_epoch,
         }

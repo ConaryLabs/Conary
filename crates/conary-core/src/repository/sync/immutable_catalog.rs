@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,7 +22,12 @@ use crate::repository::catalog::{
 };
 
 mod authority;
+mod reuse;
 mod spool;
+
+pub use reuse::{
+    DurableSourceCatalogReuseV1, SourceCatalogMaterializationV1, VerifiedSourceCatalogCandidateV1,
+};
 
 use authority::{
     source_catalog_authority, source_catalog_candidate, source_snapshot_matches_authority,
@@ -32,52 +37,6 @@ use spool::{
     SpoolProvideMergeV1,
 };
 
-/// One exact registered source snapshot eligible for reuse after the current
-/// upstream metadata independently authenticates to the same authority.
-#[derive(Debug, Clone)]
-pub struct DurableSourceCatalogReuseV1 {
-    manifest: SourceSnapshotV1,
-    bundle_path: PathBuf,
-}
-
-impl DurableSourceCatalogReuseV1 {
-    pub fn new(manifest: SourceSnapshotV1, bundle_path: PathBuf) -> Result<Self> {
-        manifest.validate()?;
-        Ok(Self {
-            manifest,
-            bundle_path,
-        })
-    }
-
-    #[must_use]
-    pub fn manifest(&self) -> &SourceSnapshotV1 {
-        &self.manifest
-    }
-
-    #[must_use]
-    pub fn bundle_path(&self) -> &Path {
-        &self.bundle_path
-    }
-}
-
-/// How the verified source reader reached the profile-composition boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceCatalogMaterializationV1 {
-    /// A new private catalog was constructed from authenticated native bytes.
-    PrivateCandidate,
-    /// An exact projection-cache entry was copied into a private candidate.
-    ProjectionCacheCandidate,
-    /// An exact registered durable bundle was reopened in place.
-    DurableReuse { bundle_path: PathBuf },
-}
-
-/// One source manifest paired with the process-local reader that completed its
-/// full logical verification.
-pub struct VerifiedSourceCatalogCandidateV1 {
-    pub manifest: SourceSnapshotV1,
-    pub reader: CatalogReader,
-    pub materialization: SourceCatalogMaterializationV1,
-}
 use crate::repository::parsers::{
     ArchPackageFragmentKind, ArchPackageRecord, AuthenticatedMetadataObject,
     AuthenticatedProjectionInputV1, ChecksumType, PackageMetadata, RepositorySnapshotSink,
@@ -971,14 +930,18 @@ impl NativeCatalogSnapshotSink {
             .collect::<Vec<_>>();
         let authority =
             source_catalog_authority(&self.repository, snapshot.clone(), authenticated_objects)?;
-        if !source_snapshot_matches_authority(&reuse.manifest, &authority) {
+        if !source_snapshot_matches_authority(reuse.manifest(), &authority) {
             return Ok(false);
         }
 
-        let reader = verify_registered_source_catalog_bundle(&reuse.bundle_path, &reuse.manifest)?;
+        let reader = verify_registered_source_catalog_bundle(
+            reuse.bundle_path(),
+            reuse.manifest(),
+            reuse.portable_manifest_attestation(),
+        )?;
         let rebound =
             crate::repository::catalog::source::bind_source_snapshot(authority, reader.binding())?;
-        if rebound != reuse.manifest {
+        if rebound != *reuse.manifest() {
             return Err(Error::ConflictError(
                 "registered source snapshot changed while its durable bundle was reopened"
                     .to_string(),
@@ -986,7 +949,8 @@ impl NativeCatalogSnapshotSink {
         }
         self.cached_reader = Some(reader);
         self.materialization = SourceCatalogMaterializationV1::DurableReuse {
-            bundle_path: reuse.bundle_path.clone(),
+            bundle_path: reuse.bundle_path().to_path_buf(),
+            portable_manifest_attestation: reuse.portable_manifest_attestation().clone(),
         };
         Ok(true)
     }

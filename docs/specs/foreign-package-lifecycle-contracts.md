@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-28
-revision: 49
+last_updated: 2026-08-29
+revision: 50
 summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, manifest-scoped Remi catalog resources, generation activation, and configuration transactions for RPM, Debian, Arch, and eopkg packages
 ---
 
@@ -271,7 +271,7 @@ and message. It does not synthesize an exit-code or stderr column absent from
 `ScriptletFailureOutcome`; `conary system history` is the read surface.
 Security-policy and boot-runtime requests also retain the exact invoked path,
 canonical path, and executable SHA-256 observed inside that selected root.
-Current-only database schema revision 54 retains the tagged
+Current-only database schema revision 55 retains the tagged
 systemd/OpenRC/SELinux/AppArmor and boot-runtime mutation union, durable
 repository synchronization fencing, and exact profile-revision conversion
 pins, artifact-level Remi conversion proof, and per-revision proof bindings
@@ -280,7 +280,8 @@ profile activation and binding each activated Remi universe to the exact
 promotion-evidence and complete-crawl digests it consumed. Distinct exact
 source-manifest identities may bind a byte-identical normalized catalog
 artifact after authenticated-root churn; resource reachability remains keyed by
-the manifest SHA-256. Earlier databases must be rebuilt; no compatibility
+the manifest SHA-256, and each resource carries a closed host-local physical
+attestation for its exact catalog artifact. Earlier databases must be rebuilt; no compatibility
 decoder or migration exists.
 Every generation build projects all eligible requests through that
 generation's applied-changeset high-water mark into

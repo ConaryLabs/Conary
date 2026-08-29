@@ -14,7 +14,8 @@ use conary_core::db::models::{
     plan_catalog_collection,
 };
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, SOURCE_METADATA_DIRECTORY_NAME,
+    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CATALOG_PORTABLE_MANIFEST_FILE_NAME,
+    SOURCE_METADATA_DIRECTORY_NAME, portable_chunk_count_v1, portable_manifest_size_v1,
 };
 use conary_core::repository::{
     acknowledge_profile_sync_candidate_cleanup, recover_expired_profile_sync_runs,
@@ -22,6 +23,7 @@ use conary_core::repository::{
 use tokio::sync::{Mutex, RwLock};
 
 use super::ServerState;
+use super::catalog_authority::CatalogAuthority;
 use super::catalog_refresh::cleanup_candidate_run;
 use super::database_writer::DatabaseWriter;
 
@@ -99,17 +101,19 @@ pub(crate) async fn recover_catalog_refresh_runs_uncoordinated(
 /// Collect catalogs at startup or from another caller that does not already
 /// own the complete publication coordinator.
 pub async fn collect_catalog_garbage(state: &Arc<RwLock<ServerState>>) -> Result<CatalogGcReport> {
-    let (coordinator, db_path, catalog_dir, database_writer) = {
+    let (coordinator, db_path, catalog_dir, database_writer, catalog_authority) = {
         let state = state.read().await;
         (
             state.publication_coordinator.clone(),
             state.config.db_path.clone(),
             state.config.catalog_dir.clone(),
             state.database_writer.clone(),
+            state.catalog_authority.clone(),
         )
     };
     let _publication_guard = coordinator.lock_owned().await;
-    collect_catalog_garbage_uncoordinated(db_path, catalog_dir, database_writer).await
+    collect_catalog_garbage_uncoordinated(db_path, catalog_dir, database_writer, catalog_authority)
+        .await
 }
 
 /// Collect catalogs while the caller owns the complete publication
@@ -118,6 +122,7 @@ pub(crate) async fn collect_catalog_garbage_uncoordinated(
     db_path: PathBuf,
     catalog_dir: PathBuf,
     database_writer: DatabaseWriter,
+    catalog_authority: CatalogAuthority,
 ) -> Result<CatalogGcReport> {
     let targets = tokio::task::spawn_blocking({
         let db_path = db_path.clone();
@@ -183,20 +188,22 @@ pub(crate) async fn collect_catalog_garbage_uncoordinated(
             let mut removed = 0;
             let mut acknowledged = Vec::with_capacity(pending_deletions.len());
             for intent in pending_deletions {
-                removed += usize::from(remove_exact_bundle(
+                removed += usize::from(remove_exact_bundle_and_evict_reader(
                     &catalog_dir,
                     intent.resource_kind,
                     &intent.source_profile,
                     &intent.resource_sha256,
+                    &catalog_authority,
                 )?);
                 acknowledged.push(intent);
             }
             for candidate in terminal_candidates {
-                removed += usize::from(remove_exact_bundle(
+                removed += usize::from(remove_exact_bundle_and_evict_reader(
                     &catalog_dir,
                     candidate.resource_kind,
                     &candidate.source_profile,
                     &candidate.resource_sha256,
+                    &catalog_authority,
                 )?);
             }
             Ok((removed, acknowledged))
@@ -241,9 +248,11 @@ pub(crate) async fn collect_catalog_garbage_serialized(
     db_path: PathBuf,
     catalog_dir: PathBuf,
     database_writer: DatabaseWriter,
+    catalog_authority: CatalogAuthority,
 ) -> Result<CatalogGcReport> {
     let _collection_guard = coordinator.lock_owned().await;
-    collect_catalog_garbage_uncoordinated(db_path, catalog_dir, database_writer).await
+    collect_catalog_garbage_uncoordinated(db_path, catalog_dir, database_writer, catalog_authority)
+        .await
 }
 
 fn deletion_key(intent: &RemiCatalogDeletionIntent) -> (RemiCatalogResourceKind, String, String) {
@@ -332,6 +341,25 @@ fn remove_exact_bundle(
     remove_gc_tombstone(&tombstone)
 }
 
+fn remove_exact_bundle_and_evict_reader(
+    catalog_root: &Path,
+    kind: RemiCatalogResourceKind,
+    source_profile: &str,
+    resource_sha256: &str,
+    catalog_authority: &CatalogAuthority,
+) -> Result<bool> {
+    let removed = remove_exact_bundle(catalog_root, kind, source_profile, resource_sha256)?;
+    match kind {
+        RemiCatalogResourceKind::ProfileRevision => {
+            catalog_authority.evict_removed_profile_catalog(source_profile, resource_sha256);
+        }
+        RemiCatalogResourceKind::SourceSnapshot => {
+            catalog_authority.evict_removed_source_catalog(source_profile, resource_sha256);
+        }
+    }
+    Ok(removed)
+}
+
 fn require_bundle_parent(
     catalog_root: &Path,
     kind: RemiCatalogResourceKind,
@@ -409,6 +437,7 @@ fn validate_exact_bundle_layout(path: &Path, kind: RemiCatalogResourceKind) -> R
     let mut expected = vec![
         std::ffi::OsString::from(CATALOG_FILE_NAME),
         std::ffi::OsString::from(CATALOG_MANIFEST_FILE_NAME),
+        std::ffi::OsString::from(CATALOG_PORTABLE_MANIFEST_FILE_NAME),
     ];
     if kind == RemiCatalogResourceKind::SourceSnapshot {
         expected.push(std::ffi::OsString::from(SOURCE_METADATA_DIRECTORY_NAME));
@@ -420,7 +449,11 @@ fn validate_exact_bundle_layout(path: &Path, kind: RemiCatalogResourceKind) -> R
             path.display()
         );
     }
-    for name in [CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME] {
+    for name in [
+        CATALOG_FILE_NAME,
+        CATALOG_MANIFEST_FILE_NAME,
+        CATALOG_PORTABLE_MANIFEST_FILE_NAME,
+    ] {
         let child = path.join(name);
         let child_metadata = fs::symlink_metadata(&child)?;
         if child_metadata.file_type().is_symlink() || !child_metadata.file_type().is_file() {
@@ -429,6 +462,18 @@ fn validate_exact_bundle_layout(path: &Path, kind: RemiCatalogResourceKind) -> R
                 child.display()
             );
         }
+    }
+    let catalog_size = fs::metadata(path.join(CATALOG_FILE_NAME))?.len();
+    let expected_portable_size = portable_manifest_size_v1(portable_chunk_count_v1(catalog_size)?)?;
+    let portable_path = path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
+    let portable_size = fs::metadata(&portable_path)?.len();
+    if portable_size != expected_portable_size {
+        bail!(
+            "catalog deletion target portable manifest {} has {} bytes; expected {}",
+            portable_path.display(),
+            portable_size,
+            expected_portable_size
+        );
     }
     if kind == RemiCatalogResourceKind::SourceSnapshot {
         validate_source_metadata_layout(&path.join(SOURCE_METADATA_DIRECTORY_NAME))?;
@@ -534,442 +579,4 @@ fn remove_gc_tombstone(path: &Path) -> Result<bool> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn digest(byte: char) -> String {
-        byte.to_string().repeat(64)
-    }
-
-    fn resource_digest(byte: char) -> String {
-        conary_core::hash::sha256(format!("{{\"resource\":\"{byte}\"}}").as_bytes())
-    }
-
-    fn exact_bundle(path: &Path, kind: RemiCatalogResourceKind) {
-        fs::create_dir_all(path).unwrap();
-        fs::write(path.join(CATALOG_FILE_NAME), b"catalog").unwrap();
-        fs::write(path.join(CATALOG_MANIFEST_FILE_NAME), b"manifest").unwrap();
-        if kind == RemiCatalogResourceKind::SourceSnapshot {
-            let metadata = path.join(SOURCE_METADATA_DIRECTORY_NAME);
-            fs::create_dir(&metadata).unwrap();
-            fs::write(metadata.join(digest('e')), b"authenticated metadata").unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn restart_recovery_fences_and_acknowledges_exact_expired_candidate() {
-        let root = tempfile::tempdir().unwrap();
-        let db_path = root.path().join("remi.db");
-        let candidate_root = root.path().join("catalog-candidates");
-        fs::create_dir(&candidate_root).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let run_id = "10000000-0000-4000-8000-000000000001";
-        let run_path = candidate_root.join(run_id);
-        fs::create_dir(&run_path).unwrap();
-        fs::write(run_path.join("private-candidate"), b"fixture").unwrap();
-        let conn = conary_core::db::open_fast(&db_path).unwrap();
-        conn.execute(
-            "INSERT INTO repository_sync_runs (
-                 run_id, source_profile, owner_instance_uuid, fencing_epoch,
-                 state, started_at, heartbeat_at, lease_expires_at
-             ) VALUES (?1, 'fedora-44', ?2, 1, 'fetching_objects', 1, 1, 1)",
-            rusqlite::params![run_id, "00000000-0000-4000-8000-000000000001",],
-        )
-        .unwrap();
-        drop(conn);
-
-        assert_eq!(
-            recover_catalog_refresh_runs_uncoordinated(
-                db_path.clone(),
-                candidate_root,
-                DatabaseWriter::default(),
-            )
-            .await
-            .unwrap(),
-            1
-        );
-        assert!(!run_path.exists());
-        let conn = conary_core::db::open_fast(&db_path).unwrap();
-        let recovered: (String, bool) = conn
-            .query_row(
-                "SELECT state, candidate_cleaned_at IS NOT NULL
-                 FROM repository_sync_runs WHERE run_id = ?1",
-                [run_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(recovered, ("abandoned".to_string(), true));
-    }
-
-    #[test]
-    fn exact_bundle_removal_refuses_unknown_or_symlinked_content() {
-        let root = tempfile::tempdir().unwrap();
-        let catalog_root = root.path().join("catalogs");
-        fs::create_dir_all(catalog_root.join("sources")).unwrap();
-        let exact_digest = digest('a');
-        let exact = bundle_path(
-            &catalog_root,
-            RemiCatalogResourceKind::SourceSnapshot,
-            "fedora-44",
-            &exact_digest,
-        );
-        exact_bundle(&exact, RemiCatalogResourceKind::SourceSnapshot);
-        assert!(
-            remove_exact_bundle(
-                &catalog_root,
-                RemiCatalogResourceKind::SourceSnapshot,
-                "fedora-44",
-                &exact_digest,
-            )
-            .unwrap()
-        );
-        assert!(!exact.exists());
-
-        let malformed_digest = digest('b');
-        let malformed = bundle_path(
-            &catalog_root,
-            RemiCatalogResourceKind::SourceSnapshot,
-            "fedora-44",
-            &malformed_digest,
-        );
-        exact_bundle(&malformed, RemiCatalogResourceKind::SourceSnapshot);
-        fs::write(malformed.join("unexpected"), b"evidence").unwrap();
-        assert!(
-            remove_exact_bundle(
-                &catalog_root,
-                RemiCatalogResourceKind::SourceSnapshot,
-                "fedora-44",
-                &malformed_digest,
-            )
-            .is_err()
-        );
-        assert!(malformed.join("unexpected").exists());
-
-        let malformed_metadata_digest = digest('f');
-        let malformed_metadata = bundle_path(
-            &catalog_root,
-            RemiCatalogResourceKind::SourceSnapshot,
-            "fedora-44",
-            &malformed_metadata_digest,
-        );
-        exact_bundle(&malformed_metadata, RemiCatalogResourceKind::SourceSnapshot);
-        fs::write(
-            malformed_metadata
-                .join(SOURCE_METADATA_DIRECTORY_NAME)
-                .join("unexpected"),
-            b"evidence",
-        )
-        .unwrap();
-        assert!(
-            remove_exact_bundle(
-                &catalog_root,
-                RemiCatalogResourceKind::SourceSnapshot,
-                "fedora-44",
-                &malformed_metadata_digest,
-            )
-            .is_err()
-        );
-        assert!(malformed_metadata.exists());
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::symlink;
-            let target = root.path().join("target");
-            exact_bundle(&target, RemiCatalogResourceKind::SourceSnapshot);
-            let linked_digest = digest('c');
-            let linked = bundle_path(
-                &catalog_root,
-                RemiCatalogResourceKind::SourceSnapshot,
-                "fedora-44",
-                &linked_digest,
-            );
-            symlink(&target, &linked).unwrap();
-            assert!(
-                remove_exact_bundle(
-                    &catalog_root,
-                    RemiCatalogResourceKind::SourceSnapshot,
-                    "fedora-44",
-                    &linked_digest,
-                )
-                .is_err()
-            );
-            assert!(target.exists());
-
-            let redirected_root = root.path().join("redirected-catalogs");
-            fs::create_dir(&redirected_root).unwrap();
-            let redirected_digest = digest('d');
-            let redirected = redirected_root.join(&redirected_digest);
-            exact_bundle(&redirected, RemiCatalogResourceKind::SourceSnapshot);
-            let symlinked_catalog_root = root.path().join("symlinked-parent-catalogs");
-            fs::create_dir(&symlinked_catalog_root).unwrap();
-            symlink(&redirected_root, symlinked_catalog_root.join("sources")).unwrap();
-            assert!(
-                remove_exact_bundle(
-                    &symlinked_catalog_root,
-                    RemiCatalogResourceKind::SourceSnapshot,
-                    "fedora-44",
-                    &redirected_digest,
-                )
-                .is_err()
-            );
-            assert!(redirected.exists());
-        }
-    }
-
-    #[test]
-    fn deletion_resumes_from_exact_gc_tombstone_after_rename() {
-        let root = tempfile::tempdir().unwrap();
-        let catalog_root = root.path().join("catalogs");
-        fs::create_dir_all(catalog_root.join("sources")).unwrap();
-        let resource_digest = digest('d');
-        let original = bundle_path(
-            &catalog_root,
-            RemiCatalogResourceKind::SourceSnapshot,
-            "fedora-44",
-            &resource_digest,
-        );
-        exact_bundle(&original, RemiCatalogResourceKind::SourceSnapshot);
-        let tombstone_parent = ensure_tombstone_parent(
-            &catalog_root,
-            RemiCatalogResourceKind::SourceSnapshot,
-            "fedora-44",
-        )
-        .unwrap();
-        let tombstone = tombstone_path(
-            &catalog_root,
-            RemiCatalogResourceKind::SourceSnapshot,
-            "fedora-44",
-            &resource_digest,
-        );
-        fs::rename(&original, &tombstone).unwrap();
-        File::open(tombstone_parent).unwrap().sync_all().unwrap();
-
-        assert!(
-            remove_exact_bundle(
-                &catalog_root,
-                RemiCatalogResourceKind::SourceSnapshot,
-                "fedora-44",
-                &resource_digest,
-            )
-            .unwrap()
-        );
-        assert!(!original.exists());
-        assert!(!tombstone.exists());
-    }
-
-    #[test]
-    fn absent_profile_namespace_is_idempotent_bundle_absence() {
-        let root = tempfile::tempdir().unwrap();
-        let catalog_root = root.path().join("catalogs");
-        fs::create_dir_all(catalog_root.join("profiles")).unwrap();
-
-        assert!(
-            !remove_exact_bundle(
-                &catalog_root,
-                RemiCatalogResourceKind::ProfileRevision,
-                "fedora-44",
-                &digest('a'),
-            )
-            .unwrap()
-        );
-    }
-
-    #[tokio::test]
-    async fn registered_unreachable_resources_are_journaled_removed_and_acknowledged() {
-        let root = tempfile::tempdir().unwrap();
-        let db_path = root.path().join("remi.db");
-        let catalog_root = root.path().join("catalogs");
-        fs::create_dir_all(catalog_root.join("sources")).unwrap();
-        fs::create_dir_all(catalog_root.join("profiles/fedora-44")).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open_fast(&db_path).unwrap();
-        for (byte, kind) in [
-            ('a', RemiCatalogResourceKind::SourceSnapshot),
-            ('b', RemiCatalogResourceKind::ProfileRevision),
-        ] {
-            let resource = RemiCatalogResource {
-                resource_sha256: resource_digest(byte),
-                kind,
-                source_profile: "fedora-44".to_string(),
-                artifact_sha256: digest(byte),
-                artifact_size: 7,
-                logical_digest_sha256: digest('d'),
-                manifest_json: format!("{{\"resource\":\"{byte}\"}}"),
-                durable: true,
-                created_at: 1,
-            };
-            resource.insert(&conn).unwrap();
-            exact_bundle(
-                &bundle_path(&catalog_root, kind, "fedora-44", &resource.resource_sha256),
-                kind,
-            );
-        }
-        drop(conn);
-
-        let report = collect_catalog_garbage_uncoordinated(
-            db_path.clone(),
-            catalog_root,
-            DatabaseWriter::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(report.deleted_profile_resources, 1);
-        assert_eq!(report.deleted_source_resources, 1);
-        assert_eq!(report.removed_bundles, 2);
-        assert_eq!(report.acknowledged_deletions, 2);
-
-        let conn = conary_core::db::open_fast(&db_path).unwrap();
-        assert!(
-            plan_catalog_collection(&conn)
-                .unwrap()
-                .pending_deletions
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn shared_coordinator_serializes_concurrent_collectors() {
-        let root = tempfile::tempdir().unwrap();
-        let db_path = root.path().join("remi.db");
-        let catalog_root = root.path().join("catalogs");
-        fs::create_dir_all(catalog_root.join("sources")).unwrap();
-        fs::create_dir_all(catalog_root.join("profiles/fedora-44")).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let conn = conary_core::db::open_fast(&db_path).unwrap();
-        let resource = RemiCatalogResource {
-            resource_sha256: resource_digest('a'),
-            kind: RemiCatalogResourceKind::SourceSnapshot,
-            source_profile: "fedora-44".to_string(),
-            artifact_sha256: digest('a'),
-            artifact_size: 7,
-            logical_digest_sha256: digest('d'),
-            manifest_json: "{\"resource\":\"a\"}".to_string(),
-            durable: true,
-            created_at: 1,
-        };
-        resource.insert(&conn).unwrap();
-        exact_bundle(
-            &bundle_path(
-                &catalog_root,
-                resource.kind,
-                &resource.source_profile,
-                &resource.resource_sha256,
-            ),
-            resource.kind,
-        );
-        drop(conn);
-
-        let coordinator = Arc::new(Mutex::new(()));
-        let database_writer = DatabaseWriter::default();
-        let first = collect_catalog_garbage_serialized(
-            Arc::clone(&coordinator),
-            db_path.clone(),
-            catalog_root.clone(),
-            database_writer.clone(),
-        );
-        let second = collect_catalog_garbage_serialized(
-            coordinator,
-            db_path.clone(),
-            catalog_root,
-            database_writer,
-        );
-        let (first, second) = tokio::join!(first, second);
-        let reports = [first.unwrap(), second.unwrap()];
-        assert_eq!(
-            reports
-                .iter()
-                .map(|report| report.acknowledged_deletions)
-                .sum::<usize>(),
-            1
-        );
-        assert_eq!(
-            reports
-                .iter()
-                .map(|report| report.removed_bundles)
-                .sum::<usize>(),
-            1
-        );
-
-        let conn = conary_core::db::open_fast(&db_path).unwrap();
-        assert!(
-            plan_catalog_collection(&conn)
-                .unwrap()
-                .pending_deletions
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn terminal_run_journal_removes_exact_unregistered_publication() {
-        let root = tempfile::tempdir().unwrap();
-        let db_path = root.path().join("remi.db");
-        let catalog_root = root.path().join("catalogs");
-        fs::create_dir_all(catalog_root.join("sources")).unwrap();
-        fs::create_dir_all(catalog_root.join("profiles/fedora-44")).unwrap();
-        conary_core::db::init(&db_path).unwrap();
-        let profile_digest = digest('a');
-        let source_digest = digest('b');
-        let conn = conary_core::db::open_fast(&db_path).unwrap();
-        let repository_id = conn
-            .query_row(
-                "INSERT INTO repositories(name, url, source_profile)
-                 VALUES ('fixture', 'https://fixture.test', 'fedora-44')
-                 RETURNING id",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .unwrap();
-        conn.execute(
-            "INSERT INTO repository_sync_runs (
-                 run_id, source_profile, owner_instance_uuid, fencing_epoch,
-                 candidate_profile_digest, state, started_at, heartbeat_at,
-                 lease_expires_at, finished_at, failure_stage, failure_category,
-                 failure_evidence
-             ) VALUES (?1, 'fedora-44', ?2, 1, ?3, 'abandoned', 1, 1, 1, 2,
-                       'publishing', 'internal', 'injected crash after rename')",
-            rusqlite::params![
-                "10000000-0000-4000-8000-000000000001",
-                "00000000-0000-4000-8000-000000000001",
-                &profile_digest,
-            ],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO repository_sync_run_members (
-                 run_id, ordinal, repository_id, source_identity,
-                 repository_identity, stream_kind, stream_identity, role,
-                 precedence, required, candidate_source_snapshot_sha256
-             ) VALUES (?1, 0, ?2, 'fixture-source', 'fixture-repository',
-                       'release', '44', 'base', 0, 1, ?3)",
-            rusqlite::params![
-                "10000000-0000-4000-8000-000000000001",
-                repository_id,
-                &source_digest,
-            ],
-        )
-        .unwrap();
-        drop(conn);
-        let profile_path = bundle_path(
-            &catalog_root,
-            RemiCatalogResourceKind::ProfileRevision,
-            "fedora-44",
-            &profile_digest,
-        );
-        let source_path = bundle_path(
-            &catalog_root,
-            RemiCatalogResourceKind::SourceSnapshot,
-            "fedora-44",
-            &source_digest,
-        );
-        exact_bundle(&profile_path, RemiCatalogResourceKind::ProfileRevision);
-        exact_bundle(&source_path, RemiCatalogResourceKind::SourceSnapshot);
-
-        let report =
-            collect_catalog_garbage_uncoordinated(db_path, catalog_root, DatabaseWriter::default())
-                .await
-                .unwrap();
-        assert_eq!(report.removed_bundles, 2);
-        assert!(!profile_path.exists());
-        assert!(!source_path.exists());
-    }
-}
+mod tests;

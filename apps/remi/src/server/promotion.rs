@@ -2,6 +2,7 @@
 
 //! Sole evidence-consuming authority for atomic public Remi promotion.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use conary_core::db::models::{
     RemiProfileRevisionActivation, publish_profile_candidate_in_transaction,
 };
 use conary_core::repository::catalog::{
-    ProfileRevisionV2, SourceSnapshotV1, verify_source_catalog_bundle,
+    ProfileRevisionV2, SourceSnapshotV1, verify_registered_source_catalog_bundle_complete,
 };
 use conary_core::repository::universe::RemiUniverseManifestV2;
 use conary_core::repository::{ProfileSyncCandidate, current_profile_sync_candidate};
@@ -75,7 +76,7 @@ struct ActiveUniverseBinding {
 struct PromotionProfile {
     manifest: ProfileRevisionV2,
     activation: Option<RemiProfileRevisionActivation>,
-    _pin: PinnedProfileCatalog,
+    pin: PinnedProfileCatalog,
 }
 
 #[derive(Clone)]
@@ -114,6 +115,7 @@ pub(crate) async fn activate_remi_promotion(
         &evidence,
         &crawl,
     )?;
+    let profile_physical_attestations = promotion_profile_physical_attestations(&profiles)?;
     let active = load_active_universe(&conn)?;
     let spool = build_object_spool(&conn, &crawl)?;
     drop(conn);
@@ -137,7 +139,7 @@ pub(crate) async fn activate_remi_promotion(
             &config.catalog_dir,
             &active_binding.manifest,
             &active_binding.manifest_sha256,
-            Some(catalog_authority),
+            &profile_physical_attestations,
         )?;
         return Ok(RemiPromotionActivationOutcome::AlreadyActive {
             manifest_sha256: active_binding.manifest_sha256.clone(),
@@ -164,7 +166,7 @@ pub(crate) async fn activate_remi_promotion(
         &config.catalog_candidate_dir,
         &config.catalog_dir,
         &candidate,
-        Some(catalog_authority),
+        &profile_physical_attestations,
     )?;
 
     database_writer.execute(|| {
@@ -245,10 +247,26 @@ fn resolve_profiles(
             Ok(PromotionProfile {
                 manifest,
                 activation,
-                _pin: pin,
+                pin,
             })
         })
         .collect()
+}
+
+fn promotion_profile_physical_attestations(
+    profiles: &[PromotionProfile],
+) -> Result<BTreeMap<String, conary_core::db::models::RemiCatalogPhysicalAttestation>> {
+    let mut attestations = BTreeMap::new();
+    for profile in profiles {
+        let revision_sha256 = profile.manifest.manifest_sha256()?;
+        ensure!(
+            attestations
+                .insert(revision_sha256, profile.pin.physical_attestation().clone())
+                .is_none(),
+            "promotion profile revision identity repeats"
+        );
+    }
+    Ok(attestations)
 }
 
 fn resolve_activation(
@@ -317,11 +335,12 @@ fn reopen_source_catalogs(
             profile.profile,
             member.source_snapshot_sha256
         );
-        verify_source_catalog_bundle(
+        verify_registered_source_catalog_bundle_complete(
             catalog_dir
                 .join("sources")
                 .join(&member.source_snapshot_sha256),
             &manifest,
+            &resource.physical_attestation.portable_manifest,
         )
         .with_context(|| {
             format!(

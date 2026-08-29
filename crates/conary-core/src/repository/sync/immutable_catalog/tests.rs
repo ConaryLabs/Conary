@@ -11,7 +11,7 @@ use crate::repository::catalog::{
     CatalogMetadataStreamScratchV1, CatalogPackageOriginV1, CatalogProjectionSpoolScratchV1,
     CatalogScopeV1, CatalogScratchAdmission, CatalogScratchCapacityError,
     CatalogSourceCandidateScratchV1, CatalogSourceEvidenceV1, SourceMetadataObjectRoleV1,
-    write_catalog_candidate, write_source_catalog_manifest,
+    publish_source_catalog_bundle_verified, write_catalog_candidate, write_source_catalog_manifest,
 };
 use crate::repository::dependency_model::RepositoryDependencyFlavor;
 use crate::repository::parsers::PackageMetadata;
@@ -217,9 +217,10 @@ fn durable_source_reuse(
         vec![object.clone()],
     )
     .unwrap();
-    let bundle = root.join("durable-source");
-    std::fs::create_dir(&bundle).unwrap();
-    let binding = write_catalog_candidate(bundle.join("catalog.sqlite"), source.content()).unwrap();
+    let candidate = root.join("durable-source-candidate");
+    std::fs::create_dir(&candidate).unwrap();
+    let binding =
+        write_catalog_candidate(candidate.join("catalog.sqlite"), source.content()).unwrap();
     let manifest = source.bind(&binding).unwrap();
     let work = tempfile::Builder::new()
         .prefix("durable-source-object-")
@@ -227,14 +228,24 @@ fn durable_source_reuse(
         .unwrap();
     let object_path = work.path().join("rpm-primary");
     std::fs::write(&object_path, authenticated_object_bytes()).unwrap();
-    retain_source_metadata_object(&bundle, work.path(), &object_path, &object).unwrap();
-    drop(write_source_catalog_manifest(&bundle, &manifest).unwrap());
+    retain_source_metadata_object(&candidate, work.path(), &object_path, &object).unwrap();
+    let verification = write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    let catalog_root = root.join("catalogs");
+    std::fs::create_dir(&catalog_root).unwrap();
+    let published =
+        publish_source_catalog_bundle_verified(&candidate, &catalog_root, &manifest, verification)
+            .unwrap();
     let projection_input = AuthenticatedProjectionInputV1::with_authenticated_decoded_size(
         object,
         authenticated_object_bytes().len() as u64,
     );
     (
-        DurableSourceCatalogReuseV1::new(manifest, bundle).unwrap(),
+        DurableSourceCatalogReuseV1::new(
+            manifest,
+            published.path,
+            published.portable_manifest_attestation,
+        )
+        .unwrap(),
         projection_input,
     )
 }
@@ -549,6 +560,7 @@ fn exact_registered_source_reuse_creates_no_candidate_catalog_or_scratch_reserva
         durable_source_reuse(root.path(), &repository, snapshot.clone());
     let expected_manifest = reuse.manifest().clone();
     let durable_path = reuse.bundle_path().to_path_buf();
+    let portable_manifest_attestation = reuse.portable_manifest_attestation().clone();
     let candidate_directory = root.path().join("candidate");
     std::fs::create_dir(&candidate_directory).unwrap();
     let candidate = candidate_directory.join("catalog.sqlite");
@@ -588,6 +600,7 @@ fn exact_registered_source_reuse_creates_no_candidate_catalog_or_scratch_reserva
         result.materialization,
         SourceCatalogMaterializationV1::DurableReuse {
             bundle_path: durable_path,
+            portable_manifest_attestation,
         }
     );
     assert!(!candidate.exists());

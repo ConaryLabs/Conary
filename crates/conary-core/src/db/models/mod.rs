@@ -125,10 +125,10 @@ pub use provide_entry::ProvideEntry;
 pub use redirect::{Redirect, RedirectType, ResolveResult};
 pub use remi_catalog::{
     RemiActiveProfileRevision, RemiCatalogCollectionPlan, RemiCatalogCollectionResult,
-    RemiCatalogDeletionIntent, RemiCatalogReachabilitySnapshot, RemiCatalogResource,
-    RemiCatalogResourceKind, RemiCatalogRunCandidate, RemiProfileActivationOutcome,
-    RemiProfileRevisionActivation, RemiProfileRevisionMember, RemiProfileRevisionPin,
-    RemiRevisionPinKind, RemiRuntimeSession, acknowledge_catalog_deletion,
+    RemiCatalogDeletionIntent, RemiCatalogPhysicalAttestation, RemiCatalogReachabilitySnapshot,
+    RemiCatalogResource, RemiCatalogResourceKind, RemiCatalogRunCandidate,
+    RemiProfileActivationOutcome, RemiProfileRevisionActivation, RemiProfileRevisionMember,
+    RemiProfileRevisionPin, RemiRevisionPinKind, RemiRuntimeSession, acknowledge_catalog_deletion,
     delete_catalog_collection, list_catalog_deletion_intents, plan_catalog_collection,
     publish_profile_candidate_in_transaction, register_profile_catalog_revision,
     verify_private_profile_candidate_authority,

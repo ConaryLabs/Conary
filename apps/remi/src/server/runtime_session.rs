@@ -56,6 +56,11 @@ mod tests {
             artifact_size: 1,
             logical_digest_sha256: "b".repeat(64),
             manifest_json: manifest_json.to_string(),
+            physical_attestation:
+                crate::server::catalog_authority::test_support::physical_attestation_for_test(
+                    1,
+                    profile_revision_sha256.as_bytes(),
+                ),
             durable: true,
             created_at: 1,
         }

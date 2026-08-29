@@ -98,7 +98,7 @@ fn ensure_current_is_idempotent_for_current_epoch() {
 }
 
 #[test]
-fn revision_45_requires_rebuild_for_revision_54() {
+fn revision_54_requires_rebuild_for_revision_55() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE schema_identity (
@@ -106,20 +106,86 @@ fn revision_45_requires_rebuild_for_revision_54() {
             revision INTEGER NOT NULL
         );
         INSERT INTO schema_identity (epoch, revision)
-            VALUES ('conary-current-v1', 45);
+            VALUES ('conary-current-v1', 54);
         CREATE TABLE schema_version (
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-        INSERT INTO schema_version (version) VALUES (45);",
+        INSERT INTO schema_version (version) VALUES (54);",
     )
     .unwrap();
 
     let error = ensure_current(&conn).unwrap_err();
     assert_eq!(
         error.to_string(),
-        "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 45; this pre-alpha build supports only schema epoch conary-current-v1 revision 54"
+        "Database schema rebuild required: database uses schema epoch conary-current-v1 revision 54; this pre-alpha build supports only schema epoch conary-current-v1 revision 55"
     );
+}
+
+#[test]
+fn catalog_resources_require_one_portable_physical_attestation_shape() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    let column_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('remi_catalog_resources')
+             WHERE name IN (
+                 'portable_manifest_sha256', 'portable_manifest_size',
+                 'portable_chunk_size', 'portable_chunk_count'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(column_count, 4);
+
+    let insert = |resource: char,
+                  artifact_size: i64,
+                  digest: &str,
+                  manifest_size: i64,
+                  chunk_size: i64,
+                  chunk_count: i64| {
+        conn.execute(
+            "INSERT INTO remi_catalog_resources (
+                 resource_sha256, resource_kind, source_profile, artifact_sha256,
+                 artifact_size, logical_digest_sha256, manifest_json,
+                 portable_manifest_sha256, portable_manifest_size,
+                 portable_chunk_size, portable_chunk_count, durable, created_at
+             ) VALUES (?1, 'profile_revision', 'fedora-44', ?2, ?3, ?4, '{}',
+                       ?5, ?6, ?7, ?8, 1, 1)",
+            params![
+                resource.to_string().repeat(64),
+                "a".repeat(64),
+                artifact_size,
+                "b".repeat(64),
+                digest,
+                manifest_size,
+                chunk_size,
+                chunk_count,
+            ],
+        )
+    };
+
+    assert!(insert('a', 65_537, &"c".repeat(64), 128, 65_536, 2).is_ok());
+    for (resource, artifact_size, digest, manifest_size, chunk_size, chunk_count) in [
+        ('b', 65_537, "A".repeat(64), 128, 65_536, 2),
+        ('c', 65_537, "c".repeat(64), 127, 65_536, 2),
+        ('d', 65_537, "c".repeat(64), 128, 4096, 17),
+        ('e', 65_537, "c".repeat(64), 128, 65_536, 1),
+        ('f', 65_536, "c".repeat(64), 128, 65_536, 2),
+    ] {
+        assert!(
+            insert(
+                resource,
+                artifact_size,
+                &digest,
+                manifest_size,
+                chunk_size,
+                chunk_count,
+            )
+            .is_err()
+        );
+    }
 }
 
 /// The revision, not the table text, is what separates the two provenance

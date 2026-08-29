@@ -7,6 +7,8 @@ mod candidate;
 mod capacity;
 mod contract;
 mod parity;
+mod portable_integrity;
+mod portable_vfs;
 mod profile;
 mod record;
 pub(in crate::repository) mod source;
@@ -14,15 +16,16 @@ mod store;
 
 pub(in crate::repository) use bundle::retain_source_metadata_object;
 pub use bundle::{
-    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, PublishedCatalogBundle,
-    SOURCE_METADATA_DIRECTORY_NAME, publish_profile_catalog_bundle,
-    publish_profile_catalog_bundle_verified, publish_profile_catalog_bundle_with_provenance,
-    publish_source_catalog_bundle, publish_source_catalog_bundle_verified,
-    publish_source_catalog_bundle_with_provenance, source_metadata_object_path,
-    verify_profile_catalog_bundle, verify_registered_profile_catalog_bundle,
-    verify_registered_source_catalog_bundle, verify_source_catalog_bundle,
-    write_profile_catalog_manifest, write_profile_catalog_manifest_verified,
-    write_source_catalog_manifest, write_source_catalog_manifest_verified,
+    CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, CATALOG_PORTABLE_MANIFEST_FILE_NAME,
+    PublishedVerifiedCatalogBundle, SOURCE_METADATA_DIRECTORY_NAME,
+    authenticate_registered_profile_catalog_layout, authenticate_registered_source_catalog_layout,
+    publish_profile_catalog_bundle_verified, publish_source_catalog_bundle_verified,
+    source_metadata_object_path, verify_profile_catalog_bundle,
+    verify_registered_profile_catalog_bundle, verify_registered_profile_catalog_bundle_complete,
+    verify_registered_source_catalog_bundle, verify_registered_source_catalog_bundle_complete,
+    verify_source_catalog_bundle, write_profile_catalog_manifest,
+    write_profile_catalog_manifest_verified, write_source_catalog_manifest,
+    write_source_catalog_manifest_verified,
 };
 pub use candidate::CatalogCandidateWriter;
 pub use capacity::{
@@ -78,6 +81,15 @@ pub use parity::{
     RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V1, RpmParityMemberInput,
     produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
 };
+pub use portable_integrity::{
+    PORTABLE_CHUNK_MANIFEST_SCHEMA_V1, PORTABLE_CHUNK_SIZE_V1, PortableChunkManifestV1,
+    PortableChunkRangeV1, PortableIntegrityError, PortableIntegrityResult,
+    PortableManifestAttestationV1, portable_chunk_count_v1, portable_manifest_size_v1,
+    read_portable_chunk_manifest_v1, write_portable_chunk_manifest_v1,
+};
+pub use portable_vfs::{
+    PortableCatalogConnection, PortableVfsFailureKindV1, PortableVfsFailureV1, PortableVfsMetricsV1,
+};
 pub use profile::{
     ProfileCatalogCandidateV2, ProfileCatalogMemberInputV2, VerifiedProfileCatalogCandidateV2,
     derive_profile_catalog_members, write_profile_catalog_candidate,
@@ -91,7 +103,8 @@ pub use record::{
 };
 pub use source::SourceCatalogCandidateV1;
 pub use store::{
-    CatalogBindingV1, CatalogPackageNamePageV1, CatalogReader, write_catalog_candidate,
+    CatalogBindingV1, CatalogPackageNamePageV1, CatalogReader, CatalogVerificationEvidenceV1,
+    write_catalog_candidate,
 };
 pub(in crate::repository) use store::{
     CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1,

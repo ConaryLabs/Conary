@@ -148,15 +148,15 @@ fn source_manifest(binding: &CatalogBindingV1) -> SourceSnapshotV1 {
     }
 }
 
-fn source_candidate(root: &Path, name: &str) -> (PathBuf, SourceSnapshotV1) {
+fn source_candidate(root: &Path, name: &str) -> (PathBuf, SourceSnapshotV1, CatalogReader) {
     let candidate = root.join(name);
     fs::create_dir(&candidate).unwrap();
     let binding =
         write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
     let manifest = source_manifest(&binding);
     retain_source_object(&candidate, &manifest.authenticated_objects[0]);
-    write_source_catalog_manifest(&candidate, &manifest).unwrap();
-    (candidate, manifest)
+    let reader = write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    (candidate, manifest, reader)
 }
 
 fn profile_content(source_snapshot_sha256: &str) -> CatalogContentV1 {
@@ -226,12 +226,25 @@ fn source_bundle_is_verified_before_atomic_content_addressed_publication() {
 
     let expected_identity = manifest.manifest_sha256().unwrap();
     let publication =
-        publish_source_catalog_bundle_with_provenance(&candidate, &catalogs, &manifest).unwrap();
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, staged_reader)
+            .unwrap();
     assert!(publication.newly_created);
-    let published = publication.path;
+    let published = &publication.path;
     assert_eq!(published.file_name().unwrap(), expected_identity.as_str());
     assert!(!candidate.exists());
-    verify_source_catalog_bundle(&published, &manifest).unwrap();
+    let decoded = read_portable_chunk_manifest_v1(
+        &published.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME),
+        &publication.portable_manifest_attestation,
+        &manifest.catalog,
+    )
+    .unwrap();
+    assert_eq!(decoded.artifact_sha256(), manifest.catalog.sha256);
+    verify_registered_source_catalog_bundle(
+        published,
+        &manifest,
+        &publication.portable_manifest_attestation,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -248,11 +261,18 @@ fn registered_profile_bundle_reopen_uses_its_durable_v2_logical_attestation() {
     )
     .unwrap();
     let manifest = profile_manifest(&binding, &source_snapshot_sha256);
-    write_profile_catalog_manifest(&candidate, &manifest).unwrap();
-    let published = publish_profile_catalog_bundle(&candidate, &catalogs, &manifest).unwrap();
+    let verified = write_profile_catalog_manifest(&candidate, &manifest).unwrap();
+    let published =
+        publish_profile_catalog_bundle_verified(&candidate, &catalogs, &manifest, verified)
+            .unwrap();
     let logical_passes_after_publication = logical_verification_passes_for_test();
 
-    let reader = verify_registered_profile_catalog_bundle(&published, &manifest).unwrap();
+    let reader = verify_registered_profile_catalog_bundle(
+        &published,
+        &manifest,
+        &published.portable_manifest_attestation,
+    )
+    .unwrap();
     assert_eq!(reader.binding(), &binding);
     assert!(reader.verification_proof().is_ok());
     assert_eq!(
@@ -273,11 +293,17 @@ fn registered_source_bundle_reopen_uses_its_durable_logical_attestation() {
         write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
     let manifest = source_manifest(&binding);
     retain_source_object(&candidate, &manifest.authenticated_objects[0]);
-    write_source_catalog_manifest(&candidate, &manifest).unwrap();
-    let published = publish_source_catalog_bundle(&candidate, &catalogs, &manifest).unwrap();
+    let verified = write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    let published =
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, verified).unwrap();
     let logical_passes_after_publication = logical_verification_passes_for_test();
 
-    let reader = verify_registered_source_catalog_bundle(&published, &manifest).unwrap();
+    let reader = verify_registered_source_catalog_bundle(
+        &published,
+        &manifest,
+        &published.portable_manifest_attestation,
+    )
+    .unwrap();
     assert_eq!(reader.binding(), &binding);
     assert!(reader.verification_proof().is_ok());
     assert_eq!(
@@ -313,11 +339,25 @@ fn local_logical_proof_survives_manifesting_and_atomic_publication() {
             .unwrap();
     assert_eq!(
         physical_verification_passes_for_test(),
-        candidate_physical_passes + 1,
-        "publication must perform exactly one independent destination reopen"
+        candidate_physical_passes + 2,
+        "publication must perform one full and one portable destination reopen"
     );
     assert!(!candidate.exists());
-    verify_source_catalog_bundle(&published, &manifest).unwrap();
+    let registered = verify_registered_source_catalog_bundle(
+        &published,
+        &manifest,
+        &published.portable_manifest_attestation,
+    )
+    .unwrap();
+    let evidence = registered.verification_evidence();
+    assert_eq!(evidence.logical_replay_passes, 0);
+    assert_eq!(evidence.userspace_sha256_passes, 0);
+    assert_eq!(evidence.sqlite_integrity_passes, 0);
+    assert!(registered.portable_vfs_metrics().is_some());
+    assert!(
+        verify_source_catalog_bundle(&published, &manifest).is_err(),
+        "candidate verification must not admit a registered proof sidecar"
+    );
 }
 
 #[test]
@@ -369,7 +409,8 @@ fn profile_manifest_and_publication_reuse_one_candidate_proof() {
             .unwrap();
     assert_eq!(
         physical_verification_passes_for_test(),
-        candidate_physical_passes + 1
+        candidate_physical_passes + 2,
+        "publication must perform one full and one portable destination reopen"
     );
     assert!(!candidate.exists());
     assert!(published.exists());
@@ -403,10 +444,15 @@ fn local_logical_proof_never_bypasses_bundle_byte_binding() {
     let error =
         publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, manifested)
             .unwrap_err();
-    assert!(error.to_string().contains("Checksum mismatch"));
-    assert!(!candidate.exists());
-    assert!(catalogs.join("sources").exists());
-    assert_eq!(fs::read_dir(catalogs.join("sources")).unwrap().count(), 0);
+    assert!(
+        error
+            .to_string()
+            .contains("portable catalog artifact SHA-256"),
+        "unexpected portable-manifest construction error: {error}"
+    );
+    assert!(candidate.exists());
+    assert!(!candidate.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME).exists());
+    assert!(!catalogs.join("sources").exists());
 }
 
 #[test]
@@ -521,26 +567,33 @@ fn existing_exact_destination_is_reused_and_survives_caller_rollback() {
     fs::create_dir(&candidates).unwrap();
     fs::create_dir(&catalogs).unwrap();
 
-    let (first_candidate, manifest) = source_candidate(&candidates, "first");
-    let first =
-        publish_source_catalog_bundle_with_provenance(&first_candidate, &catalogs, &manifest)
-            .unwrap();
+    let (first_candidate, manifest, first_reader) = source_candidate(&candidates, "first");
+    let first = publish_source_catalog_bundle_verified(
+        &first_candidate,
+        &catalogs,
+        &manifest,
+        first_reader,
+    )
+    .unwrap();
     assert!(first.newly_created);
 
-    let (second_candidate, second_manifest) = source_candidate(&candidates, "second");
+    let (second_candidate, second_manifest, second_reader) =
+        source_candidate(&candidates, "second");
     assert_eq!(manifest, second_manifest);
-    let reused = publish_source_catalog_bundle_with_provenance(
+    let reused = publish_source_catalog_bundle_verified(
         &second_candidate,
         &catalogs,
         &second_manifest,
+        second_reader,
     )
     .unwrap();
     assert!(!reused.newly_created);
     assert_eq!(reused.path, first.path);
+    assert_eq!(
+        reused.portable_manifest_attestation,
+        first.portable_manifest_attestation
+    );
 
-    if reused.newly_created {
-        fs::remove_dir_all(&reused.path).unwrap();
-    }
     assert!(reused.path.exists());
     assert!(second_candidate.exists());
 }
@@ -552,19 +605,244 @@ fn malformed_existing_destination_errors_without_removal() {
     let catalogs = directory.path().join("catalogs");
     fs::create_dir(&candidates).unwrap();
     fs::create_dir(&catalogs).unwrap();
-    let (candidate, manifest) = source_candidate(&candidates, "source");
+    let (candidate, manifest, reader) = source_candidate(&candidates, "source");
     let destination = catalogs
         .join("sources")
         .join(manifest.manifest_sha256().unwrap());
     fs::create_dir_all(&destination).unwrap();
     fs::write(destination.join("unexpected"), b"not a catalog bundle").unwrap();
 
-    let error = publish_source_catalog_bundle_with_provenance(&candidate, &catalogs, &manifest)
+    let error = publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, reader)
         .unwrap_err();
     assert!(error.to_string().contains("incomplete or unexpected"));
     assert!(destination.exists());
     assert!(destination.join("unexpected").exists());
     assert!(candidate.exists());
+}
+
+#[test]
+fn existing_destination_with_invalid_portable_manifest_is_never_repaired_or_removed() {
+    for mutation in ["missing", "tampered"] {
+        let directory = tempfile::tempdir().unwrap();
+        let candidates = directory.path().join("candidates");
+        let catalogs = directory.path().join("catalogs");
+        fs::create_dir(&candidates).unwrap();
+        fs::create_dir(&catalogs).unwrap();
+
+        let (first_candidate, manifest, first_reader) = source_candidate(&candidates, "first");
+        let first = publish_source_catalog_bundle_verified(
+            &first_candidate,
+            &catalogs,
+            &manifest,
+            first_reader,
+        )
+        .unwrap();
+        let portable_manifest = first.path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
+        let expected_after_failure = match mutation {
+            "missing" => {
+                fs::remove_file(&portable_manifest).unwrap();
+                None
+            }
+            "tampered" => {
+                let mut bytes = fs::read(&portable_manifest).unwrap();
+                bytes[0] ^= 0xff;
+                fs::write(&portable_manifest, &bytes).unwrap();
+                Some(bytes)
+            }
+            _ => unreachable!(),
+        };
+
+        let (candidate, second_manifest, reader) = source_candidate(&candidates, "second");
+        assert_eq!(second_manifest, manifest);
+        assert!(
+            publish_source_catalog_bundle_verified(
+                &candidate,
+                &catalogs,
+                &second_manifest,
+                reader,
+            )
+            .is_err(),
+            "{mutation} registered portable manifest must fail reuse"
+        );
+
+        assert!(first.path.exists());
+        assert!(first.path.join(CATALOG_FILE_NAME).exists());
+        match expected_after_failure {
+            Some(bytes) => assert_eq!(fs::read(&portable_manifest).unwrap(), bytes),
+            None => assert!(!portable_manifest.exists()),
+        }
+        assert!(candidate.exists());
+    }
+}
+
+#[test]
+fn complete_registered_verification_authenticates_portable_manifest_bytes() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidates = directory.path().join("candidates");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidates).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+    let (candidate, manifest, reader) = source_candidate(&candidates, "source");
+    let published =
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, reader).unwrap();
+    let portable_manifest = published.path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
+    let mut bytes = fs::read(&portable_manifest).unwrap();
+    bytes[0] ^= 0xff;
+    fs::write(&portable_manifest, bytes).unwrap();
+
+    assert!(
+        verify_registered_source_catalog_bundle_complete(
+            &published,
+            &manifest,
+            &published.portable_manifest_attestation,
+        )
+        .is_err(),
+        "complete registered reopen must authenticate the portable manifest"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn registered_bundle_rejects_symlinked_portable_manifest() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let candidates = directory.path().join("candidates");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidates).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+    let (candidate, manifest, reader) = source_candidate(&candidates, "source");
+    let published =
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, reader).unwrap();
+    let portable_manifest = published.path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME);
+    fs::remove_file(&portable_manifest).unwrap();
+    symlink(published.path.join(CATALOG_FILE_NAME), &portable_manifest).unwrap();
+
+    assert!(
+        verify_registered_source_catalog_bundle_complete(
+            &published,
+            &manifest,
+            &published.portable_manifest_attestation,
+        )
+        .is_err()
+    );
+    assert!(
+        verify_registered_source_catalog_bundle(
+            &published,
+            &manifest,
+            &published.portable_manifest_attestation,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn registered_bundle_rejects_unexpected_entries_and_sqlite_sidecars() {
+    for unexpected in ["unexpected", "catalog.sqlite-wal", "catalog.sqlite-shm"] {
+        let directory = tempfile::tempdir().unwrap();
+        let candidates = directory.path().join("candidates");
+        let catalogs = directory.path().join("catalogs");
+        fs::create_dir(&candidates).unwrap();
+        fs::create_dir(&catalogs).unwrap();
+        let (candidate, manifest, reader) = source_candidate(&candidates, unexpected);
+        let published =
+            publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, reader)
+                .unwrap();
+        fs::write(published.path.join(unexpected), b"unexpected").unwrap();
+
+        assert!(
+            verify_registered_source_catalog_bundle(
+                &published,
+                &manifest,
+                &published.portable_manifest_attestation,
+            )
+            .is_err(),
+            "registered bundle must reject {unexpected}"
+        );
+        assert!(
+            verify_registered_source_catalog_bundle_complete(
+                &published,
+                &manifest,
+                &published.portable_manifest_attestation,
+            )
+            .is_err(),
+            "complete registered bundle verification must reject {unexpected}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn registered_bundle_rejects_symlinked_catalog_and_manifest() {
+    use std::os::unix::fs::symlink;
+
+    for name in [CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME] {
+        let directory = tempfile::tempdir().unwrap();
+        let candidates = directory.path().join("candidates");
+        let catalogs = directory.path().join("catalogs");
+        fs::create_dir(&candidates).unwrap();
+        fs::create_dir(&catalogs).unwrap();
+        let (candidate, manifest, reader) = source_candidate(&candidates, name);
+        let published =
+            publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, reader)
+                .unwrap();
+        let path = published.path.join(name);
+        let replacement = directory.path().join(format!("replacement-{name}"));
+        fs::copy(&path, &replacement).unwrap();
+        fs::remove_file(&path).unwrap();
+        symlink(&replacement, &path).unwrap();
+
+        assert!(
+            verify_registered_source_catalog_bundle(
+                &published,
+                &manifest,
+                &published.portable_manifest_attestation,
+            )
+            .is_err(),
+            "registered bundle must reject symlinked {name}"
+        );
+        assert!(
+            verify_registered_source_catalog_bundle_complete(
+                &published,
+                &manifest,
+                &published.portable_manifest_attestation,
+            )
+            .is_err(),
+            "complete registered bundle verification must reject symlinked {name}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn registered_reader_detects_catalog_inode_replacement_before_handoff() {
+    let directory = tempfile::tempdir().unwrap();
+    let candidates = directory.path().join("candidates");
+    let catalogs = directory.path().join("catalogs");
+    fs::create_dir(&candidates).unwrap();
+    fs::create_dir(&catalogs).unwrap();
+    let (candidate, manifest, verification) = source_candidate(&candidates, "source");
+    let published =
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, verification)
+            .unwrap();
+    let reader = verify_registered_source_catalog_bundle(
+        &published,
+        &manifest,
+        &published.portable_manifest_attestation,
+    )
+    .unwrap();
+    let catalog_path = published.path.join(CATALOG_FILE_NAME);
+    let replacement = directory.path().join("replacement-catalog.sqlite");
+    fs::copy(&catalog_path, &replacement).unwrap();
+    fs::rename(&replacement, &catalog_path).unwrap();
+
+    assert!(reader.require_path_unchanged().is_err());
+    verify_registered_source_catalog_bundle(
+        &published,
+        &manifest,
+        &published.portable_manifest_attestation,
+    )
+    .expect("a fresh reopen may accept the exact replacement bytes");
 }
 
 #[test]
@@ -575,11 +853,22 @@ fn post_rename_verification_failure_removes_only_new_destination() {
     fs::create_dir(&candidate).unwrap();
     fs::create_dir(&parent).unwrap();
 
-    let error = publish_verified_directory(&candidate, &parent, "bundle", |_| {
-        Err(Error::ConflictError(
-            "verification failed after rename".to_string(),
-        ))
-    })
+    let attestation = PortableManifestAttestationV1 {
+        sha256: digest('a'),
+        size: 64,
+    };
+    let error = publish_verified_directory_for_registration(
+        &candidate,
+        &parent,
+        "bundle",
+        attestation,
+        |_, _| {
+            Err(Error::ConflictError(
+                "verification failed after rename".to_string(),
+            ))
+        },
+        |_, _| panic!("portable verification must follow complete verification"),
+    )
     .unwrap_err();
     assert!(
         error
@@ -601,10 +890,12 @@ fn malformed_or_extra_candidate_content_is_never_published() {
         write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &source_content()).unwrap();
     let manifest = source_manifest(&binding);
     retain_source_object(&candidate, &manifest.authenticated_objects[0]);
-    write_source_catalog_manifest(&candidate, &manifest).unwrap();
+    let reader = write_source_catalog_manifest(&candidate, &manifest).unwrap();
     fs::write(candidate.join("unowned.tmp"), b"nope").unwrap();
 
-    assert!(publish_source_catalog_bundle(&candidate, &catalogs, &manifest).is_err());
+    assert!(
+        publish_source_catalog_bundle_verified(&candidate, &catalogs, &manifest, reader).is_err()
+    );
     assert!(candidate.exists());
     assert!(!catalogs.join("sources").exists());
 }
@@ -616,7 +907,7 @@ fn source_bundle_rejects_missing_truncated_tampered_and_extra_metadata() {
     fs::create_dir(&candidates).unwrap();
 
     for mutation in ["missing", "truncated", "tampered", "extra"] {
-        let (candidate, manifest) = source_candidate(&candidates, mutation);
+        let (candidate, manifest, _reader) = source_candidate(&candidates, mutation);
         let metadata = candidate.join(SOURCE_METADATA_DIRECTORY_NAME);
         let object = metadata.join(&manifest.authenticated_objects[0].sha256);
         match mutation {
@@ -641,7 +932,7 @@ fn source_bundle_rejects_symlinked_metadata() {
     let directory = tempfile::tempdir().unwrap();
     let candidates = directory.path().join("candidates");
     fs::create_dir(&candidates).unwrap();
-    let (candidate, manifest) = source_candidate(&candidates, "symlinked");
+    let (candidate, manifest, _reader) = source_candidate(&candidates, "symlinked");
     let object = candidate
         .join(SOURCE_METADATA_DIRECTORY_NAME)
         .join(&manifest.authenticated_objects[0].sha256);

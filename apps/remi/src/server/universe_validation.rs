@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use conary_core::canonical::CanonicalMapSnapshot;
+use conary_core::db::models::RemiCatalogPhysicalAttestation;
 use conary_core::repository::catalog::{
-    CatalogReader, ProfileRevisionV2, verify_profile_catalog_bundle,
+    ProfileRevisionV2, verify_registered_profile_catalog_bundle_complete,
 };
 use thiserror::Error;
 
@@ -31,13 +32,6 @@ pub(crate) enum CanonicalCandidateValidationError {
     DuplicateProfile { profile: String },
 }
 
-/// One independently reopened profile catalog ready for serving-cache reuse.
-pub(crate) struct VerifiedCanonicalProfile {
-    pub(crate) profile: String,
-    pub(crate) profile_revision_sha256: String,
-    pub(crate) reader: CatalogReader,
-}
-
 /// Reopen every candidate profile and require every exact canonical
 /// implementation to name a package actually present in its profile catalog.
 ///
@@ -47,29 +41,24 @@ pub(crate) struct VerifiedCanonicalProfile {
 pub(crate) fn validate_canonical_candidate<'a>(
     catalog_dir: &Path,
     canonical: &CanonicalMapSnapshot,
-    profiles: impl IntoIterator<Item = &'a ProfileRevisionV2>,
-) -> Result<Vec<VerifiedCanonicalProfile>> {
+    profiles: impl IntoIterator<Item = (&'a ProfileRevisionV2, &'a RemiCatalogPhysicalAttestation)>,
+) -> Result<()> {
     let mut verified = BTreeMap::new();
-    for revision in profiles {
+    for (revision, physical_attestation) in profiles {
         let profile_revision_sha256 = revision.manifest_sha256()?;
         let bundle = profile_bundle_path(catalog_dir, revision, &profile_revision_sha256);
-        let reader = verify_profile_catalog_bundle(&bundle, revision).with_context(|| {
+        let reader = verify_registered_profile_catalog_bundle_complete(
+            &bundle,
+            revision,
+            &physical_attestation.portable_manifest,
+        )
+        .with_context(|| {
             format!(
                 "reopen canonical candidate profile '{}' revision {}",
                 revision.profile, profile_revision_sha256
             )
         })?;
-        if verified
-            .insert(
-                revision.profile.clone(),
-                VerifiedCanonicalProfile {
-                    profile: revision.profile.clone(),
-                    profile_revision_sha256,
-                    reader,
-                },
-            )
-            .is_some()
-        {
+        if verified.insert(revision.profile.clone(), reader).is_some() {
             return Err(CanonicalCandidateValidationError::DuplicateProfile {
                 profile: revision.profile.clone(),
             }
@@ -85,7 +74,7 @@ pub(crate) fn validate_canonical_candidate<'a>(
                     profile: profile.clone(),
                 }
             })?;
-            if !candidate.reader.contains_package_name(package)? {
+            if !candidate.contains_package_name(package)? {
                 return Err(CanonicalCandidateValidationError::MissingPackage {
                     canonical: entry.canonical.clone(),
                     profile: profile.clone(),
@@ -96,7 +85,7 @@ pub(crate) fn validate_canonical_candidate<'a>(
         }
     }
 
-    Ok(verified.into_values().collect())
+    Ok(())
 }
 
 fn profile_bundle_path(
@@ -133,13 +122,18 @@ mod tests {
         }
     }
 
-    fn active_revision(fixture: &ActiveCatalogFixture, profile: &str) -> ProfileRevisionV2 {
-        fixture
+    fn active_revision(
+        fixture: &ActiveCatalogFixture,
+        profile: &str,
+    ) -> (ProfileRevisionV2, RemiCatalogPhysicalAttestation) {
+        let pinned = fixture
             .authority()
             .open_active_profile(profile)
-            .expect("open active fixture profile")
-            .manifest()
-            .clone()
+            .expect("open active fixture profile");
+        (
+            pinned.manifest().clone(),
+            pinned.physical_attestation().clone(),
+        )
     }
 
     #[test]
@@ -169,17 +163,14 @@ mod tests {
                 ),
             ],
         );
-        let revision = active_revision(&fixture, "fedora-44");
+        let (revision, physical_attestation) = active_revision(&fixture, "fedora-44");
 
-        let verified = validate_canonical_candidate(
+        validate_canonical_candidate(
             fixture.catalog_dir(),
             &canonical("fedora-44", "bash"),
-            [&revision],
+            [(&revision, &physical_attestation)],
         )
         .expect("validate exact package presence");
-
-        assert_eq!(verified.len(), 1);
-        assert_eq!(verified[0].profile, "fedora-44");
     }
 
     #[test]
@@ -198,12 +189,12 @@ mod tests {
                 "bash",
             )],
         );
-        let revision = active_revision(&fixture, "fedora-44");
+        let (revision, physical_attestation) = active_revision(&fixture, "fedora-44");
 
         let error = match validate_canonical_candidate(
             fixture.catalog_dir(),
             &canonical("fedora-44", "shell-provider"),
-            [&revision],
+            [(&revision, &physical_attestation)],
         ) {
             Ok(_) => panic!("provides and aliases must not satisfy package presence"),
             Err(error) => error,
@@ -235,12 +226,12 @@ mod tests {
                 "bash",
             )],
         );
-        let revision = active_revision(&fixture, "fedora-44");
+        let (revision, physical_attestation) = active_revision(&fixture, "fedora-44");
 
         let error = match validate_canonical_candidate(
             fixture.catalog_dir(),
             &canonical("arch", "bash"),
-            [&revision],
+            [(&revision, &physical_attestation)],
         ) {
             Ok(_) => panic!("canonical profile outside the candidate must fail"),
             Err(error) => error,

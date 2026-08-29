@@ -382,7 +382,7 @@ impl ProjectionCache {
             Some(proof) => {
                 CatalogReader::open_verified_with_proof(&catalog_path, &manifest.catalog, proof)?
             }
-            None => CatalogReader::open_verified_with_durable_attestation(
+            None => CatalogReader::open_verified_projection_cache_entry(
                 &catalog_path,
                 &manifest.catalog,
                 &durable_attestation,

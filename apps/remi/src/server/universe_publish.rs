@@ -12,6 +12,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use chrono::{Duration, Utc};
 use conary_core::canonical::{CanonicalMapSnapshot, validate_canonical_map_snapshot};
+use conary_core::db::models::{
+    RemiCatalogPhysicalAttestation, RemiCatalogResource, RemiCatalogResourceKind,
+};
 use conary_core::repository::catalog::{CATALOG_CONTENT_SCHEMA_V1, ProfileRevisionV2};
 use conary_core::repository::universe::{
     REMI_UNIVERSE_SCHEMA_V2, RemiUniverseCanonicalMapObjectV2, RemiUniverseCatalogObjectV2,
@@ -71,7 +74,7 @@ pub(crate) enum UniversePublicationOutcome {
 pub(crate) async fn publish_current_universe_from_state(
     state: &Arc<RwLock<ServerState>>,
 ) -> Result<UniversePublicationOutcome> {
-    let (db_path, catalog_dir, candidate_dir, keys_root, database_writer, catalog_authority) = {
+    let (db_path, catalog_dir, candidate_dir, keys_root, database_writer) = {
         let guard = state.read().await;
         (
             guard.config.db_path.clone(),
@@ -79,17 +82,15 @@ pub(crate) async fn publish_current_universe_from_state(
             guard.config.catalog_candidate_dir.clone(),
             guard.config.release_publish.repository_keys_dir.clone(),
             guard.database_writer.clone(),
-            guard.catalog_authority.clone(),
         )
     };
     let outcome = tokio::task::spawn_blocking(move || {
-        publish_current_universe_with_authority(
+        publish_current_universe_from_roots(
             &db_path,
             &catalog_dir,
             &candidate_dir,
             keys_root.as_deref(),
             &database_writer,
-            Some(&catalog_authority),
         )
     })
     .await
@@ -129,8 +130,11 @@ struct UniverseInputs {
     base_conversion_crawl_sha256: Option<String>,
     active_manifest: Option<RemiUniverseManifestV2>,
     profiles: Vec<ProfileRevisionV2>,
+    profile_physical_attestations: BTreeMap<String, RemiCatalogPhysicalAttestation>,
     canonical_map: CanonicalMapSnapshot,
 }
+
+type ProfilePhysicalAttestations = BTreeMap<String, RemiCatalogPhysicalAttestation>;
 
 pub(crate) struct SignedUniverseCandidate {
     pub(crate) manifest: RemiUniverseManifestV2,
@@ -157,13 +161,12 @@ pub(crate) fn publish_current_universe(
     keys_root: Option<&Path>,
     database_writer: &DatabaseWriter,
 ) -> Result<UniversePublicationOutcome> {
-    publish_current_universe_with_authority(
+    publish_current_universe_from_roots(
         db_path,
         catalog_dir,
         candidate_dir,
         keys_root,
         database_writer,
-        None,
     )
 }
 
@@ -174,7 +177,6 @@ fn publish_initial_universe_for_test(
     candidate_dir: &Path,
     keys_root: &Path,
     database_writer: &DatabaseWriter,
-    catalog_authority: Option<&super::catalog_authority::CatalogAuthority>,
 ) -> Result<UniversePublicationOutcome> {
     let mut inputs = database_writer.execute(|| load_inputs(db_path))?;
     anyhow::ensure!(
@@ -184,7 +186,11 @@ fn publish_initial_universe_for_test(
     inputs.base_promotion_evidence_sha256 = Some("e".repeat(64));
     inputs.base_conversion_crawl_sha256 = Some("c".repeat(64));
     let canonical_map_bytes = canonical_bytes(&inputs.canonical_map)?;
-    validate_canonical_candidate(catalog_dir, &inputs.canonical_map, inputs.profiles.iter())?;
+    validate_canonical_candidate(
+        catalog_dir,
+        &inputs.canonical_map,
+        registered_profile_pairs(&inputs.profiles, &inputs.profile_physical_attestations)?,
+    )?;
     let candidate = build_candidate(
         0,
         inputs.profiles.clone(),
@@ -192,8 +198,12 @@ fn publish_initial_universe_for_test(
         load_universe_root_metadata(keys_root)?,
         keys_root,
     )?;
-    let bundle =
-        publish_candidate_files(candidate_dir, catalog_dir, &candidate, catalog_authority)?;
+    let bundle = publish_candidate_files(
+        candidate_dir,
+        catalog_dir,
+        &candidate,
+        &inputs.profile_physical_attestations,
+    )?;
     database_writer.execute(|| activate_candidate(db_path, &inputs, &candidate, &bundle))?;
     Ok(UniversePublicationOutcome::Activated {
         manifest_sha256: candidate.manifest_sha256,
@@ -201,13 +211,12 @@ fn publish_initial_universe_for_test(
     })
 }
 
-fn publish_current_universe_with_authority(
+fn publish_current_universe_from_roots(
     db_path: &Path,
     catalog_dir: &Path,
     candidate_dir: &Path,
     keys_root: Option<&Path>,
     database_writer: &DatabaseWriter,
-    catalog_authority: Option<&super::catalog_authority::CatalogAuthority>,
 ) -> Result<UniversePublicationOutcome> {
     let inputs = database_writer.execute(|| load_inputs(db_path))?;
     if inputs.profiles.is_empty() {
@@ -226,7 +235,12 @@ fn publish_current_universe_with_authority(
     if !same_authority(active, &inputs.profiles, &canonical_map_sha256) {
         bail!("evidence-free universe publication cannot change active profile authority");
     }
-    verify_published_bundle(catalog_dir, active, manifest_sha256, catalog_authority)?;
+    verify_published_bundle(
+        catalog_dir,
+        active,
+        manifest_sha256,
+        &inputs.profile_physical_attestations,
+    )?;
     if active_bundle_is_fresh(catalog_dir, active, manifest_sha256, Utc::now())? {
         return Ok(UniversePublicationOutcome::Unchanged {
             manifest_sha256: manifest_sha256.clone(),
@@ -234,8 +248,12 @@ fn publish_current_universe_with_authority(
         });
     }
 
-    validate_canonical_candidate(catalog_dir, &inputs.canonical_map, inputs.profiles.iter())
-        .context("validate canonical contracts against the candidate universe")?;
+    validate_canonical_candidate(
+        catalog_dir,
+        &inputs.canonical_map,
+        registered_profile_pairs(&inputs.profiles, &inputs.profile_physical_attestations)?,
+    )
+    .context("validate canonical contracts against the candidate universe")?;
     let root = load_universe_root_metadata(keys_root)?;
     let candidate = build_candidate(
         inputs.base_sequence,
@@ -244,8 +262,12 @@ fn publish_current_universe_with_authority(
         root,
         keys_root,
     )?;
-    let bundle =
-        publish_candidate_files(candidate_dir, catalog_dir, &candidate, catalog_authority)?;
+    let bundle = publish_candidate_files(
+        candidate_dir,
+        catalog_dir,
+        &candidate,
+        &inputs.profile_physical_attestations,
+    )?;
 
     database_writer
         .execute(|| activate_candidate(db_path, &inputs, &candidate, &bundle))
@@ -312,34 +334,49 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
     };
 
     let mut statement = conn.prepare(
-        "SELECT resource.manifest_json
+        "SELECT resource.resource_sha256
          FROM remi_active_profile_revisions active
          JOIN remi_catalog_resources resource
            ON resource.resource_sha256 = active.profile_revision_sha256
          WHERE resource.resource_kind = 'profile_revision' AND resource.durable = 1
          ORDER BY active.source_profile COLLATE BINARY",
     )?;
-    let profiles = statement
+    let resource_sha256s = statement
         .query_map([], |row| row.get::<_, String>(0))?
-        .map(|row| {
-            let manifest_json = row?;
-            let revision = serde_json::from_str::<ProfileRevisionV2>(&manifest_json)?;
-            revision.validate()?;
-            Ok::<_, anyhow::Error>(revision)
-        })
-        .filter_map(|revision| match revision {
-            Ok(revision)
-                if conary_core::repository::supported_profiles::profile_by_public_id(
-                    &revision.profile,
-                )
-                .is_some() =>
-            {
-                Some(Ok(revision))
-            }
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    let mut profiles = Vec::new();
+    let mut profile_physical_attestations = BTreeMap::new();
+    for resource_sha256 in resource_sha256s {
+        let resource = RemiCatalogResource::find_by_sha256(&conn, &resource_sha256)?
+            .with_context(|| format!("active profile resource {resource_sha256} is absent"))?;
+        anyhow::ensure!(
+            resource.kind == RemiCatalogResourceKind::ProfileRevision && resource.durable,
+            "active profile resource {resource_sha256} lacks durable profile authority"
+        );
+        let revision = serde_json::from_str::<ProfileRevisionV2>(&resource.manifest_json)
+            .context("parse active profile revision")?;
+        revision.validate()?;
+        anyhow::ensure!(
+            revision.manifest_sha256()? == resource_sha256
+                && revision.catalog.sha256 == resource.artifact_sha256
+                && i64::try_from(revision.catalog.size)? == resource.artifact_size
+                && revision.logical_digest_sha256 == resource.logical_digest_sha256,
+            "active profile resource {resource_sha256} metadata drifted"
+        );
+        if conary_core::repository::supported_profiles::profile_by_public_id(&revision.profile)
+            .is_none()
+        {
+            continue;
+        }
+        anyhow::ensure!(
+            profile_physical_attestations
+                .insert(resource_sha256, resource.physical_attestation)
+                .is_none(),
+            "active public profile resource identity repeats"
+        );
+        profiles.push(revision);
+    }
     let canonical_map = load_canonical_map_snapshot(&conn)?;
     Ok(UniverseInputs {
         base_manifest_sha256,
@@ -348,8 +385,34 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         base_conversion_crawl_sha256,
         active_manifest,
         profiles,
+        profile_physical_attestations,
         canonical_map,
     })
+}
+
+fn registered_profile_pairs<'a>(
+    profiles: &'a [ProfileRevisionV2],
+    physical_attestations: &'a ProfilePhysicalAttestations,
+) -> Result<Vec<(&'a ProfileRevisionV2, &'a RemiCatalogPhysicalAttestation)>> {
+    anyhow::ensure!(
+        profiles.len() == physical_attestations.len(),
+        "profile physical authority count differs from the candidate universe"
+    );
+    profiles
+        .iter()
+        .map(|revision| {
+            let revision_sha256 = revision.manifest_sha256()?;
+            let physical_attestation = physical_attestations
+                .get(&revision_sha256)
+                .with_context(|| {
+                    format!(
+                        "profile '{}' revision {revision_sha256} lacks persisted physical authority",
+                        revision.profile
+                    )
+                })?;
+            Ok((revision, physical_attestation))
+        })
+        .collect()
 }
 
 fn same_authority(
@@ -457,21 +520,19 @@ mod tests {
                     &self.candidate_dir,
                     &self.keys_root,
                     &self.database_writer,
-                    None,
                 )
             } else {
                 Ok(outcome)
             }
         }
 
-        fn publish_and_seed_serving_reader(&self) -> Result<UniversePublicationOutcome> {
-            let outcome = publish_current_universe_with_authority(
+        fn publish_without_serving_cache_seed(&self) -> Result<UniversePublicationOutcome> {
+            let outcome = publish_current_universe_from_roots(
                 self.catalogs.db_path(),
                 self.catalogs.catalog_dir(),
                 &self.candidate_dir,
                 Some(&self.keys_root),
                 &self.database_writer,
-                Some(self.catalogs.authority()),
             )?;
             if outcome == UniversePublicationOutcome::Unavailable {
                 publish_initial_universe_for_test(
@@ -480,7 +541,6 @@ mod tests {
                     &self.candidate_dir,
                     &self.keys_root,
                     &self.database_writer,
-                    Some(self.catalogs.authority()),
                 )
             } else {
                 Ok(outcome)
@@ -661,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_seeds_the_exact_serving_reader_cache() {
+    fn publication_validation_does_not_seed_the_serving_reader_cache() {
         let fixture = PublicationFixture::new();
         let revision = fixture.catalogs.activate(
             "fedora-44",
@@ -678,11 +738,11 @@ mod tests {
         );
 
         fixture
-            .publish_and_seed_serving_reader()
-            .expect("publish universe and seed serving reader");
+            .publish_without_serving_cache_seed()
+            .expect("publish universe without seeding a serving reader");
 
         assert!(
-            fixture
+            !fixture
                 .catalogs
                 .authority()
                 .has_verified_profile_reader_for_test("fedora-44", &revision)

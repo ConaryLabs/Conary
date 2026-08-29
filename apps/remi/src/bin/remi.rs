@@ -264,7 +264,7 @@ struct ProfileValueBinding {
 
 #[derive(Args)]
 struct ConversionBenchmarkArgs {
-    /// Deployed Remi configuration owning the source database, catalogs, and keys.
+    /// Deployed Remi configuration; the runtime must be stopped.
     #[arg(long)]
     config: PathBuf,
 
@@ -674,7 +674,7 @@ pub(crate) fn parse_candidate(
 
 fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()> {
     let config = RemiConfig::load(&args.config)?;
-    let output_path = args.work_root.join("conversion-benchmark-v2.json");
+    let output_path = args.work_root.join("conversion-benchmark-v3.json");
     let benchmark = remi::server::ConversionBenchmarkConfig {
         source_config_path: args.config,
         work_root: args.work_root,
@@ -692,9 +692,9 @@ fn run_conversion_benchmark_command(args: ConversionBenchmarkArgs) -> Result<()>
             .repetitions
             .iter()
             .filter(|record| {
-                matches!(
-                    record.outcome,
-                    remi::server::ConversionBenchmarkOutcome::Failure { .. }
+                !matches!(
+                    &record.outcome,
+                    remi::server::ConversionBenchmarkOutcome::Success { .. }
                 )
             })
             .count();

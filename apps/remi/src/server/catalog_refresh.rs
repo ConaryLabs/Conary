@@ -11,12 +11,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use conary_core::db::models::Repository;
+use conary_core::db::models::{RemiCatalogPhysicalAttestation, Repository};
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CatalogReader, CatalogScopeV1, CatalogScratchAdmission,
-    ProfileCatalogMemberInputV2, ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1,
-    derive_profile_catalog_members, publish_profile_catalog_bundle_verified,
-    publish_source_catalog_bundle_verified,
+    PortableManifestAttestationV1, ProfileCatalogMemberInputV2, ProfileRevisionV2,
+    ProfileSourceMemberV2, SourceSnapshotV1, derive_profile_catalog_members,
+    publish_profile_catalog_bundle_verified, publish_source_catalog_bundle_verified,
+    verify_registered_profile_catalog_bundle, verify_registered_source_catalog_bundle,
     write_profile_catalog_candidate_verified_with_scratch_admission,
     write_profile_catalog_manifest_verified, write_source_catalog_manifest_verified,
 };
@@ -80,6 +81,7 @@ pub struct PublishedSourceCatalog {
     pub required: bool,
     pub manifest: SourceSnapshotV1,
     pub path: PathBuf,
+    pub physical_attestation: RemiCatalogPhysicalAttestation,
 }
 
 /// One fully bound and verified source bundle still private to its fenced run.
@@ -93,10 +95,12 @@ pub struct StagedSourceCatalog {
     artifact: StagedSourceArtifact,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum StagedSourceArtifact {
     Candidate,
-    DurableReuse,
+    DurableReuse {
+        portable_manifest_attestation: PortableManifestAttestationV1,
+    },
 }
 
 /// A private source candidate paired with the reader that proved its manifest
@@ -140,6 +144,7 @@ pub struct PublishedProfileCatalog {
     pub profile: String,
     pub manifest: ProfileRevisionV2,
     pub path: PathBuf,
+    pub physical_attestation: RemiCatalogPhysicalAttestation,
     pub sources: Vec<PublishedSourceCatalog>,
     pub candidate_run_dir: PathBuf,
     _reused_profile_pin: Option<Box<PinnedProfileCatalog>>,
@@ -379,9 +384,14 @@ pub async fn stage_profile_sources(
                                 )?;
                                 (candidate_directory, StagedSourceArtifact::Candidate, reader)
                             }
-                            SourceCatalogMaterializationV1::DurableReuse { bundle_path } => (
+                            SourceCatalogMaterializationV1::DurableReuse {
                                 bundle_path,
-                                StagedSourceArtifact::DurableReuse,
+                                portable_manifest_attestation,
+                            } => (
+                                bundle_path,
+                                StagedSourceArtifact::DurableReuse {
+                                    portable_manifest_attestation,
+                                },
                                 candidate.reader,
                             ),
                         };
@@ -414,8 +424,10 @@ pub async fn stage_profile_sources(
                         ordinal,
                         elapsed_ms = source_started.elapsed().as_millis(),
                         succeeded = true,
-                        durable_source_reused =
-                            source.staged.artifact == StagedSourceArtifact::DurableReuse,
+                        durable_source_reused = matches!(
+                            &source.staged.artifact,
+                            StagedSourceArtifact::DurableReuse { .. }
+                        ),
                         candidate_catalog_bytes_materialized = if source.staged.artifact
                             == StagedSourceArtifact::Candidate
                         {
@@ -669,21 +681,35 @@ fn publish_staged_profile(
     }
     let mut published_sources = Vec::with_capacity(staged.sources.len());
     for (source, verification) in staged.sources.into_iter().zip(staged.source_verifications) {
-        let path = match source.artifact {
-            StagedSourceArtifact::Candidate => publish_source_catalog_bundle_verified(
-                &source.path,
-                catalog_root,
-                &source.manifest,
-                verification,
-            )?,
-            StagedSourceArtifact::DurableReuse => {
+        let (path, physical_attestation) = match source.artifact {
+            StagedSourceArtifact::Candidate => {
+                let published = publish_source_catalog_bundle_verified(
+                    &source.path,
+                    catalog_root,
+                    &source.manifest,
+                    verification,
+                )?;
+                let physical_attestation = RemiCatalogPhysicalAttestation::new(
+                    published.portable_manifest_attestation,
+                    source.manifest.catalog.size,
+                )?;
+                (published.path, physical_attestation)
+            }
+            StagedSourceArtifact::DurableReuse {
+                portable_manifest_attestation,
+            } => {
                 require_registered_source_publication(
                     &source.path,
                     catalog_root,
                     &source.manifest,
                     &verification,
+                    &portable_manifest_attestation,
                 )?;
-                source.path.clone()
+                let physical_attestation = RemiCatalogPhysicalAttestation::new(
+                    portable_manifest_attestation,
+                    source.manifest.catalog.size,
+                )?;
+                (source.path.clone(), physical_attestation)
             }
         };
         published_sources.push(PublishedSourceCatalog {
@@ -693,43 +719,41 @@ fn publish_staged_profile(
             required: source.required,
             manifest: source.manifest,
             path,
+            physical_attestation,
         });
     }
-    let (path, reused_profile_pin) = match staged.artifact {
+    let (path, physical_attestation, reused_profile_pin) = match staged.artifact {
         StagedProfileArtifact::Candidate {
             directory,
             verification,
-        } => (
-            publish_profile_catalog_bundle_verified(
+        } => {
+            let published = publish_profile_catalog_bundle_verified(
                 &directory,
                 catalog_root,
                 &staged.manifest,
                 *verification,
-            )?,
-            None,
-        ),
+            )?;
+            let physical_attestation = RemiCatalogPhysicalAttestation::new(
+                published.portable_manifest_attestation,
+                staged.manifest.catalog.size,
+            )?;
+            (published.path, physical_attestation, None)
+        }
         StagedProfileArtifact::Reused(reused) => {
             if reused.manifest() != &staged.manifest {
                 bail!("reused profile manifest changed before publication");
             }
-            let catalog_path = reused.catalog_path();
-            if catalog_path.file_name().and_then(|name| name.to_str()) != Some(CATALOG_FILE_NAME) {
-                bail!(
-                    "reused profile catalog path {} has an unexpected file name",
-                    catalog_path.display()
-                );
-            }
-            let bundle = catalog_path
-                .parent()
-                .ok_or_else(|| anyhow::anyhow!("reused profile catalog has no bundle parent"))?
-                .to_path_buf();
-            (bundle, Some(reused))
+            let physical_attestation = reused.physical_attestation().clone();
+            let bundle =
+                require_registered_profile_publication(catalog_root, &staged.manifest, &reused)?;
+            (bundle, physical_attestation, Some(reused))
         }
     };
     Ok(PublishedProfileCatalog {
         profile: staged.profile,
         manifest: staged.manifest,
         path,
+        physical_attestation,
         sources: published_sources,
         candidate_run_dir: staged.candidate_run_dir,
         _reused_profile_pin: reused_profile_pin,
@@ -741,6 +765,7 @@ fn require_registered_source_publication(
     catalog_root: &Path,
     manifest: &SourceSnapshotV1,
     reader: &CatalogReader,
+    portable_manifest_attestation: &PortableManifestAttestationV1,
 ) -> Result<()> {
     let manifest_sha256 = manifest.manifest_sha256()?;
     let expected_bundle = catalog_root.join("sources").join(&manifest_sha256);
@@ -768,7 +793,50 @@ fn require_registered_source_publication(
             manifest_sha256
         );
     }
+    reader.require_path_unchanged()?;
+    drop(verify_registered_source_catalog_bundle(
+        bundle_path,
+        manifest,
+        portable_manifest_attestation,
+    )?);
     Ok(())
+}
+
+fn require_registered_profile_publication(
+    catalog_root: &Path,
+    manifest: &ProfileRevisionV2,
+    reused: &PinnedProfileCatalog,
+) -> Result<PathBuf> {
+    let manifest_sha256 = manifest.manifest_sha256()?;
+    let expected_bundle = catalog_root
+        .join("profiles")
+        .join(&manifest.profile)
+        .join(&manifest_sha256);
+    require_real_directory(&expected_bundle, "reused immutable profile bundle")?;
+    let expected_catalog_path = expected_bundle.join(CATALOG_FILE_NAME).canonicalize()?;
+    let reader = reused.reader();
+    if reader.path() != expected_catalog_path
+        || reader.binding().scope
+            != (CatalogScopeV1::Profile {
+                profile: manifest.profile.clone(),
+            })
+        || reader.binding().artifact != manifest.catalog
+        || reader.binding().logical_digest_sha256 != manifest.logical_digest_sha256
+        || reader.binding().counts != manifest.counts
+    {
+        bail!(
+            "reused profile revision {} changed after its durable reopen",
+            manifest_sha256
+        );
+    }
+    reader.require_path_unchanged()?;
+    drop(reader);
+    drop(verify_registered_profile_catalog_bundle(
+        &expected_bundle,
+        manifest,
+        &reused.physical_attestation().portable_manifest,
+    )?);
+    Ok(expected_bundle)
 }
 
 fn create_candidate_run_dir(root: &Path, run_id: &str) -> Result<PathBuf> {

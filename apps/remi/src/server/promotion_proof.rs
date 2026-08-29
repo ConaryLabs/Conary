@@ -108,6 +108,7 @@ pub(crate) fn produce_remi_promotion_proof(
         };
         evidence_profiles.push(RemiPromotionProfileEvidenceInput {
             revision: pin.manifest().clone(),
+            physical_attestation: pin.physical_attestation().clone(),
             package_oracle_dir: input.package_oracle_dir.clone(),
             native_resolution_dir: input.native_resolution_dir.clone(),
             candidate_resolution_dir: candidate_dir,

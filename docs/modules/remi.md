@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
-revision: 95
-summary: Document the strict isolated schema-v2 conversion benchmark, batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 100
+summary: Document filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, the strict isolated schema-v3 conversion and registered-reopen benchmark with signed cancelled-write phase deltas and terminal typed failure publication, batched permanent-CAS durability, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -179,10 +179,12 @@ complete source authority, and accepts reuse only when it is byte-for-byte the
 registered manifest authority. An exact match performs one registered durable
 bundle reopen, creates and reserves no source-candidate SQLite file, and
 carries that reader directly through profile composition and the already-
-published source boundary. The registered reopen repeats file type and
-sidecar, SHA-256 and size, SQLite schema/integrity, embedded binding, retained
-metadata, and exact directory checks; its versioned durable attestation avoids
-another normalized-relation replay. Changed authenticated identity takes the
+published source boundary. The registered reopen checks file type, exact
+directory membership, compact portable-manifest identity and size, SQLite
+application identity, embedded binding, and retained metadata. Its read-only
+VFS authenticates every demanded fixed-size chunk before SQLite receives it,
+so unchanged bytes inherit the publication-time structural and logical proof
+without another complete catalog or normalized-relation scan. Changed authenticated identity takes the
 ordinary projection-cache or parser path. Missing, malformed, noncanonical, or
 tampered registered authority fails closed instead of becoming a cache miss.
 
@@ -190,13 +192,31 @@ Operational resource identity is the canonical source- or profile-manifest
 SHA-256. The catalog artifact SHA-256 is a separately verified byte identity,
 not a uniqueness key: a newly authenticated upstream root may produce a new
 immutable source manifest while its exact authenticated children and normalized
-catalog projection remain byte-identical. Schema 54 permits both resources to
+catalog projection remain byte-identical. Schema 55 retains the ability for both resources to
 bind those same bytes. Registration still compares complete immutable metadata
 for an exact resource replay, and profile membership, reader pins, reachability,
 GC deletion intents, and bundle paths remain keyed by the manifest resource
 SHA-256. Changing provenance is therefore recorded instead of discarded, while
 projection reuse cannot fail merely because the resulting catalog bytes already
 exist under another exact manifest.
+
+Schema 55 also binds every registered resource row to one immutable,
+filesystem-independent physical attestation for the exact catalog artifact
+named by that manifest. It records the lowercase SHA-256 and exact size of a
+canonical `catalog.sqlite.chunks-v1` portable chunk manifest, the fixed
+65,536-byte v1 chunk size, and
+the exact chunk count implied by the artifact size. The manifest header binds
+those facts back to the ordinary catalog SHA-256, and each domain-separated
+chunk digest binds its position and actual length. Missing, malformed,
+mis-sized, stale, or artifact-mismatched attestations fail before
+registration. Publication derives the proof from the exact retained candidate
+descriptor, durably places it beside the catalog before the bundle rename,
+then independently reopens the destination through the authenticated VFS.
+Reusing an already-published destination requires the same exact proof and
+attestation; publication never repairs or replaces an existing bundle. There
+is no filesystem-selected proof kind and no durable full-scan fallback. This
+attestation remains local operational state and does not alter or compete with
+the source/profile manifest authority.
 
 After every source is authenticated and staged, refresh derives the complete
 ordered `ProfileSourceMemberV2` contract from those verified source manifests
@@ -207,13 +227,24 @@ repository, stream, and source-snapshot identity equality makes an existing
 immutable profile eligible for reuse. The selected V2 bundle is resolved
 through its exact durable registry entry and content-addressed canonical
 manifest, then independently reopened with the same physical, SQLite,
-integrity, binding, and member-evidence checks described above. V2 publication
+binding, and member-evidence checks described above. The registered reopen
+authenticates demanded chunks and performs no complete SQLite integrity scan;
+V2 publication
 already required the complete logical replay, exact table cardinalities, and
 explicit orphan rejection, so this registered reopen carries that durable
 exact-byte attestation instead of counting, deserializing, re-digesting, or
 foreign-key-scanning every row after each service restart. Externally supplied
 or unregistered bundles do not receive this authority. The reader pin remains
-live until the new fenced run completes as a durable candidate. This path
+live until the new fenced run completes as a durable candidate. Every new
+request that reuses a process-cached registered reader reauthenticates the
+current canonical manifest, exact registered top-level layout, and portable
+proof, then proves that the open catalog descriptor still names the registered
+path inode before handing out the reader. Source reauthentication also proves
+that retained native metadata remains a real private directory boundary; it
+does not rescan metadata payloads. A reader already handed out retains its
+authenticated catalog descriptor and decoded proof, so a later bundle mutation
+fails new handoffs without invalidating the immutable bytes already pinned by
+an in-flight reader. This path
 creates no profile candidate file and performs no profile-catalog
 reconstruction. Any
 changed member or projection version takes the normal private composition path,
@@ -259,12 +290,14 @@ time so effective concurrency remains production-visible.
 Construction is private beneath `catalog-candidates/<run-id>/`. Candidate
 SQLite integrity, schema, ordering, counts, logical digest, and source
 membership are reopened and checked before durable registration. Every source
-bundle has exactly `catalog.sqlite`, `manifest.json`, and a private
+candidate has exactly `catalog.sqlite`, `manifest.json`, and a private
 `native-metadata/` directory containing only digest-named objects declared by
-the manifest; profile bundles retain their exact two-file layout. The catalog,
-manifest, retained metadata objects, and their directories are synchronized
-before an atomic rename makes the content-addressed bundle durable. Only then
-does one short operational-database
+the manifest; profile candidates retain their exact two-file layout.
+Publication derives and synchronizes `catalog.sqlite.chunks-v1` before the
+atomic rename, so registered source bundles have four exact entries and
+registered profile bundles have three. The catalog, manifest, portable proof,
+retained metadata objects, and their directories are synchronized before the
+content-addressed bundle becomes durable. Only then does one short operational-database
 transaction prove the current run owner and fencing epoch, register the exact
 source/profile resources, and complete the run as a terminal `candidate`.
 Refresh never advances a profile or universe pointer and never updates
@@ -291,23 +324,27 @@ package, provide, or requirement rows for the activated native Remi catalog.
 `crates/conary-core/src/repository/sync/remi/run/candidate.rs` owns the durable
 candidate transition, exact run-to-revision member proof, and current-candidate
 lookup; the parent run module retains lease, heartbeat, and failure fencing.
-`CatalogAuthority` resolves the pointer and verified bundle, opens SQLite in
-immutable read-only mode, and records a reader pin for the handle lifetime.
-Universe publication performs the complete digest, integrity, binding, count,
-and logical verification and seeds the serving cache with that exact reader; a
-first serving open performs the same proof if no publisher has done so. Later
-opens in that process share the verified read-only connection behind a bounded
-per-profile cache instead of rehashing gigabytes for every lookup. A new
-revision replaces that cache entry only after its own complete verification.
+`CatalogAuthority` resolves the pointer, registered resource, and persisted
+portable attestation, records a reader pin for the handle lifetime, validates
+the exact three-file bundle and compact proof, and opens the catalog through
+the read-only authenticated SQLite VFS. The registered reopen checks the
+SQLite header and exact stored binding through authenticated reads; it performs
+no complete userspace catalog hash, SQLite integrity scan, or logical replay.
+Universe publication and explicit promotion validation retain their complete
+candidate/destination proofs, but those full-scan readers never seed serving
+state. Later opens in one authority process may share a reader only when the
+exact profile revision and complete physical attestation agree; a mismatch
+fails instead of replacing authority silently.
+
 Each exact source snapshot referenced below a pinned profile is resolved again
-through the durable resource registry on every lookup, but its multi-gigabyte
-catalog is physically verified only once per authority process. The first open
-uses the registered durable logical attestation while retaining file type,
-sidecar, size, SHA-256, SQLite schema and integrity, stored binding, and source
-evidence checks. Later opens reuse the read-only connection only when the exact
-snapshot digest, source profile, complete manifest, and derived bundle path all
-match the cached authority; any disagreement fails closed. Unregistered source
-candidates continue through the complete logical replay verifier.
+through the durable resource registry. Its serving cache likewise requires the
+exact snapshot digest, source profile, complete manifest, bundle path, and
+physical attestation. The VFS authenticates every covering chunk before its
+bytes reach SQLite and owns the verified bytes in its bounded cache, so a
+mutation after open cannot turn a cached trusted bit into authority for changed
+backing storage. Unregistered source candidates continue through complete
+artifact, integrity, binding, and logical verification and cannot consume a
+registered portable attestation.
 Readers opened before promotion therefore finish on the old revision; later
 readers see the complete new revision. Conversion outcomes own durable exact
 revision pins. Catalog garbage collection computes reachability from active,
@@ -441,10 +478,11 @@ requires the expected schema revision, and requires usable typed repository and
 canonical publication outcomes from the initial scheduler cycle. The validated
 manifest supplies the required exact-profile policy; every required profile
 must have a valid durable active pointer, strict canonical manifest, exact
-two-file bundle, and a regular catalog file with the signed size and a nonzero
+three-file registered bundle, a regular catalog file with the signed size, an
+authenticated portable proof matching persisted authority, and a nonzero
 package count. This bounded inspection neither claims the process SQLite writer
-nor rehashes the catalog; serving opens retain the complete verification
-contract above. A server without an exact configured profile is not ready. It
+nor rehashes the catalog; serving opens retain the authenticated VFS contract
+above. A server without an exact configured profile is not ready. It
 also checks the serving directories and configured free-space floor. A probe that cannot run reports
 `unavailable` rather than success, so an unmeasurable resource never reads as
 ready. A public package cache miss before that profile is populated returns the
@@ -486,8 +524,10 @@ evidence and never establishes quiescence or mutation ownership. It reports
 active and private-candidate state separately in canonical public-profile
 order. `--require-private-candidates` requires one exact current, durable,
 nonempty candidate for every public profile, fully reopens each strict
-immutable manifest and two-file bundle, validates its typed member contract,
-and re-proves its fenced run members against the current repository bindings.
+immutable manifest and three-file registered bundle, authenticates its portable
+proof, hashes the complete catalog, runs SQLite integrity and logical replay,
+validates its typed member contract, and re-proves its fenced run members
+against the current repository bindings.
 The deployment-only
 `--accept-candidates-completed-after <unix-seconds>` form is valid only with
 that predicate. Candidate completion is already ordered after a complete
@@ -658,7 +698,7 @@ Promotion writes and synchronizes every referenced object and the signed
 reopens the complete bundle, then uses one immediate transaction to publish
 every selected candidate run, advance every changed public-profile pointer,
 insert the evidence-bound universe revision, and advance
-`remi_active_universe_revision`. Schema 54 stores the exact canonical
+`remi_active_universe_revision`. Schema 55 stores the exact canonical
 `RemiPromotionEvidenceV1` and `RemiConversionCrawlV4` digests on that universe
 revision. A catalog, proof, CAS, signed-metadata, fence, canonical-map,
 transaction, or reopen fault leaves the complete previous public state
@@ -692,7 +732,8 @@ fail closed.
 
 Refresh retains every exact parser-authenticated metadata file in the immutable
 source bundle that owns its digest, size, role, and source path. The
-materializer reopens each strict three-entry source bundle, revalidates every
+materializer reopens each strict four-entry registered source bundle,
+authenticates its portable proof, revalidates every
 retained file, and copies only those bytes; it performs no network request, URL
 reconstruction, or mutable-mirror lookup. Missing, extra, symlinked,
 wrong-sized, or digest-mismatched source metadata fails before export
@@ -885,7 +926,7 @@ disposition is valid only when that validation-origin revision differs from
 the report's current revision; flipping a current validation to invented reuse
 fails report reopen. Missing, repeated, reordered, contract-drifted,
 unattempted, corrupt, or failed outcomes prevent success. The proof ledger and
-per-revision bindings are one schema-54 database authority and publish
+per-revision bindings are one schema-55 database authority and publish
 atomically. The writer syncs an atomic staged report, reopens the published
 bytes, rejects noncanonical or unknown input, and compares the complete
 reopened value before the command may report success. A structurally valid
@@ -1385,8 +1426,10 @@ Implementation ownership lives in child modules:
 - `conversion/types.rs`: public conversion result DTOs, scriptlet package
   metadata projection, and conversion benchmark evidence records.
 - `conversion/benchmark.rs`: exact immutable-authority subject admission,
-  isolated benchmark-state construction, strict schema-v2 measurement, and
-  atomic report publication and reopen.
+  isolated benchmark-state construction, strict schema-v3 registered-reopen
+  and conversion measurement.
+- `conversion/benchmark/report.rs`: schema-v3 evidence validation plus atomic
+  report publication and strict durable reopen.
 - `conversion/lookup.rs`: exact immutable-catalog package selection, verified
   source-snapshot binding, prepared key-material lookup, and upstream download.
 - `conversion/metadata.rs`: safe CCS filenames, profile-backed parser dispatch,
@@ -1441,30 +1484,68 @@ cargo run -p remi --release -- conversion-benchmark \
 ```
 
 `--work-root` must name a new directory outside the live Remi storage root.
-The command snapshots the operational SQLite database, clears runtime
+The Remi service and every other one-shot runtime owner must be stopped. The
+command acquires the existing runtime root's exclusive kernel lock before it
+snapshots the operational SQLite database and retains that lock through strict
+reopen of the durable report. This keeps activation and catalog garbage
+collection from changing the registered catalog set during the run. It clears runtime
 conversion/cache state in that copy, stages the admitted source artifact, and
 places every mutation below the work root. Deployed catalogs, signing keys, and
 the source database remain read-only authorities; the benchmark cannot warm or
 otherwise mutate live conversion state. Use a distinct new work root for every
 subject and revision being compared.
 
-The strict `conversion-benchmark-v2.json` report records the exact binary path
+The strict `conversion-benchmark-v3.json` report records the exact binary path
 and digest, source commit and dirty state, Remi and host identity, CPU and
 memory, and the device, filesystem, and block size for every authority and
-scratch root. It pins the full profile/source authority and subject identity.
-Each repetition separates `conversion_core` from `end_to_end`, records process
-wall/user/system time, peak RSS, faults, block I/O, context switches, and thread
-and runnable-thread maxima, and retains phase timings and deterministic work
+scratch root. It pins each profile and source resource, catalog artifact,
+logical digest, portable-manifest digest and size, and exact chunk geometry as
+well as the benchmark subject.
+
+Before conversion repetitions, `setup.prepare`, `setup.profile`,
+`setup.source`, and `setup.finalize` are separately bounded, non-overlapping
+setup phases. Evidence assembly between probes is excluded rather than charged
+to the next phase.
+The profile and source records separately expose `reopen` and required
+authority-`query` work; query VFS counters are checked deltas from the owning
+reader at the end of its reopen. VFS snapshot extraction is included in the
+phase it describes. Each phase records process wall/user/system
+time, RSS endpoints and process-lifetime peak, faults, logical bytes and
+syscalls from `/proc/self/io`, storage bytes, context switches, and endpoint
+thread occupancy. Cancelled-write bytes are a signed phase delta, so a counter
+regression is retained rather than rejected. Each catalog record also names
+exact verification-pass
+evidence and authenticated-VFS read/chunk/cache work. Schema-v3 validation requires exactly one
+compact portable-manifest validation, one stored-binding check, demanded VFS
+authentication with no integrity failure, and zero complete userspace catalog
+hash, SQLite integrity scan, or logical replay. The chosen chunk size, count,
+and proof size must agree exactly with catalog geometry.
+
+Each repetition separates `conversion_core` from `end_to_end`, records the same
+process resource counters, and retains phase timings and deterministic work
 counters. Successful cold evidence independently reopens the signed transport
 and hashes the complete CCS archive; the report records the CCS, transport,
 and canonical signed-object-set identities and byte counts.
 
 The first successful repetition must be `cold`. Every later successful
 repetition must be an exact `hot` hit with no conversion-core work. Failures
-remain typed evidence rather than being relabeled or silently retried.
-Schema-v2 validation rejects inconsistent authority, iteration, cache-state,
-timing, or output proof before atomically publishing the report, then
-deserializes and compares the durable report before success. A commit-worthy
+remain typed evidence rather than being relabeled or silently retried. The
+first failure terminates the repetition sequence, including a failure in the
+independent persisted-output reopen after conversion succeeds. A conversion
+failure carries zero unexecuted views; the distinct independent-output-reopen
+failure retains the completed conversion's cache state, timing, and executed
+views while omitting the output proof that could not be authenticated. Missing
+timing or contradictory cache/view evidence is a fatal harness-contract defect,
+not a valid repetition failure. The terminal failure is validated, atomically
+published, and independently reopened before the command reports its nonzero
+outcome.
+Schema-v3 validation rejects inconsistent authority, reopen evidence,
+iteration, cache-state, timing, or output proof before atomically publishing
+the report, then deserializes and compares the durable report before success.
+The validator binds `end_to_end` to the timing total, recomputes
+`conversion_core` from its owned phases, requires each independent complete
+reopen/hash byte count to equal the CCS size, and requires every hot output
+identity and byte geometry to equal the cold result. A commit-worthy
 baseline uses a clean exact source commit, preserves the complete JSON report,
 and compares identical authority, subject, environment, and signed-object-set
 identities. The recorded counters are regression evidence; they do not weaken

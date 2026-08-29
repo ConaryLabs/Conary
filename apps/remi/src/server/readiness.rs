@@ -369,7 +369,26 @@ fn available_bytes(_path: &Path) -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::db::models::RemiCatalogPhysicalAttestation;
     use conary_core::db::schema;
+    use conary_core::repository::catalog::{
+        PortableManifestAttestationV1, portable_chunk_count_v1, portable_manifest_size_v1,
+    };
+
+    fn fixture_physical_attestation(
+        catalog_size: u64,
+        marker: &[u8],
+    ) -> RemiCatalogPhysicalAttestation {
+        let chunk_count = portable_chunk_count_v1(catalog_size).expect("fixture chunk count");
+        RemiCatalogPhysicalAttestation::new(
+            PortableManifestAttestationV1 {
+                sha256: conary_core::hash::sha256(marker),
+                size: portable_manifest_size_v1(chunk_count).expect("fixture portable size"),
+            },
+            catalog_size,
+        )
+        .expect("fixture physical attestation")
+    }
 
     fn inputs_for(dir: &Path) -> ReadinessInputs {
         let db_path = dir.join("metadata/conary.db");
@@ -444,7 +463,7 @@ mod tests {
             CATALOG_FILE_NAME, CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1,
             CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,
             ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
-            publish_profile_catalog_bundle, write_catalog_candidate,
+            publish_profile_catalog_bundle_verified, write_catalog_candidate,
             write_profile_catalog_manifest,
         };
         use conary_core::repository::versioning::VersionScheme;
@@ -557,10 +576,20 @@ mod tests {
             logical_digest_sha256: binding.logical_digest_sha256.clone(),
             counts: binding.counts,
         };
-        write_profile_catalog_manifest(&candidate_dir, &manifest)
+        let verification = write_profile_catalog_manifest(&candidate_dir, &manifest)
             .expect("write readiness profile manifest");
-        publish_profile_catalog_bundle(&candidate_dir, root.join("catalogs"), &manifest)
-            .expect("publish readiness profile catalog");
+        let publication = publish_profile_catalog_bundle_verified(
+            &candidate_dir,
+            root.join("catalogs"),
+            &manifest,
+            verification,
+        )
+        .expect("publish readiness profile catalog");
+        let profile_physical_attestation = RemiCatalogPhysicalAttestation::new(
+            publication.portable_manifest_attestation,
+            manifest.catalog.size,
+        )
+        .expect("construct readiness profile physical attestation");
         let digest = manifest.manifest_sha256().expect("hash readiness revision");
         let manifest_json = String::from_utf8(
             conary_core::json::canonical_json(&manifest).expect("serialize readiness revision"),
@@ -582,6 +611,10 @@ mod tests {
                     format!("readiness-source-logical-{profile}-{ordinal}").as_bytes(),
                 ),
                 manifest_json: source_manifest_json.clone(),
+                physical_attestation: fixture_physical_attestation(
+                    1,
+                    format!("readiness-source-portable-{profile}-{ordinal}").as_bytes(),
+                ),
                 durable: true,
                 created_at: 1,
             }
@@ -596,6 +629,7 @@ mod tests {
             artifact_size: i64::try_from(manifest.catalog.size).expect("artifact size fits"),
             logical_digest_sha256: manifest.logical_digest_sha256.clone(),
             manifest_json,
+            physical_attestation: profile_physical_attestation,
             durable: true,
             created_at: 1,
         }

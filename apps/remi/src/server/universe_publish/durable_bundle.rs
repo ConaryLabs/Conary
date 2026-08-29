@@ -4,7 +4,7 @@ pub(crate) fn publish_candidate_files(
     candidate_root: &Path,
     catalog_dir: &Path,
     candidate: &SignedUniverseCandidate,
-    catalog_authority: Option<&super::catalog_authority::CatalogAuthority>,
+    profile_physical_attestations: &ProfilePhysicalAttestations,
 ) -> Result<PathBuf> {
     require_real_directory(candidate_root, "universe candidate root")?;
     require_real_directory(catalog_dir, "catalog root")?;
@@ -18,7 +18,7 @@ pub(crate) fn publish_candidate_files(
             catalog_dir,
             &candidate.manifest,
             &candidate.manifest_sha256,
-            catalog_authority,
+            profile_physical_attestations,
         )?;
         return Ok(destination);
     }
@@ -51,7 +51,7 @@ pub(crate) fn publish_candidate_files(
         catalog_dir,
         &candidate.manifest,
         &candidate.manifest_sha256,
-        catalog_authority,
+        profile_physical_attestations,
     )?;
     Ok(destination)
 }
@@ -60,7 +60,7 @@ pub(crate) fn verify_published_bundle(
     catalog_dir: &Path,
     expected: &RemiUniverseManifestV2,
     expected_sha256: &str,
-    catalog_authority: Option<&super::catalog_authority::CatalogAuthority>,
+    profile_physical_attestations: &ProfilePhysicalAttestations,
 ) -> Result<()> {
     expected.validate().map_err(anyhow::Error::from)?;
     if expected.manifest_sha256()? != expected_sha256 {
@@ -117,21 +117,27 @@ pub(crate) fn verify_published_bundle(
     {
         bail!("published universe canonical-map facts disagree with its manifest");
     }
-    let verified_profiles = validate_canonical_candidate(
-        catalog_dir,
-        &canonical,
-        expected.profiles.iter().map(|profile| &profile.revision),
-    )
+    anyhow::ensure!(
+        expected.profiles.len() == profile_physical_attestations.len(),
+        "published universe profile physical authority count differs from its manifest"
+    );
+    let registered_profiles = expected
+        .profiles
+        .iter()
+        .map(|profile| {
+            let physical_attestation = profile_physical_attestations
+                .get(&profile.profile_revision_sha256)
+                .with_context(|| {
+                    format!(
+                        "published profile '{}' revision {} lacks persisted physical authority",
+                        profile.revision.profile, profile.profile_revision_sha256
+                    )
+                })?;
+            Ok((&profile.revision, physical_attestation))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate_canonical_candidate(catalog_dir, &canonical, registered_profiles)
     .context("revalidate canonical contracts in the published universe")?;
-    for profile in verified_profiles {
-        if let Some(authority) = catalog_authority {
-            authority.remember_verified_profile_reader(
-                &profile.profile,
-                &profile.profile_revision_sha256,
-                profile.reader,
-            );
-        }
-    }
     Ok(())
 }
 

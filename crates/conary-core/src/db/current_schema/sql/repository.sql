@@ -1000,12 +1000,26 @@ CREATE TABLE remi_catalog_resources (
             logical_digest_sha256 TEXT NOT NULL,
             manifest_json TEXT NOT NULL
                 CHECK(json_valid(manifest_json) AND json_type(manifest_json) = 'object'),
+            -- One portable, filesystem-independent physical authority for
+            -- the exact catalog bytes. Publication binds this compact digest
+            -- manifest only after the same artifact passed the complete
+            -- structural and logical proof. Registered readers authenticate
+            -- every SQLite read through it on every supported filesystem.
+            portable_manifest_sha256 TEXT NOT NULL,
+            portable_manifest_size INTEGER NOT NULL CHECK(portable_manifest_size >= 64),
+            portable_chunk_size INTEGER NOT NULL CHECK(portable_chunk_size = 65536),
+            portable_chunk_count INTEGER NOT NULL CHECK(portable_chunk_count >= 0),
             durable INTEGER NOT NULL CHECK(durable IN (0, 1)),
             created_at INTEGER NOT NULL,
             CHECK(length(resource_sha256) = 64 AND resource_sha256 NOT GLOB '*[^0-9a-f]*'),
             CHECK(length(artifact_sha256) = 64 AND artifact_sha256 NOT GLOB '*[^0-9a-f]*'),
             CHECK(length(logical_digest_sha256) = 64
                 AND logical_digest_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(length(portable_manifest_sha256) = 64
+                AND portable_manifest_sha256 NOT GLOB '*[^0-9a-f]*'),
+            CHECK(portable_chunk_count = artifact_size / portable_chunk_size
+                + CASE WHEN artifact_size % portable_chunk_size = 0 THEN 0 ELSE 1 END),
+            CHECK(portable_manifest_size = 64 + portable_chunk_count * 32),
             CHECK(length(source_profile) BETWEEN 1 AND 255
                 AND trim(source_profile) = source_profile
                 AND source_profile NOT IN ('.', '..')

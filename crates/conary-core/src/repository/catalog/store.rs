@@ -7,9 +7,9 @@ use std::cell::Cell;
 #[cfg(test)]
 use std::fs::OpenOptions;
 use std::fs::{self, File};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,7 @@ use super::{
     CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogContentV1, CatalogCountsV1,
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogProvideRecordV1,
     CatalogRequirementAtomV1, CatalogRequirementGroupV1, CatalogScopeV1, CatalogSourceEvidenceV1,
+    PortableCatalogConnection, PortableVfsMetricsV1,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::{DebianMultiArch, ProvideVersionRelation};
@@ -32,7 +33,8 @@ pub(super) use util::{
     canonical_json_string, checked_i64, checked_ordinal, create_private_file, hash_file,
     sidecar_path, sync_parent, validate_candidate_path,
 };
-use util::{checked_sqlite_usize, conversion_error, parse_json_column, reject_nonempty_sidecars};
+use util::{checked_sqlite_usize, conversion_error, parse_json_column};
+pub use verification::CatalogVerificationEvidenceV1;
 pub(in crate::repository) use verification::{
     CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1,
 };
@@ -211,129 +213,68 @@ pub struct CatalogPackageNamePageV1 {
 }
 
 /// A byte- and schema-verified immutable catalog connection.
+enum CatalogConnectionOwner {
+    Direct(Connection),
+    Portable(PortableCatalogConnection),
+}
+
+impl CatalogConnectionOwner {
+    fn portable_vfs_metrics(&self) -> Option<PortableVfsMetricsV1> {
+        match self {
+            Self::Direct(_) => None,
+            Self::Portable(connection) => Some(connection.metrics()),
+        }
+    }
+
+    fn catalog_result<T>(&self, result: Result<T>) -> Result<T> {
+        match self {
+            Self::Direct(_) => result,
+            Self::Portable(connection) => portable_catalog_result(connection, result),
+        }
+    }
+}
+
+fn portable_catalog_result<T>(
+    connection: &PortableCatalogConnection,
+    result: Result<T>,
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => match connection.first_failure() {
+            Some(failure) => Err(Error::ConflictError(format!(
+                "portable catalog authenticated read failed ({:?}, chunk {:?}): {}",
+                failure.kind, failure.chunk_index, failure.detail
+            ))),
+            None => Err(error),
+        },
+    }
+}
+
+impl Deref for CatalogConnectionOwner {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Direct(connection) => connection,
+            Self::Portable(connection) => connection.connection(),
+        }
+    }
+}
+
+/// A byte- and schema-verified immutable catalog connection.
 pub struct CatalogReader {
     path: PathBuf,
     binding: CatalogBindingV1,
-    connection: Connection,
+    file_anchor: File,
+    connection: CatalogConnectionOwner,
     verification_proof: Option<CatalogVerificationProofV1>,
+    verification_evidence: CatalogVerificationEvidenceV1,
 }
 
 impl CatalogReader {
-    pub fn open_verified(path: impl AsRef<Path>, expected: &CatalogBindingV1) -> Result<Self> {
-        Self::open_verified_inner(path.as_ref(), expected, true)
-    }
-
-    /// Open an exact signed catalog artifact without replaying its complete
-    /// logical projection through Rust values.
-    ///
-    /// The Remi publisher performs the logical/schema replay before its
-    /// dedicated universe role signs the artifact. A universe client has
-    /// already verified that signature and the exact file SHA-256; it repeats
-    /// the physical schema, integrity, and embedded-binding checks here, then
-    /// copies normalized rows directly between SQLite databases.
-    /// This avoids turning one arbitrarily large presentation or expression
-    /// field into synchronization memory.
-    pub(in crate::repository) fn open_verified_signed_artifact(
-        path: impl AsRef<Path>,
-        expected: &CatalogBindingV1,
-    ) -> Result<Self> {
-        Self::open_verified_inner(path.as_ref(), expected, false)
-    }
-
-    fn open_verified_inner(
-        path: &Path,
-        expected: &CatalogBindingV1,
-        verify_logical_content: bool,
-    ) -> Result<Self> {
-        let started = Instant::now();
-        expected.validate()?;
-        let metadata = fs::symlink_metadata(path).map_err(|error| {
-            Error::IoError(format!(
-                "inspect immutable catalog {}: {error}",
-                path.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-            return Err(Error::InvalidPath(format!(
-                "immutable catalog {} must be a regular file, never a symlink",
-                path.display()
-            )));
-        }
-        reject_nonempty_sidecars(path)?;
-        if metadata.len() != expected.artifact.size {
-            return Err(Error::ChecksumMismatch {
-                expected: format!("{} bytes", expected.artifact.size),
-                actual: format!("{} bytes", metadata.len()),
-            });
-        }
-        let actual_sha256 = hash_file(path)?;
-        if actual_sha256 != expected.artifact.sha256 {
-            return Err(Error::ChecksumMismatch {
-                expected: expected.artifact.sha256.clone(),
-                actual: actual_sha256,
-            });
-        }
-
-        let canonical_path = path.canonicalize()?;
-        let mut uri = url::Url::from_file_path(&canonical_path).map_err(|_| {
-            Error::InvalidPath(format!(
-                "catalog path {} cannot be represented as an immutable SQLite URI",
-                canonical_path.display()
-            ))
-        })?;
-        uri.query_pairs_mut().append_pair("immutable", "1");
-        let connection = Connection::open_with_flags(
-            uri.as_str(),
-            OpenFlags::SQLITE_OPEN_READ_ONLY
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        connection.execute_batch(
-            "PRAGMA query_only = ON; PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;",
-        )?;
-        let application_id: i64 =
-            connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
-        if application_id != CATALOG_APPLICATION_ID {
-            return Err(Error::ConfigError(format!(
-                "catalog {} has application id {application_id:#x}; expected {CATALOG_APPLICATION_ID:#x}",
-                path.display()
-            )));
-        }
-        let integrity: String =
-            connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        if integrity != "ok" {
-            return Err(Error::InitError(format!(
-                "catalog {} failed SQLite integrity_check: {integrity}",
-                path.display()
-            )));
-        }
-        let stored = verification::read_binding(&connection, expected.artifact.clone())?;
-        if &stored != expected {
-            return Err(Error::ConflictError(format!(
-                "catalog {} metadata does not match its exact manifest binding",
-                path.display()
-            )));
-        }
-        let mut reader = Self {
-            path: canonical_path,
-            binding: expected.clone(),
-            connection,
-            verification_proof: None,
-        };
-        if verify_logical_content {
-            reader.verify_logical_content()?;
-            reader.verification_proof = Some(CatalogVerificationProofV1::new(expected));
-        }
-        #[cfg(test)]
-        PHYSICAL_VERIFICATION_PASSES.set(PHYSICAL_VERIFICATION_PASSES.get() + 1);
-        tracing::info!(
-            catalog = %reader.path.display(),
-            catalog_bytes = expected.artifact.size,
-            verify_logical_content,
-            elapsed_ms = started.elapsed().as_millis(),
-            "Immutable catalog reopen completed"
-        );
-        Ok(reader)
+    fn catalog_query<T>(&self, query: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let result = query(&self.connection);
+        self.connection.catalog_result(result)
     }
 
     #[must_use]
@@ -344,6 +285,21 @@ impl CatalogReader {
     #[must_use]
     pub fn binding(&self) -> &CatalogBindingV1 {
         &self.binding
+    }
+
+    /// Exact work performed while this reader established catalog authority.
+    #[must_use]
+    pub fn verification_evidence(&self) -> &CatalogVerificationEvidenceV1 {
+        &self.verification_evidence
+    }
+
+    /// Exact authenticated-VFS work accumulated by this registered reader.
+    ///
+    /// Candidate, publication, repair, and projection-cache readers use the
+    /// complete direct-verification path and therefore return `None`.
+    #[must_use]
+    pub fn portable_vfs_metrics(&self) -> Option<PortableVfsMetricsV1> {
+        self.connection.portable_vfs_metrics()
     }
 
     pub fn packages(&self) -> Result<Vec<CatalogPackageRecordV1>> {
@@ -361,7 +317,9 @@ impl CatalogReader {
         &self,
         visitor: impl FnMut(CatalogPackageRecordV1) -> Result<()>,
     ) -> Result<()> {
-        for_each_package_connection(&self.connection, &self.binding.scope, visitor)
+        self.catalog_query(|connection| {
+            for_each_package_connection(connection, &self.binding.scope, visitor)
+        })
     }
 
     pub fn find_packages_by_name(&self, name: &str) -> Result<Vec<CatalogPackageRecordV1>> {
@@ -393,11 +351,13 @@ impl CatalogReader {
     /// deliberately outside this exact-identity query.
     pub fn contains_package_name(&self, name: &str) -> Result<bool> {
         validate_identity(name, "catalog package presence query name")?;
-        Ok(self.connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM catalog_packages WHERE name = ?1)",
-            [name],
-            |row| row.get(0),
-        )?)
+        self.catalog_query(|connection| {
+            Ok(connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM catalog_packages WHERE name = ?1)",
+                [name],
+                |row| row.get(0),
+            )?)
+        })
     }
 
     /// Return one exact page of distinct downloadable package names.
@@ -421,42 +381,45 @@ impl CatalogReader {
         let limit = checked_sqlite_usize(limit, "limit")?;
         let minimum_size = checked_i64(minimum_size, "minimum package size")?;
 
-        let total = self.connection.query_row(
-            "SELECT COUNT(DISTINCT name)
-             FROM catalog_packages
-             WHERE size >= ?1",
-            [minimum_size],
-            |row| row.get::<_, i64>(0),
-        )?;
-        let total = usize::try_from(total).map_err(|_| {
-            Error::ConfigError(format!(
-                "catalog downloadable package-name count {total} exceeds platform usize range"
-            ))
-        })?;
+        self.catalog_query(|connection| {
+            let total = connection.query_row(
+                "SELECT COUNT(DISTINCT name)
+                 FROM catalog_packages
+                 WHERE size >= ?1",
+                [minimum_size],
+                |row| row.get::<_, i64>(0),
+            )?;
+            let total = usize::try_from(total).map_err(|_| {
+                Error::ConfigError(format!(
+                    "catalog downloadable package-name count {total} exceeds platform usize range"
+                ))
+            })?;
 
-        let mut statement = self.connection.prepare(
-            "SELECT DISTINCT name
-             FROM catalog_packages
-             WHERE size >= ?1
-             ORDER BY name COLLATE BINARY
-             LIMIT ?2 OFFSET ?3",
-        )?;
-        let names = statement
-            .query_map(params![minimum_size, limit, offset], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<String>, _>>()?;
-        Ok(CatalogPackageNamePageV1 { total, names })
+            let mut statement = connection.prepare(
+                "SELECT DISTINCT name
+                 FROM catalog_packages
+                 WHERE size >= ?1
+                 ORDER BY name COLLATE BINARY
+                 LIMIT ?2 OFFSET ?3",
+            )?;
+            let names = statement
+                .query_map(params![minimum_size, limit, offset], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<String>, _>>()?;
+            Ok(CatalogPackageNamePageV1 { total, names })
+        })
     }
 
     pub fn source_evidence(&self) -> Result<Vec<CatalogSourceEvidenceV1>> {
-        load_source_evidence(&self.connection)
+        self.catalog_query(load_source_evidence)
     }
 
     fn verify_logical_content(&self) -> Result<()> {
         #[cfg(test)]
         LOGICAL_VERIFICATION_PASSES.set(LOGICAL_VERIFICATION_PASSES.get() + 1);
         let evidence = self.source_evidence()?;
-        let (actual, counts) =
-            digest_catalog_connection(&self.connection, &self.binding.scope, &evidence)?;
+        let (actual, counts) = self.catalog_query(|connection| {
+            digest_catalog_connection(connection, &self.binding.scope, &evidence)
+        })?;
         if actual != self.binding.logical_digest_sha256 {
             return Err(Error::ChecksumMismatch {
                 expected: self.binding.logical_digest_sha256.clone(),
@@ -476,19 +439,21 @@ impl CatalogReader {
     where
         P: rusqlite::Params,
     {
-        let mut statement = self.connection.prepare(sql)?;
-        let base = statement
-            .query_map(parameters, package_from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        base.into_iter()
-            .map(|mut package| {
-                package.provides = load_provides(&self.connection, &package.package_key_sha256)?;
-                package.requirement_groups =
-                    load_requirement_groups(&self.connection, &package.package_key_sha256)?;
-                package.validate(&self.binding.scope)?;
-                Ok(package)
-            })
-            .collect()
+        self.catalog_query(|connection| {
+            let mut statement = connection.prepare(sql)?;
+            let base = statement
+                .query_map(parameters, package_from_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            base.into_iter()
+                .map(|mut package| {
+                    package.provides = load_provides(connection, &package.package_key_sha256)?;
+                    package.requirement_groups =
+                        load_requirement_groups(connection, &package.package_key_sha256)?;
+                    package.validate(&self.binding.scope)?;
+                    Ok(package)
+                })
+                .collect()
+        })
     }
 }
 

@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use conary_core::canonical::{CanonicalMapSnapshot, validate_canonical_map_snapshot};
+use conary_core::db::models::RemiCatalogPhysicalAttestation;
 use conary_core::repository::catalog::{
     CatalogPackageRecordV1, CatalogReader, NATIVE_PARITY_COMPARISON_SCHEMA_V1,
     NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1, NativeParityComparisonV1, NativeResolutionComparisonV1,
     ProfileRevisionV2, compare_native_parity_oracle, compare_native_resolution_oracle,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
-    verify_profile_catalog_bundle,
+    verify_registered_profile_catalog_bundle_complete,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +25,7 @@ pub const REMI_PROMOTION_EVIDENCE_SCHEMA_V1: u32 = 1;
 #[derive(Debug, Clone)]
 pub struct RemiPromotionProfileEvidenceInput {
     pub revision: ProfileRevisionV2,
+    pub physical_attestation: RemiCatalogPhysicalAttestation,
     pub package_oracle_dir: PathBuf,
     pub native_resolution_dir: PathBuf,
     pub candidate_resolution_dir: PathBuf,
@@ -148,7 +150,10 @@ pub fn produce_remi_promotion_evidence(
     validate_canonical_candidate(
         &config.catalog_dir,
         canonical_map,
-        config.profiles.iter().map(|input| &input.revision),
+        config
+            .profiles
+            .iter()
+            .map(|input| (&input.revision, &input.physical_attestation)),
     )
     .context("validate canonical contracts against promotion candidates")?;
     let canonical_map_bytes = conary_core::json::canonical_json(canonical_map)
@@ -225,13 +230,17 @@ fn produce_profile_evidence(
         .join("profiles")
         .join(&input.revision.profile)
         .join(&revision_sha256);
-    let catalog =
-        verify_profile_catalog_bundle(&catalog_path, &input.revision).with_context(|| {
-            format!(
-                "reopen promotion candidate profile '{}' revision {}",
-                input.revision.profile, revision_sha256
-            )
-        })?;
+    let catalog = verify_registered_profile_catalog_bundle_complete(
+        &catalog_path,
+        &input.revision,
+        &input.physical_attestation.portable_manifest,
+    )
+    .with_context(|| {
+        format!(
+            "reopen promotion candidate profile '{}' revision {}",
+            input.revision.profile, revision_sha256
+        )
+    })?;
     compare_conversion_crawl(&catalog, crawl)?;
 
     let package_oracle =
@@ -704,6 +713,7 @@ pub(crate) mod tests {
             proof_fixtures.push(ProfileProofFixture {
                 input: RemiPromotionProfileEvidenceInput {
                     revision,
+                    physical_attestation: pinned.physical_attestation().clone(),
                     package_oracle_dir: package_oracle.path().to_path_buf(),
                     native_resolution_dir: native_resolution.path().to_path_buf(),
                     candidate_resolution_dir: candidate_resolution.path().to_path_buf(),

@@ -3,12 +3,15 @@
 use std::fs;
 use std::path::PathBuf;
 
-use conary_core::db::models::{RemiCatalogResource, RemiCatalogResourceKind, RemiRuntimeSession};
+use conary_core::db::models::{
+    RemiCatalogPhysicalAttestation, RemiCatalogResource, RemiCatalogResourceKind,
+    RemiRuntimeSession,
+};
 use conary_core::repository::catalog::{
-    CATALOG_FILE_NAME, CatalogContentV1, CatalogScopeV1, CatalogSourceEvidenceV1,
-    PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1,
-    SourceStreamV1, publish_profile_catalog_bundle, write_catalog_candidate,
-    write_profile_catalog_manifest,
+    CATALOG_FILE_NAME, CATALOG_PORTABLE_MANIFEST_FILE_NAME, CatalogContentV1, CatalogScopeV1,
+    CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2, ProfileSourceMemberV2,
+    SourceStreamKindV1, SourceStreamV1, publish_profile_catalog_bundle_verified,
+    write_catalog_candidate, write_profile_catalog_manifest,
 };
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
@@ -27,6 +30,7 @@ struct Revision {
     digest: String,
     bundle_dir: PathBuf,
     artifact_path: PathBuf,
+    portable_manifest_path: PathBuf,
 }
 
 fn fixture() -> Fixture {
@@ -42,6 +46,10 @@ fn fixture() -> Fixture {
              artifact_size INTEGER NOT NULL,
              logical_digest_sha256 TEXT NOT NULL,
              manifest_json TEXT NOT NULL,
+             portable_manifest_sha256 TEXT NOT NULL,
+             portable_manifest_size INTEGER NOT NULL,
+             portable_chunk_size INTEGER NOT NULL,
+             portable_chunk_count INTEGER NOT NULL,
              durable INTEGER NOT NULL,
              created_at INTEGER NOT NULL
          );
@@ -122,11 +130,21 @@ fn add_revision(fixture: &Fixture, marker: char, fencing_epoch: i64) -> Revision
         logical_digest_sha256: binding.logical_digest_sha256.clone(),
         counts: binding.counts,
     };
-    write_profile_catalog_manifest(&candidate_dir, &manifest)
+    let verification = write_profile_catalog_manifest(&candidate_dir, &manifest)
         .expect("write profile catalog manifest");
-    let bundle_dir =
-        publish_profile_catalog_bundle(&candidate_dir, &fixture.catalog_dir, &manifest)
-            .expect("publish profile catalog bundle");
+    let published = publish_profile_catalog_bundle_verified(
+        &candidate_dir,
+        &fixture.catalog_dir,
+        &manifest,
+        verification,
+    )
+    .expect("publish profile catalog bundle");
+    let physical_attestation = RemiCatalogPhysicalAttestation::new(
+        published.portable_manifest_attestation,
+        manifest.catalog.size,
+    )
+    .expect("construct profile physical attestation");
+    let bundle_dir = published.path;
     let digest = manifest.manifest_sha256().expect("hash profile revision");
     let manifest_json = String::from_utf8(
         conary_core::json::canonical_json(&manifest).expect("canonicalize profile revision"),
@@ -140,6 +158,7 @@ fn add_revision(fixture: &Fixture, marker: char, fencing_epoch: i64) -> Revision
         artifact_size: i64::try_from(manifest.catalog.size).expect("artifact size fits SQLite"),
         logical_digest_sha256: manifest.logical_digest_sha256.clone(),
         manifest_json,
+        physical_attestation,
         durable: true,
         created_at: fencing_epoch,
     }
@@ -171,6 +190,7 @@ fn add_revision(fixture: &Fixture, marker: char, fencing_epoch: i64) -> Revision
     Revision {
         digest,
         artifact_path: bundle_dir.join(CATALOG_FILE_NAME),
+        portable_manifest_path: bundle_dir.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME),
         bundle_dir,
     }
 }
@@ -230,10 +250,46 @@ fn rejects_tampered_catalog_artifact() {
     fs::write(&revision.artifact_path, bytes).expect("tamper catalog artifact");
 
     let error = open(&fixture).expect_err("tampered catalog must fail closed");
+    let evidence = format!("{error:#}");
     assert!(
-        format!("{error:#}").contains("Checksum mismatch"),
+        evidence.contains("portable catalog authenticated read failed")
+            && evidence.contains("chunk 0 SHA-256"),
         "unexpected error: {error:#}"
     );
+}
+
+#[test]
+fn bounded_inspection_and_serving_open_reject_tampered_portable_manifest() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let mut bytes =
+        fs::read(&revision.portable_manifest_path).expect("read portable manifest sidecar");
+    let offset = bytes.len() / 2;
+    bytes[offset] ^= 0xff;
+    fs::write(&revision.portable_manifest_path, bytes).expect("tamper portable manifest sidecar");
+
+    let resolved = super::resolve_active_profile(&fixture.conn, &fixture.catalog_dir, PROFILE)
+        .expect("resolve active profile metadata");
+    let inspection_error = super::inspect_resolved_profile_files(&resolved)
+        .expect_err("bounded inspection must reject tampered portable manifest");
+    assert!(
+        format!("{inspection_error:#}").contains("authenticate active profile portable manifest"),
+        "unexpected inspection error: {inspection_error:#}"
+    );
+
+    open(&fixture).expect_err("serving open must reject tampered portable manifest");
+}
+
+#[test]
+fn bounded_inspection_rejects_missing_portable_manifest() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    fs::remove_file(&revision.portable_manifest_path).expect("remove portable manifest sidecar");
+
+    let resolved = super::resolve_active_profile(&fixture.conn, &fixture.catalog_dir, PROFILE)
+        .expect("resolve active profile metadata");
+    super::inspect_resolved_profile_files(&resolved)
+        .expect_err("bounded inspection must require the portable manifest layout child");
 }
 
 #[test]
@@ -418,7 +474,12 @@ fn selected_profile_batch_releases_every_pin_when_one_reopen_fails() {
     let error = authority
         .open_selected_profiles(&selections)
         .expect_err("one invalid catalog must fail the complete pinned set");
-    assert!(format!("{error:#}").contains("Checksum mismatch"));
+    let evidence = format!("{error:#}");
+    assert!(
+        evidence.contains("portable catalog authenticated read failed")
+            && evidence.contains("chunk 0 SHA-256"),
+        "unexpected error: {error:#}"
+    );
     let conn = Connection::open(&db_path).expect("reopen failed batch authority database");
     assert_eq!(
         conn.query_row(
@@ -497,6 +558,186 @@ fn repeated_revision_open_reuses_one_verified_catalog_reader() {
     let second = authority.open_active_profile(PROFILE).expect("second open");
 
     assert!(first.shares_verified_reader_with(&second));
+}
+
+#[test]
+fn cached_profile_reader_revalidates_canonical_path_before_reuse() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture
+        .root
+        .path()
+        .join("replaced-cached-reader-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let retained = authority
+        .open_active_profile(PROFILE)
+        .expect("seed exact profile reader cache");
+    let replacement = fixture.root.path().join("replacement-profile.sqlite");
+    fs::copy(&revision.artifact_path, &replacement).expect("copy replacement catalog inode");
+    fs::rename(&replacement, &revision.artifact_path).expect("replace canonical catalog inode");
+
+    let error = authority
+        .open_active_profile(PROFILE)
+        .expect_err("new request must reject replaced cached catalog path");
+
+    assert!(
+        format!("{error:#}").contains("changed while its file descriptor was opened"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(retained.profile_revision_sha256(), revision.digest);
+    assert_eq!(
+        retained
+            .reader()
+            .source_evidence()
+            .expect("retained profile descriptor remains readable")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn cached_profile_reader_reauthenticates_portable_proof_before_reuse() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("cached-proof-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let retained = authority
+        .open_active_profile(PROFILE)
+        .expect("seed exact profile reader cache");
+    let mut proof = fs::read(&revision.portable_manifest_path).expect("read portable proof");
+    let offset = proof.len() / 2;
+    proof[offset] ^= 0xff;
+    let replacement = fixture.root.path().join("replacement-profile-proof");
+    fs::write(&replacement, proof).expect("write tampered replacement proof");
+    fs::rename(&replacement, &revision.portable_manifest_path)
+        .expect("replace canonical portable proof");
+
+    let error = authority
+        .open_active_profile(PROFILE)
+        .expect_err("new request must reject replaced portable proof");
+
+    assert!(
+        format!("{error:#}").contains("reauthenticate cached profile revision"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(
+        retained
+            .reader()
+            .source_evidence()
+            .expect("retained profile proof remains in memory")
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn cached_profile_reader_revalidates_exact_registered_layout_before_reuse() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("cached-layout-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let retained = authority
+        .open_active_profile(PROFILE)
+        .expect("seed exact profile reader cache");
+    fs::write(
+        revision.bundle_dir.join("catalog.sqlite-wal"),
+        b"unexpected",
+    )
+    .expect("add unexpected registered bundle entry");
+
+    let error = authority
+        .open_active_profile(PROFILE)
+        .expect_err("new request must reject unexpected registered bundle entry");
+
+    assert!(
+        format!("{error:#}").contains("registered bundle layout and portable proof"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(retained.profile_revision_sha256(), revision.digest);
+}
+
+#[test]
+fn active_profile_selection_reads_only_the_operational_pointer() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("selection-only-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    fs::remove_dir_all(&revision.bundle_dir).expect("remove catalog bundle after activation");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+
+    let selection = authority
+        .active_profile_selection(PROFILE)
+        .expect("select active profile without inspecting catalog files");
+
+    assert_eq!(selection.source_profile, PROFILE);
+    assert_eq!(selection.profile_revision_sha256, revision.digest);
+}
+
+#[test]
+fn repeated_revision_open_rejects_cached_physical_attestation_mismatch() {
+    let fixture = fixture();
+    let revision = add_revision(&fixture, 'a', 1);
+    let db_path = fixture.root.path().join("cached-attestation-authority.db");
+    fixture
+        .conn
+        .backup(rusqlite::MAIN_DB, &db_path, None)
+        .expect("copy authority fixture database");
+    let authority = super::CatalogAuthority::from_paths(
+        &db_path,
+        &fixture.catalog_dir,
+        crate::server::database_writer::DatabaseWriter::default(),
+    );
+    let pinned = authority
+        .open_active_profile(PROFILE)
+        .expect("seed exact profile reader cache");
+    authority
+        .verified_readers
+        .lock()
+        .get_mut(PROFILE)
+        .expect("cached profile reader")
+        .physical_attestation
+        .portable_manifest
+        .sha256 = "b".repeat(64);
+
+    let error = authority
+        .open_active_profile(PROFILE)
+        .expect_err("mismatched cached physical attestation must fail");
+    assert!(
+        error.to_string().contains("portable attestation disagrees"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(pinned.profile_revision_sha256(), revision.digest);
 }
 
 #[test]

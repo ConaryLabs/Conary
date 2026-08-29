@@ -274,18 +274,24 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO remi_catalog_resources (
                  resource_sha256, resource_kind, source_profile, artifact_sha256,
-                 artifact_size, logical_digest_sha256, manifest_json, durable, created_at
+                 artifact_size, logical_digest_sha256, manifest_json,
+                 portable_manifest_sha256, portable_manifest_size,
+                 portable_chunk_size, portable_chunk_count, durable, created_at
              ) VALUES
                ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                 'source_snapshot', 'fedora-44',
                 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
                 1, 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-                '{}', 1, 1),
+                '{}',
+                '1111111111111111111111111111111111111111111111111111111111111111',
+                96, 65536, 1, 1, 1),
                ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
                 'profile_revision', 'fedora-44',
                 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
                 1, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
-                '{}', 1, 1);
+                '{}',
+                '2222222222222222222222222222222222222222222222222222222222222222',
+                96, 65536, 1, 1, 1);
              INSERT INTO remi_profile_revision_members (
                  profile_revision_sha256, ordinal, source_snapshot_sha256,
                  source_identity, repository_identity, stream_kind,

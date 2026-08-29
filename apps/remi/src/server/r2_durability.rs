@@ -507,6 +507,11 @@ mod tests {
                 format!("logical-{revision}").as_bytes(),
             ),
             manifest_json,
+            physical_attestation:
+                crate::server::catalog_authority::test_support::physical_attestation_for_test(
+                    1,
+                    revision.as_bytes(),
+                ),
             durable: true,
             created_at: 1,
         }
