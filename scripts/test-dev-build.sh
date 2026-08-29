@@ -46,6 +46,14 @@ esac
 FAKE
 chmod +x "$fake_bin/sccache"
 
+cat >"$fake_bin/cargo" <<'FAKE'
+#!/usr/bin/env bash
+printf 'cargo-argv='
+printf '<%s>' "$@"
+printf '\n'
+FAKE
+chmod +x "$fake_bin/cargo"
+
 auto_out="$(
     cd "$fixture"
     env -u RUSTC_WRAPPER -u SCCACHE_DIR -u CARGO_TARGET_DIR \
@@ -98,6 +106,54 @@ off_out="$(
 )"
 assert_contains "$off_out" 'compiler-cache=disabled'
 assert_contains "$off_out" 'wrapper_set='
+
+iterate_out="$(
+    cd "$fixture"
+    env -u RUSTC_WRAPPER -u SCCACHE_DIR -u CARGO_TARGET_DIR \
+        PATH="$fake_bin:$PATH" \
+        "$script" iterate -- build -p conary --locked 2>&1
+)"
+assert_contains "$iterate_out" 'compiler-cache=sccache'
+assert_contains "$iterate_out" 'cargo-profile=fast-release authority=development-only'
+assert_contains "$iterate_out" \
+    'cargo-argv=<build><--profile><fast-release><-p><conary><--locked>'
+
+iterate_separator_out="$(
+    cd "$fixture"
+    env -u RUSTC_WRAPPER -u SCCACHE_DIR -u CARGO_TARGET_DIR \
+        PATH="$fake_bin:$PATH" \
+        "$script" iterate -- test -p conary -- --nocapture 2>&1
+)"
+assert_contains "$iterate_separator_out" \
+    'cargo-argv=<test><--profile><fast-release><-p><conary><--><--nocapture>'
+
+if iterate_release_out="$(
+    cd "$fixture"
+    PATH="$fake_bin:$PATH" "$script" iterate -- build --release 2>&1
+)"; then
+    fail "iterate unexpectedly accepted --release"
+fi
+assert_contains "$iterate_release_out" \
+    'iterate owns --profile fast-release; remove: --release'
+
+if iterate_profile_out="$(
+    cd "$fixture"
+    PATH="$fake_bin:$PATH" \
+        "$script" iterate -- build --profile release 2>&1
+)"; then
+    fail "iterate unexpectedly accepted a caller profile"
+fi
+assert_contains "$iterate_profile_out" \
+    'iterate owns --profile fast-release; remove: --profile'
+
+if iterate_action_out="$(
+    cd "$fixture"
+    PATH="$fake_bin:$PATH" "$script" iterate -- metadata 2>&1
+)"; then
+    fail "iterate unexpectedly accepted a non-compiling Cargo action"
+fi
+assert_contains "$iterate_action_out" \
+    'iterate does not support cargo action: metadata'
 
 if required_out="$(
     cd "$fixture"

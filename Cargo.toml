@@ -145,12 +145,13 @@ lto = true
 codegen-units = 1
 strip = true
 
-# Fast release profile - optimized but sccache-friendly (no LTO)
-# Use: cargo build --profile fast-release
+# Optimized development iteration only. Release and promotion gates certify the
+# exact release profile above, never this no-LTO incremental artifact.
+# Use: scripts/dev-build.sh iterate -- build -p <package>
 [profile.fast-release]
 inherits = "release"
 lto = false
-codegen-units = 16
+codegen-units = 256
 incremental = true
 
 [profile.dev]

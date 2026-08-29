@@ -7,6 +7,7 @@ usage() {
 Usage:
   scripts/dev-build.sh [--cache auto|off|required] run -- <command> [args...]
   scripts/dev-build.sh [--cache auto|off|required] cargo -- <cargo args...>
+  scripts/dev-build.sh [--cache auto|off|required] iterate -- <cargo action> [args...]
   scripts/dev-build.sh [--cache auto|off|required] status
   scripts/dev-build.sh [--cache auto|off|required] stop
   scripts/dev-build.sh [--cache auto|off|required] clean --yes
@@ -187,6 +188,29 @@ case "$action" in
         configure_run_environment
         report_run_environment
         exec cargo "$@"
+        ;;
+    iterate)
+        [[ "${1:-}" == "--" ]] && shift
+        [[ $# -ge 1 ]] || { usage; exit 2; }
+        cargo_action="$1"
+        shift
+        case "$cargo_action" in
+            bench|build|check|clippy|run|rustc|rustdoc|test) ;;
+            *)
+                fail "iterate does not support cargo action: $cargo_action"
+                ;;
+        esac
+        for argument in "$@"; do
+            case "$argument" in
+                --release|--profile|--profile=*)
+                    fail "iterate owns --profile fast-release; remove: $argument"
+                    ;;
+            esac
+        done
+        configure_run_environment
+        report_run_environment
+        printf 'dev-build: cargo-profile=fast-release authority=development-only\n' >&2
+        exec cargo "$cargo_action" --profile fast-release "$@"
         ;;
     status)
         [[ $# -eq 0 ]] || { usage; exit 2; }

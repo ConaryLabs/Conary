@@ -1505,9 +1505,9 @@ agree.
 
 **Slug:** dev-build
 
-**Capability:** share eligible compiler outputs across linked worktrees while
-keeping Cargo targets isolated per worktree and cleanup explicitly bounded to
-the compiler cache.
+**Capability:** share eligible compiler outputs across linked worktrees, expose
+one optimized development-only iteration profile, keep Cargo targets isolated
+per worktree, and bound cleanup explicitly to the compiler cache.
 
 **Start here:** `scripts/dev-build.sh`; `scripts/test-dev-build.sh`;
 `apps/remi/build.rs`; `apps/conary-test/build.rs`; `CONTRIBUTING.md`;
@@ -1538,7 +1538,8 @@ a Cargo target. A cache miss or compiler failure is reported once; it must not
 silently rerun the compiler outside the selected cache. Build metadata may
 watch only existing Git control paths; it must not permanently invalidate a
 linked worktree or recursively watch the common Git directory that owns the
-shared cache.
+shared cache. The `iterate` action selects only `fast-release`; release,
+promotion, and final performance evidence retain the exact release profile.
 
 ## Agent/MCP Operation Surfaces
 
