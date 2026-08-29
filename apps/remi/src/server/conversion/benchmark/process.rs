@@ -179,18 +179,26 @@ fn process_thread_counts() -> Result<(u64, u64)> {
     let mut runnable = 0_u64;
     for entry in fs::read_dir("/proc/self/task")? {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        threads += 1;
-        let stat = fs::read_to_string(entry.path().join("stat"))?;
+        // Threads may exit between `read_dir` and reading their task state.
+        // A vanished task is not a sampler failure; count only task records
+        // that remained readable long enough to yield one coherent sample.
+        let stat = match fs::read_to_string(entry.path().join("stat")) {
+            Ok(stat) => stat,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
         let state = stat
             .rfind(')')
             .and_then(|offset| stat.get(offset + 1..))
             .and_then(|rest| rest.split_whitespace().next())
             .context("parse /proc task state")?;
+        threads = threads
+            .checked_add(1)
+            .context("process thread count overflow")?;
         if state == "R" {
-            runnable += 1;
+            runnable = runnable
+                .checked_add(1)
+                .context("runnable process thread count overflow")?;
         }
     }
     Ok((threads, runnable))
@@ -203,7 +211,11 @@ mod tests {
     #[test]
     fn process_usage_probe_reports_thread_occupancy() {
         let probe = ProcessUsageProbe::start().unwrap();
-        std::hint::black_box((0_u64..100_000).sum::<u64>());
+        for _ in 0..128 {
+            thread::spawn(|| std::hint::black_box((0_u64..10_000).sum::<u64>()))
+                .join()
+                .unwrap();
+        }
         let usage = probe.finish().unwrap();
         assert!(usage.maximum_thread_count >= 1);
     }

@@ -51,6 +51,7 @@ pub struct ArchPackage {
     packager: Option<String>,
     build_date: Option<String>,
     payload: PackagePayload,
+    parse_metrics: crate::packages::NativePackageParseMetrics,
 }
 
 /// Arch package metadata files that should be skipped during extraction
@@ -84,7 +85,7 @@ fn read_control_entry<R: Read>(
 
 impl ArchPackage {
     /// Identify compression from its exact stream header.
-    fn detect_compression(file: &mut File) -> Result<CompressionFormat> {
+    fn detect_compression(file: &mut (impl Read + Seek)) -> Result<CompressionFormat> {
         let mut magic = [0_u8; 8];
         let read = file
             .read(&mut magic)
@@ -101,20 +102,36 @@ impl ArchPackage {
     }
 
     /// Open and decompress the package archive
-    fn open_archive(path: &str, bounds: &ArchiveDecodeBounds) -> Result<Archive<Box<dyn Read>>> {
-        let mut file = File::open(path)
+    fn open_archive(
+        path: &str,
+        bounds: &ArchiveDecodeBounds,
+        source_bytes: &crate::packages::parse_metrics::ReadCounter,
+        decompressed_bytes: &crate::packages::parse_metrics::ReadCounter,
+    ) -> Result<Archive<Box<dyn Read>>> {
+        let file = File::open(path)
             .map_err(|e| Error::InitError(format!("Failed to open package file: {}", e)))?;
-
+        let mut file = source_bytes.wrap(file);
         let format = Self::detect_compression(&mut file)?;
         let reader =
             compression::create_decoder_limited(file, format, bounds.max_decompressed_stream_bytes)
                 .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
 
-        Ok(Archive::new(reader))
+        Ok(Archive::new(Box::new(decompressed_bytes.wrap(reader))))
     }
 
-    fn required_payload_spool_bytes(path: &str, bounds: &ArchiveDecodeBounds) -> Result<u64> {
-        let mut archive = Self::open_archive(path, bounds)?;
+    fn required_payload_spool_bytes(
+        path: &str,
+        bounds: &ArchiveDecodeBounds,
+        source_bytes: &crate::packages::parse_metrics::ReadCounter,
+        decompressed_bytes: &crate::packages::parse_metrics::ReadCounter,
+        metrics: &mut crate::packages::NativePackageParseMetrics,
+    ) -> Result<u64> {
+        let mut archive = Self::open_archive(path, bounds, source_bytes, decompressed_bytes)?;
+        metrics.checked_add(crate::packages::NativePackageParseMetrics {
+            source_archive_opens: 1,
+            archive_passes: 1,
+            ..Default::default()
+        })?;
         let mut entries_seen = 0_u64;
         let mut required = 0_u64;
         for entry in archive
@@ -138,6 +155,10 @@ impl ArchPackage {
                 payload::declared_spool_bytes(&mut entry, bounds)?,
             )?;
         }
+        metrics.archive_entries_traversed = metrics
+            .archive_entries_traversed
+            .checked_add(entries_seen)
+            .ok_or_else(|| Error::ParseError("ALPM archive entry count overflow".to_string()))?;
         Ok(required)
     }
 
@@ -412,11 +433,25 @@ impl PackageFormat for ArchPackage {
         debug!("Parsing Arch package: {}", path);
 
         let bounds = CCS_BUDGET.archive_decode_bounds()?;
+        let source_bytes = crate::packages::parse_metrics::ReadCounter::default();
+        let decompressed_bytes = crate::packages::parse_metrics::ReadCounter::default();
+        let mut parse_metrics = crate::packages::NativePackageParseMetrics::default();
         // The first pass reserves exact declared regular payload bytes before
         // the second pass can create any spool file.
-        let required_spool_bytes = Self::required_payload_spool_bytes(path, &bounds)?;
+        let required_spool_bytes = Self::required_payload_spool_bytes(
+            path,
+            &bounds,
+            &source_bytes,
+            &decompressed_bytes,
+            &mut parse_metrics,
+        )?;
         let payload_spool = PayloadSpool::new(required_spool_bytes)?;
-        let mut archive = Self::open_archive(path, &bounds)?;
+        let mut archive = Self::open_archive(path, &bounds, &source_bytes, &decompressed_bytes)?;
+        parse_metrics.checked_add(crate::packages::NativePackageParseMetrics {
+            source_archive_opens: 1,
+            archive_passes: 1,
+            ..Default::default()
+        })?;
         let mut pkginfo_content = None;
         let mut install_bytes = None;
         let mut alpm_hook_bytes: Vec<(String, Vec<u8>)> = Vec::new();
@@ -424,6 +459,7 @@ impl PackageFormat for ArchPackage {
         let mut entries_seen = 0_u64;
         let mut declared_payload_bytes = 0_u64;
         let mut metadata_bytes = 0_u64;
+        let mut payload_spool_bytes_reread = 0_u64;
 
         for entry in archive
             .entries()
@@ -488,6 +524,13 @@ impl PackageFormat for ArchPackage {
                         if let Some(content) =
                             parsed.read_regular_content_bounded(bounds.max_metadata_bytes)?
                         {
+                            payload_spool_bytes_reread = payload_spool_bytes_reread
+                                .checked_add(declared)
+                                .ok_or_else(|| {
+                                    Error::ParseError(
+                                        "ALPM payload spool reread byte count overflow".to_string(),
+                                    )
+                                })?;
                             alpm_hook_bytes.push((parsed.path().to_string(), content));
                         }
                     }
@@ -501,6 +544,24 @@ impl PackageFormat for ArchPackage {
                  {required_spool_bytes} bytes, observed {declared_payload_bytes}"
             )));
         }
+        let payload_files_spooled = payload_entries.iter().try_fold(0_u64, |total, entry| {
+            total
+                .checked_add(entry.spooled_file_count())
+                .ok_or_else(|| {
+                    Error::ParseError("ALPM payload spool file count overflow".to_string())
+                })
+        })?;
+        parse_metrics.archive_entries_traversed = parse_metrics
+            .archive_entries_traversed
+            .checked_add(entries_seen)
+            .ok_or_else(|| Error::ParseError("ALPM archive entry count overflow".to_string()))?;
+        parse_metrics.source_archive_bytes_read = source_bytes.bytes();
+        parse_metrics.decompressed_archive_bytes_read = decompressed_bytes.bytes();
+        parse_metrics.payload_files_spooled = payload_files_spooled;
+        parse_metrics.payload_bytes_spooled = required_spool_bytes;
+        parse_metrics.payload_spool_bytes_reread = payload_spool_bytes_reread;
+        parse_metrics.payload_spool_file_syncs = payload_files_spooled;
+        parse_metrics.payload_bytes_hashed = required_spool_bytes;
         let payload = PackagePayload::new(payload::resolve_hardlinks(payload_entries)?);
         let files = payload
             .files()
@@ -595,6 +656,7 @@ impl PackageFormat for ArchPackage {
             packager: pkginfo.packager,
             build_date: pkginfo.build_date,
             payload,
+            parse_metrics,
         })
     }
 
@@ -654,6 +716,11 @@ impl PackageFormat for ArchPackage {
 }
 
 impl ArchPackage {
+    #[must_use]
+    pub fn parse_metrics(&self) -> crate::packages::NativePackageParseMetrics {
+        self.parse_metrics
+    }
+
     /// Get upstream URL
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()

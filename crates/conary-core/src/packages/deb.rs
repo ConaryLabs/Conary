@@ -125,6 +125,7 @@ pub struct DebPackage {
     installed_size: Option<u64>,
     /// File-backed payload parsed from the data tar member.
     payload: PackagePayload,
+    parse_metrics: crate::packages::NativePackageParseMetrics,
 }
 
 impl DebPackage {
@@ -135,10 +136,17 @@ impl DebPackage {
     fn create_tar_decoder<'a>(
         tar_data: &'a [u8],
         bounds: &ArchiveDecodeBounds,
+        compressed_bytes: &crate::packages::parse_metrics::ReadCounter,
+        decompressed_bytes: &crate::packages::parse_metrics::ReadCounter,
     ) -> Result<Box<dyn Read + 'a>> {
         let format = CompressionFormat::from_magic_bytes(tar_data);
-        compression::create_decoder_limited(tar_data, format, bounds.max_metadata_bytes)
-            .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))
+        let decoder = compression::create_decoder_limited(
+            compressed_bytes.wrap(tar_data),
+            format,
+            bounds.max_metadata_bytes,
+        )
+        .map_err(|e| Error::InitError(format!("Failed to create decoder: {}", e)))?;
+        Ok(Box::new(decompressed_bytes.wrap(decoder)))
     }
 
     /// Parse control file from control.tar archive
@@ -278,13 +286,21 @@ impl DebPackage {
     }
 
     /// Single-pass extraction of control and data tarballs from the AR archive.
-    fn extract_ar_members(path: &str) -> Result<(Vec<u8>, ReopenablePayload)> {
+    fn extract_ar_members(
+        path: &str,
+    ) -> Result<(
+        Vec<u8>,
+        ReopenablePayload,
+        crate::packages::NativePackageParseMetrics,
+    )> {
         let bounds = CCS_BUDGET.archive_decode_bounds()?;
+        let source_bytes = crate::packages::parse_metrics::ReadCounter::default();
         let file = File::open(path)
             .map_err(|e| Error::InitError(format!("Failed to open DEB file: {}", e)))?;
-        let mut archive = ar::Archive::new(file);
+        let mut archive = ar::Archive::new(source_bytes.wrap(file));
         let mut control_data: Option<Vec<u8>> = None;
         let mut data_source = None;
+        let mut data_member_bytes = 0_u64;
         let mut entries_seen = 0_u64;
         while let Some(entry) = archive.next_entry() {
             entries_seen += 1;
@@ -312,6 +328,7 @@ impl DebPackage {
                 copy_declared_entry(&mut entry, &mut output, entry_size, "DEB data member")?;
                 output.sync_all()?;
                 data_source = Some(spool.source(path));
+                data_member_bytes = entry_size;
             }
             if control_data.is_some() && data_source.is_some() {
                 break;
@@ -321,16 +338,44 @@ impl DebPackage {
             .ok_or_else(|| Error::InitError("control.tar not found in DEB archive".to_string()))?;
         let data = data_source
             .ok_or_else(|| Error::InitError("data.tar not found in DEB archive".to_string()))?;
-        Ok((control, data))
+        Ok((
+            control,
+            data,
+            crate::packages::NativePackageParseMetrics {
+                source_archive_opens: 1,
+                source_archive_bytes_read: source_bytes.bytes(),
+                archive_passes: 1,
+                archive_entries_traversed: entries_seen,
+                intermediate_archive_bytes_written: data_member_bytes,
+                intermediate_archive_file_syncs: 1,
+                ..Default::default()
+            },
+        ))
     }
 
     /// Single-pass extraction of control text, scriptlets, and conffiles from the control tarball.
     ///
     /// Replaces three separate functions that each decompressed and iterated the
     /// control tarball independently. One decompression, one iteration.
+    #[cfg(test)]
     fn parse_control_tar_all(control_data: &[u8]) -> Result<ControlTarContents> {
+        let mut metrics = crate::packages::NativePackageParseMetrics::default();
+        Self::parse_control_tar_all_with_metrics(control_data, &mut metrics)
+    }
+
+    fn parse_control_tar_all_with_metrics(
+        control_data: &[u8],
+        metrics: &mut crate::packages::NativePackageParseMetrics,
+    ) -> Result<ControlTarContents> {
         let bounds = CCS_BUDGET.archive_decode_bounds()?;
-        let reader = Self::create_tar_decoder(control_data, &bounds)?;
+        let compressed_bytes = crate::packages::parse_metrics::ReadCounter::default();
+        let decompressed_bytes = crate::packages::parse_metrics::ReadCounter::default();
+        let reader = Self::create_tar_decoder(
+            control_data,
+            &bounds,
+            &compressed_bytes,
+            &decompressed_bytes,
+        )?;
         let mut archive = Archive::new(reader);
         let mut contents = ControlTarContents::default();
         let mut entries_seen = 0_u64;
@@ -418,12 +463,23 @@ impl DebPackage {
             ));
         }
 
+        metrics.checked_add(crate::packages::NativePackageParseMetrics {
+            archive_passes: 1,
+            archive_entries_traversed: entries_seen,
+            decompressed_archive_bytes_read: decompressed_bytes.bytes(),
+            intermediate_archive_bytes_read: compressed_bytes.bytes(),
+            ..Default::default()
+        })?;
+
         Ok(contents)
     }
 
     /// Parse the data tarball to extract the file list.
-    fn parse_data_tar(data_tar: &ReopenablePayload) -> Result<PackagePayload> {
-        payload::parse_package_payload(data_tar)
+    fn parse_data_tar(
+        data_tar: &ReopenablePayload,
+        metrics: &mut crate::packages::NativePackageParseMetrics,
+    ) -> Result<PackagePayload> {
+        payload::parse_package_payload_with_metrics(data_tar, metrics)
     }
 
     fn convert_declared_capability_records(
@@ -510,10 +566,11 @@ impl PackageFormat for DebPackage {
         debug!("Parsing Debian package: {}", path);
 
         // Extract and parse control file
-        let (control_data, data_tar_data) = Self::extract_ar_members(path)?;
+        let (control_data, data_tar_data, mut parse_metrics) = Self::extract_ar_members(path)?;
 
         // Single-pass extraction of control text, scriptlets, and conffiles
-        let control_tar = Self::parse_control_tar_all(&control_data)?;
+        let control_tar =
+            Self::parse_control_tar_all_with_metrics(&control_data, &mut parse_metrics)?;
         let control_text = control_tar.control_text.as_deref().ok_or_else(|| {
             Error::ParseError("DEB control archive does not contain a control file".to_string())
         })?;
@@ -534,7 +591,7 @@ impl PackageFormat for DebPackage {
         );
 
         // Extract file list
-        let payload = Self::parse_data_tar(&data_tar_data)?;
+        let payload = Self::parse_data_tar(&data_tar_data, &mut parse_metrics)?;
         let files: Vec<PackageFile> = payload
             .files()
             .iter()
@@ -614,6 +671,7 @@ impl PackageFormat for DebPackage {
             homepage: control.homepage,
             installed_size: control.installed_size,
             payload,
+            parse_metrics,
         })
     }
 
@@ -677,6 +735,11 @@ impl PackageFormat for DebPackage {
 }
 
 impl DebPackage {
+    #[must_use]
+    pub fn parse_metrics(&self) -> crate::packages::NativePackageParseMetrics {
+        self.parse_metrics
+    }
+
     /// Get package maintainer
     pub fn maintainer(&self) -> Option<&str> {
         self.maintainer.as_deref()

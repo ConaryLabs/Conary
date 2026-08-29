@@ -28,12 +28,45 @@ mod stream;
 
 use header::{HeaderRecord, RpmFileDigestAlgorithm, header_records};
 
-pub(super) fn parse_stream(package: &Package, payload: Box<dyn Read>) -> Result<PackagePayload> {
+pub(super) fn parse_stream(
+    package: &Package,
+    payload: Box<dyn Read>,
+    decompressed_bytes: &crate::packages::parse_metrics::ReadCounter,
+) -> Result<(PackagePayload, crate::packages::NativePackageParseMetrics)> {
     require_cpio_payload(package)?;
     let records = header_records(package)?;
     let spool = PayloadSpool::new(stream::required_spool_bytes(&records)?)?;
-    let members = stream::parse_members(package, payload, &records, &spool)?;
-    project_records(&records, members)
+    let members = stream::parse_members(package, payload, &records, &spool, decompressed_bytes)?;
+    let payload_files_spooled = members
+        .iter()
+        .filter(|member| member.source.is_some())
+        .count();
+    let payload_bytes_spooled = members
+        .iter()
+        .filter(|member| member.source.is_some())
+        .try_fold(0_u64, |total, member| {
+            total
+                .checked_add(member.content_size)
+                .ok_or_else(|| parse_error("RPM payload spool byte count overflow"))
+        })?;
+    let archive_entries_traversed = u64::try_from(members.len())
+        .map_err(|_| parse_error("RPM payload member count exceeds u64"))?;
+    let payload = project_records(&records, members)?;
+    Ok((
+        payload,
+        crate::packages::NativePackageParseMetrics {
+            archive_passes: 1,
+            archive_entries_traversed,
+            decompressed_archive_bytes_read: decompressed_bytes.bytes(),
+            payload_files_spooled: u64::try_from(payload_files_spooled)
+                .map_err(|_| parse_error("RPM payload spool file count exceeds u64"))?,
+            payload_bytes_spooled,
+            payload_spool_file_syncs: u64::try_from(payload_files_spooled)
+                .map_err(|_| parse_error("RPM payload spool file count exceeds u64"))?,
+            payload_bytes_hashed: payload_bytes_spooled,
+            ..Default::default()
+        },
+    ))
 }
 
 fn project_records(
@@ -113,10 +146,13 @@ fn project_records(
 
 #[cfg(test)]
 fn parse(package: &Package) -> Result<PackagePayload> {
+    let decompressed_bytes = crate::packages::parse_metrics::ReadCounter::default();
     parse_stream(
         package,
         Box::new(std::io::Cursor::new(package.payload.clone())),
+        &decompressed_bytes,
     )
+    .map(|(payload, _metrics)| payload)
 }
 
 fn require_cpio_payload(package: &Package) -> Result<()> {

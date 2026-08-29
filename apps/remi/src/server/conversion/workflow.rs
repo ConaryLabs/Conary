@@ -28,6 +28,7 @@ struct ParsedConversion {
     source: PinnedConversionSource,
     phase_timings: Vec<ConversionPhaseTiming>,
     nested_phase_timings: Vec<ConversionNestedPhaseTiming>,
+    native_parse: conary_core::packages::NativePackageParseMetrics,
     native_payload_entries: u64,
     native_payload_regular_files: u64,
     native_payload_declared_bytes: u64,
@@ -410,6 +411,7 @@ impl ConversionService {
         timing.work.native_payload_entries = parsed.native_payload_entries;
         timing.work.native_payload_regular_files = parsed.native_payload_regular_files;
         timing.work.native_payload_declared_bytes = parsed.native_payload_declared_bytes;
+        timing.work.record_native_parse(&parsed.native_parse);
         timing
             .work
             .record_native_conversion(&parsed.conversion_result.metrics);
@@ -568,7 +570,8 @@ impl ConversionService {
         let mut phase_timings = Vec::new();
 
         let started = Instant::now();
-        let (metadata, files, format) = self.parse_package(&pkg_path, source_profile)?;
+        let (metadata, files, format, native_parse) =
+            self.parse_package(&pkg_path, source_profile)?;
         phase_timings.push(ConversionPhaseTiming {
             phase: ConversionPhase::NativeArchiveParseAndSpool,
             duration_ms: started.elapsed().as_millis(),
@@ -682,6 +685,7 @@ impl ConversionService {
             source,
             phase_timings,
             nested_phase_timings,
+            native_parse,
             native_payload_entries,
             native_payload_regular_files,
             native_payload_declared_bytes,

@@ -42,6 +42,10 @@ impl ArchivePayloadEntry {
             .map(|authority| authority.size)
     }
 
+    pub(crate) fn spooled_file_count(&self) -> u64 {
+        u64::from(self.source.is_some()) + u64::from(self._hardlink_source.is_some())
+    }
+
     pub(super) fn read_regular_content_bounded(&self, limit: u64) -> Result<Option<Vec<u8>>> {
         if !self.node.kind.is_regular() {
             return Ok(None);

@@ -23,7 +23,7 @@ use crate::repository::dependency_model::{
 use crate::repository::versioning::{EopkgVersionConstraint, VersionScheme};
 use authority::{EopkgConfigDeclaration, EopkgDeclaredCapability, EopkgPackageAuthority};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 
 pub struct EopkgPackage {
     authority: EopkgPackageAuthority,
@@ -32,6 +32,7 @@ pub struct EopkgPackage {
     requirements: Vec<RepositoryRequirementGroup>,
     relations: Vec<RepositoryRequirementGroup>,
     payload: PackagePayload,
+    parse_metrics: crate::packages::NativePackageParseMetrics,
 }
 
 pub(crate) fn has_package_contract(path: &std::path::Path) -> Result<bool> {
@@ -61,7 +62,11 @@ pub(crate) fn has_package_contract(path: &std::path::Path) -> Result<bool> {
     Ok(xml::parse_metadata(&metadata).is_ok())
 }
 
-fn read_zip_member(archive: &mut zip::ZipArchive<File>, name: &str, limit: u64) -> Result<Vec<u8>> {
+fn read_zip_member<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+    limit: u64,
+) -> Result<Vec<u8>> {
     let mut member = archive
         .by_name(name)
         .map_err(|error| Error::ParseError(format!("eopkg lacks exact {name} member: {error}")))?;
@@ -147,8 +152,14 @@ pub(crate) fn relation_groups(
 impl PackageFormat for EopkgPackage {
     fn parse(path: &str) -> Result<Self> {
         let bounds = CCS_BUDGET.archive_decode_bounds()?;
+        let source_bytes = crate::packages::parse_metrics::ReadCounter::default();
+        let mut parse_metrics = crate::packages::NativePackageParseMetrics {
+            source_archive_opens: 1,
+            archive_passes: 1,
+            ..Default::default()
+        };
         let file = File::open(path)?;
-        let mut archive = zip::ZipArchive::new(file)
+        let mut archive = zip::ZipArchive::new(source_bytes.wrap(file))
             .map_err(|error| Error::ParseError(format!("invalid eopkg ZIP contract: {error}")))?;
         if archive.len() != 3 {
             return Err(Error::ParseError(format!(
@@ -170,9 +181,26 @@ impl PackageFormat for EopkgPackage {
                 )));
             }
         }
+        parse_metrics.checked_add(crate::packages::NativePackageParseMetrics {
+            archive_entries_traversed: u64::try_from(archive.len())
+                .map_err(|_| Error::ParseError("eopkg member count exceeds u64".to_string()))?,
+            ..Default::default()
+        })?;
         let metadata_bytes =
             read_zip_member(&mut archive, "metadata.xml", bounds.max_metadata_bytes)?;
         let files_bytes = read_zip_member(&mut archive, "files.xml", bounds.max_metadata_bytes)?;
+        parse_metrics.checked_add(crate::packages::NativePackageParseMetrics {
+            archive_entries_traversed: 2,
+            decompressed_archive_bytes_read: u64::try_from(metadata_bytes.len())
+                .map_err(|_| Error::ParseError("eopkg metadata size exceeds u64".to_string()))?
+                .checked_add(u64::try_from(files_bytes.len()).map_err(|_| {
+                    Error::ParseError("eopkg files metadata size exceeds u64".to_string())
+                })?)
+                .ok_or_else(|| {
+                    Error::ParseError("eopkg decoded metadata size overflow".to_string())
+                })?,
+            ..Default::default()
+        })?;
         bounds.admit_metadata_bytes(
             "eopkg XML metadata",
             (metadata_bytes.len() + files_bytes.len()) as u64,
@@ -181,6 +209,7 @@ impl PackageFormat for EopkgPackage {
         let file_records = xml::parse_files(&files_bytes)?;
 
         let mut inner = tempfile::NamedTempFile::new()?;
+        let inner_bytes;
         {
             let mut member = archive
                 .by_name("install.tar.xz")
@@ -191,10 +220,22 @@ impl PackageFormat for EopkgPackage {
                     bounds.max_total_payload_bytes
                 )));
             }
-            std::io::copy(&mut member, &mut inner)?;
+            inner_bytes = std::io::copy(&mut member, &mut inner)?;
+            if inner_bytes != member.size() {
+                return Err(Error::ParseError(
+                    "eopkg install.tar.xz changed size while being staged".to_string(),
+                ));
+            }
             inner.flush()?;
         }
-        let payload = payload::parse(inner.path(), &file_records, &bounds)?;
+        parse_metrics.checked_add(crate::packages::NativePackageParseMetrics {
+            archive_entries_traversed: 1,
+            decompressed_archive_bytes_read: inner_bytes,
+            intermediate_archive_bytes_written: inner_bytes,
+            ..Default::default()
+        })?;
+        parse_metrics.source_archive_bytes_read = source_bytes.bytes();
+        let payload = payload::parse(inner.path(), &file_records, &bounds, &mut parse_metrics)?;
         let files = payload
             .files()
             .iter()
@@ -284,6 +325,7 @@ impl PackageFormat for EopkgPackage {
             requirements,
             relations,
             payload,
+            parse_metrics,
         })
     }
 
@@ -343,6 +385,13 @@ impl PackageFormat for EopkgPackage {
         )
         .ok();
         trove
+    }
+}
+
+impl EopkgPackage {
+    #[must_use]
+    pub fn parse_metrics(&self) -> crate::packages::NativePackageParseMetrics {
+        self.parse_metrics
     }
 }
 

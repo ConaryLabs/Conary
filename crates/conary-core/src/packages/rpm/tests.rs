@@ -31,6 +31,7 @@ fn package_for_test(name: &str, version: &str) -> RpmPackage {
         license: None,
         url: None,
         payload: PackagePayload::default(),
+        parse_metrics: Default::default(),
     }
 }
 
@@ -90,6 +91,39 @@ fn rpm_artifact_parser_preserves_nonzero_epoch_in_version_identity() {
     let parsed = RpmPackage::parse(package_path.to_str().unwrap()).unwrap();
 
     assert_eq!(parsed.version(), "7:2.0-3.fc44");
+}
+
+#[test]
+fn rpm_parse_metrics_report_archive_spool_and_hash_work() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let package_path = temp_dir.path().join("metrics-fixture.rpm");
+    let mut builder = rpm::PackageBuilder::new(
+        "metrics-fixture",
+        "1",
+        "MIT",
+        "x86_64",
+        "RPM parse metrics fixture",
+    );
+    builder
+        .with_file_contents(
+            b"hello".to_vec(),
+            rpm::FileOptions::new("/usr/bin/metrics-fixture").permissions(0o755),
+        )
+        .unwrap();
+    builder.build().unwrap().write_file(&package_path).unwrap();
+
+    let parsed = RpmPackage::parse(package_path.to_str().unwrap()).unwrap();
+    let metrics = parsed.parse_metrics();
+
+    assert_eq!(metrics.source_archive_opens, 1);
+    assert_eq!(metrics.archive_passes, 1);
+    assert_eq!(metrics.archive_entries_traversed, 1);
+    assert_eq!(metrics.payload_files_spooled, 1);
+    assert_eq!(metrics.payload_bytes_spooled, 5);
+    assert_eq!(metrics.payload_spool_file_syncs, 1);
+    assert_eq!(metrics.payload_bytes_hashed, 5);
+    assert!(metrics.source_archive_bytes_read > 0);
+    assert!(metrics.decompressed_archive_bytes_read > 0);
 }
 
 #[test]

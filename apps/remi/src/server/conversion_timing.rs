@@ -37,6 +37,19 @@ pub struct ConversionWorkMetrics {
     pub native_payload_entries: u64,
     pub native_payload_regular_files: u64,
     pub native_payload_declared_bytes: u64,
+    pub native_source_archive_opens: u64,
+    pub native_source_archive_bytes_read: u64,
+    pub native_archive_passes: u64,
+    pub native_archive_entries_traversed: u64,
+    pub native_decompressed_archive_bytes_read: u64,
+    pub native_intermediate_archive_bytes_written: u64,
+    pub native_intermediate_archive_bytes_read: u64,
+    pub native_intermediate_archive_file_syncs: u64,
+    pub native_payload_files_spooled: u64,
+    pub native_payload_bytes_spooled: u64,
+    pub native_payload_spool_bytes_reread: u64,
+    pub native_payload_spool_file_syncs: u64,
+    pub native_payload_bytes_hashed: u64,
     pub payload_files_examined: u64,
     pub payload_reference_bytes_read: u64,
     pub payload_reference_bytes_hashed: u64,
@@ -79,6 +92,25 @@ pub struct ConversionWorkMetrics {
 }
 
 impl ConversionWorkMetrics {
+    pub fn record_native_parse(
+        &mut self,
+        metrics: &conary_core::packages::NativePackageParseMetrics,
+    ) {
+        self.native_source_archive_opens = metrics.source_archive_opens;
+        self.native_source_archive_bytes_read = metrics.source_archive_bytes_read;
+        self.native_archive_passes = metrics.archive_passes;
+        self.native_archive_entries_traversed = metrics.archive_entries_traversed;
+        self.native_decompressed_archive_bytes_read = metrics.decompressed_archive_bytes_read;
+        self.native_intermediate_archive_bytes_written = metrics.intermediate_archive_bytes_written;
+        self.native_intermediate_archive_bytes_read = metrics.intermediate_archive_bytes_read;
+        self.native_intermediate_archive_file_syncs = metrics.intermediate_archive_file_syncs;
+        self.native_payload_files_spooled = metrics.payload_files_spooled;
+        self.native_payload_bytes_spooled = metrics.payload_bytes_spooled;
+        self.native_payload_spool_bytes_reread = metrics.payload_spool_bytes_reread;
+        self.native_payload_spool_file_syncs = metrics.payload_spool_file_syncs;
+        self.native_payload_bytes_hashed = metrics.payload_bytes_hashed;
+    }
+
     pub fn record_native_conversion(
         &mut self,
         metrics: &conary_core::ccs::convert::NativeConversionMetrics,
@@ -332,5 +364,33 @@ mod tests {
         assert_eq!(work.archive_input_bytes, 240);
         assert_eq!(work.immediate_converter_reopen_ccs_bytes, 180);
         assert_eq!(work.maximum_retained_staging_bytes, 420);
+    }
+
+    #[test]
+    fn native_parse_work_maps_archive_spool_and_hash_passes_separately() {
+        let metrics = conary_core::packages::NativePackageParseMetrics {
+            source_archive_opens: 2,
+            source_archive_bytes_read: 200,
+            archive_passes: 3,
+            archive_entries_traversed: 40,
+            decompressed_archive_bytes_read: 500,
+            intermediate_archive_bytes_written: 100,
+            intermediate_archive_bytes_read: 200,
+            intermediate_archive_file_syncs: 1,
+            payload_files_spooled: 10,
+            payload_bytes_spooled: 300,
+            payload_spool_bytes_reread: 30,
+            payload_spool_file_syncs: 10,
+            payload_bytes_hashed: 600,
+        };
+        let mut work = ConversionWorkMetrics::default();
+
+        work.record_native_parse(&metrics);
+
+        assert_eq!(work.native_source_archive_bytes_read, 200);
+        assert_eq!(work.native_archive_passes, 3);
+        assert_eq!(work.native_intermediate_archive_file_syncs, 1);
+        assert_eq!(work.native_payload_spool_bytes_reread, 30);
+        assert_eq!(work.native_payload_bytes_hashed, 600);
     }
 }
