@@ -560,7 +560,7 @@ impl PackageFormat for ArchPackage {
         parse_metrics.payload_files_spooled = payload_files_spooled;
         parse_metrics.payload_bytes_spooled = required_spool_bytes;
         parse_metrics.payload_spool_bytes_reread = payload_spool_bytes_reread;
-        parse_metrics.payload_spool_file_syncs = payload_files_spooled;
+        parse_metrics.payload_spool_file_syncs = 0;
         parse_metrics.payload_bytes_hashed = required_spool_bytes;
         let payload = PackagePayload::new(payload::resolve_hardlinks(payload_entries)?);
         let files = payload

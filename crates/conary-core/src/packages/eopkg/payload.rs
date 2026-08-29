@@ -136,7 +136,7 @@ pub(super) fn parse(
         })?;
     metrics.payload_files_spooled = payload_files_spooled;
     metrics.payload_bytes_spooled = required;
-    metrics.payload_spool_file_syncs = payload_files_spooled;
+    metrics.payload_spool_file_syncs = 0;
     metrics.payload_bytes_hashed = required;
     let mut files = payload::resolve_hardlinks(parsed)?;
     apply_files_xml_xattrs(&mut files, records)?;

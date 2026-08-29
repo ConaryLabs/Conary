@@ -360,7 +360,7 @@ impl<'a> RpmPayloadReader<'a> {
                 let path = self.spool.indexed_path(index);
                 let mut output = File::create(&path)?;
                 let (sha256, crc) = copy_exact_payload(&mut self.reader, &mut output, size)?;
-                output.sync_all()?;
+                drop(output);
                 (Some(self.spool.source(path)), Some(sha256), crc)
             }
             libc::S_IFLNK => {

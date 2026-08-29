@@ -61,8 +61,7 @@ pub(super) fn parse_stream(
             payload_files_spooled: u64::try_from(payload_files_spooled)
                 .map_err(|_| parse_error("RPM payload spool file count exceeds u64"))?,
             payload_bytes_spooled,
-            payload_spool_file_syncs: u64::try_from(payload_files_spooled)
-                .map_err(|_| parse_error("RPM payload spool file count exceeds u64"))?,
+            payload_spool_file_syncs: 0,
             payload_bytes_hashed: payload_bytes_spooled,
             ..Default::default()
         },
