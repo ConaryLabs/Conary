@@ -317,6 +317,35 @@ fn local_logical_proof_survives_manifesting_and_atomic_publication() {
         "publication must perform exactly one independent destination reopen"
     );
     assert!(!candidate.exists());
+    let registered = match &published.physical_seal {
+        CatalogPhysicalSealOutcomeV1::LinuxFsVerityV1 { digest_sha256 } => {
+            verify_registered_source_catalog_bundle_with_fsverity(
+                &published,
+                &manifest,
+                digest_sha256,
+            )
+            .unwrap()
+        }
+        CatalogPhysicalSealOutcomeV1::FullScanFilesystemUnsupported
+        | CatalogPhysicalSealOutcomeV1::FullScanPlatformUnsupported => {
+            verify_registered_source_catalog_bundle(&published, &manifest).unwrap()
+        }
+    };
+    let evidence = registered.verification_evidence();
+    assert_eq!(evidence.logical_replay_passes, 0);
+    match &published.physical_seal {
+        CatalogPhysicalSealOutcomeV1::LinuxFsVerityV1 { .. } => {
+            assert_eq!(evidence.fsverity_measurement_passes, 1);
+            assert_eq!(evidence.userspace_sha256_passes, 0);
+            assert_eq!(evidence.sqlite_integrity_passes, 0);
+        }
+        CatalogPhysicalSealOutcomeV1::FullScanFilesystemUnsupported
+        | CatalogPhysicalSealOutcomeV1::FullScanPlatformUnsupported => {
+            assert_eq!(evidence.fsverity_measurement_passes, 0);
+            assert_eq!(evidence.userspace_sha256_passes, 1);
+            assert_eq!(evidence.sqlite_integrity_passes, 1);
+        }
+    }
     verify_source_catalog_bundle(&published, &manifest).unwrap();
 }
 

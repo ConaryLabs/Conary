@@ -2,18 +2,71 @@
 
 //! Immutable reopen checks and non-serializable exact-artifact proofs.
 
-use std::fs;
-use std::path::Path;
-use std::time::Instant;
+use std::fs::{self, File, OpenOptions};
+use std::io::BufReader;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
-use super::util::{
-    conversion_error, hash_file, parse_json_column, read_u64, reject_nonempty_sidecars,
-};
+use super::util::{conversion_error, parse_json_column, read_u64, reject_nonempty_sidecars};
 use super::{CATALOG_APPLICATION_ID, CATALOG_CONTENT_SCHEMA_V1, CatalogBindingV1, CatalogReader};
 use crate::error::{Error, Result};
+#[cfg(target_os = "linux")]
+use crate::filesystem::fsverity::{
+    FsVerityFileError, enable_and_measure_fsverity_file, measure_fsverity_file,
+};
 use crate::repository::catalog::{CatalogArtifactV1, CatalogCountsV1};
+
+/// Production evidence for the exact work one catalog reader performed while
+/// establishing authority.
+///
+/// Timings are monotonic wall-clock microseconds. Deterministic counters name
+/// complete verification passes and bytes covered; observed process I/O is
+/// recorded separately by the Remi benchmark because page-cache behavior is
+/// intentionally not authority.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogVerificationEvidenceV1 {
+    pub catalog_bytes: u64,
+    pub total_wall_us: u64,
+    pub layout_sidecars_wall_us: u64,
+    pub artifact_identity_wall_us: u64,
+    pub sqlite_open_header_wall_us: u64,
+    pub sqlite_integrity_wall_us: u64,
+    pub stored_binding_wall_us: u64,
+    pub logical_replay_wall_us: u64,
+    pub userspace_sha256_passes: u64,
+    pub userspace_sha256_bytes: u64,
+    pub fsverity_measurement_passes: u64,
+    pub sqlite_integrity_passes: u64,
+    pub sqlite_integrity_bytes_covered: u64,
+    pub stored_binding_checks: u64,
+    pub logical_replay_passes: u64,
+}
+
+/// Same-process result of sealing a fully verified durable catalog.
+///
+/// This value is deliberately not serializable durable authority. Remi maps
+/// it into the checked operational resource schema in the same publication
+/// ceremony that registers the exact manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogPhysicalSealOutcomeV1 {
+    LinuxFsVerityV1 { digest_sha256: String },
+    FullScanFilesystemUnsupported,
+    FullScanPlatformUnsupported,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PhysicalVerification<'a> {
+    FullScan,
+    LinuxFsVerityV1 { digest_sha256: &'a str },
+}
 
 /// Read the embedded binding without treating it as independent authority.
 pub(super) fn read_binding(
@@ -111,9 +164,177 @@ impl CatalogVerificationProofV1 {
     }
 }
 
+fn elapsed_us(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
+fn catalog_display_path(path: &Path) -> Result<PathBuf> {
+    let parent = path.parent().ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "immutable catalog {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        Error::InvalidPath(format!(
+            "immutable catalog {} has no file name",
+            path.display()
+        ))
+    })?;
+    Ok(parent.canonicalize()?.join(file_name))
+}
+
+fn open_catalog_anchor(path: &Path) -> Result<(PathBuf, File, fs::Metadata)> {
+    let path_metadata = fs::symlink_metadata(path).map_err(|error| {
+        Error::IoError(format!(
+            "inspect immutable catalog {}: {error}",
+            path.display()
+        ))
+    })?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
+        return Err(Error::InvalidPath(format!(
+            "immutable catalog {} must be a regular file, never a symlink",
+            path.display()
+        )));
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let file = options.open(path).map_err(|error| {
+        Error::IoError(format!(
+            "open immutable catalog {} without following symlinks: {error}",
+            path.display()
+        ))
+    })?;
+    let file_metadata = file.metadata()?;
+    if !file_metadata.file_type().is_file() {
+        return Err(Error::InvalidPath(format!(
+            "immutable catalog {} did not open as a regular file",
+            path.display()
+        )));
+    }
+    require_same_open_file(path, &path_metadata, &file_metadata)?;
+    Ok((catalog_display_path(path)?, file, file_metadata))
+}
+
+#[cfg(unix)]
+fn require_same_open_file(
+    path: &Path,
+    path_metadata: &fs::Metadata,
+    file_metadata: &fs::Metadata,
+) -> Result<()> {
+    if path_metadata.dev() != file_metadata.dev() || path_metadata.ino() != file_metadata.ino() {
+        return Err(Error::ConflictError(format!(
+            "immutable catalog {} changed while its file descriptor was opened",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn require_same_open_file(
+    _path: &Path,
+    _path_metadata: &fs::Metadata,
+    _file_metadata: &fs::Metadata,
+) -> Result<()> {
+    Ok(())
+}
+
+fn require_path_still_names_anchor(path: &Path, file: &File) -> Result<()> {
+    let path_metadata = fs::symlink_metadata(path).map_err(|error| {
+        Error::IoError(format!(
+            "reinspect immutable catalog {} after verification: {error}",
+            path.display()
+        ))
+    })?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
+        return Err(Error::InvalidPath(format!(
+            "immutable catalog {} changed file type during verification",
+            path.display()
+        )));
+    }
+    require_same_open_file(path, &path_metadata, &file.metadata()?)
+}
+
+fn hash_catalog_anchor(file: &File) -> Result<String> {
+    let mut reader = BufReader::new(file.try_clone()?);
+    Ok(crate::hash::sha256_reader_hex(&mut reader)?)
+}
+
+#[cfg(target_os = "linux")]
+fn sqlite_anchor_path(file: &File) -> PathBuf {
+    PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sqlite_anchor_path(_file: &File) -> PathBuf {
+    PathBuf::new()
+}
+
+fn open_sqlite_anchor(file: &File, _display_path: &Path) -> Result<Connection> {
+    #[cfg(target_os = "linux")]
+    let sqlite_path = sqlite_anchor_path(file);
+    #[cfg(not(target_os = "linux"))]
+    let sqlite_path = _display_path.to_path_buf();
+
+    let mut uri = url::Url::from_file_path(&sqlite_path).map_err(|_| {
+        Error::InvalidPath(format!(
+            "catalog anchor {} cannot be represented as an immutable SQLite URI",
+            sqlite_path.display()
+        ))
+    })?;
+    uri.query_pairs_mut().append_pair("immutable", "1");
+    let connection = Connection::open_with_flags(
+        uri.as_str(),
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
+    )?;
+    connection.execute_batch(
+        "PRAGMA query_only = ON; PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;",
+    )?;
+    Ok(connection)
+}
+
+#[cfg(target_os = "linux")]
+fn measure_registered_fsverity(file: &File, expected_digest_sha256: &str) -> Result<()> {
+    super::validate_sha256(
+        expected_digest_sha256,
+        "registered catalog fs-verity digest",
+    )?;
+    let measurement = measure_fsverity_file(file).map_err(|error| {
+        Error::ConflictError(format!(
+            "registered catalog fs-verity measurement failed closed: {error}"
+        ))
+    })?;
+    let actual = hex::encode(measurement.digest);
+    if actual != expected_digest_sha256 {
+        return Err(Error::ChecksumMismatch {
+            expected: expected_digest_sha256.to_string(),
+            actual,
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn measure_registered_fsverity(_file: &File, _expected_digest_sha256: &str) -> Result<()> {
+    Err(Error::ConfigError(
+        "linux_fs_verity_v1 catalog authority is unavailable on this platform".to_string(),
+    ))
+}
+
 impl CatalogReader {
     pub fn open_verified(path: impl AsRef<Path>, expected: &CatalogBindingV1) -> Result<Self> {
-        Self::open_verified_inner(path.as_ref(), expected, true)
+        Self::open_verified_inner(
+            path.as_ref(),
+            expected,
+            true,
+            PhysicalVerification::FullScan,
+        )
     }
 
     /// Open an exact signed catalog artifact without replaying its complete
@@ -130,28 +351,29 @@ impl CatalogReader {
         path: impl AsRef<Path>,
         expected: &CatalogBindingV1,
     ) -> Result<Self> {
-        Self::open_verified_inner(path.as_ref(), expected, false)
+        Self::open_verified_inner(
+            path.as_ref(),
+            expected,
+            false,
+            PhysicalVerification::FullScan,
+        )
     }
 
     fn open_verified_inner(
         path: &Path,
         expected: &CatalogBindingV1,
         verify_logical_content: bool,
+        physical_verification: PhysicalVerification<'_>,
     ) -> Result<Self> {
         let started = Instant::now();
+        let mut evidence = CatalogVerificationEvidenceV1 {
+            catalog_bytes: expected.artifact.size,
+            ..CatalogVerificationEvidenceV1::default()
+        };
         expected.validate()?;
-        let metadata = fs::symlink_metadata(path).map_err(|error| {
-            Error::IoError(format!(
-                "inspect immutable catalog {}: {error}",
-                path.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-            return Err(Error::InvalidPath(format!(
-                "immutable catalog {} must be a regular file, never a symlink",
-                path.display()
-            )));
-        }
+
+        let phase_started = Instant::now();
+        let (canonical_path, file_anchor, metadata) = open_catalog_anchor(path)?;
         reject_nonempty_sidecars(path)?;
         if metadata.len() != expected.artifact.size {
             return Err(Error::ChecksumMismatch {
@@ -159,31 +381,30 @@ impl CatalogReader {
                 actual: format!("{} bytes", metadata.len()),
             });
         }
-        let actual_sha256 = hash_file(path)?;
-        if actual_sha256 != expected.artifact.sha256 {
-            return Err(Error::ChecksumMismatch {
-                expected: expected.artifact.sha256.clone(),
-                actual: actual_sha256,
-            });
-        }
+        evidence.layout_sidecars_wall_us = elapsed_us(phase_started.elapsed());
 
-        let canonical_path = path.canonicalize()?;
-        let mut uri = url::Url::from_file_path(&canonical_path).map_err(|_| {
-            Error::InvalidPath(format!(
-                "catalog path {} cannot be represented as an immutable SQLite URI",
-                canonical_path.display()
-            ))
-        })?;
-        uri.query_pairs_mut().append_pair("immutable", "1");
-        let connection = Connection::open_with_flags(
-            uri.as_str(),
-            OpenFlags::SQLITE_OPEN_READ_ONLY
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        connection.execute_batch(
-            "PRAGMA query_only = ON; PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;",
-        )?;
+        let phase_started = Instant::now();
+        match physical_verification {
+            PhysicalVerification::FullScan => {
+                let actual_sha256 = hash_catalog_anchor(&file_anchor)?;
+                if actual_sha256 != expected.artifact.sha256 {
+                    return Err(Error::ChecksumMismatch {
+                        expected: expected.artifact.sha256.clone(),
+                        actual: actual_sha256,
+                    });
+                }
+                evidence.userspace_sha256_passes = 1;
+                evidence.userspace_sha256_bytes = expected.artifact.size;
+            }
+            PhysicalVerification::LinuxFsVerityV1 { digest_sha256 } => {
+                measure_registered_fsverity(&file_anchor, digest_sha256)?;
+                evidence.fsverity_measurement_passes = 1;
+            }
+        }
+        evidence.artifact_identity_wall_us = elapsed_us(phase_started.elapsed());
+
+        let phase_started = Instant::now();
+        let connection = open_sqlite_anchor(&file_anchor, &canonical_path)?;
         let application_id: i64 =
             connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
         if application_id != CATALOG_APPLICATION_ID {
@@ -192,14 +413,24 @@ impl CatalogReader {
                 path.display()
             )));
         }
-        let integrity: String =
-            connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        if integrity != "ok" {
-            return Err(Error::InitError(format!(
-                "catalog {} failed SQLite integrity_check: {integrity}",
-                path.display()
-            )));
+        evidence.sqlite_open_header_wall_us = elapsed_us(phase_started.elapsed());
+
+        if matches!(physical_verification, PhysicalVerification::FullScan) {
+            let phase_started = Instant::now();
+            let integrity: String =
+                connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+            if integrity != "ok" {
+                return Err(Error::InitError(format!(
+                    "catalog {} failed SQLite integrity_check: {integrity}",
+                    path.display()
+                )));
+            }
+            evidence.sqlite_integrity_wall_us = elapsed_us(phase_started.elapsed());
+            evidence.sqlite_integrity_passes = 1;
+            evidence.sqlite_integrity_bytes_covered = expected.artifact.size;
         }
+
+        let phase_started = Instant::now();
         let stored = read_binding(&connection, expected.artifact.clone())?;
         if &stored != expected {
             return Err(Error::ConflictError(format!(
@@ -207,23 +438,37 @@ impl CatalogReader {
                 path.display()
             )));
         }
+        evidence.stored_binding_wall_us = elapsed_us(phase_started.elapsed());
+        evidence.stored_binding_checks = 1;
         let mut reader = Self {
             path: canonical_path,
             binding: expected.clone(),
+            file_anchor,
             connection,
             verification_proof: None,
+            verification_evidence: evidence,
         };
         if verify_logical_content {
+            let phase_started = Instant::now();
             reader.verify_logical_content()?;
+            reader.verification_evidence.logical_replay_wall_us =
+                elapsed_us(phase_started.elapsed());
+            reader.verification_evidence.logical_replay_passes = 1;
             reader.verification_proof = Some(CatalogVerificationProofV1::new(expected));
         }
+        require_path_still_names_anchor(path, &reader.file_anchor)?;
+        reader.verification_evidence.total_wall_us = elapsed_us(started.elapsed());
         #[cfg(test)]
         super::PHYSICAL_VERIFICATION_PASSES.set(super::PHYSICAL_VERIFICATION_PASSES.get() + 1);
         tracing::info!(
             catalog = %reader.path.display(),
             catalog_bytes = expected.artifact.size,
             verify_logical_content,
-            elapsed_ms = started.elapsed().as_millis(),
+            userspace_sha256_passes = reader.verification_evidence.userspace_sha256_passes,
+            fsverity_measurement_passes = reader.verification_evidence.fsverity_measurement_passes,
+            sqlite_integrity_passes = reader.verification_evidence.sqlite_integrity_passes,
+            logical_replay_passes = reader.verification_evidence.logical_replay_passes,
+            elapsed_us = reader.verification_evidence.total_wall_us,
             "Immutable catalog reopen completed"
         );
         Ok(reader)
@@ -243,7 +488,12 @@ impl CatalogReader {
         proof: &CatalogVerificationProofV1,
     ) -> Result<Self> {
         proof.require_binding(expected)?;
-        let mut reader = Self::open_verified_inner(path.as_ref(), expected, false)?;
+        let mut reader = Self::open_verified_inner(
+            path.as_ref(),
+            expected,
+            false,
+            PhysicalVerification::FullScan,
+        )?;
         reader.verification_proof = Some(proof.clone());
         Ok(reader)
     }
@@ -261,9 +511,84 @@ impl CatalogReader {
         attestation: &CatalogDurableLogicalAttestationV1,
     ) -> Result<Self> {
         attestation.require_binding(expected)?;
-        let mut reader = Self::open_verified_inner(path.as_ref(), expected, false)?;
+        let mut reader = Self::open_verified_inner(
+            path.as_ref(),
+            expected,
+            false,
+            PhysicalVerification::FullScan,
+        )?;
         reader.verification_proof = Some(CatalogVerificationProofV1::new(expected));
         Ok(reader)
+    }
+
+    /// Reopen exact registered bytes through an independently measured
+    /// fs-verity identity, without a complete userspace hash or SQLite scan.
+    ///
+    /// The caller owns a checked durable resource record that binds this
+    /// fs-verity digest to bytes which completed the full publication proof.
+    /// Missing kernel support, a missing verity descriptor, or any digest
+    /// mismatch refuses authority instead of falling back.
+    pub(in crate::repository) fn open_verified_with_registered_fsverity(
+        path: impl AsRef<Path>,
+        expected: &CatalogBindingV1,
+        attestation: &CatalogDurableLogicalAttestationV1,
+        digest_sha256: &str,
+    ) -> Result<Self> {
+        attestation.require_binding(expected)?;
+        let mut reader = Self::open_verified_inner(
+            path.as_ref(),
+            expected,
+            false,
+            PhysicalVerification::LinuxFsVerityV1 { digest_sha256 },
+        )?;
+        reader.verification_proof = Some(CatalogVerificationProofV1::new(expected));
+        Ok(reader)
+    }
+
+    /// Seal this fully verified durable reader and return its same-process
+    /// physical-proof outcome for registration.
+    ///
+    /// The SQLite handle is closed before enablement, while the exact file
+    /// descriptor used for SHA-256 and structural verification remains
+    /// anchored. Unsupported filesystems receive a typed full-scan outcome;
+    /// malformed or unexpected kernel failures refuse publication.
+    pub(in crate::repository) fn seal_registered_physical_integrity(
+        self,
+    ) -> Result<CatalogPhysicalSealOutcomeV1> {
+        self.verification_proof()?;
+        let Self {
+            path,
+            file_anchor,
+            connection,
+            ..
+        } = self;
+        drop(connection);
+
+        #[cfg(target_os = "linux")]
+        {
+            match enable_and_measure_fsverity_file(&file_anchor) {
+                Ok(result) => {
+                    file_anchor.sync_all()?;
+                    Ok(CatalogPhysicalSealOutcomeV1::LinuxFsVerityV1 {
+                        digest_sha256: hex::encode(result.measurement.digest),
+                    })
+                }
+                Err(FsVerityFileError::IoctlUnavailable { .. })
+                | Err(FsVerityFileError::NotSupported { .. }) => {
+                    Ok(CatalogPhysicalSealOutcomeV1::FullScanFilesystemUnsupported)
+                }
+                Err(error) => Err(Error::IoError(format!(
+                    "seal fully verified catalog {} with fs-verity: {error}",
+                    path.display()
+                ))),
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (path, file_anchor);
+            Ok(CatalogPhysicalSealOutcomeV1::FullScanPlatformUnsupported)
+        }
     }
 
     pub(in crate::repository) fn verification_proof(&self) -> Result<&CatalogVerificationProofV1> {

@@ -35,6 +35,7 @@ use util::{checked_sqlite_usize, conversion_error, parse_json_column};
 pub(in crate::repository) use verification::{
     CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1,
 };
+pub use verification::{CatalogPhysicalSealOutcomeV1, CatalogVerificationEvidenceV1};
 
 pub(super) const CATALOG_APPLICATION_ID: i64 = 0x434e_5259;
 
@@ -213,8 +214,10 @@ pub struct CatalogPackageNamePageV1 {
 pub struct CatalogReader {
     path: PathBuf,
     binding: CatalogBindingV1,
+    file_anchor: File,
     connection: Connection,
     verification_proof: Option<CatalogVerificationProofV1>,
+    verification_evidence: CatalogVerificationEvidenceV1,
 }
 
 impl CatalogReader {
@@ -226,6 +229,12 @@ impl CatalogReader {
     #[must_use]
     pub fn binding(&self) -> &CatalogBindingV1 {
         &self.binding
+    }
+
+    /// Exact work performed while this reader established catalog authority.
+    #[must_use]
+    pub fn verification_evidence(&self) -> &CatalogVerificationEvidenceV1 {
+        &self.verification_evidence
     }
 
     pub fn packages(&self) -> Result<Vec<CatalogPackageRecordV1>> {

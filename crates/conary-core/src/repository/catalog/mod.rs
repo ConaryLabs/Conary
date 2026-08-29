@@ -15,14 +15,16 @@ mod store;
 pub(in crate::repository) use bundle::retain_source_metadata_object;
 pub use bundle::{
     CATALOG_FILE_NAME, CATALOG_MANIFEST_FILE_NAME, PublishedCatalogBundle,
-    SOURCE_METADATA_DIRECTORY_NAME, publish_profile_catalog_bundle,
+    PublishedVerifiedCatalogBundle, SOURCE_METADATA_DIRECTORY_NAME, publish_profile_catalog_bundle,
     publish_profile_catalog_bundle_verified, publish_profile_catalog_bundle_with_provenance,
     publish_source_catalog_bundle, publish_source_catalog_bundle_verified,
     publish_source_catalog_bundle_with_provenance, source_metadata_object_path,
     verify_profile_catalog_bundle, verify_registered_profile_catalog_bundle,
-    verify_registered_source_catalog_bundle, verify_source_catalog_bundle,
-    write_profile_catalog_manifest, write_profile_catalog_manifest_verified,
-    write_source_catalog_manifest, write_source_catalog_manifest_verified,
+    verify_registered_profile_catalog_bundle_with_fsverity,
+    verify_registered_source_catalog_bundle, verify_registered_source_catalog_bundle_with_fsverity,
+    verify_source_catalog_bundle, write_profile_catalog_manifest,
+    write_profile_catalog_manifest_verified, write_source_catalog_manifest,
+    write_source_catalog_manifest_verified,
 };
 pub use candidate::CatalogCandidateWriter;
 pub use capacity::{
@@ -91,7 +93,8 @@ pub use record::{
 };
 pub use source::SourceCatalogCandidateV1;
 pub use store::{
-    CatalogBindingV1, CatalogPackageNamePageV1, CatalogReader, write_catalog_candidate,
+    CatalogBindingV1, CatalogPackageNamePageV1, CatalogPhysicalSealOutcomeV1, CatalogReader,
+    CatalogVerificationEvidenceV1, write_catalog_candidate,
 };
 pub(in crate::repository) use store::{
     CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1,

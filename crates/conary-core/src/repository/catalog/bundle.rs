@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use super::contract::validate_storage_component;
 use super::store::{CatalogDurableLogicalAttestationV1, CatalogVerificationProofV1};
 use super::{
-    CatalogBindingV1, CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, ProfileRevisionV2,
-    SourceSnapshotV1,
+    CatalogBindingV1, CatalogPhysicalSealOutcomeV1, CatalogReader, CatalogScopeV1,
+    CatalogSourceEvidenceV1, ProfileRevisionV2, SourceSnapshotV1,
 };
 use crate::error::{Error, Result};
 
@@ -29,6 +29,29 @@ pub const SOURCE_METADATA_DIRECTORY_NAME: &str = "native-metadata";
 pub struct PublishedCatalogBundle {
     pub path: PathBuf,
     pub newly_created: bool,
+}
+
+/// A durable catalog publication paired with the exact same-file physical
+/// seal that its operational registry must persist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedVerifiedCatalogBundle {
+    pub path: PathBuf,
+    pub newly_created: bool,
+    pub physical_seal: CatalogPhysicalSealOutcomeV1,
+}
+
+impl AsRef<Path> for PublishedVerifiedCatalogBundle {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl std::ops::Deref for PublishedVerifiedCatalogBundle {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
 }
 
 impl PublishedCatalogBundle {
@@ -141,6 +164,25 @@ pub fn verify_registered_source_catalog_bundle(
     Ok(reader)
 }
 
+/// Reopen a registered source bundle through its persisted fs-verity identity.
+/// Candidate and externally supplied bundles cannot enter this path.
+pub fn verify_registered_source_catalog_bundle_with_fsverity(
+    directory: impl AsRef<Path>,
+    expected: &SourceSnapshotV1,
+    digest_sha256: &str,
+) -> Result<CatalogReader> {
+    expected.validate()?;
+    verify_exact_source_directory(directory.as_ref())?;
+    verify_manifest_file(directory.as_ref(), expected)?;
+    let reader = verify_source_catalog_binding_with_registered_fsverity(
+        directory.as_ref(),
+        expected,
+        digest_sha256,
+    )?;
+    verify_source_metadata_directory(directory.as_ref(), expected)?;
+    Ok(reader)
+}
+
 fn verify_source_catalog_bundle_with_proof(
     directory: &Path,
     expected: &SourceSnapshotV1,
@@ -184,6 +226,23 @@ pub fn verify_registered_profile_catalog_bundle(
     verify_exact_profile_directory(directory.as_ref())?;
     verify_manifest_file(directory.as_ref(), expected)?;
     verify_profile_catalog_binding_with_durable_attestation(directory.as_ref(), expected)
+}
+
+/// Reopen a registered profile bundle through its persisted fs-verity identity.
+/// Candidate and externally supplied bundles cannot enter this path.
+pub fn verify_registered_profile_catalog_bundle_with_fsverity(
+    directory: impl AsRef<Path>,
+    expected: &ProfileRevisionV2,
+    digest_sha256: &str,
+) -> Result<CatalogReader> {
+    expected.validate()?;
+    verify_exact_profile_directory(directory.as_ref())?;
+    verify_manifest_file(directory.as_ref(), expected)?;
+    verify_profile_catalog_binding_with_registered_fsverity(
+        directory.as_ref(),
+        expected,
+        digest_sha256,
+    )
 }
 
 fn verify_profile_catalog_bundle_with_proof(
@@ -275,7 +334,7 @@ pub fn publish_source_catalog_bundle_verified(
     catalog_root: impl AsRef<Path>,
     manifest: &SourceSnapshotV1,
     verified: CatalogReader,
-) -> Result<PathBuf> {
+) -> Result<PublishedVerifiedCatalogBundle> {
     let candidate_directory = candidate_directory.as_ref();
     manifest.validate()?;
     require_source_catalog_binding(candidate_directory, manifest, &verified)?;
@@ -284,13 +343,12 @@ pub fn publish_source_catalog_bundle_verified(
     let proof = verified.verification_proof()?.clone();
     drop(verified);
     let parent = ensure_real_subdirectory(catalog_root.as_ref(), "sources")?;
-    publish_verified_directory(
+    publish_verified_directory_for_registration(
         candidate_directory,
         &parent,
         &manifest.manifest_sha256()?,
-        |path| verify_source_catalog_bundle_with_proof(path, manifest, &proof).map(|_| ()),
+        |path| verify_source_catalog_bundle_with_proof(path, manifest, &proof),
     )
-    .map(PublishedCatalogBundle::into_path)
 }
 
 /// Publish a source bundle and report whether this call created its immutable
@@ -327,7 +385,7 @@ pub fn publish_profile_catalog_bundle_verified(
     catalog_root: impl AsRef<Path>,
     manifest: &ProfileRevisionV2,
     verified: CatalogReader,
-) -> Result<PathBuf> {
+) -> Result<PublishedVerifiedCatalogBundle> {
     let candidate_directory = candidate_directory.as_ref();
     manifest.validate()?;
     require_profile_catalog_binding(candidate_directory, manifest, &verified)?;
@@ -338,13 +396,12 @@ pub fn publish_profile_catalog_bundle_verified(
     validate_storage_component(&manifest.profile, "profile catalog storage identity")?;
     let profiles = ensure_real_subdirectory(catalog_root.as_ref(), "profiles")?;
     let parent = ensure_real_subdirectory(&profiles, &manifest.profile)?;
-    publish_verified_directory(
+    publish_verified_directory_for_registration(
         candidate_directory,
         &parent,
         &manifest.manifest_sha256()?,
-        |path| verify_profile_catalog_bundle_with_proof(path, manifest, &proof).map(|_| ()),
+        |path| verify_profile_catalog_bundle_with_proof(path, manifest, &proof),
     )
-    .map(PublishedCatalogBundle::into_path)
 }
 
 /// Publish a profile bundle and report whether this call created its
@@ -502,6 +559,23 @@ fn verify_profile_catalog_binding_with_durable_attestation(
     Ok(reader)
 }
 
+fn verify_profile_catalog_binding_with_registered_fsverity(
+    directory: &Path,
+    manifest: &ProfileRevisionV2,
+    digest_sha256: &str,
+) -> Result<CatalogReader> {
+    let binding = profile_catalog_binding(manifest);
+    let attestation = CatalogDurableLogicalAttestationV1::new(&binding);
+    let reader = CatalogReader::open_verified_with_registered_fsverity(
+        directory.join(CATALOG_FILE_NAME),
+        &binding,
+        &attestation,
+        digest_sha256,
+    )?;
+    verify_profile_evidence(directory, manifest, &reader)?;
+    Ok(reader)
+}
+
 fn verify_source_catalog_binding_with_durable_attestation(
     directory: &Path,
     manifest: &SourceSnapshotV1,
@@ -512,6 +586,23 @@ fn verify_source_catalog_binding_with_durable_attestation(
         directory.join(CATALOG_FILE_NAME),
         &binding,
         &attestation,
+    )?;
+    verify_source_evidence(directory, manifest, &reader)?;
+    Ok(reader)
+}
+
+fn verify_source_catalog_binding_with_registered_fsverity(
+    directory: &Path,
+    manifest: &SourceSnapshotV1,
+    digest_sha256: &str,
+) -> Result<CatalogReader> {
+    let binding = source_catalog_binding(manifest);
+    let attestation = CatalogDurableLogicalAttestationV1::new(&binding);
+    let reader = CatalogReader::open_verified_with_registered_fsverity(
+        directory.join(CATALOG_FILE_NAME),
+        &binding,
+        &attestation,
+        digest_sha256,
     )?;
     verify_source_evidence(directory, manifest, &reader)?;
     Ok(reader)
@@ -681,6 +772,52 @@ where
     Ok(PublishedCatalogBundle {
         path: destination,
         newly_created: true,
+    })
+}
+
+fn publish_verified_directory_for_registration<F>(
+    candidate: &Path,
+    parent: &Path,
+    identity: &str,
+    verify: F,
+) -> Result<PublishedVerifiedCatalogBundle>
+where
+    F: Fn(&Path) -> Result<CatalogReader>,
+{
+    require_real_directory(candidate)?;
+    require_real_directory(parent)?;
+    let destination = parent.join(identity);
+    match fs::symlink_metadata(&destination) {
+        Ok(_) => {
+            let physical_seal = verify(&destination)?.seal_registered_physical_integrity()?;
+            return Ok(PublishedVerifiedCatalogBundle {
+                path: destination,
+                newly_created: false,
+                physical_seal,
+            });
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    require_same_filesystem(candidate, parent)?;
+    fs::rename(candidate, &destination).map_err(|error| {
+        Error::IoError(format!(
+            "atomically publish catalog {} as {}: {error}",
+            candidate.display(),
+            destination.display()
+        ))
+    })?;
+    let sealed = sync_directory(parent)
+        .and_then(|()| verify(&destination))
+        .and_then(CatalogReader::seal_registered_physical_integrity);
+    let physical_seal = match sealed {
+        Ok(seal) => seal,
+        Err(error) => return Err(cleanup_failed_publication(&destination, error)),
+    };
+    Ok(PublishedVerifiedCatalogBundle {
+        path: destination,
+        newly_created: true,
+        physical_seal,
     })
 }
 
