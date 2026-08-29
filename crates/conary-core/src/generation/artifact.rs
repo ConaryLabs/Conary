@@ -172,7 +172,7 @@ pub struct ArtifactWriteInputs<'a> {
     pub architecture: &'a str,
     pub erofs_path: &'a Path,
     pub cas_base_rel: &'a str,
-    pub cas_verification: CasObjectVerification,
+    pub cas_verification: CasObjectVerification<'a>,
     pub boot_assets: BootAssetsManifest,
     pub carrier_capabilities: GenerationCarrierCapabilities,
 }

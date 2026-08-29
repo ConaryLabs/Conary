@@ -97,7 +97,7 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
         architecture,
         erofs_path: &result.image_path,
         cas_base_rel: "../../objects",
-        cas_verification: CasObjectVerification::VerifiedPresence(cas_presence),
+        cas_verification: CasObjectVerification::VerifiedPresence(&cas_presence),
         boot_assets,
         carrier_capabilities,
     })?;
@@ -127,6 +127,7 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
             gen_dir.display()
         ))
     })?;
+    drop(cas_presence);
 
     info!(
         "Generation {} rebuilt in place: {} CAS objects, {} packages ({} metadata-only)",

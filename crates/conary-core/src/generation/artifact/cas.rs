@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::{sha256_file, validate_sha256_hex};
+use crate::filesystem::CasObjectLivenessLease;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CasManifest {
@@ -24,11 +25,14 @@ pub struct CasObjectRef {
 ///
 /// Only [`verify_cas_object_presence`] can mint this value. Its private bindings
 /// let the artifact writer reuse a just-completed runtime preflight without
-/// turning a caller assertion into CAS authority.
+/// turning a caller assertion into CAS authority. The value also retains a
+/// shared object-liveness lease; runtime builders keep it through completion so
+/// Conary garbage collection cannot invalidate the proof before publication.
 #[derive(Debug)]
 pub struct VerifiedCasObjectPresence {
     canonical_cas_dir: PathBuf,
     objects: Vec<CasObjectRef>,
+    _liveness: CasObjectLivenessLease,
 }
 
 impl VerifiedCasObjectPresence {
@@ -54,13 +58,13 @@ impl VerifiedCasObjectPresence {
 }
 
 #[derive(Debug)]
-pub enum CasObjectVerification {
+pub enum CasObjectVerification<'a> {
     /// Reopen and hash every referenced CAS object.
     Deep,
     /// Reopen every authoritative CAS path and verify its recorded size.
     AlreadyVerified,
-    /// Reuse one exact presence-and-size check completed by this process.
-    VerifiedPresence(VerifiedCasObjectPresence),
+    /// Reuse one exact presence-and-size check under its retained liveness lease.
+    VerifiedPresence(&'a VerifiedCasObjectPresence),
 }
 
 pub fn deduplicate_sort_cas_objects(
@@ -90,7 +94,8 @@ pub(crate) fn verify_cas_object_presence(
     cas_dir: &Path,
     objects: &[CasObjectRef],
 ) -> crate::Result<VerifiedCasObjectPresence> {
-    let canonical_cas_dir = std::fs::canonicalize(cas_dir)?;
+    let liveness = CasObjectLivenessLease::acquire(cas_dir)?;
+    let canonical_cas_dir = liveness.canonical_objects_dir().to_path_buf();
     let canonical_objects = deduplicate_sort_cas_objects(objects.to_vec())?;
     if canonical_objects != objects {
         return Err(crate::Error::ConflictError(
@@ -101,6 +106,7 @@ pub(crate) fn verify_cas_object_presence(
     Ok(VerifiedCasObjectPresence {
         canonical_cas_dir,
         objects: objects.to_vec(),
+        _liveness: liveness,
     })
 }
 

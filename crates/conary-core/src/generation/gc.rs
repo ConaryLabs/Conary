@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
+use crate::filesystem::CasObjectCollectionSession;
 use crate::filesystem::CasStore;
 use crate::generation::root_manifest::{
     CapturedSelectedRoot, GenerationRootManifest, MutableStateManifest,
@@ -300,10 +301,16 @@ pub struct GcStats {
     pub deleted_hashes: Vec<String>,
 }
 
-/// Remove CAS objects absent from a previously validated live set.
-pub fn gc_cas_objects(objects_dir: &Path, live_hashes: &HashSet<String>) -> crate::Result<GcStats> {
+/// Remove CAS objects absent from a live set resolved under `collection`.
+///
+/// The collection session must be acquired before assembling the live set so
+/// generation completion cannot race the reachability snapshot.
+pub fn gc_cas_objects(
+    collection: &CasObjectCollectionSession,
+    live_hashes: &HashSet<String>,
+) -> crate::Result<GcStats> {
     gc_cas_objects_at(
-        objects_dir,
+        collection.objects_dir(),
         live_hashes,
         SystemTime::now(),
         GC_RECENT_OBJECT_GRACE_PERIOD,
@@ -744,7 +751,8 @@ mod tests {
         let recent = "c".repeat(64);
         create_cas_object(&objects_dir, &recent, b"recent");
 
-        let stats = gc_cas_objects(&objects_dir, &HashSet::new()).unwrap();
+        let collection = CasObjectCollectionSession::acquire(&objects_dir).unwrap();
+        let stats = gc_cas_objects(&collection, &HashSet::new()).unwrap();
         assert_eq!(stats.objects_checked, 1);
         assert_eq!(stats.objects_removed, 0);
     }

@@ -77,7 +77,7 @@ impl WriterFixture {
             architecture: "x86_64",
             erofs_path: &self.erofs_path,
             cas_base_rel: "../../objects",
-            cas_verification: CasObjectVerification::VerifiedPresence(proof),
+            cas_verification: CasObjectVerification::VerifiedPresence(&proof),
             boot_assets: self.boot_assets.clone(),
             carrier_capabilities: GenerationCarrierCapabilities::default(),
         })

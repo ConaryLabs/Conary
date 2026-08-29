@@ -23,10 +23,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use tracing::{debug, warn};
 
+mod liveness;
 mod stream;
 mod verified_batch;
 mod write_batch;
 
+pub use liveness::CasObjectCollectionSession;
+pub(crate) use liveness::CasObjectLivenessLease;
 pub use verified_batch::{
     VerifiedObjectBatch, VerifiedObjectBatchMetrics, VerifiedObjectDisposition, VerifiedObjectSet,
 };

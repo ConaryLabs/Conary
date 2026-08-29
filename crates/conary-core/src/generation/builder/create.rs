@@ -334,7 +334,7 @@ fn build_generation_from_runtime_inputs(
         architecture,
         erofs_path: &result.image_path,
         cas_base_rel: "../../objects",
-        cas_verification: CasObjectVerification::VerifiedPresence(cas_presence),
+        cas_verification: CasObjectVerification::VerifiedPresence(&cas_presence),
         boot_assets,
         carrier_capabilities,
     })?;
@@ -381,6 +381,7 @@ fn build_generation_from_runtime_inputs(
             gen_dir.display()
         ))
     })?;
+    drop(cas_presence);
     pending_guard.disarm();
 
     info!(

@@ -217,7 +217,7 @@ fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
         );
         assert!(
             source.contains(
-                "cas_verification: CasObjectVerification::VerifiedPresence(cas_presence)"
+                "cas_verification: CasObjectVerification::VerifiedPresence(&cas_presence)"
             ),
             "{label} must pass the exact checked CAS proof into artifact writing"
         );
@@ -230,8 +230,9 @@ fn runtime_generation_artifact_write_reuses_preverified_cas_inputs() {
     assert!(
         artifact_cas_rs.contains("pub(crate) fn verify_cas_object_presence")
             && artifact_cas_rs.contains("canonical_cas_dir: PathBuf")
-            && artifact_cas_rs.contains("objects: Vec<CasObjectRef>"),
-        "only the CAS verifier must mint a proof bound to the canonical root and exact objects"
+            && artifact_cas_rs.contains("objects: Vec<CasObjectRef>")
+            && artifact_cas_rs.contains("_liveness: CasObjectLivenessLease"),
+        "only the CAS verifier must mint a proof bound to the canonical root and exact objects while retaining collection exclusion"
     );
     assert!(
         artifact_rs
