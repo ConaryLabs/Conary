@@ -88,7 +88,14 @@ struct ParsedEntry {
 #[cfg(test)]
 pub(super) fn parse_package_files(data_tar_data: &[u8]) -> Result<Vec<PackageFile>> {
     let bounds = CCS_BUDGET.archive_decode_bounds()?;
-    parse_reader(open_bytes_decoder(data_tar_data, &bounds)?, None, &bounds).map(|entries| {
+    let mut metrics = crate::packages::NativePackageParseMetrics::default();
+    parse_reader(
+        open_bytes_decoder(data_tar_data, &bounds)?,
+        None,
+        &bounds,
+        &mut metrics,
+    )
+    .map(|entries| {
         entries
             .into_iter()
             .map(|entry| PackageFile {
@@ -106,15 +113,32 @@ pub(super) fn extract_files(data_tar_data: &[u8]) -> Result<Vec<ExtractedFile>> 
     parse_package_payload(&source)?.to_extracted_in_memory()
 }
 
+#[cfg(test)]
 pub(super) fn parse_package_payload(data_tar: &ReopenablePayload) -> Result<PackagePayload> {
+    let mut metrics = crate::packages::NativePackageParseMetrics::default();
+    parse_package_payload_with_metrics(data_tar, &mut metrics)
+}
+
+pub(super) fn parse_package_payload_with_metrics(
+    data_tar: &ReopenablePayload,
+    metrics: &mut crate::packages::NativePackageParseMetrics,
+) -> Result<PackagePayload> {
     let bounds = CCS_BUDGET.archive_decode_bounds()?;
-    let metadata = parse_reader(open_source_decoder(data_tar, &bounds)?, None, &bounds)?;
+    let compressed_bytes = crate::packages::parse_metrics::ReadCounter::default();
+    let decompressed_bytes = crate::packages::parse_metrics::ReadCounter::default();
+    let metadata = parse_reader(
+        open_source_decoder(data_tar, &bounds, &compressed_bytes, &decompressed_bytes)?,
+        None,
+        &bounds,
+        metrics,
+    )?;
     let required_bytes = required_spool_bytes(&metadata, &bounds)?;
     let spool = PayloadSpool::new(required_bytes)?;
     let parsed = parse_reader(
-        open_source_decoder(data_tar, &bounds)?,
+        open_source_decoder(data_tar, &bounds, &compressed_bytes, &decompressed_bytes)?,
         Some(&spool),
         &bounds,
+        metrics,
     )?;
     if metadata.len() != parsed.len()
         || metadata.iter().zip(&parsed).any(|(first, second)| {
@@ -127,6 +151,21 @@ pub(super) fn parse_package_payload(data_tar: &ReopenablePayload) -> Result<Pack
             "DEB data tar changed between metadata and payload passes",
         ));
     }
+    let payload_files_spooled =
+        u64::try_from(parsed.iter().filter(|entry| entry.source.is_some()).count())
+            .map_err(|_| data_tar_error("DEB payload spool file count exceeds u64"))?;
+    let payload_bytes_hashed = required_bytes
+        .checked_mul(2)
+        .ok_or_else(|| data_tar_error("DEB payload hash byte count overflow"))?;
+    metrics.checked_add(crate::packages::NativePackageParseMetrics {
+        decompressed_archive_bytes_read: decompressed_bytes.bytes(),
+        intermediate_archive_bytes_read: compressed_bytes.bytes(),
+        payload_files_spooled,
+        payload_bytes_spooled: required_bytes,
+        payload_spool_file_syncs: payload_files_spooled,
+        payload_bytes_hashed,
+        ..Default::default()
+    })?;
     parsed
         .into_iter()
         .map(|entry| {
@@ -169,23 +208,27 @@ fn open_bytes_decoder<'a>(
 fn open_source_decoder(
     source: &ReopenablePayload,
     bounds: &ArchiveDecodeBounds,
+    compressed_bytes: &crate::packages::parse_metrics::ReadCounter,
+    decompressed_bytes: &crate::packages::parse_metrics::ReadCounter,
 ) -> Result<Box<dyn Read>> {
-    let mut probe = source.open()?;
+    let mut probe = compressed_bytes.wrap(source.open()?);
     let mut magic = [0_u8; 8];
     let read = probe.read(&mut magic)?;
     let format = crate::compression::CompressionFormat::from_magic_bytes(&magic[..read]);
-    compression::create_decoder_limited(
-        source.open()?,
+    let decoder = compression::create_decoder_limited(
+        compressed_bytes.wrap(source.open()?),
         format,
         bounds.max_decompressed_stream_bytes,
     )
-    .map_err(|error| data_tar_error(format!("failed to create decoder: {error}")))
+    .map_err(|error| data_tar_error(format!("failed to create decoder: {error}")))?;
+    Ok(Box::new(decompressed_bytes.wrap(decoder)))
 }
 
 fn parse_reader(
     mut reader: Box<dyn Read + '_>,
     spool: Option<&PayloadSpool>,
     bounds: &ArchiveDecodeBounds,
+    metrics: &mut crate::packages::NativePackageParseMetrics,
 ) -> Result<Vec<ParsedEntry>> {
     let mut entries = Vec::<ParsedEntry>::new();
     let mut paths = BTreeSet::<String>::new();
@@ -354,6 +397,14 @@ fn parse_reader(
     }
 
     resolve_hardlinks(&mut entries)?;
+    metrics.archive_passes = metrics
+        .archive_passes
+        .checked_add(1)
+        .ok_or_else(|| data_tar_error("DEB data archive pass count overflow"))?;
+    metrics.archive_entries_traversed = metrics
+        .archive_entries_traversed
+        .checked_add(entries_seen)
+        .ok_or_else(|| data_tar_error("DEB data archive entry count overflow"))?;
     Ok(entries)
 }
 

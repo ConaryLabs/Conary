@@ -8,6 +8,71 @@ use crate::packages::traits::{
 use crate::repository::dependency_model::RepositoryCapabilityKind;
 use std::io::Cursor;
 
+fn gzip_tar(path: &str, mode: u32, body: &[u8]) -> Vec<u8> {
+    let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    let mut header = tar::Header::new_gnu();
+    header.set_path(path).unwrap();
+    header.set_size(body.len() as u64);
+    header.set_mode(mode);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    header.set_cksum();
+    archive.append(&header, Cursor::new(body)).unwrap();
+    archive.into_inner().unwrap().finish().unwrap()
+}
+
+#[test]
+fn deb_parse_metrics_distinguish_outer_and_inner_archive_work() {
+    let root = tempfile::tempdir().unwrap();
+    let binary = root.path().join("debian-binary");
+    let control = root.path().join("control.tar.gz");
+    let data = root.path().join("data.tar.gz");
+    std::fs::write(&binary, b"2.0\n").unwrap();
+    std::fs::write(
+        &control,
+        gzip_tar(
+            "control",
+            0o644,
+            b"Package: demo\nVersion: 1.0\nArchitecture: amd64\nDescription: metrics fixture\n",
+        ),
+    )
+    .unwrap();
+    std::fs::write(&data, gzip_tar("usr/bin/demo", 0o755, b"hello")).unwrap();
+    let package_path = root.path().join("demo_1.0_amd64.deb");
+    let mut archive = ar::Builder::new(std::fs::File::create(&package_path).unwrap());
+    archive
+        .append_file(b"debian-binary", &mut std::fs::File::open(binary).unwrap())
+        .unwrap();
+    archive
+        .append_file(
+            b"control.tar.gz",
+            &mut std::fs::File::open(control).unwrap(),
+        )
+        .unwrap();
+    archive
+        .append_file(b"data.tar.gz", &mut std::fs::File::open(data).unwrap())
+        .unwrap();
+    drop(archive);
+
+    let parsed = DebPackage::parse(package_path.to_str().unwrap()).unwrap();
+    let metrics = parsed.parse_metrics();
+
+    assert_eq!(metrics.source_archive_opens, 1);
+    assert_eq!(metrics.archive_passes, 4);
+    assert_eq!(metrics.archive_entries_traversed, 6);
+    assert_eq!(metrics.intermediate_archive_file_syncs, 1);
+    assert_eq!(metrics.payload_files_spooled, 1);
+    assert_eq!(metrics.payload_bytes_spooled, 5);
+    assert_eq!(metrics.payload_spool_file_syncs, 1);
+    assert_eq!(metrics.payload_bytes_hashed, 10);
+    assert!(metrics.source_archive_bytes_read > 0);
+    assert!(metrics.decompressed_archive_bytes_read > 0);
+    assert!(metrics.intermediate_archive_bytes_written > 0);
+    assert!(metrics.intermediate_archive_bytes_read > 0);
+}
+
 #[test]
 fn declared_member_copy_rejects_shorter_and_longer_bodies() {
     let mut output = Vec::new();

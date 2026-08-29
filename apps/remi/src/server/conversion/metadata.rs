@@ -72,7 +72,12 @@ impl ConversionService {
         &self,
         path: &Path,
         source_profile: &str,
-    ) -> Result<(ForeignConversionInput, PackagePayload, &'static str)> {
+    ) -> Result<(
+        ForeignConversionInput,
+        PackagePayload,
+        &'static str,
+        conary_core::packages::NativePackageParseMetrics,
+    )> {
         let path_str = path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
         let profile = conary_core::repository::supported_profiles::profile_by_id(source_profile)
             .ok_or_else(|| anyhow!("unsupported exact source profile '{source_profile}'"))?;
@@ -81,38 +86,42 @@ impl ConversionService {
             ProfilePackageFormat::Arch => {
                 let pkg = ArchPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse Arch package: {}", e))?;
+                let parse_metrics = pkg.parse_metrics();
                 let files = pkg
                     .package_payload()
                     .map_err(|e| anyhow!("Failed to open Arch package payload: {}", e))?;
                 let metadata = Self::build_metadata(&pkg)?;
-                Ok((metadata, files, "arch"))
+                Ok((metadata, files, "arch", parse_metrics))
             }
             ProfilePackageFormat::Rpm => {
                 let pkg = RpmPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse RPM package: {}", e))?;
+                let parse_metrics = pkg.parse_metrics();
                 let files = pkg
                     .package_payload()
                     .map_err(|e| anyhow!("Failed to open RPM package payload: {}", e))?;
                 let metadata = Self::build_metadata(&pkg)?;
-                Ok((metadata, files, "rpm"))
+                Ok((metadata, files, "rpm", parse_metrics))
             }
             ProfilePackageFormat::Deb => {
                 let pkg = DebPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse DEB package: {}", e))?;
+                let parse_metrics = pkg.parse_metrics();
                 let files = pkg
                     .package_payload()
                     .map_err(|e| anyhow!("Failed to open DEB package payload: {}", e))?;
                 let metadata = Self::build_metadata(&pkg)?;
-                Ok((metadata, files, "deb"))
+                Ok((metadata, files, "deb", parse_metrics))
             }
             ProfilePackageFormat::Eopkg => {
                 let pkg = EopkgPackage::parse(path_str)
                     .map_err(|e| anyhow!("Failed to parse eopkg package: {}", e))?;
+                let parse_metrics = pkg.parse_metrics();
                 let files = pkg
                     .package_payload()
                     .map_err(|e| anyhow!("Failed to open eopkg package payload: {}", e))?;
                 let metadata = Self::build_metadata(&pkg)?;
-                Ok((metadata, files, "eopkg"))
+                Ok((metadata, files, "eopkg", parse_metrics))
             }
         }
     }
@@ -140,7 +149,8 @@ mod tests {
             root.path().join("remi.db"),
             None,
         );
-        let (metadata, payload, format) = service.parse_package(fixture.path(), "solus").unwrap();
+        let (metadata, payload, format, parse_metrics) =
+            service.parse_package(fixture.path(), "solus").unwrap();
 
         assert_eq!(metadata.name(), "demo");
         assert_eq!(metadata.version(), "1.0-2");
@@ -148,6 +158,11 @@ mod tests {
         assert_eq!(metadata.architecture(), Some("x86_64"));
         assert_eq!(payload.files().len(), 1);
         assert_eq!(format, "eopkg");
+        assert_eq!(parse_metrics.source_archive_opens, 1);
+        assert_eq!(parse_metrics.archive_passes, 3);
+        assert_eq!(parse_metrics.payload_bytes_spooled, 5);
+        assert_eq!(parse_metrics.payload_spool_bytes_reread, 5);
+        assert_eq!(parse_metrics.payload_bytes_hashed, 10);
     }
 
     #[test]

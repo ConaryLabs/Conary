@@ -48,6 +48,7 @@ pub struct RpmPackage {
     license: Option<String>,
     url: Option<String>,
     payload: PackagePayload,
+    parse_metrics: crate::packages::NativePackageParseMetrics,
 }
 
 impl RpmPackage {
@@ -361,10 +362,12 @@ impl PackageFormat for RpmPackage {
     fn parse(path: &str) -> Result<Self> {
         debug!("Parsing RPM package: {}", path);
 
+        let source_bytes = crate::packages::parse_metrics::ReadCounter::default();
+        let decompressed_bytes = crate::packages::parse_metrics::ReadCounter::default();
         let file = File::open(path)
             .map_err(|e| Error::InitError(format!("Failed to open RPM file: {}", e)))?;
 
-        let mut buf_reader = BufReader::new(file);
+        let mut buf_reader = BufReader::new(source_bytes.wrap(file));
 
         let metadata = RpmMetadata::parse(&mut buf_reader)
             .map_err(|e| Error::InitError(format!("Failed to parse RPM: {}", e)))?;
@@ -429,7 +432,10 @@ impl PackageFormat for RpmPackage {
         let license = Self::optional_header_string(pkg.metadata.get_license(), "license")?;
         let url = Self::optional_header_string(pkg.metadata.get_url(), "URL")?;
 
-        let payload = payload::parse_stream(&pkg, Box::new(buf_reader))?;
+        let (payload, mut parse_metrics) =
+            payload::parse_stream(&pkg, Box::new(buf_reader), &decompressed_bytes)?;
+        parse_metrics.source_archive_opens = 1;
+        parse_metrics.source_archive_bytes_read = source_bytes.bytes();
         let files: Vec<PackageFile> = payload
             .files()
             .iter()
@@ -483,6 +489,7 @@ impl PackageFormat for RpmPackage {
             license,
             url,
             payload,
+            parse_metrics,
         })
     }
 
@@ -542,6 +549,11 @@ impl PackageFormat for RpmPackage {
 }
 
 impl RpmPackage {
+    #[must_use]
+    pub fn parse_metrics(&self) -> crate::packages::NativePackageParseMetrics {
+        self.parse_metrics
+    }
+
     /// Get source RPM name (for provenance tracking)
     pub fn source_rpm(&self) -> Option<&str> {
         self.source_rpm.as_deref()

@@ -9,6 +9,18 @@ use crate::packages::payload::PAYLOAD_IO_BUFFER_SIZE;
 use std::fs;
 use std::io::{Read, Write};
 
+/// Exact work performed while staging one already-authoritative object.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExpectedReaderStoreMetrics {
+    pub incoming_bytes_hashed: u64,
+    pub temporary_bytes_written: u64,
+    pub canonical_bytes_reread: u64,
+    pub hits: u64,
+    pub misses: u64,
+    pub object_file_syncs: u64,
+    pub shard_syncs: u64,
+}
+
 impl CasStore {
     /// Store an exact private copy from a reader with bounded memory.
     pub fn store_private_reader(
@@ -79,6 +91,18 @@ impl CasStore {
         expected_size: u64,
         expected_sha256: &str,
     ) -> Result<String> {
+        self.store_reader_expected_with_metrics(reader, expected_size, expected_sha256)
+            .map(|(hash, _metrics)| hash)
+    }
+
+    /// Store one authoritative object and return the exact temporary-write,
+    /// hash, hit/miss, reread, and durability work performed.
+    pub fn store_reader_expected_with_metrics(
+        &self,
+        reader: &mut dyn Read,
+        expected_size: u64,
+        expected_sha256: &str,
+    ) -> Result<(String, ExpectedReaderStoreMetrics)> {
         if self.algorithm() != HashAlgorithm::Sha256 {
             return Err(crate::Error::ConfigError(format!(
                 "expected-reader storage requires SHA-256 CAS authority, found {}",
@@ -91,7 +115,7 @@ impl CasStore {
         }
         let temp_extension = format!("tmp.{}.{}", std::process::id(), Self::next_temp_id());
         let temp_path = path.with_extension(temp_extension);
-        let result = (|| -> Result<()> {
+        let result = (|| -> Result<ExpectedReaderStoreMetrics> {
             let mut output = fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -129,18 +153,30 @@ impl CasStore {
             }
             output.sync_all()?;
 
+            let mut metrics = ExpectedReaderStoreMetrics {
+                incoming_bytes_hashed: total,
+                temporary_bytes_written: total,
+                object_file_syncs: 1,
+                ..Default::default()
+            };
             match fs::hard_link(&temp_path, &path) {
-                Ok(()) => sync_parent_dir(&path)?,
+                Ok(()) => {
+                    sync_parent_dir(&path)?;
+                    metrics.misses = 1;
+                    metrics.shard_syncs = 1;
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     verify_existing_object(&path, expected_size, expected_sha256)?;
+                    metrics.hits = 1;
+                    metrics.canonical_bytes_reread = expected_size;
                 }
                 Err(error) => return Err(error.into()),
             }
-            Ok(())
+            Ok(metrics)
         })();
         let _ = fs::remove_file(&temp_path);
-        result?;
-        Ok(expected_sha256.to_string())
+        let metrics = result?;
+        Ok((expected_sha256.to_string(), metrics))
     }
 }
 
@@ -202,17 +238,34 @@ mod tests {
             max_requested: 0,
         };
 
-        assert_eq!(
-            store
-                .store_reader_expected(&mut reader, bytes.len() as u64, &sha256)
-                .unwrap(),
-            sha256
-        );
+        let (stored, metrics) = store
+            .store_reader_expected_with_metrics(&mut reader, bytes.len() as u64, &sha256)
+            .unwrap();
+        assert_eq!(stored, sha256);
+        assert_eq!(metrics.incoming_bytes_hashed, bytes.len() as u64);
+        assert_eq!(metrics.temporary_bytes_written, bytes.len() as u64);
+        assert_eq!(metrics.misses, 1);
+        assert_eq!(metrics.hits, 0);
+        assert_eq!(metrics.object_file_syncs, 1);
+        assert_eq!(metrics.shard_syncs, 1);
+        assert_eq!(metrics.canonical_bytes_reread, 0);
         assert!(reader.max_requested <= PAYLOAD_IO_BUFFER_SIZE);
         assert_eq!(
             fs::read(store.hash_to_path(&sha256).unwrap()).unwrap(),
             bytes
         );
+
+        let (_, hit) = store
+            .store_reader_expected_with_metrics(
+                &mut Cursor::new(&bytes),
+                bytes.len() as u64,
+                &sha256,
+            )
+            .unwrap();
+        assert_eq!(hit.hits, 1);
+        assert_eq!(hit.misses, 0);
+        assert_eq!(hit.shard_syncs, 0);
+        assert_eq!(hit.canonical_bytes_reread, bytes.len() as u64);
     }
 
     #[test]

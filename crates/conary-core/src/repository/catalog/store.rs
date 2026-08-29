@@ -372,6 +372,20 @@ impl CatalogReader {
         )
     }
 
+    /// Look up one exact package-key identity without scanning or admitting a
+    /// less-specific name/version tuple.
+    pub fn find_package_by_key(
+        &self,
+        package_key_sha256: &str,
+    ) -> Result<Option<CatalogPackageRecordV1>> {
+        validate_sha256(package_key_sha256, "catalog package query key")?;
+        let mut packages = self.load_packages(
+            &format!("{SELECT_PACKAGES} WHERE package_key_sha256 = ?1"),
+            [package_key_sha256],
+        )?;
+        Ok(packages.pop())
+    }
+
     /// Return whether the catalog contains at least one exact package name.
     ///
     /// This uses the catalog's package-name index and does not project package

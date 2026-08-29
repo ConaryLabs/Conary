@@ -13,18 +13,35 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-fn open_archive(path: &Path, bounds: &ArchiveDecodeBounds) -> Result<tar::Archive<Box<dyn Read>>> {
-    let reader = compression::create_decoder_limited(
-        File::open(path)?,
+fn open_archive(
+    path: &Path,
+    bounds: &ArchiveDecodeBounds,
+    compressed_bytes: &crate::packages::parse_metrics::ReadCounter,
+    decompressed_bytes: &crate::packages::parse_metrics::ReadCounter,
+) -> Result<tar::Archive<Box<dyn Read>>> {
+    let decoder = compression::create_decoder_limited(
+        compressed_bytes.wrap(File::open(path)?),
         CompressionFormat::Xz,
         bounds.max_decompressed_stream_bytes,
     )
     .map_err(|error| Error::ParseError(format!("open eopkg install.tar.xz: {error}")))?;
-    Ok(tar::Archive::new(reader))
+    Ok(tar::Archive::new(Box::new(
+        decompressed_bytes.wrap(decoder),
+    )))
 }
 
-fn required_bytes(path: &Path, bounds: &ArchiveDecodeBounds) -> Result<u64> {
-    let mut archive = open_archive(path, bounds)?;
+fn required_bytes(
+    path: &Path,
+    bounds: &ArchiveDecodeBounds,
+    compressed_bytes: &crate::packages::parse_metrics::ReadCounter,
+    decompressed_bytes: &crate::packages::parse_metrics::ReadCounter,
+    metrics: &mut crate::packages::NativePackageParseMetrics,
+) -> Result<u64> {
+    let mut archive = open_archive(path, bounds, compressed_bytes, decompressed_bytes)?;
+    metrics.checked_add(crate::packages::NativePackageParseMetrics {
+        archive_passes: 1,
+        ..Default::default()
+    })?;
     let mut count = 0_u64;
     let mut total = 0_u64;
     for entry in archive
@@ -40,6 +57,10 @@ fn required_bytes(path: &Path, bounds: &ArchiveDecodeBounds) -> Result<u64> {
             payload::declared_spool_bytes(&mut entry, bounds)?,
         )?;
     }
+    metrics.archive_entries_traversed = metrics
+        .archive_entries_traversed
+        .checked_add(count)
+        .ok_or_else(|| Error::ParseError("eopkg archive entry count overflow".to_string()))?;
     Ok(total)
 }
 
@@ -47,10 +68,23 @@ pub(super) fn parse(
     path: &Path,
     records: &[FileRecord],
     bounds: &ArchiveDecodeBounds,
+    metrics: &mut crate::packages::NativePackageParseMetrics,
 ) -> Result<PackagePayload> {
-    let required = required_bytes(path, bounds)?;
+    let compressed_bytes = crate::packages::parse_metrics::ReadCounter::default();
+    let decompressed_bytes = crate::packages::parse_metrics::ReadCounter::default();
+    let required = required_bytes(
+        path,
+        bounds,
+        &compressed_bytes,
+        &decompressed_bytes,
+        metrics,
+    )?;
     let spool = PayloadSpool::new(required)?;
-    let mut archive = open_archive(path, bounds)?;
+    let mut archive = open_archive(path, bounds, &compressed_bytes, &decompressed_bytes)?;
+    metrics.checked_add(crate::packages::NativePackageParseMetrics {
+        archive_passes: 1,
+        ..Default::default()
+    })?;
     let mut parsed = Vec::new();
     let mut count = 0_u64;
     let mut total = 0_u64;
@@ -79,10 +113,35 @@ pub(super) fn parse(
             "eopkg inner archive changed between passes: reserved {required}, observed {total}"
         )));
     }
+    let payload_files_spooled = parsed.iter().try_fold(0_u64, |total, entry| {
+        total
+            .checked_add(entry.spooled_file_count())
+            .ok_or_else(|| Error::ParseError("eopkg payload spool file count overflow".to_string()))
+    })?;
+    metrics.archive_entries_traversed = metrics
+        .archive_entries_traversed
+        .checked_add(count)
+        .ok_or_else(|| Error::ParseError("eopkg archive entry count overflow".to_string()))?;
+    metrics.intermediate_archive_bytes_read = metrics
+        .intermediate_archive_bytes_read
+        .checked_add(compressed_bytes.bytes())
+        .ok_or_else(|| {
+            Error::ParseError("eopkg compressed payload read byte count overflow".to_string())
+        })?;
+    metrics.decompressed_archive_bytes_read = metrics
+        .decompressed_archive_bytes_read
+        .checked_add(decompressed_bytes.bytes())
+        .ok_or_else(|| {
+            Error::ParseError("eopkg decompressed payload byte count overflow".to_string())
+        })?;
+    metrics.payload_files_spooled = payload_files_spooled;
+    metrics.payload_bytes_spooled = required;
+    metrics.payload_spool_file_syncs = payload_files_spooled;
+    metrics.payload_bytes_hashed = required;
     let mut files = payload::resolve_hardlinks(parsed)?;
     apply_files_xml_xattrs(&mut files, records)?;
     let package_payload = PackagePayload::new(files);
-    verify_files_xml(&package_payload, records)?;
+    verify_files_xml(&package_payload, records, metrics)?;
     Ok(package_payload)
 }
 
@@ -118,7 +177,11 @@ fn apply_files_xml_xattrs(
     Ok(())
 }
 
-fn verify_files_xml(payload: &PackagePayload, records: &[FileRecord]) -> Result<()> {
+fn verify_files_xml(
+    payload: &PackagePayload,
+    records: &[FileRecord],
+    metrics: &mut crate::packages::NativePackageParseMetrics,
+) -> Result<()> {
     let records = records
         .iter()
         .map(|record| {
@@ -136,6 +199,8 @@ fn verify_files_xml(payload: &PackagePayload, records: &[FileRecord]) -> Result<
             payload.files().len()
         )));
     }
+    let mut payload_spool_bytes_reread = 0_u64;
+    let mut payload_bytes_hashed = 0_u64;
     for file in payload.files() {
         let record = records.get(&file.path).ok_or_else(|| {
             Error::ParseError(format!(
@@ -189,7 +254,15 @@ fn verify_files_xml(payload: &PackagePayload, records: &[FileRecord]) -> Result<
                     file.path
                 )));
             }
-            if native_content_sha1(file, payload)?.as_deref() != Some(expected_sha1) {
+            if native_content_sha1(
+                file,
+                payload,
+                &mut payload_spool_bytes_reread,
+                &mut payload_bytes_hashed,
+            )?
+            .as_deref()
+                != Some(expected_sha1)
+            {
                 return Err(Error::ParseError(format!(
                     "eopkg files.xml SHA1 disagrees with payload for {}",
                     file.path
@@ -197,6 +270,11 @@ fn verify_files_xml(payload: &PackagePayload, records: &[FileRecord]) -> Result<
             }
         }
     }
+    metrics.checked_add(crate::packages::NativePackageParseMetrics {
+        payload_spool_bytes_reread,
+        payload_bytes_hashed,
+        ..Default::default()
+    })?;
     Ok(())
 }
 
@@ -224,6 +302,8 @@ fn native_content_size(
 fn native_content_sha1(
     file: &crate::packages::payload::PackagePayloadFile,
     payload: &PackagePayload,
+    payload_spool_bytes_reread: &mut u64,
+    payload_bytes_hashed: &mut u64,
 ) -> Result<Option<String>> {
     use sha1::Digest as _;
     let mut hasher = sha1::Sha1::new();
@@ -237,9 +317,29 @@ fn native_content_sha1(
                     break;
                 }
                 hasher.update(&buffer[..read]);
+                *payload_spool_bytes_reread = payload_spool_bytes_reread
+                    .checked_add(read as u64)
+                    .ok_or_else(|| {
+                    Error::ParseError("eopkg payload reread byte count overflow".to_string())
+                })?;
+                *payload_bytes_hashed =
+                    payload_bytes_hashed
+                        .checked_add(read as u64)
+                        .ok_or_else(|| {
+                            Error::ParseError("eopkg payload hash byte count overflow".to_string())
+                        })?;
             }
         }
-        crate::payload::PayloadNodeKind::Symlink { target } => hasher.update(target.as_bytes()),
+        crate::payload::PayloadNodeKind::Symlink { target } => {
+            hasher.update(target.as_bytes());
+            *payload_bytes_hashed = payload_bytes_hashed
+                .checked_add(u64::try_from(target.len()).map_err(|_| {
+                    Error::ParseError("eopkg symlink target length exceeds u64".to_string())
+                })?)
+                .ok_or_else(|| {
+                    Error::ParseError("eopkg payload hash byte count overflow".to_string())
+                })?;
+        }
         crate::payload::PayloadNodeKind::Hardlink { target, .. } => {
             let target = payload
                 .files()
@@ -248,7 +348,12 @@ fn native_content_sha1(
                 .ok_or_else(|| {
                     Error::ParseError(format!("eopkg hardlink {} lacks {target}", file.path))
                 })?;
-            return native_content_sha1(target, payload);
+            return native_content_sha1(
+                target,
+                payload,
+                payload_spool_bytes_reread,
+                payload_bytes_hashed,
+            );
         }
         _ => return Ok(None),
     }

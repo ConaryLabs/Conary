@@ -19,6 +19,7 @@ pub mod native_abi;
 #[doc(hidden)]
 pub mod native_scriptlet_support;
 pub mod pacman_query;
+mod parse_metrics;
 pub mod payload;
 pub mod query_common;
 pub mod registry;
@@ -43,6 +44,7 @@ use std::path::Path;
 use std::process::Command;
 use tracing::info;
 
+pub use parse_metrics::NativePackageParseMetrics;
 pub use payload::{PackagePayload, PackagePayloadFile, ReopenablePayload};
 pub use query_common::{InstalledFileAbsencePolicy, InstalledFileInfo, InstalledPackageRecord};
 pub use rpm_query::InstalledRpmInfo;

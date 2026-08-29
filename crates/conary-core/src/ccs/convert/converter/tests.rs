@@ -956,3 +956,5 @@ fn sysctl_text_remains_in_the_exact_native_lifecycle_body() {
 
 #[path = "tests/manifest.rs"]
 mod manifest;
+#[path = "tests/metrics.rs"]
+mod metrics;

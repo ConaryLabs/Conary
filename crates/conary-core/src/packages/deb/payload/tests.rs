@@ -69,7 +69,9 @@ fn data_tar_entry_count_over_budget_is_typed() {
     let archive = finish(builder);
     let bounds = bounds_with(1, 3, 6);
 
-    let error = parse_reader(Box::new(Cursor::new(archive)), None, &bounds).unwrap_err();
+    let mut metrics = crate::packages::NativePackageParseMetrics::default();
+    let error =
+        parse_reader(Box::new(Cursor::new(archive)), None, &bounds, &mut metrics).unwrap_err();
     let Error::Budget(error) = error else {
         panic!("expected typed entry-count refusal");
     };
@@ -103,7 +105,9 @@ fn data_tar_cumulative_payload_over_budget_is_typed() {
     let archive = finish(builder);
     let bounds = bounds_with(8, 3, 5);
 
-    let error = parse_reader(Box::new(Cursor::new(archive)), None, &bounds).unwrap_err();
+    let mut metrics = crate::packages::NativePackageParseMetrics::default();
+    let error =
+        parse_reader(Box::new(Cursor::new(archive)), None, &bounds, &mut metrics).unwrap_err();
     let Error::Budget(error) = error else {
         panic!("expected typed cumulative-payload refusal");
     };

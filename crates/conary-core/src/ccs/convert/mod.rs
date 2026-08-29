@@ -29,7 +29,9 @@ pub mod native_provenance;
 pub mod payload_hints;
 pub mod scriptlet_bundle;
 
-pub use converter::{ConversionOptions, ConversionResult, NativePackageConverter};
+pub use converter::{
+    ConversionOptions, ConversionResult, NativeConversionMetrics, NativePackageConverter,
+};
 pub use file_capabilities::file_capabilities_from_native_payload;
 pub use input::ForeignConversionInput;
 pub use native_provenance::{NativeProvenance, NativeSignatureEvidence};

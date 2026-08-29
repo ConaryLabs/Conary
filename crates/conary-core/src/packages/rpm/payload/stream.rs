@@ -66,6 +66,7 @@ pub(super) fn parse_members<'a>(
     payload: Box<dyn Read + 'a>,
     records: &'a [HeaderRecord],
     spool: &'a PayloadSpool,
+    decompressed_bytes: &crate::packages::parse_metrics::ReadCounter,
 ) -> Result<Vec<PayloadMember>> {
     let bounds = CCS_BUDGET.archive_decode_bounds()?;
     bounds.admit_archive_entry(
@@ -73,8 +74,8 @@ pub(super) fn parse_members<'a>(
         records.iter().filter(|record| !record.ghost).count() as u64,
     )?;
     let compressor = payload_compressor(package)?;
-    let reader = payload_decoder(payload, compressor)?;
-    RpmPayloadReader::new(reader, records, spool, bounds).read_all()
+    let reader = decompressed_bytes.wrap(payload_decoder(payload, compressor)?);
+    RpmPayloadReader::new(Box::new(reader), records, spool, bounds).read_all()
 }
 
 fn payload_compressor(package: &Package) -> Result<RpmPayloadCompressor> {

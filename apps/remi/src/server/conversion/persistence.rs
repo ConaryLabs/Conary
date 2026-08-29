@@ -9,6 +9,7 @@ use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::db::models::{ConvertedPackage, RepositoryPackage};
 use rusqlite::{Connection, TransactionBehavior};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use tracing::info;
 
 pub(super) struct PersistConversionInput {
@@ -21,6 +22,20 @@ pub(super) struct PersistConversionInput {
     pub(super) source: PinnedConversionSource,
     pub(super) profile_revision_sha256: String,
     pub(super) transport: conary_core::ccs::CcsTransportEnvelopeV1,
+}
+
+pub(super) struct PersistConversionOutput {
+    pub(super) result: ServerConversionResult,
+    pub(super) metrics: ConversionPersistenceMetrics,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ConversionPersistenceMetrics {
+    pub(super) complete_archive_hash: Duration,
+    pub(super) complete_archive_copy: Duration,
+    pub(super) database_persistence: Duration,
+    pub(super) complete_archive_hash_bytes: u64,
+    pub(super) complete_archive_copy_bytes: u64,
 }
 
 enum CacheInspection {
@@ -158,7 +173,7 @@ impl ConversionService {
     pub(super) fn persist_conversion_result(
         &self,
         input: PersistConversionInput,
-    ) -> Result<ServerConversionResult> {
+    ) -> Result<PersistConversionOutput> {
         let PersistConversionInput {
             source_profile,
             metadata,
@@ -185,9 +200,11 @@ impl ConversionService {
             .as_ref()
             .ok_or_else(|| anyhow!("No CCS package path"))?;
 
-        let content_hash = Self::calculate_sha256(ccs_path)?;
-        let content_hash_text = content_hash.to_prefixed_string();
         let total_size = std::fs::metadata(ccs_path)?.len();
+        let hash_started = Instant::now();
+        let content_hash = Self::calculate_sha256(ccs_path)?;
+        let complete_archive_hash = hash_started.elapsed();
+        let content_hash_text = content_hash.to_prefixed_string();
         let persisted_total_size =
             i64::try_from(total_size).context("converted CCS size exceeds SQLite INTEGER range")?;
 
@@ -213,11 +230,24 @@ impl ConversionService {
             repository_provides_digest.clone(),
         );
         converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
+
         let final_ccs_preexisting = final_ccs_path.exists();
+        let copy_started = Instant::now();
         if let Some(parent) = final_ccs_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::copy(ccs_path, &final_ccs_path)?;
+        let complete_archive_copy_bytes = std::fs::copy(ccs_path, &final_ccs_path)?;
+        let complete_archive_copy = copy_started.elapsed();
+        if complete_archive_copy_bytes != total_size {
+            if !final_ccs_preexisting {
+                let _ = std::fs::remove_file(&final_ccs_path);
+            }
+            return Err(anyhow!(
+                "persisted CCS copy changed size while reading the conversion artifact"
+            ));
+        }
+
+        let database_started = Instant::now();
         // `source` owns the PinnedProfileCatalog. Keep it alive while this
         // transaction inserts the conversion row and its durable pin.
         let writer = self.database_writer.clone();
@@ -262,11 +292,22 @@ impl ConversionService {
                 return Err(error);
             }
         };
+        let database_persistence = database_started.elapsed();
+        let metrics = ConversionPersistenceMetrics {
+            complete_archive_hash,
+            complete_archive_copy,
+            database_persistence,
+            complete_archive_hash_bytes: total_size,
+            complete_archive_copy_bytes,
+        };
         if let PersistOutcome::Existing(result) = outcome {
             if !final_ccs_preexisting {
                 let _ = std::fs::remove_file(&final_ccs_path);
             }
-            return Ok(*result);
+            return Ok(PersistConversionOutput {
+                result: *result,
+                metrics,
+            });
         }
 
         info!(
@@ -277,17 +318,20 @@ impl ConversionService {
         );
 
         let scriptlet_summary = converted.scriptlet_summary()?;
-        Ok(ServerConversionResult {
-            name: metadata.name().to_string(),
-            version: metadata.version().to_string(),
-            source_profile: Some(source_profile),
-            transport,
-            total_size,
-            content_hash: content_hash_text,
-            ccs_path: final_ccs_path,
-            cache_state: "cold".to_string(),
-            scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
-            timing: None,
+        Ok(PersistConversionOutput {
+            result: ServerConversionResult {
+                name: metadata.name().to_string(),
+                version: metadata.version().to_string(),
+                source_profile: Some(source_profile),
+                transport,
+                total_size,
+                content_hash: content_hash_text,
+                ccs_path: final_ccs_path,
+                cache_state: "cold".to_string(),
+                scriptlets: ScriptletPackageMetadata::from(&scriptlet_summary),
+                timing: None,
+            },
+            metrics,
         })
     }
 

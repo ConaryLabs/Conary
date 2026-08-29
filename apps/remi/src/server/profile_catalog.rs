@@ -103,6 +103,17 @@ impl<'a> ProfileCatalog<'a> {
         Ok(packages)
     }
 
+    /// Return the one package bound to an exact immutable package key.
+    pub(crate) fn find_package_record_by_key(
+        &self,
+        package_key_sha256: &str,
+    ) -> Result<Option<CatalogPackageRecordV1>> {
+        self.pinned
+            .reader()
+            .find_package_by_key(package_key_sha256)
+            .map_err(anyhow::Error::from)
+    }
+
     /// Return the authoritative package universe for this profile revision.
     /// Every distinct native variant remains available. Exact duplicates were
     /// collapsed, or rejected as conflicts, while the profile was built.

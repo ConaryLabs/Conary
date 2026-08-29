@@ -53,6 +53,16 @@ fn parser_preserves_unmatched_backup_without_inventing_payload() {
             .iter()
             .all(|file| file.path != declarations[0].path())
     );
+    let metrics = package.parse_metrics();
+    assert_eq!(metrics.source_archive_opens, 2);
+    assert_eq!(metrics.archive_passes, 2);
+    assert_eq!(metrics.archive_entries_traversed, 4);
+    assert_eq!(metrics.payload_files_spooled, 1);
+    assert_eq!(metrics.payload_bytes_spooled, 7);
+    assert_eq!(metrics.payload_spool_file_syncs, 1);
+    assert_eq!(metrics.payload_bytes_hashed, 7);
+    assert!(metrics.source_archive_bytes_read > 0);
+    assert!(metrics.decompressed_archive_bytes_read > 0);
 }
 
 #[test]
