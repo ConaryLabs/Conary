@@ -282,6 +282,8 @@ create_release_policy_fixture() {
         "$repo/.github/workflows/export-remi-native-oracle-inputs.yml"
     cp "$REPO_ROOT/.github/workflows/remi-conversion-benchmark.yml" \
         "$repo/.github/workflows/remi-conversion-benchmark.yml"
+    cp "$REPO_ROOT/.github/workflows/remi-conversion-work-root-owner-repair.yml" \
+        "$repo/.github/workflows/remi-conversion-work-root-owner-repair.yml"
     cp "$REPO_ROOT/.github/workflows/remi-r2-durability.yml" \
         "$repo/.github/workflows/remi-r2-durability.yml"
     cp "$REPO_ROOT/scripts/check-remi-conversion-workflow.py" \
@@ -1818,6 +1820,71 @@ test_check_release_matrix_rejects_unserialized_r2_durability() {
         "R2 durability serialized with production host authority"
 }
 
+test_check_release_matrix_rejects_work_root_owner_repair_inputs() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-work-root-owner-repair.yml" \
+        '  workflow_dispatch:' \
+        $'  workflow_dispatch:\n    inputs:\n      uid:\n        required: true\n        type: string'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion work-root owner repair has no dispatch inputs"
+}
+
+test_check_release_matrix_rejects_unserialized_work_root_owner_repair() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-work-root-owner-repair.yml" \
+        '  group: deploy-and-verify' \
+        '  group: remi-work-root-owner-repair-production'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion work-root owner repair serialized with deployment and verification"
+}
+
+test_check_release_matrix_rejects_unprotected_work_root_owner_repair_checkout() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-work-root-owner-repair.yml" \
+        '          ref: ${{ github.workflow_sha }}' \
+        '          ref: ${{ github.sha }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion work-root owner repair exact workflow-revision checkout ref"
+}
+
+test_check_release_matrix_rejects_parameterized_work_root_owner_repair() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-work-root-owner-repair.yml" \
+        '            "sudo -n /usr/local/sbin/conary-remi-deploy repair-remi-conversion-work-root-owner"' \
+        '            "sudo -n /usr/local/sbin/conary-remi-deploy repair-remi-conversion-work-root-owner 0"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion work-root owner repair fixed helper and path-free result authority"
+}
+
+test_check_release_matrix_rejects_private_work_root_owner_repair_upload() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-work-root-owner-repair.yml" \
+        '          path: remi-conversion-work-root-owner-repair-v1.json' \
+        '          path: ${{ runner.temp }}/remi-work-root-owner-repair.stderr'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion work-root owner repair path-free retained evidence"
+}
+
 test_check_release_matrix_rejects_unprotected_conversion_benchmark_source() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2726,6 +2793,11 @@ main() {
         test_check_release_matrix_rejects_loose_native_oracle_transport
         test_check_release_matrix_rejects_unserialized_site_deployment
         test_check_release_matrix_rejects_unserialized_r2_durability
+        test_check_release_matrix_rejects_work_root_owner_repair_inputs
+        test_check_release_matrix_rejects_unserialized_work_root_owner_repair
+        test_check_release_matrix_rejects_unprotected_work_root_owner_repair_checkout
+        test_check_release_matrix_rejects_parameterized_work_root_owner_repair
+        test_check_release_matrix_rejects_private_work_root_owner_repair_upload
         test_check_release_matrix_rejects_unprotected_conversion_benchmark_source
         test_check_release_matrix_rejects_nonproduction_conversion_benchmark
         test_check_release_matrix_rejects_unserialized_conversion_benchmark

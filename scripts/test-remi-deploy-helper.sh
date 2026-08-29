@@ -297,6 +297,16 @@ make_benchmark_fixture() {
     benchmark_tmp_paths+=("$source" "$transport")
 }
 
+make_work_owner_repair_fixture() {
+    local fake_root="$1"
+    write_config "$fake_root"
+    mkdir -m 0755 "$fake_root/work"
+    make_fake_benchmark_systemctl "$fake_root"
+    printf 'active\n' >"$fake_root/service-state"
+    : >"$fake_root/service-log"
+    printf 'ok\n' >"$fake_root/health"
+}
+
 run_helper() {
     local fake_root="$1"
     shift
@@ -343,6 +353,25 @@ run_benchmark_helper() {
     CONARY_FAKE_BAD_RAW_SCHEMA="${CONARY_FAKE_BAD_RAW_SCHEMA:-0}" \
     CONARY_FAKE_RAW_REPORT_MODE="${CONARY_FAKE_RAW_REPORT_MODE:-0600}" \
         bash "$helper" benchmark-remi-conversion "$@"
+}
+
+run_work_owner_repair_helper() {
+    local fake_root="$1"
+    shift
+
+    CONARY_REMI_DEPLOY_ROOT="$fake_root" \
+    CONARY_REMI_DEPLOY_HEALTH_URL="file://${CONARY_FAKE_HEALTH_PATH:-${fake_root}/health}" \
+    CONARY_REMI_DEPLOY_TEST_SYSTEMCTL="${fake_root}/fake-systemctl" \
+    CONARY_REMI_DEPLOY_TEST_FILESYSTEM_TYPE="${CONARY_FAKE_FILESYSTEM_TYPE:-xfs}" \
+    CONARY_REMI_DEPLOY_TEST_ROOT_FILESYSTEM_TYPE="${CONARY_FAKE_ROOT_FILESYSTEM_TYPE:-}" \
+    CONARY_REMI_DEPLOY_TEST_WORK_FILESYSTEM_TYPE="${CONARY_FAKE_WORK_FILESYSTEM_TYPE:-}" \
+    CONARY_REMI_DEPLOY_TEST_FILESYSTEM_DEVICE="${CONARY_FAKE_FILESYSTEM_DEVICE:-101}" \
+    CONARY_REMI_DEPLOY_TEST_WORK_FILESYSTEM_DEVICE="${CONARY_FAKE_WORK_FILESYSTEM_DEVICE:-}" \
+    CONARY_REMI_DEPLOY_TEST_WORK_OWNER_STATE="${CONARY_FAKE_WORK_OWNER_STATE:-}" \
+    CONARY_FAKE_SERVICE_STATE="${fake_root}/service-state" \
+    CONARY_FAKE_SERVICE_LOG="${fake_root}/service-log" \
+    CONARY_FAKE_FAIL_START="${fake_root}/fail-start" \
+        bash "$helper" repair-remi-conversion-work-root-owner "$@"
 }
 
 expect_fail() {
@@ -396,6 +425,36 @@ assert_benchmark_failure_envelope() {
         || grep -F -- / "$stdout_file" >/dev/null; then
         fail "benchmark failure envelope disclosed a path or private diagnostic"
     fi
+}
+
+assert_work_owner_repair_refused() {
+    local description="$1"
+    local fake_root="$2"
+    local test_owner_state="$3"
+    local expected_service_log="$4"
+    shift 4
+    local fixture_name stdout_file stderr_file
+    fixture_name="$(basename "$fake_root")"
+    stdout_file="${tmpdir}/${fixture_name}.repair.stdout"
+    stderr_file="${tmpdir}/${fixture_name}.repair.stderr"
+    local status
+
+    set +e
+    CONARY_FAKE_WORK_OWNER_STATE="$test_owner_state" \
+        run_work_owner_repair_helper "$fake_root" "$@" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" -ne 0 ]] || fail "$description unexpectedly succeeded"
+    [[ ! -s "$stdout_file" ]] || fail "$description emitted public success evidence"
+    [[ -s "$stderr_file" ]] || fail "$description omitted its private diagnostic"
+    [[ "$(cat "$fake_root/service-log")" == "$expected_service_log" ]] ||
+        fail "$description performed unexpected service activity"
+    if grep -Eq '^(stop|start) remi$' "$fake_root/service-log"; then
+        fail "$description stopped or started Remi"
+    fi
+    [[ ! -e "$fake_root/work/remi-conversion-benchmarks" ]] ||
+        fail "$description created benchmark state"
 }
 
 test_deploy_conary_accepts_verified_release() {
@@ -1102,6 +1161,130 @@ test_conversion_benchmark_restart_and_health_fail_closed() {
     [[ ! -e "/tmp/remi-conversion-benchmark-${run_id}.json" ]]
 }
 
+test_repair_remi_conversion_work_root_owner_is_exact_and_nonrecursive() {
+    local fake_root="${tmpdir}/root-work-owner-repair"
+    local stdout_file="${tmpdir}/work-owner-repair.stdout"
+    local stderr_file="${tmpdir}/work-owner-repair.stderr"
+    local expected_file="${tmpdir}/work-owner-repair.expected"
+    local expected_argv="${tmpdir}/work-owner-repair.expected-argv"
+    local actual_argv="$fake_root/repair-remi-conversion-work-root-owner.chown-argv"
+    local sentinel="$fake_root/work/child-sentinel"
+    local sentinel_before sentinel_after digest_before digest_after work_before work_after
+    make_work_owner_repair_fixture "$fake_root"
+    printf 'preserve child bytes\n' >"$sentinel"
+    chmod 0640 "$sentinel"
+    sentinel_before="$(stat -c '%d:%i:%f:%a:%u:%g:%s' "$sentinel")"
+    digest_before="$(sha256sum "$sentinel" | cut -d ' ' -f 1)"
+    work_before="$(stat -c '%d:%i:%a' "$fake_root/work")"
+
+    CONARY_FAKE_WORK_OWNER_STATE=owner-drift \
+        run_work_owner_repair_helper "$fake_root" \
+        >"$stdout_file" 2>"$stderr_file"
+
+    printf '%s\n' \
+        '{"schema_version":1,"operation":"repair-remi-conversion-work-root-owner","outcome":"repaired","precondition":"owner-drift","postcondition":"validated"}' \
+        >"$expected_file"
+    cmp -s "$stdout_file" "$expected_file" ||
+        fail "work-root owner repair did not emit its exact canonical evidence"
+    [[ ! -s "$stderr_file" ]] ||
+        fail "successful work-root owner repair emitted a private diagnostic"
+    printf '%s\n' \
+        chown \
+        --no-dereference \
+        -- \
+        "$(id -u):$(id -g)" \
+        "$fake_root/work" >"$expected_argv"
+    [[ "$(stat -c '%a' "$actual_argv")" == "600" ]] ||
+        fail "work-root owner repair test argv was not private"
+    cmp -s "$actual_argv" "$expected_argv" ||
+        fail "work-root owner repair did not use the exact nonrecursive chown argv"
+    sentinel_after="$(stat -c '%d:%i:%f:%a:%u:%g:%s' "$sentinel")"
+    digest_after="$(sha256sum "$sentinel" | cut -d ' ' -f 1)"
+    work_after="$(stat -c '%d:%i:%a' "$fake_root/work")"
+    [[ "$work_after" == "$work_before" ]] ||
+        fail "work-root owner repair changed the work-root inode or mode"
+    [[ "$sentinel_after" == "$sentinel_before" && "$digest_after" == "$digest_before" ]] ||
+        fail "work-root owner repair changed a child sentinel"
+    [[ "$(cat "$fake_root/service-log")" == \
+        $'is-active --quiet remi\nis-active --quiet remi' ]] ||
+        fail "work-root owner repair did not perform exactly two read-only service probes"
+    if grep -Eq '^(stop|start) remi$' "$fake_root/service-log"; then
+        fail "work-root owner repair stopped or started Remi"
+    fi
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ ! -e "$fake_root/work/remi-conversion-benchmarks" ]]
+}
+
+test_repair_remi_conversion_work_root_owner_refuses_unproven_or_unsafe_state() {
+    local fake_root
+
+    fake_root="${tmpdir}/root-work-owner-already-correct"
+    make_work_owner_repair_fixture "$fake_root"
+    assert_work_owner_repair_refused \
+        "already-canonical work-root owner" "$fake_root" "" ""
+
+    fake_root="${tmpdir}/root-work-owner-extra-argument"
+    make_work_owner_repair_fixture "$fake_root"
+    assert_work_owner_repair_refused \
+        "work-root owner repair extra argument" "$fake_root" owner-drift "" unexpected
+
+    fake_root="${tmpdir}/root-work-owner-symlink"
+    make_work_owner_repair_fixture "$fake_root"
+    rmdir "$fake_root/work"
+    ln -s "$fake_root/conary" "$fake_root/work"
+    assert_work_owner_repair_refused \
+        "symlinked work-root owner repair" "$fake_root" owner-drift ""
+
+    fake_root="${tmpdir}/root-work-owner-mode"
+    make_work_owner_repair_fixture "$fake_root"
+    chmod 0775 "$fake_root/work"
+    assert_work_owner_repair_refused \
+        "writable work-root owner repair" "$fake_root" owner-drift ""
+
+    fake_root="${tmpdir}/root-work-owner-setuid"
+    make_work_owner_repair_fixture "$fake_root"
+    chmod 4755 "$fake_root/work"
+    assert_work_owner_repair_refused \
+        "setuid work-root owner repair" "$fake_root" owner-drift ""
+
+    fake_root="${tmpdir}/root-work-owner-setgid"
+    make_work_owner_repair_fixture "$fake_root"
+    chmod 2755 "$fake_root/work"
+    assert_work_owner_repair_refused \
+        "setgid work-root owner repair" "$fake_root" owner-drift ""
+
+    fake_root="${tmpdir}/root-work-owner-non-xfs"
+    make_work_owner_repair_fixture "$fake_root"
+    CONARY_FAKE_WORK_FILESYSTEM_TYPE=ext4 \
+        assert_work_owner_repair_refused \
+        "non-XFS work-root owner repair" "$fake_root" owner-drift ""
+
+    fake_root="${tmpdir}/root-work-owner-device"
+    make_work_owner_repair_fixture "$fake_root"
+    CONARY_FAKE_FILESYSTEM_DEVICE=101 \
+        CONARY_FAKE_WORK_FILESYSTEM_DEVICE=202 \
+        assert_work_owner_repair_refused \
+        "distinct-device work-root owner repair" "$fake_root" owner-drift ""
+
+    fake_root="${tmpdir}/root-work-owner-post-validation"
+    make_work_owner_repair_fixture "$fake_root"
+    assert_work_owner_repair_refused \
+        "work-root owner repair postvalidation" "$fake_root" \
+        post-validation-failure "is-active --quiet remi"
+
+    local stdout_file="${tmpdir}/work-owner-production-hook.stdout"
+    local stderr_file="${tmpdir}/work-owner-production-hook.stderr"
+    local status
+    set +e
+    CONARY_REMI_DEPLOY_TEST_WORK_OWNER_STATE=owner-drift \
+        bash "$helper" repair-remi-conversion-work-root-owner \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+    [[ "$status" -ne 0 && ! -s "$stdout_file" && -s "$stderr_file" ]] ||
+        fail "work-root owner test hook was not rejected outside a fake root"
+}
+
 test_conversion_benchmark_rejects_non_xfs_before_downtime() {
     local run_id="benchmark-non-xfs-$$"
     local fake_root="${tmpdir}/root-${run_id}"
@@ -1387,6 +1570,8 @@ main() {
     test_conversion_benchmark_raw_schema_failure_reports_raw_stage
     test_conversion_benchmark_rejects_unbound_or_public_raw_evidence
     test_conversion_benchmark_restart_and_health_fail_closed
+    test_repair_remi_conversion_work_root_owner_is_exact_and_nonrecursive
+    test_repair_remi_conversion_work_root_owner_refuses_unproven_or_unsafe_state
     test_conversion_benchmark_rejects_non_xfs_before_downtime
     test_conversion_benchmark_rejects_work_mode_drift_before_downtime
     test_conversion_benchmark_rejects_work_type_before_downtime

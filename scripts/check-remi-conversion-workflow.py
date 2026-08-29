@@ -90,6 +90,9 @@ GitHubWorkflowLoader.add_constructor(
 
 
 BENCHMARK_WORKFLOW = ".github/workflows/remi-conversion-benchmark.yml"
+WORK_ROOT_OWNER_REPAIR_WORKFLOW = (
+    ".github/workflows/remi-conversion-work-root-owner-repair.yml"
+)
 SHARED_CONCURRENCY = (
     (
         ".github/workflows/deploy-and-verify.yml",
@@ -110,6 +113,10 @@ SHARED_CONCURRENCY = (
     (
         BENCHMARK_WORKFLOW,
         "conversion benchmark serialized with deployment and verification",
+    ),
+    (
+        WORK_ROOT_OWNER_REPAIR_WORKFLOW,
+        "conversion work-root owner repair serialized with deployment and verification",
     ),
     (
         ".github/workflows/remi-r2-durability.yml",
@@ -248,6 +255,41 @@ EXPECTED_RUN_IDS = {
     "Bind successful exact private-candidate deployment": "deployment",
     "Reopen exact deployment and candidate identities": "authority",
     "Run through the fixed production helper": "benchmark",
+}
+
+REPAIR_EXPECTED_STEP_ORDER = [
+    "Check out exact protected repair operator",
+    "Require a protected-main repair revision",
+    "Repair through the fixed production helper",
+    "Upload path-free work-root owner repair evidence",
+]
+
+REPAIR_REVIEWED_RUN_BLOCK_SHA256 = {
+    "Require a protected-main repair revision":
+        "f6892b5ea06ab8f6857740b73f78bc647b9a4afde81fc8c31b86bde876c2d7b2",
+    "Repair through the fixed production helper":
+        "41c08445dca1e6cfb260003cbc136107a1c595790730a921eea796270eaf4cf4",
+}
+
+REPAIR_RUN_BLOCK_ERRORS = {
+    "Require a protected-main repair revision":
+        "conversion work-root owner repair protected merged-main operator boundary",
+    "Repair through the fixed production helper":
+        "conversion work-root owner repair fixed helper and path-free result authority",
+}
+
+REPAIR_EXPECTED_RUN_ENV = {
+    "Require a protected-main repair revision": {
+        "WORKFLOW_SHA": "${{ github.workflow_sha }}",
+    },
+    "Repair through the fixed production helper": {
+        "REMI_SSH_KNOWN_HOSTS": "${{ secrets.REMI_SSH_KNOWN_HOSTS }}",
+        "REMI_SSH_KEY": "${{ secrets.REMI_SSH_KEY }}",
+        "REMI_SSH_TARGET": "${{ secrets.REMI_SSH_TARGET }}",
+        "WORKFLOW_RUN_ATTEMPT": "${{ github.run_attempt }}",
+        "WORKFLOW_RUN_ID": "${{ github.run_id }}",
+        "WORKFLOW_SHA": "${{ github.workflow_sha }}",
+    },
 }
 
 
@@ -504,6 +546,151 @@ def validate_benchmark_workflow(workflow: dict[str, Any]) -> None:
     validate_run_steps(steps)
 
 
+def validate_repair_dispatch(workflow: dict[str, Any]) -> None:
+    trigger = exact_mapping(workflow.get("on"), "conversion work-root owner repair on")
+    exact_keys(
+        trigger,
+        {"workflow_dispatch"},
+        "conversion work-root owner repair triggers",
+    )
+    require(
+        trigger["workflow_dispatch"] is None,
+        "conversion work-root owner repair has no dispatch inputs",
+    )
+
+
+def validate_repair_action_steps(steps: dict[str, dict[str, Any]]) -> None:
+    checkout = steps["Check out exact protected repair operator"]
+    exact_keys(
+        checkout,
+        {"name", "uses", "with"},
+        "conversion work-root owner repair checkout step",
+    )
+    require(
+        checkout["uses"]
+        == "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+        "conversion work-root owner repair protected checkout action",
+    )
+    require(
+        exact_mapping(
+            checkout["with"],
+            "conversion work-root owner repair checkout inputs",
+        )
+        == {
+            "ref": "${{ github.workflow_sha }}",
+            "fetch-depth": 0,
+            "persist-credentials": False,
+        },
+        "conversion work-root owner repair exact workflow-revision checkout ref",
+    )
+
+    upload = steps["Upload path-free work-root owner repair evidence"]
+    exact_keys(
+        upload,
+        {"name", "uses", "with"},
+        "conversion work-root owner repair upload step",
+    )
+    require(
+        upload["uses"]
+        == "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f",
+        "conversion work-root owner repair exact evidence upload action",
+    )
+    require(
+        exact_mapping(
+            upload["with"],
+            "conversion work-root owner repair upload inputs",
+        )
+        == {
+            "name": (
+                "remi-conversion-work-root-owner-repair-"
+                "${{ github.run_id }}-${{ github.run_attempt }}"
+            ),
+            "path": "remi-conversion-work-root-owner-repair-v1.json",
+            "if-no-files-found": "error",
+            "compression-level": 0,
+            "retention-days": 30,
+        },
+        "conversion work-root owner repair path-free retained evidence",
+    )
+
+
+def validate_repair_run_steps(steps: dict[str, dict[str, Any]]) -> None:
+    for name, expected_digest in REPAIR_REVIEWED_RUN_BLOCK_SHA256.items():
+        step = steps[name]
+        exact_keys(
+            step,
+            {"name", "env", "shell", "run"},
+            f"conversion work-root owner repair run step {name}",
+        )
+        error = REPAIR_RUN_BLOCK_ERRORS[name]
+        require(step["shell"] == "bash", error)
+        require(
+            exact_mapping(
+                step["env"],
+                f"conversion work-root owner repair run environment {name}",
+            )
+            == REPAIR_EXPECTED_RUN_ENV[name],
+            error,
+        )
+        run = step["run"]
+        require(isinstance(run, str), error)
+        observed_digest = hashlib.sha256(run.encode("utf-8")).hexdigest()
+        require(observed_digest == expected_digest, error)
+
+
+def validate_repair_workflow(workflow: dict[str, Any]) -> None:
+    exact_keys(
+        workflow,
+        {"name", "on", "permissions", "concurrency", "jobs"},
+        "conversion work-root owner repair workflow",
+    )
+    require(
+        workflow["name"] == "remi-conversion-work-root-owner-repair",
+        "conversion work-root owner repair workflow name",
+    )
+    validate_repair_dispatch(workflow)
+    require(
+        exact_mapping(
+            workflow.get("permissions"),
+            "conversion work-root owner repair permissions",
+        )
+        == {"contents": "read"},
+        "conversion work-root owner repair read-only permissions",
+    )
+    jobs = exact_mapping(workflow.get("jobs"), "conversion work-root owner repair jobs")
+    exact_keys(jobs, {"repair"}, "conversion work-root owner repair jobs")
+    job = exact_mapping(jobs["repair"], "conversion work-root owner repair job")
+    exact_keys(
+        job,
+        {"name", "runs-on", "timeout-minutes", "environment", "steps"},
+        "conversion work-root owner repair job",
+    )
+    require(
+        job["name"] == "repair exact production conversion work-root owner"
+        and job["runs-on"] == "ubuntu-latest"
+        and type(job["timeout-minutes"]) is int
+        and job["timeout-minutes"] == 20
+        and job["environment"] == "production",
+        "conversion work-root owner repair protected production boundary",
+    )
+    raw_steps = job["steps"]
+    require(
+        isinstance(raw_steps, list),
+        "conversion work-root owner repair steps must be an array",
+    )
+    names = [
+        exact_mapping(step, "conversion work-root owner repair step").get("name")
+        for step in raw_steps
+    ]
+    require(
+        names == REPAIR_EXPECTED_STEP_ORDER,
+        "conversion work-root owner repair exact reviewed step inventory",
+    )
+    steps = {step["name"]: step for step in raw_steps}
+    validate_repair_action_steps(steps)
+    validate_repair_run_steps(steps)
+
+
 def main() -> int:
     if len(sys.argv) > 2:
         print(f"usage: {Path(sys.argv[0]).name} [REPOSITORY]", file=sys.stderr)
@@ -513,6 +700,7 @@ def main() -> int:
         require(repo_root.is_dir(), f"repository root is not a directory: {repo_root}")
         workflows = validate_shared_concurrency(repo_root)
         validate_benchmark_workflow(workflows[BENCHMARK_WORKFLOW])
+        validate_repair_workflow(workflows[WORK_ROOT_OWNER_REPAIR_WORKFLOW])
     except PolicyError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

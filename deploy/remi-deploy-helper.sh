@@ -28,6 +28,7 @@ usage:
   conary-remi-deploy inspect-remi-candidate-baseline <version> <sha256> <bundle.tar.gz>
   conary-remi-deploy inspect-remi-storage
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
+  conary-remi-deploy repair-remi-conversion-work-root-owner
   conary-remi-deploy benchmark-remi-conversion <run-id> <installed-binary-sha256> <profile> <revision-sha256> <package-key-sha256> <source-sha256> <source-size>
   conary-remi-deploy verify-ingress
   conary-remi-deploy verify-access
@@ -770,6 +771,17 @@ benchmark_systemctl() {
     "$BENCHMARK_SYSTEMCTL" "$@" >/dev/null
 }
 
+configure_remi_conversion_systemctl() {
+    BENCHMARK_SYSTEMCTL=systemctl
+    local test_systemctl="${CONARY_REMI_DEPLOY_TEST_SYSTEMCTL:-}"
+    if [[ -n "$test_systemctl" ]]; then
+        [[ -n "$ROOT" ]] || die "benchmark systemctl override requires a fake root"
+        [[ -f "$test_systemctl" && ! -L "$test_systemctl" && -x "$test_systemctl" ]] ||
+            die "benchmark systemctl test override is not a plain executable"
+        BENCHMARK_SYSTEMCTL="$(realpath -e "$test_systemctl")"
+    fi
+}
+
 benchmark_start_and_probe() {
     if ! benchmark_systemctl start remi; then
         echo "remi deploy helper: failed to restart Remi after conversion benchmark" >&2
@@ -904,6 +916,174 @@ benchmark_filesystem_device() {
     stat -c '%d' "$path" || die "could not inspect benchmark filesystem device: $path"
 }
 
+REPAIR_WORK_OWNER_TEST_STATE=""
+REPAIR_WORK_OWNER_TEST_CHANGED=0
+REPAIR_WORK_CONTAINER=""
+REPAIR_LIVE_ROOT=""
+REPAIR_CANONICAL_UID=""
+REPAIR_CANONICAL_GID=""
+REPAIR_PRE_WORK_MODE=""
+REPAIR_PRE_WORK_REAL=""
+REPAIR_PRE_WORK_DEV_INODE=""
+REPAIR_PRE_LIVE_REAL=""
+REPAIR_PRE_LIVE_DEV_INODE=""
+
+repair_work_root_observed_identity() {
+    if [[ -n "$REPAIR_WORK_OWNER_TEST_STATE" ]]; then
+        if [[ "$REPAIR_WORK_OWNER_TEST_CHANGED" == "1" \
+            && "$REPAIR_WORK_OWNER_TEST_STATE" == "owner-drift" ]]; then
+            printf '%s:%s' "$REPAIR_CANONICAL_UID" "$REPAIR_CANONICAL_GID"
+        else
+            printf 'noncanonical:noncanonical'
+        fi
+        return
+    fi
+    stat -c '%u:%g' "$REPAIR_WORK_CONTAINER" ||
+        die "could not inspect benchmark XFS container ownership"
+}
+
+repair_work_root_chown() {
+    local command=(
+        chown
+        --no-dereference
+        --
+        "${REPAIR_CANONICAL_UID}:${REPAIR_CANONICAL_GID}"
+        "$REPAIR_WORK_CONTAINER"
+    )
+    if [[ -n "$REPAIR_WORK_OWNER_TEST_STATE" ]]; then
+        local argv_log
+        argv_log="$(root_path /repair-remi-conversion-work-root-owner.chown-argv)"
+        [[ ! -e "$argv_log" && ! -L "$argv_log" ]] ||
+            die "work-root owner test argv target already exists"
+        (umask 077; printf '%s\n' "${command[@]}" >"$argv_log")
+        REPAIR_WORK_OWNER_TEST_CHANGED=1
+        return
+    fi
+    "${command[@]}"
+}
+
+require_repair_service_live() {
+    benchmark_systemctl is-active --quiet remi ||
+        die "Remi must be active during work-root owner repair"
+    curl -fsS --max-time 30 "$HEALTH_URL" >/dev/null ||
+        die "Remi liveness check failed during work-root owner repair"
+}
+
+validate_repair_work_root() {
+    local phase="$1"
+    case "$phase" in
+        owner-drift|canonical) ;;
+        *) die "internal work-root validation phase is invalid" ;;
+    esac
+
+    [[ -d "$REPAIR_WORK_CONTAINER" && ! -L "$REPAIR_WORK_CONTAINER" ]] ||
+        die "benchmark XFS container is not a plain directory: $REPAIR_WORK_CONTAINER"
+
+    local observed_identity observed_uid
+    observed_identity="$(repair_work_root_observed_identity)"
+    observed_uid="${observed_identity%%:*}"
+    if [[ "$phase" == "owner-drift" ]]; then
+        [[ "$observed_uid" != "$REPAIR_CANONICAL_UID" ]] ||
+            die "benchmark XFS container does not have the proven owner drift"
+    else
+        [[ "$observed_identity" == \
+            "${REPAIR_CANONICAL_UID}:${REPAIR_CANONICAL_GID}" ]] ||
+            die "benchmark XFS container owner repair did not establish canonical ownership"
+    fi
+
+    local work_mode work_mode_value
+    work_mode="$(stat -c '%a' "$REPAIR_WORK_CONTAINER")"
+    work_mode_value=$((8#$work_mode))
+    (( (work_mode_value & 06000) == 0 )) ||
+        die "benchmark XFS container must not have set-ID mode bits: $REPAIR_WORK_CONTAINER"
+    (( (work_mode_value & 0022) == 0 )) ||
+        die "benchmark XFS container must not be group/world writable: $REPAIR_WORK_CONTAINER"
+    if [[ "$phase" == "canonical" ]]; then
+        [[ "$work_mode" == "$REPAIR_PRE_WORK_MODE" ]] ||
+            die "benchmark XFS container mode changed during owner repair"
+    fi
+
+    local live_real work_real live_dev_inode work_dev_inode
+    local live_filesystem work_filesystem live_device work_device
+    live_real="$(realpath -e "$REPAIR_LIVE_ROOT")" ||
+        die "could not resolve live Remi root"
+    work_real="$(realpath -e "$REPAIR_WORK_CONTAINER")" ||
+        die "could not resolve benchmark XFS container"
+    live_dev_inode="$(stat -c '%d:%i' "$live_real")"
+    work_dev_inode="$(stat -c '%d:%i' "$work_real")"
+
+    if [[ "$phase" == "canonical" ]]; then
+        [[ "$live_real" == "$REPAIR_PRE_LIVE_REAL" \
+            && "$live_dev_inode" == "$REPAIR_PRE_LIVE_DEV_INODE" ]] ||
+            die "live Remi root changed during work-root owner repair"
+        [[ "$work_real" == "$REPAIR_PRE_WORK_REAL" \
+            && "$work_dev_inode" == "$REPAIR_PRE_WORK_DEV_INODE" ]] ||
+            die "benchmark XFS container changed during owner repair"
+    fi
+
+    [[ "$work_real" != "$live_real" \
+        && "$work_real" != "$live_real"/* \
+        && "$live_real" != "$work_real"/* ]] ||
+        die "benchmark XFS container overlaps the live Remi root"
+    [[ "$work_dev_inode" != "$live_dev_inode" ]] ||
+        die "benchmark XFS container aliases the live Remi root"
+
+    live_filesystem="$(benchmark_filesystem_type "$live_real")"
+    work_filesystem="$(benchmark_filesystem_type "$work_real")"
+    [[ "$live_filesystem" == "xfs" ]] ||
+        die "live Remi root is not on XFS: $live_real"
+    [[ "$work_filesystem" == "xfs" ]] ||
+        die "benchmark XFS container is not on XFS: $work_real"
+    live_device="$(benchmark_filesystem_device "$live_real")"
+    work_device="$(benchmark_filesystem_device "$work_real")"
+    [[ "$work_device" == "$live_device" ]] ||
+        die "benchmark XFS container is not on the live Remi filesystem device: $work_real"
+
+    if [[ "$phase" == "owner-drift" ]]; then
+        REPAIR_PRE_WORK_MODE="$work_mode"
+        REPAIR_PRE_LIVE_REAL="$live_real"
+        REPAIR_PRE_LIVE_DEV_INODE="$live_dev_inode"
+        REPAIR_PRE_WORK_REAL="$work_real"
+        REPAIR_PRE_WORK_DEV_INODE="$work_dev_inode"
+    fi
+}
+
+repair_remi_conversion_work_root_owner() {
+    REPAIR_WORK_OWNER_TEST_STATE="${CONARY_REMI_DEPLOY_TEST_WORK_OWNER_STATE:-}"
+    REPAIR_WORK_OWNER_TEST_CHANGED=0
+    if [[ -n "$REPAIR_WORK_OWNER_TEST_STATE" && -z "$ROOT" ]]; then
+        die "work-root owner test hook requires a fake root"
+    fi
+    case "$REPAIR_WORK_OWNER_TEST_STATE" in
+        ""|owner-drift|post-validation-failure) ;;
+        *) die "invalid work-root owner test state" ;;
+    esac
+
+    [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
+    require_shared_conary_root
+    configure_remi_conversion_systemctl
+
+    REPAIR_WORK_CONTAINER="$(root_path /work)"
+    REPAIR_LIVE_ROOT="$(root_path /conary)"
+    if [[ -n "$ROOT" ]]; then
+        REPAIR_CANONICAL_UID="$(id -u)"
+        REPAIR_CANONICAL_GID="$(id -g)"
+    else
+        REPAIR_CANONICAL_UID=0
+        REPAIR_CANONICAL_GID=0
+    fi
+
+    validate_repair_work_root owner-drift
+    require_repair_service_live
+    repair_work_root_chown
+    require_shared_conary_root
+    validate_repair_work_root canonical
+    require_repair_service_live
+
+    printf '%s\n' \
+        '{"schema_version":1,"operation":"repair-remi-conversion-work-root-owner","outcome":"repaired","precondition":"owner-drift","postcondition":"validated"}'
+}
+
 require_secure_benchmark_file() {
     local path="$1"
     local label="$2"
@@ -956,23 +1136,19 @@ benchmark_remi_conversion() {
     require_shared_conary_root
 
     BENCHMARK_FAILURE_STAGE=systemctl-authority
-    local test_systemctl="${CONARY_REMI_DEPLOY_TEST_SYSTEMCTL:-}"
-    if [[ -n "$test_systemctl" ]]; then
-        [[ -n "$ROOT" ]] || die "benchmark systemctl override requires a fake root"
-        [[ -f "$test_systemctl" && ! -L "$test_systemctl" && -x "$test_systemctl" ]] ||
-            die "benchmark systemctl test override is not a plain executable"
-        BENCHMARK_SYSTEMCTL="$(realpath -e "$test_systemctl")"
-    fi
+    configure_remi_conversion_systemctl
 
     BENCHMARK_FAILURE_STAGE=account-identity
-    local control_uid runtime_uid runtime_gid source_uid
+    local control_uid control_gid runtime_uid runtime_gid source_uid
     if [[ -n "$ROOT" ]]; then
         control_uid="$(id -u)"
+        control_gid="$(id -g)"
         runtime_uid="$(id -u)"
         runtime_gid="$(id -g)"
         source_uid="$(id -u)"
     else
         control_uid=0
+        control_gid=0
         runtime_uid="$(id -u conary)" || die "missing conary service account"
         runtime_gid="$(id -g conary)" || die "missing conary service group"
         source_uid="${SUDO_UID:-0}"
@@ -1026,7 +1202,7 @@ benchmark_remi_conversion() {
         die "benchmark XFS container is not a plain directory: $work_container"
 
     BENCHMARK_FAILURE_STAGE=work-root-owner
-    [[ "$(stat -c '%u' "$work_container")" == "$control_uid" ]] ||
+    [[ "$(stat -c '%u:%g' "$work_container")" == "${control_uid}:${control_gid}" ]] ||
         die "benchmark XFS container has the wrong owner: $work_container"
 
     local work_mode work_mode_value
@@ -1279,6 +1455,10 @@ case "${1:-}" in
     export-native-oracle-inputs)
         [[ $# -eq 5 ]] || usage
         export_native_oracle_inputs "$2" "$3" "$4" "$5"
+        ;;
+    repair-remi-conversion-work-root-owner)
+        [[ $# -eq 1 ]] || usage
+        repair_remi_conversion_work_root_owner
         ;;
     benchmark-remi-conversion)
         shift
