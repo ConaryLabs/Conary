@@ -6,7 +6,9 @@ use fs2::FileExt as _;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
-const CAS_OBJECT_LIVENESS_LOCK: &str = ".object-liveness.lock";
+// This is persistent coordination state, not a private staging object. Keep it
+// out of the leading-dot and `.tmp` namespaces removed by CAS temp cleanup.
+const CAS_OBJECT_LIVENESS_LOCK: &str = "object-liveness.lock";
 
 /// Shared lease preventing Conary's collector from deleting canonical objects.
 ///
@@ -92,6 +94,8 @@ fn open_lock_file(objects_dir: &Path) -> crate::Result<(PathBuf, File)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filesystem::{CasStore, is_temporary_object_name};
+    use std::ffi::OsStr;
 
     #[test]
     fn shared_liveness_lease_excludes_collection_session() {
@@ -100,6 +104,31 @@ mod tests {
         let lease = CasObjectLivenessLease::acquire(&objects_dir).unwrap();
         let (_, competing_lock) = open_lock_file(&objects_dir).unwrap();
 
+        assert!(competing_lock.try_lock_exclusive().is_err());
+        drop(lease);
+        competing_lock.try_lock_exclusive().unwrap();
+    }
+
+    #[test]
+    fn temp_cleanup_preserves_the_liveness_lock_inode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let objects_dir = tmp.path().join("objects");
+        let lease = CasObjectLivenessLease::acquire(&objects_dir).unwrap();
+        let lock_path = objects_dir.join(CAS_OBJECT_LIVENESS_LOCK);
+
+        assert!(!is_temporary_object_name(OsStr::new(
+            CAS_OBJECT_LIVENESS_LOCK
+        )));
+        assert_eq!(
+            CasStore::new(&objects_dir)
+                .unwrap()
+                .cleanup_orphaned_temps(std::time::Duration::ZERO)
+                .unwrap(),
+            0
+        );
+        assert!(lock_path.exists());
+
+        let (_, competing_lock) = open_lock_file(&objects_dir).unwrap();
         assert!(competing_lock.try_lock_exclusive().is_err());
         drop(lease);
         competing_lock.try_lock_exclusive().unwrap();
