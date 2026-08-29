@@ -108,6 +108,7 @@ worktree's Cargo target isolated:
 ```bash
 scripts/dev-build.sh cargo -- build -p conary
 scripts/dev-build.sh cargo -- test -p remi
+scripts/dev-build.sh iterate -- build -p conary
 scripts/dev-build.sh status
 ```
 
@@ -116,6 +117,11 @@ to 10 GiB by default. Existing `RUSTC_WRAPPER`, `CARGO_TARGET_DIR`,
 `SCCACHE_DIR`, and `SCCACHE_CACHE_SIZE` values retain precedence. Use
 `scripts/dev-build.sh clean --yes` only when intentionally clearing that
 marked compiler cache; it never removes Cargo targets.
+
+Use `iterate` for an optimized edit/build/run loop. It selects the repository's
+no-LTO incremental `fast-release` profile and keeps the caller's isolated Cargo
+target. That artifact is development-only: release, promotion, and final
+performance evidence continue to use the exact `--release` profile.
 
 The project root is a virtual Cargo workspace with eight members:
 `apps/conary`, `apps/remi`, `apps/conaryd`, `apps/conary-test`,

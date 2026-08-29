@@ -104,8 +104,11 @@ stay in ignored local files.
   `scripts/maintainability-drift-report.sh` as evidence aids, not replacement
   owners or automatic failure gates.
 - Use `scripts/dev-build.sh cargo -- <cargo arguments>` for repeated local
-  builds, and `scripts/dev-build.sh status` to inspect the shared compiler
-  cache. Caller-selected wrappers, cache locations, and Cargo targets retain
+  builds, `scripts/dev-build.sh iterate -- build -p <package>` for the optimized
+  development-only profile, and `scripts/dev-build.sh status` to inspect the
+  shared compiler cache. `iterate` never supplies a release or promotion
+  artifact; final performance evidence uses the exact release profile.
+  Caller-selected wrappers, cache locations, and Cargo targets retain
   precedence; cache cleanup never owns a worktree target.
 - When tool, SDK, model, or harness behavior matters, verify current official
   vendor documentation before changing durable guidance.
