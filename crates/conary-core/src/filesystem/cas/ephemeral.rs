@@ -17,6 +17,16 @@ pub(crate) struct EphemeralObjectStore {
     store: CasStore,
 }
 
+/// Exact work performed while staging one disposable object.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EphemeralObjectStoreMetrics {
+    pub(crate) incoming_bytes_hashed: u64,
+    pub(crate) temporary_bytes_written: u64,
+    pub(crate) canonical_bytes_reread: u64,
+    pub(crate) hits: u64,
+    pub(crate) misses: u64,
+}
+
 impl EphemeralObjectStore {
     pub(crate) fn new(root: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
@@ -38,6 +48,16 @@ impl EphemeralObjectStore {
         expected_size: u64,
         expected_sha256: &str,
     ) -> Result<String> {
+        self.store_reader_expected_with_metrics(reader, expected_size, expected_sha256)
+            .map(|(sha256, _metrics)| sha256)
+    }
+
+    pub(crate) fn store_reader_expected_with_metrics(
+        &self,
+        reader: &mut dyn Read,
+        expected_size: u64,
+        expected_sha256: &str,
+    ) -> Result<(String, EphemeralObjectStoreMetrics)> {
         if self.store.algorithm() != HashAlgorithm::Sha256 {
             return Err(crate::Error::ConfigError(format!(
                 "ephemeral expected-reader storage requires SHA-256 CAS authority, found {}",
@@ -54,6 +74,7 @@ impl EphemeralObjectStore {
             CasStore::next_temp_id()
         );
         let temp_path = path.with_extension(temp_extension);
+        let mut metrics = EphemeralObjectStoreMetrics::default();
         let result = (|| -> Result<()> {
             let mut output = fs::OpenOptions::new()
                 .write(true)
@@ -79,6 +100,8 @@ impl EphemeralObjectStore {
                 }
                 hasher.update(&buffer[..read]);
                 output.write_all(&buffer[..read])?;
+                metrics.incoming_bytes_hashed += read as u64;
+                metrics.temporary_bytes_written += read as u64;
             }
             if total != expected_size {
                 return Err(crate::Error::IoError(format!(
@@ -95,9 +118,11 @@ impl EphemeralObjectStore {
             drop(output);
 
             match fs::hard_link(&temp_path, &path) {
-                Ok(()) => {}
+                Ok(()) => metrics.misses = 1,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     verify_existing_object(&path, expected_size, expected_sha256)?;
+                    metrics.hits = 1;
+                    metrics.canonical_bytes_reread = expected_size;
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -105,7 +130,7 @@ impl EphemeralObjectStore {
         })();
         let _ = fs::remove_file(&temp_path);
         result?;
-        Ok(expected_sha256.to_string())
+        Ok((expected_sha256.to_string(), metrics))
     }
 
     #[cfg(test)]
@@ -166,18 +191,38 @@ mod tests {
             max_requested: 0,
         };
 
+        let (stored, first) = store
+            .store_reader_expected_with_metrics(&mut reader, bytes.len() as u64, &sha256)
+            .unwrap();
+        assert_eq!(stored, sha256);
         assert_eq!(
-            store
-                .store_reader_expected(&mut reader, bytes.len() as u64, &sha256)
-                .unwrap(),
-            sha256
+            first,
+            EphemeralObjectStoreMetrics {
+                incoming_bytes_hashed: bytes.len() as u64,
+                temporary_bytes_written: bytes.len() as u64,
+                canonical_bytes_reread: 0,
+                hits: 0,
+                misses: 1,
+            }
         );
         assert!(reader.max_requested <= PAYLOAD_IO_BUFFER_SIZE);
+        let (stored, second) = store
+            .store_reader_expected_with_metrics(
+                &mut Cursor::new(&bytes),
+                bytes.len() as u64,
+                &sha256,
+            )
+            .unwrap();
+        assert_eq!(stored, sha256);
         assert_eq!(
-            store
-                .store_reader_expected(&mut Cursor::new(&bytes), bytes.len() as u64, &sha256,)
-                .unwrap(),
-            sha256
+            second,
+            EphemeralObjectStoreMetrics {
+                incoming_bytes_hashed: bytes.len() as u64,
+                temporary_bytes_written: bytes.len() as u64,
+                canonical_bytes_reread: bytes.len() as u64,
+                hits: 1,
+                misses: 0,
+            }
         );
         assert_eq!(
             fs::read(store.object_path(&sha256).unwrap()).unwrap(),
