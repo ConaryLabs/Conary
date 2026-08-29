@@ -1459,16 +1459,17 @@ counters. Successful cold evidence independently reopens the signed transport
 and hashes the complete CCS archive; the report records the CCS, transport,
 and canonical signed-object-set identities and byte counts.
 
-The first repetition must be `cold`. Every successor must be an exact `hot`
-hit with no conversion-core work. Schema-v2 validation rejects inconsistent
-authority, iteration, cache-state, timing, or output proof before atomically
-publishing the report, then deserializes and compares the durable report before
-success. A commit-worthy baseline uses a clean exact source commit, preserves
-the complete JSON report, and compares identical authority, subject,
-environment, and signed-object-set identities. The recorded counters are
-regression evidence; they do not weaken conversion verification or storage
-authority. Performance baselines and measured optimizations live in
-[performance evidence](../performance/README.md).
+The first successful repetition must be `cold`. Every later successful
+repetition must be an exact `hot` hit with no conversion-core work. Failures
+remain typed evidence rather than being relabeled or silently retried.
+Schema-v2 validation rejects inconsistent authority, iteration, cache-state,
+timing, or output proof before atomically publishing the report, then
+deserializes and compares the durable report before success. A commit-worthy
+baseline uses a clean exact source commit, preserves the complete JSON report,
+and compares identical authority, subject, environment, and signed-object-set
+identities. The recorded counters are regression evidence; they do not weaken
+conversion verification or storage authority. Performance baselines and
+measured optimizations live in [performance evidence](../performance/README.md).
 
 The isolated harness exercises local verified-CAS durability separately from
 cloud publication. `r2_write_through` is therefore recorded as skipped with a
