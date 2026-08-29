@@ -2,12 +2,16 @@
 
 //! Immutable reopen checks and non-serializable exact-artifact proofs.
 
+use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
-use super::util::{conversion_error, parse_json_column, read_u64};
-use super::{CATALOG_CONTENT_SCHEMA_V1, CatalogBindingV1, CatalogReader};
+use super::util::{
+    conversion_error, hash_file, parse_json_column, read_u64, reject_nonempty_sidecars,
+};
+use super::{CATALOG_APPLICATION_ID, CATALOG_CONTENT_SCHEMA_V1, CatalogBindingV1, CatalogReader};
 use crate::error::{Error, Result};
 use crate::repository::catalog::{CatalogArtifactV1, CatalogCountsV1};
 
@@ -108,6 +112,123 @@ impl CatalogVerificationProofV1 {
 }
 
 impl CatalogReader {
+    pub fn open_verified(path: impl AsRef<Path>, expected: &CatalogBindingV1) -> Result<Self> {
+        Self::open_verified_inner(path.as_ref(), expected, true)
+    }
+
+    /// Open an exact signed catalog artifact without replaying its complete
+    /// logical projection through Rust values.
+    ///
+    /// The Remi publisher performs the logical/schema replay before its
+    /// dedicated universe role signs the artifact. A universe client has
+    /// already verified that signature and the exact file SHA-256; it repeats
+    /// the physical schema, integrity, and embedded-binding checks here, then
+    /// copies normalized rows directly between SQLite databases.
+    /// This avoids turning one arbitrarily large presentation or expression
+    /// field into synchronization memory.
+    pub(in crate::repository) fn open_verified_signed_artifact(
+        path: impl AsRef<Path>,
+        expected: &CatalogBindingV1,
+    ) -> Result<Self> {
+        Self::open_verified_inner(path.as_ref(), expected, false)
+    }
+
+    fn open_verified_inner(
+        path: &Path,
+        expected: &CatalogBindingV1,
+        verify_logical_content: bool,
+    ) -> Result<Self> {
+        let started = Instant::now();
+        expected.validate()?;
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
+            Error::IoError(format!(
+                "inspect immutable catalog {}: {error}",
+                path.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(Error::InvalidPath(format!(
+                "immutable catalog {} must be a regular file, never a symlink",
+                path.display()
+            )));
+        }
+        reject_nonempty_sidecars(path)?;
+        if metadata.len() != expected.artifact.size {
+            return Err(Error::ChecksumMismatch {
+                expected: format!("{} bytes", expected.artifact.size),
+                actual: format!("{} bytes", metadata.len()),
+            });
+        }
+        let actual_sha256 = hash_file(path)?;
+        if actual_sha256 != expected.artifact.sha256 {
+            return Err(Error::ChecksumMismatch {
+                expected: expected.artifact.sha256.clone(),
+                actual: actual_sha256,
+            });
+        }
+
+        let canonical_path = path.canonicalize()?;
+        let mut uri = url::Url::from_file_path(&canonical_path).map_err(|_| {
+            Error::InvalidPath(format!(
+                "catalog path {} cannot be represented as an immutable SQLite URI",
+                canonical_path.display()
+            ))
+        })?;
+        uri.query_pairs_mut().append_pair("immutable", "1");
+        let connection = Connection::open_with_flags(
+            uri.as_str(),
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        connection.execute_batch(
+            "PRAGMA query_only = ON; PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;",
+        )?;
+        let application_id: i64 =
+            connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
+        if application_id != CATALOG_APPLICATION_ID {
+            return Err(Error::ConfigError(format!(
+                "catalog {} has application id {application_id:#x}; expected {CATALOG_APPLICATION_ID:#x}",
+                path.display()
+            )));
+        }
+        let integrity: String =
+            connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        if integrity != "ok" {
+            return Err(Error::InitError(format!(
+                "catalog {} failed SQLite integrity_check: {integrity}",
+                path.display()
+            )));
+        }
+        let stored = read_binding(&connection, expected.artifact.clone())?;
+        if &stored != expected {
+            return Err(Error::ConflictError(format!(
+                "catalog {} metadata does not match its exact manifest binding",
+                path.display()
+            )));
+        }
+        let mut reader = Self {
+            path: canonical_path,
+            binding: expected.clone(),
+            connection,
+            verification_proof: None,
+        };
+        if verify_logical_content {
+            reader.verify_logical_content()?;
+            reader.verification_proof = Some(CatalogVerificationProofV1::new(expected));
+        }
+        #[cfg(test)]
+        super::PHYSICAL_VERIFICATION_PASSES.set(super::PHYSICAL_VERIFICATION_PASSES.get() + 1);
+        tracing::info!(
+            catalog = %reader.path.display(),
+            catalog_bytes = expected.artifact.size,
+            verify_logical_content,
+            elapsed_ms = started.elapsed().as_millis(),
+            "Immutable catalog reopen completed"
+        );
+        Ok(reader)
+    }
+
     /// Reopen one independently addressed physical artifact while carrying
     /// forward a full logical verification of the exact same binding.
     ///
