@@ -397,7 +397,7 @@ async fn run_iteration(
                     views,
                     ConversionBenchmarkOutcome::Success {
                         cache_state: result.cache_state,
-                        timing,
+                        timing: Box::new(timing),
                         output,
                     },
                 ),
@@ -444,10 +444,16 @@ fn benchmark_views(
         .filter(|phase| {
             matches!(
                 phase.phase,
-                crate::server::conversion_timing::ConversionPhase::ArchiveExtraction
-                    | crate::server::conversion_timing::ConversionPhase::NativeShellAstExtraction
-                    | crate::server::conversion_timing::ConversionPhase::AdapterDispatch
-                    | crate::server::conversion_timing::ConversionPhase::CcsEmission
+                crate::server::conversion_timing::ConversionPhase::NativeArchiveParseAndSpool
+                    | crate::server::conversion_timing::ConversionPhase::ArtifactIdentityAndAuthorityValidation
+                    | crate::server::conversion_timing::ConversionPhase::MetadataLifecycleAndAuthorityProjection
+                    | crate::server::conversion_timing::ConversionPhase::PayloadReferenceDerivation
+                    | crate::server::conversion_timing::ConversionPhase::OutputWorkspacePreparation
+                    | crate::server::conversion_timing::ConversionPhase::ControlProjectionAndSigning
+                    | crate::server::conversion_timing::ConversionPhase::PayloadObjectEmission
+                    | crate::server::conversion_timing::ConversionPhase::ArchiveAssemblyAndGzip
+                    | crate::server::conversion_timing::ConversionPhase::ImmediateConverterReopen
+                    | crate::server::conversion_timing::ConversionPhase::NativeProvenanceProjection
             )
         })
         .map(|phase| phase.duration_ms)
@@ -479,11 +485,17 @@ fn independently_reopen_output(
     result: &super::ServerConversionResult,
     signing_key: &conary_core::ccs::signing::SigningKeyPair,
 ) -> Result<ConversionBenchmarkOutputProof> {
-    let started = Instant::now();
+    let ccs_size_bytes = fs::metadata(&result.ccs_path)?.len();
+    ensure!(
+        ccs_size_bytes == result.total_size,
+        "independent CCS size disagrees with persisted conversion result"
+    );
+    let transport_reopen_started = Instant::now();
     let policy =
         conary_core::ccs::verify::TrustPolicy::strict(vec![signing_key.public_key_base64()]);
     let verified = conary_core::ccs::verify::verify_package(&result.ccs_path, &policy)?;
     let transport = conary_core::ccs::CcsTransportEnvelopeV1::from_verified_archive(&verified)?;
+    let independent_transport_reopen_ms = transport_reopen_started.elapsed().as_millis();
     let expected_transport_sha256 =
         conary_core::ccs::attestation::canonical_json_hash(&result.transport)?;
     let transport_sha256 = conary_core::ccs::attestation::canonical_json_hash(&transport)?;
@@ -491,15 +503,12 @@ fn independently_reopen_output(
         transport_sha256 == expected_transport_sha256,
         "independent transport envelope disagrees with conversion result"
     );
+    let complete_hash_started = Instant::now();
     let ccs_sha256 = sha256_file(&result.ccs_path)?;
+    let independent_complete_archive_hash_ms = complete_hash_started.elapsed().as_millis();
     ensure!(
         result.content_hash == format!("sha256:{ccs_sha256}"),
         "independent CCS digest disagrees with persisted conversion result"
-    );
-    let ccs_size_bytes = fs::metadata(&result.ccs_path)?.len();
-    ensure!(
-        ccs_size_bytes == result.total_size,
-        "independent CCS size disagrees with persisted conversion result"
     );
     let signed_object_count = transport.objects.len() as u64;
     let signed_object_bytes = transport.objects.iter().try_fold(0_u64, |total, object| {
@@ -516,7 +525,10 @@ fn independently_reopen_output(
         signed_object_set_sha256,
         signed_object_count,
         signed_object_bytes,
-        independent_reopen_ms: started.elapsed().as_millis(),
+        independent_transport_reopen_ms,
+        independent_transport_reopen_bytes: ccs_size_bytes,
+        independent_complete_archive_hash_ms,
+        independent_complete_archive_hash_bytes: ccs_size_bytes,
     })
 }
 

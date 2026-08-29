@@ -15,7 +15,8 @@ use crate::ccs::attestation::{
     compute_build_output_identity_from_v3,
 };
 use crate::ccs::builder::{
-    BuildResult, ChunkStats, ComponentData, FileEntry, write_v3_ccs_package_from_sources,
+    BuildResult, CcsPackageWriteMetrics, ChunkStats, ComponentData, FileEntry,
+    write_v3_ccs_package_from_sources_with_metrics,
 };
 use crate::ccs::convert::native_provenance::NativeProvenance;
 use crate::ccs::convert::scriptlet_bundle::{
@@ -42,6 +43,7 @@ use crate::security::command_risk::{
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Options for native package conversion
 #[derive(Debug, Clone)]
@@ -77,6 +79,34 @@ pub struct ConversionResult {
     pub scriptlet_metadata: ScriptletBundleSummary,
     /// Exact Ed25519 public key that authenticated the emitted CCS v3 package.
     pub signing_public_key: String,
+    /// Exact internal pass and work evidence for performance attribution.
+    pub metrics: NativeConversionMetrics,
+}
+
+/// Internal native-conversion phase and work evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeConversionMetrics {
+    pub metadata_lifecycle_and_authority_projection: Duration,
+    pub payload_reference_derivation: Duration,
+    pub output_workspace_preparation: Duration,
+    pub native_provenance_projection: Duration,
+    pub immediate_converter_reopen: Duration,
+    pub payload_files_examined: u64,
+    pub payload_reference_bytes_read: u64,
+    pub payload_reference_bytes_hashed: u64,
+    pub payload_chunks_derived: u64,
+    pub unique_payload_chunks_derived: u64,
+    pub ccs_write: CcsPackageWriteMetrics,
+}
+
+#[derive(Default)]
+struct PayloadReferenceMetrics {
+    duration: Duration,
+    files_examined: u64,
+    bytes_read: u64,
+    bytes_hashed: u64,
+    chunks_derived: u64,
+    unique_chunks_derived: u64,
 }
 
 /// Converts native packages (RPM/DEB/Arch/eopkg) to CCS format.
@@ -138,6 +168,7 @@ impl NativePackageConverter {
         format: &str,
         checksum: &Hash,
     ) -> Result<ConversionResult, ConversionError> {
+        let metadata_projection_started = Instant::now();
         if checksum.algorithm != HashAlgorithm::Sha256 {
             return Err(ConversionError::ManifestError(format!(
                 "foreign conversion source checksum must use SHA-256, got '{}'",
@@ -234,9 +265,12 @@ impl NativePackageConverter {
         // Foreign conversion preserves exact package payload authority. It
         // does not run content-rewriting build policy or materialize a second
         // source tree.
-        let mut build_result = build_streaming_result(manifest.clone(), files)?;
+        let metadata_before_payload_references = metadata_projection_started.elapsed();
+        let (mut build_result, payload_reference_metrics) =
+            build_streaming_result(manifest.clone(), files)?;
 
         // Step 5: Write the package file.
+        let workspace_started = Instant::now();
         std::fs::create_dir_all(&self.options.output_dir)
             .map_err(|e| ConversionError::IoError(format!("Failed to create output dir: {}", e)))?;
 
@@ -245,7 +279,9 @@ impl NativePackageConverter {
             build_result.manifest.package.name, build_result.manifest.package.version
         );
         let package_path = self.options.output_dir.join(&package_filename);
+        let output_workspace_preparation = workspace_started.elapsed();
 
+        let authority_projection_started = Instant::now();
         let signing_key = self.signing_key.as_ref().ok_or_else(|| {
             ConversionError::BuildError(
                 "Foreign conversion requires an explicit CCS authority signing key".to_string(),
@@ -329,7 +365,9 @@ impl NativePackageConverter {
                 "Foreign conversion produced invalid CCS v3 authority: {error}"
             ))
         })?;
-        write_v3_ccs_package_from_sources(
+        let metadata_lifecycle_and_authority_projection =
+            metadata_before_payload_references + authority_projection_started.elapsed();
+        let ccs_write = write_v3_ccs_package_from_sources_with_metrics(
             &authority,
             files,
             &package_path,
@@ -344,6 +382,7 @@ impl NativePackageConverter {
                 e
             ))
         })?;
+        let immediate_reopen_started = Instant::now();
         crate::ccs::verify::verify_package(
             &package_path,
             &crate::ccs::verify::TrustPolicy::strict(vec![signing_key.public_key_base64()]),
@@ -353,8 +392,10 @@ impl NativePackageConverter {
                 "Converted CCS package failed immediate authority verification: {error:#}"
             ))
         })?;
+        let immediate_converter_reopen = immediate_reopen_started.elapsed();
 
         // Step 6: Extract source-package provenance information.
+        let native_provenance_started = Instant::now();
         let artifact_exists = metadata.package_path.try_exists().map_err(|error| {
             ConversionError::IoError(format!(
                 "Failed to inspect native package provenance path {:?}: {error}",
@@ -386,6 +427,7 @@ impl NativePackageConverter {
             tracing::debug!("No optional provenance fields found in {} package", format);
         }
         let native_provenance = Some(provenance);
+        let native_provenance_projection = native_provenance_started.elapsed();
 
         Ok(ConversionResult {
             build_result,
@@ -396,6 +438,19 @@ impl NativePackageConverter {
             native_lifecycle: Some(scriptlet_bundle.bundle),
             scriptlet_metadata: scriptlet_bundle.summary,
             signing_public_key: signing_key.public_key_base64(),
+            metrics: NativeConversionMetrics {
+                metadata_lifecycle_and_authority_projection,
+                payload_reference_derivation: payload_reference_metrics.duration,
+                output_workspace_preparation,
+                native_provenance_projection,
+                immediate_converter_reopen,
+                payload_files_examined: payload_reference_metrics.files_examined,
+                payload_reference_bytes_read: payload_reference_metrics.bytes_read,
+                payload_reference_bytes_hashed: payload_reference_metrics.bytes_hashed,
+                payload_chunks_derived: payload_reference_metrics.chunks_derived,
+                unique_payload_chunks_derived: payload_reference_metrics.unique_chunks_derived,
+                ccs_write,
+            },
         })
     }
 
@@ -460,7 +515,16 @@ impl NativePackageConverter {
 fn build_streaming_result(
     manifest: CcsManifest,
     payloads: &[PackagePayloadFile],
-) -> Result<BuildResult, ConversionError> {
+) -> Result<(BuildResult, PayloadReferenceMetrics), ConversionError> {
+    let started = Instant::now();
+    let mut metrics = PayloadReferenceMetrics {
+        files_examined: u64::try_from(payloads.len()).map_err(|_| {
+            ConversionError::BuildError(
+                "conversion payload file count exceeds u64 authority".to_string(),
+            )
+        })?,
+        ..Default::default()
+    };
     let mut files = Vec::with_capacity(payloads.len());
     let mut total_size = 0_u64;
     let mut chunk_stats = ChunkStats::default();
@@ -510,6 +574,18 @@ fn build_streaming_result(
                         payload.path, content.size
                     )));
                 }
+                metrics.bytes_read =
+                    metrics.bytes_read.checked_add(processed).ok_or_else(|| {
+                        ConversionError::BuildError(
+                            "conversion payload reference read-byte count overflow".to_string(),
+                        )
+                    })?;
+                metrics.bytes_hashed =
+                    metrics.bytes_hashed.checked_add(processed).ok_or_else(|| {
+                        ConversionError::BuildError(
+                            "conversion payload reference hash-byte count overflow".to_string(),
+                        )
+                    })?;
                 chunk_stats.chunked_files += 1;
                 Some(references)
             }
@@ -545,15 +621,27 @@ fn build_streaming_result(
         )])
     };
     chunk_stats.unique_chunks = unique_chunks.len();
-    Ok(BuildResult {
-        manifest,
-        components,
-        files,
-        payloads: payloads.to_vec(),
-        total_size,
-        chunked: chunk_stats.chunked_files > 0,
-        chunk_stats: Some(chunk_stats),
-    })
+    metrics.chunks_derived = u64::try_from(chunk_stats.total_chunks).map_err(|_| {
+        ConversionError::BuildError("conversion chunk count exceeds u64 authority".to_string())
+    })?;
+    metrics.unique_chunks_derived = u64::try_from(chunk_stats.unique_chunks).map_err(|_| {
+        ConversionError::BuildError(
+            "conversion unique chunk count exceeds u64 authority".to_string(),
+        )
+    })?;
+    metrics.duration = started.elapsed();
+    Ok((
+        BuildResult {
+            manifest,
+            components,
+            files,
+            payloads: payloads.to_vec(),
+            total_size,
+            chunked: chunk_stats.chunked_files > 0,
+            chunk_stats: Some(chunk_stats),
+        },
+        metrics,
+    ))
 }
 
 fn project_source_capabilities(

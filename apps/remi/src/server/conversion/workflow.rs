@@ -6,8 +6,8 @@ use super::lookup::{PackageDownloadRequest, PinnedConversionSource};
 use super::persistence::PersistConversionInput;
 use crate::server::catalog_authority::ProfileRevisionSelection;
 use crate::server::conversion_timing::{
-    ConversionPhase, ConversionPhaseTiming, ConversionSkippedPhase, ConversionSourceIdentity,
-    ConversionTimingReport,
+    ConversionNestedPhase, ConversionNestedPhaseTiming, ConversionPhase, ConversionPhaseTiming,
+    ConversionSourceIdentity, ConversionTimingReport,
 };
 use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow};
@@ -27,7 +27,10 @@ struct ParsedConversion {
     conversion_result: ConversionResult,
     source: PinnedConversionSource,
     phase_timings: Vec<ConversionPhaseTiming>,
-    skipped_phases: Vec<ConversionSkippedPhase>,
+    nested_phase_timings: Vec<ConversionNestedPhaseTiming>,
+    native_payload_entries: u64,
+    native_payload_regular_files: u64,
+    native_payload_declared_bytes: u64,
 }
 
 enum ConversionSourceSelection {
@@ -42,6 +45,15 @@ enum ConversionSourceSelection {
 enum ConversionArtifactSelection {
     Download,
     AuthenticatedLocal(PathBuf),
+}
+
+struct ConversionRequest<'a> {
+    distro: &'a str,
+    package_name: &'a str,
+    version: Option<&'a str>,
+    architecture: Option<&'a str>,
+    selection: ConversionSourceSelection,
+    artifact: ConversionArtifactSelection,
 }
 
 impl ConversionService {
@@ -173,12 +185,14 @@ impl ConversionService {
         let mut timing = ConversionTimingReport::new(distro, package_name, version);
         let result = self
             .convert_package_async_inner(
-                distro,
-                package_name,
-                version,
-                architecture,
-                selection,
-                artifact,
+                ConversionRequest {
+                    distro,
+                    package_name,
+                    version,
+                    architecture,
+                    selection,
+                    artifact,
+                },
                 &mut timing,
             )
             .await;
@@ -187,12 +201,16 @@ impl ConversionService {
             Ok(mut result) => {
                 timing.work.ccs_output_bytes = result.total_size;
                 timing.work.signed_object_count = result.transport.objects.len() as u64;
-                timing.work.signed_object_bytes = result
-                    .transport
-                    .objects
-                    .iter()
-                    .map(|object| object.size)
-                    .sum();
+                timing.work.signed_object_bytes =
+                    result
+                        .transport
+                        .objects
+                        .iter()
+                        .try_fold(0_u64, |total, object| {
+                            total
+                                .checked_add(object.size)
+                                .context("signed conversion object byte count overflow")
+                        })?;
                 timing.finish(true);
                 Self::log_conversion_timing(&timing);
                 result.timing = Some(timing);
@@ -208,14 +226,17 @@ impl ConversionService {
 
     async fn convert_package_async_inner(
         &self,
-        distro: &str,
-        package_name: &str,
-        version: Option<&str>,
-        architecture: Option<&str>,
-        selection: ConversionSourceSelection,
-        artifact: ConversionArtifactSelection,
+        request: ConversionRequest<'_>,
         timing: &mut ConversionTimingReport,
     ) -> Result<super::ServerConversionResult> {
+        let ConversionRequest {
+            distro,
+            package_name,
+            version,
+            architecture,
+            selection,
+            artifact,
+        } = request;
         info!(
             "Converting package: {}:{} (version: {:?})",
             distro, package_name, version
@@ -383,16 +404,40 @@ impl ConversionService {
         .await
         .map_err(|e| anyhow!("conversion task panicked: {e}"))??;
         timing.phases.extend(parsed.phase_timings.clone());
-        timing.skipped_phases.extend(parsed.skipped_phases.clone());
+        timing
+            .nested_phases
+            .extend(parsed.nested_phase_timings.clone());
+        timing.work.native_payload_entries = parsed.native_payload_entries;
+        timing.work.native_payload_regular_files = parsed.native_payload_regular_files;
+        timing.work.native_payload_declared_bytes = parsed.native_payload_declared_bytes;
+        timing
+            .work
+            .record_native_conversion(&parsed.conversion_result.metrics);
 
         let stored_transport = self
             .store_transport_with_timing(&parsed.conversion_result, source_feed.id())
             .await?;
         timing.record(
-            ConversionPhase::TransportVerification,
+            ConversionPhase::IndependentTransportReopen,
             stored_transport.verification_duration,
         );
-        timing.record(ConversionPhase::CasWrite, stored_transport.cas_duration);
+        timing.record(
+            ConversionPhase::DurableCasIngestion,
+            stored_transport.cas_duration,
+        );
+        timing.work.independent_transport_reopen_ccs_bytes = timing.work.ccs_output_bytes;
+        let reopened_object_bytes =
+            stored_transport
+                .transport
+                .objects
+                .iter()
+                .try_fold(0_u64, |total, object| {
+                    total
+                        .checked_add(object.size)
+                        .context("signed conversion object byte count overflow")
+                })?;
+        timing.work.immediate_converter_reopen_object_bytes_hashed = reopened_object_bytes;
+        timing.work.independent_transport_reopen_object_bytes_hashed = reopened_object_bytes;
         timing.work.record_cas(stored_transport.cas_metrics);
         timing.work.r2 = stored_transport.r2_work;
         if let Some(duration) = stored_transport.r2_duration {
@@ -407,8 +452,7 @@ impl ConversionService {
 
         let persist_service = self.clone();
         let source_profile_owned = parsed.source.source_profile().to_string();
-        let started = Instant::now();
-        tokio::task::spawn_blocking(move || {
+        let persisted = tokio::task::spawn_blocking(move || {
             persist_service.persist_conversion_result(PersistConversionInput {
                 source_profile: source_profile_owned,
                 metadata: parsed.metadata,
@@ -421,22 +465,44 @@ impl ConversionService {
             })
         })
         .await
-        .map_err(|e| anyhow!("conversion persistence task panicked: {e}"))?
-        .inspect(|_| timing.record(ConversionPhase::Persistence, started.elapsed()))
+        .map_err(|e| anyhow!("conversion persistence task panicked: {e}"))??;
+        timing.record(
+            ConversionPhase::CompleteArchiveHash,
+            persisted.metrics.complete_archive_hash,
+        );
+        timing.record(
+            ConversionPhase::CompleteArchiveCopy,
+            persisted.metrics.complete_archive_copy,
+        );
+        timing.record(
+            ConversionPhase::DatabasePersistence,
+            persisted.metrics.database_persistence,
+        );
+        timing.work.complete_archive_hash_bytes = persisted.metrics.complete_archive_hash_bytes;
+        timing.work.complete_archive_copy_bytes = persisted.metrics.complete_archive_copy_bytes;
+        Ok(persisted.result)
     }
 
     fn record_cache_hit_skips(timing: &mut ConversionTimingReport) {
         for phase in [
             ConversionPhase::Download,
             ConversionPhase::Checksum,
-            ConversionPhase::ArchiveExtraction,
-            ConversionPhase::NativeShellAstExtraction,
-            ConversionPhase::AdapterDispatch,
-            ConversionPhase::CcsEmission,
-            ConversionPhase::TransportVerification,
-            ConversionPhase::CasWrite,
+            ConversionPhase::NativeArchiveParseAndSpool,
+            ConversionPhase::ArtifactIdentityAndAuthorityValidation,
+            ConversionPhase::MetadataLifecycleAndAuthorityProjection,
+            ConversionPhase::PayloadReferenceDerivation,
+            ConversionPhase::OutputWorkspacePreparation,
+            ConversionPhase::ControlProjectionAndSigning,
+            ConversionPhase::PayloadObjectEmission,
+            ConversionPhase::ArchiveAssemblyAndGzip,
+            ConversionPhase::ImmediateConverterReopen,
+            ConversionPhase::NativeProvenanceProjection,
+            ConversionPhase::IndependentTransportReopen,
+            ConversionPhase::DurableCasIngestion,
             ConversionPhase::R2WriteThrough,
-            ConversionPhase::Persistence,
+            ConversionPhase::CompleteArchiveHash,
+            ConversionPhase::CompleteArchiveCopy,
+            ConversionPhase::DatabasePersistence,
         ] {
             timing.record_skipped(phase, "cache hit; phase did not run");
         }
@@ -500,14 +566,33 @@ impl ConversionService {
     ) -> Result<ParsedConversion> {
         let repo_pkg = &source.repo_pkg;
         let mut phase_timings = Vec::new();
-        let mut skipped_phases = Vec::new();
 
         let started = Instant::now();
         let (metadata, files, format) = self.parse_package(&pkg_path, source_profile)?;
         phase_timings.push(ConversionPhaseTiming {
-            phase: ConversionPhase::ArchiveExtraction,
+            phase: ConversionPhase::NativeArchiveParseAndSpool,
             duration_ms: started.elapsed().as_millis(),
         });
+        let native_payload_entries =
+            u64::try_from(files.files().len()).context("native payload entry count exceeds u64")?;
+        let native_payload_regular_files = u64::try_from(
+            files
+                .files()
+                .iter()
+                .filter(|file| file.content_authority.is_some())
+                .count(),
+        )
+        .context("native regular payload file count exceeds u64")?;
+        let native_payload_declared_bytes =
+            files.files().iter().try_fold(0_u64, |total, file| {
+                total
+                    .checked_add(
+                        file.content_authority
+                            .as_ref()
+                            .map_or(0, |content| content.size),
+                    )
+                    .context("native declared payload byte count overflow")
+            })?;
 
         let started = Instant::now();
         Self::validate_repository_identity(&metadata, repo_pkg)?;
@@ -520,7 +605,7 @@ impl ConversionService {
             capability_count
         );
         phase_timings.push(ConversionPhaseTiming {
-            phase: ConversionPhase::NativeShellAstExtraction,
+            phase: ConversionPhase::ArtifactIdentityAndAuthorityValidation,
             duration_ms: started.elapsed().as_millis(),
         });
 
@@ -537,19 +622,52 @@ impl ConversionService {
             .with_source_profile(source_profile)
             .with_conversion_tool("remi")
             .with_signing_key(std::sync::Arc::new(signing_key));
-        skipped_phases.push(ConversionSkippedPhase {
-            phase: ConversionPhase::AdapterDispatch,
-            reason: "diagnostic adapter timing is included in native conversion".to_string(),
-        });
 
-        let started = Instant::now();
         let conversion_result = converter
             .convert_payload(&metadata, files.files(), format, &artifact_sha256)
             .map_err(|e| anyhow!("Conversion failed: {}", e))?;
-        phase_timings.push(ConversionPhaseTiming {
-            phase: ConversionPhase::CcsEmission,
-            duration_ms: started.elapsed().as_millis(),
-        });
+        let metrics = &conversion_result.metrics;
+        phase_timings.extend([
+            ConversionPhaseTiming {
+                phase: ConversionPhase::MetadataLifecycleAndAuthorityProjection,
+                duration_ms: metrics
+                    .metadata_lifecycle_and_authority_projection
+                    .as_millis(),
+            },
+            ConversionPhaseTiming {
+                phase: ConversionPhase::PayloadReferenceDerivation,
+                duration_ms: metrics.payload_reference_derivation.as_millis(),
+            },
+            ConversionPhaseTiming {
+                phase: ConversionPhase::OutputWorkspacePreparation,
+                duration_ms: metrics.output_workspace_preparation.as_millis(),
+            },
+            ConversionPhaseTiming {
+                phase: ConversionPhase::ControlProjectionAndSigning,
+                duration_ms: metrics.ccs_write.control_projection_and_signing.as_millis(),
+            },
+            ConversionPhaseTiming {
+                phase: ConversionPhase::PayloadObjectEmission,
+                duration_ms: metrics.ccs_write.payload_object_emission.as_millis(),
+            },
+            ConversionPhaseTiming {
+                phase: ConversionPhase::ArchiveAssemblyAndGzip,
+                duration_ms: metrics.ccs_write.archive_assembly_and_gzip.as_millis(),
+            },
+            ConversionPhaseTiming {
+                phase: ConversionPhase::ImmediateConverterReopen,
+                duration_ms: metrics.immediate_converter_reopen.as_millis(),
+            },
+            ConversionPhaseTiming {
+                phase: ConversionPhase::NativeProvenanceProjection,
+                duration_ms: metrics.native_provenance_projection.as_millis(),
+            },
+        ]);
+        let nested_phase_timings = vec![ConversionNestedPhaseTiming {
+            phase: ConversionNestedPhase::TemporaryObjectDurability,
+            included_in: ConversionPhase::PayloadObjectEmission,
+            duration_ms: metrics.ccs_write.temporary_object_durability.as_millis(),
+        }];
 
         info!(
             "Conversion complete: scriptlet_fidelity={}",
@@ -563,7 +681,10 @@ impl ConversionService {
             conversion_result,
             source,
             phase_timings,
-            skipped_phases,
+            nested_phase_timings,
+            native_payload_entries,
+            native_payload_regular_files,
+            native_payload_declared_bytes,
         })
     }
 }

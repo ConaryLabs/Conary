@@ -30,6 +30,7 @@ mod write_batch;
 
 pub use liveness::CasObjectCollectionSession;
 pub(crate) use liveness::CasObjectLivenessLease;
+pub use stream::ExpectedReaderStoreMetrics;
 pub use verified_batch::{
     VerifiedObjectBatch, VerifiedObjectBatchMetrics, VerifiedObjectDisposition, VerifiedObjectSet,
 };

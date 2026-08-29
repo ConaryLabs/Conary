@@ -20,9 +20,9 @@ pub mod vfs;
 
 pub(crate) use cas::CasObjectLivenessLease;
 pub use cas::{
-    CasObjectCollectionSession, CasStore, PrivateCasWriter, PrivateCopyBatch, VerifiedObjectBatch,
-    VerifiedObjectBatchMetrics, VerifiedObjectDisposition, VerifiedObjectSet,
-    is_temporary_object_name, object_path,
+    CasObjectCollectionSession, CasStore, ExpectedReaderStoreMetrics, PrivateCasWriter,
+    PrivateCopyBatch, VerifiedObjectBatch, VerifiedObjectBatchMetrics, VerifiedObjectDisposition,
+    VerifiedObjectSet, is_temporary_object_name, object_path,
 };
 pub use path::{safe_join, sanitize_filename, sanitize_path};
 pub use source_path::{DeploymentPath, SourcePathBytes};

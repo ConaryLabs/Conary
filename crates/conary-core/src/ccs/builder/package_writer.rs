@@ -11,6 +11,46 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// Exact phase and work evidence from one streamed CCS v3 package emission.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CcsPackageWriteMetrics {
+    pub control_projection_and_signing: Duration,
+    pub payload_object_emission: Duration,
+    pub temporary_object_durability: Duration,
+    pub archive_assembly_and_gzip: Duration,
+    pub payload_files_traversed: u64,
+    pub payload_bytes_read: u64,
+    pub chunk_reference_bytes_hashed: u64,
+    pub reconstructed_content_bytes_hashed: u64,
+    pub temporary_object_incoming_bytes_hashed: u64,
+    pub temporary_object_bytes_written: u64,
+    pub temporary_object_canonical_bytes_reread: u64,
+    pub temporary_object_hits: u64,
+    pub temporary_object_misses: u64,
+    pub temporary_object_file_syncs: u64,
+    pub temporary_object_shard_syncs: u64,
+    pub archive_members_traversed: u64,
+    pub archive_input_bytes: u64,
+    pub ccs_output_bytes: u64,
+    pub maximum_retained_staging_bytes: u64,
+}
+
+#[derive(Default)]
+struct PayloadObjectEmissionMetrics {
+    durability: Duration,
+    payload_bytes_read: u64,
+    chunk_reference_bytes_hashed: u64,
+    reconstructed_content_bytes_hashed: u64,
+    store: crate::filesystem::ExpectedReaderStoreMetrics,
+}
+
+#[derive(Default)]
+struct ArchiveTraversalMetrics {
+    members: u64,
+    input_bytes: u64,
+}
 
 /// Explicit ceiling for test-only in-memory fixture input.
 ///
@@ -111,6 +151,29 @@ pub fn write_v3_ccs_package_from_sources(
     build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
 ) -> Result<()> {
+    write_v3_ccs_package_from_sources_with_metrics(
+        authority,
+        payloads,
+        output_path,
+        signing_key,
+        debug_toml,
+        build_attestation,
+        foreign_conversion_boundary,
+    )
+    .map(|_metrics| ())
+}
+
+/// Emit the sole signed CCS archive while retaining exact pass, byte, object,
+/// traversal, and durability evidence for performance attribution.
+pub fn write_v3_ccs_package_from_sources_with_metrics(
+    authority: &crate::ccs::v3::AuthorityDocumentV3,
+    payloads: &[crate::packages::payload::PackagePayloadFile],
+    output_path: &Path,
+    signing_key: &super::super::signing::SigningKeyPair,
+    debug_toml: Option<&str>,
+    build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
+    foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
+) -> Result<CcsPackageWriteMetrics> {
     let mut by_path = std::collections::HashMap::with_capacity(payloads.len());
     for file in payloads {
         if by_path.insert(file.path.as_str(), file).is_some() {
@@ -143,13 +206,15 @@ fn write_v3_ccs_package_with_open<'a>(
     build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
     mut open_payload: impl FnMut(&str) -> Result<Box<dyn std::io::Read + 'a>>,
-) -> Result<()> {
+) -> Result<CcsPackageWriteMetrics> {
     use crate::ccs::budget::CCS_BUDGET;
     use crate::ccs::v3::schema::PackageKindV3;
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use tar::Builder;
 
+    let mut metrics = CcsPackageWriteMetrics::default();
+    let control_started = Instant::now();
     // Authoring preflight and verification share one structural-budget owner,
     // so a package this writer emits is admissible to the reader by
     // construction rather than by coincidence.
@@ -200,18 +265,44 @@ fn write_v3_ccs_package_with_open<'a>(
     let PackageKindV3::Package(data) = &authority.kind else {
         anyhow::bail!("M4a v3 writer only writes package payloads");
     };
+    metrics.control_projection_and_signing = control_started.elapsed();
 
     let objects_dir = temp_dir.path().join("objects");
     let object_store = crate::filesystem::CasStore::new(&objects_dir)?;
+    let emission_started = Instant::now();
     for file in &data.files {
         if !authority.components.contains_key(&file.component) {
             anyhow::bail!("missing component {}", file.component);
         }
         if file.node.kind.is_regular() {
-            write_file_objects(file, &object_store, open_payload(&file.path)?)?;
+            let emitted = write_file_objects(file, &object_store, open_payload(&file.path)?)?;
+            metrics.payload_files_traversed = checked_add(
+                metrics.payload_files_traversed,
+                1,
+                "payload file traversal count",
+            )?;
+            metrics.payload_bytes_read = checked_add(
+                metrics.payload_bytes_read,
+                emitted.payload_bytes_read,
+                "payload emission bytes",
+            )?;
+            metrics.chunk_reference_bytes_hashed = checked_add(
+                metrics.chunk_reference_bytes_hashed,
+                emitted.chunk_reference_bytes_hashed,
+                "second-pass chunk-reference bytes",
+            )?;
+            metrics.reconstructed_content_bytes_hashed = checked_add(
+                metrics.reconstructed_content_bytes_hashed,
+                emitted.reconstructed_content_bytes_hashed,
+                "second-pass reconstructed-content bytes",
+            )?;
+            metrics.temporary_object_durability += emitted.durability;
+            add_store_metrics(&mut metrics, emitted.store)?;
         }
     }
+    metrics.payload_object_emission = emission_started.elapsed();
 
+    let archive_started = Instant::now();
     let output_file = fs::File::create(output_path)?;
     let encoder = GzEncoder::new(output_file, Compression::default());
     let mut archive = Builder::new(encoder);
@@ -219,16 +310,25 @@ fn write_v3_ccs_package_with_open<'a>(
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1_704_067_200);
-    append_dir_with_mtime(&mut archive, temp_dir.path(), "", timestamp)?;
+    let traversal = append_dir_with_mtime(&mut archive, temp_dir.path(), "", timestamp)?;
     archive.into_inner()?.finish()?;
-    Ok(())
+    metrics.archive_assembly_and_gzip = archive_started.elapsed();
+    metrics.archive_members_traversed = traversal.members;
+    metrics.archive_input_bytes = traversal.input_bytes;
+    metrics.ccs_output_bytes = fs::metadata(output_path)?.len();
+    metrics.maximum_retained_staging_bytes = checked_add(
+        metrics.archive_input_bytes,
+        metrics.ccs_output_bytes,
+        "maximum retained CCS staging bytes",
+    )?;
+    Ok(metrics)
 }
 
 fn write_file_objects(
     file: &crate::ccs::v3::schema::FileAuthorityV3,
     object_store: &crate::filesystem::CasStore,
     mut reader: Box<dyn std::io::Read + '_>,
-) -> Result<()> {
+) -> Result<PayloadObjectEmissionMetrics> {
     use crate::ccs::v3::schema::FileContentLayoutV3;
 
     let content = file.content.as_ref().with_context(|| {
@@ -237,16 +337,25 @@ fn write_file_objects(
             file.path
         )
     })?;
+    let mut metrics = PayloadObjectEmissionMetrics {
+        payload_bytes_read: content.size,
+        ..Default::default()
+    };
     match &file.content_layout {
-        FileContentLayoutV3::WholeObject => object_store
-            .store_reader_expected(reader.as_mut(), content.size, &content.sha256)
-            .with_context(|| {
-                format!(
-                    "payload for {} does not match signed v3 authority",
-                    file.path
-                )
-            })
-            .map(|_| ()),
+        FileContentLayoutV3::WholeObject => {
+            let started = Instant::now();
+            let (_, stored) = object_store
+                .store_reader_expected_with_metrics(reader.as_mut(), content.size, &content.sha256)
+                .with_context(|| {
+                    format!(
+                        "payload for {} does not match signed v3 authority",
+                        file.path
+                    )
+                })?;
+            metrics.durability += started.elapsed();
+            metrics.store = stored;
+            Ok(metrics)
+        }
         FileContentLayoutV3::FastCdcV2020 {
             min_size,
             average_size,
@@ -276,11 +385,24 @@ fn write_file_objects(
                     );
                 }
                 whole_hasher.update(&chunk.data);
-                object_store.store_reader_expected(
+                metrics.chunk_reference_bytes_hashed = checked_add(
+                    metrics.chunk_reference_bytes_hashed,
+                    u64::from(chunk.length),
+                    "second-pass chunk-reference bytes",
+                )?;
+                metrics.reconstructed_content_bytes_hashed = checked_add(
+                    metrics.reconstructed_content_bytes_hashed,
+                    u64::from(chunk.length),
+                    "second-pass reconstructed-content bytes",
+                )?;
+                let started = Instant::now();
+                let (_, stored) = object_store.store_reader_expected_with_metrics(
                     &mut std::io::Cursor::new(&chunk.data),
                     u64::from(chunk.length),
                     &signed.sha256,
                 )?;
+                metrics.durability += started.elapsed();
+                add_expected_reader_metrics(&mut metrics.store, stored)?;
                 index += 1;
                 Ok(())
             })?;
@@ -300,7 +422,7 @@ fn write_file_objects(
                     content.size
                 );
             }
-            Ok(())
+            Ok(metrics)
         }
         FileContentLayoutV3::NoContent => {
             anyhow::bail!(
@@ -309,6 +431,87 @@ fn write_file_objects(
             )
         }
     }
+}
+
+fn checked_add(left: u64, right: u64, label: &str) -> Result<u64> {
+    left.checked_add(right)
+        .with_context(|| format!("{label} overflow"))
+}
+
+fn add_expected_reader_metrics(
+    total: &mut crate::filesystem::ExpectedReaderStoreMetrics,
+    value: crate::filesystem::ExpectedReaderStoreMetrics,
+) -> Result<()> {
+    total.incoming_bytes_hashed = checked_add(
+        total.incoming_bytes_hashed,
+        value.incoming_bytes_hashed,
+        "temporary object incoming hash bytes",
+    )?;
+    total.temporary_bytes_written = checked_add(
+        total.temporary_bytes_written,
+        value.temporary_bytes_written,
+        "temporary object write bytes",
+    )?;
+    total.canonical_bytes_reread = checked_add(
+        total.canonical_bytes_reread,
+        value.canonical_bytes_reread,
+        "temporary object canonical reread bytes",
+    )?;
+    total.hits = checked_add(total.hits, value.hits, "temporary object hits")?;
+    total.misses = checked_add(total.misses, value.misses, "temporary object misses")?;
+    total.object_file_syncs = checked_add(
+        total.object_file_syncs,
+        value.object_file_syncs,
+        "temporary object file syncs",
+    )?;
+    total.shard_syncs = checked_add(
+        total.shard_syncs,
+        value.shard_syncs,
+        "temporary object shard syncs",
+    )?;
+    Ok(())
+}
+
+fn add_store_metrics(
+    total: &mut CcsPackageWriteMetrics,
+    value: crate::filesystem::ExpectedReaderStoreMetrics,
+) -> Result<()> {
+    total.temporary_object_incoming_bytes_hashed = checked_add(
+        total.temporary_object_incoming_bytes_hashed,
+        value.incoming_bytes_hashed,
+        "temporary object incoming hash bytes",
+    )?;
+    total.temporary_object_bytes_written = checked_add(
+        total.temporary_object_bytes_written,
+        value.temporary_bytes_written,
+        "temporary object write bytes",
+    )?;
+    total.temporary_object_canonical_bytes_reread = checked_add(
+        total.temporary_object_canonical_bytes_reread,
+        value.canonical_bytes_reread,
+        "temporary object canonical reread bytes",
+    )?;
+    total.temporary_object_hits = checked_add(
+        total.temporary_object_hits,
+        value.hits,
+        "temporary object hits",
+    )?;
+    total.temporary_object_misses = checked_add(
+        total.temporary_object_misses,
+        value.misses,
+        "temporary object misses",
+    )?;
+    total.temporary_object_file_syncs = checked_add(
+        total.temporary_object_file_syncs,
+        value.object_file_syncs,
+        "temporary object file syncs",
+    )?;
+    total.temporary_object_shard_syncs = checked_add(
+        total.temporary_object_shard_syncs,
+        value.shard_syncs,
+        "temporary object shard syncs",
+    )?;
+    Ok(())
 }
 
 /// Admit one attestation-class control document against the shared budget.
@@ -409,14 +612,16 @@ fn append_dir_with_mtime<W: std::io::Write>(
     base_path: &Path,
     archive_path: &str,
     mtime: u64,
-) -> Result<()> {
+) -> Result<ArchiveTraversalMetrics> {
     let mut entries = Vec::new();
     collect_archive_entries(base_path, archive_path, &mut entries)?;
+    let mut metrics = ArchiveTraversalMetrics::default();
     for directories in [true, false] {
         for (path, entry_archive_path, file_type) in &entries {
             if file_type.is_dir() != directories {
                 continue;
             }
+            metrics.members = checked_add(metrics.members, 1, "CCS archive member count")?;
             if file_type.is_dir() {
                 let mut header = tar::Header::new_gnu();
                 header.set_entry_type(tar::EntryType::Directory);
@@ -428,6 +633,11 @@ fn append_dir_with_mtime<W: std::io::Write>(
                 archive.append_data(&mut header, entry_archive_path, std::io::empty())?;
             } else if file_type.is_file() {
                 let metadata = fs::metadata(path)?;
+                metrics.input_bytes = checked_add(
+                    metrics.input_bytes,
+                    metadata.len(),
+                    "CCS archive input bytes",
+                )?;
                 let mut content = fs::File::open(path)?;
 
                 let mut header = tar::Header::new_gnu();
@@ -452,7 +662,7 @@ fn append_dir_with_mtime<W: std::io::Write>(
             }
         }
     }
-    Ok(())
+    Ok(metrics)
 }
 
 fn collect_archive_entries(

@@ -154,7 +154,10 @@ pub struct ConversionBenchmarkOutputProof {
     pub signed_object_set_sha256: String,
     pub signed_object_count: u64,
     pub signed_object_bytes: u64,
-    pub independent_reopen_ms: u128,
+    pub independent_transport_reopen_ms: u128,
+    pub independent_transport_reopen_bytes: u64,
+    pub independent_complete_archive_hash_ms: u128,
+    pub independent_complete_archive_hash_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,7 +165,7 @@ pub struct ConversionBenchmarkOutputProof {
 pub enum ConversionBenchmarkOutcome {
     Success {
         cache_state: String,
-        timing: ConversionTimingReport,
+        timing: Box<ConversionTimingReport>,
         output: ConversionBenchmarkOutputProof,
     },
     Failure {

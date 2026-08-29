@@ -34,7 +34,35 @@ pub struct ConversionWorkMetrics {
     pub repository_checksum_bytes_hashed: u64,
     pub source_artifact_bytes: u64,
     pub source_bytes_hashed: u64,
+    pub native_payload_entries: u64,
+    pub native_payload_regular_files: u64,
+    pub native_payload_declared_bytes: u64,
+    pub payload_files_examined: u64,
+    pub payload_reference_bytes_read: u64,
+    pub payload_reference_bytes_hashed: u64,
+    pub payload_chunks_derived: u64,
+    pub unique_payload_chunks_derived: u64,
+    pub payload_files_reopened: u64,
+    pub payload_object_bytes_read: u64,
+    pub second_pass_chunk_reference_bytes_hashed: u64,
+    pub second_pass_reconstructed_content_bytes_hashed: u64,
+    pub temporary_object_incoming_bytes_hashed: u64,
+    pub temporary_object_bytes_written: u64,
+    pub temporary_object_canonical_bytes_reread: u64,
+    pub temporary_object_hits: u64,
+    pub temporary_object_misses: u64,
+    pub temporary_object_file_syncs: u64,
+    pub temporary_object_shard_syncs: u64,
+    pub archive_members_traversed: u64,
+    pub archive_input_bytes: u64,
     pub ccs_output_bytes: u64,
+    pub immediate_converter_reopen_ccs_bytes: u64,
+    pub immediate_converter_reopen_object_bytes_hashed: u64,
+    pub independent_transport_reopen_ccs_bytes: u64,
+    pub independent_transport_reopen_object_bytes_hashed: u64,
+    pub complete_archive_hash_bytes: u64,
+    pub complete_archive_copy_bytes: u64,
+    pub maximum_retained_staging_bytes: u64,
     pub signed_object_count: u64,
     pub signed_object_bytes: u64,
     pub cas_incoming_bytes_hashed: u64,
@@ -51,6 +79,37 @@ pub struct ConversionWorkMetrics {
 }
 
 impl ConversionWorkMetrics {
+    pub fn record_native_conversion(
+        &mut self,
+        metrics: &conary_core::ccs::convert::NativeConversionMetrics,
+    ) {
+        self.payload_files_examined = metrics.payload_files_examined;
+        self.payload_reference_bytes_read = metrics.payload_reference_bytes_read;
+        self.payload_reference_bytes_hashed = metrics.payload_reference_bytes_hashed;
+        self.payload_chunks_derived = metrics.payload_chunks_derived;
+        self.unique_payload_chunks_derived = metrics.unique_payload_chunks_derived;
+        self.payload_files_reopened = metrics.ccs_write.payload_files_traversed;
+        self.payload_object_bytes_read = metrics.ccs_write.payload_bytes_read;
+        self.second_pass_chunk_reference_bytes_hashed =
+            metrics.ccs_write.chunk_reference_bytes_hashed;
+        self.second_pass_reconstructed_content_bytes_hashed =
+            metrics.ccs_write.reconstructed_content_bytes_hashed;
+        self.temporary_object_incoming_bytes_hashed =
+            metrics.ccs_write.temporary_object_incoming_bytes_hashed;
+        self.temporary_object_bytes_written = metrics.ccs_write.temporary_object_bytes_written;
+        self.temporary_object_canonical_bytes_reread =
+            metrics.ccs_write.temporary_object_canonical_bytes_reread;
+        self.temporary_object_hits = metrics.ccs_write.temporary_object_hits;
+        self.temporary_object_misses = metrics.ccs_write.temporary_object_misses;
+        self.temporary_object_file_syncs = metrics.ccs_write.temporary_object_file_syncs;
+        self.temporary_object_shard_syncs = metrics.ccs_write.temporary_object_shard_syncs;
+        self.archive_members_traversed = metrics.ccs_write.archive_members_traversed;
+        self.archive_input_bytes = metrics.ccs_write.archive_input_bytes;
+        self.ccs_output_bytes = metrics.ccs_write.ccs_output_bytes;
+        self.immediate_converter_reopen_ccs_bytes = metrics.ccs_write.ccs_output_bytes;
+        self.maximum_retained_staging_bytes = metrics.ccs_write.maximum_retained_staging_bytes;
+    }
+
     pub fn record_cas(&mut self, metrics: VerifiedObjectBatchMetrics) {
         self.cas_incoming_bytes_hashed = metrics.incoming_bytes_hashed;
         self.cas_persistent_bytes_written = metrics.persistent_bytes_written;
@@ -73,14 +132,36 @@ pub enum ConversionPhase {
     Download,
     Checksum,
     CacheLookup,
-    ArchiveExtraction,
-    NativeShellAstExtraction,
-    AdapterDispatch,
-    CcsEmission,
-    TransportVerification,
-    CasWrite,
+    NativeArchiveParseAndSpool,
+    ArtifactIdentityAndAuthorityValidation,
+    MetadataLifecycleAndAuthorityProjection,
+    PayloadReferenceDerivation,
+    OutputWorkspacePreparation,
+    ControlProjectionAndSigning,
+    PayloadObjectEmission,
+    ArchiveAssemblyAndGzip,
+    ImmediateConverterReopen,
+    NativeProvenanceProjection,
+    IndependentTransportReopen,
+    DurableCasIngestion,
     R2WriteThrough,
-    Persistence,
+    CompleteArchiveHash,
+    CompleteArchiveCopy,
+    DatabasePersistence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversionNestedPhase {
+    TemporaryObjectDurability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionNestedPhaseTiming {
+    pub phase: ConversionNestedPhase,
+    pub included_in: ConversionPhase,
+    pub duration_ms: u128,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +188,7 @@ pub struct ConversionTimingReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<ConversionSourceIdentity>,
     pub phases: Vec<ConversionPhaseTiming>,
+    pub nested_phases: Vec<ConversionNestedPhaseTiming>,
     pub skipped_phases: Vec<ConversionSkippedPhase>,
     pub work: ConversionWorkMetrics,
     pub total_ms: u128,
@@ -123,6 +205,7 @@ impl ConversionTimingReport {
             version: version.map(ToString::to_string),
             source: None,
             phases: Vec::new(),
+            nested_phases: Vec::new(),
             skipped_phases: Vec::new(),
             work: ConversionWorkMetrics::default(),
             total_ms: 0,
@@ -145,6 +228,19 @@ impl ConversionTimingReport {
         });
     }
 
+    pub fn record_nested(
+        &mut self,
+        phase: ConversionNestedPhase,
+        included_in: ConversionPhase,
+        duration: Duration,
+    ) {
+        self.nested_phases.push(ConversionNestedPhaseTiming {
+            phase,
+            included_in,
+            duration_ms: duration.as_millis(),
+        });
+    }
+
     pub fn finish(&mut self, success: bool) {
         self.success = success;
         self.total_ms = self.started_at.elapsed().as_millis();
@@ -162,6 +258,11 @@ mod tests {
         let mut report = ConversionTimingReport::new("fedora", "nginx", Some("1.28.0"));
         report.record(ConversionPhase::PackageLookup, Duration::from_millis(11));
         report.record(ConversionPhase::Download, Duration::from_millis(22));
+        report.record_nested(
+            ConversionNestedPhase::TemporaryObjectDurability,
+            ConversionPhase::PayloadObjectEmission,
+            Duration::from_millis(7),
+        );
         report.record_skipped(ConversionPhase::R2WriteThrough, "r2 store not configured");
         report.finish(true);
 
@@ -176,6 +277,14 @@ mod tests {
         assert_eq!(value["phases"][1]["phase"], json!("download"));
         assert_eq!(value["phases"][1]["duration_ms"], json!(22));
         assert_eq!(
+            value["nested_phases"][0],
+            json!({
+                "phase": "temporary_object_durability",
+                "included_in": "payload_object_emission",
+                "duration_ms": 7
+            })
+        );
+        assert_eq!(
             value["skipped_phases"][0]["phase"],
             json!("r2_write_through")
         );
@@ -183,5 +292,45 @@ mod tests {
             value["skipped_phases"][0]["reason"],
             json!("r2 store not configured")
         );
+    }
+
+    #[test]
+    fn native_conversion_work_maps_without_collapsing_payload_passes() {
+        let metrics = conary_core::ccs::convert::NativeConversionMetrics {
+            payload_files_examined: 5,
+            payload_reference_bytes_read: 100,
+            payload_reference_bytes_hashed: 100,
+            payload_chunks_derived: 4,
+            unique_payload_chunks_derived: 3,
+            ccs_write: conary_core::ccs::builder::CcsPackageWriteMetrics {
+                payload_files_traversed: 5,
+                payload_bytes_read: 120,
+                chunk_reference_bytes_hashed: 100,
+                reconstructed_content_bytes_hashed: 100,
+                temporary_object_incoming_bytes_hashed: 120,
+                temporary_object_bytes_written: 120,
+                temporary_object_canonical_bytes_reread: 20,
+                temporary_object_hits: 1,
+                temporary_object_misses: 3,
+                temporary_object_file_syncs: 4,
+                temporary_object_shard_syncs: 3,
+                archive_members_traversed: 12,
+                archive_input_bytes: 240,
+                ccs_output_bytes: 180,
+                maximum_retained_staging_bytes: 420,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut work = ConversionWorkMetrics::default();
+
+        work.record_native_conversion(&metrics);
+
+        assert_eq!(work.payload_reference_bytes_read, 100);
+        assert_eq!(work.payload_object_bytes_read, 120);
+        assert_eq!(work.temporary_object_file_syncs, 4);
+        assert_eq!(work.archive_input_bytes, 240);
+        assert_eq!(work.immediate_converter_reopen_ccs_bytes, 180);
+        assert_eq!(work.maximum_retained_staging_bytes, 420);
     }
 }
