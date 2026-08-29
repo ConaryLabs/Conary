@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
-revision: 54
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS conversion benchmarking, and current remote development tooling
+revision: 55
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -305,6 +305,16 @@ workflow.
   workflow retains the public projection, source-byte verification, candidate
   manifest, and deployment inspection for 30 days. It never uploads the raw
   report, source bytes, source URL, SSH material, or host-local paths.
+- A failed production benchmark emits exactly one helper-owned schema-v1
+  envelope containing only an allowlisted stage, bounded exit status, and
+  service-restoration outcome. The workflow validates that envelope, binds it
+  to the exact deployment, workflow, binary, profile, revision, package, and
+  source identities, and may retain only that path-free JSON record. The
+  helper writes the envelope on an isolated stdout channel while all free-form
+  diagnostics remain on private stderr. Missing, duplicate, malformed, or
+  unknown envelopes fail closed with an unproven service outcome. Private
+  stderr, its digest and size, and any free-form Remi failure text are deleted
+  without entering Actions logs or artifacts.
 - Production R2 inventory and backfill use the manually dispatched
   `remi-r2-durability` workflow after its exact `commit_sha` is merged into
   `main` and deployed. The protected job enters through the normal Remi SSH

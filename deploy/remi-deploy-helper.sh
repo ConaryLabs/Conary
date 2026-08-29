@@ -759,9 +759,15 @@ export_native_oracle_inputs() {
 
 BENCHMARK_REMI_STOPPED=0
 BENCHMARK_SYSTEMCTL=systemctl
+BENCHMARK_FAILURE_ARMED=0
+BENCHMARK_FAILURE_EMITTED=0
+BENCHMARK_FAILURE_STAGE=internal
+BENCHMARK_SERVICE_OUTCOME=not-stopped
+BENCHMARK_STOP_ATTEMPTED=0
+BENCHMARK_TRANSPORT_NEXT=""
 
 benchmark_systemctl() {
-    "$BENCHMARK_SYSTEMCTL" "$@"
+    "$BENCHMARK_SYSTEMCTL" "$@" >/dev/null
 }
 
 benchmark_start_and_probe() {
@@ -777,18 +783,78 @@ benchmark_start_and_probe() {
         return 1
     fi
     BENCHMARK_REMI_STOPPED=0
+    BENCHMARK_SERVICE_OUTCOME=restored
+}
+
+benchmark_emit_failure() {
+    local status="$1"
+    local stage="$BENCHMARK_FAILURE_STAGE"
+    local service_outcome="$BENCHMARK_SERVICE_OUTCOME"
+    [[ "$BENCHMARK_FAILURE_ARMED" == "1" \
+        && "$BENCHMARK_FAILURE_EMITTED" == "0" \
+        && "$status" != "0" ]] || return 0
+    BENCHMARK_FAILURE_EMITTED=1
+
+    case "$stage" in
+        request-validation|runtime-authority|systemctl-authority|account-identity|\
+        binary-config-authority|live-root-authority|work-root-authority|\
+        benchmark-root-authority|input-target-authority|source-authentication|\
+        binary-authentication|private-config-copy|private-source-copy|\
+        service-active|service-stop|benchmark-command|raw-report-validation|\
+        public-sidecar-validation|service-restore|transport-publication|internal) ;;
+        *) stage=internal ;;
+    esac
+    if [[ ! "$status" =~ ^[1-9][0-9]{0,2}$ ]] || (( status > 255 )); then
+        status=1
+        stage=internal
+    fi
+    if [[ "$BENCHMARK_STOP_ATTEMPTED" == "0" ]]; then
+        service_outcome=not-stopped
+    elif [[ "$service_outcome" != "restored" ]]; then
+        service_outcome=restore-failed
+    fi
+    case "$stage" in
+        request-validation|runtime-authority|systemctl-authority|account-identity|\
+        binary-config-authority|live-root-authority|work-root-authority|\
+        benchmark-root-authority|input-target-authority|source-authentication|\
+        binary-authentication|private-config-copy|private-source-copy|service-active)
+            [[ "$service_outcome" == "not-stopped" ]] || stage=internal
+            ;;
+        service-stop|benchmark-command|raw-report-validation|\
+        public-sidecar-validation|service-restore)
+            [[ "$service_outcome" == "restored" \
+                || "$service_outcome" == "restore-failed" ]] || stage=internal
+            ;;
+        transport-publication)
+            [[ "$service_outcome" == "restored" ]] || stage=internal
+            ;;
+        internal) ;;
+    esac
+    printf 'Conversion benchmark failure: {"schema_version":1,"stage":"%s","status":%s,"service_outcome":"%s"}\n' \
+        "$stage" "$status" "$service_outcome"
 }
 
 benchmark_restore_and_exit() {
     local status="$1"
     trap - EXIT INT TERM
+    set +e
+    if [[ "$status" == "255" ]]; then
+        status=254
+        BENCHMARK_FAILURE_STAGE=internal
+    fi
+    if [[ -n "$BENCHMARK_TRANSPORT_NEXT" ]]; then
+        rm -f -- "$BENCHMARK_TRANSPORT_NEXT"
+        BENCHMARK_TRANSPORT_NEXT=""
+    fi
     if [[ "$BENCHMARK_REMI_STOPPED" == "1" ]]; then
         if ! benchmark_start_and_probe; then
+            BENCHMARK_SERVICE_OUTCOME=restore-failed
             if (( status == 0 )); then
                 status=1
             fi
         fi
     fi
+    benchmark_emit_failure "$status"
     exit "$status"
 }
 
@@ -852,6 +918,18 @@ require_secure_benchmark_file() {
 }
 
 benchmark_remi_conversion() {
+    BENCHMARK_REMI_STOPPED=0
+    BENCHMARK_FAILURE_ARMED=1
+    BENCHMARK_FAILURE_EMITTED=0
+    BENCHMARK_FAILURE_STAGE=request-validation
+    BENCHMARK_SERVICE_OUTCOME=not-stopped
+    BENCHMARK_STOP_ATTEMPTED=0
+    BENCHMARK_TRANSPORT_NEXT=""
+    trap 'benchmark_restore_and_exit "$?"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    [[ $# -eq 7 ]] || usage
+
     local run_id="$1"
     local expected_binary_sha256="$2"
     local profile="$3"
@@ -866,11 +944,14 @@ benchmark_remi_conversion() {
     validate_sha256 "$package_key_sha256"
     validate_sha256 "$expected_source_sha256"
     validate_positive_size "$expected_source_size"
+
+    BENCHMARK_FAILURE_STAGE=runtime-authority
     [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
     [[ "$SKIP_RESTART" == "0" ]] ||
         die "conversion benchmark may not skip Remi service restoration"
     require_shared_conary_root
 
+    BENCHMARK_FAILURE_STAGE=systemctl-authority
     local test_systemctl="${CONARY_REMI_DEPLOY_TEST_SYSTEMCTL:-}"
     if [[ -n "$test_systemctl" ]]; then
         [[ -n "$ROOT" ]] || die "benchmark systemctl override requires a fake root"
@@ -879,6 +960,7 @@ benchmark_remi_conversion() {
         BENCHMARK_SYSTEMCTL="$(realpath -e "$test_systemctl")"
     fi
 
+    BENCHMARK_FAILURE_STAGE=account-identity
     local control_uid runtime_uid runtime_gid source_uid
     if [[ -n "$ROOT" ]]; then
         control_uid="$(id -u)"
@@ -909,6 +991,7 @@ benchmark_remi_conversion() {
     public_sidecar="${work_root}/conversion-benchmark-public-v1.json"
     transport="/tmp/remi-conversion-benchmark-${run_id}.json"
 
+    BENCHMARK_FAILURE_STAGE=binary-config-authority
     require_secure_benchmark_file "$bin" "installed Remi binary" "$control_uid" 1
     require_secure_benchmark_file "$config" "Remi configuration" "$control_uid" 0
     [[ "$(stat -c '%a' "$bin")" == "755" ]] ||
@@ -926,12 +1009,15 @@ benchmark_remi_conversion() {
         runuser -u conary -- test -r "$config" ||
             die "Remi configuration is not readable by the service account"
     fi
+
+    BENCHMARK_FAILURE_STAGE=live-root-authority
     local live_real live_device work_real work_device benchmark_real benchmark_device
     live_real="$(realpath -e "$live_root")" || die "could not resolve live Remi root"
     [[ "$(benchmark_filesystem_type "$live_real")" == "xfs" ]] ||
         die "live Remi root is not on XFS: $live_real"
     live_device="$(benchmark_filesystem_device "$live_real")"
 
+    BENCHMARK_FAILURE_STAGE=work-root-authority
     [[ -d "$work_container" && ! -L "$work_container" ]] ||
         die "benchmark XFS container is not a plain directory: $work_container"
     [[ "$(stat -c '%u' "$work_container")" == "$control_uid" ]] ||
@@ -955,6 +1041,7 @@ benchmark_remi_conversion() {
     [[ "$work_device" == "$live_device" ]] ||
         die "benchmark XFS container is not on the live Remi filesystem device: $work_real"
 
+    BENCHMARK_FAILURE_STAGE=benchmark-root-authority
     if [[ ! -e "$benchmark_parent" && ! -L "$benchmark_parent" ]]; then
         install_owned_dir 0700 "$benchmark_parent"
     fi
@@ -978,6 +1065,7 @@ benchmark_remi_conversion() {
     [[ "$benchmark_device" == "$live_device" ]] ||
         die "benchmark root is not on the live Remi filesystem device: $benchmark_real"
 
+    BENCHMARK_FAILURE_STAGE=input-target-authority
     [[ ! -e "$run_root" && ! -L "$run_root" ]] ||
         die "conversion benchmark run already exists: $run_root"
     [[ ! -e "$transport" && ! -L "$transport" ]] ||
@@ -985,6 +1073,8 @@ benchmark_remi_conversion() {
     require_secure_benchmark_file "$staged_source" "staged benchmark source" "$source_uid" 0
     [[ "$(stat -c '%h' "$staged_source")" == "1" ]] ||
         die "staged benchmark source must have exactly one link: $staged_source"
+
+    BENCHMARK_FAILURE_STAGE="source-authentication"
     local config_sha256 observed_source_size observed_source_sha256 observed_binary_sha256
     config_sha256="$(sha256sum "$config" | cut -d ' ' -f 1)"
     observed_source_size="$(stat -c '%s' "$staged_source")"
@@ -995,10 +1085,13 @@ benchmark_remi_conversion() {
         die "staged benchmark source SHA-256 mismatch"
     [[ "$(stat -c '%s' "$staged_source")" == "$expected_source_size" ]] ||
         die "staged benchmark source changed while being authenticated"
+
+    BENCHMARK_FAILURE_STAGE=binary-authentication
     observed_binary_sha256="$(sha256sum "$bin" | cut -d ' ' -f 1)"
     [[ "$observed_binary_sha256" == "$expected_binary_sha256" ]] ||
         die "installed Remi binary SHA-256 mismatch"
 
+    BENCHMARK_FAILURE_STAGE=private-config-copy
     mkdir -m 0700 "$run_root" || die "could not create benchmark run root: $run_root"
     if [[ -z "$ROOT" ]]; then
         chown conary:conary "$run_root"
@@ -1010,6 +1103,8 @@ benchmark_remi_conversion() {
     [[ "$(sha256sum "$trusted_config" | cut -d ' ' -f 1)" == "$config_sha256" \
         && "$(sha256sum "$config" | cut -d ' ' -f 1)" == "$config_sha256" ]] ||
         die "trusted benchmark configuration changed during private copy"
+
+    BENCHMARK_FAILURE_STAGE=private-source-copy
     install_owned_file 0400 "$staged_source" "$trusted_source"
     [[ -f "$trusted_source" && ! -L "$trusted_source" ]] ||
         die "trusted benchmark source copy is not a plain file"
@@ -1020,14 +1115,17 @@ benchmark_remi_conversion() {
     [[ "$(sha256sum "$trusted_source" | cut -d ' ' -f 1)" == "$expected_source_sha256" ]] ||
         die "trusted benchmark source copy SHA-256 mismatch"
 
+    BENCHMARK_FAILURE_STAGE=service-active
     benchmark_systemctl is-active --quiet remi ||
         die "Remi must be active before a production conversion benchmark"
-    trap 'benchmark_restore_and_exit "$?"' EXIT
-    trap 'benchmark_restore_and_exit 130' INT
-    trap 'benchmark_restore_and_exit 143' TERM
+
+    BENCHMARK_STOP_ATTEMPTED=1
+    BENCHMARK_SERVICE_OUTCOME=restore-failed
     BENCHMARK_REMI_STOPPED=1
+    BENCHMARK_FAILURE_STAGE=service-stop
     benchmark_systemctl stop remi || die "failed to stop Remi for conversion benchmark"
 
+    BENCHMARK_FAILURE_STAGE=benchmark-command
     local command=(
         "$bin" conversion-benchmark
         --config "$trusted_config"
@@ -1056,18 +1154,13 @@ benchmark_remi_conversion() {
         exit "$benchmark_status"
     fi
 
+    BENCHMARK_FAILURE_STAGE=raw-report-validation
     [[ -f "$raw_report" && ! -L "$raw_report" ]] ||
         die "conversion benchmark omitted its plain raw report"
     [[ "$(stat -c '%u' "$raw_report")" == "$runtime_uid" ]] ||
         die "conversion benchmark raw report has the wrong owner"
     [[ "$(stat -c '%a' "$raw_report")" == "600" ]] ||
         die "conversion benchmark raw report must have mode 0600"
-    [[ -f "$public_sidecar" && ! -L "$public_sidecar" ]] ||
-        die "conversion benchmark omitted its plain public sidecar"
-    [[ "$(stat -c '%u' "$public_sidecar")" == "$runtime_uid" ]] ||
-        die "conversion benchmark public sidecar has the wrong owner"
-    [[ "$(stat -c '%a' "$public_sidecar")" == "600" ]] ||
-        die "conversion benchmark public sidecar must have mode 0600"
 
     local raw_sha256 raw_bytes public_sha256 public_bytes
     raw_sha256="$(sha256sum "$raw_report" | cut -d ' ' -f 1)"
@@ -1075,6 +1168,14 @@ benchmark_remi_conversion() {
     (( raw_bytes > 0 )) || die "conversion benchmark raw report is empty"
     jq -e '.schema_version == 3 and type == "object"' "$raw_report" >/dev/null ||
         die "conversion benchmark raw report has an invalid schema"
+
+    BENCHMARK_FAILURE_STAGE=public-sidecar-validation
+    [[ -f "$public_sidecar" && ! -L "$public_sidecar" ]] ||
+        die "conversion benchmark omitted its plain public sidecar"
+    [[ "$(stat -c '%u' "$public_sidecar")" == "$runtime_uid" ]] ||
+        die "conversion benchmark public sidecar has the wrong owner"
+    [[ "$(stat -c '%a' "$public_sidecar")" == "600" ]] ||
+        die "conversion benchmark public sidecar must have mode 0600"
     jq -e \
         --arg raw_sha256 "$raw_sha256" \
         --argjson raw_bytes "$raw_bytes" '
@@ -1089,14 +1190,15 @@ benchmark_remi_conversion() {
     public_bytes="$(stat -c '%s' "$public_sidecar")"
     (( public_bytes > 0 )) || die "conversion benchmark public sidecar is empty"
 
+    BENCHMARK_FAILURE_STAGE=service-restore
     if ! benchmark_start_and_probe; then
         die "failed to restore Remi after conversion benchmark"
     fi
-    trap - EXIT INT TERM
 
+    BENCHMARK_FAILURE_STAGE="transport-publication"
     local transport_next transport_sha256 transport_bytes
     transport_next="$(mktemp "/tmp/remi-conversion-benchmark-${run_id}.XXXXXX")"
-    trap 'rm -f "$transport_next"' EXIT
+    BENCHMARK_TRANSPORT_NEXT="$transport_next"
     install -m 0600 "$public_sidecar" "$transport_next"
     [[ "$(sha256sum "$transport_next" | cut -d ' ' -f 1)" == "$public_sha256" \
         && "$(stat -c '%s' "$transport_next")" == "$public_bytes" ]] ||
@@ -1108,11 +1210,13 @@ benchmark_remi_conversion() {
         die "conversion benchmark transport target appeared during publication: $transport"
     fi
     rm -f "$transport_next"
-    trap - EXIT
+    BENCHMARK_TRANSPORT_NEXT=""
     transport_sha256="$(sha256sum "$transport" | cut -d ' ' -f 1)"
     transport_bytes="$(stat -c '%s' "$transport")"
     [[ "$transport_sha256" == "$public_sha256" && "$transport_bytes" == "$public_bytes" ]] ||
         die "conversion benchmark transport changed during publication"
+    BENCHMARK_FAILURE_ARMED=0
+    trap - EXIT INT TERM
     printf 'Conversion benchmark: run=%s transport=%s sha256=%s bytes=%s\n' \
         "$run_id" "$transport" "$transport_sha256" "$transport_bytes"
 }
@@ -1161,8 +1265,8 @@ case "${1:-}" in
         export_native_oracle_inputs "$2" "$3" "$4" "$5"
         ;;
     benchmark-remi-conversion)
-        [[ $# -eq 8 ]] || usage
-        benchmark_remi_conversion "$2" "$3" "$4" "$5" "$6" "$7" "$8"
+        shift
+        benchmark_remi_conversion "$@"
         ;;
     verify-ingress)
         [[ $# -eq 1 ]] || usage

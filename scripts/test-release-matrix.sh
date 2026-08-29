@@ -1974,6 +1974,136 @@ test_check_release_matrix_rejects_extra_conversion_benchmark_upload() {
         "conversion benchmark public-only retained evidence"
 }
 
+test_check_release_matrix_rejects_private_conversion_failure_upload() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          path: remi-conversion-benchmark-failure-v1.json' \
+        '          path: ${{ runner.temp }}/remi-conversion-benchmark-helper.stderr'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark failure-only retained evidence"
+}
+
+test_check_release_matrix_rejects_nonexclusive_conversion_failure_upload() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        "        if: \${{ steps.benchmark.outputs.result == 'failure' }}" \
+        '        if: ${{ failure() }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark mutually exclusive result publication"
+}
+
+test_check_release_matrix_rejects_nonexclusive_conversion_success_upload() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        "        if: \${{ steps.benchmark.outputs.result == 'success' }}" \
+        '        if: ${{ success() }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark mutually exclusive result publication"
+}
+
+test_check_release_matrix_rejects_nonterminal_conversion_failure_guard() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        "        if: \${{ always() && steps.benchmark.outputs.result != 'success' }}" \
+        "        if: \${{ steps.benchmark.outputs.result == 'failure' }}"
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark typed terminal failure result"
+}
+
+test_check_release_matrix_rejects_unbounded_conversion_helper_stdout() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '            && (( stdout_bytes <= 4096 )) \' \
+        '            && (( stdout_bytes <= 65536 )) \'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_reserved_ssh_conversion_helper_status() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          if (( helper_status >= 1 && helper_status <= 254 )) \' \
+        '          if (( helper_status >= 1 && helper_status <= 255 )) \'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_unbound_conversion_helper_identity() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                    helper_sha256: $helper_sha256,' \
+        '                    helper_sha256: $workflow_commit_sha,'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_noncanonical_conversion_failure_envelope() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                && [[ "$canonical_envelope" == "$envelope_json" ]]; then' \
+        '                && [[ -n "$canonical_envelope" ]]; then'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_unsanitized_conversion_failure_stage() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '          failure_stage="helper-envelope-invalid"' \
+        '          failure_stage="internal"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_preupload_conversion_failure_exit() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        $'            echo "fixed production conversion benchmark operation failed" >&2\n            exit 0' \
+        $'            echo "fixed production conversion benchmark operation failed" >&2\n            exit "$helper_status"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
 test_check_release_matrix_requires_pinned_conversion_benchmark_host() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2608,6 +2738,16 @@ main() {
         test_check_release_matrix_rejects_partial_xfs_conversion_benchmark_proof
         test_check_release_matrix_rejects_fractional_conversion_benchmark_timing
         test_check_release_matrix_rejects_extra_conversion_benchmark_upload
+        test_check_release_matrix_rejects_private_conversion_failure_upload
+        test_check_release_matrix_rejects_nonexclusive_conversion_failure_upload
+        test_check_release_matrix_rejects_nonexclusive_conversion_success_upload
+        test_check_release_matrix_rejects_nonterminal_conversion_failure_guard
+        test_check_release_matrix_rejects_unbounded_conversion_helper_stdout
+        test_check_release_matrix_rejects_reserved_ssh_conversion_helper_status
+        test_check_release_matrix_rejects_unbound_conversion_helper_identity
+        test_check_release_matrix_rejects_noncanonical_conversion_failure_envelope
+        test_check_release_matrix_rejects_unsanitized_conversion_failure_stage
+        test_check_release_matrix_rejects_preupload_conversion_failure_exit
         test_check_release_matrix_requires_pinned_conversion_benchmark_host
         test_check_release_matrix_rejects_live_conversion_benchmark_host_discovery
         test_check_release_matrix_rejects_commented_conversion_benchmark_permissions
