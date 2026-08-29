@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
-revision: 66
-summary: Convert foreign packages through lossless source authority, ephemeral exact archive staging, and typed native relation, lifecycle, and export contracts
+revision: 67
+summary: Convert foreign packages through lossless source authority, ephemeral exact archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -570,8 +570,12 @@ Verification-only and dry-run callers use a temporary payload spool and do not
 create permanent CAS state. Mutating CCS install, restore, and repository-batch
 preparation instead stream the signed complete layout-object set into one
 permanent SHA-256 `VerifiedObjectBatch`. Missing bytes are hashed while written once,
-data-synced, published without replacement, and followed by shard/root
-directory durability barriers. Exact-size canonical hits write no payload
+then cross one filesystem durability barrier before any canonical name is
+published without replacement. A second filesystem barrier makes the complete
+canonical-name set durable before typed authority can escape. Linux therefore
+performs two barriers independent of object count; the explicit non-Linux
+fallback synchronizes each staged object and touched directory while reporting
+that work separately. Exact-size canonical hits write no payload
 bytes and are not reread solely for insertion; a concurrent publication winner
 is reread and must match its signed size and digest. Only the committed batch
 can create `ReopenablePayload` object sources carrying `VerifiedObjectSet`
