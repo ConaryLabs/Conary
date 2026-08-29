@@ -175,6 +175,7 @@ impl ConversionService {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
+        drop(verification);
 
         // Publish cache bookkeeping only after every durable write succeeds. A
         // failed R2 write must not leave a non-evictable local-only cache row.
