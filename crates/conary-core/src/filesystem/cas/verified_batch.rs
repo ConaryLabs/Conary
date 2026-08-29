@@ -11,6 +11,10 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+mod durability;
+
+use durability::{FilesystemVerifiedObjectDurability, VerifiedObjectDurability};
+
 /// Observable work performed by one verified-object transaction.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct VerifiedObjectBatchMetrics {
@@ -20,9 +24,10 @@ pub struct VerifiedObjectBatchMetrics {
     pub hits: u64,
     pub misses: u64,
     pub race_losers: u64,
-    pub object_syncs: u64,
-    pub shard_syncs: u64,
-    pub root_syncs: u64,
+    pub staged_data_barriers: u64,
+    pub canonical_name_barriers: u64,
+    pub fallback_object_syncs: u64,
+    pub fallback_directory_syncs: u64,
     pub canonical_bytes_reread: u64,
 }
 
@@ -279,7 +284,6 @@ impl<'a> VerifiedObjectBatch<'a> {
         }
 
         let disposition = if let Some(staged) = staged {
-            self.metrics.object_syncs += 1;
             self.staged.insert(sha256.to_string(), staged);
             self.expected.get_mut(sha256).expect("object exists").state =
                 ObjectState::IngestedMissing;
@@ -362,14 +366,20 @@ impl<'a> VerifiedObjectBatch<'a> {
                 actual,
             });
         }
-        if let Some(output) = output {
-            output.sync_data()?;
-        }
+        drop(output);
         Ok(())
     }
 
     /// Publish the complete verified set and make all names durable.
-    pub fn commit(mut self) -> Result<VerifiedObjectSet> {
+    pub fn commit(self) -> Result<VerifiedObjectSet> {
+        let mut durability = FilesystemVerifiedObjectDurability;
+        self.commit_with_durability(&mut durability)
+    }
+
+    fn commit_with_durability(
+        mut self,
+        durability: &mut impl VerifiedObjectDurability,
+    ) -> Result<VerifiedObjectSet> {
         if self.poisoned {
             return Err(crate::Error::ConflictError(
                 "cannot commit a poisoned verified object batch".into(),
@@ -387,6 +397,8 @@ impl<'a> VerifiedObjectBatch<'a> {
                 "cannot commit before signed object {sha256} is ingested"
             )));
         }
+
+        durability.sync_staged_data(self.cas, &self.staged, &mut self.metrics)?;
 
         let mut touched_shards = BTreeSet::new();
         let mut publish_result = Ok(());
@@ -425,7 +437,16 @@ impl<'a> VerifiedObjectBatch<'a> {
             }
         }
 
-        let durability_result = self.sync_publication(&touched_shards);
+        // Even when publication fails partway through, make every completed
+        // canonical link durable. Those objects are valid but unreachable
+        // because no complete VerifiedObjectSet can escape this error.
+        let durability_result = durability.sync_canonical_names(
+            self.cas,
+            &self.staged,
+            &touched_shards,
+            &self.new_shards,
+            &mut self.metrics,
+        );
         publish_result?;
         durability_result?;
 
@@ -453,18 +474,6 @@ impl<'a> VerifiedObjectBatch<'a> {
             objects,
             metrics: self.metrics,
         })
-    }
-
-    fn sync_publication(&mut self, touched_shards: &BTreeSet<PathBuf>) -> Result<()> {
-        for shard in touched_shards {
-            fs::File::open(shard)?.sync_all()?;
-            self.metrics.shard_syncs += 1;
-        }
-        if !self.new_shards.is_empty() {
-            fs::File::open(self.cas.objects_dir())?.sync_all()?;
-            self.metrics.root_syncs += 1;
-        }
-        Ok(())
     }
 
     fn remove_staged(&mut self) {
@@ -511,6 +520,64 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ObservedBarrier {
+        StagedData,
+        CanonicalNames,
+    }
+
+    #[derive(Default)]
+    struct InspectingDurability {
+        events: Vec<ObservedBarrier>,
+        fail_at: Option<ObservedBarrier>,
+    }
+
+    impl VerifiedObjectDurability for InspectingDurability {
+        fn sync_staged_data(
+            &mut self,
+            _cas: &CasStore,
+            staged: &BTreeMap<String, StagedObject>,
+            metrics: &mut VerifiedObjectBatchMetrics,
+        ) -> Result<()> {
+            assert!(!staged.is_empty());
+            for object in staged.values() {
+                assert!(object.temp_path.is_file());
+                assert!(!object.canonical_path.exists());
+            }
+            self.events.push(ObservedBarrier::StagedData);
+            if self.fail_at == Some(ObservedBarrier::StagedData) {
+                return Err(crate::Error::IoError(
+                    "injected staged-data barrier failure".into(),
+                ));
+            }
+            metrics.staged_data_barriers += 1;
+            Ok(())
+        }
+
+        fn sync_canonical_names(
+            &mut self,
+            _cas: &CasStore,
+            staged: &BTreeMap<String, StagedObject>,
+            _touched_shards: &BTreeSet<PathBuf>,
+            _new_shards: &BTreeSet<PathBuf>,
+            metrics: &mut VerifiedObjectBatchMetrics,
+        ) -> Result<()> {
+            assert!(!staged.is_empty());
+            for object in staged.values() {
+                assert!(!object.temp_path.exists());
+                assert!(object.canonical_path.is_file());
+            }
+            self.events.push(ObservedBarrier::CanonicalNames);
+            if self.fail_at == Some(ObservedBarrier::CanonicalNames) {
+                return Err(crate::Error::IoError(
+                    "injected canonical-name barrier failure".into(),
+                ));
+            }
+            metrics.canonical_name_barriers += 1;
+            Ok(())
+        }
+    }
+
     fn temp_entries(root: &Path) -> Vec<PathBuf> {
         fn visit(path: &Path, found: &mut Vec<PathBuf>) {
             let Ok(entries) = fs::read_dir(path) else {
@@ -533,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn cold_batch_writes_hashes_and_syncs_each_missing_object_once() {
+    fn cold_batch_writes_hashes_once_and_uses_two_batch_barriers() {
         let temp = tempfile::tempdir().unwrap();
         let cas = CasStore::new(temp.path().join("objects")).unwrap();
         let first = b"first signed object";
@@ -570,21 +637,99 @@ mod tests {
             second
         );
         assert_eq!(verified.objects().len(), 2);
+        let expected_metrics = VerifiedObjectBatchMetrics {
+            incoming_bytes_hashed: (first.len() + second.len()) as u64,
+            persistent_bytes_written: (first.len() + second.len()) as u64,
+            objects_hashed: 2,
+            hits: 0,
+            misses: 2,
+            race_losers: 0,
+            staged_data_barriers: 1,
+            canonical_name_barriers: 1,
+            fallback_object_syncs: 0,
+            fallback_directory_syncs: 0,
+            canonical_bytes_reread: 0,
+        };
+        #[cfg(not(target_os = "linux"))]
+        let expected_metrics = {
+            let touched_shards = [first_hash[..2].to_string(), second_hash[..2].to_string()]
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .len() as u64;
+            let mut expected_metrics = expected_metrics;
+            expected_metrics.fallback_object_syncs = 2;
+            expected_metrics.fallback_directory_syncs = touched_shards + 1;
+            expected_metrics
+        };
+        assert_eq!(verified.metrics(), expected_metrics);
+    }
+
+    #[test]
+    fn durability_barriers_surround_canonical_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let cas = CasStore::new(temp.path().join("objects")).unwrap();
+        let bytes = b"barrier-ordered bytes";
+        let hash = crate::hash::sha256(bytes);
+        let mut batch = cas
+            .verified_object_batch([(hash.clone(), bytes.len() as u64)])
+            .unwrap();
+        batch.ingest(&hash, &mut Cursor::new(bytes)).unwrap();
+        let mut durability = InspectingDurability::default();
+
+        let set = batch.commit_with_durability(&mut durability).unwrap();
+
         assert_eq!(
-            verified.metrics(),
-            VerifiedObjectBatchMetrics {
-                incoming_bytes_hashed: (first.len() + second.len()) as u64,
-                persistent_bytes_written: (first.len() + second.len()) as u64,
-                objects_hashed: 2,
-                hits: 0,
-                misses: 2,
-                race_losers: 0,
-                object_syncs: 2,
-                shard_syncs: 2,
-                root_syncs: 1,
-                canonical_bytes_reread: 0,
-            }
+            durability.events,
+            vec![ObservedBarrier::StagedData, ObservedBarrier::CanonicalNames]
         );
+        assert_eq!(set.metrics().staged_data_barriers, 1);
+        assert_eq!(set.metrics().canonical_name_barriers, 1);
+        assert_eq!(fs::read(set.object_path(&hash).unwrap()).unwrap(), bytes);
+    }
+
+    #[test]
+    fn staged_data_barrier_failure_publishes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let cas = CasStore::new(temp.path().join("objects")).unwrap();
+        let bytes = b"never published";
+        let hash = crate::hash::sha256(bytes);
+        let mut batch = cas
+            .verified_object_batch([(hash.clone(), bytes.len() as u64)])
+            .unwrap();
+        batch.ingest(&hash, &mut Cursor::new(bytes)).unwrap();
+        let mut durability = InspectingDurability {
+            fail_at: Some(ObservedBarrier::StagedData),
+            ..Default::default()
+        };
+
+        assert!(batch.commit_with_durability(&mut durability).is_err());
+        assert_eq!(durability.events, vec![ObservedBarrier::StagedData]);
+        assert!(!cas.exists(&hash));
+        assert!(temp_entries(cas.objects_dir()).is_empty());
+    }
+
+    #[test]
+    fn canonical_barrier_failure_returns_no_set_and_leaves_valid_object() {
+        let temp = tempfile::tempdir().unwrap();
+        let cas = CasStore::new(temp.path().join("objects")).unwrap();
+        let bytes = b"valid unreachable object";
+        let hash = crate::hash::sha256(bytes);
+        let mut batch = cas
+            .verified_object_batch([(hash.clone(), bytes.len() as u64)])
+            .unwrap();
+        batch.ingest(&hash, &mut Cursor::new(bytes)).unwrap();
+        let mut durability = InspectingDurability {
+            fail_at: Some(ObservedBarrier::CanonicalNames),
+            ..Default::default()
+        };
+
+        assert!(batch.commit_with_durability(&mut durability).is_err());
+        assert_eq!(
+            durability.events,
+            vec![ObservedBarrier::StagedData, ObservedBarrier::CanonicalNames]
+        );
+        assert_eq!(fs::read(cas.hash_to_path(&hash).unwrap()).unwrap(), bytes);
+        assert!(temp_entries(cas.objects_dir()).is_empty());
     }
 
     #[test]
@@ -636,9 +781,10 @@ mod tests {
                 hits: 1,
                 misses: 0,
                 race_losers: 0,
-                object_syncs: 0,
-                shard_syncs: 0,
-                root_syncs: 0,
+                staged_data_barriers: 0,
+                canonical_name_barriers: 0,
+                fallback_object_syncs: 0,
+                fallback_directory_syncs: 0,
                 canonical_bytes_reread: 0,
             }
         );

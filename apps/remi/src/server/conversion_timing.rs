@@ -106,9 +106,10 @@ pub struct ConversionWorkMetrics {
     pub cas_hits: u64,
     pub cas_misses: u64,
     pub cas_race_losers: u64,
-    pub cas_object_syncs: u64,
-    pub cas_shard_syncs: u64,
-    pub cas_root_syncs: u64,
+    pub cas_staged_data_barriers: u64,
+    pub cas_canonical_name_barriers: u64,
+    pub cas_fallback_object_syncs: u64,
+    pub cas_fallback_directory_syncs: u64,
     pub cas_canonical_bytes_reread: u64,
     pub r2: ConversionR2Work,
 }
@@ -171,9 +172,10 @@ impl ConversionWorkMetrics {
         self.cas_hits = metrics.hits;
         self.cas_misses = metrics.misses;
         self.cas_race_losers = metrics.race_losers;
-        self.cas_object_syncs = metrics.object_syncs;
-        self.cas_shard_syncs = metrics.shard_syncs;
-        self.cas_root_syncs = metrics.root_syncs;
+        self.cas_staged_data_barriers = metrics.staged_data_barriers;
+        self.cas_canonical_name_barriers = metrics.canonical_name_barriers;
+        self.cas_fallback_object_syncs = metrics.fallback_object_syncs;
+        self.cas_fallback_directory_syncs = metrics.fallback_directory_syncs;
         self.cas_canonical_bytes_reread = metrics.canonical_bytes_reread;
     }
 }

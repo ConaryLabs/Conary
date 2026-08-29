@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use tracing::{debug, warn};
 
+mod durability;
 mod ephemeral;
 mod liveness;
 mod stream;

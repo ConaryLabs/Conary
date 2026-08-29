@@ -2,7 +2,7 @@
 
 //! Batched durability for exact private CAS captures.
 
-use super::{CasStore, cas_object_appears_shared};
+use super::{CasStore, cas_object_appears_shared, durability::sync_filesystem};
 use crate::error::Result;
 use crate::hash::Hasher;
 use crate::packages::payload::PAYLOAD_IO_BUFFER_SIZE;
@@ -10,8 +10,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Byte-capture interface shared by immediate and transaction-scoped CAS use.
 pub trait PrivateCasWriter {
@@ -197,23 +196,6 @@ impl Drop for PrivateCopyBatch<'_> {
             let _ = fs::remove_file(&pending.temp_path);
         }
     }
-}
-
-#[cfg(target_os = "linux")]
-fn sync_filesystem(path: &Path) -> Result<()> {
-    let directory = fs::File::open(path)?;
-    let result = unsafe { libc::syncfs(directory.as_raw_fd()) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error().into())
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn sync_filesystem(path: &Path) -> Result<()> {
-    fs::File::open(path)?.sync_all()?;
-    Ok(())
 }
 
 #[cfg(test)]
