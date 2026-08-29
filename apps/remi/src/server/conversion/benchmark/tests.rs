@@ -182,3 +182,33 @@ fn assert_registered_catalog_work(setup: &ConversionBenchmarkCatalogSetup) {
     assert_eq!(query.carrier_bytes_requested, query.authenticated_bytes);
     assert_eq!(query.integrity_failures, 0);
 }
+
+#[test]
+fn failed_publication_rollback_removes_only_the_staged_inode() {
+    let root = tempfile::tempdir().unwrap();
+    let temporary = root.path().join("staged-report");
+    let target = root.path().join("published-report");
+    fs::write(&temporary, b"owned evidence").unwrap();
+    let owned = PublishedInode::from_metadata(&fs::metadata(&temporary).unwrap());
+    fs::hard_link(&temporary, &target).unwrap();
+
+    rollback_failed_publication(&target, &temporary, Some(owned));
+    assert!(!temporary.exists());
+    assert!(!target.exists());
+
+    let raced_temporary = root.path().join("staged-raced-report");
+    let raced_target = root.path().join("published-raced-report");
+    fs::write(&raced_temporary, b"owned evidence").unwrap();
+    let raced_owned = PublishedInode::from_metadata(&fs::metadata(&raced_temporary).unwrap());
+    fs::hard_link(&raced_temporary, &raced_target).unwrap();
+    fs::remove_file(&raced_target).unwrap();
+    fs::write(&raced_target, b"unrelated raced target").unwrap();
+
+    rollback_failed_publication(&raced_target, &raced_temporary, Some(raced_owned));
+    assert!(!raced_temporary.exists());
+    assert_eq!(
+        fs::read(&raced_target).unwrap(),
+        b"unrelated raced target",
+        "rollback removed an unrelated target that raced into the name"
+    );
+}
