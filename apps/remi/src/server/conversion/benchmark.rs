@@ -521,8 +521,11 @@ fn independently_reopen_output(
     Ok(ConversionBenchmarkOutputProof {
         ccs_sha256,
         ccs_size_bytes,
-        transport_sha256,
-        signed_object_set_sha256,
+        transport_sha256: bare_sha256(&transport_sha256, "transport SHA-256")?,
+        signed_object_set_sha256: bare_sha256(
+            &signed_object_set_sha256,
+            "signed object set SHA-256",
+        )?,
         signed_object_count,
         signed_object_bytes,
         independent_transport_reopen_ms,
@@ -624,6 +627,14 @@ fn validate_report(report: &ConversionBenchmarkReportV2) -> Result<()> {
                     !repetition.views.conversion_core.executed
                         && repetition.views.conversion_core.duration_ms == 0,
                     "hot benchmark executed conversion core"
+                );
+                ensure!(
+                    timing.work.downloaded_bytes == 0
+                        && timing.work.admitted_local_bytes == 0
+                        && timing.work.repository_checksum_bytes_hashed == 0
+                        && timing.work.source_artifact_bytes == 0
+                        && timing.work.source_bytes_hashed == 0,
+                    "hot benchmark transferred, admitted, or hashed source bytes"
                 );
             }
         }
@@ -756,6 +767,14 @@ fn validate_sha256(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn bare_sha256(value: &str, label: &str) -> Result<String> {
+    let value = value
+        .strip_prefix("sha256:")
+        .with_context(|| format!("{label} lacks the exact sha256 algorithm prefix"))?;
+    validate_sha256(value, label)?;
+    Ok(value.to_string())
+}
+
 fn sync_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         File::open(parent)?.sync_all()?;
@@ -824,5 +843,15 @@ mod tests {
         });
         let error = serde_json::from_value::<ConversionBenchmarkReportV2>(value).unwrap_err();
         assert!(error.to_string().contains("unknown field"), "{error}");
+    }
+
+    #[test]
+    fn canonical_hashes_are_normalized_to_schema_sha256_values() {
+        let digest = "a".repeat(64);
+        assert_eq!(
+            bare_sha256(&format!("sha256:{digest}"), "fixture").unwrap(),
+            digest
+        );
+        assert!(bare_sha256(&digest, "fixture").is_err());
     }
 }

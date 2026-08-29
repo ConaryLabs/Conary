@@ -319,6 +319,32 @@ impl ConversionService {
 
         let source_checksum = source.repo_pkg.checksum.clone();
         let profile_revision_sha256 = source.profile_revision_sha256().to_string();
+        let authenticated_local_artifact = matches!(
+            &artifact,
+            ConversionArtifactSelection::AuthenticatedLocal(_)
+        );
+        let started = Instant::now();
+        if let Some(existing) = self
+            .cached_conversion_result_async(
+                source_feed.id(),
+                &source.repo_pkg,
+                &source_checksum,
+                &profile_revision_sha256,
+            )
+            .await?
+        {
+            timing.record(ConversionPhase::CacheLookup, started.elapsed());
+            if authenticated_local_artifact {
+                timing.record_skipped(
+                    ConversionPhase::LocalArtifactAdmission,
+                    "exact cache hit; local source artifact did not need admission",
+                );
+            }
+            Self::record_cache_hit_skips(timing);
+            return Ok(existing);
+        }
+        timing.record(ConversionPhase::CacheLookup, started.elapsed());
+
         let local_artifact = match artifact {
             ConversionArtifactSelection::Download => None,
             ConversionArtifactSelection::AuthenticatedLocal(path) => {
@@ -331,21 +357,6 @@ impl ConversionService {
                 Some(path)
             }
         };
-        let started = Instant::now();
-        if let Some(existing) = self
-            .cached_conversion_result_async(
-                source_feed.id(),
-                &source.repo_pkg,
-                &source_checksum,
-                &profile_revision_sha256,
-            )
-            .await?
-        {
-            timing.record(ConversionPhase::CacheLookup, started.elapsed());
-            Self::record_cache_hit_skips(timing);
-            return Ok(existing);
-        }
-        timing.record(ConversionPhase::CacheLookup, started.elapsed());
 
         let cache_dir = self
             .cache_dir
