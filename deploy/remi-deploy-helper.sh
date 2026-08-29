@@ -797,7 +797,8 @@ benchmark_emit_failure() {
 
     case "$stage" in
         request-validation|runtime-authority|systemctl-authority|account-identity|\
-        binary-config-authority|live-root-authority|work-root-layout|\
+        binary-config-authority|live-root-authority|work-root-type|\
+        work-root-owner|work-root-mode|work-root-resolution|\
         work-root-separation|work-root-filesystem|work-root-device|\
         benchmark-root-authority|input-target-authority|source-authentication|\
         binary-authentication|private-config-copy|private-source-copy|\
@@ -816,7 +817,8 @@ benchmark_emit_failure() {
     fi
     case "$stage" in
         request-validation|runtime-authority|systemctl-authority|account-identity|\
-        binary-config-authority|live-root-authority|work-root-layout|\
+        binary-config-authority|live-root-authority|work-root-type|\
+        work-root-owner|work-root-mode|work-root-resolution|\
         work-root-separation|work-root-filesystem|work-root-device|\
         benchmark-root-authority|input-target-authority|source-authentication|\
         binary-authentication|private-config-copy|private-source-copy|service-active)
@@ -1019,16 +1021,22 @@ benchmark_remi_conversion() {
         die "live Remi root is not on XFS: $live_real"
     live_device="$(benchmark_filesystem_device "$live_real")"
 
-    BENCHMARK_FAILURE_STAGE=work-root-layout
+    BENCHMARK_FAILURE_STAGE=work-root-type
     [[ -d "$work_container" && ! -L "$work_container" ]] ||
         die "benchmark XFS container is not a plain directory: $work_container"
+
+    BENCHMARK_FAILURE_STAGE=work-root-owner
     [[ "$(stat -c '%u' "$work_container")" == "$control_uid" ]] ||
         die "benchmark XFS container has the wrong owner: $work_container"
+
     local work_mode work_mode_value
+    BENCHMARK_FAILURE_STAGE=work-root-mode
     work_mode="$(stat -c '%a' "$work_container")"
     work_mode_value=$((8#$work_mode))
     (( (work_mode_value & 0022) == 0 )) ||
         die "benchmark XFS container must not be group/world writable: $work_container"
+
+    BENCHMARK_FAILURE_STAGE=work-root-resolution
     work_real="$(realpath -e "$work_container")" ||
         die "could not resolve benchmark XFS container"
 
