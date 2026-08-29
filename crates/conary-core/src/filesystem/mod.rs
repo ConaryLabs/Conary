@@ -23,7 +23,7 @@ pub use cas::{
     PrivateCopyBatch, VerifiedObjectBatch, VerifiedObjectBatchMetrics, VerifiedObjectDisposition,
     VerifiedObjectSet, is_temporary_object_name, object_path,
 };
-pub(crate) use cas::{CasObjectLivenessLease, EphemeralObjectStore};
+pub(crate) use cas::{CasObjectLivenessLease, EphemeralObjectStore, EphemeralObjectStoreMetrics};
 pub use path::{safe_join, sanitize_filename, sanitize_path};
 pub use source_path::{DeploymentPath, SourcePathBytes};
 pub use vfs::{NodeId, NodeKind, VfsNode, VfsStats, VfsTree};

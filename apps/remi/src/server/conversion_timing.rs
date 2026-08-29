@@ -207,7 +207,7 @@ pub enum ConversionPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionNestedPhase {
-    TemporaryObjectDurability,
+    TemporaryObjectStaging,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -316,7 +316,7 @@ mod tests {
         report.record(ConversionPhase::PackageLookup, Duration::from_millis(11));
         report.record(ConversionPhase::Download, Duration::from_millis(22));
         report.record_nested(
-            ConversionNestedPhase::TemporaryObjectDurability,
+            ConversionNestedPhase::TemporaryObjectStaging,
             ConversionPhase::PayloadObjectEmission,
             Duration::from_millis(7),
         );
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(
             value["nested_phases"][0],
             json!({
-                "phase": "temporary_object_durability",
+                "phase": "temporary_object_staging",
                 "included_in": "payload_object_emission",
                 "duration_ms": 7
             })
@@ -359,7 +359,7 @@ mod tests {
             Duration::from_millis(11),
         );
         report.record_nested(
-            ConversionNestedPhase::TemporaryObjectDurability,
+            ConversionNestedPhase::TemporaryObjectStaging,
             ConversionPhase::PayloadObjectEmission,
             Duration::from_millis(7),
         );

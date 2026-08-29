@@ -698,9 +698,9 @@ impl ConversionService {
             },
         ]);
         let nested_phase_timings = vec![ConversionNestedPhaseTiming {
-            phase: ConversionNestedPhase::TemporaryObjectDurability,
+            phase: ConversionNestedPhase::TemporaryObjectStaging,
             included_in: ConversionPhase::PayloadObjectEmission,
-            duration_ms: metrics.ccs_write.temporary_object_durability.as_millis(),
+            duration_ms: metrics.ccs_write.temporary_object_staging.as_millis(),
         }];
 
         info!(

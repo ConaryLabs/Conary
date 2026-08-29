@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 pub struct CcsPackageWriteMetrics {
     pub control_projection_and_signing: Duration,
     pub payload_object_emission: Duration,
-    pub temporary_object_durability: Duration,
+    pub temporary_object_staging: Duration,
     pub archive_assembly_and_gzip: Duration,
     pub payload_files_traversed: u64,
     pub payload_bytes_read: u64,
@@ -39,7 +39,7 @@ pub struct CcsPackageWriteMetrics {
 
 #[derive(Default)]
 struct PayloadObjectEmissionMetrics {
-    durability: Duration,
+    staging: Duration,
     payload_bytes_read: u64,
     chunk_reference_bytes_hashed: u64,
     reconstructed_content_bytes_hashed: u64,
@@ -296,7 +296,7 @@ fn write_v3_ccs_package_with_open<'a>(
                 emitted.reconstructed_content_bytes_hashed,
                 "second-pass reconstructed-content bytes",
             )?;
-            metrics.temporary_object_durability += emitted.durability;
+            metrics.temporary_object_staging += emitted.staging;
             add_store_metrics(&mut metrics, emitted.store)?;
         }
     }
@@ -352,8 +352,8 @@ fn write_file_objects(
                         file.path
                     )
                 })?;
-            metrics.durability += started.elapsed();
-            metrics.store = stored;
+            metrics.staging += started.elapsed();
+            add_ephemeral_store_metrics(&mut metrics.store, stored)?;
             Ok(metrics)
         }
         FileContentLayoutV3::FastCdcV2020 {
@@ -401,8 +401,8 @@ fn write_file_objects(
                     u64::from(chunk.length),
                     &signed.sha256,
                 )?;
-                metrics.durability += started.elapsed();
-                add_expected_reader_metrics(&mut metrics.store, stored)?;
+                metrics.staging += started.elapsed();
+                add_ephemeral_store_metrics(&mut metrics.store, stored)?;
                 index += 1;
                 Ok(())
             })?;
@@ -438,9 +438,9 @@ fn checked_add(left: u64, right: u64, label: &str) -> Result<u64> {
         .with_context(|| format!("{label} overflow"))
 }
 
-fn add_expected_reader_metrics(
+fn add_ephemeral_store_metrics(
     total: &mut crate::filesystem::ExpectedReaderStoreMetrics,
-    value: crate::filesystem::ExpectedReaderStoreMetrics,
+    value: crate::filesystem::EphemeralObjectStoreMetrics,
 ) -> Result<()> {
     total.incoming_bytes_hashed = checked_add(
         total.incoming_bytes_hashed,
@@ -459,16 +459,6 @@ fn add_expected_reader_metrics(
     )?;
     total.hits = checked_add(total.hits, value.hits, "temporary object hits")?;
     total.misses = checked_add(total.misses, value.misses, "temporary object misses")?;
-    total.object_file_syncs = checked_add(
-        total.object_file_syncs,
-        value.object_file_syncs,
-        "temporary object file syncs",
-    )?;
-    total.shard_syncs = checked_add(
-        total.shard_syncs,
-        value.shard_syncs,
-        "temporary object shard syncs",
-    )?;
     Ok(())
 }
 
