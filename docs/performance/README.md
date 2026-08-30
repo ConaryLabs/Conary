@@ -506,12 +506,14 @@ canonical FastCDC layout; 13,116 files and 30,976,256 bytes used whole objects.
 The split implementation opened the 7,967 chunked sources once for reference
 derivation, then reopened all 21,083 regular sources for object emission. It
 therefore performed 29,050 payload-source opens and read 5,483,136,312 source
-bytes. Its payload-boundary SHA-256 input was 10,935,296,368 bytes: first-pass
+bytes. The instrumented hash counters covered 10,935,296,368 bytes: first-pass
 chunk identities, second-pass chunk identities, second-pass large-file whole
-content, and temporary-store object identities. The store attempted 51,434
-objects, wrote all 2,757,056,284 attempted bytes, and reread 117,682,166
-canonical duplicate bytes before emitting the exact 49,091-object,
-2,639,374,118-byte signed set.
+content, and temporary-store incoming object identities. Duplicate verification
+then SHA-256-hashed another 117,682,166 canonical reread bytes, making the
+complete physical payload-boundary cryptographic input 11,052,978,534 bytes.
+The store attempted 51,434 objects, wrote all 2,757,056,284 attempted bytes,
+and reread those 117,682,166 canonical duplicate bytes before emitting the
+exact 49,091-object, 2,639,374,118-byte signed set.
 
 Schema v6 and public schema v4 replace that split evidence with one
 `payload_derivation_and_object_staging` phase. The exact target for the pinned
@@ -599,7 +601,7 @@ Schema v6 proves the targeted physical change directly:
 | --- | ---: | ---: | ---: |
 | Payload-source opens | 29,050 | 21,083 | -7,967 (-27.425%) |
 | Payload-source bytes | 5,483,136,312 | 2,757,056,284 | -2,726,080,028 (-49.718%) |
-| Payload cryptographic hash input | 10,935,296,368 B | 5,483,136,312 B | -5,452,160,056 B (-49.858%) |
+| Payload cryptographic hash input | 11,052,978,534 B | 5,483,136,312 B | -5,569,842,222 B (-50.392%) |
 | Staging bytes written | 2,757,056,284 B | 2,639,374,118 B | -117,682,166 B (-4.268%) |
 | Canonical duplicate rereads | 117,682,166 B | 0 B | -117,682,166 B (-100%) |
 
@@ -608,6 +610,7 @@ reported zero source reopens or reread bytes. It derived 38,318 chunks, hashed
 2,726,080,028 chunk-identity bytes and 2,757,056,284 whole-content bytes, and
 staged the exact 49,091 unique objects without file or shard syncs. The 2,343
 duplicate objects avoided 117,682,166 bytes of writes and canonical rereads.
+Eliminating those canonical rereads also eliminated their SHA-256 verification.
 The stable signed set remained exact at SHA-256
 `cf4f448fdcf9f228febaf1767c98adbb0ca2053de4bfe231d7291f7ecf23d186`,
 49,091 objects, and 2,639,374,118 bytes. Cold and hot outputs agreed within the
