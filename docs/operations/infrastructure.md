@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-30
-revision: 60
+revision: 61
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -325,17 +325,16 @@ workflow.
   without entering Actions logs or artifacts.
 - The bounded one-shot production `/work` owner repair succeeded in protected
   run `33282179559`, and exact conversion baseline run `33282246922`
-  subsequently passed the repaired `/work` preflight. The repair command and
-  its source workflow are removed, but the installed production helper remains
-  authority until the no-input protected, `deploy-and-verify`-serialized
-  `remi-conversion-work-root-owner-repair-retirement` workflow installs the
-  exact merged-main command-free helper, proves its `root:root` ownership,
-  mode, SHA-256, and `verify-access` result, proves the old repair command is
-  unavailable, and publishes strict path-free evidence. Remove that retirement
-  workflow, policy, and tests immediately after its successful run. Until then,
-  helper retirement is not complete. Future owner drift remains a fail-closed
-  `work-root-owner` benchmark failure and requires a new issue-backed, reviewed
-  operation.
+  subsequently passed the repaired `/work` preflight. Protected retirement run
+  `33284695296` then installed and verified the exact merged-main command-free
+  helper with SHA-256
+  `65a374327e4c4037e364bfb19b2f9a5293f989a367a3014d5bdcb3a1b9eb6352`,
+  `root:root` ownership, mode `0755`, and a successful `verify-access` result;
+  its strict evidence also proved the old repair command unavailable. Both
+  temporary workflows, their policy checks, and their tests are removed. No
+  dispatchable owner-repair or retirement surface remains. Future owner drift
+  is a fail-closed `work-root-owner` benchmark failure and requires a new
+  issue-backed, reviewed operation.
 - Production R2 inventory and backfill use the manually dispatched
   `remi-r2-durability` workflow after its exact `commit_sha` is merged into
   `main` and deployed. The protected job enters through the normal Remi SSH
