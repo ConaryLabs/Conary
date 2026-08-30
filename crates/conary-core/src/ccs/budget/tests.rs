@@ -492,6 +492,35 @@ fn derived_ceilings_are_stated_in_terms_of_structural_dimensions() {
 }
 
 #[test]
+fn compression_limits_and_buffer_ceiling_share_the_canonical_budget() {
+    let budget = CCS_BUDGET;
+    let workers = budget.max_archive_compression_workers;
+    let block = u64::try_from(budget.archive_compression_block_bytes).unwrap();
+    let worker_count = u64::try_from(workers).unwrap();
+    let in_flight = worker_count * ARCHIVE_COMPRESSION_IN_FLIGHT_BLOCKS_PER_WORKER
+        + ARCHIVE_COMPRESSION_ACCUMULATING_BLOCKS;
+    let compressed = block
+        + block / ARCHIVE_COMPRESSION_OUTPUT_SLACK_DIVISOR
+        + ARCHIVE_COMPRESSION_OUTPUT_SLACK_BYTES;
+    let expected = block + in_flight * (block + compressed);
+
+    budget.admit_archive_compression_workers(workers).unwrap();
+    assert_eq!(
+        budget
+            .archive_compression_buffer_ceiling_bytes(workers)
+            .unwrap(),
+        expected
+    );
+
+    let error = budget
+        .admit_archive_compression_workers(workers + 1)
+        .unwrap_err();
+    assert_eq!(error.dimension, BudgetDimension::ArchiveCompressionWorkers);
+    assert_eq!(error.observed, worker_count + 1);
+    assert_eq!(error.limit, worker_count);
+}
+
+#[test]
 fn archive_decode_dimensions_fail_one_over_with_typed_diagnostics() {
     let bounds = CCS_BUDGET.archive_decode_bounds().unwrap();
 

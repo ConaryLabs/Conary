@@ -189,7 +189,7 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.archive_compression_input_bytes = 2048;
         timing.work.archive_compression_workers = 1;
         timing.work.archive_compression_block_bytes =
-            conary_core::ccs::CcsArchiveCompression::BLOCK_BYTES as u64;
+            conary_core::ccs::CCS_BUDGET.archive_compression_block_bytes as u64;
         timing.work.archive_compression_blocks = 1;
         timing.work.archive_compression_buffer_ceiling_bytes =
             conary_core::ccs::CcsArchiveCompression::default()

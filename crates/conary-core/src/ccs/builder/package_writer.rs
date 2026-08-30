@@ -23,22 +23,13 @@ pub struct CcsArchiveCompression {
 }
 
 impl CcsArchiveCompression {
-    /// Largest admitted worker allocation for one archive emission.
-    pub const MAX_WORKERS: usize = 64;
-    /// Fixed independent DEFLATE block size.
-    pub const BLOCK_BYTES: usize = 1024 * 1024;
-
     /// Construct one checked per-archive worker budget.
     pub fn with_workers(workers: usize) -> Result<Self> {
         anyhow::ensure!(
             workers > 0,
             "CCS archive compression requires at least one worker"
         );
-        anyhow::ensure!(
-            workers <= Self::MAX_WORKERS,
-            "CCS archive compression worker count {workers} exceeds limit {}",
-            Self::MAX_WORKERS
-        );
+        crate::ccs::CCS_BUDGET.admit_archive_compression_workers(workers)?;
         Ok(Self { workers })
     }
 
@@ -59,7 +50,7 @@ impl CcsArchiveCompression {
             logical_parallelism
                 .checked_div(concurrent_conversions)
                 .unwrap_or(0)
-                .clamp(1, Self::MAX_WORKERS),
+                .clamp(1, crate::ccs::CCS_BUDGET.max_archive_compression_workers),
         )
     }
 
@@ -70,30 +61,7 @@ impl CcsArchiveCompression {
 
     /// Conservative ceiling for buffered input and output block bytes.
     pub fn buffer_ceiling_bytes(self) -> Result<u64> {
-        // The parallel writer admits at most 2W ordered in-flight blocks.
-        // Include the accumulating block and charge each in-flight block for
-        // both input and the compressor's maximum output allocation.
-        let workers = u64::try_from(self.workers).context("compression workers exceed u64")?;
-        let in_flight = workers
-            .checked_mul(2)
-            .and_then(|value| value.checked_add(1))
-            .context("compression in-flight block count overflow")?;
-        let block = Self::BLOCK_BYTES as u64;
-        let compressed = block
-            .checked_add(block / 10)
-            .and_then(|value| value.checked_add(128))
-            .context("compression output block ceiling overflow")?;
-        block
-            .checked_add(
-                in_flight
-                    .checked_mul(
-                        block
-                            .checked_add(compressed)
-                            .context("compression block pair ceiling overflow")?,
-                    )
-                    .context("compression in-flight buffer ceiling overflow")?,
-            )
-            .context("compression buffer ceiling overflow")
+        Ok(crate::ccs::CCS_BUDGET.archive_compression_buffer_ceiling_bytes(self.workers)?)
     }
 }
 

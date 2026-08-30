@@ -55,6 +55,15 @@ const DEBUG_PROJECTION_ENVELOPE_BYTES: u64 = 64 * 1024;
 /// alignment padding. The extra byte also covers the terminal block envelope.
 const ARCHIVE_ENTRY_ENVELOPE_BYTES: u64 = 2 * 512;
 
+/// Maximum output allocation charged for one independent DEFLATE block.
+const ARCHIVE_COMPRESSION_OUTPUT_SLACK_DIVISOR: u64 = 10;
+const ARCHIVE_COMPRESSION_OUTPUT_SLACK_BYTES: u64 = 128;
+
+/// The ordered parallel compressor admits at most two blocks per worker plus
+/// the accumulating input block.
+const ARCHIVE_COMPRESSION_IN_FLIGHT_BLOCKS_PER_WORKER: u64 = 2;
+const ARCHIVE_COMPRESSION_ACCUMULATING_BLOCKS: u64 = 1;
+
 /// One payload object may occupy the package's entire payload allowance.
 ///
 /// Authoring, conversion, chunking, CAS ingestion, and package writing all
@@ -99,6 +108,7 @@ pub enum BudgetDimension {
     TotalPayloadBytes,
     ArchiveEntryCount,
     DecompressedStreamBytes,
+    ArchiveCompressionWorkers,
     CborNestingDepth,
     Arithmetic,
 }
@@ -137,6 +147,7 @@ impl BudgetDimension {
             Self::TotalPayloadBytes => "total-payload-bytes",
             Self::ArchiveEntryCount => "archive-entry-count",
             Self::DecompressedStreamBytes => "decompressed-stream-bytes",
+            Self::ArchiveCompressionWorkers => "archive-compression-workers",
             Self::CborNestingDepth => "cbor-nesting-depth",
             Self::Arithmetic => "arithmetic",
         }
@@ -364,6 +375,8 @@ pub struct CcsStructuralBudget {
     pub max_payload_object_bytes: u64,
     pub max_total_payload_bytes: u64,
     pub max_metadata_bytes: u64,
+    pub max_archive_compression_workers: usize,
+    pub archive_compression_block_bytes: usize,
     pub max_cbor_nesting_depth: usize,
 }
 
@@ -401,8 +414,53 @@ impl CcsStructuralBudget {
         max_payload_object_bytes: MAX_TOTAL_PAYLOAD_BYTES,
         max_total_payload_bytes: MAX_TOTAL_PAYLOAD_BYTES,
         max_metadata_bytes: MAX_METADATA_BYTES,
+        max_archive_compression_workers: 64,
+        archive_compression_block_bytes: 1024 * 1024,
         max_cbor_nesting_depth: 64,
     };
+
+    /// Admit one per-archive compression worker allocation.
+    pub fn admit_archive_compression_workers(&self, workers: usize) -> BudgetResult<()> {
+        admit(
+            BudgetDimension::ArchiveCompressionWorkers,
+            "archive compression workers",
+            u64::try_from(workers)
+                .map_err(|_| BudgetError::overflow("archive compression workers"))?,
+            u64::try_from(self.max_archive_compression_workers)
+                .map_err(|_| BudgetError::overflow("archive compression worker limit"))?,
+        )
+    }
+
+    /// Conservative ceiling for buffered input and output compression blocks.
+    pub fn archive_compression_buffer_ceiling_bytes(&self, workers: usize) -> BudgetResult<u64> {
+        self.admit_archive_compression_workers(workers)?;
+        let workers = u64::try_from(workers)
+            .map_err(|_| BudgetError::overflow("archive compression workers"))?;
+        let block = u64::try_from(self.archive_compression_block_bytes)
+            .map_err(|_| BudgetError::overflow("archive compression block bytes"))?;
+        let in_flight = product(
+            "archive compression in-flight blocks",
+            workers,
+            ARCHIVE_COMPRESSION_IN_FLIGHT_BLOCKS_PER_WORKER,
+        )?
+        .checked_add(ARCHIVE_COMPRESSION_ACCUMULATING_BLOCKS)
+        .ok_or_else(|| BudgetError::overflow("archive compression in-flight blocks"))?;
+        let compressed = block
+            .checked_add(block / ARCHIVE_COMPRESSION_OUTPUT_SLACK_DIVISOR)
+            .and_then(|value| value.checked_add(ARCHIVE_COMPRESSION_OUTPUT_SLACK_BYTES))
+            .ok_or_else(|| BudgetError::overflow("archive compression output block"))?;
+        let block_pair = block
+            .checked_add(compressed)
+            .ok_or_else(|| BudgetError::overflow("archive compression block pair"))?;
+        let in_flight_bytes = product(
+            "archive compression in-flight buffer",
+            in_flight,
+            block_pair,
+        )?;
+        block
+            .checked_add(in_flight_bytes)
+            .ok_or_else(|| BudgetError::overflow("archive compression buffer ceiling"))
+    }
 
     /// Derive the complete source-archive decode budget from this owner.
     ///

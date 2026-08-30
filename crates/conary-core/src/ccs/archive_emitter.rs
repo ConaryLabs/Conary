@@ -167,7 +167,7 @@ impl<W: Write + Send + 'static> ParallelGzipWriter<W> {
     fn new(writer: W, compression: crate::ccs::builder::CcsArchiveCompression) -> Result<Self> {
         let workers = compression.workers();
         let inner = ParCompressBuilder::<Gzip>::new()
-            .buffer_size(crate::ccs::builder::CcsArchiveCompression::BLOCK_BYTES)?
+            .buffer_size(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)?
             .num_threads(workers)?
             .compression_level(Compression::default())
             .from_writer(writer);
@@ -180,7 +180,8 @@ impl<W: Write + Send + 'static> ParallelGzipWriter<W> {
 
     fn finish(mut self) -> Result<(W, ParallelCompressionMetrics)> {
         let writer = self.inner.finish()?;
-        let block_bytes = crate::ccs::builder::CcsArchiveCompression::BLOCK_BYTES as u64;
+        let block_bytes = u64::try_from(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)
+            .context("archive compression block bytes exceed u64")?;
         let blocks = self.input_bytes.div_ceil(block_bytes);
         Ok((
             writer,
@@ -391,7 +392,7 @@ mod tests {
         assert_eq!(metrics.compression_workers, 1);
         assert_eq!(
             metrics.compression_block_bytes,
-            crate::ccs::builder::CcsArchiveCompression::BLOCK_BYTES as u64
+            crate::ccs::CCS_BUDGET.archive_compression_block_bytes as u64
         );
         assert_eq!(
             metrics.compression_blocks,
@@ -418,7 +419,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let one_worker = temp.path().join("one.ccs");
         let four_workers = temp.path().join("four.ccs");
-        let bytes = (0..(crate::ccs::builder::CcsArchiveCompression::BLOCK_BYTES * 3 + 17))
+        let bytes = (0..(crate::ccs::CCS_BUDGET.archive_compression_block_bytes * 3 + 17))
             .map(|index| (index % 251) as u8)
             .collect::<Vec<_>>();
         let sha256 = crate::hash::sha256(&bytes);
@@ -478,7 +479,10 @@ mod tests {
 
         assert!(CcsArchiveCompression::with_workers(0).is_err());
         assert!(
-            CcsArchiveCompression::with_workers(CcsArchiveCompression::MAX_WORKERS + 1).is_err()
+            CcsArchiveCompression::with_workers(
+                crate::ccs::CCS_BUDGET.max_archive_compression_workers + 1
+            )
+            .is_err()
         );
         assert_eq!(
             CcsArchiveCompression::for_concurrent_conversions(12, 4)

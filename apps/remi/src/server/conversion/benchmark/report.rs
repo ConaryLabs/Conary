@@ -273,7 +273,8 @@ fn validate_cold_archive_compression(
     let workers = usize::try_from(work.archive_compression_workers)
         .context("archive compression worker count exceeds usize")?;
     let compression = conary_core::ccs::CcsArchiveCompression::with_workers(workers)?;
-    let block_bytes = conary_core::ccs::CcsArchiveCompression::BLOCK_BYTES as u64;
+    let block_bytes = u64::try_from(conary_core::ccs::CCS_BUDGET.archive_compression_block_bytes)
+        .context("archive compression block bytes exceed u64")?;
     ensure!(
         work.archive_compression_input_bytes >= work.archive_input_bytes
             && work.archive_compression_block_bytes == block_bytes
