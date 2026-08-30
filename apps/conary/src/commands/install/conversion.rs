@@ -311,9 +311,9 @@ impl PendingInstalledConversion {
 
 /// Pending output of the canonical native-package conversion pipeline.
 ///
-/// The temporary directory owns the unverified archive. The signing key is
-/// captured independently from configured local authority rather than trusted
-/// from the pending artifact's self-reported authoring evidence.
+/// The temporary directory owns the unverified archive. The configured signing
+/// public key is captured independently as the caller's trust anchor rather
+/// than trusted from the pending artifact's self-reported authoring evidence.
 pub(crate) struct PendingNativeCcsConversion {
     pending: PendingConversionResult,
     temp_dir: TempDir,
@@ -359,7 +359,7 @@ impl PendingNativeCcsConversion {
             conary_core::ccs::TrustPolicy::strict(vec![self.trusted_signing_public_key.clone()]);
         self.pending
             .verify_staged_copy(staged_path, &policy)
-            .context("same-directory adopted CCS staging failed verification")
+            .context("adopted CCS publication input failed verification")
     }
 }
 
@@ -594,7 +594,7 @@ pub(super) async fn install_pending_ccs_conversion(
         opts.repository_provenance.as_ref(),
         permanent_cas.as_ref(),
     )?;
-    let (conversion, verification) = verified.into_parts();
+    let (conversion, verification, _archive_identity) = verified.into_parts();
     anyhow::ensure!(
         conversion.package_path.as_path() == Path::new(opts.ccs_path),
         "verified conversion path '{}' does not match requested install path '{}'",

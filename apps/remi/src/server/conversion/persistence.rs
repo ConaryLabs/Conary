@@ -2,6 +2,7 @@
 //! Converted-package persistence and cache-hit reconstruction.
 
 use super::lookup::PinnedConversionSource;
+use super::storage::artifact::PublishedConversionArtifact;
 use super::{ConversionService, ScriptletPackageMetadata, ServerConversionResult};
 use anyhow::{Context, Result, anyhow, ensure};
 use conary_core::ccs::convert::ConversionResult;
@@ -22,6 +23,8 @@ pub(super) struct PersistConversionInput {
     pub(super) source: PinnedConversionSource,
     pub(super) profile_revision_sha256: String,
     pub(super) transport: conary_core::ccs::CcsTransportEnvelopeV1,
+    /// Holds the private staging name and exact canonical read FD through DB commit.
+    pub(super) artifact: PublishedConversionArtifact,
 }
 
 pub(super) struct PersistConversionOutput {
@@ -31,11 +34,7 @@ pub(super) struct PersistConversionOutput {
 
 #[derive(Debug, Default)]
 pub(super) struct ConversionPersistenceMetrics {
-    pub(super) complete_archive_hash: Duration,
-    pub(super) complete_archive_copy: Duration,
     pub(super) database_persistence: Duration,
-    pub(super) complete_archive_hash_bytes: u64,
-    pub(super) complete_archive_copy_bytes: u64,
 }
 
 enum CacheInspection {
@@ -183,6 +182,7 @@ impl ConversionService {
             source,
             profile_revision_sha256,
             transport,
+            mut artifact,
         } = input;
         ensure!(
             source.source_profile() == source_profile,
@@ -195,13 +195,9 @@ impl ConversionService {
         let repo_pkg = source.repo_pkg.clone();
         let repository_provides_digest = source.catalog_provides_digest()?;
 
-        let ccs_path = &conversion_result.package_path;
-
-        let total_size = std::fs::metadata(ccs_path)?.len();
-        let hash_started = Instant::now();
-        let content_hash = Self::calculate_sha256(ccs_path)?;
-        let complete_archive_hash = hash_started.elapsed();
-        let content_hash_text = content_hash.to_prefixed_string();
+        artifact.require_publication_binding()?;
+        let total_size = artifact.archive_bytes();
+        let content_hash_text = format!("sha256:{}", artifact.archive_sha256());
         let persisted_total_size =
             i64::try_from(total_size).context("converted CCS size exceeds SQLite INTEGER range")?;
 
@@ -209,8 +205,7 @@ impl ConversionService {
             .architecture
             .clone()
             .context("pinned catalog package has no exact architecture identity")?;
-        let ccs_filename = format!("{}.ccs", content_hash.as_str());
-        let final_ccs_path = self.cache_dir.join("packages").join(&ccs_filename);
+        let final_ccs_path = artifact.path().to_path_buf();
 
         let mut converted = ConvertedPackage::new_repository(
             source_profile.clone(),
@@ -228,29 +223,14 @@ impl ConversionService {
         );
         converted.set_scriptlet_metadata(&conversion_result.scriptlet_metadata)?;
 
-        let final_ccs_preexisting = final_ccs_path.exists();
-        let copy_started = Instant::now();
-        if let Some(parent) = final_ccs_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let complete_archive_copy_bytes = std::fs::copy(ccs_path, &final_ccs_path)?;
-        let complete_archive_copy = copy_started.elapsed();
-        if complete_archive_copy_bytes != total_size {
-            if !final_ccs_preexisting {
-                let _ = std::fs::remove_file(&final_ccs_path);
-            }
-            return Err(anyhow!(
-                "persisted CCS copy changed size while reading the conversion artifact"
-            ));
-        }
-
         let database_started = Instant::now();
         // `source` owns the PinnedProfileCatalog. Keep it alive while this
         // transaction inserts the conversion row and its durable pin.
         let writer = self.database_writer.clone();
-        let outcome = match writer.execute(|| -> Result<PersistOutcome> {
+        let outcome = writer.execute(|| -> Result<PersistOutcome> {
             let mut conn = crate::server::open_runtime_db(&self.db_path)?;
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            artifact.require_publication_binding()?;
 
             match self.inspect_cached_conversion(
                 &tx,
@@ -278,34 +258,33 @@ impl ConversionService {
             }
 
             converted.insert_with_conversion_pin_in_transaction(&tx, unix_seconds()?)?;
+            artifact.require_publication_binding()?;
             tx.commit()?;
             Ok(PersistOutcome::Inserted)
-        }) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                if !final_ccs_preexisting {
-                    let _ = std::fs::remove_file(&final_ccs_path);
-                }
-                return Err(error);
-            }
-        };
+        })?;
         let database_persistence = database_started.elapsed();
         let metrics = ConversionPersistenceMetrics {
-            complete_archive_hash,
-            complete_archive_copy,
             database_persistence,
-            complete_archive_hash_bytes: total_size,
-            complete_archive_copy_bytes,
         };
         if let PersistOutcome::Existing(result) = outcome {
-            if !final_ccs_preexisting {
-                let _ = std::fs::remove_file(&final_ccs_path);
+            let same_artifact = result.ccs_path == final_ccs_path
+                && result.total_size == total_size
+                && result.content_hash == content_hash_text;
+            if result.ccs_path == final_ccs_path {
+                ensure!(
+                    same_artifact,
+                    "current conversion row contradicts the exact published artifact"
+                );
+            }
+            if same_artifact {
+                artifact.retire_staging_after_commit();
             }
             return Ok(PersistConversionOutput {
                 result: *result,
                 metrics,
             });
         }
+        artifact.retire_staging_after_commit();
 
         info!(
             "Recorded conversion in database (source_profile={}, name={}, version={})",

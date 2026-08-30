@@ -138,8 +138,16 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
             Duration::from_millis(7),
         );
         timing.record(
+            ConversionPhase::CompleteArchiveCopy,
+            Duration::from_millis(1),
+        );
+        timing.record(
             ConversionPhase::IndependentTransportReopen,
             Duration::from_millis(2),
+        );
+        timing.record(
+            ConversionPhase::CompleteArchiveHash,
+            Duration::from_millis(1),
         );
         timing.record_skipped(
             ConversionPhase::Download,
@@ -157,6 +165,7 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.native_decompressed_archive_bytes_read = 83;
         timing.work.payload_reference_bytes_hashed = 89;
         timing.work.ccs_output_bytes = 23;
+        timing.work.ccs_output_bytes_hashed = 23;
         timing.work.independent_transport_reopen_ccs_bytes = 23;
         timing.work.complete_archive_hash_bytes = 23;
         timing.work.complete_archive_copy_bytes = 23;
@@ -189,11 +198,11 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
             ConversionPhase::PayloadObjectEmission,
             ConversionPhase::ArchiveAssemblyAndGzip,
             ConversionPhase::NativeProvenanceProjection,
+            ConversionPhase::CompleteArchiveCopy,
             ConversionPhase::IndependentTransportReopen,
+            ConversionPhase::CompleteArchiveHash,
             ConversionPhase::DurableCasIngestion,
             ConversionPhase::R2WriteThrough,
-            ConversionPhase::CompleteArchiveHash,
-            ConversionPhase::CompleteArchiveCopy,
             ConversionPhase::DatabasePersistence,
         ] {
             timing.record_skipped(phase, "cache hit; phase did not run");
@@ -435,11 +444,11 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
             "payload_object_emission",
             "archive_assembly_and_gzip",
             "native_provenance_projection",
+            "complete_archive_copy",
             "independent_transport_reopen",
+            "complete_archive_hash",
             "durable_cas_ingestion",
             "r2_write_through",
-            "complete_archive_hash",
-            "complete_archive_copy",
             "database_persistence",
         ])
     );

@@ -449,40 +449,63 @@ impl ConversionService {
             .work
             .record_native_conversion(parsed.conversion_result.metrics());
 
-        let (stored_transport, conversion_result) = self
+        let stored_conversion = self
             .store_transport_with_timing(parsed.conversion_result, source_feed.id())
             .await?;
         timing.record(
+            ConversionPhase::CompleteArchiveCopy,
+            stored_conversion.archive_work.complete_archive_copy,
+        );
+        timing.record(
             ConversionPhase::IndependentTransportReopen,
-            stored_transport.verification_and_cas_duration,
+            stored_conversion
+                .stored_transport
+                .verification_and_cas_duration,
+        );
+        timing.record(
+            ConversionPhase::CompleteArchiveHash,
+            stored_conversion.archive_work.complete_archive_hash,
         );
         timing.record_skipped(
             ConversionPhase::DurableCasIngestion,
             crate::server::conversion_timing::DURABLE_CAS_FUSED_SKIP_REASON,
         );
         timing.work.independent_transport_reopen_ccs_bytes = timing.work.ccs_output_bytes;
-        let reopened_object_bytes =
-            stored_transport
-                .transport
-                .objects
-                .iter()
-                .try_fold(0_u64, |total, object| {
-                    total
-                        .checked_add(object.size)
-                        .context("signed conversion object byte count overflow")
-                })?;
+        let reopened_object_bytes = stored_conversion
+            .stored_transport
+            .transport
+            .objects
+            .iter()
+            .try_fold(0_u64, |total, object| {
+                total
+                    .checked_add(object.size)
+                    .context("signed conversion object byte count overflow")
+            })?;
         timing.work.independent_transport_reopen_object_bytes_hashed = reopened_object_bytes;
-        timing.work.record_cas(stored_transport.cas_metrics);
-        timing.work.r2 = stored_transport.r2_work;
-        if let Some(duration) = stored_transport.r2_duration {
+        timing
+            .work
+            .record_cas(stored_conversion.stored_transport.cas_metrics);
+        timing.work.r2 = stored_conversion.stored_transport.r2_work.clone();
+        timing.work.complete_archive_copy_bytes =
+            stored_conversion.archive_work.complete_archive_copy_bytes;
+        timing.work.complete_archive_hash_bytes =
+            stored_conversion.archive_work.complete_archive_hash_bytes;
+        if let Some(duration) = stored_conversion.stored_transport.r2_duration {
             timing.record(ConversionPhase::R2WriteThrough, duration);
         } else {
             timing.record_skipped(ConversionPhase::R2WriteThrough, "r2 store not configured");
         }
         info!(
             "Stored {} signed CCS objects",
-            stored_transport.transport.objects.len()
+            stored_conversion.stored_transport.transport.objects.len()
         );
+
+        let super::storage::StoredConversion {
+            stored_transport,
+            conversion: conversion_result,
+            artifact,
+            ..
+        } = stored_conversion;
 
         let persist_service = self.clone();
         let source_profile_owned = parsed.source.source_profile().to_string();
@@ -496,24 +519,15 @@ impl ConversionService {
                 source: parsed.source,
                 profile_revision_sha256,
                 transport: stored_transport.transport,
+                artifact,
             })
         })
         .await
         .map_err(|e| anyhow!("conversion persistence task panicked: {e}"))??;
         timing.record(
-            ConversionPhase::CompleteArchiveHash,
-            persisted.metrics.complete_archive_hash,
-        );
-        timing.record(
-            ConversionPhase::CompleteArchiveCopy,
-            persisted.metrics.complete_archive_copy,
-        );
-        timing.record(
             ConversionPhase::DatabasePersistence,
             persisted.metrics.database_persistence,
         );
-        timing.work.complete_archive_hash_bytes = persisted.metrics.complete_archive_hash_bytes;
-        timing.work.complete_archive_copy_bytes = persisted.metrics.complete_archive_copy_bytes;
         Ok(persisted.result)
     }
 
@@ -530,11 +544,11 @@ impl ConversionService {
             ConversionPhase::PayloadObjectEmission,
             ConversionPhase::ArchiveAssemblyAndGzip,
             ConversionPhase::NativeProvenanceProjection,
+            ConversionPhase::CompleteArchiveCopy,
             ConversionPhase::IndependentTransportReopen,
+            ConversionPhase::CompleteArchiveHash,
             ConversionPhase::DurableCasIngestion,
             ConversionPhase::R2WriteThrough,
-            ConversionPhase::CompleteArchiveHash,
-            ConversionPhase::CompleteArchiveCopy,
             ConversionPhase::DatabasePersistence,
         ] {
             timing.record_skipped(phase, "cache hit; phase did not run");

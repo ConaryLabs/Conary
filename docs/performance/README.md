@@ -246,6 +246,15 @@ end-to-end reduction. These are pass-removal ceilings, not measured results;
 the protected production-XFS rerun must establish the realized change and
 retain the separate benchmark-only reopen/hash proof outside both views.
 
+The writer now computes the exact compressed output SHA-256 inline beneath
+gzip as `ccs_output_sha256`; `ccs_output_bytes_hashed` records the exact work,
+so the pending value is bound to the authored bytes without another file pass.
+Remi records three disjoint full-archive operations in physical order: the copy
+into sealed same-directory staging, the sole verifier/direct-CAS finalizer, and
+the canonical published inode hash. The added fused authoring hash is real CPU
+work, so the arithmetic ceiling above is deliberately not treated as a
+realized forecast.
+
 ## Remi conversion baseline: 2026-08-15
 
 The raw baseline is

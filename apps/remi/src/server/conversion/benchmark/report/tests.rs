@@ -114,8 +114,16 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
             Duration::from_millis(7),
         );
         timing.record(
+            ConversionPhase::CompleteArchiveCopy,
+            Duration::from_millis(1),
+        );
+        timing.record(
             ConversionPhase::IndependentTransportReopen,
             Duration::from_millis(2),
+        );
+        timing.record(
+            ConversionPhase::CompleteArchiveHash,
+            Duration::from_millis(1),
         );
         timing.record_skipped(
             ConversionPhase::DurableCasIngestion,
@@ -126,6 +134,7 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.source_artifact_bytes = 5;
         timing.work.source_bytes_hashed = 5;
         timing.work.ccs_output_bytes = 23;
+        timing.work.ccs_output_bytes_hashed = 23;
         timing.work.independent_transport_reopen_ccs_bytes = 23;
         timing.work.complete_archive_hash_bytes = 23;
         timing.work.complete_archive_copy_bytes = 23;
@@ -460,6 +469,14 @@ fn rejects_hot_output_or_cold_work_that_changes_exact_ccs_identity() {
     };
     timing.work.complete_archive_hash_bytes -= 1;
     assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+    else {
+        unreachable!()
+    };
+    timing.work.ccs_output_bytes_hashed -= 1;
+    assert!(validate_report(&report).is_err());
 }
 
 #[test]
@@ -538,6 +555,62 @@ fn rejects_missing_or_duplicate_fused_independent_reopen() {
         error.to_string(),
         "cold benchmark did not record one fused independent reopen into durable CAS"
     );
+}
+
+#[test]
+fn rejects_missing_duplicate_skipped_or_reordered_archive_pipeline_phases() {
+    for omitted in [
+        ConversionPhase::CompleteArchiveCopy,
+        ConversionPhase::CompleteArchiveHash,
+    ] {
+        let mut report = valid_report();
+        let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+        else {
+            unreachable!()
+        };
+        timing.phases.retain(|phase| phase.phase != omitted);
+        assert!(validate_report(&report).is_err());
+    }
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+    else {
+        unreachable!()
+    };
+    timing.record(
+        ConversionPhase::CompleteArchiveCopy,
+        Duration::from_millis(1),
+    );
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+    else {
+        unreachable!()
+    };
+    timing.record_skipped(
+        ConversionPhase::CompleteArchiveHash,
+        "fixture contradicts executed canonical hash",
+    );
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+    else {
+        unreachable!()
+    };
+    let copy = timing
+        .phases
+        .iter()
+        .position(|phase| phase.phase == ConversionPhase::CompleteArchiveCopy)
+        .unwrap();
+    let hash = timing
+        .phases
+        .iter()
+        .position(|phase| phase.phase == ConversionPhase::CompleteArchiveHash)
+        .unwrap();
+    timing.phases.swap(copy, hash);
+    assert!(validate_report(&report).is_err());
 }
 
 #[test]

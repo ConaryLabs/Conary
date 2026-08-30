@@ -79,4 +79,4 @@ pub use target_contract::{
 pub use transport::{
     CCS_TRANSPORT_SCHEMA_V1, CcsTransportEnvelopeV1, CcsTransportObjectV1, PreparedCcsTransport,
 };
-pub use verify::{TrustPolicy, VerifiedCcsArchive};
+pub use verify::{TrustPolicy, VerifiedArchiveIdentity, VerifiedCcsArchive};

@@ -371,12 +371,38 @@ fn persistence_failure_rolls_back_record_changeset_and_artifact_for_all_formats(
     }
 }
 
+#[test]
+fn existing_exact_output_finalizes_without_authored_staging_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let (ccs_path, _, _) = publish_lifecycle_conversion_inner(
+        temp.path(),
+        PackageFormatType::Rpm,
+        VersionScheme::Rpm,
+        "rpm",
+        "1.2.3",
+        true,
+    );
+
+    assert!(ccs_path.exists());
+}
+
 fn publish_lifecycle_conversion(
     case_dir: &Path,
     format: PackageFormatType,
     scheme: VersionScheme,
     extension: &str,
     version: &str,
+) -> (PathBuf, String, String) {
+    publish_lifecycle_conversion_inner(case_dir, format, scheme, extension, version, false)
+}
+
+fn publish_lifecycle_conversion_inner(
+    case_dir: &Path,
+    format: PackageFormatType,
+    scheme: VersionScheme,
+    extension: &str,
+    version: &str,
+    existing_output_without_authored_staging: bool,
 ) -> (PathBuf, String, String) {
     std::fs::create_dir_all(case_dir).unwrap();
     let package_path = case_dir.join(format!("exact-lifecycle-{version}.{extension}"));
@@ -438,6 +464,17 @@ fn publish_lifecycle_conversion(
             ),
         },
     };
+    if existing_output_without_authored_staging {
+        let output_dir =
+            conary_core::db::paths::db_dir(db_path.to_str().unwrap()).join("packages/adopted");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let final_path =
+            adopted_ccs_output_path(&output_dir, &plan, converted.original_checksum()).unwrap();
+        let authored_path = converted.unverified_ccs_path().to_path_buf();
+        std::fs::copy(&authored_path, final_path).unwrap();
+        std::fs::remove_file(&authored_path).unwrap();
+        assert!(!authored_path.exists());
+    }
     publish_conversion(&mut conn, db_path.to_str().unwrap(), &plan, converted).unwrap();
     let record = conary_core::db::models::ConvertedPackage::find_by_trove(&conn, trove_id)
         .unwrap()

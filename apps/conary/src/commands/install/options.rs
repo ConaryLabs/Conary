@@ -145,9 +145,9 @@ pub(crate) fn verify_ccs_package_authority_into_cas(
 /// Finalize one newly authored native conversion against the install caller's
 /// exact envelope authority.
 ///
-/// Unlike path-based CCS verification, this consumes the pending conversion,
-/// so application code cannot accidentally reopen the same authored artifact
-/// before handing it to the existing install verification sink.
+/// Unlike path-based CCS verification, this consumes the pending conversion so
+/// only this selected finalizer can turn it into installation authority. The
+/// unverified path remains available for caller-owned staging before handoff.
 pub(crate) fn verify_pending_ccs_conversion_authority(
     db_path: &str,
     pending: PendingConversionResult,

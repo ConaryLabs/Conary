@@ -214,6 +214,7 @@ pub(crate) fn archive_from_parts(parts: VerifiedArchiveParts) -> Result<Verified
     let payload = payload_from_authority(&authority, &object_sources)?;
     let components = crate::ccs::v3::component_view::components(&authority);
     Ok(VerifiedCcsArchive {
+        archive_identity: None,
         authority,
         signature,
         build_attestation,

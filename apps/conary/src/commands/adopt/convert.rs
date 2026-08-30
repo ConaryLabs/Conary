@@ -865,34 +865,19 @@ fn publish_conversion(
         .join("packages")
         .join("adopted");
     fs::create_dir_all(&output_dir)?;
-    let checksum = exact_sha256(converted.original_checksum())?;
-    let file_name = conary_core::filesystem::path::sanitize_filename(&format!(
-        "{}-{}-{}-v{}-{}.ccs",
-        plan.identity.name(),
-        plan.identity.version(),
-        plan.identity.architecture(),
-        conary_core::db::models::CONVERSION_VERSION,
-        &checksum[..16]
-    ))?;
-    let final_path = output_dir.join(file_name);
-    let mut staged = NamedTempFile::new_in(&output_dir)?;
-    let mut input = File::open(converted.unverified_ccs_path())?;
-    std::io::copy(&mut input, staged.as_file_mut())?;
-    staged.as_file_mut().flush()?;
-    staged.as_file().sync_all()?;
+    let final_path = adopted_ccs_output_path(&output_dir, plan, converted.original_checksum())?;
 
     let (published_new, pending_record) = if final_path.exists() {
-        if file_sha256(staged.path())? != file_sha256(&final_path)? {
-            bail!(
-                "refusing to replace different adopted CCS artifact at {}",
-                final_path.display()
-            );
-        }
         let verified = converted
             .verify_staged_copy(&final_path)
             .context("existing adopted CCS output failed verification")?;
         (false, validated_conversion_record(&verified)?)
     } else {
+        let mut staged = NamedTempFile::new_in(&output_dir)?;
+        let mut input = File::open(converted.unverified_ccs_path())?;
+        std::io::copy(&mut input, staged.as_file_mut())?;
+        staged.as_file_mut().flush()?;
+        staged.as_file().sync_all()?;
         let verified = converted.verify_staged_copy(staged.path())?;
         let pending_record = validated_conversion_record(&verified)?;
         staged
@@ -935,6 +920,23 @@ fn publish_conversion(
         return Err(error);
     }
     Ok(())
+}
+
+fn adopted_ccs_output_path(
+    output_dir: &Path,
+    plan: &AdoptedConversionPlan,
+    original_checksum: &str,
+) -> Result<PathBuf> {
+    let checksum = exact_sha256(original_checksum)?;
+    let file_name = conary_core::filesystem::path::sanitize_filename(&format!(
+        "{}-{}-{}-v{}-{}.ccs",
+        plan.identity.name(),
+        plan.identity.version(),
+        plan.identity.architecture(),
+        conary_core::db::models::CONVERSION_VERSION,
+        &checksum[..16]
+    ))?;
+    Ok(output_dir.join(file_name))
 }
 
 fn validated_conversion_record(

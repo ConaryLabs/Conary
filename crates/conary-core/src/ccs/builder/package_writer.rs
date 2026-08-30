@@ -5,6 +5,8 @@
 //! `builder.rs` focuses on scanning and assembling build state; this module
 //! owns the final archive-writing and manifest serialization steps.
 
+mod output_identity;
+
 use super::BuildResult;
 use anyhow::{Context, Result};
 use std::fs;
@@ -33,7 +35,9 @@ pub struct CcsPackageWriteMetrics {
     pub temporary_object_shard_syncs: u64,
     pub archive_members_traversed: u64,
     pub archive_input_bytes: u64,
+    pub ccs_output_sha256: String,
     pub ccs_output_bytes: u64,
+    pub ccs_output_bytes_hashed: u64,
     pub maximum_retained_staging_bytes: u64,
 }
 
@@ -304,18 +308,21 @@ fn write_v3_ccs_package_with_open<'a>(
 
     let archive_started = Instant::now();
     let output_file = fs::File::create(output_path)?;
-    let encoder = GzEncoder::new(output_file, Compression::default());
+    let identity_writer = output_identity::ArchiveIdentityWriter::new(output_file);
+    let encoder = GzEncoder::new(identity_writer, Compression::default());
     let mut archive = Builder::new(encoder);
     let timestamp = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1_704_067_200);
     let traversal = append_dir_with_mtime(&mut archive, temp_dir.path(), "", timestamp)?;
-    archive.into_inner()?.finish()?;
+    let identity = archive.into_inner()?.finish()?.finish();
     metrics.archive_assembly_and_gzip = archive_started.elapsed();
     metrics.archive_members_traversed = traversal.members;
     metrics.archive_input_bytes = traversal.input_bytes;
-    metrics.ccs_output_bytes = fs::metadata(output_path)?.len();
+    metrics.ccs_output_sha256 = identity.sha256;
+    metrics.ccs_output_bytes = identity.bytes;
+    metrics.ccs_output_bytes_hashed = identity.bytes;
     metrics.maximum_retained_staging_bytes = checked_add(
         metrics.archive_input_bytes,
         metrics.ccs_output_bytes,

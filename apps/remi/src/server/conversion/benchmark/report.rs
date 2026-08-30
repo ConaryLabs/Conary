@@ -34,11 +34,11 @@ const HOT_SKIPPED_PHASES: [ConversionPhase; 18] = [
     ConversionPhase::PayloadObjectEmission,
     ConversionPhase::ArchiveAssemblyAndGzip,
     ConversionPhase::NativeProvenanceProjection,
+    ConversionPhase::CompleteArchiveCopy,
     ConversionPhase::IndependentTransportReopen,
+    ConversionPhase::CompleteArchiveHash,
     ConversionPhase::DurableCasIngestion,
     ConversionPhase::R2WriteThrough,
-    ConversionPhase::CompleteArchiveHash,
-    ConversionPhase::CompleteArchiveCopy,
     ConversionPhase::DatabasePersistence,
 ];
 
@@ -319,6 +319,24 @@ fn validate_cold_fused_cas(
         fused_phase.duration_ms <= timing.total_ms,
         "cold benchmark fused independent reopen duration exceeds timing total"
     );
+    let archive_pipeline = [
+        ConversionPhase::CompleteArchiveCopy,
+        ConversionPhase::IndependentTransportReopen,
+        ConversionPhase::CompleteArchiveHash,
+    ];
+    ensure!(
+        timing
+            .phases
+            .iter()
+            .filter(|phase| archive_pipeline.contains(&phase.phase))
+            .map(|phase| phase.phase)
+            .eq(archive_pipeline)
+            && !timing
+                .skipped_phases
+                .iter()
+                .any(|phase| archive_pipeline.contains(&phase.phase)),
+        "cold benchmark archive copy, fused reopen, and canonical hash phases are not one ordered executed pipeline"
+    );
     Ok(())
 }
 
@@ -351,6 +369,7 @@ fn validate_successful_repetition(
         let work = &timing.work;
         ensure!(
             work.ccs_output_bytes == output.ccs_size_bytes
+                && work.ccs_output_bytes_hashed == output.ccs_size_bytes
                 && work.independent_transport_reopen_ccs_bytes == output.ccs_size_bytes
                 && work.complete_archive_hash_bytes == output.ccs_size_bytes
                 && work.complete_archive_copy_bytes == output.ccs_size_bytes,

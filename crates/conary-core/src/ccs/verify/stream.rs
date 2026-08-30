@@ -2,6 +2,7 @@
 
 //! Signature-first streaming verification of trusted CCS archives.
 
+use super::archive_identity::ArchiveDecoder;
 use super::{PackageSignature, TrustPolicy, VerifyError};
 use crate::ccs::archive_layout::is_lower_hex;
 use crate::ccs::budget::{AuthorityCensus, BudgetDimension, CCS_BUDGET};
@@ -9,23 +10,17 @@ use crate::ccs::builder::ComponentData;
 use crate::ccs::v3::schema::AuthorityDocumentV3;
 use crate::packages::payload::{PackagePayload, ReopenablePayload};
 use anyhow::{Context, Result};
-use flate2::bufread::GzDecoder;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::Read;
 use std::path::{Component, Path};
-use tar::Archive;
 
 #[cfg(test)]
 use super::content::expected_objects;
 #[cfg(test)]
 use crate::ccs::v3::schema::{FileContentLayoutV3, PackageKindV3};
 
-const EXPECTED_TAR_TRAILING_ZERO_BYTES: u64 = 512;
-
-type ArchiveDecoder = GzDecoder<BufReader<File>>;
-
 pub(super) struct StreamVerifiedArchive {
+    pub archive_identity: super::VerifiedArchiveIdentity,
     pub authority: AuthorityDocumentV3,
     pub signature: PackageSignature,
     pub build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
@@ -69,9 +64,7 @@ pub(super) fn verify_archive<'a>(
     policy: &TrustPolicy,
     destination: super::object_sink::ObjectDestination<'a>,
 ) -> Result<StreamVerifiedArchive> {
-    let file = File::open(path).with_context(|| format!("open CCS package {}", path.display()))?;
-    let decoder = GzDecoder::new(BufReader::new(file));
-    let mut archive = Archive::new(decoder);
+    let mut archive = super::archive_identity::open(path)?;
     let mut metadata = MetadataState::default();
     let mut authenticated = None;
     let mut object_sink = None;
@@ -116,7 +109,7 @@ pub(super) fn verify_archive<'a>(
         }
         read_metadata_entry(&mut entry, &path, &mut metadata)?;
     }
-    finish_archive(archive)?;
+    let archive_identity = super::archive_identity::finish(archive)?;
 
     let authenticated = match authenticated {
         Some(value) => value,
@@ -162,6 +155,7 @@ pub(super) fn verify_archive<'a>(
         foreign_conversion_boundary: metadata.conversion_boundary,
     };
     Ok(StreamVerifiedArchive {
+        archive_identity,
         authority: authenticated.authority,
         signature: authenticated.signature,
         build_attestation: authenticated.build_attestation,
@@ -476,50 +470,6 @@ fn canonical_path(path: &str) -> Result<String> {
     Ok(normalized.to_string())
 }
 
-fn finish_archive(archive: Archive<ArchiveDecoder>) -> Result<()> {
-    let mut decoder = archive.into_inner();
-    let mut trailing = 0_u64;
-    let mut buffer = [0_u8; 512];
-    loop {
-        let read = decoder
-            .read(&mut buffer)
-            .context("finish CCS gzip member and verify its CRC/footer")?;
-        if read == 0 {
-            break;
-        }
-        if buffer[..read].iter().any(|byte| *byte != 0) {
-            return Err(VerifyError::PackageError(
-                "CCS archive carries non-zero data after the canonical tar terminator".to_string(),
-            )
-            .into());
-        }
-        trailing = trailing
-            .checked_add(read as u64)
-            .context("CCS tar-padding arithmetic overflow")?;
-        if trailing > EXPECTED_TAR_TRAILING_ZERO_BYTES {
-            return Err(VerifyError::PackageError(format!(
-                "CCS tar terminator/padding exceeds {EXPECTED_TAR_TRAILING_ZERO_BYTES} bytes"
-            ))
-            .into());
-        }
-    }
-    if trailing != EXPECTED_TAR_TRAILING_ZERO_BYTES {
-        return Err(VerifyError::PackageError(format!(
-            "CCS tar terminator/padding has noncanonical length {trailing}; expected {EXPECTED_TAR_TRAILING_ZERO_BYTES}"
-        ))
-        .into());
-    }
-    let mut compressed = decoder.into_inner();
-    let mut extra = [0_u8; 1];
-    if compressed.read(&mut extra)? != 0 {
-        return Err(VerifyError::PackageError(
-            "CCS package carries trailing compressed bytes or a second gzip member".to_string(),
-        )
-        .into());
-    }
-    Ok(())
-}
-
 fn require_known_directory(path: &str) -> Result<()> {
     if crate::ccs::archive_layout::is_known_directory(path) {
         return Ok(());
@@ -535,8 +485,9 @@ mod tests {
     use flate2::Compression;
     use flate2::read::GzDecoder as ReadGzDecoder;
     use flate2::write::GzEncoder;
+    use std::fs::File;
     use std::io::Write;
-    use tar::{Builder, EntryType, Header};
+    use tar::{Archive, Builder, EntryType, Header};
 
     #[derive(Clone)]
     struct TestEntry {

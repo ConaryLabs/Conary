@@ -341,15 +341,20 @@ source checksum remain exact.
 It emits `PendingConversionResult`, whose archive path is explicitly
 unverified. The pending value must be consumed by exactly one caller-selected
 finalizer before it becomes `VerifiedConversionResult`: `verify` uses a
-bounded spool and `verify_into_cas` uses one permanent SHA-256 CAS batch. Both
-require a caller-supplied trust policy; the key recorded by the authoring result
-is evidence and is never promoted into an external trust anchor. The verified
-result owns the `VerifiedCcsArchive` capability, and publication, persistence,
-installation, or successful CLI output cannot be derived from the pending
-type. Adoption uses `verify_staged_copy` after copying and synchronizing the
-artifact in its durable destination directory; that finalizer additionally
-requires the staged archive's authenticated v3 authority identity to equal the
-exact final authority retained by the pending result.
+bounded spool and `verify_into_cas` uses one permanent SHA-256 CAS batch;
+same-directory publication can select `verify_staged_copy_into_cas`. The
+writer hashes every compressed output byte below gzip during the existing
+write and binds that exact hash and length into the pending value without an
+output reread. Every finalizer requires the verified archive identity,
+canonical authority, and exact signer to equal the authored result under the
+caller's trust policy. The authoring key remains evidence and is never promoted
+into an external trust anchor. The verified result owns both the
+`VerifiedCcsArchive` capability and a nonoptional physical archive identity;
+transport-reconstructed capabilities truthfully carry no compressed-archive
+identity. Publication, persistence, installation, or successful CLI output
+cannot be derived from the pending type. Adoption uses `verify_staged_copy`
+after copying and synchronizing the artifact in its durable destination
+directory.
 
 `convert/scriptlet_bundle/{builder,entries,format_metadata,native_contracts}.rs`
 projects package-parser ABI entries into the durable bundle, and

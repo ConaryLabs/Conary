@@ -449,6 +449,7 @@ mod tests {
             .unwrap()
             .verify_object_set(set)
             .unwrap();
+        assert_eq!(transported.archive_identity(), None);
         let reconstructed = temp.path().join("reconstructed.ccs");
         write_verified_transport_archive(&transported, &reconstructed).unwrap();
 

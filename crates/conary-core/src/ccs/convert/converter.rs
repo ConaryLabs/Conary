@@ -71,6 +71,13 @@ impl Default for ConversionOptions {
 pub struct PendingConversionResult {
     result: ConversionResult,
     authority_sha256: String,
+    authored_archive_identity: AuthoredArchiveIdentity,
+}
+
+#[derive(Debug)]
+struct AuthoredArchiveIdentity {
+    sha256: String,
+    bytes: u64,
 }
 
 impl PendingConversionResult {
@@ -97,14 +104,30 @@ impl PendingConversionResult {
     /// Finalize a caller-owned copy in same-directory staging.
     ///
     /// Publication workflows copy pending bytes into their own staging root
-    /// before verification and atomic persistence. The verified copy must carry
-    /// the exact authored authority or it cannot finalize this conversion.
+    /// before verification and atomic persistence. The verified copy must have
+    /// the exact authored archive identity, authority, and signer or it cannot
+    /// finalize this conversion.
     pub fn verify_staged_copy(
         self,
         staged_path: &Path,
         policy: &crate::ccs::verify::TrustPolicy,
     ) -> anyhow::Result<VerifiedConversionResult> {
         let verification = crate::ccs::verify::verify_package(staged_path, policy)?;
+        self.finalize(staged_path.to_path_buf(), verification)
+    }
+
+    /// Finalize a caller-owned staged copy into one permanent SHA-256 CAS.
+    ///
+    /// This is the permanent-CAS counterpart to [`Self::verify_staged_copy`]:
+    /// the caller keeps authority over the staged path while verification
+    /// commits its payload objects exactly once into the supplied CAS.
+    pub fn verify_staged_copy_into_cas(
+        self,
+        staged_path: &Path,
+        policy: &crate::ccs::verify::TrustPolicy,
+        cas: &crate::filesystem::CasStore,
+    ) -> anyhow::Result<VerifiedConversionResult> {
+        let verification = crate::ccs::verify::verify_package_into_cas(staged_path, policy, cas)?;
         self.finalize(staged_path.to_path_buf(), verification)
     }
 
@@ -124,15 +147,30 @@ impl PendingConversionResult {
         verified_path: PathBuf,
         verification: crate::ccs::verify::VerifiedCcsArchive,
     ) -> anyhow::Result<VerifiedConversionResult> {
+        let archive_identity = verification.archive_identity().cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "pending native conversion finalization requires exact verified archive identity"
+            )
+        })?;
         let verified_authority_sha256 = crate::hash::sha256(&verification.authority().to_cbor()?);
         anyhow::ensure!(
             verified_authority_sha256 == self.authority_sha256,
             "verified CCS authority differs from the pending native conversion"
         );
+        anyhow::ensure!(
+            verification.signature().public_key == self.result.signing_public_key,
+            "verified CCS signer differs from the pending native conversion authoring key"
+        );
+        anyhow::ensure!(
+            archive_identity.sha256() == self.authored_archive_identity.sha256.as_str()
+                && archive_identity.bytes() == self.authored_archive_identity.bytes,
+            "verified CCS archive identity differs from the authored native conversion output"
+        );
         self.result.package_path = verified_path;
         Ok(VerifiedConversionResult {
             result: self.result,
             verification,
+            archive_identity,
         })
     }
 }
@@ -167,10 +205,11 @@ pub struct ConversionResult {
 pub struct VerifiedConversionResult {
     result: ConversionResult,
     verification: crate::ccs::verify::VerifiedCcsArchive,
+    archive_identity: crate::ccs::verify::VerifiedArchiveIdentity,
 }
 
 impl VerifiedConversionResult {
-    /// Verified conversion metadata and authored archive path.
+    /// Verified conversion metadata and the exact path selected by finalization.
     pub fn conversion(&self) -> &ConversionResult {
         &self.result
     }
@@ -180,10 +219,21 @@ impl VerifiedConversionResult {
         &self.verification
     }
 
-    /// Separate the verified metadata and archive capability for consumers
-    /// that must retain them in different ownership structures.
-    pub fn into_parts(self) -> (ConversionResult, crate::ccs::verify::VerifiedCcsArchive) {
-        (self.result, self.verification)
+    /// Exact compressed archive identity from the selected finalizer pass.
+    pub fn archive_identity(&self) -> &crate::ccs::verify::VerifiedArchiveIdentity {
+        &self.archive_identity
+    }
+
+    /// Separate the verified metadata, archive capability, and exact compressed
+    /// archive identity for consumers that retain them independently.
+    pub fn into_parts(
+        self,
+    ) -> (
+        ConversionResult,
+        crate::ccs::verify::VerifiedCcsArchive,
+        crate::ccs::verify::VerifiedArchiveIdentity,
+    ) {
+        (self.result, self.verification, self.archive_identity)
     }
 }
 
@@ -490,6 +540,10 @@ impl NativePackageConverter {
                 e
             ))
         })?;
+        let authored_archive_identity = AuthoredArchiveIdentity {
+            sha256: ccs_write.ccs_output_sha256.clone(),
+            bytes: ccs_write.ccs_output_bytes,
+        };
         // Step 6: Extract source-package provenance information.
         let native_provenance_started = Instant::now();
         let artifact_exists = metadata.package_path.try_exists().map_err(|error| {
@@ -527,6 +581,7 @@ impl NativePackageConverter {
 
         Ok(PendingConversionResult {
             authority_sha256,
+            authored_archive_identity,
             result: ConversionResult {
                 build_result,
                 package_path,

@@ -326,6 +326,13 @@ fn passive_test_converter(output_dir: &std::path::Path) -> TestConverter {
     let signing_key = std::sync::Arc::new(
         crate::ccs::signing::SigningKeyPair::generate().with_key_id("converter-test"),
     );
+    test_converter_with_signing_key(output_dir, signing_key)
+}
+
+fn test_converter_with_signing_key(
+    output_dir: &std::path::Path,
+    signing_key: std::sync::Arc<crate::ccs::signing::SigningKeyPair>,
+) -> TestConverter {
     let policy = crate::ccs::verify::TrustPolicy::strict(vec![signing_key.public_key_base64()]);
     TestConverter {
         converter: NativePackageConverter::new(ConversionOptions {
@@ -334,6 +341,37 @@ fn passive_test_converter(output_dir: &std::path::Path) -> TestConverter {
         .with_signing_key(signing_key),
         policy,
     }
+}
+
+fn repack_ccs_at_gzip_level_zero(source: &std::path::Path, destination: &std::path::Path) {
+    use std::io::Read;
+
+    let decoder = flate2::read::GzDecoder::new(std::fs::File::open(source).unwrap());
+    let mut source_archive = tar::Archive::new(decoder);
+    let entries = source_archive
+        .entries()
+        .unwrap()
+        .map(|entry| {
+            let mut entry = entry.unwrap();
+            let header = entry.header().clone();
+            let path = entry.path().unwrap().into_owned();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            (header, path, bytes)
+        })
+        .collect::<Vec<_>>();
+
+    let encoder = flate2::write::GzEncoder::new(
+        std::fs::File::create(destination).unwrap(),
+        flate2::Compression::none(),
+    );
+    let mut destination_archive = tar::Builder::new(encoder);
+    for (mut header, path, bytes) in entries {
+        destination_archive
+            .append_data(&mut header, path, bytes.as_slice())
+            .unwrap();
+    }
+    destination_archive.into_inner().unwrap().finish().unwrap();
 }
 
 #[test]
@@ -448,6 +486,122 @@ fn pending_conversion_rejects_another_valid_archive_from_the_same_trusted_key() 
         format!("{error:#}").contains("differs from the pending native conversion"),
         "{error:#}"
     );
+}
+
+#[test]
+fn pending_conversion_rejects_same_authority_resigned_by_another_trusted_key() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let authoring_dir = temp_dir.path().join("authoring");
+    let resigned_dir = temp_dir.path().join("resigned");
+    let authoring_key = std::sync::Arc::new(
+        crate::ccs::signing::SigningKeyPair::generate().with_key_id("authoring"),
+    );
+    let resigning_key = std::sync::Arc::new(
+        crate::ccs::signing::SigningKeyPair::generate().with_key_id("resigning"),
+    );
+    let authoring = test_converter_with_signing_key(&authoring_dir, authoring_key.clone());
+    let resigning = test_converter_with_signing_key(&resigned_dir, resigning_key.clone());
+    let metadata = make_test_metadata();
+    let payload =
+        crate::packages::PackagePayload::from_extracted_in_memory(make_test_files()).unwrap();
+    let checksum = crate::hash::Hash::parse_prefixed(
+        "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    )
+    .unwrap();
+    let pending = authoring
+        .author_payload(&metadata, payload.files(), "rpm", &checksum)
+        .unwrap();
+    let resigned = resigning
+        .author_payload(&metadata, payload.files(), "rpm", &checksum)
+        .unwrap();
+    let resigned_path = resigned.unverified_package_path().to_path_buf();
+    let policy = crate::ccs::verify::TrustPolicy::strict(vec![
+        authoring_key.public_key_base64(),
+        resigning_key.public_key_base64(),
+    ]);
+
+    let error = pending
+        .verify_staged_copy(&resigned_path, &policy)
+        .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("signer differs from the pending native conversion"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn pending_conversion_rejects_a_same_authority_same_signer_canonical_repack() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let converter = passive_test_converter(&temp_dir.path().join("authored"));
+    let metadata = make_test_metadata();
+    let payload =
+        crate::packages::PackagePayload::from_extracted_in_memory(make_test_files()).unwrap();
+    let checksum = crate::hash::Hash::parse_prefixed(
+        "sha256:abababababababababababababababababababababababababababababababab",
+    )
+    .unwrap();
+    let pending = converter
+        .author_payload(&metadata, payload.files(), "rpm", &checksum)
+        .unwrap();
+    let authored_path = pending.unverified_package_path().to_path_buf();
+    let repacked_path = temp_dir.path().join("repacked.ccs");
+    repack_ccs_at_gzip_level_zero(&authored_path, &repacked_path);
+
+    let authored = crate::ccs::verify::verify_package(&authored_path, &converter.policy).unwrap();
+    let repacked = crate::ccs::verify::verify_package(&repacked_path, &converter.policy).unwrap();
+    assert_eq!(repacked.authority(), authored.authority());
+    assert_eq!(repacked.signature(), authored.signature());
+    assert_ne!(repacked.archive_identity(), authored.archive_identity());
+    drop((authored, repacked));
+
+    let error = pending
+        .verify_staged_copy(&repacked_path, &converter.policy)
+        .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("archive identity differs from the authored"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn staged_copy_finalizer_verifies_once_into_the_supplied_permanent_cas() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let converter = passive_test_converter(&temp_dir.path().join("authored"));
+    let metadata = make_test_metadata();
+    let payload =
+        crate::packages::PackagePayload::from_extracted_in_memory(make_test_files()).unwrap();
+    let checksum = crate::hash::Hash::parse_prefixed(
+        "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    .unwrap();
+    let pending = converter
+        .author_payload(&metadata, payload.files(), "rpm", &checksum)
+        .unwrap();
+    let staged_path = temp_dir.path().join("publication").join("staged.ccs");
+    std::fs::create_dir_all(staged_path.parent().unwrap()).unwrap();
+    std::fs::copy(pending.unverified_package_path(), &staged_path).unwrap();
+    let staged_bytes = std::fs::read(&staged_path).unwrap();
+    let cas = crate::filesystem::CasStore::new(temp_dir.path().join("objects")).unwrap();
+
+    let verified = pending
+        .verify_staged_copy_into_cas(&staged_path, &converter.policy, &cas)
+        .unwrap();
+
+    assert_eq!(verified.conversion().package_path, staged_path);
+    assert_eq!(
+        verified.archive_identity().sha256(),
+        crate::hash::sha256(&staged_bytes)
+    );
+    assert_eq!(
+        verified.archive_identity().bytes(),
+        staged_bytes.len() as u64
+    );
+    let metrics = verified.verification().verified_object_metrics().unwrap();
+    assert_eq!(metrics.misses, 1);
+    assert_eq!(metrics.hits, 0);
+    assert!(metrics.persistent_bytes_written > 0);
 }
 
 #[test]
