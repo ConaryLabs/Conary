@@ -210,8 +210,8 @@ while (( $# > 0 )); do
 done
 [[ -n "$work_root" && ! -e "$work_root" ]]
 mkdir -m 0700 "$work_root"
-raw="${work_root}/conversion-benchmark-v6.json"
-public="${work_root}/conversion-benchmark-public-v4.json"
+raw="${work_root}/conversion-benchmark-v7.json"
+public="${work_root}/conversion-benchmark-public-v5.json"
 printf '%s\n' '{"schema_version":6}' >"$raw"
 if [[ "${CONARY_FAKE_BAD_RAW_SCHEMA:-0}" == "1" ]]; then
     printf '%s\n' '{"schema_version":5}' >"$raw"
@@ -902,8 +902,8 @@ test_conversion_benchmark_uses_fixed_paths_arguments_and_service_sequence() {
         run_valid_conversion_benchmark "$fake_root" "$run_id")"
     transport="/tmp/remi-conversion-benchmark-${run_id}.json"
     work_root="$fake_root/work/remi-conversion-benchmarks/$run_id/work"
-    raw="$work_root/conversion-benchmark-v6.json"
-    public="$work_root/conversion-benchmark-public-v4.json"
+    raw="$work_root/conversion-benchmark-v7.json"
+    public="$work_root/conversion-benchmark-public-v5.json"
     bin_sha256="$(sha256sum "$fake_root/usr/local/bin/remi" | cut -d ' ' -f 1)"
     source="/tmp/remi-conversion-source-${run_id}.native"
     source_sha256="$(sha256sum "$source" | cut -d ' ' -f 1)"

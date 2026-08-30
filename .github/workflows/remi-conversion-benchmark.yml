@@ -866,6 +866,11 @@ jobs:
               def work_shape:
                 (keys | sort) == [
                   "admitted_local_bytes",
+                  "archive_compression_block_bytes",
+                  "archive_compression_blocks",
+                  "archive_compression_buffer_ceiling_bytes",
+                  "archive_compression_input_bytes",
+                  "archive_compression_workers",
                   "archive_input_bytes",
                   "archive_members_traversed",
                   "cas_canonical_bytes_reread",
@@ -1000,10 +1005,10 @@ jobs:
                 "setup",
                 "subject"
               ]
-              and .schema_version == 4
+              and .schema_version == 5
               and (.raw_report | keys | sort)
                 == ["schema_version", "sha256", "size_bytes"]
-              and .raw_report.schema_version == 6
+              and .raw_report.schema_version == 7
               and (.raw_report.sha256 | sha256)
               and (.raw_report.size_bytes | type == "number")
               and .raw_report.size_bytes > 0
@@ -1127,6 +1132,16 @@ jobs:
                 and $work.staged_object_canonical_bytes_reread == 0
                 and $work.staged_object_file_syncs == 0
                 and $work.staged_object_shard_syncs == 0
+                and $work.archive_compression_input_bytes >= $work.archive_input_bytes
+                and $work.archive_compression_workers > 0
+                and $work.archive_compression_workers <= 64
+                and $work.archive_compression_block_bytes == 1048576
+                and $work.archive_compression_blocks
+                  == (($work.archive_compression_input_bytes + 1048575) / 1048576 | floor)
+                and $work.archive_compression_buffer_ceiling_bytes
+                  == (1048576
+                    + (2 * $work.archive_compression_workers + 1)
+                      * (1048576 + 1048576 + 104857 + 128))
                 and (if $profile == "fedora-44" then
                   $work.native_payload_files_spooled > 0
                   and $work.native_payload_bytes_spooled > 0
@@ -1204,7 +1219,7 @@ jobs:
               exit 1
           }
 
-          cp -- "$local_transport" remi-conversion-benchmark-public-v4.json
+          cp -- "$local_transport" remi-conversion-benchmark-public-v5.json
           {
             echo "result=success"
             echo "benchmark_id=$benchmark_id"
@@ -1231,7 +1246,7 @@ jobs:
         with:
           name: remi-conversion-benchmark-${{ inputs.deployment_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            remi-conversion-benchmark-public-v4.json
+            remi-conversion-benchmark-public-v5.json
             remi-conversion-source-verification-v1.json
             remi-deployment-inspection.json
             remi-candidate-manifest.json
@@ -1272,7 +1287,7 @@ jobs:
               | "- iteration \(.iteration) `\(.cache_state)`: "
                 + "conversion core \(.views.conversion_core.duration_ms) ms; "
                 + "end to end \(.views.end_to_end.duration_ms) ms"' \
-              remi-conversion-benchmark-public-v4.json
+              remi-conversion-benchmark-public-v5.json
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail closed on unsuccessful benchmark result

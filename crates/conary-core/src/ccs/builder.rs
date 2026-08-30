@@ -25,9 +25,9 @@ mod source;
 
 pub(crate) use package_writer::write_v3_ccs_package_from_prepared_with_metrics;
 pub use package_writer::{
-    CcsPackageWriteMetrics, print_build_summary, write_signed_current_ccs_package,
-    write_v3_ccs_package_from_bounded_memory_for_tests, write_v3_ccs_package_from_sources,
-    write_v3_ccs_package_from_sources_with_metrics,
+    CcsArchiveCompression, CcsPackageWriteMetrics, print_build_summary,
+    write_signed_current_ccs_package, write_v3_ccs_package_from_bounded_memory_for_tests,
+    write_v3_ccs_package_from_sources, write_v3_ccs_package_from_sources_with_metrics,
 };
 pub(crate) use payload_preparation::{PayloadPreparationMetrics, PreparedPayloadObjectSet};
 

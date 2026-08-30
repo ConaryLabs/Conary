@@ -993,8 +993,8 @@ benchmark_remi_conversion() {
     staged_source="/tmp/remi-conversion-source-${run_id}.native"
     trusted_config="${run_root}/remi.toml"
     trusted_source="${run_root}/source.native"
-    raw_report="${work_root}/conversion-benchmark-v6.json"
-    public_sidecar="${work_root}/conversion-benchmark-public-v4.json"
+    raw_report="${work_root}/conversion-benchmark-v7.json"
+    public_sidecar="${work_root}/conversion-benchmark-public-v5.json"
     transport="/tmp/remi-conversion-benchmark-${run_id}.json"
 
     BENCHMARK_FAILURE_STAGE=binary-config-authority

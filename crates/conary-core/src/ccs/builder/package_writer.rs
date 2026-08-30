@@ -12,6 +12,98 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Explicit resource budget for deterministic CCS archive compression.
+///
+/// The block shape is format-independent transport detail, while the worker
+/// count controls only how many fixed blocks may be compressed concurrently.
+/// Ordered output makes archive bytes independent of worker scheduling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CcsArchiveCompression {
+    workers: usize,
+}
+
+impl CcsArchiveCompression {
+    /// Largest admitted worker allocation for one archive emission.
+    pub const MAX_WORKERS: usize = 64;
+    /// Fixed independent DEFLATE block size.
+    pub const BLOCK_BYTES: usize = 1024 * 1024;
+
+    /// Construct one checked per-archive worker budget.
+    pub fn with_workers(workers: usize) -> Result<Self> {
+        anyhow::ensure!(
+            workers > 0,
+            "CCS archive compression requires at least one worker"
+        );
+        anyhow::ensure!(
+            workers <= Self::MAX_WORKERS,
+            "CCS archive compression worker count {workers} exceeds limit {}",
+            Self::MAX_WORKERS
+        );
+        Ok(Self { workers })
+    }
+
+    /// Allocate each concurrent conversion an equal whole-core share.
+    pub fn for_concurrent_conversions(
+        logical_parallelism: usize,
+        concurrent_conversions: usize,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            logical_parallelism > 0,
+            "logical parallelism must be greater than zero"
+        );
+        anyhow::ensure!(
+            concurrent_conversions > 0,
+            "concurrent conversion count must be greater than zero"
+        );
+        Self::with_workers(
+            logical_parallelism
+                .checked_div(concurrent_conversions)
+                .unwrap_or(0)
+                .max(1)
+                .min(Self::MAX_WORKERS),
+        )
+    }
+
+    /// Number of concurrent compression workers owned by one archive.
+    pub fn workers(self) -> usize {
+        self.workers
+    }
+
+    /// Conservative ceiling for buffered input and output block bytes.
+    pub fn buffer_ceiling_bytes(self) -> Result<u64> {
+        // The parallel writer admits at most 2W ordered in-flight blocks.
+        // Include the accumulating block and charge each in-flight block for
+        // both input and the compressor's maximum output allocation.
+        let workers = u64::try_from(self.workers).context("compression workers exceed u64")?;
+        let in_flight = workers
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(1))
+            .context("compression in-flight block count overflow")?;
+        let block = Self::BLOCK_BYTES as u64;
+        let compressed = block
+            .checked_add(block / 10)
+            .and_then(|value| value.checked_add(128))
+            .context("compression output block ceiling overflow")?;
+        block
+            .checked_add(
+                in_flight
+                    .checked_mul(
+                        block
+                            .checked_add(compressed)
+                            .context("compression block pair ceiling overflow")?,
+                    )
+                    .context("compression in-flight buffer ceiling overflow")?,
+            )
+            .context("compression buffer ceiling overflow")
+    }
+}
+
+impl Default for CcsArchiveCompression {
+    fn default() -> Self {
+        Self { workers: 1 }
+    }
+}
+
 /// Exact phase and work evidence from one streamed CCS v3 package emission.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CcsPackageWriteMetrics {
@@ -37,6 +129,11 @@ pub struct CcsPackageWriteMetrics {
     pub staged_object_shard_syncs: u64,
     pub archive_members_traversed: u64,
     pub archive_input_bytes: u64,
+    pub archive_compression_input_bytes: u64,
+    pub archive_compression_workers: u64,
+    pub archive_compression_block_bytes: u64,
+    pub archive_compression_blocks: u64,
+    pub archive_compression_buffer_ceiling_bytes: u64,
     pub ccs_output_sha256: String,
     pub ccs_output_bytes: u64,
     pub ccs_output_bytes_hashed: u64,
@@ -179,6 +276,7 @@ pub fn write_v3_ccs_package_from_sources_with_metrics(
         debug_toml,
         build_attestation,
         foreign_conversion_boundary,
+        CcsArchiveCompression::default(),
     )
 }
 
@@ -191,6 +289,7 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
     debug_toml: Option<&str>,
     build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
+    archive_compression: CcsArchiveCompression,
 ) -> Result<CcsPackageWriteMetrics> {
     use crate::ccs::budget::CCS_BUDGET;
     use crate::ccs::v3::schema::PackageKindV3;
@@ -266,11 +365,17 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
         timestamp,
         &controls,
         prepared.inventory(),
+        archive_compression,
         |sha256| prepared.open_object(sha256),
     )?;
     metrics.archive_assembly_and_gzip = archive_started.elapsed();
     metrics.archive_members_traversed = emitted.members;
     metrics.archive_input_bytes = emitted.input_bytes;
+    metrics.archive_compression_input_bytes = emitted.compression_input_bytes;
+    metrics.archive_compression_workers = emitted.compression_workers;
+    metrics.archive_compression_block_bytes = emitted.compression_block_bytes;
+    metrics.archive_compression_blocks = emitted.compression_blocks;
+    metrics.archive_compression_buffer_ceiling_bytes = emitted.compression_buffer_ceiling_bytes;
     metrics.ccs_output_sha256 = emitted.output_sha256;
     metrics.ccs_output_bytes = emitted.output_bytes;
     metrics.ccs_output_bytes_hashed = emitted.output_bytes;

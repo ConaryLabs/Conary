@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-30
-revision: 12
-summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results including one-pass CCS payload preparation
+last_updated: 2026-08-31
+revision: 13
+summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results including one-pass CCS payload preparation and bounded parallel archive compression
 ---
 
 # Performance evidence
@@ -33,7 +33,14 @@ passing the label. Network bytes, CAS work, SQLite statements, durability
 calls, complete-root scans, and internal phase timing remain separate typed
 counters rather than estimates derived from elapsed time.
 
-The current Remi conversion schema-v6 contract treats internal signed-archive
+Schema v7 records the exact CCS compression geometry: tar-stream input bytes,
+compression workers, fixed block bytes, block count, and the checked buffering
+ceiling. Fixed ordered blocks make gzip bytes independent of worker scheduling.
+Remi derives each conversion's worker budget from detected logical parallelism
+and configured conversion concurrency; no environment variable or
+filesystem-specific backend selects archive representation.
+
+The current Remi conversion schema-v7 contract treats internal signed-archive
 authentication and permanent verified-CAS admission as one fused physical
 pass. Its full elapsed time is recorded once in the `timing.phases` entry named
 `independent_transport_reopen`; `durable_cas_ingestion` is skipped because
@@ -56,7 +63,7 @@ Two current reopen fields must not be conflated:
   `conversion_core` or `end_to_end`. The output proof's separate complete CCS
   hash has the same boundary.
 
-Schema v6 retains the schema-v4 deletion of the former converter-owned
+Schema v7 retains the schema-v4 deletion of the former converter-owned
 `immediate_converter_reopen` phase and both
 `immediate_converter_reopen_*` inferred counters. The converter now returns an
 explicitly pending artifact; Remi verifies it once under the profile targets
