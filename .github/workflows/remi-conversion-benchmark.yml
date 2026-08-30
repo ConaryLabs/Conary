@@ -972,8 +972,8 @@ jobs:
                   | select(.phase == "native_archive_parse_and_spool"
                     or .phase == "artifact_identity_and_authority_validation"
                     or .phase == "metadata_lifecycle_and_authority_projection"
-                    or .phase == "payload_derivation_and_object_staging"
                     or .phase == "output_workspace_preparation"
+                    or .phase == "payload_derivation_and_object_staging"
                     or .phase == "control_projection_and_signing"
                     or .phase == "archive_assembly_and_gzip"
                     or .phase == "native_provenance_projection")
@@ -1057,8 +1057,8 @@ jobs:
                 "native_archive_parse_and_spool",
                 "artifact_identity_and_authority_validation",
                 "metadata_lifecycle_and_authority_projection",
-                "payload_derivation_and_object_staging",
                 "output_workspace_preparation",
+                "payload_derivation_and_object_staging",
                 "control_projection_and_signing",
                 "archive_assembly_and_gzip",
                 "native_provenance_projection",
@@ -1173,8 +1173,8 @@ jobs:
                 "native_archive_parse_and_spool",
                 "artifact_identity_and_authority_validation",
                 "metadata_lifecycle_and_authority_projection",
-                "payload_derivation_and_object_staging",
                 "output_workspace_preparation",
+                "payload_derivation_and_object_staging",
                 "control_projection_and_signing",
                 "archive_assembly_and_gzip",
                 "native_provenance_projection",

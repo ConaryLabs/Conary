@@ -154,7 +154,7 @@ REVIEWED_RUN_BLOCK_SHA256 = {
     "Acquire and authenticate exact source bytes":
         "4e8c8e91fb4b79803aed47afc34c1e51034f7e9ccc45a23fd213df924c6d0856",
     "Run through the fixed production helper":
-        "804a6fc56c511847fa73677b57dd8e257bd9022ce1eca869a1dd057e0c042c4e",
+        "a5102bf0567c72ee95c61e47b124605676e760e87fe556030793d7504d245436",
     "Record exact production benchmark evidence":
         "4c7ee68e08e107e896515feac6fa00916fb3c312bc885e3dbc6812bbfd0a811c",
     "Fail closed on unsuccessful benchmark result":

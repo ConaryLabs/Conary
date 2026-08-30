@@ -533,8 +533,8 @@ impl ConversionService {
             ConversionPhase::NativeArchiveParseAndSpool,
             ConversionPhase::ArtifactIdentityAndAuthorityValidation,
             ConversionPhase::MetadataLifecycleAndAuthorityProjection,
-            ConversionPhase::PayloadDerivationAndObjectStaging,
             ConversionPhase::OutputWorkspacePreparation,
+            ConversionPhase::PayloadDerivationAndObjectStaging,
             ConversionPhase::ControlProjectionAndSigning,
             ConversionPhase::ArchiveAssemblyAndGzip,
             ConversionPhase::NativeProvenanceProjection,
@@ -677,15 +677,15 @@ impl ConversionService {
                     .as_millis(),
             },
             ConversionPhaseTiming {
+                phase: ConversionPhase::OutputWorkspacePreparation,
+                duration_ms: metrics.output_workspace_preparation.as_millis(),
+            },
+            ConversionPhaseTiming {
                 phase: ConversionPhase::PayloadDerivationAndObjectStaging,
                 duration_ms: metrics
                     .ccs_write
                     .payload_derivation_and_object_staging
                     .as_millis(),
-            },
-            ConversionPhaseTiming {
-                phase: ConversionPhase::OutputWorkspacePreparation,
-                duration_ms: metrics.output_workspace_preparation.as_millis(),
             },
             ConversionPhaseTiming {
                 phase: ConversionPhase::ControlProjectionAndSigning,
