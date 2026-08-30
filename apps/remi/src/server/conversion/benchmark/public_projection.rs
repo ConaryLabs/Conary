@@ -1,9 +1,9 @@
 // apps/remi/src/server/conversion/benchmark/public_projection.rs
-//! Sanitized, byte-bound projection of one successful schema-v6 benchmark.
+//! Sanitized, byte-bound projection of one successful schema-v7 benchmark.
 
 use super::{
     ConversionBenchmarkAuthority, ConversionBenchmarkOutcome, ConversionBenchmarkOutputProof,
-    ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV6, ConversionBenchmarkSetup,
+    ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV7, ConversionBenchmarkSetup,
     ConversionBenchmarkSubject, ConversionBenchmarkViews, PublishedInode, report::validate_report,
     rollback_failed_publication, sync_parent, validate_sha256,
 };
@@ -19,8 +19,8 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
-pub(super) const PUBLIC_REPORT_FILE_NAME: &str = "conversion-benchmark-public-v4.json";
-const PUBLIC_REPORT_SCHEMA_V4: u32 = 4;
+pub(super) const PUBLIC_REPORT_FILE_NAME: &str = "conversion-benchmark-public-v5.json";
+const PUBLIC_REPORT_SCHEMA_V5: u32 = 5;
 const MAX_REPORT_BYTES: u64 = 64 * 1024 * 1024;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const EXPECTED_ROOT_ROLES: [&str; 10] = [
@@ -98,7 +98,7 @@ struct PublicBenchmarkRepetition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct ConversionBenchmarkPublicReportV4 {
+struct ConversionBenchmarkPublicReportV5 {
     schema_version: u32,
     raw_report: PublicRawReportBinding,
     environment: PublicBenchmarkEnvironment,
@@ -116,18 +116,18 @@ pub(super) fn publish_and_reopen_public_report(raw_path: &Path, public_path: &Pa
     Ok(())
 }
 
-fn read_and_validate_raw_report(path: &Path) -> Result<(Vec<u8>, ConversionBenchmarkReportV6)> {
+fn read_and_validate_raw_report(path: &Path) -> Result<(Vec<u8>, ConversionBenchmarkReportV7)> {
     let bytes = read_regular_nofollow(path, "raw conversion benchmark")?;
-    let report: ConversionBenchmarkReportV6 = serde_json::from_slice(&bytes)
-        .context("strictly decode raw conversion benchmark schema v6")?;
-    validate_report(&report).context("validate raw conversion benchmark schema v6")?;
+    let report: ConversionBenchmarkReportV7 = serde_json::from_slice(&bytes)
+        .context("strictly decode raw conversion benchmark schema v7")?;
+    validate_report(&report).context("validate raw conversion benchmark schema v7")?;
     Ok((bytes, report))
 }
 
 fn project_report(
     raw_bytes: &[u8],
-    raw: &ConversionBenchmarkReportV6,
-) -> Result<ConversionBenchmarkPublicReportV4> {
+    raw: &ConversionBenchmarkReportV7,
+) -> Result<ConversionBenchmarkPublicReportV5> {
     ensure!(
         !raw.environment.source_dirty,
         "dirty source identity cannot be published as public benchmark evidence"
@@ -186,8 +186,8 @@ fn project_report(
         .collect::<Result<Vec<_>>>()?;
 
     let raw_size = u64::try_from(raw_bytes.len()).context("raw report size exceeds u64")?;
-    Ok(ConversionBenchmarkPublicReportV4 {
-        schema_version: PUBLIC_REPORT_SCHEMA_V4,
+    Ok(ConversionBenchmarkPublicReportV5 {
+        schema_version: PUBLIC_REPORT_SCHEMA_V5,
         raw_report: PublicRawReportBinding {
             schema_version: raw.schema_version,
             sha256: conary_core::hash::sha256(raw_bytes),
@@ -222,15 +222,15 @@ fn project_report(
     })
 }
 
-fn validate_public_report(report: &ConversionBenchmarkPublicReportV4) -> Result<()> {
+fn validate_public_report(report: &ConversionBenchmarkPublicReportV5) -> Result<()> {
     ensure!(
-        report.schema_version == PUBLIC_REPORT_SCHEMA_V4,
+        report.schema_version == PUBLIC_REPORT_SCHEMA_V5,
         "unsupported public conversion benchmark schema {}",
         report.schema_version
     );
     ensure!(
-        report.raw_report.schema_version == super::CONVERSION_BENCHMARK_SCHEMA_V6,
-        "public benchmark does not bind raw schema v6"
+        report.raw_report.schema_version == super::CONVERSION_BENCHMARK_SCHEMA_V7,
+        "public benchmark does not bind raw schema v7"
     );
     validate_sha256(&report.raw_report.sha256, "raw benchmark report SHA-256")?;
     ensure!(
@@ -280,7 +280,7 @@ fn validate_public_report(report: &ConversionBenchmarkPublicReportV4) -> Result<
     }
     ensure!(
         actual_roles == expected_roles,
-        "public benchmark root roles differ from the schema-v4 environment identity"
+        "public benchmark root roles differ from the schema-v5 environment identity"
     );
 
     ensure!(
@@ -434,7 +434,7 @@ fn read_regular_nofollow(path: &Path, label: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn publish_create_new(path: &Path, report: &ConversionBenchmarkPublicReportV4) -> Result<()> {
+fn publish_create_new(path: &Path, report: &ConversionBenchmarkPublicReportV5) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => bail!("public benchmark report already exists: {}", path.display()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -521,9 +521,9 @@ fn publish_create_new(path: &Path, report: &ConversionBenchmarkPublicReportV4) -
             reopened_bytes == bytes,
             "reopened public conversion benchmark report changed bytes"
         );
-        let reopened: ConversionBenchmarkPublicReportV4 =
+        let reopened: ConversionBenchmarkPublicReportV5 =
             serde_json::from_slice(&reopened_bytes)
-                .context("strictly reopen published public conversion benchmark schema v4")?;
+                .context("strictly reopen published public conversion benchmark schema v5")?;
         validate_public_report(&reopened)?;
         ensure!(
             reopened == *report,

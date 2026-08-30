@@ -15,7 +15,8 @@ use crate::ccs::attestation::{
     compute_build_output_identity_from_v3,
 };
 use crate::ccs::builder::{
-    BuildResult, CcsPackageWriteMetrics, write_v3_ccs_package_from_prepared_with_metrics,
+    BuildResult, CcsArchiveCompression, CcsPackageWriteMetrics, PreparedCcsWriteOptions,
+    write_v3_ccs_package_from_prepared_with_metrics,
 };
 use crate::ccs::convert::native_provenance::NativeProvenance;
 use crate::ccs::convert::scriptlet_bundle::{
@@ -251,6 +252,7 @@ pub struct NativePackageConverter {
     source_release: Option<String>,
     conversion_tool: String,
     signing_key: Option<Arc<SigningKeyPair>>,
+    archive_compression: CcsArchiveCompression,
 }
 
 impl NativePackageConverter {
@@ -262,6 +264,7 @@ impl NativePackageConverter {
             source_release: None,
             conversion_tool: "conary".to_string(),
             signing_key: None,
+            archive_compression: CcsArchiveCompression::default(),
         }
     }
 
@@ -291,6 +294,12 @@ impl NativePackageConverter {
     /// Set the authority key required to emit a trusted CCS v3 package.
     pub fn with_signing_key(mut self, key: Arc<SigningKeyPair>) -> Self {
         self.signing_key = Some(key);
+        self
+    }
+
+    /// Set the checked per-archive compression worker budget.
+    pub fn with_archive_compression(mut self, compression: CcsArchiveCompression) -> Self {
+        self.archive_compression = compression;
         self
     }
 
@@ -512,9 +521,12 @@ impl NativePackageConverter {
             &prepared_payload,
             &package_path,
             signing_key,
-            Some(&debug_toml),
-            None,
-            Some(&boundary),
+            PreparedCcsWriteOptions {
+                debug_toml: Some(&debug_toml),
+                build_attestation: None,
+                foreign_conversion_boundary: Some(&boundary),
+                archive_compression: self.archive_compression,
+            },
         )
         .map_err(|e| {
             ConversionError::BuildError(format!(

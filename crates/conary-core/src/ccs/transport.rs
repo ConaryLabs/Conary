@@ -302,6 +302,7 @@ pub fn write_verified_transport_archive(
         TRANSPORT_ARCHIVE_MTIME,
         &controls,
         &expected_objects,
+        crate::ccs::builder::CcsArchiveCompression::default(),
         |sha256| {
             verified
                 .object_sources()

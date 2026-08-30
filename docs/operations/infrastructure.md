@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-30
-revision: 63
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS schema-v6 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
+last_updated: 2026-08-31
+revision: 64
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS schema-v7 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -292,8 +292,8 @@ workflow.
   Every retained benchmark-state mutation stays under a new
   `/work/remi-conversion-benchmarks/<run-id>` root outside `/conary`; repeated
   identities and preexisting transports fail closed.
-- The complete schema-v6 report remains mode 0600 on the production host. The
-  authenticated caller receives only `conversion-benchmark-public-v4.json`: a
+- The complete schema-v7 report remains mode 0600 on the production host. The
+  authenticated caller receives only `conversion-benchmark-public-v5.json`: a
   strict Rust-produced projection that binds the exact raw-report byte count
   and SHA-256, preserves authority, timing, process, VFS, work, and output
   counters, and removes binary paths, root paths and device IDs, free-form
@@ -310,7 +310,9 @@ workflow.
   regular content owner, zero payload-source reopens/reread bytes, aggregate
   payload crypto input equal to chunk-identity plus whole-content SHA-256
   input, one write per unique signed object, exact deduplicated bytes, and zero
-  staging canonical rereads or durability calls.
+  staging canonical rereads or durability calls. Schema v7 additionally
+  requires canonical fixed-block compression geometry and the exact checked
+  buffering ceiling for the reported worker allocation.
   This predicate applies to the dispatched RPM subject rather than naming a
   fixed package. The workflow retains the public projection, source-byte
   verification, candidate

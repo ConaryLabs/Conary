@@ -99,6 +99,11 @@ pub struct ConversionWorkMetrics {
     pub staged_object_shard_syncs: u64,
     pub archive_members_traversed: u64,
     pub archive_input_bytes: u64,
+    pub archive_compression_input_bytes: u64,
+    pub archive_compression_workers: u64,
+    pub archive_compression_block_bytes: u64,
+    pub archive_compression_blocks: u64,
+    pub archive_compression_buffer_ceiling_bytes: u64,
     pub ccs_output_bytes: u64,
     pub ccs_output_bytes_hashed: u64,
     pub independent_transport_reopen_ccs_bytes: u64,
@@ -169,6 +174,12 @@ impl ConversionWorkMetrics {
         self.staged_object_shard_syncs = metrics.ccs_write.staged_object_shard_syncs;
         self.archive_members_traversed = metrics.ccs_write.archive_members_traversed;
         self.archive_input_bytes = metrics.ccs_write.archive_input_bytes;
+        self.archive_compression_input_bytes = metrics.ccs_write.archive_compression_input_bytes;
+        self.archive_compression_workers = metrics.ccs_write.archive_compression_workers;
+        self.archive_compression_block_bytes = metrics.ccs_write.archive_compression_block_bytes;
+        self.archive_compression_blocks = metrics.ccs_write.archive_compression_blocks;
+        self.archive_compression_buffer_ceiling_bytes =
+            metrics.ccs_write.archive_compression_buffer_ceiling_bytes;
         self.ccs_output_bytes = metrics.ccs_write.ccs_output_bytes;
         self.ccs_output_bytes_hashed = metrics.ccs_write.ccs_output_bytes_hashed;
         self.maximum_retained_staging_bytes = metrics.ccs_write.maximum_retained_staging_bytes;
@@ -356,6 +367,11 @@ mod tests {
                 staged_object_shard_syncs: 0,
                 archive_members_traversed: 12,
                 archive_input_bytes: 240,
+                archive_compression_input_bytes: 4096,
+                archive_compression_workers: 3,
+                archive_compression_block_bytes: 1024,
+                archive_compression_blocks: 4,
+                archive_compression_buffer_ceiling_bytes: 8192,
                 ccs_output_bytes: 180,
                 ccs_output_sha256: "a".repeat(64),
                 ccs_output_bytes_hashed: 180,
@@ -378,6 +394,11 @@ mod tests {
         assert_eq!(work.staged_object_deduplications, 1);
         assert_eq!(work.staged_unique_objects, 3);
         assert_eq!(work.staged_object_canonical_bytes_reread, 0);
+        assert_eq!(work.archive_compression_input_bytes, 4096);
+        assert_eq!(work.archive_compression_workers, 3);
+        assert_eq!(work.archive_compression_block_bytes, 1024);
+        assert_eq!(work.archive_compression_blocks, 4);
+        assert_eq!(work.archive_compression_buffer_ceiling_bytes, 8192);
         assert_eq!(work.archive_input_bytes, 240);
         assert_eq!(work.ccs_output_bytes_hashed, 180);
         assert_eq!(work.maximum_retained_staging_bytes, 420);

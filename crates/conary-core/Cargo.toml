@@ -87,6 +87,7 @@ sequoia-openpgp.workspace = true
 # Repository metadata parsing
 tar.workspace = true                     # Tarball extraction for Arch repos
 flate2.workspace = true                  # Gzip compression (for Arch, Debian, Fedora)
+gzp.workspace = true                     # Bounded parallel CCS gzip emission
 liblzma.workspace = true          # XZ/LZMA compression (for Arch)
 rfc822-like = "0.2"             # RFC 822 parser for Debian/Ubuntu Packages files
 quick-xml = "0.41"              # XML parser for Fedora/RPM repodata

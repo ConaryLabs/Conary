@@ -12,6 +12,74 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Explicit resource budget for deterministic CCS archive compression.
+///
+/// The block shape is format-independent transport detail, while the worker
+/// count controls only how many fixed blocks may be compressed concurrently.
+/// Ordered output makes archive bytes independent of worker scheduling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CcsArchiveCompression {
+    workers: usize,
+}
+
+impl CcsArchiveCompression {
+    /// Construct one checked per-archive worker budget.
+    pub fn with_workers(workers: usize) -> Result<Self> {
+        anyhow::ensure!(
+            workers > 0,
+            "CCS archive compression requires at least one worker"
+        );
+        crate::ccs::CCS_BUDGET.admit_archive_compression_workers(workers)?;
+        Ok(Self { workers })
+    }
+
+    /// Allocate each concurrent conversion an equal whole-core share.
+    pub fn for_concurrent_conversions(
+        logical_parallelism: usize,
+        concurrent_conversions: usize,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            logical_parallelism > 0,
+            "logical parallelism must be greater than zero"
+        );
+        anyhow::ensure!(
+            concurrent_conversions > 0,
+            "concurrent conversion count must be greater than zero"
+        );
+        Self::with_workers(
+            logical_parallelism
+                .checked_div(concurrent_conversions)
+                .unwrap_or(0)
+                .clamp(1, crate::ccs::CCS_BUDGET.max_archive_compression_workers),
+        )
+    }
+
+    /// Number of concurrent compression workers owned by one archive.
+    pub fn workers(self) -> usize {
+        self.workers
+    }
+
+    /// Conservative ceiling for buffered input and output block bytes.
+    pub fn buffer_ceiling_bytes(self) -> Result<u64> {
+        Ok(crate::ccs::CCS_BUDGET.archive_compression_buffer_ceiling_bytes(self.workers)?)
+    }
+}
+
+impl Default for CcsArchiveCompression {
+    fn default() -> Self {
+        Self { workers: 1 }
+    }
+}
+
+/// Complete control-plane and resource options for one prepared archive write.
+pub(crate) struct PreparedCcsWriteOptions<'a> {
+    pub(crate) debug_toml: Option<&'a str>,
+    pub(crate) build_attestation: Option<&'a crate::ccs::attestation::BuildAttestationEnvelope>,
+    pub(crate) foreign_conversion_boundary:
+        Option<&'a crate::ccs::attestation::ForeignConversionBoundary>,
+    pub(crate) archive_compression: CcsArchiveCompression,
+}
+
 /// Exact phase and work evidence from one streamed CCS v3 package emission.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CcsPackageWriteMetrics {
@@ -37,6 +105,11 @@ pub struct CcsPackageWriteMetrics {
     pub staged_object_shard_syncs: u64,
     pub archive_members_traversed: u64,
     pub archive_input_bytes: u64,
+    pub archive_compression_input_bytes: u64,
+    pub archive_compression_workers: u64,
+    pub archive_compression_block_bytes: u64,
+    pub archive_compression_blocks: u64,
+    pub archive_compression_buffer_ceiling_bytes: u64,
     pub ccs_output_sha256: String,
     pub ccs_output_bytes: u64,
     pub ccs_output_bytes_hashed: u64,
@@ -176,9 +249,12 @@ pub fn write_v3_ccs_package_from_sources_with_metrics(
         &prepared,
         output_path,
         signing_key,
-        debug_toml,
-        build_attestation,
-        foreign_conversion_boundary,
+        PreparedCcsWriteOptions {
+            debug_toml,
+            build_attestation,
+            foreign_conversion_boundary,
+            archive_compression: CcsArchiveCompression::default(),
+        },
     )
 }
 
@@ -188,9 +264,7 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
     prepared: &PreparedPayloadObjectSet,
     output_path: &Path,
     signing_key: &super::super::signing::SigningKeyPair,
-    debug_toml: Option<&str>,
-    build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
-    foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
+    options: PreparedCcsWriteOptions<'_>,
 ) -> Result<CcsPackageWriteMetrics> {
     use crate::ccs::budget::CCS_BUDGET;
     use crate::ccs::v3::schema::PackageKindV3;
@@ -214,7 +288,7 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
     }
     let manifest_cbor = authority.to_cbor()?;
     CCS_BUDGET.admit_encoded_authority(&census, manifest_cbor.len() as u64)?;
-    if let Some(debug_toml) = debug_toml {
+    if let Some(debug_toml) = options.debug_toml {
         CCS_BUDGET.admit_control_bytes(
             crate::ccs::budget::BudgetDimension::DebugProjectionBytes,
             "MANIFEST.toml",
@@ -222,13 +296,15 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
             CCS_BUDGET.debug_projection_bytes_ceiling(&census)?,
         )?;
     }
-    let build_attestation_document = build_attestation
+    let build_attestation_document = options
+        .build_attestation
         .map(serde_json::to_string_pretty)
         .transpose()?;
     if let Some(encoded) = build_attestation_document.as_deref() {
         admit_attestation_document(encoded, "MANIFEST.attestation.json")?;
     }
-    let foreign_conversion_boundary_document = foreign_conversion_boundary
+    let foreign_conversion_boundary_document = options
+        .foreign_conversion_boundary
         .map(serde_json::to_string_pretty)
         .transpose()?;
     if let Some(encoded) = foreign_conversion_boundary_document.as_deref() {
@@ -251,7 +327,7 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
         controls.insert("MANIFEST.conversion-boundary.json", encoded.as_bytes());
     }
     controls.insert("MANIFEST.sig", signature_document.as_bytes());
-    if let Some(debug_toml) = debug_toml {
+    if let Some(debug_toml) = options.debug_toml {
         controls.insert("MANIFEST.toml", debug_toml.as_bytes());
     }
     metrics.control_projection_and_signing = control_started.elapsed();
@@ -266,11 +342,17 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
         timestamp,
         &controls,
         prepared.inventory(),
+        options.archive_compression,
         |sha256| prepared.open_object(sha256),
     )?;
     metrics.archive_assembly_and_gzip = archive_started.elapsed();
     metrics.archive_members_traversed = emitted.members;
     metrics.archive_input_bytes = emitted.input_bytes;
+    metrics.archive_compression_input_bytes = emitted.compression_input_bytes;
+    metrics.archive_compression_workers = emitted.compression_workers;
+    metrics.archive_compression_block_bytes = emitted.compression_block_bytes;
+    metrics.archive_compression_blocks = emitted.compression_blocks;
+    metrics.archive_compression_buffer_ceiling_bytes = emitted.compression_buffer_ceiling_bytes;
     metrics.ccs_output_sha256 = emitted.output_sha256;
     metrics.ccs_output_bytes = emitted.output_bytes;
     metrics.ccs_output_bytes_hashed = emitted.output_bytes;

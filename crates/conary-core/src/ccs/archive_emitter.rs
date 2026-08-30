@@ -4,7 +4,9 @@
 
 use anyhow::{Context, Result, bail};
 use flate2::Compression;
-use flate2::write::GzEncoder;
+use gzp::ZWriter;
+use gzp::deflate::Gzip;
+use gzp::par::compress::{ParCompress, ParCompressBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read, Write};
@@ -17,6 +19,11 @@ use tar::{Builder, EntryType, Header};
 pub(crate) struct ArchiveEmissionMetrics {
     pub(crate) members: u64,
     pub(crate) input_bytes: u64,
+    pub(crate) compression_input_bytes: u64,
+    pub(crate) compression_workers: u64,
+    pub(crate) compression_block_bytes: u64,
+    pub(crate) compression_blocks: u64,
+    pub(crate) compression_buffer_ceiling_bytes: u64,
     pub(crate) output_sha256: String,
     pub(crate) output_bytes: u64,
 }
@@ -32,6 +39,7 @@ pub(crate) fn write_exact_archive(
     mtime: u64,
     controls: &BTreeMap<&str, &[u8]>,
     objects: &BTreeMap<String, u64>,
+    compression: crate::ccs::builder::CcsArchiveCompression,
     mut open_object: impl FnMut(&str) -> Result<Box<dyn Read + Send>>,
 ) -> Result<ArchiveEmissionMetrics> {
     let first_control = controls
@@ -61,8 +69,8 @@ pub(crate) fn write_exact_archive(
     let mut metrics = ArchiveEmissionMetrics::default();
     let identity;
     {
-        let identity_writer = ArchiveIdentityWriter::new(staged.as_file_mut());
-        let encoder = GzEncoder::new(identity_writer, Compression::default());
+        let identity_writer = ArchiveIdentityWriter::new(staged.reopen()?);
+        let encoder = ParallelGzipWriter::new(identity_writer, compression)?;
         let mut archive = Builder::new(encoder);
 
         let mut directory = Header::new_gnu();
@@ -121,7 +129,14 @@ pub(crate) fn write_exact_archive(
                 checked_add(metrics.input_bytes, *size, "CCS archive input bytes")?;
         }
 
-        identity = archive.into_inner()?.finish()?.finish();
+        archive.finish()?;
+        let (identity_writer, compression_metrics) = archive.into_inner()?.finish()?;
+        metrics.compression_input_bytes = compression_metrics.input_bytes;
+        metrics.compression_workers = compression_metrics.workers;
+        metrics.compression_block_bytes = compression_metrics.block_bytes;
+        metrics.compression_blocks = compression_metrics.blocks;
+        metrics.compression_buffer_ceiling_bytes = compression_metrics.buffer_ceiling_bytes;
+        identity = identity_writer.finish();
     }
     staged.as_file_mut().flush()?;
     staged
@@ -131,6 +146,72 @@ pub(crate) fn write_exact_archive(
     metrics.output_sha256 = identity.sha256;
     metrics.output_bytes = identity.bytes;
     Ok(metrics)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParallelCompressionMetrics {
+    input_bytes: u64,
+    workers: u64,
+    block_bytes: u64,
+    blocks: u64,
+    buffer_ceiling_bytes: u64,
+}
+
+struct ParallelGzipWriter<W: Write + Send + 'static> {
+    inner: ParCompress<'static, Gzip, W>,
+    input_bytes: u64,
+    workers: usize,
+}
+
+impl<W: Write + Send + 'static> ParallelGzipWriter<W> {
+    fn new(writer: W, compression: crate::ccs::builder::CcsArchiveCompression) -> Result<Self> {
+        let workers = compression.workers();
+        let inner = ParCompressBuilder::<Gzip>::new()
+            .buffer_size(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)?
+            .num_threads(workers)?
+            .compression_level(Compression::default())
+            .from_writer(writer);
+        Ok(Self {
+            inner,
+            input_bytes: 0,
+            workers,
+        })
+    }
+
+    fn finish(mut self) -> Result<(W, ParallelCompressionMetrics)> {
+        let writer = self.inner.finish()?;
+        let block_bytes = u64::try_from(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)
+            .context("archive compression block bytes exceed u64")?;
+        let blocks = self.input_bytes.div_ceil(block_bytes);
+        Ok((
+            writer,
+            ParallelCompressionMetrics {
+                input_bytes: self.input_bytes,
+                workers: self.workers as u64,
+                block_bytes,
+                blocks,
+                buffer_ceiling_bytes: crate::ccs::builder::CcsArchiveCompression::with_workers(
+                    self.workers,
+                )?
+                .buffer_ceiling_bytes()?,
+            },
+        ))
+    }
+}
+
+impl<W: Write + Send + 'static> Write for ParallelGzipWriter<W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        self.input_bytes = self
+            .input_bytes
+            .checked_add(written as u64)
+            .ok_or_else(|| io::Error::other("CCS compression input byte count overflow"))?;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn append_bytes<W: Write>(
@@ -295,19 +376,125 @@ mod tests {
         let sha256 = crate::hash::sha256(&bytes);
         let objects = BTreeMap::from([(sha256.clone(), bytes.len() as u64)]);
 
-        let metrics = write_exact_archive(&output, 7, &controls(), &objects, |_| {
-            Ok(Box::new(Cursor::new(bytes.clone())))
-        })
+        let metrics = write_exact_archive(
+            &output,
+            7,
+            &controls(),
+            &objects,
+            crate::ccs::builder::CcsArchiveCompression::default(),
+            |_| Ok(Box::new(Cursor::new(bytes.clone()))),
+        )
         .unwrap();
         let archive = fs::read(&output).unwrap();
 
         assert_eq!(metrics.members, 5);
         assert_eq!(metrics.input_bytes, (8 + 9 + bytes.len()) as u64);
+        assert_eq!(metrics.compression_workers, 1);
+        assert_eq!(
+            metrics.compression_block_bytes,
+            crate::ccs::CCS_BUDGET.archive_compression_block_bytes as u64
+        );
+        assert_eq!(
+            metrics.compression_blocks,
+            metrics
+                .compression_input_bytes
+                .div_ceil(metrics.compression_block_bytes)
+        );
+        assert_eq!(
+            metrics.compression_buffer_ceiling_bytes,
+            crate::ccs::builder::CcsArchiveCompression::default()
+                .buffer_ceiling_bytes()
+                .unwrap()
+        );
         assert_eq!(metrics.output_bytes, archive.len() as u64);
         assert_eq!(metrics.output_sha256, crate::hash::sha256(&archive));
         assert_eq!(
             fs::metadata(&output).unwrap().permissions().mode() & 0o777,
             0o644
+        );
+    }
+
+    #[test]
+    fn parallel_compression_is_worker_independent_and_one_gzip_member() {
+        let temp = tempfile::tempdir().unwrap();
+        let one_worker = temp.path().join("one.ccs");
+        let four_workers = temp.path().join("four.ccs");
+        let bytes = (0..(crate::ccs::CCS_BUDGET.archive_compression_block_bytes * 3 + 17))
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let sha256 = crate::hash::sha256(&bytes);
+        let objects = BTreeMap::from([(sha256, bytes.len() as u64)]);
+
+        let one_metrics = write_exact_archive(
+            &one_worker,
+            7,
+            &controls(),
+            &objects,
+            crate::ccs::builder::CcsArchiveCompression::with_workers(1).unwrap(),
+            |_| Ok(Box::new(Cursor::new(bytes.clone()))),
+        )
+        .unwrap();
+        let four_metrics = write_exact_archive(
+            &four_workers,
+            7,
+            &controls(),
+            &objects,
+            crate::ccs::builder::CcsArchiveCompression::with_workers(4).unwrap(),
+            |_| Ok(Box::new(Cursor::new(bytes.clone()))),
+        )
+        .unwrap();
+
+        let one = fs::read(one_worker).unwrap();
+        let four = fs::read(four_workers).unwrap();
+        assert_eq!(one, four);
+        assert_eq!(one_metrics.output_sha256, four_metrics.output_sha256);
+        assert_eq!(
+            one_metrics.compression_input_bytes,
+            four_metrics.compression_input_bytes
+        );
+        assert_eq!(
+            one_metrics.compression_blocks,
+            four_metrics.compression_blocks
+        );
+        assert_eq!(one_metrics.compression_workers, 1);
+        assert_eq!(four_metrics.compression_workers, 4);
+        assert!(
+            four_metrics.compression_buffer_ceiling_bytes
+                > one_metrics.compression_buffer_ceiling_bytes
+        );
+
+        let mut compressed = one.as_slice();
+        let mut decoder = flate2::bufread::GzDecoder::new(&mut compressed);
+        io::copy(&mut decoder, &mut io::sink()).unwrap();
+        drop(decoder);
+        assert!(
+            compressed.is_empty(),
+            "archive carried a second gzip member"
+        );
+    }
+
+    #[test]
+    fn compression_budget_rejects_zero_and_unbounded_workers() {
+        use crate::ccs::builder::CcsArchiveCompression;
+
+        assert!(CcsArchiveCompression::with_workers(0).is_err());
+        assert!(
+            CcsArchiveCompression::with_workers(
+                crate::ccs::CCS_BUDGET.max_archive_compression_workers + 1
+            )
+            .is_err()
+        );
+        assert_eq!(
+            CcsArchiveCompression::for_concurrent_conversions(12, 4)
+                .unwrap()
+                .workers(),
+            3
+        );
+        assert_eq!(
+            CcsArchiveCompression::for_concurrent_conversions(12, 32)
+                .unwrap()
+                .workers(),
+            1
         );
     }
 
@@ -336,12 +523,19 @@ mod tests {
         let expected_object_order = objects.keys().cloned().collect::<Vec<_>>();
         let mut opened_objects = Vec::new();
 
-        write_exact_archive(&output, mtime, &controls, &objects, |sha256| {
-            opened_objects.push(sha256.to_owned());
-            Ok(Box::new(Cursor::new(
-                object_bytes.get(sha256).unwrap().clone(),
-            )))
-        })
+        write_exact_archive(
+            &output,
+            mtime,
+            &controls,
+            &objects,
+            crate::ccs::builder::CcsArchiveCompression::default(),
+            |sha256| {
+                opened_objects.push(sha256.to_owned());
+                Ok(Box::new(Cursor::new(
+                    object_bytes.get(sha256).unwrap().clone(),
+                )))
+            },
+        )
         .unwrap();
 
         assert_eq!(opened_objects, expected_object_order);
@@ -451,9 +645,14 @@ mod tests {
             fs::write(&output, b"previous complete archive").unwrap();
 
             assert!(
-                write_exact_archive(&output, 7, &controls(), &objects, |_| {
-                    Ok(Box::new(Cursor::new(bytes.clone())))
-                })
+                write_exact_archive(
+                    &output,
+                    7,
+                    &controls(),
+                    &objects,
+                    crate::ccs::builder::CcsArchiveCompression::default(),
+                    |_| Ok(Box::new(Cursor::new(bytes.clone()))),
+                )
                 .is_err()
             );
             assert_eq!(fs::read(&output).unwrap(), b"previous complete archive");
@@ -486,20 +685,32 @@ mod tests {
         let output = temp.path().join("package.ccs");
         fs::write(&output, b"previous complete archive").unwrap();
         assert!(
-            write_exact_archive(&output, 7, &controls(), &objects, |_| {
-                bail!("injected prepared-object open failure")
-            })
+            write_exact_archive(
+                &output,
+                7,
+                &controls(),
+                &objects,
+                crate::ccs::builder::CcsArchiveCompression::default(),
+                |_| bail!("injected prepared-object open failure"),
+            )
             .is_err()
         );
         assert_eq!(fs::read(&output).unwrap(), b"previous complete archive");
         assert!(staged_archive_paths(temp.path()).is_empty());
 
         assert!(
-            write_exact_archive(&output, 7, &controls(), &objects, |_| {
-                Ok(Box::new(FailsAfterPrefix {
-                    prefix: Some(expected[..3].to_vec()),
-                }))
-            })
+            write_exact_archive(
+                &output,
+                7,
+                &controls(),
+                &objects,
+                crate::ccs::builder::CcsArchiveCompression::default(),
+                |_| {
+                    Ok(Box::new(FailsAfterPrefix {
+                        prefix: Some(expected[..3].to_vec()),
+                    }))
+                },
+            )
             .is_err()
         );
         assert_eq!(fs::read(&output).unwrap(), b"previous complete archive");

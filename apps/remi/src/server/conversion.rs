@@ -24,11 +24,11 @@ use crate::server::{BoundedCache, R2Store};
 use std::path::PathBuf;
 use std::sync::Arc;
 pub use types::{
-    CONVERSION_BENCHMARK_SCHEMA_V6, ConversionBenchmarkAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V7, ConversionBenchmarkAuthority,
     ConversionBenchmarkCatalogAuthority, ConversionBenchmarkCatalogQuery,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkConfig,
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
-    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV6,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV7,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSetup,
     ConversionBenchmarkSubject, ConversionBenchmarkView, ConversionBenchmarkViews,
     ScriptletPackageMetadata, ServerConversionResult,
@@ -57,6 +57,8 @@ pub struct ConversionService {
     database_writer: DatabaseWriter,
     /// Shared owner for complete repository publication operations.
     publication_coordinator: Arc<PublicationCoordinator>,
+    /// Checked CPU/memory budget for one deterministic CCS archive writer.
+    archive_compression: conary_core::ccs::CcsArchiveCompression,
 }
 
 impl ConversionService {
@@ -76,6 +78,7 @@ impl ConversionService {
             repository_keys_dir: None,
             database_writer: DatabaseWriter::default(),
             publication_coordinator: Arc::new(PublicationCoordinator::default()),
+            archive_compression: conary_core::ccs::CcsArchiveCompression::default(),
         }
     }
 
@@ -113,6 +116,14 @@ impl ConversionService {
         self.repository_keys_dir = keys_dir;
         self
     }
+
+    pub(crate) fn with_archive_compression(
+        mut self,
+        archive_compression: conary_core::ccs::CcsArchiveCompression,
+    ) -> Self {
+        self.archive_compression = archive_compression;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +146,7 @@ mod tests {
         assert!(service.catalog_authority.is_none());
         assert!(service.r2_store.is_none());
         assert!(service.repository_keys_dir.is_none());
+        assert_eq!(service.archive_compression.workers(), 1);
     }
 
     #[test]

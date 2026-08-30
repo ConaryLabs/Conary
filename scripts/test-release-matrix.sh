@@ -1862,8 +1862,8 @@ test_check_release_matrix_rejects_raw_conversion_benchmark_upload() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '            remi-conversion-benchmark-public-v4.json' \
-        $'            remi-conversion-benchmark-public-v4.json\n            conversion-benchmark-v6.json'
+        '            remi-conversion-benchmark-public-v5.json' \
+        $'            remi-conversion-benchmark-public-v5.json\n            conversion-benchmark-v7.json'
 
     assert_check_release_matrix_fails \
         "$repo" \

@@ -99,6 +99,12 @@ async fn run_conversion_crawl(
     .with_catalog_authority(authority)
     .with_database_writer(database_writer.clone())
     .with_bounded_cache(bounded_cache)
+    .with_archive_compression(
+        conary_core::ccs::CcsArchiveCompression::for_concurrent_conversions(
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+            config.concurrency,
+        )?,
+    )
     .with_repository_keys_dir(Some(config.repository_keys_dir.clone()));
     let proof_store =
         proof_reuse::ConversionProofStore::new(config.db_path.clone(), database_writer);

@@ -78,11 +78,11 @@ pub use cache::ChunkCache;
 pub use catalog_authority::ProfileRevisionSelection;
 pub use config::RemiConfig;
 pub use conversion::{
-    CONVERSION_BENCHMARK_SCHEMA_V6, ConversionBenchmarkAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V7, ConversionBenchmarkAuthority,
     ConversionBenchmarkCatalogAuthority, ConversionBenchmarkCatalogQuery,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkConfig,
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
-    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV6,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV7,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSetup,
     ConversionBenchmarkSubject, ConversionBenchmarkView, ConversionBenchmarkViews,
     ConversionService, ServerConversionResult, run_conversion_benchmark_from_config,
@@ -327,6 +327,11 @@ impl ServerState {
             config.db_path.clone(),
         );
         let bounded_cache = BoundedCache::new(chunk_cache.clone());
+        let archive_compression =
+            conary_core::ccs::CcsArchiveCompression::for_concurrent_conversions(
+                std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+                config.max_concurrent_conversions,
+            )?;
         let conversion_service = ConversionService::new(
             config.chunk_dir.clone(),
             config.cache_dir.clone(),
@@ -337,6 +342,7 @@ impl ServerState {
         .with_database_writer(database_writer.clone())
         .with_publication_coordinator(Arc::clone(&publication_coordinator))
         .with_bounded_cache(bounded_cache.clone())
+        .with_archive_compression(archive_compression)
         .with_repository_keys_dir(config.release_publish.repository_keys_dir.clone());
 
         // Initialize Bloom filter if enabled

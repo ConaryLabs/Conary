@@ -210,11 +210,11 @@ while (( $# > 0 )); do
 done
 [[ -n "$work_root" && ! -e "$work_root" ]]
 mkdir -m 0700 "$work_root"
-raw="${work_root}/conversion-benchmark-v6.json"
-public="${work_root}/conversion-benchmark-public-v4.json"
-printf '%s\n' '{"schema_version":6}' >"$raw"
+raw="${work_root}/conversion-benchmark-v7.json"
+public="${work_root}/conversion-benchmark-public-v5.json"
+printf '%s\n' '{"schema_version":7}' >"$raw"
 if [[ "${CONARY_FAKE_BAD_RAW_SCHEMA:-0}" == "1" ]]; then
-    printf '%s\n' '{"schema_version":5}' >"$raw"
+    printf '%s\n' '{"schema_version":6}' >"$raw"
 fi
 chmod "${CONARY_FAKE_RAW_REPORT_MODE:-0600}" "$raw"
 raw_sha256="$(sha256sum "$raw" | cut -d ' ' -f 1)"
@@ -222,13 +222,13 @@ raw_bytes="$(stat -c '%s' "$raw")"
 if [[ "${CONARY_FAKE_BAD_PUBLIC_BINDING:-0}" == "1" ]]; then
     raw_sha256=0000000000000000000000000000000000000000000000000000000000000000
 fi
-public_schema=4
+public_schema=5
 if [[ "${CONARY_FAKE_LEGACY_PUBLIC_SCHEMA:-0}" == "1" ]]; then
-    public_schema=3
+    public_schema=4
 fi
-raw_binding_schema=6
+raw_binding_schema=7
 if [[ "${CONARY_FAKE_LEGACY_PUBLIC_RAW_SCHEMA:-0}" == "1" ]]; then
-    raw_binding_schema=5
+    raw_binding_schema=6
 fi
 jq -n \
     --arg raw_sha256 "$raw_sha256" \
@@ -902,8 +902,8 @@ test_conversion_benchmark_uses_fixed_paths_arguments_and_service_sequence() {
         run_valid_conversion_benchmark "$fake_root" "$run_id")"
     transport="/tmp/remi-conversion-benchmark-${run_id}.json"
     work_root="$fake_root/work/remi-conversion-benchmarks/$run_id/work"
-    raw="$work_root/conversion-benchmark-v6.json"
-    public="$work_root/conversion-benchmark-public-v4.json"
+    raw="$work_root/conversion-benchmark-v7.json"
+    public="$work_root/conversion-benchmark-public-v5.json"
     bin_sha256="$(sha256sum "$fake_root/usr/local/bin/remi" | cut -d ' ' -f 1)"
     source="/tmp/remi-conversion-source-${run_id}.native"
     source_sha256="$(sha256sum "$source" | cut -d ' ' -f 1)"
@@ -929,7 +929,8 @@ test_conversion_benchmark_uses_fixed_paths_arguments_and_service_sequence() {
     jq -e \
         --arg sha "$(sha256sum "$raw" | cut -d ' ' -f 1)" \
         --argjson bytes "$(stat -c '%s' "$raw")" '
-        .schema_version == 4
+        .schema_version == 5
+        and .raw_report.schema_version == 7
         and .raw_report.sha256 == $sha
         and .raw_report.size_bytes == $bytes
     ' "$transport" >/dev/null
