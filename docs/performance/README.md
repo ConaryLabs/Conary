@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-30
-revision: 11
-summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, measured optimization results, and the one-pass CCS payload-preparation target
+revision: 12
+summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results including one-pass CCS payload preparation
 ---
 
 # Performance evidence
@@ -506,12 +506,14 @@ canonical FastCDC layout; 13,116 files and 30,976,256 bytes used whole objects.
 The split implementation opened the 7,967 chunked sources once for reference
 derivation, then reopened all 21,083 regular sources for object emission. It
 therefore performed 29,050 payload-source opens and read 5,483,136,312 source
-bytes. Its payload-boundary SHA-256 input was 10,935,296,368 bytes: first-pass
+bytes. The instrumented hash counters covered 10,935,296,368 bytes: first-pass
 chunk identities, second-pass chunk identities, second-pass large-file whole
-content, and temporary-store object identities. The store attempted 51,434
-objects, wrote all 2,757,056,284 attempted bytes, and reread 117,682,166
-canonical duplicate bytes before emitting the exact 49,091-object,
-2,639,374,118-byte signed set.
+content, and temporary-store incoming object identities. Duplicate verification
+then SHA-256-hashed another 117,682,166 canonical reread bytes, making the
+complete physical payload-boundary cryptographic input 11,052,978,534 bytes.
+The store attempted 51,434 objects, wrote all 2,757,056,284 attempted bytes,
+and reread those 117,682,166 canonical duplicate bytes before emitting the
+exact 49,091-object, 2,639,374,118-byte signed set.
 
 Schema v6 and public schema v4 replace that split evidence with one
 `payload_derivation_and_object_staging` phase. The exact target for the pinned
@@ -528,6 +530,101 @@ candidate must be deployed and rerun against the same authority, subject, XFS
 host, and cache state before any realized wall/CPU/RSS improvement is claimed.
 No same-host native-package-manager diagnostic has yet been recorded for this
 subject.
+
+## One-pass CCS payload preparation measured result: 2026-08-30
+
+Protected production-XFS workflow
+[run 33305607313](https://github.com/FieldmouseWorks/Conary/actions/runs/33305607313)
+measured deployed merge commit
+`6370afca919ce7c932162a3069d8b906ed0ed3d1`, Remi 0.16.1, binary SHA-256
+`b48f16a807bb905925710a32b003934b8881858a30915f43e22ad6961f5cf586`.
+The binary came from exact protected push-to-main candidate build
+[33304905924](https://github.com/FieldmouseWorks/Conary/actions/runs/33304905924)
+and successful `private-candidates` deployment
+[33305505612](https://github.com/FieldmouseWorks/Conary/actions/runs/33305505612),
+whose inspection selected that build. The run retained the exact baseline
+Fedora profile revision, package key, 1,881,853,676-byte source and source
+SHA-256, complete catalog authority and subject, production hardware, kernel,
+memory, and all ten 4,096-byte block XFS root geometries.
+
+The sole artifact was ID `9730465537`, named
+`remi-conversion-benchmark-33305505612-33305607313-1`, and 34,452 bytes. Its
+Actions API digest and an independently downloaded archive both had SHA-256
+`d40d6a6bed60f355950949ead9ac1be4eb89c15ca75a82e059bdc1f2eeaef9cc`.
+The four-entry archive contained the public report and exact source,
+deployment, and candidate bindings. The 25,849-byte public schema-v4 report
+had SHA-256
+`8fffdf61d071681acc4ccb3577f722423af30631e4cc6524ca1d2cad29058c5d`
+and bound the private 29,502-byte raw schema-v6 report at SHA-256
+`cc12493de27830f2687b4cf5a322378db88a5a088eab4aed11659a6903e0e288`.
+
+| Measurement boundary | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Payload derivation plus staging | 48.717 s | 25.306 s | -23.411 s (-48.055%) |
+| Cold `views.conversion_core` | 116.590 s | 92.986 s | -23.604 s (-20.245%) |
+| Cold `views.end_to_end` | 198.660 s | 175.527 s | -23.133 s (-11.645%) |
+| Cold repetition process wall | 252.402529 s | 228.975566 s | -23.426963 s (-9.282%) |
+| `native_archive_parse_and_spool` | 12.647 s | 12.486 s | -0.161 s (-1.273%) |
+| `archive_assembly_and_gzip` | 54.072 s | 53.990 s | -0.082 s (-0.152%) |
+| `complete_archive_copy` | 1.462 s | 2.539 s | +1.077 s (+73.666%) |
+| Retained `independent_transport_reopen` | 54.271 s | 52.796 s | -1.475 s (-2.718%) |
+| `complete_archive_hash` | 7.277 s | 7.293 s | +0.016 s (+0.220%) |
+| Benchmark-proof independent reopen | 45.583 s | 45.369 s | -0.214 s (-0.469%) |
+| Benchmark-proof complete archive hash | 7.341 s | 7.260 s | -0.081 s (-1.103%) |
+| Hot `views.end_to_end` | 0.386 s | 0.495 s | +0.109 s (+28.238%) |
+| Hot repetition process wall | 54.044081 s | 53.789178 s | -0.254903 s (-0.472%) |
+
+The fused phase improved by 23.411 seconds, accounting for nearly all of the
+23.604-second conversion-core reduction. Archive assembly/gzip was effectively
+flat, while the complete archive copy sampled 1.077 seconds higher and the
+retained verifier 1.475 seconds lower. Those observations describe the
+measured propagation boundaries but are not causal attribution from one
+sample. The separate benchmark-only output proof remained outside both timing
+views and was also effectively flat.
+
+| Cold process resource | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| User CPU | 229.352956 s | 205.588164 s | -23.764792 s (-10.362%) |
+| System CPU | 14.873123 s | 14.658700 s | -0.214423 s (-1.442%) |
+| Total CPU | 244.226079 s | 220.246864 s | -23.979215 s (-9.818%) |
+| Process-lifetime peak RSS | 1,544,904,704 B | 1,544,351,744 B | -552,960 B (-0.036%) |
+| Logical reads | 29,168,607,398 B | 26,308,931,269 B | -2,859,676,129 B (-9.804%) |
+| Read syscalls | 2,153,361 | 2,096,579 | -56,782 (-2.637%) |
+| Logical writes | 15,715,782,003 B | 15,582,419,515 B | -133,362,488 B (-0.849%) |
+| Write syscalls | 1,308,578 | 1,281,081 | -27,497 (-2.101%) |
+| Storage reads | 1,961,574,400 B | 1,964,400,640 B | +2,826,240 B (+0.144%) |
+| Storage writes | 7,673,352,192 B | 7,534,903,296 B | -138,448,896 B (-1.804%) |
+
+Schema v6 proves the targeted physical change directly:
+
+| Deterministic physical work | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Payload-source opens | 29,050 | 21,083 | -7,967 (-27.425%) |
+| Payload-source bytes | 5,483,136,312 | 2,757,056,284 | -2,726,080,028 (-49.718%) |
+| Payload cryptographic hash input | 11,052,978,534 B | 5,483,136,312 B | -5,569,842,222 B (-50.392%) |
+| Staging bytes written | 2,757,056,284 B | 2,639,374,118 B | -117,682,166 B (-4.268%) |
+| Canonical duplicate rereads | 117,682,166 B | 0 B | -117,682,166 B (-100%) |
+
+The result opened each of the 21,083 regular content owners exactly once and
+reported zero source reopens or reread bytes. It derived 38,318 chunks, hashed
+2,726,080,028 chunk-identity bytes and 2,757,056,284 whole-content bytes, and
+staged the exact 49,091 unique objects without file or shard syncs. The 2,343
+duplicate objects avoided 117,682,166 bytes of writes and canonical rereads.
+Eliminating those canonical rereads also eliminated their SHA-256 verification.
+The stable signed set remained exact at SHA-256
+`cf4f448fdcf9f228febaf1767c98adbb0ca2053de4bfe231d7291f7ecf23d186`,
+49,091 objects, and 2,639,374,118 bytes. Cold and hot outputs agreed within the
+run. The retained independent reopen rehashed all 2,639,374,118 signed-object
+bytes; the separate complete-archive hash covered all 1,950,609,956 CCS bytes.
+Registered catalog access retained the same authenticated portable-VFS
+counters with no userspace full hash, SQLite integrity scan, logical replay,
+or integrity failure.
+
+This is one paired production sample, not a latency distribution. `cold`
+still means empty application conversion, cache, and CAS state rather than a
+dropped kernel page cache. It proves the exact one-pass payload-preparation
+change and does not constitute a same-host native-package-manager performance
+comparison.
 
 ## Remi conversion baseline: 2026-08-15
 
