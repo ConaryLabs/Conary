@@ -18,6 +18,31 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
+const HOT_EXECUTED_PHASES: [ConversionPhase; 2] =
+    [ConversionPhase::PackageLookup, ConversionPhase::CacheLookup];
+
+const HOT_SKIPPED_PHASES: [ConversionPhase; 19] = [
+    ConversionPhase::LocalArtifactAdmission,
+    ConversionPhase::Download,
+    ConversionPhase::Checksum,
+    ConversionPhase::NativeArchiveParseAndSpool,
+    ConversionPhase::ArtifactIdentityAndAuthorityValidation,
+    ConversionPhase::MetadataLifecycleAndAuthorityProjection,
+    ConversionPhase::PayloadReferenceDerivation,
+    ConversionPhase::OutputWorkspacePreparation,
+    ConversionPhase::ControlProjectionAndSigning,
+    ConversionPhase::PayloadObjectEmission,
+    ConversionPhase::ArchiveAssemblyAndGzip,
+    ConversionPhase::ImmediateConverterReopen,
+    ConversionPhase::NativeProvenanceProjection,
+    ConversionPhase::IndependentTransportReopen,
+    ConversionPhase::DurableCasIngestion,
+    ConversionPhase::R2WriteThrough,
+    ConversionPhase::CompleteArchiveHash,
+    ConversionPhase::CompleteArchiveCopy,
+    ConversionPhase::DatabasePersistence,
+];
+
 pub(super) fn validate_report(report: &ConversionBenchmarkReportV3) -> Result<()> {
     ensure!(
         report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V3,
@@ -215,6 +240,26 @@ fn validate_completed_conversion(
             "hot benchmark executed conversion core"
         );
         ensure!(
+            timing
+                .phases
+                .iter()
+                .map(|phase| phase.phase)
+                .eq(HOT_EXECUTED_PHASES),
+            "hot benchmark executed phases differ from the exact cache-hit path"
+        );
+        ensure!(
+            timing.nested_phases.is_empty(),
+            "hot benchmark recorded nested conversion work"
+        );
+        ensure!(
+            timing
+                .skipped_phases
+                .iter()
+                .map(|phase| phase.phase)
+                .eq(HOT_SKIPPED_PHASES),
+            "hot benchmark skipped phases differ from the exact cache-hit path"
+        );
+        ensure!(
             timing.work == crate::server::conversion_timing::ConversionWorkMetrics::default(),
             "hot benchmark recorded conversion or persistence work: {:#?}",
             timing.work
@@ -241,13 +286,15 @@ fn validate_cold_fused_cas(
             && work.cas_canonical_bytes_reread == 0,
         "cold benchmark did not stream its exact signed object set once into the empty durable CAS"
     );
+    let mut fused_phases = timing
+        .phases
+        .iter()
+        .filter(|phase| phase.phase == ConversionPhase::IndependentTransportReopen);
+    let fused_phase = fused_phases
+        .next()
+        .context("cold benchmark omitted fused independent reopen into durable CAS")?;
     ensure!(
-        timing
-            .phases
-            .iter()
-            .filter(|phase| phase.phase == ConversionPhase::IndependentTransportReopen)
-            .count()
-            == 1
+        fused_phases.next().is_none()
             && !timing
                 .skipped_phases
                 .iter()
@@ -268,6 +315,10 @@ fn validate_cold_fused_cas(
                 .count()
                 == 1,
         "cold benchmark did not record one fused independent reopen into durable CAS"
+    );
+    ensure!(
+        fused_phase.duration_ms <= timing.total_ms,
+        "cold benchmark fused independent reopen duration exceeds timing total"
     );
     Ok(())
 }

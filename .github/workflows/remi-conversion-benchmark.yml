@@ -807,6 +807,10 @@ jobs:
             --arg source_sha256 "$SOURCE_SHA256" \
             --argjson source_size_bytes "$SOURCE_SIZE_BYTES" '
               def sha256: type == "string" and test("^[0-9a-f]{64}$");
+              def uint:
+                type == "number" and . >= 0 and floor == .;
+              def positive_uint:
+                uint and . > 0;
               def expected_roots: [
                 "benchmark_cache",
                 "benchmark_chunks",
@@ -819,6 +823,166 @@ jobs:
                 "staged_source_artifact",
                 "work_root"
               ];
+              def timing_shape_without_work:
+                (keys | sort) == [
+                  "distro",
+                  "nested_phases",
+                  "package",
+                  "phases",
+                  "skipped_phases",
+                  "source",
+                  "success",
+                  "total_ms",
+                  "version",
+                  "work"
+                ]
+                and (.distro | type == "string" and length > 0)
+                and (.package | type == "string" and length > 0)
+                and (.version | type == "string" and length > 0)
+                and (.source | (keys | sort)) == [
+                  "architecture",
+                  "checksum",
+                  "declared_size_bytes",
+                  "source_profile",
+                  "version"
+                ]
+                and (.source.source_profile | type == "string" and length > 0)
+                and (.source.version | type == "string" and length > 0)
+                and (.source.architecture == null
+                  or (.source.architecture | type == "string" and length > 0))
+                and (.source.checksum | type == "string" and length > 0)
+                and (.source.declared_size_bytes | positive_uint)
+                and (.phases | type == "array")
+                and all(.phases[];
+                  (keys | sort) == ["duration_ms", "phase"]
+                  and (.phase | type == "string" and length > 0)
+                  and (.duration_ms | uint))
+                and (.nested_phases | type == "array")
+                and all(.nested_phases[];
+                  (keys | sort) == ["duration_ms", "included_in", "phase"]
+                  and (.phase | type == "string" and length > 0)
+                  and (.included_in | type == "string" and length > 0)
+                  and (.duration_ms | uint))
+                and (.skipped_phases | type == "array")
+                and all(.skipped_phases[]; type == "string" and length > 0)
+                and (.total_ms | uint)
+                and .success == true;
+              def work_shape:
+                (keys | sort) == [
+                  "admitted_local_bytes",
+                  "archive_input_bytes",
+                  "archive_members_traversed",
+                  "cas_canonical_bytes_reread",
+                  "cas_canonical_name_barriers",
+                  "cas_fallback_directory_syncs",
+                  "cas_fallback_object_syncs",
+                  "cas_hits",
+                  "cas_incoming_bytes_hashed",
+                  "cas_misses",
+                  "cas_objects_hashed",
+                  "cas_persistent_bytes_written",
+                  "cas_race_losers",
+                  "cas_staged_data_barriers",
+                  "ccs_output_bytes",
+                  "complete_archive_copy_bytes",
+                  "complete_archive_hash_bytes",
+                  "downloaded_bytes",
+                  "immediate_converter_reopen_ccs_bytes",
+                  "immediate_converter_reopen_object_bytes_hashed",
+                  "independent_transport_reopen_ccs_bytes",
+                  "independent_transport_reopen_object_bytes_hashed",
+                  "maximum_retained_staging_bytes",
+                  "native_archive_entries_traversed",
+                  "native_archive_passes",
+                  "native_decompressed_archive_bytes_read",
+                  "native_intermediate_archive_bytes_read",
+                  "native_intermediate_archive_bytes_written",
+                  "native_intermediate_archive_file_syncs",
+                  "native_payload_bytes_hashed",
+                  "native_payload_bytes_spooled",
+                  "native_payload_declared_bytes",
+                  "native_payload_entries",
+                  "native_payload_files_spooled",
+                  "native_payload_regular_files",
+                  "native_payload_spool_bytes_reread",
+                  "native_payload_spool_file_syncs",
+                  "native_source_archive_bytes_read",
+                  "native_source_archive_opens",
+                  "payload_chunks_derived",
+                  "payload_files_examined",
+                  "payload_files_reopened",
+                  "payload_object_bytes_read",
+                  "payload_reference_bytes_hashed",
+                  "payload_reference_bytes_read",
+                  "r2",
+                  "repository_checksum_bytes_hashed",
+                  "second_pass_chunk_reference_bytes_hashed",
+                  "second_pass_reconstructed_content_bytes_hashed",
+                  "signed_object_bytes",
+                  "signed_object_count",
+                  "source_artifact_bytes",
+                  "source_bytes_hashed",
+                  "temporary_object_bytes_written",
+                  "temporary_object_canonical_bytes_reread",
+                  "temporary_object_file_syncs",
+                  "temporary_object_hits",
+                  "temporary_object_incoming_bytes_hashed",
+                  "temporary_object_misses",
+                  "temporary_object_shard_syncs",
+                  "unique_payload_chunks_derived"
+                ]
+                and ([to_entries[] | select(.key != "r2") | .value]
+                  | all(.[]; uint))
+                and (.r2 | (keys | sort)) == [
+                  "bytes_written",
+                  "head_requests",
+                  "hits",
+                  "misses",
+                  "put_requests"
+                ]
+                and (.r2 | all(.[]; uint));
+              def timing_shape:
+                timing_shape_without_work and (.work | work_shape);
+              def output_shape:
+                (keys | sort) == [
+                  "ccs_sha256",
+                  "ccs_size_bytes",
+                  "independent_complete_archive_hash_bytes",
+                  "independent_complete_archive_hash_ms",
+                  "independent_transport_reopen_bytes",
+                  "independent_transport_reopen_ms",
+                  "signed_object_bytes",
+                  "signed_object_count",
+                  "signed_object_set_sha256",
+                  "transport_sha256"
+                ]
+                and (.ccs_sha256 | sha256)
+                and (.ccs_size_bytes | positive_uint)
+                and (.transport_sha256 | sha256)
+                and (.signed_object_set_sha256 | sha256)
+                and (.signed_object_count | positive_uint)
+                and (.signed_object_bytes | positive_uint)
+                and (.independent_transport_reopen_ms | uint)
+                and (.independent_transport_reopen_bytes | positive_uint)
+                and (.independent_complete_archive_hash_ms | uint)
+                and (.independent_complete_archive_hash_bytes | positive_uint);
+              def view_shape:
+                (keys | sort) == ["duration_ms", "executed"]
+                and (.executed | type == "boolean")
+                and (.duration_ms | uint);
+              def conversion_core_ms:
+                ([.phases[]
+                  | select(.phase == "native_archive_parse_and_spool"
+                    or .phase == "artifact_identity_and_authority_validation"
+                    or .phase == "metadata_lifecycle_and_authority_projection"
+                    or .phase == "payload_reference_derivation"
+                    or .phase == "output_workspace_preparation"
+                    or .phase == "control_projection_and_signing"
+                    or .phase == "payload_object_emission"
+                    or .phase == "archive_assembly_and_gzip"
+                    or .phase == "immediate_converter_reopen"
+                    or .phase == "native_provenance_projection")
+                  | .duration_ms] | add // 0);
               def output_identity: {
                 ccs_sha256,
                 ccs_size_bytes,
@@ -829,7 +993,10 @@ jobs:
                 independent_transport_reopen_bytes,
                 independent_complete_archive_hash_bytes
               };
-              (keys | sort) == [
+              . as $report
+              | .repetitions[0] as $cold
+              | .repetitions[1] as $hot
+              | (keys | sort) == [
                 "authority",
                 "environment",
                 "raw_report",
@@ -869,19 +1036,127 @@ jobs:
               and all(.repetitions[];
                 (keys | sort)
                   == ["cache_state", "iteration", "output", "process", "timing", "views"]
-                and (.output.ccs_sha256 | sha256)
-                and (.output.transport_sha256 | sha256)
-                and (.output.signed_object_set_sha256 | sha256))
-              and .repetitions[0].views.conversion_core.executed == true
-              and .repetitions[1].views.conversion_core.executed == false
-              and .repetitions[1].views.conversion_core.duration_ms == 0
-              and all(.repetitions[];
-                (.output.independent_transport_reopen_ms
-                  | type == "number" and . >= 0 and floor == .)
-                and (.output.independent_complete_archive_hash_ms
-                  | type == "number" and . >= 0 and floor == .))
-              and (.repetitions[1].output | output_identity)
-                == (.repetitions[0].output | output_identity)
+                and (.timing | timing_shape)
+                and (.output | output_shape)
+                and (.views | (keys | sort)) == ["conversion_core", "end_to_end"]
+                and (.views.conversion_core | view_shape)
+                and (.views.end_to_end | view_shape)
+                and .timing.package == $report.subject.name
+                and .timing.version == $report.subject.version
+                and .timing.source.source_profile == $report.authority.source_profile
+                and .timing.source.version == $report.subject.version
+                and .timing.source.architecture == $report.subject.architecture
+                and .timing.source.checksum == $report.subject.repository_checksum
+                and .timing.source.declared_size_bytes == $report.subject.source_size_bytes
+                and .views.end_to_end.executed == true
+                and .views.end_to_end.duration_ms == .timing.total_ms
+                and .output.independent_transport_reopen_bytes
+                  == .output.ccs_size_bytes
+                and .output.independent_complete_archive_hash_bytes
+                  == .output.ccs_size_bytes)
+              and ($cold.timing.phases | map(.phase)) == [
+                "package_lookup",
+                "cache_lookup",
+                "local_artifact_admission",
+                "checksum",
+                "native_archive_parse_and_spool",
+                "artifact_identity_and_authority_validation",
+                "metadata_lifecycle_and_authority_projection",
+                "payload_reference_derivation",
+                "output_workspace_preparation",
+                "control_projection_and_signing",
+                "payload_object_emission",
+                "archive_assembly_and_gzip",
+                "immediate_converter_reopen",
+                "native_provenance_projection",
+                "independent_transport_reopen",
+                "complete_archive_hash",
+                "complete_archive_copy",
+                "database_persistence"
+              ]
+              and $cold.timing.nested_phases == [
+                {
+                  phase: "temporary_object_staging",
+                  included_in: "payload_object_emission",
+                  duration_ms: $cold.timing.nested_phases[0].duration_ms
+                }
+              ]
+              and $cold.timing.skipped_phases == [
+                "download",
+                "durable_cas_ingestion",
+                "r2_write_through"
+              ]
+              and $cold.views.conversion_core.executed == true
+              and $cold.views.conversion_core.duration_ms
+                == ($cold.timing | conversion_core_ms)
+              and ([ $cold.timing.phases[]
+                | select(.phase == "independent_transport_reopen") ] | length) == 1
+              and ($cold.timing.phases[]
+                | select(.phase == "independent_transport_reopen")
+                | .duration_ms) <= $cold.timing.total_ms
+              and ($cold.timing.work as $work
+                | $cold.output as $output
+                | $work.downloaded_bytes == 0
+                and $work.admitted_local_bytes == $source_size_bytes
+                and $work.repository_checksum_bytes_hashed == $source_size_bytes
+                and $work.source_artifact_bytes == $source_size_bytes
+                and $work.source_bytes_hashed == $source_size_bytes
+                and $work.ccs_output_bytes == $output.ccs_size_bytes
+                and $work.immediate_converter_reopen_ccs_bytes
+                  == $output.ccs_size_bytes
+                and $work.independent_transport_reopen_ccs_bytes
+                  == $output.ccs_size_bytes
+                and $work.complete_archive_hash_bytes == $output.ccs_size_bytes
+                and $work.complete_archive_copy_bytes == $output.ccs_size_bytes
+                and $work.signed_object_count == $output.signed_object_count
+                and $work.signed_object_bytes == $output.signed_object_bytes
+                and $work.immediate_converter_reopen_object_bytes_hashed
+                  == $output.signed_object_bytes
+                and $work.independent_transport_reopen_object_bytes_hashed
+                  == $output.signed_object_bytes
+                and $work.cas_incoming_bytes_hashed == $output.signed_object_bytes
+                and $work.cas_persistent_bytes_written == $output.signed_object_bytes
+                and $work.cas_objects_hashed == $output.signed_object_count
+                and $work.cas_hits == 0
+                and $work.cas_misses == $output.signed_object_count
+                and $work.cas_race_losers == 0
+                and $work.cas_staged_data_barriers == 1
+                and $work.cas_canonical_name_barriers == 1
+                and $work.cas_fallback_object_syncs == 0
+                and $work.cas_fallback_directory_syncs == 0
+                and $work.cas_canonical_bytes_reread == 0
+                and ($work.r2 | all(.[]; . == 0)))
+              and ($hot.timing.phases | map(.phase)) == [
+                "package_lookup",
+                "cache_lookup"
+              ]
+              and $hot.timing.nested_phases == []
+              and $hot.timing.skipped_phases == [
+                "local_artifact_admission",
+                "download",
+                "checksum",
+                "native_archive_parse_and_spool",
+                "artifact_identity_and_authority_validation",
+                "metadata_lifecycle_and_authority_projection",
+                "payload_reference_derivation",
+                "output_workspace_preparation",
+                "control_projection_and_signing",
+                "payload_object_emission",
+                "archive_assembly_and_gzip",
+                "immediate_converter_reopen",
+                "native_provenance_projection",
+                "independent_transport_reopen",
+                "durable_cas_ingestion",
+                "r2_write_through",
+                "complete_archive_hash",
+                "complete_archive_copy",
+                "database_persistence"
+              ]
+              and $hot.views.conversion_core.executed == false
+              and $hot.views.conversion_core.duration_ms == 0
+              and ($hot.timing.work | all(.. | numbers; . == 0))
+              and ($hot.output | output_identity)
+                == ($cold.output | output_identity)
               and ([paths
                 | select(.[-1] == "path"
                   or .[-1] == "device_id"

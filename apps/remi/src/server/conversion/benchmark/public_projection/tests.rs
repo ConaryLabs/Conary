@@ -7,7 +7,8 @@ use crate::server::conversion::{
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkView,
 };
 use crate::server::conversion_timing::{
-    ConversionSourceIdentity, ConversionTimingReport, DURABLE_CAS_FUSED_SKIP_REASON,
+    ConversionPhase, ConversionSourceIdentity, ConversionTimingReport, ConversionWorkMetrics,
+    DURABLE_CAS_FUSED_SKIP_REASON,
 };
 use conary_core::repository::catalog::{
     CatalogVerificationEvidenceV1, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1,
@@ -172,6 +173,34 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.cas_canonical_name_barriers = 1;
         timing.total_ms = 11;
     } else {
+        timing.record(ConversionPhase::PackageLookup, Duration::from_millis(1));
+        timing.record(ConversionPhase::CacheLookup, Duration::from_millis(1));
+        timing.record_skipped(
+            ConversionPhase::LocalArtifactAdmission,
+            "exact cache hit; local source artifact did not need admission",
+        );
+        for phase in [
+            ConversionPhase::Download,
+            ConversionPhase::Checksum,
+            ConversionPhase::NativeArchiveParseAndSpool,
+            ConversionPhase::ArtifactIdentityAndAuthorityValidation,
+            ConversionPhase::MetadataLifecycleAndAuthorityProjection,
+            ConversionPhase::PayloadReferenceDerivation,
+            ConversionPhase::OutputWorkspacePreparation,
+            ConversionPhase::ControlProjectionAndSigning,
+            ConversionPhase::PayloadObjectEmission,
+            ConversionPhase::ArchiveAssemblyAndGzip,
+            ConversionPhase::ImmediateConverterReopen,
+            ConversionPhase::NativeProvenanceProjection,
+            ConversionPhase::IndependentTransportReopen,
+            ConversionPhase::DurableCasIngestion,
+            ConversionPhase::R2WriteThrough,
+            ConversionPhase::CompleteArchiveHash,
+            ConversionPhase::CompleteArchiveCopy,
+            ConversionPhase::DatabasePersistence,
+        ] {
+            timing.record_skipped(phase, "cache hit; phase did not run");
+        }
         timing.total_ms = 3;
     }
     timing
@@ -382,6 +411,45 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
     assert_eq!(
         value["repetitions"][0]["timing"]["skipped_phases"],
         serde_json::json!(["download", "durable_cas_ingestion"])
+    );
+    assert_eq!(
+        value["repetitions"][1]["timing"]["phases"],
+        serde_json::json!([
+            {"phase": "package_lookup", "duration_ms": 1},
+            {"phase": "cache_lookup", "duration_ms": 1},
+        ])
+    );
+    assert_eq!(
+        value["repetitions"][1]["timing"]["nested_phases"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        value["repetitions"][1]["timing"]["skipped_phases"],
+        serde_json::json!([
+            "local_artifact_admission",
+            "download",
+            "checksum",
+            "native_archive_parse_and_spool",
+            "artifact_identity_and_authority_validation",
+            "metadata_lifecycle_and_authority_projection",
+            "payload_reference_derivation",
+            "output_workspace_preparation",
+            "control_projection_and_signing",
+            "payload_object_emission",
+            "archive_assembly_and_gzip",
+            "immediate_converter_reopen",
+            "native_provenance_projection",
+            "independent_transport_reopen",
+            "durable_cas_ingestion",
+            "r2_write_through",
+            "complete_archive_hash",
+            "complete_archive_copy",
+            "database_persistence",
+        ])
+    );
+    assert_eq!(
+        value["repetitions"][1]["timing"]["work"],
+        serde_json::to_value(ConversionWorkMetrics::default()).unwrap()
     );
     assert_eq!(
         value["environment"]["roots"][0],

@@ -6,7 +6,7 @@ use crate::server::conversion::{
     ConversionBenchmarkView, ConversionBenchmarkViews,
 };
 use crate::server::conversion_timing::{
-    ConversionPhase, ConversionSourceIdentity, ConversionTimingReport,
+    ConversionNestedPhase, ConversionPhase, ConversionSourceIdentity, ConversionTimingReport,
 };
 use conary_core::repository::catalog::CatalogVerificationEvidenceV1;
 use std::os::unix::fs::symlink;
@@ -142,6 +142,15 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.cas_canonical_name_barriers = 1;
         timing.total_ms = 11;
     } else {
+        timing.record(ConversionPhase::PackageLookup, Duration::from_millis(1));
+        timing.record(ConversionPhase::CacheLookup, Duration::from_millis(1));
+        timing.record_skipped(
+            ConversionPhase::LocalArtifactAdmission,
+            "exact cache hit; local source artifact did not need admission",
+        );
+        for phase in HOT_SKIPPED_PHASES.into_iter().skip(1) {
+            timing.record_skipped(phase, "cache hit; phase did not run");
+        }
         timing.total_ms = 3;
     }
     timing
@@ -469,6 +478,83 @@ fn rejects_a_second_cas_pass_or_inconsistent_direct_cas_work() {
         ConversionPhase::IndependentTransportReopen,
         "fixture contradicts the executed fused phase",
     );
+    assert!(validate_report(&report).is_err());
+}
+
+#[test]
+fn rejects_a_fused_reopen_duration_larger_than_the_total() {
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+    else {
+        unreachable!()
+    };
+    let invalid_duration = timing.total_ms + 1;
+    timing
+        .phases
+        .iter_mut()
+        .find(|phase| phase.phase == ConversionPhase::IndependentTransportReopen)
+        .unwrap()
+        .duration_ms = invalid_duration;
+
+    let error = validate_report(&report).expect_err("fused phase cannot exceed total wall time");
+    assert_eq!(
+        error.to_string(),
+        "cold benchmark fused independent reopen duration exceeds timing total"
+    );
+}
+
+#[test]
+fn rejects_hot_evidence_outside_the_exact_cache_hit_path() {
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[1].outcome
+    else {
+        unreachable!()
+    };
+    timing.record(ConversionPhase::Download, Duration::from_millis(1));
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[1].outcome
+    else {
+        unreachable!()
+    };
+    timing.record_nested(
+        ConversionNestedPhase::TemporaryObjectStaging,
+        ConversionPhase::PayloadObjectEmission,
+        Duration::from_millis(1),
+    );
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[1].outcome
+    else {
+        unreachable!()
+    };
+    timing.skipped_phases.swap(0, 1);
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[1].outcome
+    else {
+        unreachable!()
+    };
+    timing.skipped_phases.pop();
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[1].outcome
+    else {
+        unreachable!()
+    };
+    timing.work.downloaded_bytes = 1;
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[1].outcome
+    else {
+        unreachable!()
+    };
+    timing.work.r2.head_requests = 1;
     assert!(validate_report(&report).is_err());
 }
 

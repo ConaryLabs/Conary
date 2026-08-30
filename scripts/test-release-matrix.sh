@@ -1953,8 +1953,125 @@ test_check_release_matrix_rejects_fractional_conversion_benchmark_timing() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                  | type == "number" and . >= 0 and floor == .)' \
-        '                  | type == "number" and . >= 0)'
+        '                type == "number" and . >= 0 and floor == .;' \
+        '                type == "number" and . >= 0;'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_partial_public_conversion_timing_shape() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                and (.timing | timing_shape)' \
+        '                and (.timing | type == "object")'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_partial_public_conversion_work_shape() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                timing_shape_without_work and (.work | work_shape);' \
+        '                timing_shape_without_work and (.work | type == "object");'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_partial_public_conversion_output_shape() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                and (.output | output_shape)' \
+        '                and (.output | type == "object")'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_duplicate_fused_conversion_phase() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                | select(.phase == "independent_transport_reopen") ] | length) == 1' \
+        '                | select(.phase == "independent_transport_reopen") ] | length) >= 1'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_unbounded_fused_conversion_timing() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                | .duration_ms) <= $cold.timing.total_ms' \
+        '                | .duration_ms) >= 0'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_xfs_conversion_fallback_syncs() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                and $work.cas_fallback_object_syncs == 0' \
+        '                and $work.cas_fallback_object_syncs >= 0'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_collapsed_hot_conversion_phases() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '              and ($hot.timing.phases | map(.phase)) == [' \
+        '              and ($hot.timing.phases | map(.phase) | unique) == ['
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_collapsed_hot_skipped_phases() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '              and $hot.timing.skipped_phases == [' \
+        '              and ($hot.timing.skipped_phases | unique) == ['
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_nonzero_hot_conversion_work() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '              and ($hot.timing.work | all(.. | numbers; . == 0))' \
+        '              and ($hot.timing.work | all(.. | numbers; . >= 0))'
 
     assert_check_release_matrix_fails \
         "$repo" \
@@ -2737,6 +2854,15 @@ main() {
         test_check_release_matrix_rejects_timing_as_hot_output_identity
         test_check_release_matrix_rejects_partial_xfs_conversion_benchmark_proof
         test_check_release_matrix_rejects_fractional_conversion_benchmark_timing
+        test_check_release_matrix_rejects_partial_public_conversion_timing_shape
+        test_check_release_matrix_rejects_partial_public_conversion_work_shape
+        test_check_release_matrix_rejects_partial_public_conversion_output_shape
+        test_check_release_matrix_rejects_duplicate_fused_conversion_phase
+        test_check_release_matrix_rejects_unbounded_fused_conversion_timing
+        test_check_release_matrix_rejects_xfs_conversion_fallback_syncs
+        test_check_release_matrix_rejects_collapsed_hot_conversion_phases
+        test_check_release_matrix_rejects_collapsed_hot_skipped_phases
+        test_check_release_matrix_rejects_nonzero_hot_conversion_work
         test_check_release_matrix_rejects_extra_conversion_benchmark_upload
         test_check_release_matrix_rejects_private_conversion_failure_upload
         test_check_release_matrix_rejects_nonexclusive_conversion_failure_upload
