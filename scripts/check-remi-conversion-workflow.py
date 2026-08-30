@@ -154,9 +154,9 @@ REVIEWED_RUN_BLOCK_SHA256 = {
     "Acquire and authenticate exact source bytes":
         "4e8c8e91fb4b79803aed47afc34c1e51034f7e9ccc45a23fd213df924c6d0856",
     "Run through the fixed production helper":
-        "b668d296d97a1708bb7ceb1a50a0b35b998ee9546b6be1a7f7f3731de3339926",
+        "804a6fc56c511847fa73677b57dd8e257bd9022ce1eca869a1dd057e0c042c4e",
     "Record exact production benchmark evidence":
-        "bb5378af4528b9f711cead85b40e9831d0df6a43a30e5859fd792a333a1aa700",
+        "4c7ee68e08e107e896515feac6fa00916fb3c312bc885e3dbc6812bbfd0a811c",
     "Fail closed on unsuccessful benchmark result":
         "9097f565c79005bd7cb2b3d928f284c1606c6d28203e48d85222006af4239b15",
 }
@@ -425,7 +425,7 @@ def validate_action_steps(steps: dict[str, dict[str, Any]]) -> None:
         isinstance(upload_with["path"], str)
         and upload_with["path"].splitlines()
         == [
-            "remi-conversion-benchmark-public-v3.json",
+            "remi-conversion-benchmark-public-v4.json",
             "remi-conversion-source-verification-v1.json",
             "remi-deployment-inspection.json",
             "remi-candidate-manifest.json",

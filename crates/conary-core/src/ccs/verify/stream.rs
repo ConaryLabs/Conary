@@ -807,7 +807,7 @@ mod tests {
 
         let directory = entries
             .iter()
-            .find(|entry| entry.path.starts_with("objects/") && entry.entry_type.is_dir())
+            .find(|entry| entry.entry_type.is_dir())
             .unwrap()
             .clone();
         let mut directory_after = entries.clone();

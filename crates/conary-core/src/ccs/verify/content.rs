@@ -164,7 +164,7 @@ fn verify_reconstructed_file(
                 signed.size
             );
         }
-        whole_hasher.update(&chunk.data);
+        whole_hasher.update(chunk.data());
         index += 1;
         Ok(())
     })?;

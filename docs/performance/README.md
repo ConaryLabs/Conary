@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-30
-revision: 10
-summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results
+revision: 11
+summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, measured optimization results, and the one-pass CCS payload-preparation target
 ---
 
 # Performance evidence
@@ -33,7 +33,7 @@ passing the label. Network bytes, CAS work, SQLite statements, durability
 calls, complete-root scans, and internal phase timing remain separate typed
 counters rather than estimates derived from elapsed time.
 
-The current Remi conversion schema-v5 contract treats internal signed-archive
+The current Remi conversion schema-v6 contract treats internal signed-archive
 authentication and permanent verified-CAS admission as one fused physical
 pass. Its full elapsed time is recorded once in the `timing.phases` entry named
 `independent_transport_reopen`; `durable_cas_ingestion` is skipped because
@@ -56,7 +56,7 @@ Two current reopen fields must not be conflated:
   `conversion_core` or `end_to_end`. The output proof's separate complete CCS
   hash has the same boundary.
 
-Schema v5 retains the schema-v4 deletion of the former converter-owned
+Schema v6 retains the schema-v4 deletion of the former converter-owned
 `immediate_converter_reopen` phase and both
 `immediate_converter_reopen_*` inferred counters. The converter now returns an
 explicitly pending artifact; Remi verifies it once under the profile targets
@@ -386,9 +386,10 @@ second SHA-256 over the reopened content, so its cryptographic hash input was
 5,514,112,568 bytes. Those counters therefore described only the decode/spool
 pass and hid the complete projection reopen, reread, and duplicate hash.
 
-Schema v5 hard-cuts the raw report and schema v3 hard-cuts its public
-projection. The raw filename is `conversion-benchmark-v5.json`; the public
-filename is `conversion-benchmark-public-v3.json`. Schema v5 adds exact
+At the measured #766 step, schema v5 hard-cut the raw report and schema v3
+hard-cut its public projection. That historical run's raw filename was
+`conversion-benchmark-v5.json`; its public filename was
+`conversion-benchmark-public-v3.json`. Schema v5 added exact
 `native_payload_spool_file_reopens` accounting, including successful opens of
 zero-length files, and makes `native_payload_spool_bytes_reread` describe the
 bytes physically read after spooling. `native_payload_bytes_hashed` is the
@@ -491,6 +492,42 @@ This is one paired production sample, not a latency distribution. `cold`
 still means empty application conversion, cache, and CAS state rather than a
 dropped kernel page cache. It proves the exact RPM file-digest fusion and does
 not constitute a same-host native-package-manager performance comparison.
+
+## One-pass CCS payload preparation pre-change anchor: 2026-08-30
+
+The same protected production-XFS run
+[33299133807](https://github.com/FieldmouseWorks/Conary/actions/runs/33299133807)
+is the exact pre-#771 anchor. After native decode, CCS reference derivation took
+12.846 seconds and object emission took 35.871 seconds, or 48.717 seconds
+combined. Those phases operated over 21,083 regular content owners totaling
+2,757,056,284 bytes. Of that set, 7,967 files and 2,726,080,028 bytes used the
+canonical FastCDC layout; 13,116 files and 30,976,256 bytes used whole objects.
+
+The split implementation opened the 7,967 chunked sources once for reference
+derivation, then reopened all 21,083 regular sources for object emission. It
+therefore performed 29,050 payload-source opens and read 5,483,136,312 source
+bytes. Its payload-boundary SHA-256 input was 10,935,296,368 bytes: first-pass
+chunk identities, second-pass chunk identities, second-pass large-file whole
+content, and temporary-store object identities. The store attempted 51,434
+objects, wrote all 2,757,056,284 attempted bytes, and reread 117,682,166
+canonical duplicate bytes before emitting the exact 49,091-object,
+2,639,374,118-byte signed set.
+
+Schema v6 and public schema v4 replace that split evidence with one
+`payload_derivation_and_object_staging` phase. The exact target for the pinned
+subject is 21,083 source opens, 2,757,056,284 source bytes, zero source reopens
+or reread bytes, 2,726,080,028 chunk-identity hash bytes,
+2,757,056,284 whole-content hash bytes, and 5,483,136,312 aggregate payload
+crypto bytes. Staging must write only the 2,639,374,118 unique signed bytes,
+avoid 117,682,166 duplicate-write bytes, and perform zero canonical staging
+rereads or durability calls. Large files retain both required identities; the
+work reduction does not remove whole-content validation or chunk authority.
+
+Those are deterministic physical-work gates, not a latency promise. The merged
+candidate must be deployed and rerun against the same authority, subject, XFS
+host, and cache state before any realized wall/CPU/RSS improvement is claimed.
+No same-host native-package-manager diagnostic has yet been recorded for this
+subject.
 
 ## Remi conversion baseline: 2026-08-15
 

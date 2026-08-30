@@ -531,10 +531,11 @@ inheritable = false
             None,
         )
         .unwrap_err();
+        let error = format!("{error:#}");
         assert!(
-            error
-                .to_string()
-                .contains("does not match signed v3 authority")
+            error.contains("authenticate and stage whole payload")
+                && error.contains("payload size mismatch while staging"),
+            "{error}"
         );
     }
 

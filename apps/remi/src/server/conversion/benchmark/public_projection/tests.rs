@@ -1,7 +1,7 @@
 // apps/remi/src/server/conversion/benchmark/public_projection/tests.rs
 use super::*;
 use crate::server::conversion::{
-    CONVERSION_BENCHMARK_SCHEMA_V5, ConversionBenchmarkCatalogAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V6, ConversionBenchmarkCatalogAuthority,
     ConversionBenchmarkCatalogQuery, ConversionBenchmarkCatalogReopen,
     ConversionBenchmarkCatalogSetup, ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkView,
@@ -135,7 +135,11 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
     if cold {
         timing.record(
             ConversionPhase::NativeArchiveParseAndSpool,
-            Duration::from_millis(7),
+            Duration::from_millis(6),
+        );
+        timing.record(
+            ConversionPhase::PayloadDerivationAndObjectStaging,
+            Duration::from_millis(1),
         );
         timing.record(
             ConversionPhase::CompleteArchiveCopy,
@@ -163,11 +167,24 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.source_bytes_hashed = 5;
         timing.work.native_archive_entries_traversed = 79;
         timing.work.native_decompressed_archive_bytes_read = 83;
-        timing.work.native_payload_files_spooled = 1;
-        timing.work.native_payload_bytes_spooled = 5;
-        timing.work.native_payload_declared_bytes = 5;
-        timing.work.native_payload_bytes_hashed = 5;
-        timing.work.payload_reference_bytes_hashed = 89;
+        timing.work.native_payload_entries = 2;
+        timing.work.native_payload_regular_files = 2;
+        timing.work.native_payload_files_spooled = 2;
+        timing.work.native_payload_bytes_spooled = 20;
+        timing.work.native_payload_declared_bytes = 20;
+        timing.work.native_payload_bytes_hashed = 20;
+        timing.work.payload_files_examined = 2;
+        timing.work.payload_chunks_derived = 4;
+        timing.work.unique_payload_chunks_derived = 3;
+        timing.work.payload_source_files_opened = 2;
+        timing.work.payload_source_bytes_read = 20;
+        timing.work.payload_chunk_identity_bytes_hashed = 12;
+        timing.work.payload_whole_content_bytes_hashed = 20;
+        timing.work.payload_crypto_bytes_hashed = 32;
+        timing.work.staged_object_bytes_written = 17;
+        timing.work.staged_object_deduplicated_bytes = 3;
+        timing.work.staged_object_deduplications = 1;
+        timing.work.staged_unique_objects = 2;
         timing.work.ccs_output_bytes = 23;
         timing.work.ccs_output_bytes_hashed = 23;
         timing.work.independent_transport_reopen_ccs_bytes = 23;
@@ -196,10 +213,9 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
             ConversionPhase::NativeArchiveParseAndSpool,
             ConversionPhase::ArtifactIdentityAndAuthorityValidation,
             ConversionPhase::MetadataLifecycleAndAuthorityProjection,
-            ConversionPhase::PayloadReferenceDerivation,
+            ConversionPhase::PayloadDerivationAndObjectStaging,
             ConversionPhase::OutputWorkspacePreparation,
             ConversionPhase::ControlProjectionAndSigning,
-            ConversionPhase::PayloadObjectEmission,
             ConversionPhase::ArchiveAssemblyAndGzip,
             ConversionPhase::NativeProvenanceProjection,
             ConversionPhase::CompleteArchiveCopy,
@@ -216,10 +232,10 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
     timing
 }
 
-fn valid_report() -> ConversionBenchmarkReportV5 {
+fn valid_report() -> ConversionBenchmarkReportV6 {
     let output = valid_output();
-    ConversionBenchmarkReportV5 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V5,
+    ConversionBenchmarkReportV6 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V6,
         environment: ConversionBenchmarkEnvironment {
             hardware_label: "production-xfs".to_string(),
             remi_version: "0.1.0".to_string(),
@@ -313,7 +329,7 @@ fn valid_report() -> ConversionBenchmarkReportV5 {
     }
 }
 
-fn publish_raw(root: &Path, report: &ConversionBenchmarkReportV5) -> std::path::PathBuf {
+fn publish_raw(root: &Path, report: &ConversionBenchmarkReportV6) -> std::path::PathBuf {
     let raw_path = root.join(super::super::REPORT_FILE_NAME);
     super::super::report::publish_and_reopen_report(&raw_path, report)
         .expect("publish raw benchmark fixture");
@@ -337,7 +353,7 @@ fn assert_no_key(value: &Value, forbidden: &str) {
     }
 }
 
-fn assert_publication_rejected(report: &ConversionBenchmarkReportV5) -> String {
+fn assert_publication_rejected(report: &ConversionBenchmarkReportV6) -> String {
     let root = tempfile::tempdir().expect("create rejected-publication root");
     let raw_path = publish_raw(root.path(), report);
     let public_path = root.path().join(PUBLIC_REPORT_FILE_NAME);
@@ -373,7 +389,23 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
     for forbidden in ["binary_path", "path", "device_id", "reason", "error"] {
         assert_no_key(&value, forbidden);
     }
-    assert_eq!(value["schema_version"], PUBLIC_REPORT_SCHEMA_V3);
+    for retired in [
+        "nested_phases",
+        "payload_reference_bytes_read",
+        "payload_reference_bytes_hashed",
+        "payload_files_reopened",
+        "payload_object_bytes_read",
+        "second_pass_chunk_reference_bytes_hashed",
+        "second_pass_reconstructed_content_bytes_hashed",
+        "temporary_object_incoming_bytes_hashed",
+    ] {
+        assert_no_key(&value, retired);
+    }
+    assert_eq!(value["schema_version"], PUBLIC_REPORT_SCHEMA_V4);
+    assert_eq!(
+        value["raw_report"]["schema_version"],
+        CONVERSION_BENCHMARK_SCHEMA_V6
+    );
     assert_eq!(
         value["raw_report"]["sha256"],
         conary_core::hash::sha256(&raw_bytes)
@@ -408,10 +440,7 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
             projected["timing"]["phases"],
             serde_json::to_value(&timing.phases).unwrap()
         );
-        assert_eq!(
-            projected["timing"]["nested_phases"],
-            serde_json::to_value(&timing.nested_phases).unwrap()
-        );
+        assert!(projected["timing"].get("nested_phases").is_none());
         assert_eq!(
             projected["timing"]["work"],
             serde_json::to_value(&timing.work).unwrap()
@@ -429,9 +458,10 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
             {"phase": "cache_lookup", "duration_ms": 1},
         ])
     );
-    assert_eq!(
-        value["repetitions"][1]["timing"]["nested_phases"],
-        serde_json::json!([])
+    assert!(
+        value["repetitions"][1]["timing"]
+            .get("nested_phases")
+            .is_none()
     );
     assert_eq!(
         value["repetitions"][1]["timing"]["skipped_phases"],
@@ -442,10 +472,9 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
             "native_archive_parse_and_spool",
             "artifact_identity_and_authority_validation",
             "metadata_lifecycle_and_authority_projection",
-            "payload_reference_derivation",
+            "payload_derivation_and_object_staging",
             "output_workspace_preparation",
             "control_projection_and_signing",
-            "payload_object_emission",
             "archive_assembly_and_gzip",
             "native_provenance_projection",
             "complete_archive_copy",
@@ -471,21 +500,21 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
 }
 
 #[test]
-fn public_schema_v3_rejects_legacy_public_and_raw_versions() {
+fn public_schema_v4_rejects_legacy_public_and_raw_versions() {
     let report = valid_report();
     let raw_bytes = serde_json::to_vec(&report).unwrap();
     let mut public = project_report(&raw_bytes, &report).unwrap();
 
-    public.schema_version = 2;
+    public.schema_version = 3;
     assert!(validate_public_report(&public).is_err());
 
-    public.schema_version = PUBLIC_REPORT_SCHEMA_V3;
-    public.raw_report.schema_version = 4;
+    public.schema_version = PUBLIC_REPORT_SCHEMA_V4;
+    public.raw_report.schema_version = 5;
     assert!(validate_public_report(&public).is_err());
 }
 
 #[test]
-fn public_schema_v3_requires_exact_spool_reopen_work() {
+fn public_schema_v4_requires_exact_payload_source_reopen_work() {
     let report = valid_report();
     let raw_bytes = serde_json::to_vec(&report).unwrap();
     let public = project_report(&raw_bytes, &report).unwrap();
@@ -493,10 +522,52 @@ fn public_schema_v3_requires_exact_spool_reopen_work() {
     value["repetitions"][0]["timing"]["work"]
         .as_object_mut()
         .unwrap()
-        .remove("native_payload_spool_file_reopens");
+        .remove("payload_source_files_reopened");
 
-    let error = serde_json::from_value::<ConversionBenchmarkPublicReportV3>(value).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkPublicReportV4>(value).unwrap_err();
     assert!(error.to_string().contains("missing field"), "{error}");
+}
+
+#[test]
+fn public_schema_v4_rejects_retired_payload_shape() {
+    let report = valid_report();
+    let raw_bytes = serde_json::to_vec(&report).unwrap();
+
+    let mut legacy_work =
+        serde_json::to_value(project_report(&raw_bytes, &report).unwrap()).unwrap();
+    legacy_work["repetitions"][0]["timing"]["work"]
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "temporary_object_incoming_bytes_hashed".to_string(),
+            serde_json::json!(20),
+        );
+    let error =
+        serde_json::from_value::<ConversionBenchmarkPublicReportV4>(legacy_work).unwrap_err();
+    assert!(error.to_string().contains("unknown field"), "{error}");
+
+    let mut legacy_nested =
+        serde_json::to_value(project_report(&raw_bytes, &report).unwrap()).unwrap();
+    legacy_nested["repetitions"][0]["timing"]
+        .as_object_mut()
+        .unwrap()
+        .insert("nested_phases".to_string(), serde_json::json!([]));
+    let error =
+        serde_json::from_value::<ConversionBenchmarkPublicReportV4>(legacy_nested).unwrap_err();
+    assert!(error.to_string().contains("unknown field"), "{error}");
+
+    let mut legacy_phase =
+        serde_json::to_value(project_report(&raw_bytes, &report).unwrap()).unwrap();
+    legacy_phase["repetitions"][0]["timing"]["phases"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "phase": "payload_object_emission",
+            "duration_ms": 1,
+        }));
+    let error =
+        serde_json::from_value::<ConversionBenchmarkPublicReportV4>(legacy_phase).unwrap_err();
+    assert!(error.to_string().contains("unknown variant"), "{error}");
 }
 
 #[test]

@@ -36,16 +36,40 @@ pub const MAX_CHUNK_SIZE: u32 = 256 * 1024; // 256 KB maximum
 #[derive(Debug, Clone)]
 pub struct Chunk {
     /// SHA-256 hash of the chunk content
-    pub hash: [u8; 32],
+    hash: [u8; 32],
     /// Offset in the original file
-    pub offset: u64,
+    offset: u64,
     /// Length of the chunk
-    pub length: u32,
+    length: u32,
     /// The actual data (only populated during chunking, not storage)
-    pub data: Vec<u8>,
+    data: Vec<u8>,
 }
 
 impl Chunk {
+    /// SHA-256 identity computed over this chunk's exact bytes by the chunker.
+    #[must_use]
+    pub const fn hash(&self) -> &[u8; 32] {
+        &self.hash
+    }
+
+    /// Contiguous byte offset in the source stream.
+    #[must_use]
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    /// Exact number of authenticated bytes in this chunk.
+    #[must_use]
+    pub const fn length(&self) -> u32 {
+        self.length
+    }
+
+    /// Exact bytes bound to [`Self::hash`].
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
     /// Get the hash as a hex string
     pub fn hash_hex(&self) -> String {
         hex::encode(self.hash)
@@ -513,6 +537,20 @@ mod tests {
             assert_eq!(chunk.offset, offset);
             offset += u64::from(chunk.length);
         }
+    }
+
+    #[test]
+    fn chunk_exposes_read_only_authenticated_geometry() {
+        let data = b"opaque chunk evidence";
+        let chunks = Chunker::new().chunk_bytes(data);
+        assert_eq!(chunks.len(), 1);
+        let chunk = &chunks[0];
+
+        assert_eq!(chunk.offset(), 0);
+        assert_eq!(chunk.length(), data.len() as u32);
+        assert_eq!(chunk.data(), data);
+        assert_eq!(chunk.hash(), &crate::hash::sha256_bytes(data));
+        assert_eq!(chunk.hash_hex(), crate::hash::sha256(data));
     }
 
     #[test]

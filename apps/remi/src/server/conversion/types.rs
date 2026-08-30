@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const CONVERSION_BENCHMARK_SCHEMA_V5: u32 = 5;
+pub const CONVERSION_BENCHMARK_SCHEMA_V6: u32 = 6;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -251,7 +251,7 @@ pub struct ConversionBenchmarkEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConversionBenchmarkReportV5 {
+pub struct ConversionBenchmarkReportV6 {
     pub schema_version: u32,
     pub environment: ConversionBenchmarkEnvironment,
     pub authority: ConversionBenchmarkAuthority,

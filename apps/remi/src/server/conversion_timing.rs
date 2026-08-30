@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use conary_core::filesystem::VerifiedObjectBatchMetrics;
 
-/// Schema-v5 keeps the historical phase name while the implementation streams
+/// Schema-v6 keeps the historical phase name while the implementation streams
 /// independent archive verification directly into permanent CAS. Recording the
 /// retired second phase as skipped prevents the fused work from being counted
 /// twice in benchmark interpretation.
@@ -81,21 +81,22 @@ pub struct ConversionWorkMetrics {
     pub native_payload_spool_file_syncs: u64,
     pub native_payload_bytes_hashed: u64,
     pub payload_files_examined: u64,
-    pub payload_reference_bytes_read: u64,
-    pub payload_reference_bytes_hashed: u64,
     pub payload_chunks_derived: u64,
     pub unique_payload_chunks_derived: u64,
-    pub payload_files_reopened: u64,
-    pub payload_object_bytes_read: u64,
-    pub second_pass_chunk_reference_bytes_hashed: u64,
-    pub second_pass_reconstructed_content_bytes_hashed: u64,
-    pub temporary_object_incoming_bytes_hashed: u64,
-    pub temporary_object_bytes_written: u64,
-    pub temporary_object_canonical_bytes_reread: u64,
-    pub temporary_object_hits: u64,
-    pub temporary_object_misses: u64,
-    pub temporary_object_file_syncs: u64,
-    pub temporary_object_shard_syncs: u64,
+    pub payload_source_files_opened: u64,
+    pub payload_source_bytes_read: u64,
+    pub payload_source_files_reopened: u64,
+    pub payload_source_bytes_reread: u64,
+    pub payload_chunk_identity_bytes_hashed: u64,
+    pub payload_whole_content_bytes_hashed: u64,
+    pub payload_crypto_bytes_hashed: u64,
+    pub staged_object_bytes_written: u64,
+    pub staged_object_deduplicated_bytes: u64,
+    pub staged_object_deduplications: u64,
+    pub staged_unique_objects: u64,
+    pub staged_object_canonical_bytes_reread: u64,
+    pub staged_object_file_syncs: u64,
+    pub staged_object_shard_syncs: u64,
     pub archive_members_traversed: u64,
     pub archive_input_bytes: u64,
     pub ccs_output_bytes: u64,
@@ -146,26 +147,26 @@ impl ConversionWorkMetrics {
         &mut self,
         metrics: &conary_core::ccs::convert::NativeConversionMetrics,
     ) {
-        self.payload_files_examined = metrics.payload_files_examined;
-        self.payload_reference_bytes_read = metrics.payload_reference_bytes_read;
-        self.payload_reference_bytes_hashed = metrics.payload_reference_bytes_hashed;
-        self.payload_chunks_derived = metrics.payload_chunks_derived;
-        self.unique_payload_chunks_derived = metrics.unique_payload_chunks_derived;
-        self.payload_files_reopened = metrics.ccs_write.payload_files_traversed;
-        self.payload_object_bytes_read = metrics.ccs_write.payload_bytes_read;
-        self.second_pass_chunk_reference_bytes_hashed =
-            metrics.ccs_write.chunk_reference_bytes_hashed;
-        self.second_pass_reconstructed_content_bytes_hashed =
-            metrics.ccs_write.reconstructed_content_bytes_hashed;
-        self.temporary_object_incoming_bytes_hashed =
-            metrics.ccs_write.temporary_object_incoming_bytes_hashed;
-        self.temporary_object_bytes_written = metrics.ccs_write.temporary_object_bytes_written;
-        self.temporary_object_canonical_bytes_reread =
-            metrics.ccs_write.temporary_object_canonical_bytes_reread;
-        self.temporary_object_hits = metrics.ccs_write.temporary_object_hits;
-        self.temporary_object_misses = metrics.ccs_write.temporary_object_misses;
-        self.temporary_object_file_syncs = metrics.ccs_write.temporary_object_file_syncs;
-        self.temporary_object_shard_syncs = metrics.ccs_write.temporary_object_shard_syncs;
+        self.payload_files_examined = metrics.ccs_write.payload_files_examined;
+        self.payload_chunks_derived = metrics.ccs_write.payload_chunks_derived;
+        self.unique_payload_chunks_derived = metrics.ccs_write.unique_payload_chunks_derived;
+        self.payload_source_files_opened = metrics.ccs_write.payload_source_files_opened;
+        self.payload_source_bytes_read = metrics.ccs_write.payload_source_bytes_read;
+        self.payload_source_files_reopened = metrics.ccs_write.payload_source_files_reopened;
+        self.payload_source_bytes_reread = metrics.ccs_write.payload_source_bytes_reread;
+        self.payload_chunk_identity_bytes_hashed =
+            metrics.ccs_write.payload_chunk_identity_bytes_hashed;
+        self.payload_whole_content_bytes_hashed =
+            metrics.ccs_write.payload_whole_content_bytes_hashed;
+        self.payload_crypto_bytes_hashed = metrics.ccs_write.payload_crypto_bytes_hashed;
+        self.staged_object_bytes_written = metrics.ccs_write.staged_object_bytes_written;
+        self.staged_object_deduplicated_bytes = metrics.ccs_write.staged_object_deduplicated_bytes;
+        self.staged_object_deduplications = metrics.ccs_write.staged_object_deduplications;
+        self.staged_unique_objects = metrics.ccs_write.staged_unique_objects;
+        self.staged_object_canonical_bytes_reread =
+            metrics.ccs_write.staged_object_canonical_bytes_reread;
+        self.staged_object_file_syncs = metrics.ccs_write.staged_object_file_syncs;
+        self.staged_object_shard_syncs = metrics.ccs_write.staged_object_shard_syncs;
         self.archive_members_traversed = metrics.ccs_write.archive_members_traversed;
         self.archive_input_bytes = metrics.ccs_write.archive_input_bytes;
         self.ccs_output_bytes = metrics.ccs_write.ccs_output_bytes;
@@ -199,10 +200,9 @@ pub enum ConversionPhase {
     NativeArchiveParseAndSpool,
     ArtifactIdentityAndAuthorityValidation,
     MetadataLifecycleAndAuthorityProjection,
-    PayloadReferenceDerivation,
+    PayloadDerivationAndObjectStaging,
     OutputWorkspacePreparation,
     ControlProjectionAndSigning,
-    PayloadObjectEmission,
     ArchiveAssemblyAndGzip,
     NativeProvenanceProjection,
     CompleteArchiveCopy,
@@ -211,21 +211,6 @@ pub enum ConversionPhase {
     DurableCasIngestion,
     R2WriteThrough,
     DatabasePersistence,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConversionNestedPhase {
-    TemporaryObjectStaging,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConversionNestedPhaseTiming {
-    pub phase: ConversionNestedPhase,
-    pub included_in: ConversionPhase,
-    #[serde(with = "json_u128")]
-    pub duration_ms: u128,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,7 +238,6 @@ pub struct ConversionTimingReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<ConversionSourceIdentity>,
     pub phases: Vec<ConversionPhaseTiming>,
-    pub nested_phases: Vec<ConversionNestedPhaseTiming>,
     pub skipped_phases: Vec<ConversionSkippedPhase>,
     pub work: ConversionWorkMetrics,
     #[serde(with = "json_u128")]
@@ -271,7 +255,6 @@ impl ConversionTimingReport {
             version: version.map(ToString::to_string),
             source: None,
             phases: Vec::new(),
-            nested_phases: Vec::new(),
             skipped_phases: Vec::new(),
             work: ConversionWorkMetrics::default(),
             total_ms: 0,
@@ -294,19 +277,6 @@ impl ConversionTimingReport {
         });
     }
 
-    pub fn record_nested(
-        &mut self,
-        phase: ConversionNestedPhase,
-        included_in: ConversionPhase,
-        duration: Duration,
-    ) {
-        self.nested_phases.push(ConversionNestedPhaseTiming {
-            phase,
-            included_in,
-            duration_ms: duration.as_millis(),
-        });
-    }
-
     pub fn finish(&mut self, success: bool) {
         self.success = success;
         self.total_ms = self.started_at.elapsed().as_millis();
@@ -324,11 +294,6 @@ mod tests {
         let mut report = ConversionTimingReport::new("fedora", "nginx", Some("1.28.0"));
         report.record(ConversionPhase::PackageLookup, Duration::from_millis(11));
         report.record(ConversionPhase::Download, Duration::from_millis(22));
-        report.record_nested(
-            ConversionNestedPhase::TemporaryObjectStaging,
-            ConversionPhase::PayloadObjectEmission,
-            Duration::from_millis(7),
-        );
         report.record_skipped(ConversionPhase::R2WriteThrough, "r2 store not configured");
         report.finish(true);
 
@@ -342,14 +307,7 @@ mod tests {
         assert_eq!(value["phases"][0]["duration_ms"], json!(11));
         assert_eq!(value["phases"][1]["phase"], json!("download"));
         assert_eq!(value["phases"][1]["duration_ms"], json!(22));
-        assert_eq!(
-            value["nested_phases"][0],
-            json!({
-                "phase": "temporary_object_staging",
-                "included_in": "payload_object_emission",
-                "duration_ms": 7
-            })
-        );
+        assert!(value.get("nested_phases").is_none());
         assert_eq!(
             value["skipped_phases"][0]["phase"],
             json!("r2_write_through")
@@ -367,11 +325,6 @@ mod tests {
             ConversionPhase::NativeArchiveParseAndSpool,
             Duration::from_millis(11),
         );
-        report.record_nested(
-            ConversionNestedPhase::TemporaryObjectStaging,
-            ConversionPhase::PayloadObjectEmission,
-            Duration::from_millis(7),
-        );
         report.total_ms = 19;
 
         let encoded = serde_json::to_vec(&report).expect("serialize timing report");
@@ -379,30 +332,28 @@ mod tests {
             serde_json::from_slice(&encoded).expect("reopen timing report");
 
         assert_eq!(reopened.phases[0].duration_ms, 11);
-        assert_eq!(reopened.nested_phases[0].duration_ms, 7);
         assert_eq!(reopened.total_ms, 19);
     }
 
     #[test]
-    fn native_conversion_work_maps_without_collapsing_payload_passes() {
+    fn native_conversion_work_maps_exact_fused_payload_preparation() {
         let metrics = conary_core::ccs::convert::NativeConversionMetrics {
-            payload_files_examined: 5,
-            payload_reference_bytes_read: 100,
-            payload_reference_bytes_hashed: 100,
-            payload_chunks_derived: 4,
-            unique_payload_chunks_derived: 3,
             ccs_write: conary_core::ccs::builder::CcsPackageWriteMetrics {
-                payload_files_traversed: 5,
-                payload_bytes_read: 120,
-                chunk_reference_bytes_hashed: 100,
-                reconstructed_content_bytes_hashed: 100,
-                temporary_object_incoming_bytes_hashed: 120,
-                temporary_object_bytes_written: 120,
-                temporary_object_canonical_bytes_reread: 20,
-                temporary_object_hits: 1,
-                temporary_object_misses: 3,
-                temporary_object_file_syncs: 4,
-                temporary_object_shard_syncs: 3,
+                payload_files_examined: 5,
+                payload_chunks_derived: 4,
+                unique_payload_chunks_derived: 3,
+                payload_source_files_opened: 5,
+                payload_source_bytes_read: 120,
+                payload_chunk_identity_bytes_hashed: 100,
+                payload_whole_content_bytes_hashed: 120,
+                payload_crypto_bytes_hashed: 220,
+                staged_object_bytes_written: 100,
+                staged_object_deduplicated_bytes: 20,
+                staged_object_deduplications: 1,
+                staged_unique_objects: 3,
+                staged_object_canonical_bytes_reread: 0,
+                staged_object_file_syncs: 0,
+                staged_object_shard_syncs: 0,
                 archive_members_traversed: 12,
                 archive_input_bytes: 240,
                 ccs_output_bytes: 180,
@@ -417,9 +368,16 @@ mod tests {
 
         work.record_native_conversion(&metrics);
 
-        assert_eq!(work.payload_reference_bytes_read, 100);
-        assert_eq!(work.payload_object_bytes_read, 120);
-        assert_eq!(work.temporary_object_file_syncs, 4);
+        assert_eq!(work.payload_source_files_opened, 5);
+        assert_eq!(work.payload_source_bytes_read, 120);
+        assert_eq!(work.payload_chunk_identity_bytes_hashed, 100);
+        assert_eq!(work.payload_whole_content_bytes_hashed, 120);
+        assert_eq!(work.payload_crypto_bytes_hashed, 220);
+        assert_eq!(work.staged_object_bytes_written, 100);
+        assert_eq!(work.staged_object_deduplicated_bytes, 20);
+        assert_eq!(work.staged_object_deduplications, 1);
+        assert_eq!(work.staged_unique_objects, 3);
+        assert_eq!(work.staged_object_canonical_bytes_reread, 0);
         assert_eq!(work.archive_input_bytes, 240);
         assert_eq!(work.ccs_output_bytes_hashed, 180);
         assert_eq!(work.maximum_retained_staging_bytes, 420);

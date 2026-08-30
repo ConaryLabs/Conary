@@ -17,8 +17,6 @@ use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
-use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -285,79 +283,36 @@ pub fn write_verified_transport_archive(
     verified: &VerifiedCcsArchive,
     output_path: &Path,
 ) -> Result<()> {
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
-    use tar::{Builder, EntryType, Header};
-
-    let parent = output_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let mut staged = tempfile::Builder::new()
-        .prefix(".conary-ccs-transport-")
-        .tempfile_in(parent)?;
-    {
-        let encoder = GzEncoder::new(staged.as_file_mut(), Compression::default());
-        let mut archive = Builder::new(encoder);
-        let mut directory = Header::new_gnu();
-        directory.set_entry_type(EntryType::Directory);
-        directory.set_mode(0o755);
-        directory.set_size(0);
-        directory.set_mtime(TRANSPORT_ARCHIVE_MTIME);
-        directory.set_cksum();
-        archive.append_data(&mut directory, "objects", std::io::empty())?;
-
-        let raw = verified.raw_control_documents();
-        let mut controls: BTreeMap<&str, &[u8]> = BTreeMap::new();
-        controls.insert("MANIFEST", &raw.manifest);
-        if let Some(value) = raw.build_attestation.as_deref() {
-            controls.insert("MANIFEST.attestation.json", value.as_bytes());
-        }
-        if let Some(value) = raw.foreign_conversion_boundary.as_deref() {
-            controls.insert("MANIFEST.conversion-boundary.json", value.as_bytes());
-        }
-        controls.insert("MANIFEST.sig", raw.signature.as_bytes());
-        if let Some(value) = raw.debug_toml.as_deref() {
-            controls.insert("MANIFEST.toml", value);
-        }
-        for (path, bytes) in controls {
-            append_bytes(&mut archive, path, bytes)?;
-        }
-
-        let (expected_objects, _) = super::verify::content::expected_objects(verified.authority())?;
-        let mut objects = verified.object_sources().iter().collect::<Vec<_>>();
-        objects.sort_by_key(|(sha256, _)| *sha256);
-        for (sha256, source) in objects {
-            let path = format!("objects/{}/{}", &sha256[..2], &sha256[2..]);
-            let mut reader = source.open()?;
-            let size = expected_objects
-                .get(sha256)
-                .copied()
-                .context("verified transport object is absent from signed authority")?;
-            let mut header = Header::new_gnu();
-            header.set_entry_type(EntryType::Regular);
-            header.set_mode(0o644);
-            header.set_size(size);
-            header.set_mtime(TRANSPORT_ARCHIVE_MTIME);
-            header.set_cksum();
-            archive.append_data(&mut header, path, &mut reader)?;
-        }
-        archive.into_inner()?.finish()?;
+    let raw = verified.raw_control_documents();
+    let mut controls: BTreeMap<&str, &[u8]> = BTreeMap::new();
+    controls.insert("MANIFEST", &raw.manifest);
+    if let Some(value) = raw.build_attestation.as_deref() {
+        controls.insert("MANIFEST.attestation.json", value.as_bytes());
     }
-    staged.as_file_mut().flush()?;
-    staged.persist(output_path).map_err(|error| error.error)?;
-    Ok(())
-}
-
-fn append_bytes<W: Write>(archive: &mut tar::Builder<W>, path: &str, bytes: &[u8]) -> Result<()> {
-    let mut header = tar::Header::new_gnu();
-    header.set_entry_type(tar::EntryType::Regular);
-    header.set_mode(0o644);
-    header.set_size(bytes.len() as u64);
-    header.set_mtime(TRANSPORT_ARCHIVE_MTIME);
-    header.set_cksum();
-    archive.append_data(&mut header, path, bytes)?;
+    if let Some(value) = raw.foreign_conversion_boundary.as_deref() {
+        controls.insert("MANIFEST.conversion-boundary.json", value.as_bytes());
+    }
+    controls.insert("MANIFEST.sig", raw.signature.as_bytes());
+    if let Some(value) = raw.debug_toml.as_deref() {
+        controls.insert("MANIFEST.toml", value);
+    }
+    let (expected_objects, _) = super::verify::content::expected_objects(verified.authority())?;
+    crate::ccs::archive_emitter::write_exact_archive(
+        output_path,
+        TRANSPORT_ARCHIVE_MTIME,
+        &controls,
+        &expected_objects,
+        |sha256| {
+            verified
+                .object_sources()
+                .get(sha256)
+                .with_context(|| {
+                    format!("verified transport object {sha256} has no authenticated source")
+                })?
+                .open()
+                .map_err(anyhow::Error::from)
+        },
+    )?;
     Ok(())
 }
 

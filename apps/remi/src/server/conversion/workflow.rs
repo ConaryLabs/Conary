@@ -6,8 +6,7 @@ use super::lookup::{PackageDownloadRequest, PinnedConversionSource};
 use super::persistence::PersistConversionInput;
 use crate::server::catalog_authority::ProfileRevisionSelection;
 use crate::server::conversion_timing::{
-    ConversionNestedPhase, ConversionNestedPhaseTiming, ConversionPhase, ConversionPhaseTiming,
-    ConversionSourceIdentity, ConversionTimingReport,
+    ConversionPhase, ConversionPhaseTiming, ConversionSourceIdentity, ConversionTimingReport,
 };
 use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow};
@@ -29,7 +28,6 @@ struct ParsedConversion {
     conversion_result: PendingConversionResult,
     source: PinnedConversionSource,
     phase_timings: Vec<ConversionPhaseTiming>,
-    nested_phase_timings: Vec<ConversionNestedPhaseTiming>,
     native_parse: conary_core::packages::NativePackageParseMetrics,
     native_payload_entries: u64,
     native_payload_regular_files: u64,
@@ -438,9 +436,6 @@ impl ConversionService {
         .await
         .map_err(|e| anyhow!("conversion task panicked: {e}"))??;
         timing.phases.extend(parsed.phase_timings.clone());
-        timing
-            .nested_phases
-            .extend(parsed.nested_phase_timings.clone());
         timing.work.native_payload_entries = parsed.native_payload_entries;
         timing.work.native_payload_regular_files = parsed.native_payload_regular_files;
         timing.work.native_payload_declared_bytes = parsed.native_payload_declared_bytes;
@@ -538,10 +533,9 @@ impl ConversionService {
             ConversionPhase::NativeArchiveParseAndSpool,
             ConversionPhase::ArtifactIdentityAndAuthorityValidation,
             ConversionPhase::MetadataLifecycleAndAuthorityProjection,
-            ConversionPhase::PayloadReferenceDerivation,
+            ConversionPhase::PayloadDerivationAndObjectStaging,
             ConversionPhase::OutputWorkspacePreparation,
             ConversionPhase::ControlProjectionAndSigning,
-            ConversionPhase::PayloadObjectEmission,
             ConversionPhase::ArchiveAssemblyAndGzip,
             ConversionPhase::NativeProvenanceProjection,
             ConversionPhase::CompleteArchiveCopy,
@@ -683,8 +677,11 @@ impl ConversionService {
                     .as_millis(),
             },
             ConversionPhaseTiming {
-                phase: ConversionPhase::PayloadReferenceDerivation,
-                duration_ms: metrics.payload_reference_derivation.as_millis(),
+                phase: ConversionPhase::PayloadDerivationAndObjectStaging,
+                duration_ms: metrics
+                    .ccs_write
+                    .payload_derivation_and_object_staging
+                    .as_millis(),
             },
             ConversionPhaseTiming {
                 phase: ConversionPhase::OutputWorkspacePreparation,
@@ -695,10 +692,6 @@ impl ConversionService {
                 duration_ms: metrics.ccs_write.control_projection_and_signing.as_millis(),
             },
             ConversionPhaseTiming {
-                phase: ConversionPhase::PayloadObjectEmission,
-                duration_ms: metrics.ccs_write.payload_object_emission.as_millis(),
-            },
-            ConversionPhaseTiming {
                 phase: ConversionPhase::ArchiveAssemblyAndGzip,
                 duration_ms: metrics.ccs_write.archive_assembly_and_gzip.as_millis(),
             },
@@ -707,12 +700,6 @@ impl ConversionService {
                 duration_ms: metrics.native_provenance_projection.as_millis(),
             },
         ]);
-        let nested_phase_timings = vec![ConversionNestedPhaseTiming {
-            phase: ConversionNestedPhase::TemporaryObjectStaging,
-            included_in: ConversionPhase::PayloadObjectEmission,
-            duration_ms: metrics.ccs_write.temporary_object_staging.as_millis(),
-        }];
-
         Ok(ParsedConversion {
             metadata,
             format,
@@ -720,7 +707,6 @@ impl ConversionService {
             conversion_result,
             source,
             phase_timings,
-            nested_phase_timings,
             native_parse,
             native_payload_entries,
             native_payload_regular_files,

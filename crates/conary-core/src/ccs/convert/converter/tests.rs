@@ -850,28 +850,45 @@ fn conversion_preserves_exact_source_architecture_tokens_in_signed_identity() {
 
     let temp_dir = tempfile::tempdir().unwrap();
     let converter = passive_test_converter(temp_dir.path());
-    for (name, scheme, architecture, multi_arch, source_format) in [
+    for (name, version, scheme, architecture, multi_arch, source_format) in [
         (
             "debian-all-token",
+            "1",
             VersionScheme::Debian,
             "all",
             Some(DebianMultiArch::No),
             "deb",
         ),
-        ("arch-any-token", VersionScheme::Arch, "any", None, "arch"),
+        (
+            "arch-any-token",
+            "1",
+            VersionScheme::Arch,
+            "any",
+            None,
+            "arch",
+        ),
         (
             "rpm-noarch-token",
+            "1",
             VersionScheme::Rpm,
             "noarch",
             None,
             "rpm",
+        ),
+        (
+            "eopkg-x86-64-token",
+            "1-1",
+            VersionScheme::Eopkg,
+            "x86_64",
+            None,
+            "eopkg",
         ),
     ] {
         let mut metadata = make_test_metadata();
         set_test_identity(
             &mut metadata,
             name,
-            "1",
+            version,
             scheme,
             Some(architecture),
             multi_arch,

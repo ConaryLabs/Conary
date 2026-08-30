@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn conversion_metrics_expose_each_chunked_payload_pass_and_ephemeral_staging() {
+fn conversion_metrics_prove_one_pass_chunk_derivation_and_object_staging() {
     let temp_dir = tempfile::tempdir().unwrap();
     let metadata = make_test_metadata();
     let converter = passive_test_converter(temp_dir.path());
@@ -18,33 +18,39 @@ fn conversion_metrics_expose_each_chunked_payload_pass_and_ephemeral_staging() {
             "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         )
         .unwrap();
-    let metrics = &result.metrics;
-    let ccs_write = &metrics.ccs_write;
+    let ccs_write = &result.metrics.ccs_write;
     let independent_output = std::fs::read(&result.package_path).unwrap();
 
-    assert_eq!(metrics.payload_files_examined, 1);
-    assert_eq!(metrics.payload_reference_bytes_read, bytes.len() as u64);
-    assert_eq!(metrics.payload_reference_bytes_hashed, bytes.len() as u64);
-    assert!(metrics.payload_chunks_derived > 0);
-    assert!(metrics.unique_payload_chunks_derived > 0);
-    assert_eq!(ccs_write.payload_files_traversed, 1);
-    assert_eq!(ccs_write.payload_bytes_read, bytes.len() as u64);
-    assert_eq!(ccs_write.chunk_reference_bytes_hashed, bytes.len() as u64);
+    assert_eq!(ccs_write.payload_files_examined, 1);
+    assert!(ccs_write.payload_chunks_derived > 0);
+    assert!(ccs_write.unique_payload_chunks_derived > 0);
+    assert_eq!(ccs_write.payload_source_files_opened, 1);
+    assert_eq!(ccs_write.payload_source_bytes_read, bytes.len() as u64);
+    assert_eq!(ccs_write.payload_source_files_reopened, 0);
+    assert_eq!(ccs_write.payload_source_bytes_reread, 0);
     assert_eq!(
-        ccs_write.reconstructed_content_bytes_hashed,
+        ccs_write.payload_chunk_identity_bytes_hashed,
         bytes.len() as u64
     );
     assert_eq!(
-        ccs_write.temporary_object_incoming_bytes_hashed,
+        ccs_write.payload_whole_content_bytes_hashed,
         bytes.len() as u64
     );
-    assert_eq!(ccs_write.temporary_object_bytes_written, bytes.len() as u64);
     assert_eq!(
-        ccs_write.temporary_object_hits + ccs_write.temporary_object_misses,
-        metrics.payload_chunks_derived
+        ccs_write.payload_crypto_bytes_hashed,
+        bytes.len() as u64 * 2
     );
-    assert_eq!(ccs_write.temporary_object_file_syncs, 0);
-    assert_eq!(ccs_write.temporary_object_shard_syncs, 0);
+    assert_eq!(
+        ccs_write.staged_object_bytes_written + ccs_write.staged_object_deduplicated_bytes,
+        bytes.len() as u64
+    );
+    assert_eq!(
+        ccs_write.staged_object_deduplications + ccs_write.staged_unique_objects,
+        ccs_write.payload_chunks_derived
+    );
+    assert_eq!(ccs_write.staged_object_canonical_bytes_reread, 0);
+    assert_eq!(ccs_write.staged_object_file_syncs, 0);
+    assert_eq!(ccs_write.staged_object_shard_syncs, 0);
     assert!(ccs_write.archive_members_traversed > 0);
     assert!(ccs_write.archive_input_bytes >= bytes.len() as u64);
     assert!(ccs_write.ccs_output_bytes > 0);
