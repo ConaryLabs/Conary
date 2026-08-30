@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-30
-revision: 61
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS conversion benchmarking with path-free typed failure evidence, and current remote development tooling
+revision: 62
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS schema-v5 conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -292,8 +292,8 @@ workflow.
   Every retained benchmark-state mutation stays under a new
   `/work/remi-conversion-benchmarks/<run-id>` root outside `/conary`; repeated
   identities and preexisting transports fail closed.
-- The complete schema-v4 report remains mode 0600 on the production host. The
-  authenticated caller receives only `conversion-benchmark-public-v2.json`: a
+- The complete schema-v5 report remains mode 0600 on the production host. The
+  authenticated caller receives only `conversion-benchmark-public-v3.json`: a
   strict Rust-produced projection that binds the exact raw-report byte count
   and SHA-256, preserves authority, timing, process, VFS, work, and output
   counters, and removes binary paths, root paths and device IDs, free-form
@@ -302,7 +302,13 @@ workflow.
   successful cold and one hot repetition with equal proof digests and
   byte/count geometry, and preserves each repetition's independently measured
   reopen and complete-hash duration. Every reported root must prove XFS. The
-  workflow retains the public projection, source-byte verification, candidate
+  generic RPM predicate additionally requires exact one-pass decode/spool
+  geometry: spooled bytes equal declared bytes, payload spool reopens and
+  reread bytes are zero, and cryptographic hash input is exactly one or two
+  times spooled bytes according to the declared RPM file-digest algorithm.
+  This predicate applies to the dispatched RPM subject rather than naming a
+  fixed package. The workflow retains the public projection, source-byte
+  verification, candidate
   manifest, and deployment inspection for 30 days. It never uploads the raw
   report, source bytes, source URL, SSH material, or host-local paths.
 - A failed production benchmark emits exactly one helper-owned schema-v1

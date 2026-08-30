@@ -120,6 +120,8 @@ fn rpm_parse_metrics_report_archive_spool_and_hash_work() {
     assert_eq!(metrics.archive_entries_traversed, 1);
     assert_eq!(metrics.payload_files_spooled, 1);
     assert_eq!(metrics.payload_bytes_spooled, 5);
+    assert_eq!(metrics.payload_spool_bytes_reread, 0);
+    assert_eq!(metrics.payload_spool_file_reopens, 0);
     assert_eq!(metrics.payload_spool_file_syncs, 0);
     assert_eq!(metrics.payload_bytes_hashed, 5);
     assert!(metrics.source_archive_bytes_read > 0);

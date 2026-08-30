@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-29
-revision: 69
-summary: Convert foreign packages through lossless source authority, typed pending-to-verified finalization, ephemeral exact native-payload and archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
+last_updated: 2026-08-30
+revision: 70
+summary: Convert foreign packages through lossless source authority, decode-pass typed native payload digest evidence, typed pending-to-verified finalization, ephemeral exact native-payload and archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -587,16 +587,29 @@ decompression-bomb resistance. `docs/specs/ccs-format-v3.md` owns the contract.
 RPM, Debian, Arch, and eopkg extraction retain regular payloads in a shared
 `PayloadSpool` lifetime backed by `Arc<TempDir>`. Each parser streams bounded
 declared bytes into a unique file while deriving the source-format and
-whole-file checksums, closes that file, and reopens it for chunking and signed
-CCS emission. These same-process files are not crash-recovery or package
-authority and are never synchronized per payload file; parse or conversion
-failure cannot commit their paths into CCS, permanent CAS, database, package,
-or generation authority. Benchmark work therefore reports the exact spooled
-file and byte counts with zero payload-spool durability calls. Each consumer
-then selects one independent CCS verification boundary: Remi streams directly
-into permanent CAS, a mutating local install uses its installation CAS, and
-verification-only, dry-run, or foreign-cook callers use a bounded spool. The
-converter does not perform and discard an earlier hidden verification pass.
+whole-file checksums, closes that file, and later reopens it for chunking and
+signed CCS emission. RPM first pairs the exact `FILEDIGESTALGO` with every
+`FILEDIGESTS` value. Its bounded decode/spool copy then produces typed,
+algorithm-tagged digest evidence alongside the content SHA-256: code 8 shares
+that SHA-256 state, while every other supported algorithm uses one concurrent
+declared-digest state. Header projection consumes this evidence without
+reopening or rereading a spool file and fails closed on an unsupported
+algorithm or digest mismatch.
+
+These same-process files are not crash-recovery or package authority and are
+never synchronized per payload file; parse or conversion failure cannot commit
+their paths into CCS, permanent CAS, database, package, or generation
+authority. Benchmark work reports the exact spooled file and byte counts,
+successful spool-file reopens including zero-length files, reread bytes,
+cryptographic hash input, and zero payload-spool durability calls. RPM's
+one-pass projection has zero reopens and reread bytes; its cryptographic input
+is exactly one times spooled bytes for code 8 or two times spooled bytes for
+another supported declared digest. Additive CPIO CRC work is not included.
+Each consumer then selects one independent CCS verification boundary: Remi
+streams directly into permanent CAS, a mutating local install uses its
+installation CAS, and verification-only, dry-run, or foreign-cook callers use
+a bounded spool. The converter does not perform and discard an earlier hidden
+verification pass.
 
 Verification-only and dry-run callers use a temporary payload spool and do not
 create permanent CAS state. Mutating CCS install, restore, and repository-batch

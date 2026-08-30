@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use conary_core::filesystem::VerifiedObjectBatchMetrics;
 
-/// Schema-v4 keeps the historical phase name while the implementation streams
+/// Schema-v5 keeps the historical phase name while the implementation streams
 /// independent archive verification directly into permanent CAS. Recording the
 /// retired second phase as skipped prevents the fused work from being counted
 /// twice in benchmark interpretation.
@@ -76,6 +76,7 @@ pub struct ConversionWorkMetrics {
     pub native_intermediate_archive_file_syncs: u64,
     pub native_payload_files_spooled: u64,
     pub native_payload_bytes_spooled: u64,
+    pub native_payload_spool_file_reopens: u64,
     pub native_payload_spool_bytes_reread: u64,
     pub native_payload_spool_file_syncs: u64,
     pub native_payload_bytes_hashed: u64,
@@ -135,6 +136,7 @@ impl ConversionWorkMetrics {
         self.native_intermediate_archive_file_syncs = metrics.intermediate_archive_file_syncs;
         self.native_payload_files_spooled = metrics.payload_files_spooled;
         self.native_payload_bytes_spooled = metrics.payload_bytes_spooled;
+        self.native_payload_spool_file_reopens = metrics.payload_spool_file_reopens;
         self.native_payload_spool_bytes_reread = metrics.payload_spool_bytes_reread;
         self.native_payload_spool_file_syncs = metrics.payload_spool_file_syncs;
         self.native_payload_bytes_hashed = metrics.payload_bytes_hashed;
@@ -436,6 +438,7 @@ mod tests {
             intermediate_archive_file_syncs: 1,
             payload_files_spooled: 10,
             payload_bytes_spooled: 300,
+            payload_spool_file_reopens: 2,
             payload_spool_bytes_reread: 30,
             payload_spool_file_syncs: 10,
             payload_bytes_hashed: 600,
@@ -447,6 +450,7 @@ mod tests {
         assert_eq!(work.native_source_archive_bytes_read, 200);
         assert_eq!(work.native_archive_passes, 3);
         assert_eq!(work.native_intermediate_archive_file_syncs, 1);
+        assert_eq!(work.native_payload_spool_file_reopens, 2);
         assert_eq!(work.native_payload_spool_bytes_reread, 30);
         assert_eq!(work.native_payload_bytes_hashed, 600);
     }

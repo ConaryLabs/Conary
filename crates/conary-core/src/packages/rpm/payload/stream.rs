@@ -2,7 +2,8 @@
 
 //! Streaming RPM payload decompression and exact CPIO grammar.
 
-use super::header::HeaderRecord;
+use super::digest::{ComputedFileDigest, ComputedRegularContent, DeclaredDigestHasher};
+use super::header::{HeaderRecord, RpmFileDigestAlgorithm};
 use super::{mode_type, parse_error};
 use crate::ccs::{ArchiveDecodeBounds, CCS_BUDGET};
 use crate::compression::{self, CompressionFormat};
@@ -11,7 +12,7 @@ use crate::packages::archive_utils::normalize_path;
 use crate::packages::payload::{PAYLOAD_IO_BUFFER_SIZE, PayloadSpool, ReopenablePayload};
 use rpm::{IndexTag, Package};
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 
 const CPIO_HEADER_SIZE: usize = 110;
@@ -25,8 +26,14 @@ pub(super) struct PayloadMember {
     pub(super) header_index: usize,
     pub(super) archive_position: usize,
     pub(super) content_size: u64,
-    pub(super) sha256: Option<String>,
-    pub(super) source: Option<ReopenablePayload>,
+    pub(super) regular: Option<RegularPayloadEvidence>,
+}
+
+/// One indivisible regular-member source and its same-pass digest evidence.
+#[derive(Debug, Clone)]
+pub(super) struct RegularPayloadEvidence {
+    pub(super) source: ReopenablePayload,
+    pub(super) computed: ComputedRegularContent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -349,7 +356,7 @@ impl<'a> RpmPayloadReader<'a> {
             size,
         )?;
         let record = &self.records[index];
-        let (source, sha256, actual_crc) = match mode_type(record.mode) {
+        let (regular, actual_crc) = match mode_type(record.mode) {
             libc::S_IFREG => {
                 if size != 0 && size != record.size {
                     return Err(parse_error(format!(
@@ -357,11 +364,36 @@ impl<'a> RpmPayloadReader<'a> {
                         record.path, record.size
                     )));
                 }
+                let declared_algorithm = record
+                    .digest
+                    .as_ref()
+                    .ok_or_else(|| {
+                        parse_error(format!(
+                            "RPM regular node {} has no declared file digest",
+                            record.path
+                        ))
+                    })?
+                    .algorithm;
                 let path = self.spool.indexed_path(index);
-                let mut output = File::create(&path)?;
-                let (sha256, crc) = copy_exact_payload(&mut self.reader, &mut output, size)?;
+                let mut output = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)?;
+                let (computed, crc) = copy_exact_payload(
+                    &mut self.reader,
+                    &mut output,
+                    size,
+                    declared_algorithm,
+                    expected_crc.is_some(),
+                )?;
                 drop(output);
-                (Some(self.spool.source(path)), Some(sha256), crc)
+                (
+                    Some(RegularPayloadEvidence {
+                        source: self.spool.source(path),
+                        computed,
+                    }),
+                    crc,
+                )
             }
             libc::S_IFLNK => {
                 let target = record.link_target.as_deref().ok_or_else(|| {
@@ -376,8 +408,13 @@ impl<'a> RpmPayloadReader<'a> {
                         record.path
                     )));
                 }
-                let crc = compare_exact_payload(&mut self.reader, target.as_bytes(), &record.path)?;
-                (None, None, crc)
+                let crc = compare_exact_payload(
+                    &mut self.reader,
+                    target.as_bytes(),
+                    &record.path,
+                    expected_crc.is_some(),
+                )?;
+                (None, crc)
             }
             _ => {
                 if size != 0 {
@@ -386,16 +423,17 @@ impl<'a> RpmPayloadReader<'a> {
                         record.path
                     )));
                 }
-                (None, None, 0)
+                (None, expected_crc.map(|_| 0))
             }
         };
-        if let Some(expected_crc) = expected_crc
-            && actual_crc != expected_crc
-        {
-            return Err(parse_error(format!(
-                "RPM CPIO CRC mismatch for {}: expected {expected_crc:#x}, got {actual_crc:#x}",
-                record.path
-            )));
+        if let Some(expected_crc) = expected_crc {
+            let actual_crc = actual_crc.expect("CRC-flavored entry computes a CRC");
+            if actual_crc != expected_crc {
+                return Err(parse_error(format!(
+                    "RPM CPIO CRC mismatch for {}: expected {expected_crc:#x}, got {actual_crc:#x}",
+                    record.path
+                )));
+            }
         }
         self.read_alignment_padding(size, "CPIO content")?;
         let archive_position = self.members.len();
@@ -403,8 +441,7 @@ impl<'a> RpmPayloadReader<'a> {
             header_index: index,
             archive_position,
             content_size: size,
-            sha256,
-            source,
+            regular,
         });
         Ok(())
     }
@@ -438,14 +475,24 @@ impl<'a> RpmPayloadReader<'a> {
     }
 }
 
-fn copy_exact_payload(
+pub(super) fn copy_exact_payload(
     reader: &mut dyn Read,
     writer: &mut dyn Write,
     size: u64,
-) -> Result<(String, u32)> {
+    declared_algorithm: RpmFileDigestAlgorithm,
+    compute_crc: bool,
+) -> Result<(ComputedRegularContent, Option<u32>)> {
+    let bytes_hashed = size
+        .checked_mul(if declared_algorithm == RpmFileDigestAlgorithm::Sha2_256 {
+            1
+        } else {
+            2
+        })
+        .ok_or_else(|| parse_error("RPM payload hash byte count overflow"))?;
     let mut remaining = size;
     let mut sha256 = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
-    let mut crc = 0_u32;
+    let mut declared = DeclaredDigestHasher::new(declared_algorithm);
+    let mut crc = compute_crc.then_some(0_u32);
     let mut buffer = [0_u8; PAYLOAD_IO_BUFFER_SIZE];
     while remaining > 0 {
         let wanted = usize::try_from(remaining.min(buffer.len() as u64))
@@ -455,17 +502,41 @@ fn copy_exact_payload(
             .map_err(|error| parse_error(format!("read RPM payload bytes: {error}")))?;
         writer.write_all(&buffer[..wanted])?;
         sha256.update(&buffer[..wanted]);
-        crc = buffer[..wanted]
-            .iter()
-            .fold(crc, |sum, byte| sum.wrapping_add(u32::from(*byte)));
+        if let Some(declared) = declared.as_mut() {
+            declared.update(&buffer[..wanted]);
+        }
+        if let Some(crc) = crc.as_mut() {
+            *crc = buffer[..wanted]
+                .iter()
+                .fold(*crc, |sum, byte| sum.wrapping_add(u32::from(*byte)));
+        }
         remaining -= wanted as u64;
     }
-    Ok((sha256.finalize().value, crc))
+    let sha256 = sha256.finalize().value;
+    let declared = ComputedFileDigest {
+        algorithm: declared_algorithm,
+        hex: declared
+            .map(DeclaredDigestHasher::finalize)
+            .unwrap_or_else(|| sha256.clone()),
+    };
+    Ok((
+        ComputedRegularContent {
+            sha256,
+            declared,
+            bytes_hashed,
+        },
+        crc,
+    ))
 }
 
-fn compare_exact_payload(reader: &mut dyn Read, expected: &[u8], path: &str) -> Result<u32> {
+fn compare_exact_payload(
+    reader: &mut dyn Read,
+    expected: &[u8],
+    path: &str,
+    compute_crc: bool,
+) -> Result<Option<u32>> {
     let mut offset = 0_usize;
-    let mut crc = 0_u32;
+    let mut crc = compute_crc.then_some(0_u32);
     let mut buffer = [0_u8; PAYLOAD_IO_BUFFER_SIZE];
     while offset < expected.len() {
         let wanted = (expected.len() - offset).min(buffer.len());
@@ -477,9 +548,11 @@ fn compare_exact_payload(reader: &mut dyn Read, expected: &[u8], path: &str) -> 
                 "RPM symlink {path} payload target differs from FILELINKTOS"
             )));
         }
-        crc = buffer[..wanted]
-            .iter()
-            .fold(crc, |sum, byte| sum.wrapping_add(u32::from(*byte)));
+        if let Some(crc) = crc.as_mut() {
+            *crc = buffer[..wanted]
+                .iter()
+                .fold(*crc, |sum, byte| sum.wrapping_add(u32::from(*byte)));
+        }
         offset += wanted;
     }
     Ok(crc)
@@ -487,6 +560,7 @@ fn compare_exact_payload(reader: &mut dyn Read, expected: &[u8], path: &str) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::super::header::DeclaredDigest;
     use super::*;
     use std::io;
 
@@ -509,6 +583,19 @@ mod tests {
             rdev: 0,
             nlink: None,
         }
+    }
+
+    fn regular_header_record(
+        size: u64,
+        algorithm: RpmFileDigestAlgorithm,
+        digest: &str,
+    ) -> HeaderRecord {
+        let mut record = header_record(libc::S_IFREG | 0o644, size, None);
+        record.digest = Some(DeclaredDigest {
+            algorithm,
+            hex: digest.to_string(),
+        });
+        record
     }
 
     struct ZeroReader {
@@ -538,10 +625,213 @@ mod tests {
     #[test]
     fn stripped_large_member_uses_u64_and_fixed_buffers() {
         let mut reader = ZeroReader { max_requested: 0 };
-        let error =
-            copy_exact_payload(&mut reader, &mut StopWriter, u64::from(u32::MAX) + 1).unwrap_err();
+        let error = copy_exact_payload(
+            &mut reader,
+            &mut StopWriter,
+            u64::from(u32::MAX) + 1,
+            RpmFileDigestAlgorithm::Sha2_256,
+            false,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("injected bounded sink stop"));
         assert!(reader.max_requested <= PAYLOAD_IO_BUFFER_SIZE);
+    }
+
+    #[test]
+    fn sole_spool_copy_computes_every_pinned_digest_and_reuses_sha256() {
+        const SHA256_ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        for (algorithm, expected) in [
+            (
+                RpmFileDigestAlgorithm::Md5,
+                "900150983cd24fb0d6963f7d28e17f72",
+            ),
+            (
+                RpmFileDigestAlgorithm::Sha1,
+                "a9993e364706816aba3e25717850c26c9cd0d89d",
+            ),
+            (
+                RpmFileDigestAlgorithm::Sha2_224,
+                "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7",
+            ),
+            (RpmFileDigestAlgorithm::Sha2_256, SHA256_ABC),
+            (
+                RpmFileDigestAlgorithm::Sha2_384,
+                "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed\
+                 8086072ba1e7cc2358baeca134c825a7",
+            ),
+            (
+                RpmFileDigestAlgorithm::Sha2_512,
+                "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a\
+                 2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+            ),
+            (
+                RpmFileDigestAlgorithm::Sha3_256,
+                "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+            ),
+            (
+                RpmFileDigestAlgorithm::Sha3_512,
+                "b751850b1a57168a5693cd924b6b096e08f621827444f70d884f5d0240d2712\
+                 e10e116e9192af3c91a7ec57647e3934057340b4cf408d5a56592f8274eec53f0",
+            ),
+        ] {
+            let expected = expected.replace(char::is_whitespace, "");
+            let mut output = Vec::new();
+            let (computed, crc) = copy_exact_payload(
+                &mut io::Cursor::new(b"abc"),
+                &mut output,
+                3,
+                algorithm,
+                false,
+            )
+            .unwrap();
+
+            assert_eq!(output, b"abc");
+            assert_eq!(computed.sha256, SHA256_ABC);
+            assert_eq!(computed.declared.algorithm, algorithm);
+            assert_eq!(computed.declared.hex, expected);
+            assert_eq!(
+                computed.bytes_hashed,
+                if algorithm == RpmFileDigestAlgorithm::Sha2_256 {
+                    3
+                } else {
+                    6
+                }
+            );
+            assert_eq!(crc, None, "non-CRC entries must not accumulate CRC work");
+
+            let valid = regular_header_record(3, algorithm, &expected);
+            super::super::require_regular_content(&valid, 3, &computed).unwrap();
+
+            let mismatch = regular_header_record(3, algorithm, &"0".repeat(expected.len()));
+            let error = super::super::require_regular_content(&mismatch, 3, &computed).unwrap_err();
+            assert!(
+                error.to_string().contains("file digest mismatch"),
+                "{error}"
+            );
+        }
+
+        let computed = ComputedRegularContent {
+            sha256: SHA256_ABC.to_string(),
+            declared: ComputedFileDigest {
+                algorithm: RpmFileDigestAlgorithm::Sha2_256,
+                hex: SHA256_ABC.to_string(),
+            },
+            bytes_hashed: 3,
+        };
+        let sha3_header = regular_header_record(3, RpmFileDigestAlgorithm::Sha3_256, SHA256_ABC);
+        let error = super::super::require_regular_content(&sha3_header, 3, &computed).unwrap_err();
+        assert!(
+            error.to_string().contains("digest algorithm")
+                && !error.to_string().contains("digest mismatch"),
+            "equal-length SHA2-256/SHA3-256 identities must fail by typed algorithm: {error}"
+        );
+    }
+
+    #[test]
+    fn bounded_spool_copy_rejects_short_input_and_sink_failure() {
+        let error = copy_exact_payload(
+            &mut io::Cursor::new(b"ab"),
+            &mut Vec::new(),
+            3,
+            RpmFileDigestAlgorithm::Sha2_256,
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("read RPM payload bytes"),
+            "{error}"
+        );
+
+        let error = copy_exact_payload(
+            &mut io::Cursor::new(b"abc"),
+            &mut StopWriter,
+            3,
+            RpmFileDigestAlgorithm::Sha2_256,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("injected bounded sink stop"));
+    }
+
+    #[test]
+    fn payload_reader_rejects_extra_bytes_after_stripped_trailer() {
+        let mut bytes = b"07070Xffffffff".to_vec();
+        bytes.extend_from_slice(&[0, 0]);
+        bytes.push(b'x');
+        let records = [];
+        let spool = PayloadSpool::new(0).unwrap();
+        let error = RpmPayloadReader::new(
+            Box::new(io::Cursor::new(bytes)),
+            &records,
+            &spool,
+            CCS_BUDGET.archive_decode_bounds().unwrap(),
+        )
+        .read_all()
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("nonzero bytes after the CPIO trailer")
+        );
+    }
+
+    #[test]
+    fn regular_member_rejects_crc_mismatch_and_spool_create_collision() {
+        let digest = crate::hash::sha256(b"abc");
+        let records = [regular_header_record(
+            3,
+            RpmFileDigestAlgorithm::Sha2_256,
+            &digest,
+        )];
+        let spool = PayloadSpool::new(3).unwrap();
+        let mut reader = RpmPayloadReader::new(
+            Box::new(io::Cursor::new(b"abc\0")),
+            &records,
+            &spool,
+            CCS_BUDGET.archive_decode_bounds().unwrap(),
+        );
+        let error = reader.read_member_content(0, 3, Some(0)).unwrap_err();
+        assert!(error.to_string().contains("CPIO CRC mismatch"), "{error}");
+
+        let spool = PayloadSpool::new(3).unwrap();
+        let collision = spool.indexed_path(0);
+        std::fs::write(&collision, b"preexisting authority").unwrap();
+        let mut reader = RpmPayloadReader::new(
+            Box::new(io::Cursor::new(b"abc")),
+            &records,
+            &spool,
+            CCS_BUDGET.archive_decode_bounds().unwrap(),
+        );
+        let error = reader.read_member_content(0, 3, None).unwrap_err();
+        let crate::Error::Io(error) = error else {
+            panic!("expected typed I/O collision failure");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(collision).unwrap(), b"preexisting authority");
+    }
+
+    #[test]
+    fn repeated_member_index_fails_before_a_second_spool_open() {
+        let digest = crate::hash::sha256(b"abc");
+        let records = [regular_header_record(
+            3,
+            RpmFileDigestAlgorithm::Sha2_256,
+            &digest,
+        )];
+        let spool = PayloadSpool::new(3).unwrap();
+        let mut reader = RpmPayloadReader::new(
+            Box::new(io::Cursor::new(b"abc\0")),
+            &records,
+            &spool,
+            CCS_BUDGET.archive_decode_bounds().unwrap(),
+        );
+        reader.read_member_content(0, 3, None).unwrap();
+
+        let error = reader.read_member_content(0, 3, None).unwrap_err();
+
+        assert!(error.to_string().contains("repeats header path"), "{error}");
+        assert_eq!(std::fs::read(spool.indexed_path(0)).unwrap(), b"abc");
     }
 
     #[test]
@@ -608,6 +898,7 @@ mod tests {
             &mut io::Cursor::new(b"../../expecteD-target"),
             b"../../expected-target",
             "/usr/lib/.build-id/fixture",
+            false,
         )
         .unwrap_err();
         assert!(

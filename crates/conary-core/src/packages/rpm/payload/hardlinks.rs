@@ -110,13 +110,10 @@ impl HardlinkSet {
             .remove(&self.content_authority_index)
             .expect("payload completeness checked");
         require_regular_member_authority(owner, &content_member)?;
-        let sha256 = content_member
-            .sha256
+        let regular = content_member
+            .regular
             .expect("regular member authority checked");
-        let source = content_member
-            .source
-            .expect("regular member authority checked");
-        require_regular_content(owner, content_member.content_size, &source)?;
+        require_regular_content(owner, content_member.content_size, &regular.computed)?;
 
         let identity = format!("rpm:{}:{}", owner.device, owner.inode);
         let mut owner_node = source_node(owner)?;
@@ -124,7 +121,7 @@ impl HardlinkSet {
             hardlink_identity: Some(identity.clone()),
         };
         let authority = PayloadContentAuthority {
-            sha256,
+            sha256: regular.computed.sha256,
             size: content_member.content_size,
         };
         validate_projected(&owner.path, &owner_node, Some(&authority))?;
@@ -134,7 +131,7 @@ impl HardlinkSet {
             owner.path.clone(),
             owner_node.clone(),
             Some(authority),
-            Some(source),
+            Some(regular.source),
         )?);
         for index in &self.member_indexes {
             if *index == self.content_authority_index {
@@ -225,7 +222,7 @@ pub(super) fn sets(records: &[HeaderRecord]) -> Result<Vec<HardlinkSet>> {
 }
 
 fn require_regular_member_authority(record: &HeaderRecord, member: &PayloadMember) -> Result<()> {
-    if member.sha256.is_none() || member.source.is_none() {
+    if member.regular.is_none() {
         return Err(parse_error(format!(
             "RPM regular hardlink member {} has no payload authority",
             record.path
@@ -256,7 +253,9 @@ mod tests {
     use crate::payload::{PayloadIdentity, PayloadTimestamp};
     use std::sync::Arc;
 
+    use super::super::digest::{ComputedFileDigest, ComputedRegularContent};
     use super::super::header::{DeclaredDigest, RpmFileDigestAlgorithm};
+    use super::super::stream::RegularPayloadEvidence;
 
     const CONTENT: &[u8] = b"payload";
 
@@ -294,14 +293,22 @@ mod tests {
     }
 
     fn member(header_index: usize, archive_position: usize, content: &[u8]) -> PayloadMember {
+        let sha256 = crate::hash::sha256(content);
         PayloadMember {
             header_index,
             archive_position,
             content_size: content.len() as u64,
-            sha256: Some(crate::hash::sha256(content)),
-            source: Some(ReopenablePayload::from_in_memory_bytes(Arc::<[u8]>::from(
-                content,
-            ))),
+            regular: Some(RegularPayloadEvidence {
+                computed: ComputedRegularContent {
+                    sha256: sha256.clone(),
+                    declared: ComputedFileDigest {
+                        algorithm: RpmFileDigestAlgorithm::Sha2_256,
+                        hex: sha256,
+                    },
+                    bytes_hashed: content.len() as u64,
+                },
+                source: ReopenablePayload::from_in_memory_bytes(Arc::<[u8]>::from(content)),
+            }),
         }
     }
 

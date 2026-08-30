@@ -1,7 +1,7 @@
 // apps/remi/src/server/conversion/benchmark/public_projection/tests.rs
 use super::*;
 use crate::server::conversion::{
-    CONVERSION_BENCHMARK_SCHEMA_V4, ConversionBenchmarkCatalogAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V5, ConversionBenchmarkCatalogAuthority,
     ConversionBenchmarkCatalogQuery, ConversionBenchmarkCatalogReopen,
     ConversionBenchmarkCatalogSetup, ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkView,
@@ -163,6 +163,10 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.source_bytes_hashed = 5;
         timing.work.native_archive_entries_traversed = 79;
         timing.work.native_decompressed_archive_bytes_read = 83;
+        timing.work.native_payload_files_spooled = 1;
+        timing.work.native_payload_bytes_spooled = 5;
+        timing.work.native_payload_declared_bytes = 5;
+        timing.work.native_payload_bytes_hashed = 5;
         timing.work.payload_reference_bytes_hashed = 89;
         timing.work.ccs_output_bytes = 23;
         timing.work.ccs_output_bytes_hashed = 23;
@@ -212,10 +216,10 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
     timing
 }
 
-fn valid_report() -> ConversionBenchmarkReportV4 {
+fn valid_report() -> ConversionBenchmarkReportV5 {
     let output = valid_output();
-    ConversionBenchmarkReportV4 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V4,
+    ConversionBenchmarkReportV5 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V5,
         environment: ConversionBenchmarkEnvironment {
             hardware_label: "production-xfs".to_string(),
             remi_version: "0.1.0".to_string(),
@@ -309,7 +313,7 @@ fn valid_report() -> ConversionBenchmarkReportV4 {
     }
 }
 
-fn publish_raw(root: &Path, report: &ConversionBenchmarkReportV4) -> std::path::PathBuf {
+fn publish_raw(root: &Path, report: &ConversionBenchmarkReportV5) -> std::path::PathBuf {
     let raw_path = root.join(super::super::REPORT_FILE_NAME);
     super::super::report::publish_and_reopen_report(&raw_path, report)
         .expect("publish raw benchmark fixture");
@@ -333,7 +337,7 @@ fn assert_no_key(value: &Value, forbidden: &str) {
     }
 }
 
-fn assert_publication_rejected(report: &ConversionBenchmarkReportV4) -> String {
+fn assert_publication_rejected(report: &ConversionBenchmarkReportV5) -> String {
     let root = tempfile::tempdir().expect("create rejected-publication root");
     let raw_path = publish_raw(root.path(), report);
     let public_path = root.path().join(PUBLIC_REPORT_FILE_NAME);
@@ -369,7 +373,7 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
     for forbidden in ["binary_path", "path", "device_id", "reason", "error"] {
         assert_no_key(&value, forbidden);
     }
-    assert_eq!(value["schema_version"], PUBLIC_REPORT_SCHEMA_V2);
+    assert_eq!(value["schema_version"], PUBLIC_REPORT_SCHEMA_V3);
     assert_eq!(
         value["raw_report"]["sha256"],
         conary_core::hash::sha256(&raw_bytes)
@@ -467,17 +471,32 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
 }
 
 #[test]
-fn public_schema_v2_rejects_legacy_public_and_raw_versions() {
+fn public_schema_v3_rejects_legacy_public_and_raw_versions() {
     let report = valid_report();
     let raw_bytes = serde_json::to_vec(&report).unwrap();
     let mut public = project_report(&raw_bytes, &report).unwrap();
 
-    public.schema_version = 1;
+    public.schema_version = 2;
     assert!(validate_public_report(&public).is_err());
 
-    public.schema_version = PUBLIC_REPORT_SCHEMA_V2;
-    public.raw_report.schema_version = 3;
+    public.schema_version = PUBLIC_REPORT_SCHEMA_V3;
+    public.raw_report.schema_version = 4;
     assert!(validate_public_report(&public).is_err());
+}
+
+#[test]
+fn public_schema_v3_requires_exact_spool_reopen_work() {
+    let report = valid_report();
+    let raw_bytes = serde_json::to_vec(&report).unwrap();
+    let public = project_report(&raw_bytes, &report).unwrap();
+    let mut value = serde_json::to_value(public).unwrap();
+    value["repetitions"][0]["timing"]["work"]
+        .as_object_mut()
+        .unwrap()
+        .remove("native_payload_spool_file_reopens");
+
+    let error = serde_json::from_value::<ConversionBenchmarkPublicReportV3>(value).unwrap_err();
+    assert!(error.to_string().contains("missing field"), "{error}");
 }
 
 #[test]

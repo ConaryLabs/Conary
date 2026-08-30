@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-30
-revision: 8
+revision: 9
 summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results
 ---
 
@@ -33,7 +33,7 @@ passing the label. Network bytes, CAS work, SQLite statements, durability
 calls, complete-root scans, and internal phase timing remain separate typed
 counters rather than estimates derived from elapsed time.
 
-The current Remi conversion schema-v4 contract treats internal signed-archive
+The current Remi conversion schema-v5 contract treats internal signed-archive
 authentication and permanent verified-CAS admission as one fused physical
 pass. Its full elapsed time is recorded once in the `timing.phases` entry named
 `independent_transport_reopen`; `durable_cas_ingestion` is skipped because
@@ -56,12 +56,13 @@ Two current reopen fields must not be conflated:
   `conversion_core` or `end_to_end`. The output proof's separate complete CCS
   hash has the same boundary.
 
-Schema v4 deletes the former converter-owned `immediate_converter_reopen`
-phase and both `immediate_converter_reopen_*` inferred counters. The converter
-now returns an explicitly pending artifact; Remi verifies it once under the
-profile targets authority directly into permanent CAS before transport or
-persistence. Local install and cook select their own single explicit verifier.
-The retired pass is not retained as a zero-duration or skipped phase.
+Schema v5 retains the schema-v4 deletion of the former converter-owned
+`immediate_converter_reopen` phase and both
+`immediate_converter_reopen_*` inferred counters. The converter now returns an
+explicitly pending artifact; Remi verifies it once under the profile targets
+authority directly into permanent CAS before transport or persistence. Local
+install and cook select their own single explicit verifier. The retired pass
+is not retained as a zero-duration or skipped phase.
 
 ## Remi direct verified-CAS pre-change anchor: 2026-08-30
 
@@ -365,6 +366,47 @@ This is one paired production sample, not a latency distribution. `cold`
 still means empty application conversion, cache, and CAS state rather than a
 dropped kernel page cache. It proves the exact single-finalizer physical-pass
 change and does not constitute a same-host native-package-manager comparison.
+
+## RPM file-digest fusion pre-change anchor: 2026-08-30
+
+The same protected production-XFS run
+[33295190850](https://github.com/FieldmouseWorks/Conary/actions/runs/33295190850)
+at deployed commit `44a345e5650a8fefe21508f10b2c689abf00a1e6` is the
+exact pre-#766 anchor. Its cold `native_archive_parse_and_spool` phase took
+23.567 seconds. RPM decode produced 21,636 spool files and
+2,757,056,284 spooled bytes while reading 2,761,335,228 decompressed archive
+bytes. Projection then physically reopened 21,083 regular content sources and
+reread all 2,757,056,284 content bytes. The other 553 spool files were
+zero-byte non-owner hardlink members and were not projection sources.
+
+The schema-v4 instrumentation reported zero
+`native_payload_spool_bytes_reread` and only 2,757,056,284
+`native_payload_bytes_hashed`. The implementation had actually performed a
+second SHA-256 over the reopened content, so its cryptographic hash input was
+5,514,112,568 bytes. Those counters therefore described only the decode/spool
+pass and hid the complete projection reopen, reread, and duplicate hash.
+
+Schema v5 hard-cuts the raw report and schema v3 hard-cuts its public
+projection. The raw filename is `conversion-benchmark-v5.json`; the public
+filename is `conversion-benchmark-public-v3.json`. Schema v5 adds exact
+`native_payload_spool_file_reopens` accounting, including successful opens of
+zero-length files, and makes `native_payload_spool_bytes_reread` describe the
+bytes physically read after spooling. `native_payload_bytes_hashed` is the
+aggregate input presented to cryptographic hash states: one times spooled
+bytes when RPM `FILEDIGESTALGO` code 8 shares the content SHA-256, or two times
+spooled bytes when another supported `FILEDIGESTALGO` requires a concurrent
+declared-digest state alongside content SHA-256. Additive CPIO CRC work is not
+cryptographic hash input.
+
+RPM projection now consumes typed, algorithm-tagged evidence derived from
+`FILEDIGESTALGO` and `FILEDIGESTS` during the bounded decode/spool copy. It does
+not reopen payload files to reconstruct that evidence. For this code-8
+FlightGear subject, the resulting improvement is projected at approximately
+10.3 seconds. That linear estimate applies the same run's independent complete
+archive SHA-256 rate (1,950,687,953 bytes in 7.265 seconds) to the hidden
+2,757,056,284-byte reread; it is not a measurement and does not assume that
+many-file reopen overhead is identical. A protected schema-v5 production run
+must establish the realized change.
 
 ## Remi conversion baseline: 2026-08-15
 

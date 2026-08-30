@@ -59,10 +59,50 @@ fn parser_preserves_unmatched_backup_without_inventing_payload() {
     assert_eq!(metrics.archive_entries_traversed, 4);
     assert_eq!(metrics.payload_files_spooled, 1);
     assert_eq!(metrics.payload_bytes_spooled, 7);
+    assert_eq!(metrics.payload_spool_file_reopens, 0);
     assert_eq!(metrics.payload_spool_file_syncs, 0);
     assert_eq!(metrics.payload_bytes_hashed, 7);
     assert!(metrics.source_archive_bytes_read > 0);
     assert!(metrics.decompressed_archive_bytes_read > 0);
+}
+
+#[test]
+fn parser_counts_each_successful_package_hook_spool_reopen() {
+    let pkginfo = b"pkgname = hook-fixture\npkgver = 1-1\narch = any\n";
+    let hook = b"[Trigger]\nOperation = Install\nType = Path\nTarget = usr/share/mime/*\n\n\
+                 [Action]\nWhen = PostTransaction\nExec = /usr/bin/update-mime-database\n";
+    let mut tar = tar::Builder::new(Vec::new());
+    for (path, body) in [
+        (".PKGINFO", pkginfo.as_slice()),
+        (
+            "usr/share/libalpm/hooks/30-update-mime.hook",
+            hook.as_slice(),
+        ),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_cksum();
+        tar.append_data(&mut header, path, Cursor::new(body))
+            .unwrap();
+    }
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&tar.into_inner().unwrap()).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let package_path = temp.path().join("hook-fixture.pkg.tar.gz");
+    std::fs::write(&package_path, encoder.finish().unwrap()).unwrap();
+
+    let package = ArchPackage::parse(package_path.to_str().unwrap()).unwrap();
+    let metrics = package.parse_metrics();
+
+    assert_eq!(metrics.payload_files_spooled, 1);
+    assert_eq!(metrics.payload_bytes_spooled, hook.len() as u64);
+    assert_eq!(metrics.payload_spool_bytes_reread, hook.len() as u64);
+    assert_eq!(metrics.payload_spool_file_reopens, 1);
+    assert_eq!(metrics.payload_bytes_hashed, hook.len() as u64);
 }
 
 #[test]
