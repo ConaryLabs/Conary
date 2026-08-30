@@ -67,10 +67,56 @@ fn extracted_regular(path: impl Into<String>, content: &[u8], mode: u32) -> Extr
     }
 }
 
-fn signed_test_converter(options: ConversionOptions) -> NativePackageConverter {
-    NativePackageConverter::new(options).with_signing_key(std::sync::Arc::new(
+struct TestConverter {
+    converter: NativePackageConverter,
+    policy: conary_core::ccs::TrustPolicy,
+}
+
+impl TestConverter {
+    fn with_source_profile(mut self, profile: impl Into<String>) -> Self {
+        self.converter = self.converter.with_source_profile(profile);
+        self
+    }
+
+    fn with_source_release(mut self, release: impl Into<String>) -> Self {
+        self.converter = self.converter.with_source_release(release);
+        self
+    }
+
+    fn convert_payload(
+        &self,
+        metadata: &ForeignConversionInput,
+        files: &[conary_core::packages::payload::PackagePayloadFile],
+        format: &str,
+        checksum: &conary_core::hash::Hash,
+    ) -> anyhow::Result<FinalizedTestConversion> {
+        self.converter
+            .convert_payload(metadata, files, format, checksum)?
+            .verify(&self.policy)
+            .map(FinalizedTestConversion)
+    }
+}
+
+#[derive(Debug)]
+struct FinalizedTestConversion(conary_core::ccs::convert::VerifiedConversionResult);
+
+impl std::ops::Deref for FinalizedTestConversion {
+    type Target = conary_core::ccs::convert::ConversionResult;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.conversion()
+    }
+}
+
+fn signed_test_converter(options: ConversionOptions) -> TestConverter {
+    let signing_key = std::sync::Arc::new(
         conary_core::ccs::SigningKeyPair::generate().with_key_id("conversion-integration"),
-    ))
+    );
+    let policy = conary_core::ccs::TrustPolicy::strict(vec![signing_key.public_key_base64()]);
+    TestConverter {
+        converter: NativePackageConverter::new(options).with_signing_key(signing_key),
+        policy,
+    }
 }
 
 trait InMemoryConversionForTest {
@@ -80,22 +126,21 @@ trait InMemoryConversionForTest {
         files: &[ExtractedFile],
         format: &str,
         checksum: &str,
-    ) -> anyhow::Result<conary_core::ccs::convert::ConversionResult>;
+    ) -> anyhow::Result<FinalizedTestConversion>;
 }
 
-impl InMemoryConversionForTest for NativePackageConverter {
+impl InMemoryConversionForTest for TestConverter {
     fn convert_in_memory_for_test(
         &self,
         metadata: &ForeignConversionInput,
         files: &[ExtractedFile],
         format: &str,
         checksum: &str,
-    ) -> anyhow::Result<conary_core::ccs::convert::ConversionResult> {
+    ) -> anyhow::Result<FinalizedTestConversion> {
         let payload =
             conary_core::packages::PackagePayload::from_extracted_in_memory(files.to_vec())?;
         let checksum = conary_core::hash::Hash::parse_prefixed(checksum)?;
         self.convert_payload(metadata, payload.files(), format, &checksum)
-            .map_err(Into::into)
     }
 }
 
@@ -215,7 +260,7 @@ fn create_test_files(name: &str) -> Vec<ExtractedFile> {
     )]
 }
 
-fn passive_converter(output_dir: &std::path::Path) -> NativePackageConverter {
+fn passive_converter(output_dir: &std::path::Path) -> TestConverter {
     signed_test_converter(ConversionOptions {
         output_dir: output_dir.to_path_buf(),
     })
@@ -223,19 +268,11 @@ fn passive_converter(output_dir: &std::path::Path) -> NativePackageConverter {
     .with_source_release("44")
 }
 
-fn parse_converted_package(result: &conary_core::ccs::convert::ConversionResult) -> CcsPackage {
-    let package_path = result
-        .package_path
-        .as_ref()
-        .expect("conversion should write CCS package");
-    let verified = conary_core::ccs::verify::verify_package(
-        package_path,
-        &conary_core::ccs::TrustPolicy::strict(vec![result.signing_public_key.clone()]),
-    )
-    .expect("converted CCS authority should verify");
+fn parse_converted_package(result: &FinalizedTestConversion) -> CcsPackage {
+    let package_path = &result.package_path;
     CcsPackage::from_verified_archive(
         package_path.to_str().expect("package path is utf-8"),
-        &verified,
+        result.0.verification(),
     )
     .expect("verified converted CCS package should open")
 }
@@ -384,12 +421,12 @@ fn test_minimal_conversion() {
     assert!(result.is_ok(), "Basic conversion should succeed");
 
     let result = result.unwrap();
-    assert!(result.package_path.is_some(), "Should produce output file");
+    assert!(result.package_path.exists(), "Should produce output file");
     assert_eq!(result.original_format, "rpm");
     assert_eq!(result.original_checksum, checksum);
 
     // Verify output file exists
-    let package_path = result.package_path.unwrap();
+    let package_path = &result.package_path;
     assert!(package_path.exists(), "CCS package file should exist");
     assert!(
         package_path.to_string_lossy().ends_with(".ccs"),
@@ -515,7 +552,7 @@ fn test_file_permissions_preserved() {
         .unwrap();
 
     // Verify conversion completed
-    assert!(result.package_path.is_some());
+    assert!(result.package_path.exists());
 
     // Verify all files included in manifest
     let manifest = &result.build_result.manifest;
@@ -593,7 +630,7 @@ fn test_large_payload_emits_verified_ccs_archive() {
     );
 
     let result = result.unwrap();
-    assert!(result.package_path.is_some());
+    assert!(result.package_path.exists());
     let parsed = parse_converted_package(&result);
     assert_eq!(parsed.file_entries().len(), 1);
     assert_eq!(
@@ -786,5 +823,5 @@ fn test_special_characters_in_package_name() {
     );
 
     let result = result.unwrap();
-    assert!(result.package_path.is_some());
+    assert!(result.package_path.exists());
 }

@@ -292,8 +292,8 @@ workflow.
   Every retained benchmark-state mutation stays under a new
   `/work/remi-conversion-benchmarks/<run-id>` root outside `/conary`; repeated
   identities and preexisting transports fail closed.
-- The complete schema-v3 report remains mode 0600 on the production host. The
-  authenticated caller receives only `conversion-benchmark-public-v1.json`: a
+- The complete schema-v4 report remains mode 0600 on the production host. The
+  authenticated caller receives only `conversion-benchmark-public-v2.json`: a
   strict Rust-produced projection that binds the exact raw-report byte count
   and SHA-256, preserves authority, timing, process, VFS, work, and output
   counters, and removes binary paths, root paths and device IDs, free-form

@@ -65,15 +65,15 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
     )
     .await
     .unwrap();
-    let ConversionResult::Converted {
-        ccs_path,
-        temp_dir: _conversion_dir,
-        pending_record,
-        signing_public_key,
-    } = converted
-    else {
+    let ConversionResult::Converted { conversion } = converted else {
         panic!("native conversion unexpectedly skipped");
     };
+    let conversion = *conversion;
+    let ccs_path = conversion
+        .unverified_ccs_path()
+        .to_string_lossy()
+        .into_owned();
+    let signing_public_key = conversion.trusted_signing_public_key().to_string();
 
     let wrong_key = SigningKeyPair::generate().public_key_base64();
     let error = verify_ccs_package_authority(
@@ -88,24 +88,28 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
         "wrong exact conversion key must fail even with repository provenance: {error:#}"
     );
 
-    let trove_id = install_ccs_artifact(CcsArtifactInstallOptions {
-        ccs_path: &ccs_path,
-        db_path: db_path_str,
-        root: install_root.to_str().unwrap(),
-        dry_run: false,
-        sandbox_mode: SandboxMode::Always,
-        no_deps: true,
-        allow_downgrade: false,
-        intent: InstallIntent::PackageChange,
-        yes: true,
-        envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
-        repository_provenance: Some(provenance),
-        requested_source_identity: None,
-        resolution_policy: test_resolution_policy(),
-    })
+    let (pending, _conversion_dir) = conversion.into_pending_parts();
+    let (trove_id, pending_record) = install_pending_ccs_conversion(
+        pending,
+        CcsArtifactInstallOptions {
+            ccs_path: &ccs_path,
+            db_path: db_path_str,
+            root: install_root.to_str().unwrap(),
+            dry_run: false,
+            sandbox_mode: SandboxMode::Always,
+            no_deps: true,
+            allow_downgrade: false,
+            intent: InstallIntent::PackageChange,
+            yes: true,
+            envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
+            repository_provenance: Some(provenance),
+            requested_source_identity: None,
+            resolution_policy: test_resolution_policy(),
+        },
+    )
     .await
-    .unwrap()
-    .expect("converted package install must persist a trove");
+    .unwrap();
+    let trove_id = trove_id.expect("converted package install must persist a trove");
     pending_record.persist(db_path_str, trove_id).unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -148,34 +152,38 @@ async fn converted_local_artifact_persists_explicit_source_identity_without_repo
     )
     .await
     .unwrap();
-    let ConversionResult::Converted {
-        ccs_path,
-        temp_dir: _conversion_dir,
-        signing_public_key,
-        ..
-    } = converted
-    else {
+    let ConversionResult::Converted { conversion } = converted else {
         panic!("native conversion unexpectedly skipped");
     };
+    let conversion = *conversion;
+    let ccs_path = conversion
+        .unverified_ccs_path()
+        .to_string_lossy()
+        .into_owned();
+    let signing_public_key = conversion.trusted_signing_public_key().to_string();
+    let (pending, _conversion_dir) = conversion.into_pending_parts();
 
-    let trove_id = install_ccs_artifact(CcsArtifactInstallOptions {
-        ccs_path: &ccs_path,
-        db_path: db_path_str,
-        root: install_root.to_str().unwrap(),
-        dry_run: false,
-        sandbox_mode: SandboxMode::Always,
-        no_deps: true,
-        allow_downgrade: false,
-        intent: InstallIntent::PackageChange,
-        yes: true,
-        envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
-        repository_provenance: None,
-        requested_source_identity: Some("fedora-44"),
-        resolution_policy: test_resolution_policy(),
-    })
+    let (trove_id, _pending_record) = install_pending_ccs_conversion(
+        pending,
+        CcsArtifactInstallOptions {
+            ccs_path: &ccs_path,
+            db_path: db_path_str,
+            root: install_root.to_str().unwrap(),
+            dry_run: false,
+            sandbox_mode: SandboxMode::Always,
+            no_deps: true,
+            allow_downgrade: false,
+            intent: InstallIntent::PackageChange,
+            yes: true,
+            envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
+            repository_provenance: None,
+            requested_source_identity: Some("fedora-44"),
+            resolution_policy: test_resolution_policy(),
+        },
+    )
     .await
-    .unwrap()
-    .expect("converted package install must persist a trove");
+    .unwrap();
+    let trove_id = trove_id.expect("converted package install must persist a trove");
 
     let conn = conary_core::db::open(db_path_str).unwrap();
     let installed = Trove::find_by_id(&conn, trove_id).unwrap().unwrap();

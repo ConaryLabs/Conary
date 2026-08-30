@@ -44,7 +44,10 @@ pub use builder::{
 pub use chunking::{
     Chunk, ChunkReference, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats,
 };
-pub use convert::{ConversionOptions, ConversionResult, NativePackageConverter};
+pub use convert::{
+    ConversionOptions, ConversionResult, NativePackageConverter, PendingConversionResult,
+    VerifiedConversionResult,
+};
 pub use enhancement::{
     ENHANCEMENT_VERSION, EnhancementContext, EnhancementEngine, EnhancementError,
     EnhancementRegistry, EnhancementRunner, EnhancementStatus, EnhancementType,
@@ -76,4 +79,4 @@ pub use target_contract::{
 pub use transport::{
     CCS_TRANSPORT_SCHEMA_V1, CcsTransportEnvelopeV1, CcsTransportObjectV1, PreparedCcsTransport,
 };
-pub use verify::{TrustPolicy, VerifiedCcsArchive};
+pub use verify::{TrustPolicy, VerifiedArchiveIdentity, VerifiedCcsArchive};

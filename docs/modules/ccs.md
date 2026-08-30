@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
-revision: 68
-summary: Convert foreign packages through lossless source authority, ephemeral exact native-payload and archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
+revision: 69
+summary: Convert foreign packages through lossless source authority, typed pending-to-verified finalization, ephemeral exact native-payload and archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -338,6 +338,24 @@ format/checksum, signed identity, architecture, version scheme, and lifecycle
 source checksum remain exact.
 
 `convert/converter.rs` is the conversion orchestration hub.
+It emits `PendingConversionResult`, whose archive path is explicitly
+unverified. The pending value must be consumed by exactly one caller-selected
+finalizer before it becomes `VerifiedConversionResult`: `verify` uses a
+bounded spool and `verify_into_cas` uses one permanent SHA-256 CAS batch;
+same-directory publication can select `verify_staged_copy_into_cas`. The
+writer hashes every compressed output byte below gzip during the existing
+write and binds that exact hash and length into the pending value without an
+output reread. Every finalizer requires the verified archive identity,
+canonical authority, and exact signer to equal the authored result under the
+caller's trust policy. The authoring key remains evidence and is never promoted
+into an external trust anchor. The verified result owns both the
+`VerifiedCcsArchive` capability and a nonoptional physical archive identity;
+transport-reconstructed capabilities truthfully carry no compressed-archive
+identity. Publication, persistence, installation, or successful CLI output
+cannot be derived from the pending type. Adoption uses `verify_staged_copy`
+after copying and synchronizing the artifact in its durable destination
+directory.
+
 `convert/scriptlet_bundle/{builder,entries,format_metadata,native_contracts}.rs`
 projects package-parser ABI entries into the durable bundle, and
 `convert/scriptlet_bundle/{digest,summary}.rs` owns its content identity and
@@ -574,8 +592,11 @@ CCS emission. These same-process files are not crash-recovery or package
 authority and are never synchronized per payload file; parse or conversion
 failure cannot commit their paths into CCS, permanent CAS, database, package,
 or generation authority. Benchmark work therefore reports the exact spooled
-file and byte counts with zero payload-spool durability calls. Independent CCS
-reopen and permanent-CAS durability remain later mandatory boundaries.
+file and byte counts with zero payload-spool durability calls. Each consumer
+then selects one independent CCS verification boundary: Remi streams directly
+into permanent CAS, a mutating local install uses its installation CAS, and
+verification-only, dry-run, or foreign-cook callers use a bounded spool. The
+converter does not perform and discard an earlier hidden verification pass.
 
 Verification-only and dry-run callers use a temporary payload spool and do not
 create permanent CAS state. Mutating CCS install, restore, and repository-batch

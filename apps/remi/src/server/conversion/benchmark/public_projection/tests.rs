@@ -1,7 +1,7 @@
 // apps/remi/src/server/conversion/benchmark/public_projection/tests.rs
 use super::*;
 use crate::server::conversion::{
-    CONVERSION_BENCHMARK_SCHEMA_V3, ConversionBenchmarkCatalogAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V4, ConversionBenchmarkCatalogAuthority,
     ConversionBenchmarkCatalogQuery, ConversionBenchmarkCatalogReopen,
     ConversionBenchmarkCatalogSetup, ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkView,
@@ -138,8 +138,16 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
             Duration::from_millis(7),
         );
         timing.record(
+            ConversionPhase::CompleteArchiveCopy,
+            Duration::from_millis(1),
+        );
+        timing.record(
             ConversionPhase::IndependentTransportReopen,
             Duration::from_millis(2),
+        );
+        timing.record(
+            ConversionPhase::CompleteArchiveHash,
+            Duration::from_millis(1),
         );
         timing.record_skipped(
             ConversionPhase::Download,
@@ -157,13 +165,12 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.native_decompressed_archive_bytes_read = 83;
         timing.work.payload_reference_bytes_hashed = 89;
         timing.work.ccs_output_bytes = 23;
-        timing.work.immediate_converter_reopen_ccs_bytes = 23;
+        timing.work.ccs_output_bytes_hashed = 23;
         timing.work.independent_transport_reopen_ccs_bytes = 23;
         timing.work.complete_archive_hash_bytes = 23;
         timing.work.complete_archive_copy_bytes = 23;
         timing.work.signed_object_count = 2;
         timing.work.signed_object_bytes = 17;
-        timing.work.immediate_converter_reopen_object_bytes_hashed = 17;
         timing.work.independent_transport_reopen_object_bytes_hashed = 17;
         timing.work.cas_incoming_bytes_hashed = 17;
         timing.work.cas_persistent_bytes_written = 17;
@@ -190,13 +197,12 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
             ConversionPhase::ControlProjectionAndSigning,
             ConversionPhase::PayloadObjectEmission,
             ConversionPhase::ArchiveAssemblyAndGzip,
-            ConversionPhase::ImmediateConverterReopen,
             ConversionPhase::NativeProvenanceProjection,
+            ConversionPhase::CompleteArchiveCopy,
             ConversionPhase::IndependentTransportReopen,
+            ConversionPhase::CompleteArchiveHash,
             ConversionPhase::DurableCasIngestion,
             ConversionPhase::R2WriteThrough,
-            ConversionPhase::CompleteArchiveHash,
-            ConversionPhase::CompleteArchiveCopy,
             ConversionPhase::DatabasePersistence,
         ] {
             timing.record_skipped(phase, "cache hit; phase did not run");
@@ -206,10 +212,10 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
     timing
 }
 
-fn valid_report() -> ConversionBenchmarkReportV3 {
+fn valid_report() -> ConversionBenchmarkReportV4 {
     let output = valid_output();
-    ConversionBenchmarkReportV3 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V3,
+    ConversionBenchmarkReportV4 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V4,
         environment: ConversionBenchmarkEnvironment {
             hardware_label: "production-xfs".to_string(),
             remi_version: "0.1.0".to_string(),
@@ -303,7 +309,7 @@ fn valid_report() -> ConversionBenchmarkReportV3 {
     }
 }
 
-fn publish_raw(root: &Path, report: &ConversionBenchmarkReportV3) -> std::path::PathBuf {
+fn publish_raw(root: &Path, report: &ConversionBenchmarkReportV4) -> std::path::PathBuf {
     let raw_path = root.join(super::super::REPORT_FILE_NAME);
     super::super::report::publish_and_reopen_report(&raw_path, report)
         .expect("publish raw benchmark fixture");
@@ -327,7 +333,7 @@ fn assert_no_key(value: &Value, forbidden: &str) {
     }
 }
 
-fn assert_publication_rejected(report: &ConversionBenchmarkReportV3) -> String {
+fn assert_publication_rejected(report: &ConversionBenchmarkReportV4) -> String {
     let root = tempfile::tempdir().expect("create rejected-publication root");
     let raw_path = publish_raw(root.path(), report);
     let public_path = root.path().join(PUBLIC_REPORT_FILE_NAME);
@@ -363,7 +369,7 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
     for forbidden in ["binary_path", "path", "device_id", "reason", "error"] {
         assert_no_key(&value, forbidden);
     }
-    assert_eq!(value["schema_version"], PUBLIC_REPORT_SCHEMA_V1);
+    assert_eq!(value["schema_version"], PUBLIC_REPORT_SCHEMA_V2);
     assert_eq!(
         value["raw_report"]["sha256"],
         conary_core::hash::sha256(&raw_bytes)
@@ -437,13 +443,12 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
             "control_projection_and_signing",
             "payload_object_emission",
             "archive_assembly_and_gzip",
-            "immediate_converter_reopen",
             "native_provenance_projection",
+            "complete_archive_copy",
             "independent_transport_reopen",
+            "complete_archive_hash",
             "durable_cas_ingestion",
             "r2_write_through",
-            "complete_archive_hash",
-            "complete_archive_copy",
             "database_persistence",
         ])
     );
@@ -459,6 +464,20 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
             "block_size": 4096,
         })
     );
+}
+
+#[test]
+fn public_schema_v2_rejects_legacy_public_and_raw_versions() {
+    let report = valid_report();
+    let raw_bytes = serde_json::to_vec(&report).unwrap();
+    let mut public = project_report(&raw_bytes, &report).unwrap();
+
+    public.schema_version = 1;
+    assert!(validate_public_report(&public).is_err());
+
+    public.schema_version = PUBLIC_REPORT_SCHEMA_V2;
+    public.raw_report.schema_version = 3;
+    assert!(validate_public_report(&public).is_err());
 }
 
 #[test]

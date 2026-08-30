@@ -18,8 +18,9 @@ fn conversion_metrics_expose_each_chunked_payload_pass_and_ephemeral_staging() {
             "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         )
         .unwrap();
-    let metrics = result.metrics;
-    let ccs_write = metrics.ccs_write;
+    let metrics = &result.metrics;
+    let ccs_write = &metrics.ccs_write;
+    let independent_output = std::fs::read(&result.package_path).unwrap();
 
     assert_eq!(metrics.payload_files_examined, 1);
     assert_eq!(metrics.payload_reference_bytes_read, bytes.len() as u64);
@@ -47,6 +48,15 @@ fn conversion_metrics_expose_each_chunked_payload_pass_and_ephemeral_staging() {
     assert!(ccs_write.archive_members_traversed > 0);
     assert!(ccs_write.archive_input_bytes >= bytes.len() as u64);
     assert!(ccs_write.ccs_output_bytes > 0);
+    assert_eq!(ccs_write.ccs_output_bytes, independent_output.len() as u64);
+    assert_eq!(
+        ccs_write.ccs_output_bytes_hashed,
+        ccs_write.ccs_output_bytes
+    );
+    assert_eq!(
+        ccs_write.ccs_output_sha256,
+        crate::hash::sha256(&independent_output)
+    );
     assert_eq!(
         ccs_write.maximum_retained_staging_bytes,
         ccs_write.archive_input_bytes + ccs_write.ccs_output_bytes

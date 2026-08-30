@@ -31,6 +31,7 @@ pub mod scriptlet_bundle;
 
 pub use converter::{
     ConversionOptions, ConversionResult, NativeConversionMetrics, NativePackageConverter,
+    PendingConversionResult, VerifiedConversionResult,
 };
 pub use file_capabilities::file_capabilities_from_native_payload;
 pub use input::ForeignConversionInput;

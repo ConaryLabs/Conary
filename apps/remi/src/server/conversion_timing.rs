@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use conary_core::filesystem::VerifiedObjectBatchMetrics;
 
-/// Schema-v3 keeps the historical phase name while the implementation streams
+/// Schema-v4 keeps the historical phase name while the implementation streams
 /// independent archive verification directly into permanent CAS. Recording the
 /// retired second phase as skipped prevents the fused work from being counted
 /// twice in benchmark interpretation.
@@ -98,8 +98,7 @@ pub struct ConversionWorkMetrics {
     pub archive_members_traversed: u64,
     pub archive_input_bytes: u64,
     pub ccs_output_bytes: u64,
-    pub immediate_converter_reopen_ccs_bytes: u64,
-    pub immediate_converter_reopen_object_bytes_hashed: u64,
+    pub ccs_output_bytes_hashed: u64,
     pub independent_transport_reopen_ccs_bytes: u64,
     pub independent_transport_reopen_object_bytes_hashed: u64,
     pub complete_archive_hash_bytes: u64,
@@ -168,7 +167,7 @@ impl ConversionWorkMetrics {
         self.archive_members_traversed = metrics.ccs_write.archive_members_traversed;
         self.archive_input_bytes = metrics.ccs_write.archive_input_bytes;
         self.ccs_output_bytes = metrics.ccs_write.ccs_output_bytes;
-        self.immediate_converter_reopen_ccs_bytes = metrics.ccs_write.ccs_output_bytes;
+        self.ccs_output_bytes_hashed = metrics.ccs_write.ccs_output_bytes_hashed;
         self.maximum_retained_staging_bytes = metrics.ccs_write.maximum_retained_staging_bytes;
     }
 
@@ -203,13 +202,12 @@ pub enum ConversionPhase {
     ControlProjectionAndSigning,
     PayloadObjectEmission,
     ArchiveAssemblyAndGzip,
-    ImmediateConverterReopen,
     NativeProvenanceProjection,
+    CompleteArchiveCopy,
     IndependentTransportReopen,
+    CompleteArchiveHash,
     DurableCasIngestion,
     R2WriteThrough,
-    CompleteArchiveHash,
-    CompleteArchiveCopy,
     DatabasePersistence,
 }
 
@@ -406,6 +404,8 @@ mod tests {
                 archive_members_traversed: 12,
                 archive_input_bytes: 240,
                 ccs_output_bytes: 180,
+                ccs_output_sha256: "a".repeat(64),
+                ccs_output_bytes_hashed: 180,
                 maximum_retained_staging_bytes: 420,
                 ..Default::default()
             },
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(work.payload_object_bytes_read, 120);
         assert_eq!(work.temporary_object_file_syncs, 4);
         assert_eq!(work.archive_input_bytes, 240);
-        assert_eq!(work.immediate_converter_reopen_ccs_bytes, 180);
+        assert_eq!(work.ccs_output_bytes_hashed, 180);
         assert_eq!(work.maximum_retained_staging_bytes, 420);
     }
 

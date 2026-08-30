@@ -1,10 +1,15 @@
 // apps/remi/src/server/conversion/storage.rs
 //! Signed CCS object persistence and durable R2 publication.
 
+pub(super) mod artifact;
+
 use super::ConversionService;
 use anyhow::{Context, Result, ensure};
+use artifact::{
+    ConversionArchiveWork, PublishedConversionArtifact, stage_finalize_and_publish_then,
+};
 use async_trait::async_trait;
-use conary_core::ccs::convert::ConversionResult;
+use conary_core::ccs::convert::{ConversionResult, PendingConversionResult};
 use conary_core::ccs::transport::CcsTransportObjectV1;
 use conary_core::db::models::ChunkAccess;
 use conary_core::filesystem::{CasStore, VerifiedObjectBatchMetrics, object_path};
@@ -23,6 +28,13 @@ pub(super) struct StoredTransport {
     pub(super) cas_metrics: VerifiedObjectBatchMetrics,
     pub(super) r2_duration: Option<Duration>,
     pub(super) r2_work: crate::server::conversion_timing::ConversionR2Work,
+}
+
+pub(super) struct StoredConversion {
+    pub(super) stored_transport: StoredTransport,
+    pub(super) conversion: ConversionResult,
+    pub(super) artifact: PublishedConversionArtifact,
+    pub(super) archive_work: ConversionArchiveWork,
 }
 
 #[async_trait]
@@ -120,15 +132,69 @@ where
 impl ConversionService {
     pub(super) async fn store_transport_with_timing(
         &self,
-        result: &ConversionResult,
+        pending: PendingConversionResult,
         source_profile: &str,
-    ) -> Result<StoredTransport> {
-        let package_path = result
-            .package_path
-            .as_deref()
-            .context("conversion did not emit a CCS artifact")?;
-        self.store_signed_ccs_path_with_timing(package_path, source_profile)
+    ) -> Result<StoredConversion> {
+        self.store_transport_with_timing_then(pending, source_profile, |_| Ok(()))
             .await
+    }
+
+    async fn store_transport_with_timing_then<F>(
+        &self,
+        pending: PendingConversionResult,
+        source_profile: &str,
+        after_publication: F,
+    ) -> Result<StoredConversion>
+    where
+        F: FnOnce(&Path) -> Result<()> + Send + 'static,
+    {
+        let objects_dir = self.chunk_dir.join("objects");
+        let packages_dir = self.cache_dir.join("packages");
+        let keys_dir = self.repository_keys_dir.as_ref().context(
+            "Remi conversion requires release_publish.repository_keys_dir for CCS transport verification",
+        )?;
+        let signing_key = crate::server::signing_authority::load_role_key(
+            keys_dir,
+            source_profile,
+            crate::server::signing_authority::RepositorySigningRole::Targets,
+        )?;
+        let policy = conary_core::ccs::TrustPolicy::strict(vec![signing_key.public_key_base64()]);
+
+        let local_objects_dir = objects_dir.clone();
+        let finalized = tokio::task::spawn_blocking(move || {
+            let cas =
+                CasStore::new(local_objects_dir).context("initialize signed CCS object CAS")?;
+            stage_finalize_and_publish_then(
+                pending,
+                &policy,
+                &cas,
+                &packages_dir,
+                after_publication,
+            )
+        })
+        .await
+        .context("join emitted CCS transport verification and CAS ingestion task")??;
+        let artifact::FinalizedConversionArtifact {
+            conversion,
+            verification,
+            artifact,
+            work: archive_work,
+            verification_and_cas_duration,
+        } = finalized;
+        let stored_transport = self
+            .publish_verified_transport(
+                verification,
+                verification_and_cas_duration,
+                &objects_dir,
+                Some(&artifact),
+            )
+            .await?;
+        Ok(StoredConversion {
+            stored_transport,
+            conversion,
+            artifact,
+            archive_work,
+        })
     }
 
     /// Verify the signed CCS authority, persist exactly its canonical objects,
@@ -160,6 +226,22 @@ impl ConversionService {
         .await
         .context("join emitted CCS transport verification and CAS ingestion task")??;
         let verification_and_cas_duration = verify_and_cas_started.elapsed();
+        self.publish_verified_transport(
+            verification,
+            verification_and_cas_duration,
+            &objects_dir,
+            None,
+        )
+        .await
+    }
+
+    async fn publish_verified_transport(
+        &self,
+        verification: conary_core::ccs::VerifiedCcsArchive,
+        verification_and_cas_duration: Duration,
+        objects_dir: &Path,
+        conversion_artifact: Option<&PublishedConversionArtifact>,
+    ) -> Result<StoredTransport> {
         let cas_metrics = verification
             .verified_object_metrics()
             .context("permanent CCS verification omitted verified-CAS work evidence")?;
@@ -176,6 +258,9 @@ impl ConversionService {
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         drop(verification);
+        if let Some(artifact) = conversion_artifact {
+            artifact.require_publication_binding()?;
+        }
 
         // Publish cache bookkeeping only after every durable write succeeds. A
         // failed R2 write must not leave a non-evictable local-only cache row.
@@ -183,14 +268,22 @@ impl ConversionService {
         let (r2_duration, r2_work) = if let Some(r2) = self.r2_store.clone() {
             let (duration, work) = publish_transport_objects_then(
                 r2,
-                &objects_dir,
+                objects_dir,
                 &transport.objects,
                 R2_PUBLICATION_CONCURRENCY,
-                || self.persist_chunk_sizes(&exact_sizes),
+                || async {
+                    if let Some(artifact) = conversion_artifact {
+                        artifact.require_publication_binding()?;
+                    }
+                    self.persist_chunk_sizes(&exact_sizes).await
+                },
             )
             .await?;
             (Some(duration), work)
         } else {
+            if let Some(artifact) = conversion_artifact {
+                artifact.require_publication_binding()?;
+            }
             self.persist_chunk_sizes(&exact_sizes).await?;
             (
                 None,
@@ -265,6 +358,8 @@ mod tests {
         FileContentLayoutV3, LifecycleAuthorityV3, PackageDataV3, PackageIdentityV3,
         PackageKindTagV3, PackageKindV3, ProvenanceAuthorityV3,
     };
+    use conary_core::packages::source_authority::{CcsPackageAuthority, SourcePackageAuthority};
+    use conary_core::packages::traits::{ExtractedFile, PackageFile};
     use conary_core::payload::{PayloadContentAuthority, PayloadNode};
     use conary_core::repository::versioning::VersionScheme;
     use std::collections::HashSet;
@@ -420,6 +515,60 @@ mod tests {
         (service, chunk_dir)
     }
 
+    fn pending_conversion(root: &Path, signer: Arc<SigningKeyPair>) -> PendingConversionResult {
+        let payload_bytes = b"verified staging payload";
+        let payload_path = "/usr/bin/verified-staging".to_string();
+        let content_authority = PayloadContentAuthority {
+            sha256: conary_core::hash::sha256(payload_bytes),
+            size: payload_bytes.len() as u64,
+        };
+        let mut metadata = conary_core::ccs::convert::ForeignConversionInput::new(
+            Path::new("verified-staging-1.0-1.x86_64.rpm").to_path_buf(),
+            "verified-staging".to_string(),
+            "1.0".to_string(),
+            VersionScheme::Rpm,
+        );
+        metadata.source_authority = SourcePackageAuthority::Ccs(CcsPackageAuthority {
+            name: "verified-staging".to_string(),
+            version: "1.0".to_string(),
+            version_scheme: VersionScheme::Rpm,
+            architecture: Some("x86_64".to_string()),
+            debian_multi_arch: None,
+            capabilities: Vec::new(),
+            config: Vec::new(),
+        });
+        metadata.files = vec![PackageFile {
+            path: payload_path.clone(),
+            node: PayloadNode::regular(0o755),
+            content: Some(content_authority.clone()),
+        }];
+        let payload =
+            conary_core::packages::PackagePayload::from_extracted_in_memory(vec![ExtractedFile {
+                path: payload_path,
+                node: PayloadNode::regular(0o755),
+                content: payload_bytes.to_vec(),
+                content_authority: Some(content_authority),
+            }])
+            .unwrap();
+        conary_core::ccs::convert::NativePackageConverter::new(
+            conary_core::ccs::convert::ConversionOptions {
+                output_dir: root.to_path_buf(),
+            },
+        )
+        .with_source_profile("fedora-44")
+        .with_source_release("1")
+        .with_conversion_tool("remi-storage-test")
+        .with_signing_key(signer)
+        .convert_payload(
+            &metadata,
+            payload.files(),
+            "rpm",
+            &conary_core::hash::Hash::new(conary_core::hash::HashAlgorithm::Sha256, "d".repeat(64))
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
     fn stored_objects(
         objects_dir: &Path,
         count: usize,
@@ -539,6 +688,60 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM chunk_access", [], |row| row.get(0))
             .unwrap();
         assert_eq!(rows, 0);
+    }
+
+    #[tokio::test]
+    async fn post_finalizer_same_size_mutation_fails_before_publication_bookkeeping() {
+        let temp = tempfile::tempdir().unwrap();
+        let signer = Arc::new(SigningKeyPair::generate().with_key_id("targets"));
+        let authored = temp.path().join("authored");
+        fs::create_dir(&authored).unwrap();
+        let pending = pending_conversion(&authored, Arc::clone(&signer));
+        let expected_bytes = pending.metrics().ccs_write.ccs_output_bytes;
+        let expected_digest = pending.metrics().ccs_write.ccs_output_sha256.clone();
+        let (service, _chunk_dir) = direct_cas_service(temp.path(), signer.as_ref());
+
+        let error = match service
+            .store_transport_with_timing_then(pending, "fedora-44", move |path| {
+                let mut bytes = fs::read(path)?;
+                ensure!(bytes.len() as u64 == expected_bytes);
+                let offset = bytes.len() / 2;
+                bytes[offset] ^= 0x01;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+                fs::write(path, &bytes)?;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o400))?;
+                fs::File::open(path)?.sync_all()?;
+                Ok(())
+            })
+            .await
+        {
+            Ok(_) => panic!("post-finalizer mutation was published"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("changed after finalization"),
+            "{error:#}"
+        );
+
+        let packages = service.cache_dir.join("packages");
+        let canonical = packages.join(format!("{expected_digest}.ccs"));
+        assert!(canonical.exists());
+        assert_ne!(
+            conary_core::hash::sha256(&fs::read(&canonical).unwrap()),
+            expected_digest
+        );
+        assert_eq!(fs::read_dir(&packages).unwrap().count(), 1);
+        let conn = crate::server::open_runtime_db(&service.db_path).unwrap();
+        let chunk_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunk_access", [], |row| row.get(0))
+            .unwrap();
+        let conversion_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM converted_packages", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(chunk_rows, 0);
+        assert_eq!(conversion_rows, 0);
     }
 
     #[tokio::test]

@@ -44,16 +44,16 @@ pub(super) fn cook_foreign_package(
     })?;
     let metadata =
         ForeignConversionInput::from_package(package_path.to_path_buf(), package.as_ref())?;
+    let signing_key = std::sync::Arc::new(crate::commands::ccs::load_or_create_local_dev_key()?);
+    let signing_public_key = signing_key.public_key_base64();
     let mut converter = NativePackageConverter::new(ConversionOptions {
         output_dir: output_dir.to_path_buf(),
     })
-    .with_signing_key(std::sync::Arc::new(
-        crate::commands::ccs::load_or_create_local_dev_key()?,
-    ));
+    .with_signing_key(signing_key);
     if let Some(profile_id) = exact_source_profile(format, source_profile)? {
         converter = converter.with_source_profile(profile_id);
     }
-    let result = converter
+    let pending = converter
         .convert_payload(&metadata, payload.files(), format.name(), &checksum)
         .with_context(|| {
             format!(
@@ -61,10 +61,14 @@ pub(super) fn cook_foreign_package(
                 package_path.display()
             )
         })?;
-    let converted = result
-        .package_path
-        .as_ref()
-        .context("foreign conversion succeeded without a CCS output path")?;
+    let policy = conary_core::ccs::TrustPolicy::strict(vec![signing_public_key]);
+    let verified = pending.verify(&policy).with_context(|| {
+        format!(
+            "Failed to verify converted foreign package {}",
+            package_path.display()
+        )
+    })?;
+    let converted = &verified.conversion().package_path;
 
     writeln!(output, "Converted foreign package: {}", converted.display())?;
     Ok(())

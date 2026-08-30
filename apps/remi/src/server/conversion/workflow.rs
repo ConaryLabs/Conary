@@ -12,7 +12,9 @@ use crate::server::conversion_timing::{
 use crate::server::signing_authority::{RepositorySigningRole, load_role_key};
 use anyhow::{Context, Result, anyhow};
 use conary_core::ccs::convert::ForeignConversionInput;
-use conary_core::ccs::convert::{ConversionOptions, ConversionResult, NativePackageConverter};
+use conary_core::ccs::convert::{
+    ConversionOptions, NativePackageConverter, PendingConversionResult,
+};
 use conary_core::db::models::RepositoryPackage;
 use conary_core::repository::catalog::CatalogPackageRecordV1;
 use std::path::PathBuf;
@@ -24,7 +26,7 @@ struct ParsedConversion {
     metadata: ForeignConversionInput,
     format: &'static str,
     source_checksum: String,
-    conversion_result: ConversionResult,
+    conversion_result: PendingConversionResult,
     source: PinnedConversionSource,
     phase_timings: Vec<ConversionPhaseTiming>,
     nested_phase_timings: Vec<ConversionNestedPhaseTiming>,
@@ -445,43 +447,65 @@ impl ConversionService {
         timing.work.record_native_parse(&parsed.native_parse);
         timing
             .work
-            .record_native_conversion(&parsed.conversion_result.metrics);
+            .record_native_conversion(parsed.conversion_result.metrics());
 
-        let stored_transport = self
-            .store_transport_with_timing(&parsed.conversion_result, source_feed.id())
+        let stored_conversion = self
+            .store_transport_with_timing(parsed.conversion_result, source_feed.id())
             .await?;
         timing.record(
+            ConversionPhase::CompleteArchiveCopy,
+            stored_conversion.archive_work.complete_archive_copy,
+        );
+        timing.record(
             ConversionPhase::IndependentTransportReopen,
-            stored_transport.verification_and_cas_duration,
+            stored_conversion
+                .stored_transport
+                .verification_and_cas_duration,
+        );
+        timing.record(
+            ConversionPhase::CompleteArchiveHash,
+            stored_conversion.archive_work.complete_archive_hash,
         );
         timing.record_skipped(
             ConversionPhase::DurableCasIngestion,
             crate::server::conversion_timing::DURABLE_CAS_FUSED_SKIP_REASON,
         );
         timing.work.independent_transport_reopen_ccs_bytes = timing.work.ccs_output_bytes;
-        let reopened_object_bytes =
-            stored_transport
-                .transport
-                .objects
-                .iter()
-                .try_fold(0_u64, |total, object| {
-                    total
-                        .checked_add(object.size)
-                        .context("signed conversion object byte count overflow")
-                })?;
-        timing.work.immediate_converter_reopen_object_bytes_hashed = reopened_object_bytes;
+        let reopened_object_bytes = stored_conversion
+            .stored_transport
+            .transport
+            .objects
+            .iter()
+            .try_fold(0_u64, |total, object| {
+                total
+                    .checked_add(object.size)
+                    .context("signed conversion object byte count overflow")
+            })?;
         timing.work.independent_transport_reopen_object_bytes_hashed = reopened_object_bytes;
-        timing.work.record_cas(stored_transport.cas_metrics);
-        timing.work.r2 = stored_transport.r2_work;
-        if let Some(duration) = stored_transport.r2_duration {
+        timing
+            .work
+            .record_cas(stored_conversion.stored_transport.cas_metrics);
+        timing.work.r2 = stored_conversion.stored_transport.r2_work.clone();
+        timing.work.complete_archive_copy_bytes =
+            stored_conversion.archive_work.complete_archive_copy_bytes;
+        timing.work.complete_archive_hash_bytes =
+            stored_conversion.archive_work.complete_archive_hash_bytes;
+        if let Some(duration) = stored_conversion.stored_transport.r2_duration {
             timing.record(ConversionPhase::R2WriteThrough, duration);
         } else {
             timing.record_skipped(ConversionPhase::R2WriteThrough, "r2 store not configured");
         }
         info!(
             "Stored {} signed CCS objects",
-            stored_transport.transport.objects.len()
+            stored_conversion.stored_transport.transport.objects.len()
         );
+
+        let super::storage::StoredConversion {
+            stored_transport,
+            conversion: conversion_result,
+            artifact,
+            ..
+        } = stored_conversion;
 
         let persist_service = self.clone();
         let source_profile_owned = parsed.source.source_profile().to_string();
@@ -491,28 +515,19 @@ impl ConversionService {
                 metadata: parsed.metadata,
                 format: parsed.format,
                 source_checksum: parsed.source_checksum,
-                conversion_result: parsed.conversion_result,
+                conversion_result,
                 source: parsed.source,
                 profile_revision_sha256,
                 transport: stored_transport.transport,
+                artifact,
             })
         })
         .await
         .map_err(|e| anyhow!("conversion persistence task panicked: {e}"))??;
         timing.record(
-            ConversionPhase::CompleteArchiveHash,
-            persisted.metrics.complete_archive_hash,
-        );
-        timing.record(
-            ConversionPhase::CompleteArchiveCopy,
-            persisted.metrics.complete_archive_copy,
-        );
-        timing.record(
             ConversionPhase::DatabasePersistence,
             persisted.metrics.database_persistence,
         );
-        timing.work.complete_archive_hash_bytes = persisted.metrics.complete_archive_hash_bytes;
-        timing.work.complete_archive_copy_bytes = persisted.metrics.complete_archive_copy_bytes;
         Ok(persisted.result)
     }
 
@@ -528,13 +543,12 @@ impl ConversionService {
             ConversionPhase::ControlProjectionAndSigning,
             ConversionPhase::PayloadObjectEmission,
             ConversionPhase::ArchiveAssemblyAndGzip,
-            ConversionPhase::ImmediateConverterReopen,
             ConversionPhase::NativeProvenanceProjection,
+            ConversionPhase::CompleteArchiveCopy,
             ConversionPhase::IndependentTransportReopen,
+            ConversionPhase::CompleteArchiveHash,
             ConversionPhase::DurableCasIngestion,
             ConversionPhase::R2WriteThrough,
-            ConversionPhase::CompleteArchiveHash,
-            ConversionPhase::CompleteArchiveCopy,
             ConversionPhase::DatabasePersistence,
         ] {
             timing.record_skipped(phase, "cache hit; phase did not run");
@@ -660,7 +674,7 @@ impl ConversionService {
         let conversion_result = converter
             .convert_payload(&metadata, files.files(), format, &artifact_sha256)
             .map_err(|e| anyhow!("Conversion failed: {}", e))?;
-        let metrics = &conversion_result.metrics;
+        let metrics = conversion_result.metrics();
         phase_timings.extend([
             ConversionPhaseTiming {
                 phase: ConversionPhase::MetadataLifecycleAndAuthorityProjection,
@@ -689,10 +703,6 @@ impl ConversionService {
                 duration_ms: metrics.ccs_write.archive_assembly_and_gzip.as_millis(),
             },
             ConversionPhaseTiming {
-                phase: ConversionPhase::ImmediateConverterReopen,
-                duration_ms: metrics.immediate_converter_reopen.as_millis(),
-            },
-            ConversionPhaseTiming {
                 phase: ConversionPhase::NativeProvenanceProjection,
                 duration_ms: metrics.native_provenance_projection.as_millis(),
             },
@@ -702,11 +712,6 @@ impl ConversionService {
             included_in: ConversionPhase::PayloadObjectEmission,
             duration_ms: metrics.ccs_write.temporary_object_staging.as_millis(),
         }];
-
-        info!(
-            "Conversion complete: scriptlet_fidelity={}",
-            conversion_result.scriptlet_metadata.scriptlet_fidelity
-        );
 
         Ok(ParsedConversion {
             metadata,

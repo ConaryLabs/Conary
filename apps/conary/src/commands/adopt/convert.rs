@@ -128,7 +128,7 @@ pub async fn cmd_adopt_convert(
         let converted =
             convert_native_package_to_ccs(parsed.as_ref(), &acquired.path, format, source_profile)?;
         validate_converted_source_checksum(
-            converted.pending_record.original_checksum(),
+            converted.original_checksum(),
             &plan.source.package.checksum,
             &acquired.path,
         )?;
@@ -859,53 +859,38 @@ fn publish_conversion(
     conn: &mut rusqlite::Connection,
     db_path: &str,
     plan: &AdoptedConversionPlan,
-    converted: super::super::install::NativeCcsConversion,
+    converted: super::super::install::PendingNativeCcsConversion,
 ) -> Result<()> {
     let output_dir = conary_core::db::paths::db_dir(db_path)
         .join("packages")
         .join("adopted");
     fs::create_dir_all(&output_dir)?;
-    let checksum = exact_sha256(converted.pending_record.original_checksum())?;
-    let file_name = conary_core::filesystem::path::sanitize_filename(&format!(
-        "{}-{}-{}-v{}-{}.ccs",
-        plan.identity.name(),
-        plan.identity.version(),
-        plan.identity.architecture(),
-        conary_core::db::models::CONVERSION_VERSION,
-        &checksum[..16]
-    ))?;
-    let final_path = output_dir.join(file_name);
-    let mut staged = NamedTempFile::new_in(&output_dir)?;
-    let mut input = File::open(&converted.ccs_path)?;
-    std::io::copy(&mut input, staged.as_file_mut())?;
-    staged.as_file_mut().flush()?;
-    staged.as_file().sync_all()?;
-    let policy = TrustPolicy::strict(vec![converted.signing_public_key.clone()]);
-    conary_core::ccs::verify::verify_package(staged.path(), &policy)
-        .context("same-directory adopted CCS staging failed verification")?;
+    let final_path = adopted_ccs_output_path(&output_dir, plan, converted.original_checksum())?;
 
-    let published_new = if final_path.exists() {
-        if file_sha256(staged.path())? != file_sha256(&final_path)? {
-            bail!(
-                "refusing to replace different adopted CCS artifact at {}",
-                final_path.display()
-            );
-        }
-        conary_core::ccs::verify::verify_package(&final_path, &policy)
+    let (published_new, pending_record) = if final_path.exists() {
+        let verified = converted
+            .verify_staged_copy(&final_path)
             .context("existing adopted CCS output failed verification")?;
-        false
+        (false, validated_conversion_record(&verified)?)
     } else {
+        let mut staged = NamedTempFile::new_in(&output_dir)?;
+        let mut input = File::open(converted.unverified_ccs_path())?;
+        std::io::copy(&mut input, staged.as_file_mut())?;
+        staged.as_file_mut().flush()?;
+        staged.as_file().sync_all()?;
+        let verified = converted.verify_staged_copy(staged.path())?;
+        let pending_record = validated_conversion_record(&verified)?;
         staged
             .persist_noclobber(&final_path)
             .map_err(|error| error.error)?;
         sync_directory(&output_dir)?;
-        true
+        (true, pending_record)
     };
 
     let db_result = (|| -> Result<()> {
         let tx = conn.unchecked_transaction()?;
         ConvertedPackage::delete_installed_by_trove(&tx, plan.trove_id)?;
-        let mut record = converted.pending_record.into_record(plan.trove_id)?;
+        let mut record = pending_record.into_record(plan.trove_id)?;
         record.set_installed_ccs_path(final_path.to_string_lossy().into_owned())?;
         record.insert(&tx)?;
         let mut changeset = Changeset::new(format!(
@@ -935,6 +920,40 @@ fn publish_conversion(
         return Err(error);
     }
     Ok(())
+}
+
+fn adopted_ccs_output_path(
+    output_dir: &Path,
+    plan: &AdoptedConversionPlan,
+    original_checksum: &str,
+) -> Result<PathBuf> {
+    let checksum = exact_sha256(original_checksum)?;
+    let file_name = conary_core::filesystem::path::sanitize_filename(&format!(
+        "{}-{}-{}-v{}-{}.ccs",
+        plan.identity.name(),
+        plan.identity.version(),
+        plan.identity.architecture(),
+        conary_core::db::models::CONVERSION_VERSION,
+        &checksum[..16]
+    ))?;
+    Ok(output_dir.join(file_name))
+}
+
+fn validated_conversion_record(
+    verified: &conary_core::ccs::convert::VerifiedConversionResult,
+) -> Result<super::super::install::PendingInstalledConversion> {
+    let path = verified
+        .conversion()
+        .package_path
+        .to_str()
+        .context("verified adopted CCS path is not UTF-8")?;
+    let package =
+        conary_core::ccs::CcsPackage::from_verified_archive(path, verified.verification())
+            .context("failed to construct verified adopted CCS package")?;
+    super::super::ccs::validate_ccs_capability_declaration(&package)?;
+    super::super::install::PendingInstalledConversion::from_verified_conversion(
+        verified.conversion(),
+    )
 }
 
 fn file_sha256(path: &Path) -> Result<String> {

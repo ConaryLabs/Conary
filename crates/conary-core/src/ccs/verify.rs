@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use thiserror::Error;
 
+mod archive_identity;
 pub(crate) mod content;
 mod object_sink;
 mod stream;
@@ -155,13 +156,37 @@ impl TrustPolicy {
     }
 }
 
-/// Authenticated current CCS archive.
+/// Exact physical identity produced while streaming a complete CCS archive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedArchiveIdentity {
+    sha256: String,
+    bytes: u64,
+}
+
+impl VerifiedArchiveIdentity {
+    fn new(sha256: String, bytes: u64) -> Self {
+        Self { sha256, bytes }
+    }
+
+    /// SHA-256 of every compressed byte in the exact verified archive.
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    /// Exact compressed archive byte length covered by [`Self::sha256`].
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+}
+
+/// Authenticated current CCS package capability.
 ///
-/// Construction is private to `verify_package`; consumers use this value as
-/// proof that current authority, package signature, projections, and payload
-/// bytes agreed under the supplied trust policy.
+/// Archive-backed verification carries an exact compressed archive identity.
+/// A capability reconstructed from authenticated transport controls and CAS
+/// objects does not claim that a compressed archive was read.
 #[derive(Debug, Clone)]
 pub struct VerifiedCcsArchive {
+    archive_identity: Option<VerifiedArchiveIdentity>,
     authority: crate::ccs::v3::AuthorityDocumentV3,
     signature: PackageSignature,
     build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
@@ -176,6 +201,24 @@ pub struct VerifiedCcsArchive {
 }
 
 impl VerifiedCcsArchive {
+    /// Exact compressed identity when verification read an archive.
+    ///
+    /// Transport-created capabilities have no compressed archive identity and
+    /// therefore return `None`.
+    pub fn archive_identity(&self) -> Option<&VerifiedArchiveIdentity> {
+        self.archive_identity.as_ref()
+    }
+
+    /// SHA-256 of every compressed byte when verification read an archive.
+    pub fn archive_sha256(&self) -> Option<&str> {
+        self.archive_identity().map(VerifiedArchiveIdentity::sha256)
+    }
+
+    /// Exact compressed byte length covered by [`Self::archive_sha256`].
+    pub fn archive_bytes(&self) -> Option<u64> {
+        self.archive_identity().map(VerifiedArchiveIdentity::bytes)
+    }
+
     pub fn authority(&self) -> &crate::ccs::v3::AuthorityDocumentV3 {
         &self.authority
     }
@@ -264,6 +307,7 @@ fn verify_package_to(
     let verified = stream::verify_archive(path, policy, destination)
         .with_context(|| format!("verify streaming CCS v3 archive {}", path.display()))?;
     Ok(VerifiedCcsArchive {
+        archive_identity: Some(verified.archive_identity),
         authority: verified.authority,
         signature: verified.signature,
         build_attestation: verified.build_attestation,
@@ -445,6 +489,26 @@ mod tests {
         assert_eq!(verified.files_checked(), 1);
         assert_eq!(verified.signature().key_id.as_deref(), Some("release"));
         assert_eq!(verified.verified_object_metrics(), None);
+    }
+
+    #[test]
+    fn verified_archive_identity_covers_the_exact_complete_compressed_file() {
+        let signer = SigningKeyPair::generate().with_key_id("release");
+        let (_temp, path, policy) = package(&signer);
+        let independent_bytes = std::fs::read(&path).unwrap();
+        let independent_size = std::fs::metadata(&path).unwrap().len();
+
+        let verified = verify_package(&path, &policy).unwrap();
+
+        assert_eq!(
+            verified.archive_sha256(),
+            Some(crate::hash::sha256(&independent_bytes).as_str())
+        );
+        assert_eq!(verified.archive_bytes(), Some(independent_size));
+        assert_eq!(
+            verified.archive_bytes(),
+            Some(independent_bytes.len() as u64)
+        );
     }
 
     #[test]
