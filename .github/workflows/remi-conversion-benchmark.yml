@@ -884,6 +884,7 @@ jobs:
                   "cas_race_losers",
                   "cas_staged_data_barriers",
                   "ccs_output_bytes",
+                  "ccs_output_bytes_hashed",
                   "complete_archive_copy_bytes",
                   "complete_archive_hash_bytes",
                   "downloaded_bytes",
@@ -1065,9 +1066,9 @@ jobs:
                 "payload_object_emission",
                 "archive_assembly_and_gzip",
                 "native_provenance_projection",
+                "complete_archive_copy",
                 "independent_transport_reopen",
                 "complete_archive_hash",
-                "complete_archive_copy",
                 "database_persistence"
               ]
               and $cold.timing.nested_phases == [
@@ -1098,6 +1099,7 @@ jobs:
                 and $work.source_artifact_bytes == $source_size_bytes
                 and $work.source_bytes_hashed == $source_size_bytes
                 and $work.ccs_output_bytes == $output.ccs_size_bytes
+                and $work.ccs_output_bytes_hashed == $output.ccs_size_bytes
                 and $work.independent_transport_reopen_ccs_bytes
                   == $output.ccs_size_bytes
                 and $work.complete_archive_hash_bytes == $output.ccs_size_bytes
@@ -1136,11 +1138,11 @@ jobs:
                 "payload_object_emission",
                 "archive_assembly_and_gzip",
                 "native_provenance_projection",
+                "complete_archive_copy",
                 "independent_transport_reopen",
+                "complete_archive_hash",
                 "durable_cas_ingestion",
                 "r2_write_through",
-                "complete_archive_hash",
-                "complete_archive_copy",
                 "database_persistence"
               ]
               and $hot.views.conversion_core.executed == false
