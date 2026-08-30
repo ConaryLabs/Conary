@@ -191,7 +191,7 @@ fn tumbleweed_image_and_enabled_repositories_share_one_snapshot() {
     let expected_declarations = [
         (
             "/etc/zypp/repos.d/repo-non-oss.repo",
-            "7f49b5b18873f4b12e734454a1e1abee47790b8dc06b7fa7e3dd0fda7212da80",
+            "1d35c7e492806da2c792b3044e061aa0187ce5850b832043391b97bd4a75be00",
         ),
         (
             "/etc/zypp/repos.d/repo-openh264.repo",
@@ -199,7 +199,7 @@ fn tumbleweed_image_and_enabled_repositories_share_one_snapshot() {
         ),
         (
             "/etc/zypp/repos.d/repo-oss.repo",
-            "0e3bd029ed70e151e4c9240c21f608b8fb3c56f5a128883b5592cb21e48c8392",
+            "fa6c52d497e132d546dd28e54c2e0c5cb072e8a68f85267caa7c85d4396523b7",
         ),
         (
             "/etc/zypp/repos.d/repo-update.repo",

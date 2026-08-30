@@ -7,19 +7,19 @@ FROM ${BASE_IMAGE}
 ARG INSTALL_MODE=binary
 
 RUN sed -i \
-        's#^baseurl=http://download.opensuse.org/tumbleweed/repo/non-oss/$#baseurl=https://downloadcontent.opensuse.org/history/20260821/tumbleweed/repo/non-oss/#' \
+        's#^baseurl=http://download.opensuse.org/tumbleweed/repo/non-oss/$#baseurl=https://downloadcontent.opensuse.org/history/20260829/tumbleweed/repo/non-oss/#' \
         /etc/zypp/repos.d/repo-non-oss.repo \
     && sed -i \
-        's#^baseurl=http://download.opensuse.org/tumbleweed/repo/oss/$#baseurl=https://downloadcontent.opensuse.org/history/20260821/tumbleweed/repo/oss/#' \
+        's#^baseurl=http://download.opensuse.org/tumbleweed/repo/oss/$#baseurl=https://downloadcontent.opensuse.org/history/20260829/tumbleweed/repo/oss/#' \
         /etc/zypp/repos.d/repo-oss.repo \
     && sed -i 's/^enabled=1$/enabled=0/' \
         /etc/zypp/repos.d/repo-openh264.repo \
         /etc/zypp/repos.d/repo-update.repo \
     && grep -Fx \
-        'baseurl=https://downloadcontent.opensuse.org/history/20260821/tumbleweed/repo/non-oss/' \
+        'baseurl=https://downloadcontent.opensuse.org/history/20260829/tumbleweed/repo/non-oss/' \
         /etc/zypp/repos.d/repo-non-oss.repo \
     && grep -Fx \
-        'baseurl=https://downloadcontent.opensuse.org/history/20260821/tumbleweed/repo/oss/' \
+        'baseurl=https://downloadcontent.opensuse.org/history/20260829/tumbleweed/repo/oss/' \
         /etc/zypp/repos.d/repo-oss.repo \
     && grep -Fx 'enabled=0' /etc/zypp/repos.d/repo-openh264.repo \
     && grep -Fx 'enabled=0' /etc/zypp/repos.d/repo-update.repo \

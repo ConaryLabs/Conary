@@ -124,19 +124,19 @@ test_packages = [
 ]
 
 [distros."opensuse-tumbleweed".target_root]
-base_image = "registry.opensuse.org/opensuse/tumbleweed:20260821@sha256:eb1b69dbf109eba4ff9c91a964ba2f819d081ec09445f623f26da8a523ddcc1d"
+base_image = "registry.opensuse.org/opensuse/tumbleweed:20260829@sha256:ff12700e033ece72df574b5514e39f2f89ab0f803e180fb5f37928bfb896a9e5"
 package_query = "rpm"
 identity_packages = [
-    { name = "openSUSE-release", version = "20260821-4263.1" },
+    { name = "openSUSE-release", version = "20260829-4277.1" },
     { name = "libzypp", version = "17.38.14-1.2" },
     { name = "zypper", version = "1.14.98-1.3" },
-    { name = "rpm", version = "4.20.1-9.2" },
+    { name = "rpm", version = "4.20.1-10.1" },
 ]
 repository_declarations = [
     { path = "/etc/zypp/repos.d/repo-debug.repo", sha256 = "a634cb148a3e870c6fa86735e41ce36ae9be7970c73c3a8d14cec1a9e7093865", fingerprints = [] },
-    { path = "/etc/zypp/repos.d/repo-non-oss.repo", sha256 = "7f49b5b18873f4b12e734454a1e1abee47790b8dc06b7fa7e3dd0fda7212da80", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-non-oss.repo", sha256 = "1d35c7e492806da2c792b3044e061aa0187ce5850b832043391b97bd4a75be00", fingerprints = [] },
     { path = "/etc/zypp/repos.d/repo-openh264.repo", sha256 = "bf901fbf5492544bc22f008a4e2589c71cd575bf06733e3a89dd7c9bac1a062b", fingerprints = [] },
-    { path = "/etc/zypp/repos.d/repo-oss.repo", sha256 = "0e3bd029ed70e151e4c9240c21f608b8fb3c56f5a128883b5592cb21e48c8392", fingerprints = [] },
+    { path = "/etc/zypp/repos.d/repo-oss.repo", sha256 = "fa6c52d497e132d546dd28e54c2e0c5cb072e8a68f85267caa7c85d4396523b7", fingerprints = [] },
     { path = "/etc/zypp/repos.d/repo-source.repo", sha256 = "2dddf51cd4a794237599512cbf33c522e9a86c5248660e02f0f7a5b9f5962e98", fingerprints = [] },
     { path = "/etc/zypp/repos.d/repo-update.repo", sha256 = "570792fd9fd4e19400501a100cf31352f05f0d593981034e6d5597d02247b53a", fingerprints = [] },
 ]
@@ -158,7 +158,7 @@ repository_trust = [
 
 [distros."opensuse-tumbleweed".target_root.expected_os_release]
 id = "opensuse-tumbleweed"
-version_id = "20260821"
+version_id = "20260829"
 id_like = "opensuse suse"
 
 [distros."linux-mint-22.3"]
