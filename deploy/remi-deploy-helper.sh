@@ -1184,7 +1184,7 @@ benchmark_remi_conversion() {
     raw_sha256="$(sha256sum "$raw_report" | cut -d ' ' -f 1)"
     raw_bytes="$(stat -c '%s' "$raw_report")"
     (( raw_bytes > 0 )) || die "conversion benchmark raw report is empty"
-    jq -e '.schema_version == 6 and type == "object"' "$raw_report" >/dev/null ||
+    jq -e '.schema_version == 7 and type == "object"' "$raw_report" >/dev/null ||
         die "conversion benchmark raw report has an invalid schema"
 
     BENCHMARK_FAILURE_STAGE=public-sidecar-validation
@@ -1198,8 +1198,8 @@ benchmark_remi_conversion() {
         --arg raw_sha256 "$raw_sha256" \
         --argjson raw_bytes "$raw_bytes" '
         type == "object"
-        and .schema_version == 4
-        and .raw_report.schema_version == 6
+        and .schema_version == 5
+        and .raw_report.schema_version == 7
         and .raw_report.sha256 == $raw_sha256
         and .raw_report.size_bytes == $raw_bytes
     ' "$public_sidecar" >/dev/null ||
