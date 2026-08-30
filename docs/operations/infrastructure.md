@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-30
-revision: 58
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS conversion benchmarking with path-free typed failure evidence and bounded one-shot work-root owner repair, and current remote development tooling
+revision: 59
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -323,29 +323,15 @@ workflow.
   unknown envelopes fail closed with an unproven service outcome. Private
   stderr, its digest and size, and any free-form Remi failure text are deleted
   without entering Actions logs or artifacts.
-- The temporary `repair-remi-conversion-work-root-owner` helper operation is a
-  no-input, one-shot repair for the proven production `work-root-owner` drift.
-  It has no caller-selected path or identity: the only target is the exact
-  `/work` directory inode and the only post-repair owner is the canonical
-  `root:root` identity. Before mutation it requires the owner to be drifted,
-  proves Remi liveness, and validates the complete plain-directory, non-set-ID mode,
-  canonical-resolution, non-overlap, non-alias, XFS, and same-device topology
-  contract against `/conary`. It performs one nonrecursive, no-dereference
-  ownership change, never stops or starts Remi, and then revalidates the exact
-  pre-repair mode, full topology, canonical owner, and liveness. The no-input protected
-  `remi-conversion-work-root-owner-repair` workflow uses the production
-  environment, pinned SSH identity, exact merged-main helper, and the shared
-  `deploy-and-verify` serialization group. The helper's sole success record is
-  the fixed path-free schema-v1 JSON object
-  `{"schema_version":1,"operation":"repair-remi-conversion-work-root-owner","outcome":"repaired","precondition":"owner-drift","postcondition":"validated"}`;
-  the workflow admits only that record and projects it into
-  `remi-conversion-work-root-owner-repair-v1.json`, binding the exact workflow
-  commit, helper digest, run, and attempt. Free-form diagnostics, paths,
-  observed identities, modes, filesystems, and device identifiers never enter
-  retained evidence. An already-correct owner or any pre/postcondition drift
-  fails closed without broadening the repair. Remove this helper operation,
-  workflow surface, and their policy/tests after the repair succeeds and the
-  identical protected conversion baseline completes.
+- The bounded one-shot production `/work` owner repair was consumed by
+  protected run `33282179559`. It changed only the already-proven drifted
+  directory inode to the canonical `root:root` owner, without recursion or a
+  Remi service transition, and revalidated its topology and liveness. Exact
+  conversion baseline run `33282246922` subsequently passed the repaired
+  `/work` preflight. The temporary helper operation, workflow, policy checks,
+  and tests are retired. No dispatchable owner-repair surface remains. Future
+  owner drift is a fail-closed `work-root-owner` benchmark
+  failure and requires a new issue-backed, reviewed operation.
 - Production R2 inventory and backfill use the manually dispatched
   `remi-r2-durability` workflow after its exact `commit_sha` is merged into
   `main` and deployed. The protected job enters through the normal Remi SSH
