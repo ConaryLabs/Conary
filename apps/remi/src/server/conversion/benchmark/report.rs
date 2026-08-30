@@ -1,17 +1,18 @@
 // apps/remi/src/server/conversion/benchmark/report.rs
-//! Strict schema-v4 validation and durable report publication.
+//! Strict schema-v5 validation and durable report publication.
 
 use super::{
-    CONVERSION_BENCHMARK_SCHEMA_V4, ConversionBenchmarkCatalogAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V5, ConversionBenchmarkCatalogAuthority,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkEvidence,
     ConversionBenchmarkOutcome, ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage,
-    ConversionBenchmarkReportV4, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, PublishedInode,
+    ConversionBenchmarkReportV5, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, PublishedInode,
     REPORT_FILE_NAME, conversion_core_duration, rollback_failed_publication, sync_parent,
     validate_sha256,
 };
 use crate::server::conversion_timing::{ConversionPhase, DURABLE_CAS_FUSED_SKIP_REASON};
 use anyhow::{Context, Result, anyhow, ensure};
 use conary_core::repository::catalog::{portable_chunk_count_v1, portable_manifest_size_v1};
+use conary_core::repository::supported_profiles::ProfilePackageFormat;
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -42,9 +43,9 @@ const HOT_SKIPPED_PHASES: [ConversionPhase; 18] = [
     ConversionPhase::DatabasePersistence,
 ];
 
-pub(super) fn validate_report(report: &ConversionBenchmarkReportV4) -> Result<()> {
+pub(super) fn validate_report(report: &ConversionBenchmarkReportV5) -> Result<()> {
     ensure!(
-        report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V4,
+        report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V5,
         "conversion benchmark schema {} is unsupported",
         report.schema_version
     );
@@ -164,7 +165,7 @@ fn validate_terminal_failure(
 }
 
 fn validate_completed_conversion(
-    report: &ConversionBenchmarkReportV4,
+    report: &ConversionBenchmarkReportV5,
     repetition: &ConversionBenchmarkEvidence,
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
@@ -232,6 +233,7 @@ fn validate_completed_conversion(
                 && work.source_bytes_hashed == report.subject.source_size_bytes,
             "cold benchmark source-artifact work contradicts the exact subject size"
         );
+        validate_cold_native_parse(profile.package_format(), timing)?;
         validate_cold_fused_cas(timing)?;
     } else {
         ensure!(
@@ -264,6 +266,33 @@ fn validate_completed_conversion(
             timing.work
         );
     }
+    Ok(())
+}
+
+fn validate_cold_native_parse(
+    package_format: ProfilePackageFormat,
+    timing: &crate::server::conversion_timing::ConversionTimingReport,
+) -> Result<()> {
+    if package_format != ProfilePackageFormat::Rpm {
+        return Ok(());
+    }
+    let work = &timing.work;
+    ensure!(
+        work.native_payload_files_spooled > 0
+            && work.native_payload_bytes_spooled > 0
+            && work.native_payload_bytes_spooled == work.native_payload_declared_bytes
+            && work.native_payload_spool_file_reopens == 0
+            && work.native_payload_spool_bytes_reread == 0,
+        "cold RPM benchmark did not retain exact one-pass decode-spool geometry"
+    );
+    ensure!(
+        work.native_payload_bytes_hashed == work.native_payload_bytes_spooled
+            || work
+                .native_payload_bytes_hashed
+                .checked_sub(work.native_payload_bytes_spooled)
+                == Some(work.native_payload_bytes_spooled),
+        "cold RPM benchmark payload hash bytes do not describe one shared SHA-256 pass or two concurrent digest passes"
+    );
     Ok(())
 }
 
@@ -342,7 +371,7 @@ fn validate_cold_fused_cas(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_successful_repetition(
-    report: &ConversionBenchmarkReportV4,
+    report: &ConversionBenchmarkReportV5,
     repetition: &ConversionBenchmarkEvidence,
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
@@ -545,7 +574,7 @@ fn validate_process_usage(usage: &ConversionBenchmarkProcessUsage, label: &str) 
 
 pub(super) fn publish_and_reopen_report(
     path: &Path,
-    report: &ConversionBenchmarkReportV4,
+    report: &ConversionBenchmarkReportV5,
 ) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
@@ -659,8 +688,8 @@ pub(super) fn publish_and_reopen_report(
             reopened_bytes == bytes,
             "reopened conversion benchmark report changed bytes"
         );
-        let reopened: ConversionBenchmarkReportV4 = serde_json::from_slice(&reopened_bytes)
-            .context("strictly reopen published conversion benchmark schema v4")?;
+        let reopened: ConversionBenchmarkReportV5 = serde_json::from_slice(&reopened_bytes)
+            .context("strictly reopen published conversion benchmark schema v5")?;
         validate_report(&reopened)?;
         ensure!(
             serde_json::to_value(&reopened)? == serde_json::to_value(report)?,

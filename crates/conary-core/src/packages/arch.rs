@@ -460,6 +460,7 @@ impl PackageFormat for ArchPackage {
         let mut declared_payload_bytes = 0_u64;
         let mut metadata_bytes = 0_u64;
         let mut payload_spool_bytes_reread = 0_u64;
+        let mut payload_spool_file_reopens = 0_u64;
 
         for entry in archive
             .entries()
@@ -524,6 +525,12 @@ impl PackageFormat for ArchPackage {
                         if let Some(content) =
                             parsed.read_regular_content_bounded(bounds.max_metadata_bytes)?
                         {
+                            payload_spool_file_reopens =
+                                payload_spool_file_reopens.checked_add(1).ok_or_else(|| {
+                                    Error::ParseError(
+                                        "ALPM payload spool file reopen count overflow".to_string(),
+                                    )
+                                })?;
                             payload_spool_bytes_reread = payload_spool_bytes_reread
                                 .checked_add(declared)
                                 .ok_or_else(|| {
@@ -560,6 +567,7 @@ impl PackageFormat for ArchPackage {
         parse_metrics.payload_files_spooled = payload_files_spooled;
         parse_metrics.payload_bytes_spooled = required_spool_bytes;
         parse_metrics.payload_spool_bytes_reread = payload_spool_bytes_reread;
+        parse_metrics.payload_spool_file_reopens = payload_spool_file_reopens;
         parse_metrics.payload_spool_file_syncs = 0;
         parse_metrics.payload_bytes_hashed = required_spool_bytes;
         let payload = PackagePayload::new(payload::resolve_hardlinks(payload_entries)?);

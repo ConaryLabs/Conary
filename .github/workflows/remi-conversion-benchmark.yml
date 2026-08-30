@@ -904,6 +904,7 @@ jobs:
                   "native_payload_files_spooled",
                   "native_payload_regular_files",
                   "native_payload_spool_bytes_reread",
+                  "native_payload_spool_file_reopens",
                   "native_payload_spool_file_syncs",
                   "native_source_archive_bytes_read",
                   "native_source_archive_opens",
@@ -1003,10 +1004,10 @@ jobs:
                 "setup",
                 "subject"
               ]
-              and .schema_version == 2
+              and .schema_version == 3
               and (.raw_report | keys | sort)
                 == ["schema_version", "sha256", "size_bytes"]
-              and .raw_report.schema_version == 4
+              and .raw_report.schema_version == 5
               and (.raw_report.sha256 | sha256)
               and (.raw_report.size_bytes | type == "number")
               and .raw_report.size_bytes > 0
@@ -1098,6 +1099,19 @@ jobs:
                 and $work.repository_checksum_bytes_hashed == $source_size_bytes
                 and $work.source_artifact_bytes == $source_size_bytes
                 and $work.source_bytes_hashed == $source_size_bytes
+                and (if $profile == "fedora-44" then
+                  $work.native_payload_files_spooled > 0
+                  and $work.native_payload_bytes_spooled > 0
+                  and $work.native_payload_bytes_spooled
+                    == $work.native_payload_declared_bytes
+                  and $work.native_payload_spool_file_reopens == 0
+                  and $work.native_payload_spool_bytes_reread == 0
+                  and ($work.native_payload_bytes_hashed
+                    == $work.native_payload_bytes_spooled
+                  or $work.native_payload_bytes_hashed
+                      - $work.native_payload_bytes_spooled
+                        == $work.native_payload_bytes_spooled)
+                else true end)
                 and $work.ccs_output_bytes == $output.ccs_size_bytes
                 and $work.ccs_output_bytes_hashed == $output.ccs_size_bytes
                 and $work.independent_transport_reopen_ccs_bytes
@@ -1164,7 +1178,7 @@ jobs:
               exit 1
           }
 
-          cp -- "$local_transport" remi-conversion-benchmark-public-v2.json
+          cp -- "$local_transport" remi-conversion-benchmark-public-v3.json
           {
             echo "result=success"
             echo "benchmark_id=$benchmark_id"
@@ -1191,7 +1205,7 @@ jobs:
         with:
           name: remi-conversion-benchmark-${{ inputs.deployment_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            remi-conversion-benchmark-public-v2.json
+            remi-conversion-benchmark-public-v3.json
             remi-conversion-source-verification-v1.json
             remi-deployment-inspection.json
             remi-candidate-manifest.json
@@ -1232,7 +1246,7 @@ jobs:
               | "- iteration \(.iteration) `\(.cache_state)`: "
                 + "conversion core \(.views.conversion_core.duration_ms) ms; "
                 + "end to end \(.views.end_to_end.duration_ms) ms"' \
-              remi-conversion-benchmark-public-v2.json
+              remi-conversion-benchmark-public-v3.json
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail closed on unsuccessful benchmark result

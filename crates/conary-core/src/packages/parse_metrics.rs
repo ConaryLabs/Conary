@@ -20,6 +20,7 @@ pub struct NativePackageParseMetrics {
     pub payload_files_spooled: u64,
     pub payload_bytes_spooled: u64,
     pub payload_spool_bytes_reread: u64,
+    pub payload_spool_file_reopens: u64,
     pub payload_spool_file_syncs: u64,
     pub payload_bytes_hashed: u64,
 }
@@ -80,6 +81,11 @@ impl NativePackageParseMetrics {
             self.payload_spool_bytes_reread,
             other.payload_spool_bytes_reread,
             "native payload spool reread bytes",
+        )?;
+        self.payload_spool_file_reopens = add(
+            self.payload_spool_file_reopens,
+            other.payload_spool_file_reopens,
+            "native payload spool file reopen count",
         )?;
         self.payload_spool_file_syncs = add(
             self.payload_spool_file_syncs,

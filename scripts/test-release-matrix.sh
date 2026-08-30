@@ -1862,8 +1862,8 @@ test_check_release_matrix_rejects_raw_conversion_benchmark_upload() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '            remi-conversion-benchmark-public-v2.json' \
-        $'            remi-conversion-benchmark-public-v2.json\n            conversion-benchmark-v4.json'
+        '            remi-conversion-benchmark-public-v3.json' \
+        $'            remi-conversion-benchmark-public-v3.json\n            conversion-benchmark-v5.json'
 
     assert_check_release_matrix_fails \
         "$repo" \
@@ -2007,6 +2007,71 @@ test_check_release_matrix_rejects_unbound_fused_ccs_output_hash_work() {
         "$repo/.github/workflows/remi-conversion-benchmark.yml" \
         '                and $work.ccs_output_bytes_hashed == $output.ccs_size_bytes' \
         '                and $work.ccs_output_bytes_hashed >= 0'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_missing_rpm_spool_reopen_counter() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        $'                  "native_payload_spool_bytes_reread",\n                  "native_payload_spool_file_reopens",' \
+        '                  "native_payload_spool_bytes_reread",'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_unbound_rpm_spool_reopen_counter() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                  and $work.native_payload_spool_file_reopens == 0' \
+        '                  and $work.native_payload_spool_file_reopens >= 0'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_unbound_rpm_spool_reread_counter() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                  and $work.native_payload_spool_bytes_reread == 0' \
+        '                  and $work.native_payload_spool_bytes_reread >= 0'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_unbound_rpm_spool_declared_geometry() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                    == $work.native_payload_declared_bytes' \
+        '                    >= $work.native_payload_declared_bytes'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+}
+
+test_check_release_matrix_rejects_unbound_rpm_payload_hash_work() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
+        '                    == $work.native_payload_bytes_spooled' \
+        '                    >= $work.native_payload_bytes_spooled'
 
     assert_check_release_matrix_fails \
         "$repo" \
@@ -2910,6 +2975,11 @@ main() {
         test_check_release_matrix_rejects_partial_public_conversion_work_shape
         test_check_release_matrix_rejects_missing_fused_ccs_output_hash_work
         test_check_release_matrix_rejects_unbound_fused_ccs_output_hash_work
+        test_check_release_matrix_rejects_missing_rpm_spool_reopen_counter
+        test_check_release_matrix_rejects_unbound_rpm_spool_reopen_counter
+        test_check_release_matrix_rejects_unbound_rpm_spool_reread_counter
+        test_check_release_matrix_rejects_unbound_rpm_spool_declared_geometry
+        test_check_release_matrix_rejects_unbound_rpm_payload_hash_work
         test_check_release_matrix_rejects_partial_public_conversion_output_shape
         test_check_release_matrix_rejects_out_of_order_cold_conversion_finalizer_phases
         test_check_release_matrix_rejects_duplicate_fused_conversion_phase

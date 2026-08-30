@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-30
-revision: 107
-summary: Document filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v4 conversion and registered-reopen benchmark with signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 108
+summary: Document filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v5 conversion and registered-reopen benchmark with signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -1435,9 +1435,9 @@ Implementation ownership lives in child modules:
 - `conversion/types.rs`: public conversion result DTOs, scriptlet package
   metadata projection, and conversion benchmark evidence records.
 - `conversion/benchmark.rs`: exact immutable-authority subject admission,
-  isolated benchmark-state construction, strict schema-v4 registered-reopen
+  isolated benchmark-state construction, strict schema-v5 registered-reopen
   and conversion measurement.
-- `conversion/benchmark/report.rs`: schema-v4 evidence validation plus atomic
+- `conversion/benchmark/report.rs`: schema-v5 evidence validation plus atomic
   report publication and strict durable reopen.
 - `conversion/lookup.rs`: exact immutable-catalog package selection, verified
   source-snapshot binding, prepared key-material lookup, and upstream download.
@@ -1504,7 +1504,7 @@ the source database remain read-only authorities; the benchmark cannot warm or
 otherwise mutate live conversion state. Use a distinct new work root for every
 subject and revision being compared.
 
-The strict `conversion-benchmark-v4.json` report records the exact binary path
+The strict `conversion-benchmark-v5.json` report records the exact binary path
 and digest, source commit and dirty state, Remi and host identity, CPU and
 memory, and the device, filesystem, and block size for every authority and
 scratch root. It pins each profile and source resource, catalog artifact,
@@ -1524,7 +1524,7 @@ syscalls from `/proc/self/io`, storage bytes, context switches, and endpoint
 thread occupancy. Cancelled-write bytes are a signed phase delta, so a counter
 regression is retained rather than rejected. Each catalog record also names
 exact verification-pass
-evidence and authenticated-VFS read/chunk/cache work. Schema-v4 validation requires exactly one
+evidence and authenticated-VFS read/chunk/cache work. Schema-v5 validation requires exactly one
 compact portable-manifest validation, one stored-binding check, demanded VFS
 authentication with no integrity failure, and zero complete userspace catalog
 hash, SQLite integrity scan, or logical replay. The chosen chunk size, count,
@@ -1535,6 +1535,19 @@ process resource counters, and retains phase timings and deterministic work
 counters. Successful cold evidence independently reopens the signed transport
 and hashes the complete CCS archive; the report records the CCS, transport,
 and canonical signed-object-set identities and byte counts.
+
+Schema v5 also makes native payload amplification explicit. The
+`native_payload_spool_file_reopens` counter records each successful physical
+reopen after spooling, including an open of a zero-length file, while
+`native_payload_spool_bytes_reread` records bytes actually read through those
+reopens. For a cold RPM conversion, validation requires declared bytes to
+equal spooled bytes and both reopen counters to be zero. The RPM decoder pairs
+the exact `FILEDIGESTALGO` with every `FILEDIGESTS` value and produces typed,
+algorithm-tagged evidence during its bounded decode/spool copy. Code 8 shares
+the content SHA-256 state, so `native_payload_bytes_hashed` is exactly one
+times spooled bytes; every other supported file-digest algorithm runs one
+concurrent declared-digest state, so it is exactly two times spooled bytes.
+Additive CPIO CRC work is excluded from that cryptographic counter.
 
 The two current reopen timers have different owners and boundaries. The
 `timing.phases` entry named `independent_transport_reopen` consumes the
@@ -1548,7 +1561,7 @@ a conversion optimization. The adjacent
 `output.independent_complete_archive_hash_ms` is also post-conversion proof.
 
 The internal independent transport reopen streams signed object bytes directly
-into the permanent verified-CAS batch. The current schema-v4 contract
+into the permanent verified-CAS batch. The current schema-v5 contract
 attributes that fused wall time once to `independent_transport_reopen` and
 records `durable_cas_ingestion` as skipped with the exact reason
 `fused into independent transport reopen; no post-verification object pass`.
@@ -1561,13 +1574,14 @@ canonical-name barrier. A hot repetition has zero conversion `timing.work`,
 but the benchmark still performs its separate output proof; outer process wall
 time is therefore not hot service latency.
 
-The schema-v4 hard cut removes the former converter-owned immediate reopen and
-its inferred work fields entirely; it is not represented by a zero-duration or
-skipped compatibility phase. Foreign conversion now returns a typed pending
-artifact. Remi storage consumes that value and is the only code that can hand a
-verified conversion to transport construction and persistence. A signature,
-archive, object, or reconstructed-layout failure therefore still terminates
-before transport, chunk bookkeeping, or conversion rows become authoritative.
+Schema v5 retains the schema-v4 hard cut that removed the former
+converter-owned immediate reopen and its inferred work fields entirely; it is
+not represented by a zero-duration or skipped compatibility phase. Foreign
+conversion now returns a typed pending artifact. Remi storage consumes that
+value and is the only code that can hand a verified conversion to transport
+construction and persistence. A signature, archive, object, or
+reconstructed-layout failure therefore still terminates before transport,
+chunk bookkeeping, or conversion rows become authoritative.
 The writer hashes every compressed output byte in its existing gzip write and
 binds that identity into the pending value. Remi first copies those bytes into
 a same-directory private file below `cache/packages`, synchronizes and seals it
@@ -1613,7 +1627,7 @@ timing or contradictory cache/view evidence is a fatal harness-contract defect,
 not a valid repetition failure. The terminal failure is validated, atomically
 published, and independently reopened before the command reports its nonzero
 outcome.
-Schema-v4 validation rejects inconsistent authority, reopen evidence,
+Schema-v5 validation rejects inconsistent authority, reopen evidence,
 iteration, cache-state, timing, or output proof before atomically publishing
 the report, then deserializes and compares the durable report before success.
 The validator binds `end_to_end` to the timing total, recomputes
@@ -1631,8 +1645,8 @@ authority. Performance baselines and measured optimizations live in
 [performance evidence](../performance/README.md).
 
 A successful command also atomically publishes
-`conversion-benchmark-public-v2.json`. This strict sidecar binds the exact raw
-schema-v4 bytes by size and SHA-256 and carries the complete safe authority,
+`conversion-benchmark-public-v3.json`. This strict sidecar binds the exact raw
+schema-v5 bytes by size and SHA-256 and carries the complete safe authority,
 setup, process, VFS, phase, work, view, and output-proof evidence without
 rounding. It omits the executable path, every storage-root path and device ID,
 and the free-form explanation attached to skipped phases. Failed or dirty-source

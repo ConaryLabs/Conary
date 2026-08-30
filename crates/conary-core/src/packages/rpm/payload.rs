@@ -8,25 +8,22 @@
 //! `FILEDEVICES`/`FILEINODES` hard-link identity.
 
 use crate::error::{Error, Result};
-use crate::packages::payload::{
-    PackagePayload, PackagePayloadFile, PayloadSpool, ReopenablePayload,
-};
+use crate::packages::payload::{PackagePayload, PackagePayloadFile, PayloadSpool};
 use crate::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
 };
-use md5::Md5;
 use rpm::{IndexTag, Package};
-use sha1::{Digest as Digest10, Sha1};
-use sha2::{Digest as Digest11, Sha224, Sha256, Sha384, Sha512};
-use sha3::{Sha3_256, Sha3_512};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 
+mod digest;
 mod hardlinks;
 mod header;
 mod stream;
 
-use header::{HeaderRecord, RpmFileDigestAlgorithm, header_records};
+#[cfg(test)]
+use header::RpmFileDigestAlgorithm;
+use header::{HeaderRecord, header_records};
 
 pub(super) fn parse_stream(
     package: &Package,
@@ -39,15 +36,23 @@ pub(super) fn parse_stream(
     let members = stream::parse_members(package, payload, &records, &spool, decompressed_bytes)?;
     let payload_files_spooled = members
         .iter()
-        .filter(|member| member.source.is_some())
+        .filter(|member| member.regular.is_some())
         .count();
     let payload_bytes_spooled = members
         .iter()
-        .filter(|member| member.source.is_some())
+        .filter(|member| member.regular.is_some())
         .try_fold(0_u64, |total, member| {
             total
                 .checked_add(member.content_size)
                 .ok_or_else(|| parse_error("RPM payload spool byte count overflow"))
+        })?;
+    let payload_bytes_hashed = members
+        .iter()
+        .filter_map(|member| member.regular.as_ref())
+        .try_fold(0_u64, |total, computed| {
+            total
+                .checked_add(computed.computed.bytes_hashed)
+                .ok_or_else(|| parse_error("RPM payload hash byte count overflow"))
         })?;
     let archive_entries_traversed = u64::try_from(members.len())
         .map_err(|_| parse_error("RPM payload member count exceeds u64"))?;
@@ -61,8 +66,10 @@ pub(super) fn parse_stream(
             payload_files_spooled: u64::try_from(payload_files_spooled)
                 .map_err(|_| parse_error("RPM payload spool file count exceeds u64"))?,
             payload_bytes_spooled,
+            payload_spool_bytes_reread: 0,
+            payload_spool_file_reopens: 0,
             payload_spool_file_syncs: 0,
-            payload_bytes_hashed: payload_bytes_spooled,
+            payload_bytes_hashed,
             ..Default::default()
         },
     ))
@@ -175,36 +182,28 @@ fn project_single(
     let node = source_node(record)?;
     let (content_authority, source) = match &node.kind {
         PayloadNodeKind::Regular { .. } => {
-            let source = member.source.ok_or_else(|| {
+            let regular = member.regular.ok_or_else(|| {
                 parse_error(format!(
-                    "RPM regular node {} has no payload source",
+                    "RPM regular node {} has no payload source and computed content evidence",
                     record.path
                 ))
             })?;
-            require_regular_content(record, member.content_size, &source)?;
-            let sha256 = member.sha256.ok_or_else(|| {
-                parse_error(format!(
-                    "RPM regular node {} has no SHA-256 authority",
-                    record.path
-                ))
-            })?;
+            require_regular_content(record, member.content_size, &regular.computed)?;
             (
                 Some(PayloadContentAuthority {
-                    sha256,
+                    sha256: regular.computed.sha256,
                     size: member.content_size,
                 }),
-                Some(source),
+                Some(regular.source),
             )
         }
         PayloadNodeKind::Symlink { target }
-            if member.content_size == target.len() as u64
-                && member.source.is_none()
-                && member.sha256.is_none() =>
+            if member.content_size == target.len() as u64 && member.regular.is_none() =>
         {
             (None, None)
         }
         _ => {
-            if member.content_size != 0 || member.source.is_some() || member.sha256.is_some() {
+            if member.content_size != 0 || member.regular.is_some() {
                 return Err(parse_error(format!(
                     "non-regular RPM node {} retained ambiguous payload content",
                     record.path
@@ -220,7 +219,7 @@ fn project_single(
 fn require_regular_content(
     record: &HeaderRecord,
     content_size: u64,
-    source: &ReopenablePayload,
+    computed: &digest::ComputedRegularContent,
 ) -> Result<()> {
     if content_size != record.size {
         return Err(parse_error(format!(
@@ -234,66 +233,35 @@ fn require_regular_content(
             record.path
         ))
     })?;
-    let mut reader = source.open()?;
-    let actual = digest_reader(digest.algorithm, reader.as_mut(), content_size)?;
-    if actual != digest.hex {
+    if computed.declared.algorithm != digest.algorithm {
         return Err(parse_error(format!(
-            "RPM file digest mismatch for {}: expected {}, got {actual}",
-            record.path, digest.hex
+            "RPM computed file digest algorithm for {} disagrees with its header authority",
+            record.path
         )));
     }
-    let mut trailing = [0_u8; 1];
-    if reader.read(&mut trailing)? != 0 {
+    if computed.declared.hex != digest.hex {
         return Err(parse_error(format!(
-            "RPM payload source for {} exceeds declared size {content_size}",
-            record.path
+            "RPM file digest mismatch for {}: expected {}, got {}",
+            record.path, digest.hex, computed.declared.hex
         )));
     }
     Ok(())
 }
 
-fn digest_reader(
-    algorithm: RpmFileDigestAlgorithm,
-    reader: &mut dyn Read,
-    size: u64,
-) -> Result<String> {
-    macro_rules! hash_exact {
-        ($hasher:expr) => {{
-            let mut hasher = $hasher;
-            let mut remaining = size;
-            let mut buffer = [0_u8; crate::packages::payload::PAYLOAD_IO_BUFFER_SIZE];
-            while remaining > 0 {
-                let wanted = usize::try_from(remaining.min(buffer.len() as u64))
-                    .expect("bounded by the fixed buffer");
-                reader.read_exact(&mut buffer[..wanted]).map_err(|error| {
-                    parse_error(format!("read RPM payload for digest verification: {error}"))
-                })?;
-                hasher.update(&buffer[..wanted]);
-                remaining -= wanted as u64;
-            }
-            hex::encode(hasher.finalize())
-        }};
-    }
-    Ok(match algorithm {
-        RpmFileDigestAlgorithm::Md5 => hash_exact!(Md5::new()),
-        RpmFileDigestAlgorithm::Sha1 => hash_exact!(Sha1::new()),
-        RpmFileDigestAlgorithm::Sha2_224 => hash_exact!(Sha224::new()),
-        RpmFileDigestAlgorithm::Sha2_256 => hash_exact!(Sha256::new()),
-        RpmFileDigestAlgorithm::Sha2_384 => hash_exact!(Sha384::new()),
-        RpmFileDigestAlgorithm::Sha2_512 => hash_exact!(Sha512::new()),
-        RpmFileDigestAlgorithm::Sha3_256 => hash_exact!(Sha3_256::new()),
-        RpmFileDigestAlgorithm::Sha3_512 => hash_exact!(Sha3_512::new()),
-    })
-}
-
 #[cfg(test)]
 fn digest_hex(algorithm: RpmFileDigestAlgorithm, content: &[u8]) -> String {
-    digest_reader(
-        algorithm,
+    let mut output = Vec::new();
+    stream::copy_exact_payload(
         &mut std::io::Cursor::new(content),
+        &mut output,
         content.len() as u64,
+        algorithm,
+        false,
     )
     .expect("in-memory digest")
+    .0
+    .declared
+    .hex
 }
 
 fn source_node(record: &HeaderRecord) -> Result<PayloadNode> {
@@ -518,10 +486,14 @@ fn parse_error(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use super::digest::{ComputedFileDigest, ComputedRegularContent};
+    use super::header::DeclaredDigest;
+    use super::stream::{PayloadMember, RegularPayloadEvidence};
     use super::{
         HeaderRecord, RpmFileDigestAlgorithm, apply_capability_operation, digest_hex, parse,
         parse_file_capabilities, project_records,
     };
+    use crate::packages::payload::ReopenablePayload;
     use crate::payload::PayloadNodeKind;
     use rpm::IndexTag;
     use std::io::Cursor;
@@ -560,11 +532,82 @@ mod tests {
         bytes[digest_offset + sha1.len()] = 0;
 
         let patched = rpm::Package::parse(&mut Cursor::new(bytes)).unwrap();
-        let payload = parse(&patched).unwrap();
+        let decompressed = crate::packages::parse_metrics::ReadCounter::default();
+        let (payload, metrics) = super::parse_stream(
+            &patched,
+            Box::new(Cursor::new(patched.payload.clone())),
+            &decompressed,
+        )
+        .unwrap();
         let files = payload.to_extracted_in_memory().unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "/usr/share/sha1-fixture/data");
         assert_eq!(files[0].content, content);
+        assert_eq!(metrics.payload_spool_bytes_reread, 0);
+        assert_eq!(metrics.payload_spool_file_reopens, 0);
+        assert_eq!(metrics.payload_bytes_hashed, content.len() as u64 * 2);
+    }
+
+    #[test]
+    fn projection_consumes_computed_evidence_without_reopening_spool_source() {
+        let content = b"projection evidence";
+        let sha256 = crate::hash::sha256(content);
+        let record = HeaderRecord {
+            path: "/usr/share/fixture".to_string(),
+            path_kind: super::header::HeaderPathKind::Deployable,
+            mode: libc::S_IFREG | 0o644,
+            user: "root".to_string(),
+            group: "root".to_string(),
+            mtime: 1,
+            size: content.len() as u64,
+            ghost: false,
+            digest: Some(DeclaredDigest {
+                algorithm: RpmFileDigestAlgorithm::Sha2_256,
+                hex: sha256.clone(),
+            }),
+            link_target: None,
+            caps: None,
+            ima_signature: None,
+            device: 1,
+            inode: 0,
+            rdev: 0,
+            nlink: Some(1),
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let absent_source = temp.path().join("must-not-be-opened");
+        let members = vec![PayloadMember {
+            header_index: 0,
+            archive_position: 0,
+            content_size: content.len() as u64,
+            regular: Some(RegularPayloadEvidence {
+                computed: ComputedRegularContent {
+                    sha256: sha256.clone(),
+                    declared: ComputedFileDigest {
+                        algorithm: RpmFileDigestAlgorithm::Sha2_256,
+                        hex: sha256.clone(),
+                    },
+                    bytes_hashed: content.len() as u64,
+                },
+                source: ReopenablePayload::from_path(&absent_source),
+            }),
+        }];
+
+        let payload = project_records(&[record], members).unwrap();
+
+        assert_eq!(payload.files().len(), 1);
+        assert_eq!(
+            payload.files()[0]
+                .content_authority
+                .as_ref()
+                .unwrap()
+                .sha256,
+            sha256
+        );
+        assert_eq!(
+            payload.files()[0].source().unwrap().path(),
+            Some(absent_source.as_path())
+        );
+        assert!(!absent_source.exists());
     }
 
     #[test]
@@ -617,8 +660,7 @@ mod tests {
             header_index: 0,
             archive_position: 0,
             content_size: 0,
-            sha256: None,
-            source: None,
+            regular: None,
         }];
 
         let payload = project_records(&records, members).unwrap();

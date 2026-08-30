@@ -200,6 +200,7 @@ fn verify_files_xml(
         )));
     }
     let mut payload_spool_bytes_reread = 0_u64;
+    let mut payload_spool_file_reopens = 0_u64;
     let mut payload_bytes_hashed = 0_u64;
     for file in payload.files() {
         let record = records.get(&file.path).ok_or_else(|| {
@@ -258,6 +259,7 @@ fn verify_files_xml(
                 file,
                 payload,
                 &mut payload_spool_bytes_reread,
+                &mut payload_spool_file_reopens,
                 &mut payload_bytes_hashed,
             )?
             .as_deref()
@@ -272,6 +274,7 @@ fn verify_files_xml(
     }
     metrics.checked_add(crate::packages::NativePackageParseMetrics {
         payload_spool_bytes_reread,
+        payload_spool_file_reopens,
         payload_bytes_hashed,
         ..Default::default()
     })?;
@@ -303,6 +306,7 @@ fn native_content_sha1(
     file: &crate::packages::payload::PackagePayloadFile,
     payload: &PackagePayload,
     payload_spool_bytes_reread: &mut u64,
+    payload_spool_file_reopens: &mut u64,
     payload_bytes_hashed: &mut u64,
 ) -> Result<Option<String>> {
     use sha1::Digest as _;
@@ -310,6 +314,10 @@ fn native_content_sha1(
     match &file.node.kind {
         crate::payload::PayloadNodeKind::Regular { .. } => {
             let mut reader = file.open_content()?;
+            *payload_spool_file_reopens =
+                payload_spool_file_reopens.checked_add(1).ok_or_else(|| {
+                    Error::ParseError("eopkg payload spool file reopen count overflow".to_string())
+                })?;
             let mut buffer = [0_u8; crate::packages::payload::PAYLOAD_IO_BUFFER_SIZE];
             loop {
                 let read = reader.read(&mut buffer)?;
@@ -352,10 +360,67 @@ fn native_content_sha1(
                 target,
                 payload,
                 payload_spool_bytes_reread,
+                payload_spool_file_reopens,
                 payload_bytes_hashed,
             );
         }
         _ => return Ok(None),
     }
     Ok(Some(format!("{:x}", hasher.finalize())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::packages::payload::{PackagePayloadFile, ReopenablePayload};
+    use crate::payload::{PayloadContentAuthority, PayloadNode, PayloadNodeKind};
+    use std::sync::Arc;
+
+    #[test]
+    fn hardlink_sha1_verification_counts_each_physical_target_reopen() {
+        let content = Arc::<[u8]>::from(&b"payload"[..]);
+        let target = PackagePayloadFile::new(
+            "/usr/bin/target".to_string(),
+            PayloadNode::regular(0o755),
+            Some(PayloadContentAuthority {
+                sha256: crate::hash::sha256(&content),
+                size: content.len() as u64,
+            }),
+            Some(ReopenablePayload::from_in_memory_bytes(Arc::clone(
+                &content,
+            ))),
+        )
+        .unwrap();
+        let mut hardlink_node = PayloadNode::regular(0o755);
+        hardlink_node.kind = PayloadNodeKind::Hardlink {
+            target: target.path.clone(),
+            identity: "path:/usr/bin/target".to_string(),
+        };
+        let hardlink =
+            PackagePayloadFile::new("/usr/bin/link".to_string(), hardlink_node, None, None)
+                .unwrap();
+        let payload = PackagePayload::new(vec![target, hardlink]);
+        let mut reread_bytes = 0;
+        let mut file_reopens = 0;
+        let mut hash_bytes = 0;
+
+        for file in payload.files() {
+            assert_eq!(
+                native_content_sha1(
+                    file,
+                    &payload,
+                    &mut reread_bytes,
+                    &mut file_reopens,
+                    &mut hash_bytes,
+                )
+                .unwrap()
+                .as_deref(),
+                Some("f07e5a815613c5abeddc4b682247a4c42d8a95df")
+            );
+        }
+
+        assert_eq!(file_reopens, 2);
+        assert_eq!(reread_bytes, content.len() as u64 * 2);
+        assert_eq!(hash_bytes, content.len() as u64 * 2);
+    }
 }

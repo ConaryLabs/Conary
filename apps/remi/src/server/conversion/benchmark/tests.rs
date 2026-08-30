@@ -1,5 +1,5 @@
 // apps/remi/src/server/conversion/benchmark/tests.rs
-//! Registered-authority and operator-boundary tests for schema-v4 benchmarks.
+//! Registered-authority and operator-boundary tests for schema-v5 benchmarks.
 
 use super::*;
 use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
