@@ -282,8 +282,6 @@ create_release_policy_fixture() {
         "$repo/.github/workflows/export-remi-native-oracle-inputs.yml"
     cp "$REPO_ROOT/.github/workflows/remi-conversion-benchmark.yml" \
         "$repo/.github/workflows/remi-conversion-benchmark.yml"
-    cp "$REPO_ROOT/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml" \
-        "$repo/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml"
     cp "$REPO_ROOT/.github/workflows/remi-r2-durability.yml" \
         "$repo/.github/workflows/remi-r2-durability.yml"
     cp "$REPO_ROOT/scripts/check-remi-conversion-workflow.py" \
@@ -1820,110 +1818,6 @@ test_check_release_matrix_rejects_unserialized_r2_durability() {
         "R2 durability serialized with production host authority"
 }
 
-test_check_release_matrix_rejects_work_root_owner_repair_retirement_inputs() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml" \
-        '  workflow_dispatch:' \
-        $'  workflow_dispatch:\n    inputs:\n      retired_command:\n        required: true\n        type: string'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion work-root owner repair retirement has no dispatch inputs"
-}
-
-test_check_release_matrix_rejects_unserialized_work_root_owner_repair_retirement() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml" \
-        '  group: deploy-and-verify' \
-        '  group: remi-work-root-owner-repair-retirement-production'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion work-root owner repair retirement serialized with deployment and verification"
-}
-
-test_check_release_matrix_rejects_unprotected_work_root_owner_repair_retirement_checkout() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml" \
-        '          ref: ${{ github.workflow_sha }}' \
-        '          ref: ${{ github.sha }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion work-root owner repair retirement exact workflow-revision checkout ref"
-}
-
-test_check_release_matrix_rejects_parameterized_retirement_helper_installation() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml" \
-        '          installed_helper="/usr/local/sbin/conary-remi-deploy"' \
-        '          installed_helper="${INSTALLED_HELPER:-/usr/local/sbin/conary-remi-deploy}"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion work-root owner repair retirement fixed installation and retired-command proof"
-}
-
-test_check_release_matrix_rejects_parameterized_retired_command_proof() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml" \
-        '          retired_command="repair-remi-conversion-work-root-owner"' \
-        '          retired_command="${RETIRED_COMMAND:-repair-remi-conversion-work-root-owner}"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion work-root owner repair retirement fixed installation and retired-command proof"
-}
-
-test_check_release_matrix_rejects_loose_retired_command_status_proof() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml" \
-        '          if (( remote_retired_status != 2 || remote_stdout_bytes != 0 )); then' \
-        '          if (( remote_retired_status == 0 || remote_stdout_bytes != 0 )); then'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion work-root owner repair retirement fixed installation and retired-command proof"
-}
-
-test_check_release_matrix_rejects_private_work_root_owner_repair_retirement_upload() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml" \
-        '          path: remi-conversion-work-root-owner-repair-retirement-v1.json' \
-        '          path: ${{ runner.temp }}/remi-work-root-owner-repair-retirement.stderr'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion work-root owner repair retirement path-free retained evidence"
-}
-
-test_check_release_matrix_rejects_broad_work_root_owner_repair_retirement_upload() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-work-root-owner-repair-retirement.yml" \
-        '          path: remi-conversion-work-root-owner-repair-retirement-v1.json' \
-        '          path: .'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion work-root owner repair retirement path-free retained evidence"
-}
-
 test_check_release_matrix_rejects_unprotected_conversion_benchmark_source() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2832,14 +2726,6 @@ main() {
         test_check_release_matrix_rejects_loose_native_oracle_transport
         test_check_release_matrix_rejects_unserialized_site_deployment
         test_check_release_matrix_rejects_unserialized_r2_durability
-        test_check_release_matrix_rejects_work_root_owner_repair_retirement_inputs
-        test_check_release_matrix_rejects_unserialized_work_root_owner_repair_retirement
-        test_check_release_matrix_rejects_unprotected_work_root_owner_repair_retirement_checkout
-        test_check_release_matrix_rejects_parameterized_retirement_helper_installation
-        test_check_release_matrix_rejects_parameterized_retired_command_proof
-        test_check_release_matrix_rejects_loose_retired_command_status_proof
-        test_check_release_matrix_rejects_private_work_root_owner_repair_retirement_upload
-        test_check_release_matrix_rejects_broad_work_root_owner_repair_retirement_upload
         test_check_release_matrix_rejects_unprotected_conversion_benchmark_source
         test_check_release_matrix_rejects_nonproduction_conversion_benchmark
         test_check_release_matrix_rejects_unserialized_conversion_benchmark

@@ -90,9 +90,6 @@ GitHubWorkflowLoader.add_constructor(
 
 
 BENCHMARK_WORKFLOW = ".github/workflows/remi-conversion-benchmark.yml"
-WORK_ROOT_OWNER_REPAIR_RETIREMENT_WORKFLOW = (
-    ".github/workflows/remi-conversion-work-root-owner-repair-retirement.yml"
-)
 SHARED_CONCURRENCY = (
     (
         ".github/workflows/deploy-and-verify.yml",
@@ -113,10 +110,6 @@ SHARED_CONCURRENCY = (
     (
         BENCHMARK_WORKFLOW,
         "conversion benchmark serialized with deployment and verification",
-    ),
-    (
-        WORK_ROOT_OWNER_REPAIR_RETIREMENT_WORKFLOW,
-        "conversion work-root owner repair retirement serialized with deployment and verification",
     ),
     (
         ".github/workflows/remi-r2-durability.yml",
@@ -255,43 +248,6 @@ EXPECTED_RUN_IDS = {
     "Bind successful exact private-candidate deployment": "deployment",
     "Reopen exact deployment and candidate identities": "authority",
     "Run through the fixed production helper": "benchmark",
-}
-
-RETIREMENT_EXPECTED_STEP_ORDER = [
-    "Check out exact protected retirement operator",
-    "Require a protected-main retirement revision",
-    "Install and prove the command-free production helper",
-    "Upload path-free work-root owner repair retirement evidence",
-]
-
-RETIREMENT_REVIEWED_RUN_BLOCK_SHA256 = {
-    "Require a protected-main retirement revision":
-        "07e754af5c7c7606d2ceef2c4eb250f902fda8e4192c07575800b34000476728",
-    "Install and prove the command-free production helper":
-        "b08f01ecd17e0fcc89e273f089a641a56466e544abb6646adb23bd2dab7a82ea",
-}
-
-RETIREMENT_RUN_BLOCK_ERRORS = {
-    "Require a protected-main retirement revision": (
-        "conversion work-root owner repair retirement protected merged-main operator boundary"
-    ),
-    "Install and prove the command-free production helper": (
-        "conversion work-root owner repair retirement fixed installation and retired-command proof"
-    ),
-}
-
-RETIREMENT_EXPECTED_RUN_ENV = {
-    "Require a protected-main retirement revision": {
-        "WORKFLOW_SHA": "${{ github.workflow_sha }}",
-    },
-    "Install and prove the command-free production helper": {
-        "REMI_SSH_KNOWN_HOSTS": "${{ secrets.REMI_SSH_KNOWN_HOSTS }}",
-        "REMI_SSH_KEY": "${{ secrets.REMI_SSH_KEY }}",
-        "REMI_SSH_TARGET": "${{ secrets.REMI_SSH_TARGET }}",
-        "WORKFLOW_RUN_ATTEMPT": "${{ github.run_attempt }}",
-        "WORKFLOW_RUN_ID": "${{ github.run_id }}",
-        "WORKFLOW_SHA": "${{ github.workflow_sha }}",
-    },
 }
 
 
@@ -548,164 +504,6 @@ def validate_benchmark_workflow(workflow: dict[str, Any]) -> None:
     validate_run_steps(steps)
 
 
-def validate_retirement_dispatch(workflow: dict[str, Any]) -> None:
-    trigger = exact_mapping(
-        workflow.get("on"),
-        "conversion work-root owner repair retirement on",
-    )
-    exact_keys(
-        trigger,
-        {"workflow_dispatch"},
-        "conversion work-root owner repair retirement triggers",
-    )
-    require(
-        trigger["workflow_dispatch"] is None,
-        "conversion work-root owner repair retirement has no dispatch inputs",
-    )
-
-
-def validate_retirement_action_steps(steps: dict[str, dict[str, Any]]) -> None:
-    checkout = steps["Check out exact protected retirement operator"]
-    exact_keys(
-        checkout,
-        {"name", "uses", "with"},
-        "conversion work-root owner repair retirement checkout step",
-    )
-    require(
-        checkout["uses"]
-        == "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-        "conversion work-root owner repair retirement protected checkout action",
-    )
-    require(
-        exact_mapping(
-            checkout["with"],
-            "conversion work-root owner repair retirement checkout inputs",
-        )
-        == {
-            "ref": "${{ github.workflow_sha }}",
-            "fetch-depth": 0,
-            "persist-credentials": False,
-        },
-        "conversion work-root owner repair retirement exact workflow-revision checkout ref",
-    )
-
-    upload = steps["Upload path-free work-root owner repair retirement evidence"]
-    exact_keys(
-        upload,
-        {"name", "uses", "with"},
-        "conversion work-root owner repair retirement upload step",
-    )
-    require(
-        upload["uses"]
-        == "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f",
-        "conversion work-root owner repair retirement exact evidence upload action",
-    )
-    require(
-        exact_mapping(
-            upload["with"],
-            "conversion work-root owner repair retirement upload inputs",
-        )
-        == {
-            "name": (
-                "remi-conversion-work-root-owner-repair-retirement-"
-                "${{ github.run_id }}-${{ github.run_attempt }}"
-            ),
-            "path": "remi-conversion-work-root-owner-repair-retirement-v1.json",
-            "if-no-files-found": "error",
-            "compression-level": 0,
-            "retention-days": 30,
-        },
-        "conversion work-root owner repair retirement path-free retained evidence",
-    )
-
-
-def validate_retirement_run_steps(steps: dict[str, dict[str, Any]]) -> None:
-    for name, expected_digest in RETIREMENT_REVIEWED_RUN_BLOCK_SHA256.items():
-        step = steps[name]
-        exact_keys(
-            step,
-            {"name", "env", "shell", "run"},
-            f"conversion work-root owner repair retirement run step {name}",
-        )
-        error = RETIREMENT_RUN_BLOCK_ERRORS[name]
-        require(step["shell"] == "bash", error)
-        require(
-            exact_mapping(
-                step["env"],
-                f"conversion work-root owner repair retirement run environment {name}",
-            )
-            == RETIREMENT_EXPECTED_RUN_ENV[name],
-            error,
-        )
-        run = step["run"]
-        require(isinstance(run, str), error)
-        observed_digest = hashlib.sha256(run.encode("utf-8")).hexdigest()
-        require(observed_digest == expected_digest, error)
-
-
-def validate_retirement_workflow(workflow: dict[str, Any]) -> None:
-    exact_keys(
-        workflow,
-        {"name", "on", "permissions", "concurrency", "jobs"},
-        "conversion work-root owner repair retirement workflow",
-    )
-    require(
-        workflow["name"]
-        == "remi-conversion-work-root-owner-repair-retirement",
-        "conversion work-root owner repair retirement workflow name",
-    )
-    validate_retirement_dispatch(workflow)
-    require(
-        exact_mapping(
-            workflow.get("permissions"),
-            "conversion work-root owner repair retirement permissions",
-        )
-        == {"contents": "read"},
-        "conversion work-root owner repair retirement read-only permissions",
-    )
-    jobs = exact_mapping(
-        workflow.get("jobs"),
-        "conversion work-root owner repair retirement jobs",
-    )
-    exact_keys(jobs, {"retire"}, "conversion work-root owner repair retirement jobs")
-    job = exact_mapping(
-        jobs["retire"],
-        "conversion work-root owner repair retirement job",
-    )
-    exact_keys(
-        job,
-        {"name", "runs-on", "timeout-minutes", "environment", "steps"},
-        "conversion work-root owner repair retirement job",
-    )
-    require(
-        job["name"] == "retire production conversion work-root owner repair"
-        and job["runs-on"] == "ubuntu-latest"
-        and type(job["timeout-minutes"]) is int
-        and job["timeout-minutes"] == 20
-        and job["environment"] == "production",
-        "conversion work-root owner repair retirement protected production boundary",
-    )
-    raw_steps = job["steps"]
-    require(
-        isinstance(raw_steps, list),
-        "conversion work-root owner repair retirement steps must be an array",
-    )
-    names = [
-        exact_mapping(
-            step,
-            "conversion work-root owner repair retirement step",
-        ).get("name")
-        for step in raw_steps
-    ]
-    require(
-        names == RETIREMENT_EXPECTED_STEP_ORDER,
-        "conversion work-root owner repair retirement exact reviewed step inventory",
-    )
-    steps = {step["name"]: step for step in raw_steps}
-    validate_retirement_action_steps(steps)
-    validate_retirement_run_steps(steps)
-
-
 def main() -> int:
     if len(sys.argv) > 2:
         print(f"usage: {Path(sys.argv[0]).name} [REPOSITORY]", file=sys.stderr)
@@ -715,9 +513,6 @@ def main() -> int:
         require(repo_root.is_dir(), f"repository root is not a directory: {repo_root}")
         workflows = validate_shared_concurrency(repo_root)
         validate_benchmark_workflow(workflows[BENCHMARK_WORKFLOW])
-        validate_retirement_workflow(
-            workflows[WORK_ROOT_OWNER_REPAIR_RETIREMENT_WORKFLOW]
-        )
     except PolicyError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
