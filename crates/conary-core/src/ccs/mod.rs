@@ -44,7 +44,10 @@ pub use builder::{
 pub use chunking::{
     Chunk, ChunkReference, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats,
 };
-pub use convert::{ConversionOptions, ConversionResult, NativePackageConverter};
+pub use convert::{
+    ConversionOptions, ConversionResult, NativePackageConverter, PendingConversionResult,
+    VerifiedConversionResult,
+};
 pub use enhancement::{
     ENHANCEMENT_VERSION, EnhancementContext, EnhancementEngine, EnhancementError,
     EnhancementRegistry, EnhancementRunner, EnhancementStatus, EnhancementType,

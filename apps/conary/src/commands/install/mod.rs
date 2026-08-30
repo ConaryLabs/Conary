@@ -35,7 +35,9 @@ mod validation;
 pub use batch::{BatchInstaller, prepare_package_for_batch};
 pub use command::cmd_install;
 pub(crate) use command::cmd_install_replatform;
-pub(crate) use conversion::{NativeCcsConversion, convert_native_package_to_ccs};
+pub(crate) use conversion::{
+    PendingInstalledConversion, PendingNativeCcsConversion, convert_native_package_to_ccs,
+};
 pub use ownership_mode::OwnershipMode;
 pub(crate) use package_set::{PackageSetRequest, install_package_set, validate_package_set};
 pub(crate) use payload_identity::resolve_native_payload_nodes;
@@ -53,6 +55,7 @@ pub use options::InstallOptions;
 pub(crate) use options::{
     CcsEnvelopeAuthority, RepositoryInstallProvenance, repository_install_provenance_from_package,
     verify_ccs_package_authority, verify_ccs_package_authority_into_cas,
+    verify_pending_ccs_conversion_authority,
 };
 pub use prepare::{ComponentSelection, UpgradeCheck};
 pub(crate) use restore::{

@@ -2,6 +2,7 @@
 
 use super::OwnershipMode;
 use anyhow::{Context, Result};
+use conary_core::ccs::convert::{PendingConversionResult, VerifiedConversionResult};
 use conary_core::ccs::verify::{TrustPolicy, verify_package, verify_package_into_cas};
 use conary_core::db::models::{Repository, RepositoryPackage, RepositoryPackageKey};
 use conary_core::filesystem::CasStore;
@@ -137,6 +138,33 @@ pub(crate) fn verify_ccs_package_authority_into_cas(
         format!(
             "CCS package authority verification and permanent CAS ingestion failed for {}",
             ccs_path.display()
+        )
+    })
+}
+
+/// Finalize one newly authored native conversion against the install caller's
+/// exact envelope authority.
+///
+/// Unlike path-based CCS verification, this consumes the pending conversion,
+/// so application code cannot accidentally reopen the same authored artifact
+/// before handing it to the existing install verification sink.
+pub(crate) fn verify_pending_ccs_conversion_authority(
+    db_path: &str,
+    pending: PendingConversionResult,
+    envelope_authority: &CcsEnvelopeAuthority,
+    repository_provenance: Option<&RepositoryInstallProvenance>,
+    cas: Option<&CasStore>,
+) -> Result<VerifiedConversionResult> {
+    let path = pending.unverified_package_path().to_path_buf();
+    let policy = ccs_trust_policy(db_path, envelope_authority, repository_provenance)?;
+    match cas {
+        Some(cas) => pending.verify_into_cas(&policy, cas),
+        None => pending.verify(&policy),
+    }
+    .with_context(|| {
+        format!(
+            "pending CCS conversion authority verification failed for {}",
+            path.display()
         )
     })
 }

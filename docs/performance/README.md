@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-30
-revision: 6
+revision: 7
 summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results
 ---
 
@@ -33,7 +33,7 @@ passing the label. Network bytes, CAS work, SQLite statements, durability
 calls, complete-root scans, and internal phase timing remain separate typed
 counters rather than estimates derived from elapsed time.
 
-The current Remi conversion schema-v3 contract treats internal signed-archive
+The current Remi conversion schema-v4 contract treats internal signed-archive
 authentication and permanent verified-CAS admission as one fused physical
 pass. Its full elapsed time is recorded once in the `timing.phases` entry named
 `independent_transport_reopen`; `durable_cas_ingestion` is skipped because
@@ -46,17 +46,22 @@ still reads and authenticates the persisted CCS after `end_to_end` returns.
 Required chunk-reconstruction validation remains inside the independent signed-
 archive verification boundaries; fusion removes only the later CAS-source pass.
 
-Three reopen fields must not be conflated:
+Two current reopen fields must not be conflated:
 
-- `timing.phases[phase=immediate_converter_reopen]` is converter-owned signed
-  archive verification and contributes to `conversion_core` and `end_to_end`.
 - `timing.phases[phase=independent_transport_reopen]` is service-owned storage
-  verification after conversion and contributes to `end_to_end`. This is the
-  direct verified-CAS fusion boundary.
+  verification and contributes to `end_to_end`. It consumes the typed pending
+  conversion and is the sole internal direct verified-CAS finalizer.
 - `output.independent_transport_reopen_ms` is the benchmark's post-conversion
   proof. It contributes to outer repetition process wall time, but not to
   `conversion_core` or `end_to_end`. The output proof's separate complete CCS
   hash has the same boundary.
+
+Schema v4 deletes the former converter-owned `immediate_converter_reopen`
+phase and both `immediate_converter_reopen_*` inferred counters. The converter
+now returns an explicitly pending artifact; Remi verifies it once under the
+profile targets authority directly into permanent CAS before transport or
+persistence. Local install and cook select their own single explicit verifier.
+The retired pass is not retained as a zero-duration or skipped phase.
 
 ## Remi direct verified-CAS pre-change anchor: 2026-08-30
 
@@ -221,6 +226,25 @@ change.
 This result is one paired production sample, not a latency distribution. It
 proves the named direct-CAS physical-pass improvement and does not constitute a
 same-host native-package-manager performance comparison.
+
+## Single-finalizer pre-change anchor: 2026-08-30
+
+Issue #765 selects the next physical amplification from the exact merged-#755
+result above. The converter-owned immediate reopen consumed 38.720 seconds,
+23.937% of the 161.755-second conversion core. It read and decompressed the
+1,950,687,953-byte CCS, authenticated the 49,091-object,
+2,639,374,118-byte signed set into a disposable spool, reconstructed the signed
+FastCDC layouts, and then discarded the complete verification capability.
+Remi immediately repeated the same archive authority under the exact profile
+targets key while streaming the objects into permanent CAS.
+
+Schema v4 therefore makes conversion emission return a typed pending artifact
+and leaves one internal finalizer: `independent_transport_reopen`. The
+arithmetic ceilings with every other duration fixed are 123.035 seconds for
+`conversion_core` and 194.919 seconds end to end, a 38.720-second or 16.573%
+end-to-end reduction. These are pass-removal ceilings, not measured results;
+the protected production-XFS rerun must establish the realized change and
+retain the separate benchmark-only reopen/hash proof outside both views.
 
 ## Remi conversion baseline: 2026-08-15
 

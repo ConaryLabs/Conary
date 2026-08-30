@@ -6,11 +6,11 @@ mod public_projection;
 mod report;
 
 use super::{
-    CONVERSION_BENCHMARK_SCHEMA_V3, ConversionBenchmarkAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V4, ConversionBenchmarkAuthority,
     ConversionBenchmarkCatalogAuthority, ConversionBenchmarkCatalogQuery,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkConfig,
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
-    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV3,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV4,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSetup,
     ConversionBenchmarkSubject, ConversionBenchmarkView, ConversionBenchmarkViews,
     ConversionService,
@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const REPORT_FILE_NAME: &str = "conversion-benchmark-v3.json";
+const REPORT_FILE_NAME: &str = "conversion-benchmark-v4.json";
 
 /// Run one network-independent conversion benchmark against a coherent copy
 /// of the deployed operational database and the deployed immutable catalogs.
@@ -46,7 +46,7 @@ const REPORT_FILE_NAME: &str = "conversion-benchmark-v3.json";
 pub async fn run_conversion_benchmark_from_config(
     remi_config: &RemiConfig,
     config: ConversionBenchmarkConfig,
-) -> Result<ConversionBenchmarkReportV3> {
+) -> Result<ConversionBenchmarkReportV4> {
     let prepare_probe = ProcessUsageProbe::start()?;
     validate_request(&config)?;
     remi_config.validate()?;
@@ -169,8 +169,8 @@ pub async fn run_conversion_benchmark_from_config(
         }
     }
 
-    let report = ConversionBenchmarkReportV3 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V3,
+    let report = ConversionBenchmarkReportV4 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V4,
         environment,
         authority,
         setup,
@@ -713,7 +713,6 @@ fn conversion_core_duration(
                     | crate::server::conversion_timing::ConversionPhase::ControlProjectionAndSigning
                     | crate::server::conversion_timing::ConversionPhase::PayloadObjectEmission
                     | crate::server::conversion_timing::ConversionPhase::ArchiveAssemblyAndGzip
-                    | crate::server::conversion_timing::ConversionPhase::ImmediateConverterReopen
                     | crate::server::conversion_timing::ConversionPhase::NativeProvenanceProjection
             )
         })

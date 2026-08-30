@@ -195,8 +195,15 @@ fn canonical_conversion_preserves_lifecycle_for_all_native_formats() {
             Some(source_profile(format)),
         )
         .unwrap();
-        assert!(converted.ccs_path.exists());
-        let record = converted.pending_record.into_record(42).unwrap();
+        assert!(converted.unverified_ccs_path().exists());
+        let (verified, _conversion_dir) = converted.verify().unwrap();
+        let record =
+            crate::commands::install::PendingInstalledConversion::from_verified_conversion(
+                verified.conversion(),
+            )
+            .unwrap()
+            .into_record(42)
+            .unwrap();
         let summary = record.scriptlet_summary().unwrap();
         if format == PackageFormatType::Eopkg {
             assert_eq!(summary.scriptlet_fidelity, "native-free");
@@ -383,7 +390,7 @@ fn publish_lifecycle_conversion(
         Some(source_profile(format)),
     )
     .unwrap();
-    let signing_public_key = converted.signing_public_key.clone();
+    let signing_public_key = converted.trusted_signing_public_key().to_string();
 
     let db_path = case_dir.join("source/conary.db");
     conary_core::db::init(&db_path).unwrap();

@@ -18,8 +18,8 @@ fn conversion_metrics_expose_each_chunked_payload_pass_and_ephemeral_staging() {
             "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         )
         .unwrap();
-    let metrics = result.metrics;
-    let ccs_write = metrics.ccs_write;
+    let metrics = &result.metrics;
+    let ccs_write = &metrics.ccs_write;
 
     assert_eq!(metrics.payload_files_examined, 1);
     assert_eq!(metrics.payload_reference_bytes_read, bytes.len() as u64);

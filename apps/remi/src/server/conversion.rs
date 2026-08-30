@@ -24,11 +24,11 @@ use crate::server::{BoundedCache, R2Store};
 use std::path::PathBuf;
 use std::sync::Arc;
 pub use types::{
-    CONVERSION_BENCHMARK_SCHEMA_V3, ConversionBenchmarkAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V4, ConversionBenchmarkAuthority,
     ConversionBenchmarkCatalogAuthority, ConversionBenchmarkCatalogQuery,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkConfig,
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
-    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV3,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV4,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSetup,
     ConversionBenchmarkSubject, ConversionBenchmarkView, ConversionBenchmarkViews,
     ScriptletPackageMetadata, ServerConversionResult,

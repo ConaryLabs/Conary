@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-29
-revision: 68
-summary: Convert foreign packages through lossless source authority, ephemeral exact native-payload and archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
+revision: 69
+summary: Convert foreign packages through lossless source authority, typed pending-to-verified finalization, ephemeral exact native-payload and archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -338,6 +338,19 @@ format/checksum, signed identity, architecture, version scheme, and lifecycle
 source checksum remain exact.
 
 `convert/converter.rs` is the conversion orchestration hub.
+It emits `PendingConversionResult`, whose archive path is explicitly
+unverified. The pending value must be consumed by exactly one caller-selected
+finalizer before it becomes `VerifiedConversionResult`: `verify` uses a
+bounded spool and `verify_into_cas` uses one permanent SHA-256 CAS batch. Both
+require a caller-supplied trust policy; the key recorded by the authoring result
+is evidence and is never promoted into an external trust anchor. The verified
+result owns the `VerifiedCcsArchive` capability, and publication, persistence,
+installation, or successful CLI output cannot be derived from the pending
+type. Adoption uses `verify_staged_copy` after copying and synchronizing the
+artifact in its durable destination directory; that finalizer additionally
+requires the staged archive's authenticated v3 authority identity to equal the
+exact final authority retained by the pending result.
+
 `convert/scriptlet_bundle/{builder,entries,format_metadata,native_contracts}.rs`
 projects package-parser ABI entries into the durable bundle, and
 `convert/scriptlet_bundle/{digest,summary}.rs` owns its content identity and
@@ -574,8 +587,11 @@ CCS emission. These same-process files are not crash-recovery or package
 authority and are never synchronized per payload file; parse or conversion
 failure cannot commit their paths into CCS, permanent CAS, database, package,
 or generation authority. Benchmark work therefore reports the exact spooled
-file and byte counts with zero payload-spool durability calls. Independent CCS
-reopen and permanent-CAS durability remain later mandatory boundaries.
+file and byte counts with zero payload-spool durability calls. Each consumer
+then selects one independent CCS verification boundary: Remi streams directly
+into permanent CAS, a mutating local install uses its installation CAS, and
+verification-only, dry-run, or foreign-cook callers use a bounded spool. The
+converter does not perform and discard an earlier hidden verification pass.
 
 Verification-only and dry-run callers use a temporary payload spool and do not
 create permanent CAS state. Mutating CCS install, restore, and repository-batch

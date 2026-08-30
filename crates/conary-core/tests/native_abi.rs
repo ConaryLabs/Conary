@@ -2,7 +2,7 @@
 
 use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::{
-    SigningKeyPair,
+    SigningKeyPair, TrustPolicy,
     convert::{ConversionOptions, NativePackageConverter},
 };
 use conary_core::db::models::{Trove, TroveType};
@@ -510,12 +510,12 @@ fn assert_conversion_preserves_native_entries(
     source_profile: &str,
 ) {
     let output = TempDir::new().expect("converter output tempdir");
+    let signing_key = Arc::new(SigningKeyPair::generate().with_key_id("native-abi-test"));
+    let policy = TrustPolicy::strict(vec![signing_key.public_key_base64()]);
     let converter = NativePackageConverter::new(ConversionOptions {
         output_dir: output.path().to_path_buf(),
     })
-    .with_signing_key(Arc::new(
-        SigningKeyPair::generate().with_key_id("native-abi-test"),
-    ))
+    .with_signing_key(signing_key)
     .with_source_profile(source_profile);
     let metadata = metadata_from_package(package, package_path);
     let payload = package
@@ -528,7 +528,10 @@ fn assert_conversion_preserves_native_entries(
     .expect("valid native ABI test checksum");
     let result = converter
         .convert_payload(&metadata, payload.files(), format, &checksum)
-        .unwrap_or_else(|error| panic!("convert {format} package: {error}"));
+        .unwrap_or_else(|error| panic!("convert {format} package: {error}"))
+        .verify(&policy)
+        .unwrap_or_else(|error| panic!("verify converted {format} package: {error:#}"));
+    let result = result.conversion();
 
     let bundle = result
         .build_result

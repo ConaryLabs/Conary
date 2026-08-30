@@ -887,8 +887,6 @@ jobs:
                   "complete_archive_copy_bytes",
                   "complete_archive_hash_bytes",
                   "downloaded_bytes",
-                  "immediate_converter_reopen_ccs_bytes",
-                  "immediate_converter_reopen_object_bytes_hashed",
                   "independent_transport_reopen_ccs_bytes",
                   "independent_transport_reopen_object_bytes_hashed",
                   "maximum_retained_staging_bytes",
@@ -980,7 +978,6 @@ jobs:
                     or .phase == "control_projection_and_signing"
                     or .phase == "payload_object_emission"
                     or .phase == "archive_assembly_and_gzip"
-                    or .phase == "immediate_converter_reopen"
                     or .phase == "native_provenance_projection")
                   | .duration_ms] | add // 0);
               def output_identity: {
@@ -1005,10 +1002,10 @@ jobs:
                 "setup",
                 "subject"
               ]
-              and .schema_version == 1
+              and .schema_version == 2
               and (.raw_report | keys | sort)
                 == ["schema_version", "sha256", "size_bytes"]
-              and .raw_report.schema_version == 3
+              and .raw_report.schema_version == 4
               and (.raw_report.sha256 | sha256)
               and (.raw_report.size_bytes | type == "number")
               and .raw_report.size_bytes > 0
@@ -1067,7 +1064,6 @@ jobs:
                 "control_projection_and_signing",
                 "payload_object_emission",
                 "archive_assembly_and_gzip",
-                "immediate_converter_reopen",
                 "native_provenance_projection",
                 "independent_transport_reopen",
                 "complete_archive_hash",
@@ -1102,16 +1098,12 @@ jobs:
                 and $work.source_artifact_bytes == $source_size_bytes
                 and $work.source_bytes_hashed == $source_size_bytes
                 and $work.ccs_output_bytes == $output.ccs_size_bytes
-                and $work.immediate_converter_reopen_ccs_bytes
-                  == $output.ccs_size_bytes
                 and $work.independent_transport_reopen_ccs_bytes
                   == $output.ccs_size_bytes
                 and $work.complete_archive_hash_bytes == $output.ccs_size_bytes
                 and $work.complete_archive_copy_bytes == $output.ccs_size_bytes
                 and $work.signed_object_count == $output.signed_object_count
                 and $work.signed_object_bytes == $output.signed_object_bytes
-                and $work.immediate_converter_reopen_object_bytes_hashed
-                  == $output.signed_object_bytes
                 and $work.independent_transport_reopen_object_bytes_hashed
                   == $output.signed_object_bytes
                 and $work.cas_incoming_bytes_hashed == $output.signed_object_bytes
@@ -1143,7 +1135,6 @@ jobs:
                 "control_projection_and_signing",
                 "payload_object_emission",
                 "archive_assembly_and_gzip",
-                "immediate_converter_reopen",
                 "native_provenance_projection",
                 "independent_transport_reopen",
                 "durable_cas_ingestion",
@@ -1171,7 +1162,7 @@ jobs:
               exit 1
           }
 
-          cp -- "$local_transport" remi-conversion-benchmark-public-v1.json
+          cp -- "$local_transport" remi-conversion-benchmark-public-v2.json
           {
             echo "result=success"
             echo "benchmark_id=$benchmark_id"
@@ -1198,7 +1189,7 @@ jobs:
         with:
           name: remi-conversion-benchmark-${{ inputs.deployment_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            remi-conversion-benchmark-public-v1.json
+            remi-conversion-benchmark-public-v2.json
             remi-conversion-source-verification-v1.json
             remi-deployment-inspection.json
             remi-candidate-manifest.json
@@ -1239,7 +1230,7 @@ jobs:
               | "- iteration \(.iteration) `\(.cache_state)`: "
                 + "conversion core \(.views.conversion_core.duration_ms) ms; "
                 + "end to end \(.views.end_to_end.duration_ms) ms"' \
-              remi-conversion-benchmark-public-v1.json
+              remi-conversion-benchmark-public-v2.json
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail closed on unsuccessful benchmark result

@@ -41,7 +41,7 @@ use crate::security::command_risk::{
     COMMAND_RISK_CLASSIFIER_VERSION, CommandRiskReport, CommandRiskSeverity, classify_shell_text,
 };
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -60,13 +60,91 @@ impl Default for ConversionOptions {
     }
 }
 
-/// Result of converting a native package
+/// Authored native-conversion output that has not crossed a trust boundary.
+///
+/// The archive path is deliberately named as unverified. Consumers must choose
+/// one explicit finalizer, supplying their own trust policy and either a
+/// bounded spool or permanent CAS destination, before using the conversion as
+/// package, transport, publication, or persistence authority.
 #[derive(Debug)]
+#[must_use = "a pending native conversion must be explicitly verified before use"]
+pub struct PendingConversionResult {
+    result: ConversionResult,
+    authority_sha256: String,
+}
+
+impl PendingConversionResult {
+    /// Exact path to the newly authored, still-unverified CCS archive.
+    pub fn unverified_package_path(&self) -> &Path {
+        &self.result.package_path
+    }
+
+    /// Exact authoring work performed before final verification.
+    pub fn metrics(&self) -> &NativeConversionMetrics {
+        &self.result.metrics
+    }
+
+    /// Finalize this conversion into a bounded verification spool.
+    pub fn verify(
+        self,
+        policy: &crate::ccs::verify::TrustPolicy,
+    ) -> anyhow::Result<VerifiedConversionResult> {
+        let path = self.result.package_path.clone();
+        let verification = crate::ccs::verify::verify_package(&path, policy)?;
+        self.finalize(path, verification)
+    }
+
+    /// Finalize a caller-owned copy in same-directory staging.
+    ///
+    /// Publication workflows copy pending bytes into their own staging root
+    /// before verification and atomic persistence. The verified copy must carry
+    /// the exact authored authority or it cannot finalize this conversion.
+    pub fn verify_staged_copy(
+        self,
+        staged_path: &Path,
+        policy: &crate::ccs::verify::TrustPolicy,
+    ) -> anyhow::Result<VerifiedConversionResult> {
+        let verification = crate::ccs::verify::verify_package(staged_path, policy)?;
+        self.finalize(staged_path.to_path_buf(), verification)
+    }
+
+    /// Finalize this conversion directly into one permanent SHA-256 CAS.
+    pub fn verify_into_cas(
+        self,
+        policy: &crate::ccs::verify::TrustPolicy,
+        cas: &crate::filesystem::CasStore,
+    ) -> anyhow::Result<VerifiedConversionResult> {
+        let path = self.result.package_path.clone();
+        let verification = crate::ccs::verify::verify_package_into_cas(&path, policy, cas)?;
+        self.finalize(path, verification)
+    }
+
+    fn finalize(
+        mut self,
+        verified_path: PathBuf,
+        verification: crate::ccs::verify::VerifiedCcsArchive,
+    ) -> anyhow::Result<VerifiedConversionResult> {
+        let verified_authority_sha256 = crate::hash::sha256(&verification.authority().to_cbor()?);
+        anyhow::ensure!(
+            verified_authority_sha256 == self.authority_sha256,
+            "verified CCS authority differs from the pending native conversion"
+        );
+        self.result.package_path = verified_path;
+        Ok(VerifiedConversionResult {
+            result: self.result,
+            verification,
+        })
+    }
+}
+
+/// Result of one explicitly verified native conversion.
+#[derive(Debug)]
+#[non_exhaustive]
 pub struct ConversionResult {
     /// The build result from CcsBuilder
     pub build_result: BuildResult,
-    /// Path to the output CCS package (if written)
-    pub package_path: Option<PathBuf>,
+    /// Path to the verified CCS package.
+    pub package_path: PathBuf,
     /// Original package format
     pub original_format: String,
     /// Original package checksum (for dedup/skip)
@@ -83,6 +161,32 @@ pub struct ConversionResult {
     pub metrics: NativeConversionMetrics,
 }
 
+/// A conversion result paired with the non-forgeable archive capability
+/// returned by its selected verifier.
+#[derive(Debug)]
+pub struct VerifiedConversionResult {
+    result: ConversionResult,
+    verification: crate::ccs::verify::VerifiedCcsArchive,
+}
+
+impl VerifiedConversionResult {
+    /// Verified conversion metadata and authored archive path.
+    pub fn conversion(&self) -> &ConversionResult {
+        &self.result
+    }
+
+    /// Exact capability proving archive, signature, objects, and layouts.
+    pub fn verification(&self) -> &crate::ccs::verify::VerifiedCcsArchive {
+        &self.verification
+    }
+
+    /// Separate the verified metadata and archive capability for consumers
+    /// that must retain them in different ownership structures.
+    pub fn into_parts(self) -> (ConversionResult, crate::ccs::verify::VerifiedCcsArchive) {
+        (self.result, self.verification)
+    }
+}
+
 /// Internal native-conversion phase and work evidence.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativeConversionMetrics {
@@ -90,7 +194,6 @@ pub struct NativeConversionMetrics {
     pub payload_reference_derivation: Duration,
     pub output_workspace_preparation: Duration,
     pub native_provenance_projection: Duration,
-    pub immediate_converter_reopen: Duration,
     pub payload_files_examined: u64,
     pub payload_reference_bytes_read: u64,
     pub payload_reference_bytes_hashed: u64,
@@ -167,7 +270,7 @@ impl NativePackageConverter {
         files: &[PackagePayloadFile],
         format: &str,
         checksum: &Hash,
-    ) -> Result<ConversionResult, ConversionError> {
+    ) -> Result<PendingConversionResult, ConversionError> {
         let metadata_projection_started = Instant::now();
         if checksum.algorithm != HashAlgorithm::Sha256 {
             return Err(ConversionError::ManifestError(format!(
@@ -365,6 +468,11 @@ impl NativePackageConverter {
                 "Foreign conversion produced invalid CCS v3 authority: {error}"
             ))
         })?;
+        let authority_sha256 = crate::hash::sha256(&authority.to_cbor().map_err(|error| {
+            ConversionError::BuildError(format!(
+                "Failed to encode final CCS v3 authority identity: {error}"
+            ))
+        })?);
         let metadata_lifecycle_and_authority_projection =
             metadata_before_payload_references + authority_projection_started.elapsed();
         let ccs_write = write_v3_ccs_package_from_sources_with_metrics(
@@ -382,18 +490,6 @@ impl NativePackageConverter {
                 e
             ))
         })?;
-        let immediate_reopen_started = Instant::now();
-        crate::ccs::verify::verify_package(
-            &package_path,
-            &crate::ccs::verify::TrustPolicy::strict(vec![signing_key.public_key_base64()]),
-        )
-        .map_err(|error| {
-            ConversionError::BuildError(format!(
-                "Converted CCS package failed immediate authority verification: {error:#}"
-            ))
-        })?;
-        let immediate_converter_reopen = immediate_reopen_started.elapsed();
-
         // Step 6: Extract source-package provenance information.
         let native_provenance_started = Instant::now();
         let artifact_exists = metadata.package_path.try_exists().map_err(|error| {
@@ -429,27 +525,29 @@ impl NativePackageConverter {
         let native_provenance = Some(provenance);
         let native_provenance_projection = native_provenance_started.elapsed();
 
-        Ok(ConversionResult {
-            build_result,
-            package_path: Some(package_path),
-            original_format: format.to_string(),
-            original_checksum: checksum,
-            native_provenance,
-            native_lifecycle: Some(scriptlet_bundle.bundle),
-            scriptlet_metadata: scriptlet_bundle.summary,
-            signing_public_key: signing_key.public_key_base64(),
-            metrics: NativeConversionMetrics {
-                metadata_lifecycle_and_authority_projection,
-                payload_reference_derivation: payload_reference_metrics.duration,
-                output_workspace_preparation,
-                native_provenance_projection,
-                immediate_converter_reopen,
-                payload_files_examined: payload_reference_metrics.files_examined,
-                payload_reference_bytes_read: payload_reference_metrics.bytes_read,
-                payload_reference_bytes_hashed: payload_reference_metrics.bytes_hashed,
-                payload_chunks_derived: payload_reference_metrics.chunks_derived,
-                unique_payload_chunks_derived: payload_reference_metrics.unique_chunks_derived,
-                ccs_write,
+        Ok(PendingConversionResult {
+            authority_sha256,
+            result: ConversionResult {
+                build_result,
+                package_path,
+                original_format: format.to_string(),
+                original_checksum: checksum,
+                native_provenance,
+                native_lifecycle: Some(scriptlet_bundle.bundle),
+                scriptlet_metadata: scriptlet_bundle.summary,
+                signing_public_key: signing_key.public_key_base64(),
+                metrics: NativeConversionMetrics {
+                    metadata_lifecycle_and_authority_projection,
+                    payload_reference_derivation: payload_reference_metrics.duration,
+                    output_workspace_preparation,
+                    native_provenance_projection,
+                    payload_files_examined: payload_reference_metrics.files_examined,
+                    payload_reference_bytes_read: payload_reference_metrics.bytes_read,
+                    payload_reference_bytes_hashed: payload_reference_metrics.bytes_hashed,
+                    payload_chunks_derived: payload_reference_metrics.chunks_derived,
+                    unique_payload_chunks_derived: payload_reference_metrics.unique_chunks_derived,
+                    ccs_write,
+                },
             },
         })
     }

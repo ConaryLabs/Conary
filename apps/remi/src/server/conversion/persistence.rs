@@ -195,10 +195,7 @@ impl ConversionService {
         let repo_pkg = source.repo_pkg.clone();
         let repository_provides_digest = source.catalog_provides_digest()?;
 
-        let ccs_path = conversion_result
-            .package_path
-            .as_ref()
-            .ok_or_else(|| anyhow!("No CCS package path"))?;
+        let ccs_path = &conversion_result.package_path;
 
         let total_size = std::fs::metadata(ccs_path)?.len();
         let hash_started = Instant::now();

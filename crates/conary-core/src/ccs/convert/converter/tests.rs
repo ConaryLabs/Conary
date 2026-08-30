@@ -11,6 +11,67 @@ use crate::payload::{PayloadContentAuthority, PayloadNode};
 
 const TEST_PAYLOAD: &[u8] = b"#!/bin/sh\necho test";
 
+struct TestConverter {
+    converter: NativePackageConverter,
+    policy: crate::ccs::verify::TrustPolicy,
+}
+
+impl TestConverter {
+    fn with_source_profile(mut self, profile: impl Into<String>) -> Self {
+        self.converter = self.converter.with_source_profile(profile);
+        self
+    }
+
+    fn with_source_release(mut self, release: impl Into<String>) -> Self {
+        self.converter = self.converter.with_source_release(release);
+        self
+    }
+
+    fn with_conversion_tool(mut self, tool: impl Into<String>) -> Self {
+        self.converter = self.converter.with_conversion_tool(tool);
+        self
+    }
+
+    fn author_payload(
+        &self,
+        metadata: &ForeignConversionInput,
+        files: &[crate::packages::payload::PackagePayloadFile],
+        format: &str,
+        checksum: &crate::hash::Hash,
+    ) -> Result<PendingConversionResult, ConversionError> {
+        self.converter
+            .convert_payload(metadata, files, format, checksum)
+    }
+
+    fn finalize(
+        &self,
+        pending: PendingConversionResult,
+    ) -> anyhow::Result<FinalizedTestConversion> {
+        pending.verify(&self.policy).map(FinalizedTestConversion)
+    }
+
+    fn convert_payload(
+        &self,
+        metadata: &ForeignConversionInput,
+        files: &[crate::packages::payload::PackagePayloadFile],
+        format: &str,
+        checksum: &crate::hash::Hash,
+    ) -> anyhow::Result<FinalizedTestConversion> {
+        self.finalize(self.author_payload(metadata, files, format, checksum)?)
+    }
+}
+
+#[derive(Debug)]
+struct FinalizedTestConversion(VerifiedConversionResult);
+
+impl std::ops::Deref for FinalizedTestConversion {
+    type Target = ConversionResult;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.conversion()
+    }
+}
+
 trait InMemoryConversionForTest {
     fn convert_in_memory_for_test(
         &self,
@@ -18,17 +79,17 @@ trait InMemoryConversionForTest {
         files: &[ExtractedFile],
         format: &str,
         checksum: &str,
-    ) -> Result<ConversionResult, ConversionError>;
+    ) -> anyhow::Result<FinalizedTestConversion>;
 }
 
-impl InMemoryConversionForTest for NativePackageConverter {
+impl InMemoryConversionForTest for TestConverter {
     fn convert_in_memory_for_test(
         &self,
         metadata: &ForeignConversionInput,
         files: &[ExtractedFile],
         format: &str,
         checksum: &str,
-    ) -> Result<ConversionResult, ConversionError> {
+    ) -> anyhow::Result<FinalizedTestConversion> {
         let payload = crate::packages::PackagePayload::from_extracted_in_memory(files.to_vec())
             .map_err(|error| ConversionError::IoError(error.to_string()))?;
         let checksum =
@@ -261,13 +322,18 @@ fn arch_install_function_entry(function_name: &str, install_source: &str) -> Nat
     }
 }
 
-fn passive_test_converter(output_dir: &std::path::Path) -> NativePackageConverter {
-    NativePackageConverter::new(ConversionOptions {
-        output_dir: output_dir.to_path_buf(),
-    })
-    .with_signing_key(std::sync::Arc::new(
+fn passive_test_converter(output_dir: &std::path::Path) -> TestConverter {
+    let signing_key = std::sync::Arc::new(
         crate::ccs::signing::SigningKeyPair::generate().with_key_id("converter-test"),
-    ))
+    );
+    let policy = crate::ccs::verify::TrustPolicy::strict(vec![signing_key.public_key_base64()]);
+    TestConverter {
+        converter: NativePackageConverter::new(ConversionOptions {
+            output_dir: output_dir.to_path_buf(),
+        })
+        .with_signing_key(signing_key),
+        policy,
+    }
 }
 
 #[test]
@@ -288,6 +354,99 @@ fn conversion_requires_typed_sha256_source_identity() {
             .to_string()
             .contains("source checksum must use SHA-256"),
         "{error}"
+    );
+}
+
+#[test]
+fn pending_conversion_rejects_a_policy_without_the_configured_authoring_key() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let converter = passive_test_converter(temp_dir.path());
+    let metadata = make_test_metadata();
+    let payload =
+        crate::packages::PackagePayload::from_extracted_in_memory(make_test_files()).unwrap();
+    let checksum = crate::hash::Hash::parse_prefixed(
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .unwrap();
+    let pending = converter
+        .author_payload(&metadata, payload.files(), "rpm", &checksum)
+        .unwrap();
+    let other_key = crate::ccs::signing::SigningKeyPair::generate();
+    let wrong_policy = crate::ccs::verify::TrustPolicy::strict(vec![other_key.public_key_base64()]);
+
+    let error = pending.verify(&wrong_policy).unwrap_err();
+
+    assert!(format!("{error:#}").contains("not trusted"), "{error:#}");
+}
+
+#[test]
+fn pending_conversion_rejects_archive_tampering_before_finalization() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let converter = passive_test_converter(temp_dir.path());
+    let metadata = make_test_metadata();
+    let payload =
+        crate::packages::PackagePayload::from_extracted_in_memory(make_test_files()).unwrap();
+    let checksum = crate::hash::Hash::parse_prefixed(
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+    .unwrap();
+    let pending = converter
+        .author_payload(&metadata, payload.files(), "rpm", &checksum)
+        .unwrap();
+    std::fs::write(
+        pending.unverified_package_path(),
+        b"tampered pending archive",
+    )
+    .unwrap();
+
+    let error = converter.finalize(pending).unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("verify streaming CCS v3 archive"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn pending_conversion_rejects_another_valid_archive_from_the_same_trusted_key() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let converter = passive_test_converter(temp_dir.path());
+    let metadata = make_test_metadata();
+    let payload =
+        crate::packages::PackagePayload::from_extracted_in_memory(make_test_files()).unwrap();
+    let checksum = crate::hash::Hash::parse_prefixed(
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    )
+    .unwrap();
+    let pending = converter
+        .author_payload(&metadata, payload.files(), "rpm", &checksum)
+        .unwrap();
+
+    let mut other_metadata = metadata.clone();
+    set_test_identity(
+        &mut other_metadata,
+        "other-package",
+        "1.0.0",
+        crate::repository::versioning::VersionScheme::Rpm,
+        Some("x86_64"),
+        None,
+    );
+    let other_checksum = crate::hash::Hash::parse_prefixed(
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    )
+    .unwrap();
+    let other_pending = converter
+        .author_payload(&other_metadata, payload.files(), "rpm", &other_checksum)
+        .unwrap();
+    let other_path = other_pending.unverified_package_path().to_path_buf();
+
+    let error = pending
+        .verify_staged_copy(&other_path, &converter.policy)
+        .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("differs from the pending native conversion"),
+        "{error:#}"
     );
 }
 
@@ -323,17 +482,9 @@ fn conversion_signs_native_file_capability_authority() {
     );
 }
 
-fn verified_converted_package(result: &ConversionResult) -> crate::ccs::CcsPackage {
-    let path = result
-        .package_path
-        .as_ref()
-        .expect("converted package path");
-    let verified = crate::ccs::verify::verify_package(
-        path,
-        &crate::ccs::verify::TrustPolicy::strict(vec![result.signing_public_key.clone()]),
-    )
-    .expect("converted CCS authority should verify");
-    crate::ccs::CcsPackage::from_verified_archive(path.to_str().unwrap(), &verified)
+fn verified_converted_package(result: &FinalizedTestConversion) -> crate::ccs::CcsPackage {
+    let path = &result.package_path;
+    crate::ccs::CcsPackage::from_verified_archive(path.to_str().unwrap(), result.0.verification())
         .expect("verified converted CCS package should open")
 }
 
@@ -614,8 +765,8 @@ fn conversion_rejects_missing_source_architecture_authority() {
         .unwrap_err();
 
     assert!(matches!(
-        error,
-        ConversionError::BuildError(message)
+        error.downcast_ref::<ConversionError>(),
+        Some(ConversionError::BuildError(message))
             if message.contains("v3 package identity architecture is required")
     ));
 }
@@ -865,7 +1016,7 @@ fn converted_ccs_archive_round_trip_preserves_native_lifecycle_bundle() {
             "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         )
         .unwrap();
-    let package_path = result.package_path.as_ref().unwrap();
+    let package_path = &result.package_path;
 
     let file = std::fs::File::open(package_path).unwrap();
     let archive = crate::ccs::archive_reader::inspect_untrusted_ccs_archive(file).unwrap();
@@ -908,7 +1059,7 @@ fn remi_converter_context_flows_into_bundle_metadata() {
     );
 }
 
-fn convert_scriptlet_body(converter: &NativePackageConverter, content: &str) -> ConversionResult {
+fn convert_scriptlet_body(converter: &TestConverter, content: &str) -> FinalizedTestConversion {
     let mut metadata = make_test_metadata();
     set_test_scriptlet(
         &mut metadata,

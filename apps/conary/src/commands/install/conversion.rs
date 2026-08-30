@@ -15,13 +15,13 @@ use super::repository_batch::{
 };
 use super::{
     CcsEnvelopeAuthority, CcsTransactionInstallOptions, InstallIntent, RepositoryInstallProvenance,
-    verify_ccs_package_authority,
+    verify_ccs_package_authority, verify_pending_ccs_conversion_authority,
 };
 use anyhow::{Context, Result};
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::convert::{
-    ConversionOptions, NativePackageConverter, ScriptletBundleSummary,
+    ConversionOptions, NativePackageConverter, PendingConversionResult, ScriptletBundleSummary,
 };
 use conary_core::packages::PackageFormat;
 use conary_core::repository::versioning::VersionScheme;
@@ -248,10 +248,7 @@ pub(super) fn validate_selected_repository_native_identity(
 pub enum ConversionResult {
     /// Package was converted, install via CCS path
     Converted {
-        ccs_path: String,
-        temp_dir: TempDir,
-        pending_record: PendingInstalledConversion,
-        signing_public_key: String,
+        conversion: Box<PendingNativeCcsConversion>,
     },
     /// Conversion skipped (already converted or not needed)
     Skipped,
@@ -266,8 +263,28 @@ pub struct PendingInstalledConversion {
 }
 
 impl PendingInstalledConversion {
-    pub(crate) fn original_checksum(&self) -> &str {
-        &self.original_checksum
+    pub(crate) fn from_verified_conversion(
+        conversion: &conary_core::ccs::convert::ConversionResult,
+    ) -> Result<Self> {
+        let extracted_provenance_json = conversion
+            .native_provenance
+            .as_ref()
+            .map(|provenance| provenance.to_json())
+            .transpose()
+            .context("Failed to serialize native package provenance")?;
+
+        if let Some(provenance) = &conversion.native_provenance
+            && provenance.has_content()
+        {
+            info!("Provenance extracted: {}", provenance.summary());
+        }
+
+        Ok(Self {
+            original_format: conversion.original_format.clone(),
+            original_checksum: conversion.original_checksum.clone(),
+            extracted_provenance_json,
+            scriptlet_summary: conversion.scriptlet_metadata.clone(),
+        })
     }
 
     pub(crate) fn into_record(
@@ -292,16 +309,58 @@ impl PendingInstalledConversion {
     }
 }
 
-/// Fully verified output of the canonical native-package conversion pipeline.
+/// Pending output of the canonical native-package conversion pipeline.
 ///
-/// The temporary directory owns `ccs_path`. Callers must either consume the
-/// artifact while this value is alive or copy it into same-directory staging
-/// before publishing it durably.
-pub(crate) struct NativeCcsConversion {
-    pub(crate) ccs_path: std::path::PathBuf,
-    pub(crate) temp_dir: TempDir,
-    pub(crate) pending_record: PendingInstalledConversion,
-    pub(crate) signing_public_key: String,
+/// The temporary directory owns the unverified archive. The signing key is
+/// captured independently from configured local authority rather than trusted
+/// from the pending artifact's self-reported authoring evidence.
+pub(crate) struct PendingNativeCcsConversion {
+    pending: PendingConversionResult,
+    temp_dir: TempDir,
+    original_checksum: String,
+    trusted_signing_public_key: String,
+}
+
+impl PendingNativeCcsConversion {
+    pub(crate) fn unverified_ccs_path(&self) -> &Path {
+        self.pending.unverified_package_path()
+    }
+
+    pub(crate) fn original_checksum(&self) -> &str {
+        &self.original_checksum
+    }
+
+    pub(crate) fn trusted_signing_public_key(&self) -> &str {
+        &self.trusted_signing_public_key
+    }
+
+    pub(crate) fn into_pending_parts(self) -> (PendingConversionResult, TempDir) {
+        (self.pending, self.temp_dir)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verify(
+        self,
+    ) -> Result<(conary_core::ccs::convert::VerifiedConversionResult, TempDir)> {
+        let policy =
+            conary_core::ccs::TrustPolicy::strict(vec![self.trusted_signing_public_key.clone()]);
+        let verified = self
+            .pending
+            .verify(&policy)
+            .context("Failed to verify converted CCS package authority")?;
+        Ok((verified, self.temp_dir))
+    }
+
+    pub(crate) fn verify_staged_copy(
+        self,
+        staged_path: &Path,
+    ) -> Result<conary_core::ccs::convert::VerifiedConversionResult> {
+        let policy =
+            conary_core::ccs::TrustPolicy::strict(vec![self.trusted_signing_public_key.clone()]);
+        self.pending
+            .verify_staged_copy(staged_path, &policy)
+            .context("same-directory adopted CCS staging failed verification")
+    }
 }
 
 pub struct CcsArtifactInstallOptions<'a> {
@@ -382,34 +441,29 @@ pub async fn try_convert_to_ccs(
         }
     }
 
-    let converted = convert_native_package_to_ccs_with_checksum(
+    let conversion = prepare_native_package_conversion_with_checksum(
         pkg,
         package_path,
         format,
         source_profile,
         &original_checksum,
     )?;
-    let ccs_path = converted.ccs_path.to_string_lossy().to_string();
     Ok(ConversionResult::Converted {
-        ccs_path,
-        temp_dir: converted.temp_dir,
-        pending_record: converted.pending_record,
-        signing_public_key: converted.signing_public_key,
+        conversion: Box::new(conversion),
     })
 }
 
 /// Convert one exact native artifact through the same parser/lifecycle/CCS
 /// pipeline used by direct installation.
 ///
-/// This function performs no database mutation and returns only after the
-/// signed CCS archive has passed strict verification and capability-policy
-/// validation.
+/// This function performs no database mutation. Its caller must consume the
+/// pending result at the exact verification/publication boundary.
 pub(crate) fn convert_native_package_to_ccs(
     pkg: &dyn PackageFormat,
     package_path: &Path,
     format: PackageFormatType,
     source_profile: Option<&str>,
-) -> Result<NativeCcsConversion> {
+) -> Result<PendingNativeCcsConversion> {
     let mut package_file = std::fs::File::open(package_path).with_context(|| {
         format!(
             "Failed to open package file for checksum: {}",
@@ -424,7 +478,7 @@ pub(crate) fn convert_native_package_to_ccs(
                     package_path.display()
                 )
             })?;
-    convert_native_package_to_ccs_with_checksum(
+    prepare_native_package_conversion_with_checksum(
         pkg,
         package_path,
         format,
@@ -433,13 +487,13 @@ pub(crate) fn convert_native_package_to_ccs(
     )
 }
 
-fn convert_native_package_to_ccs_with_checksum(
+fn prepare_native_package_conversion_with_checksum(
     pkg: &dyn PackageFormat,
     package_path: &Path,
     format: PackageFormatType,
     source_profile: Option<&str>,
     original_checksum: &conary_core::hash::Hash,
-) -> Result<NativeCcsConversion> {
+) -> Result<PendingNativeCcsConversion> {
     let format_str = match format {
         PackageFormatType::Rpm => "rpm",
         PackageFormatType::Deb => "deb",
@@ -462,64 +516,24 @@ fn convert_native_package_to_ccs_with_checksum(
     };
 
     let conversion_key = std::sync::Arc::new(crate::commands::ccs::load_or_create_local_dev_key()?);
+    let trusted_signing_public_key = conversion_key.public_key_base64();
     let mut converter = NativePackageConverter::new(options).with_signing_key(conversion_key);
     if let Some(profile) = source_profile {
         converter = converter.with_source_profile(profile);
     }
-    let conversion_result = converter
+    let pending = converter
         .convert_payload(&metadata, &extracted, format_str, original_checksum)
         .with_context(|| format!("Failed to convert {} to CCS format", pkg.name()))?;
-
-    // Get the package path
-    let ccs_package_path = conversion_result
-        .package_path
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Conversion succeeded but no package path returned"))?;
-    let converted_ccs_path = ccs_package_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Converted CCS path is not valid UTF-8"))?;
-    let verification = conary_core::ccs::verify::verify_package(
-        ccs_package_path,
-        &conary_core::ccs::TrustPolicy::strict(vec![conversion_result.signing_public_key.clone()]),
-    )
-    .context("Failed to verify converted CCS package authority")?;
-    let converted_ccs_pkg = CcsPackage::from_verified_archive(converted_ccs_path, &verification)
-        .context("Failed to construct converted CCS package for capability policy")?;
-    crate::commands::ccs::validate_ccs_capability_declaration(&converted_ccs_pkg)?;
-
     info!(
-        "Converted {} to CCS format: {} (scriptlet_fidelity: {})",
+        "Authored {} as pending CCS format: {}",
         pkg.name(),
-        ccs_package_path.display(),
-        conversion_result.scriptlet_metadata.scriptlet_fidelity
+        pending.unverified_package_path().display()
     );
-
-    // Serialize extracted provenance to JSON for audit trail
-    let provenance_json = conversion_result
-        .native_provenance
-        .as_ref()
-        .map(|provenance| provenance.to_json())
-        .transpose()
-        .context("Failed to serialize native package provenance")?;
-
-    if let Some(ref prov) = conversion_result.native_provenance
-        && prov.has_content()
-    {
-        info!("Provenance extracted: {}", prov.summary());
-    }
-
-    let pending_record = PendingInstalledConversion {
-        original_format: conversion_result.original_format.clone(),
-        original_checksum: conversion_result.original_checksum.clone(),
-        extracted_provenance_json: provenance_json,
-        scriptlet_summary: conversion_result.scriptlet_metadata.clone(),
-    };
-
-    Ok(NativeCcsConversion {
-        ccs_path: ccs_package_path.to_path_buf(),
+    Ok(PendingNativeCcsConversion {
+        pending,
         temp_dir: ccs_temp,
-        pending_record,
-        signing_public_key: conversion_result.signing_public_key.clone(),
+        original_checksum: original_checksum.to_prefixed_string(),
+        trusted_signing_public_key,
     })
 }
 
@@ -527,6 +541,75 @@ fn convert_native_package_to_ccs_with_checksum(
 ///
 /// The artifact may be Conary-native or converted from another package format.
 pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result<Option<i64>> {
+    let permanent_cas = (!opts.dry_run)
+        .then(|| {
+            let runtime_root =
+                conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(opts.db_path);
+            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+        })
+        .transpose()?;
+    let verified = match &permanent_cas {
+        Some(cas) => super::verify_ccs_package_authority_into_cas(
+            opts.db_path,
+            Path::new(opts.ccs_path),
+            &opts.envelope_authority,
+            opts.repository_provenance.as_ref(),
+            cas,
+        )?,
+        None => verify_ccs_package_authority(
+            opts.db_path,
+            Path::new(opts.ccs_path),
+            &opts.envelope_authority,
+            opts.repository_provenance.as_ref(),
+        )?,
+    };
+
+    install_verified_ccs_artifact(opts, verified).await
+}
+
+/// Finalize one freshly authored conversion at the normal install authority
+/// sink, then retain that exact verification capability for installation.
+pub(super) async fn install_pending_ccs_conversion(
+    pending: PendingConversionResult,
+    opts: CcsArtifactInstallOptions<'_>,
+) -> Result<(Option<i64>, PendingInstalledConversion)> {
+    anyhow::ensure!(
+        pending.unverified_package_path() == Path::new(opts.ccs_path),
+        "pending conversion path '{}' does not match requested install path '{}'",
+        pending.unverified_package_path().display(),
+        opts.ccs_path
+    );
+
+    let permanent_cas = (!opts.dry_run)
+        .then(|| {
+            let runtime_root =
+                conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(opts.db_path);
+            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
+        })
+        .transpose()?;
+    let verified = verify_pending_ccs_conversion_authority(
+        opts.db_path,
+        pending,
+        &opts.envelope_authority,
+        opts.repository_provenance.as_ref(),
+        permanent_cas.as_ref(),
+    )?;
+    let (conversion, verification) = verified.into_parts();
+    anyhow::ensure!(
+        conversion.package_path.as_path() == Path::new(opts.ccs_path),
+        "verified conversion path '{}' does not match requested install path '{}'",
+        conversion.package_path.display(),
+        opts.ccs_path
+    );
+    let pending_record = PendingInstalledConversion::from_verified_conversion(&conversion)?;
+    let installed_trove_id = install_verified_ccs_artifact(opts, verification).await?;
+    Ok((installed_trove_id, pending_record))
+}
+
+async fn install_verified_ccs_artifact(
+    opts: CcsArtifactInstallOptions<'_>,
+    verified: conary_core::ccs::VerifiedCcsArchive,
+) -> Result<Option<i64>> {
     let CcsArtifactInstallOptions {
         ccs_path,
         db_path,
@@ -537,33 +620,11 @@ pub async fn install_ccs_artifact(opts: CcsArtifactInstallOptions<'_>) -> Result
         allow_downgrade,
         intent,
         yes,
-        envelope_authority,
+        envelope_authority: _,
         repository_provenance,
         requested_source_identity,
         resolution_policy,
     } = opts;
-
-    let permanent_cas = (!dry_run)
-        .then(|| {
-            let runtime_root = conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path);
-            conary_core::filesystem::CasStore::new(runtime_root.objects_dir())
-        })
-        .transpose()?;
-    let verified = match &permanent_cas {
-        Some(cas) => super::verify_ccs_package_authority_into_cas(
-            db_path,
-            Path::new(ccs_path),
-            &envelope_authority,
-            repository_provenance.as_ref(),
-            cas,
-        )?,
-        None => verify_ccs_package_authority(
-            db_path,
-            Path::new(ccs_path),
-            &envelope_authority,
-            repository_provenance.as_ref(),
-        )?,
-    };
 
     let ccs_pkg = CcsPackage::from_verified_archive(ccs_path, &verified)
         .context("Failed to construct verified CCS package")?;

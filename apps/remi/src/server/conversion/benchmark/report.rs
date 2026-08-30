@@ -1,11 +1,11 @@
 // apps/remi/src/server/conversion/benchmark/report.rs
-//! Strict schema-v3 validation and durable report publication.
+//! Strict schema-v4 validation and durable report publication.
 
 use super::{
-    CONVERSION_BENCHMARK_SCHEMA_V3, ConversionBenchmarkCatalogAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V4, ConversionBenchmarkCatalogAuthority,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkEvidence,
     ConversionBenchmarkOutcome, ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage,
-    ConversionBenchmarkReportV3, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, PublishedInode,
+    ConversionBenchmarkReportV4, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, PublishedInode,
     REPORT_FILE_NAME, conversion_core_duration, rollback_failed_publication, sync_parent,
     validate_sha256,
 };
@@ -21,7 +21,7 @@ use std::path::Path;
 const HOT_EXECUTED_PHASES: [ConversionPhase; 2] =
     [ConversionPhase::PackageLookup, ConversionPhase::CacheLookup];
 
-const HOT_SKIPPED_PHASES: [ConversionPhase; 19] = [
+const HOT_SKIPPED_PHASES: [ConversionPhase; 18] = [
     ConversionPhase::LocalArtifactAdmission,
     ConversionPhase::Download,
     ConversionPhase::Checksum,
@@ -33,7 +33,6 @@ const HOT_SKIPPED_PHASES: [ConversionPhase; 19] = [
     ConversionPhase::ControlProjectionAndSigning,
     ConversionPhase::PayloadObjectEmission,
     ConversionPhase::ArchiveAssemblyAndGzip,
-    ConversionPhase::ImmediateConverterReopen,
     ConversionPhase::NativeProvenanceProjection,
     ConversionPhase::IndependentTransportReopen,
     ConversionPhase::DurableCasIngestion,
@@ -43,9 +42,9 @@ const HOT_SKIPPED_PHASES: [ConversionPhase; 19] = [
     ConversionPhase::DatabasePersistence,
 ];
 
-pub(super) fn validate_report(report: &ConversionBenchmarkReportV3) -> Result<()> {
+pub(super) fn validate_report(report: &ConversionBenchmarkReportV4) -> Result<()> {
     ensure!(
-        report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V3,
+        report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V4,
         "conversion benchmark schema {} is unsupported",
         report.schema_version
     );
@@ -165,7 +164,7 @@ fn validate_terminal_failure(
 }
 
 fn validate_completed_conversion(
-    report: &ConversionBenchmarkReportV3,
+    report: &ConversionBenchmarkReportV4,
     repetition: &ConversionBenchmarkEvidence,
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
@@ -325,7 +324,7 @@ fn validate_cold_fused_cas(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_successful_repetition(
-    report: &ConversionBenchmarkReportV3,
+    report: &ConversionBenchmarkReportV4,
     repetition: &ConversionBenchmarkEvidence,
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
@@ -352,7 +351,6 @@ fn validate_successful_repetition(
         let work = &timing.work;
         ensure!(
             work.ccs_output_bytes == output.ccs_size_bytes
-                && work.immediate_converter_reopen_ccs_bytes == output.ccs_size_bytes
                 && work.independent_transport_reopen_ccs_bytes == output.ccs_size_bytes
                 && work.complete_archive_hash_bytes == output.ccs_size_bytes
                 && work.complete_archive_copy_bytes == output.ccs_size_bytes,
@@ -361,8 +359,6 @@ fn validate_successful_repetition(
         ensure!(
             work.signed_object_count == output.signed_object_count
                 && work.signed_object_bytes == output.signed_object_bytes
-                && work.immediate_converter_reopen_object_bytes_hashed
-                    == output.signed_object_bytes
                 && work.independent_transport_reopen_object_bytes_hashed
                     == output.signed_object_bytes,
             "cold benchmark conversion work contradicts the signed object set"
@@ -530,7 +526,7 @@ fn validate_process_usage(usage: &ConversionBenchmarkProcessUsage, label: &str) 
 
 pub(super) fn publish_and_reopen_report(
     path: &Path,
-    report: &ConversionBenchmarkReportV3,
+    report: &ConversionBenchmarkReportV4,
 ) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
@@ -644,8 +640,8 @@ pub(super) fn publish_and_reopen_report(
             reopened_bytes == bytes,
             "reopened conversion benchmark report changed bytes"
         );
-        let reopened: ConversionBenchmarkReportV3 = serde_json::from_slice(&reopened_bytes)
-            .context("strictly reopen published conversion benchmark schema v3")?;
+        let reopened: ConversionBenchmarkReportV4 = serde_json::from_slice(&reopened_bytes)
+            .context("strictly reopen published conversion benchmark schema v4")?;
         validate_report(&reopened)?;
         ensure!(
             serde_json::to_value(&reopened)? == serde_json::to_value(report)?,

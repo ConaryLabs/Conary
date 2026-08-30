@@ -4,7 +4,7 @@
 use super::ConversionService;
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
-use conary_core::ccs::convert::ConversionResult;
+use conary_core::ccs::convert::{ConversionResult, PendingConversionResult};
 use conary_core::ccs::transport::CcsTransportObjectV1;
 use conary_core::db::models::ChunkAccess;
 use conary_core::filesystem::{CasStore, VerifiedObjectBatchMetrics, object_path};
@@ -120,15 +120,35 @@ where
 impl ConversionService {
     pub(super) async fn store_transport_with_timing(
         &self,
-        result: &ConversionResult,
+        pending: PendingConversionResult,
         source_profile: &str,
-    ) -> Result<StoredTransport> {
-        let package_path = result
-            .package_path
-            .as_deref()
-            .context("conversion did not emit a CCS artifact")?;
-        self.store_signed_ccs_path_with_timing(package_path, source_profile)
-            .await
+    ) -> Result<(StoredTransport, ConversionResult)> {
+        let objects_dir = self.chunk_dir.join("objects");
+        let keys_dir = self.repository_keys_dir.as_ref().context(
+            "Remi conversion requires release_publish.repository_keys_dir for CCS transport verification",
+        )?;
+        let signing_key = crate::server::signing_authority::load_role_key(
+            keys_dir,
+            source_profile,
+            crate::server::signing_authority::RepositorySigningRole::Targets,
+        )?;
+        let policy = conary_core::ccs::TrustPolicy::strict(vec![signing_key.public_key_base64()]);
+
+        let verify_and_cas_started = Instant::now();
+        let local_objects_dir = objects_dir.clone();
+        let finalized = tokio::task::spawn_blocking(move || {
+            let cas =
+                CasStore::new(local_objects_dir).context("initialize signed CCS object CAS")?;
+            pending.verify_into_cas(&policy, &cas)
+        })
+        .await
+        .context("join emitted CCS transport verification and CAS ingestion task")??;
+        let verification_and_cas_duration = verify_and_cas_started.elapsed();
+        let (conversion, verification) = finalized.into_parts();
+        let stored = self
+            .publish_verified_transport(verification, verification_and_cas_duration, &objects_dir)
+            .await?;
+        Ok((stored, conversion))
     }
 
     /// Verify the signed CCS authority, persist exactly its canonical objects,
@@ -160,6 +180,16 @@ impl ConversionService {
         .await
         .context("join emitted CCS transport verification and CAS ingestion task")??;
         let verification_and_cas_duration = verify_and_cas_started.elapsed();
+        self.publish_verified_transport(verification, verification_and_cas_duration, &objects_dir)
+            .await
+    }
+
+    async fn publish_verified_transport(
+        &self,
+        verification: conary_core::ccs::VerifiedCcsArchive,
+        verification_and_cas_duration: Duration,
+        objects_dir: &Path,
+    ) -> Result<StoredTransport> {
         let cas_metrics = verification
             .verified_object_metrics()
             .context("permanent CCS verification omitted verified-CAS work evidence")?;
@@ -183,7 +213,7 @@ impl ConversionService {
         let (r2_duration, r2_work) = if let Some(r2) = self.r2_store.clone() {
             let (duration, work) = publish_transport_objects_then(
                 r2,
-                &objects_dir,
+                objects_dir,
                 &transport.objects,
                 R2_PUBLICATION_CONCURRENCY,
                 || self.persist_chunk_sizes(&exact_sizes),

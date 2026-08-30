@@ -183,7 +183,7 @@ mod tests {
             config: Vec::new(),
         });
         let source_sha256 = "d".repeat(64);
-        let converted = NativePackageConverter::new(ConversionOptions {
+        let pending = NativePackageConverter::new(ConversionOptions {
             output_dir: directory.path().to_path_buf(),
         })
         .with_source_profile("fedora-44")
@@ -198,11 +198,13 @@ mod tests {
                 .expect("source SHA-256"),
         )
         .expect("convert CCS reopen fixture");
-        let ccs_path = converted.package_path.expect("converted CCS path");
         let policy = TrustPolicy::strict(vec![public_key.clone()]);
-        let verified = verify_package(&ccs_path, &policy).expect("verify CCS reopen fixture");
-        let transport = conary_core::ccs::CcsTransportEnvelopeV1::from_verified_archive(&verified)
-            .expect("fixture transport");
+        let finalized = pending.verify(&policy).expect("verify CCS reopen fixture");
+        let ccs_path = finalized.conversion().package_path.clone();
+        let transport = conary_core::ccs::CcsTransportEnvelopeV1::from_verified_archive(
+            finalized.verification(),
+        )
+        .expect("fixture transport");
         let mut ccs_file = File::open(&ccs_path).expect("open fixture CCS");
         let ccs_sha256 =
             conary_core::hash::hash_reader(conary_core::hash::HashAlgorithm::Sha256, &mut ccs_file)
@@ -228,8 +230,16 @@ mod tests {
             ccs_path,
             cache_state: "cold".to_string(),
             scriptlets: ScriptletPackageMetadata {
-                scriptlet_fidelity: converted.scriptlet_metadata.scriptlet_fidelity,
-                evidence_digest: converted.scriptlet_metadata.evidence_digest,
+                scriptlet_fidelity: finalized
+                    .conversion()
+                    .scriptlet_metadata
+                    .scriptlet_fidelity
+                    .clone(),
+                evidence_digest: finalized
+                    .conversion()
+                    .scriptlet_metadata
+                    .evidence_digest
+                    .clone(),
             },
             timing: None,
         };

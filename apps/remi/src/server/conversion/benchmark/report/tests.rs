@@ -126,13 +126,11 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.source_artifact_bytes = 5;
         timing.work.source_bytes_hashed = 5;
         timing.work.ccs_output_bytes = 23;
-        timing.work.immediate_converter_reopen_ccs_bytes = 23;
         timing.work.independent_transport_reopen_ccs_bytes = 23;
         timing.work.complete_archive_hash_bytes = 23;
         timing.work.complete_archive_copy_bytes = 23;
         timing.work.signed_object_count = 2;
         timing.work.signed_object_bytes = 17;
-        timing.work.immediate_converter_reopen_object_bytes_hashed = 17;
         timing.work.independent_transport_reopen_object_bytes_hashed = 17;
         timing.work.cas_incoming_bytes_hashed = 17;
         timing.work.cas_persistent_bytes_written = 17;
@@ -156,10 +154,10 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
     timing
 }
 
-fn valid_report() -> ConversionBenchmarkReportV3 {
+fn valid_report() -> ConversionBenchmarkReportV4 {
     let output = valid_output();
-    ConversionBenchmarkReportV3 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V3,
+    ConversionBenchmarkReportV4 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V4,
         environment: ConversionBenchmarkEnvironment {
             hardware_label: "fixture".to_string(),
             remi_version: "0".to_string(),
@@ -257,6 +255,35 @@ fn accepts_exact_registered_reopen_and_query_counters() {
 #[test]
 fn accepts_fully_bound_cold_and_hot_repetition_evidence() {
     validate_report(&valid_report()).unwrap();
+}
+
+#[test]
+fn rejects_legacy_schema_and_converter_reopen_members() {
+    let mut legacy_schema = valid_report();
+    legacy_schema.schema_version = 3;
+    assert!(validate_report(&legacy_schema).is_err());
+
+    let mut legacy_work = serde_json::to_value(valid_report()).unwrap();
+    legacy_work["repetitions"][0]["outcome"]["timing"]["work"]
+        .as_object_mut()
+        .unwrap()
+        .insert(
+            "immediate_converter_reopen_ccs_bytes".to_string(),
+            serde_json::json!(23),
+        );
+    let error = serde_json::from_value::<ConversionBenchmarkReportV4>(legacy_work).unwrap_err();
+    assert!(error.to_string().contains("unknown field"), "{error}");
+
+    let mut legacy_phase = serde_json::to_value(valid_report()).unwrap();
+    legacy_phase["repetitions"][0]["outcome"]["timing"]["phases"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "phase": "immediate_converter_reopen",
+            "duration_ms": 1,
+        }));
+    let error = serde_json::from_value::<ConversionBenchmarkReportV4>(legacy_phase).unwrap_err();
+    assert!(error.to_string().contains("unknown variant"), "{error}");
 }
 
 #[test]
@@ -482,6 +509,38 @@ fn rejects_a_second_cas_pass_or_inconsistent_direct_cas_work() {
 }
 
 #[test]
+fn rejects_missing_or_duplicate_fused_independent_reopen() {
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+    else {
+        unreachable!()
+    };
+    timing
+        .phases
+        .retain(|phase| phase.phase != ConversionPhase::IndependentTransportReopen);
+    let error = validate_report(&report).expect_err("cold evidence must retain the fused reopen");
+    assert_eq!(
+        error.to_string(),
+        "cold benchmark omitted fused independent reopen into durable CAS"
+    );
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+    else {
+        unreachable!()
+    };
+    timing.record(
+        ConversionPhase::IndependentTransportReopen,
+        Duration::from_millis(1),
+    );
+    let error = validate_report(&report).expect_err("cold evidence must contain one fused reopen");
+    assert_eq!(
+        error.to_string(),
+        "cold benchmark did not record one fused independent reopen into durable CAS"
+    );
+}
+
+#[test]
 fn rejects_a_fused_reopen_duration_larger_than_the_total() {
     let mut report = valid_report();
     let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
@@ -611,7 +670,7 @@ fn strict_schema_rejects_unknown_top_level_fields() {
         "portable_chunk_count": 1
     });
     let mut value = serde_json::json!({
-        "schema_version": CONVERSION_BENCHMARK_SCHEMA_V3,
+        "schema_version": CONVERSION_BENCHMARK_SCHEMA_V4,
         "environment": {
             "hardware_label": "fixture",
             "remi_version": "0",
@@ -671,6 +730,6 @@ fn strict_schema_rejects_unknown_top_level_fields() {
         .as_object_mut()
         .unwrap()
         .insert("legacy_v2_field".to_string(), serde_json::Value::Bool(true));
-    let error = serde_json::from_value::<ConversionBenchmarkReportV3>(value).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkReportV4>(value).unwrap_err();
     assert!(error.to_string().contains("unknown field"), "{error}");
 }

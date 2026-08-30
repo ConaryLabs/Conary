@@ -392,17 +392,16 @@ async fn try_convert_to_ccs_does_not_guess_capability_policy() {
     )
     .await
     .expect("conversion without declared capabilities must not require policy approval");
-    let ConversionResult::Converted { ccs_path, .. } = result else {
+    let ConversionResult::Converted { conversion } = result else {
         panic!("conversion unexpectedly skipped");
     };
-    let verified = verify_ccs_package_authority(
-        db_path_str,
-        Path::new(&ccs_path),
-        &CcsEnvelopeAuthority::LocalDev,
-        None,
+    let conversion = *conversion;
+    let (verified, _conversion_dir) = conversion.verify().unwrap();
+    let converted = CcsPackage::from_verified_archive(
+        verified.conversion().package_path.to_str().unwrap(),
+        verified.verification(),
     )
     .unwrap();
-    let converted = CcsPackage::from_verified_archive(&ccs_path, &verified).unwrap();
     assert!(
         converted.manifest().capabilities.is_none(),
         "conversion must not guess capability policy from package names or paths"

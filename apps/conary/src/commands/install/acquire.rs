@@ -1,7 +1,8 @@
 // apps/conary/src/commands/install/acquire.rs
 
 use super::conversion::{
-    CcsArtifactInstallOptions, ConversionResult, install_ccs_artifact, try_convert_to_ccs,
+    CcsArtifactInstallOptions, ConversionResult, install_ccs_artifact,
+    install_pending_ccs_conversion, try_convert_to_ccs,
 };
 use super::prepare::parse_package;
 use super::resolve::{
@@ -188,28 +189,34 @@ pub(super) async fn resolve_and_parse_package(
         )
         .await?
         {
-            ConversionResult::Converted {
-                ccs_path,
-                temp_dir: _temp_dir,
-                pending_record,
-                signing_public_key,
-            } => {
+            ConversionResult::Converted { conversion } => {
+                let conversion = *conversion;
+                let ccs_path = conversion
+                    .unverified_ccs_path()
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("Converted CCS path is not valid UTF-8"))?
+                    .to_string();
+                let signing_public_key = conversion.trusted_signing_public_key().to_string();
+                let (pending_conversion, _temp_dir) = conversion.into_pending_parts();
                 // Install via CCS path (temp_dir kept alive until install completes)
-                let installed_trove_id = install_ccs_artifact(CcsArtifactInstallOptions {
-                    ccs_path: &ccs_path,
-                    db_path: ccs_opts.db_path,
-                    root: ccs_opts.root,
-                    dry_run: ccs_opts.dry_run,
-                    sandbox_mode: ccs_opts.sandbox_mode,
-                    no_deps: ccs_opts.no_deps,
-                    allow_downgrade: ccs_opts.allow_downgrade,
-                    intent: ccs_opts.intent,
-                    yes: ccs_opts.yes,
-                    envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
-                    repository_provenance,
-                    requested_source_identity: ccs_opts.requested_source_identity,
-                    resolution_policy,
-                })
+                let (installed_trove_id, pending_record) = install_pending_ccs_conversion(
+                    pending_conversion,
+                    CcsArtifactInstallOptions {
+                        ccs_path: &ccs_path,
+                        db_path: ccs_opts.db_path,
+                        root: ccs_opts.root,
+                        dry_run: ccs_opts.dry_run,
+                        sandbox_mode: ccs_opts.sandbox_mode,
+                        no_deps: ccs_opts.no_deps,
+                        allow_downgrade: ccs_opts.allow_downgrade,
+                        intent: ccs_opts.intent,
+                        yes: ccs_opts.yes,
+                        envelope_authority: CcsEnvelopeAuthority::ExactKey(signing_public_key),
+                        repository_provenance,
+                        requested_source_identity: ccs_opts.requested_source_identity,
+                        resolution_policy,
+                    },
+                )
                 .await?;
                 if let Some(trove_id) = installed_trove_id {
                     pending_record.persist(db_path, trove_id)?;
