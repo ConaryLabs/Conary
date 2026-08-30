@@ -15,8 +15,7 @@ use crate::ccs::attestation::{
     compute_build_output_identity_from_v3,
 };
 use crate::ccs::builder::{
-    BuildResult, CcsPackageWriteMetrics, ChunkStats, ComponentData, FileEntry,
-    write_v3_ccs_package_from_sources_with_metrics,
+    BuildResult, CcsPackageWriteMetrics, write_v3_ccs_package_from_prepared_with_metrics,
 };
 use crate::ccs::convert::native_provenance::NativeProvenance;
 use crate::ccs::convert::scriptlet_bundle::{
@@ -40,7 +39,6 @@ use crate::repository::versioning::VersionScheme;
 use crate::security::command_risk::{
     COMMAND_RISK_CLASSIFIER_VERSION, CommandRiskReport, CommandRiskSeverity, classify_shell_text,
 };
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -241,25 +239,9 @@ impl VerifiedConversionResult {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativeConversionMetrics {
     pub metadata_lifecycle_and_authority_projection: Duration,
-    pub payload_reference_derivation: Duration,
     pub output_workspace_preparation: Duration,
     pub native_provenance_projection: Duration,
-    pub payload_files_examined: u64,
-    pub payload_reference_bytes_read: u64,
-    pub payload_reference_bytes_hashed: u64,
-    pub payload_chunks_derived: u64,
-    pub unique_payload_chunks_derived: u64,
     pub ccs_write: CcsPackageWriteMetrics,
-}
-
-#[derive(Default)]
-struct PayloadReferenceMetrics {
-    duration: Duration,
-    files_examined: u64,
-    bytes_read: u64,
-    bytes_hashed: u64,
-    chunks_derived: u64,
-    unique_chunks_derived: u64,
 }
 
 /// Converts native packages (RPM/DEB/Arch/eopkg) to CCS format.
@@ -418,21 +400,21 @@ impl NativePackageConverter {
         // Foreign conversion preserves exact package payload authority. It
         // does not run content-rewriting build policy or materialize a second
         // source tree.
-        let metadata_before_payload_references = metadata_projection_started.elapsed();
-        let (mut build_result, payload_reference_metrics) =
-            build_streaming_result(manifest.clone(), files)?;
-
-        // Step 5: Write the package file.
+        let metadata_before_payload_preparation = metadata_projection_started.elapsed();
         let workspace_started = Instant::now();
         std::fs::create_dir_all(&self.options.output_dir)
             .map_err(|e| ConversionError::IoError(format!("Failed to create output dir: {}", e)))?;
 
-        let package_filename = format!(
-            "{}-{}.ccs",
-            build_result.manifest.package.name, build_result.manifest.package.version
-        );
+        let package_filename =
+            format!("{}-{}.ccs", manifest.package.name, manifest.package.version);
         let package_path = self.options.output_dir.join(&package_filename);
         let output_workspace_preparation = workspace_started.elapsed();
+        let (mut build_result, prepared_payload) =
+            super::payload_preparation::prepare_streaming_result(
+                manifest.clone(),
+                files,
+                &self.options.output_dir,
+            )?;
 
         let authority_projection_started = Instant::now();
         let signing_key = self.signing_key.as_ref().ok_or_else(|| {
@@ -524,10 +506,10 @@ impl NativePackageConverter {
             ))
         })?);
         let metadata_lifecycle_and_authority_projection =
-            metadata_before_payload_references + authority_projection_started.elapsed();
-        let ccs_write = write_v3_ccs_package_from_sources_with_metrics(
+            metadata_before_payload_preparation + authority_projection_started.elapsed();
+        let ccs_write = write_v3_ccs_package_from_prepared_with_metrics(
             &authority,
-            files,
+            &prepared_payload,
             &package_path,
             signing_key,
             Some(&debug_toml),
@@ -593,14 +575,8 @@ impl NativePackageConverter {
                 signing_public_key: signing_key.public_key_base64(),
                 metrics: NativeConversionMetrics {
                     metadata_lifecycle_and_authority_projection,
-                    payload_reference_derivation: payload_reference_metrics.duration,
                     output_workspace_preparation,
                     native_provenance_projection,
-                    payload_files_examined: payload_reference_metrics.files_examined,
-                    payload_reference_bytes_read: payload_reference_metrics.bytes_read,
-                    payload_reference_bytes_hashed: payload_reference_metrics.bytes_hashed,
-                    payload_chunks_derived: payload_reference_metrics.chunks_derived,
-                    unique_payload_chunks_derived: payload_reference_metrics.unique_chunks_derived,
                     ccs_write,
                 },
             },
@@ -663,138 +639,6 @@ impl NativePackageConverter {
 
         Ok(manifest)
     }
-}
-
-fn build_streaming_result(
-    manifest: CcsManifest,
-    payloads: &[PackagePayloadFile],
-) -> Result<(BuildResult, PayloadReferenceMetrics), ConversionError> {
-    let started = Instant::now();
-    let mut metrics = PayloadReferenceMetrics {
-        files_examined: u64::try_from(payloads.len()).map_err(|_| {
-            ConversionError::BuildError(
-                "conversion payload file count exceeds u64 authority".to_string(),
-            )
-        })?,
-        ..Default::default()
-    };
-    let mut files = Vec::with_capacity(payloads.len());
-    let mut total_size = 0_u64;
-    let mut chunk_stats = ChunkStats::default();
-    let mut unique_chunks = HashSet::new();
-    for payload in payloads {
-        payload
-            .node
-            .validate_content(payload.content_authority.as_ref())
-            .map_err(|error| ConversionError::BuildError(error.to_string()))?;
-        if let Some(content) = &payload.content_authority {
-            total_size = total_size.checked_add(content.size).ok_or_else(|| {
-                ConversionError::BuildError("CCS payload size arithmetic overflow".to_string())
-            })?;
-        }
-        let chunks = match &payload.content_authority {
-            Some(content) if content.size >= u64::from(crate::ccs::chunking::MIN_CHUNK_SIZE) => {
-                let mut references = Vec::new();
-                let processed = crate::ccs::chunking::Chunker::new()
-                    .visit_reader_chunks(payload.open_content().map_err(|error| {
-                        ConversionError::BuildError(format!(
-                            "failed to open conversion payload {} for canonical chunking: {error}",
-                            payload.path
-                        ))
-                    })?, |chunk| {
-                        let reference = chunk.reference();
-                        chunk_stats.total_chunks += 1;
-                        if !unique_chunks.insert(reference.sha256.clone()) {
-                            chunk_stats.dedup_savings = chunk_stats
-                                .dedup_savings
-                                .checked_add(u64::from(reference.size))
-                                .ok_or_else(|| {
-                                    anyhow::anyhow!("conversion chunk dedup savings overflow")
-                                })?;
-                        }
-                        references.push(reference);
-                        Ok(())
-                    })
-                    .map_err(|error| {
-                        ConversionError::BuildError(format!(
-                            "failed to derive canonical chunks for {}: {error}",
-                            payload.path
-                        ))
-                    })?;
-                if processed != content.size {
-                    return Err(ConversionError::BuildError(format!(
-                        "conversion payload {} changed while chunking: expected {} bytes, read {processed}",
-                        payload.path, content.size
-                    )));
-                }
-                metrics.bytes_read =
-                    metrics.bytes_read.checked_add(processed).ok_or_else(|| {
-                        ConversionError::BuildError(
-                            "conversion payload reference read-byte count overflow".to_string(),
-                        )
-                    })?;
-                metrics.bytes_hashed =
-                    metrics.bytes_hashed.checked_add(processed).ok_or_else(|| {
-                        ConversionError::BuildError(
-                            "conversion payload reference hash-byte count overflow".to_string(),
-                        )
-                    })?;
-                chunk_stats.chunked_files += 1;
-                Some(references)
-            }
-            Some(_) => {
-                chunk_stats.whole_files += 1;
-                None
-            }
-            None => None,
-        };
-        files.push(FileEntry {
-            path: payload.path.clone(),
-            node: payload.node.clone(),
-            content: payload.content_authority.clone(),
-            component: "runtime".to_string(),
-            chunks,
-        });
-    }
-    let component_hash = crate::hash::sha256_prefixed(
-        &crate::ccs::attestation::canonical_json_bytes(&files)
-            .map_err(|error| ConversionError::BuildError(error.to_string()))?,
-    );
-    let components = if files.is_empty() {
-        HashMap::new()
-    } else {
-        HashMap::from([(
-            "runtime".to_string(),
-            ComponentData {
-                name: "runtime".to_string(),
-                files: files.clone(),
-                hash: component_hash,
-                size: total_size,
-            },
-        )])
-    };
-    chunk_stats.unique_chunks = unique_chunks.len();
-    metrics.chunks_derived = u64::try_from(chunk_stats.total_chunks).map_err(|_| {
-        ConversionError::BuildError("conversion chunk count exceeds u64 authority".to_string())
-    })?;
-    metrics.unique_chunks_derived = u64::try_from(chunk_stats.unique_chunks).map_err(|_| {
-        ConversionError::BuildError(
-            "conversion unique chunk count exceeds u64 authority".to_string(),
-        )
-    })?;
-    metrics.duration = started.elapsed();
-    Ok((
-        BuildResult {
-            manifest,
-            components,
-            files,
-            payloads: payloads.to_vec(),
-            total_size,
-            chunked: chunk_stats.chunked_files > 0,
-            chunk_stats: Some(chunk_stats),
-        },
-        metrics,
-    ))
 }
 
 fn project_source_capabilities(

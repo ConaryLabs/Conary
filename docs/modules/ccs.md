@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-30
-revision: 70
-summary: Convert foreign packages through lossless source authority, decode-pass typed native payload digest evidence, typed pending-to-verified finalization, ephemeral exact native-payload and archive staging, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
+revision: 71
+summary: Convert foreign packages through lossless source authority, decode-pass typed native digest evidence, one-pass authenticated payload layout derivation and object staging, atomic exact archive emission, typed pending-to-verified finalization, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
 # CCS Module (conary-core/src/ccs/)
@@ -25,7 +25,7 @@ Apply typed install prefix (default `/`) to source-root children
      +-- Compute SHA-256 hash
      +-- Apply PolicyChain (Keep / Replace / Skip / Reject)
      +-- Apply exact path/rule component assignment, else lossless `runtime`
-     +-- By default, split files >= 16 KiB into canonical FastCDC v2020 chunks
+     +-- When requested, split files >= 16 KiB into canonical FastCDC v2020 chunks
      |
   Group files by component -> ComponentData
      |
@@ -38,14 +38,26 @@ Apply typed install prefix (default `/`) to source-root children
   Output .ccs archive (tar.gz with MANIFEST + MANIFEST.toml + objects/)
 ```
 
-The archive writer stores exact payload objects below one operation-private
-temporary root. Each object is size- and SHA-256-checked and becomes visible
-under its content address only after a complete write. Those staging names are
-not durable CAS authority and are never synchronized per object or shard; a
-failure discards the complete root and cannot return an archive. Archive
-assembly and its caller-owned persistence and independent reopen are the
-separate durable boundary. Permanent transaction and repository CAS paths do
-not use this ephemeral API and retain their durability barriers.
+Foreign conversion opens each regular content owner exactly once. That pass
+validates the native whole-file SHA-256 while canonical FastCDC computes every
+required chunk identity and the same trusted owner stages each first-seen
+object. Small whole objects share their one validated SHA-256 between content
+and object identity. An opaque chunk result, not a caller-supplied digest,
+authorizes the no-rehash staging path. Duplicate occurrences are still
+authenticated by their owning whole-file or chunk hash but perform no duplicate
+write or canonical-object reread.
+
+Prepared objects live below one operation-private temporary root and grant no
+durable CAS authority. Before signing, the writer compares every prepared node,
+content layout, and exact unique `(digest, size)` inventory with the projected
+v3 authority. It then writes the object root and occupied fan-out directories,
+in-memory controls, and the lexically ordered object set through one private
+same-directory temporary tar/gzip output while hashing every compressed byte.
+Only the completed file is changed to mode `0644` and atomically published;
+short, extra, changed, missing, or conflicting evidence leaves the final path
+unchanged. Caller-owned independent archive reopen and persistence remain the
+separate trust and durability boundary. Permanent transaction and repository
+CAS paths do not use this ephemeral API and retain their durability barriers.
 
 ## Key Types
 
@@ -57,6 +69,7 @@ not use this ephemeral API and retain their durability barriers.
 | `CcsBuilder` | builder.rs + builder/source.rs | Describes a CCS package from filesystem metadata and reopenable payload sources |
 | `CcsInstallPrefix` | builder.rs | Validated absolute mapping for source-root children; the prefix and its ancestors are not package entries |
 | `BuildResult` | builder.rs | Output: manifest, components, files, reopenable payload sources, total_size |
+| Prepared payload object set | builder/payload_preparation.rs | Operation-private one-pass file-layout and exact object evidence consumed before signing and archive emission |
 | `CcsPackage` | package.rs | Parsed .ccs file ready for installation via PackageFormat trait |
 | CCS package projection | package/v3_projection.rs | Project verified signed v3 authority into install-time package data |
 | `AuthorityDocumentV3` | v3/schema.rs | Signed CCS v3 native package authority |

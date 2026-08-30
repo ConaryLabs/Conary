@@ -6,7 +6,7 @@ use crate::server::conversion::{
     ConversionBenchmarkView, ConversionBenchmarkViews,
 };
 use crate::server::conversion_timing::{
-    ConversionNestedPhase, ConversionPhase, ConversionSourceIdentity, ConversionTimingReport,
+    ConversionPhase, ConversionSourceIdentity, ConversionTimingReport,
 };
 use conary_core::repository::catalog::CatalogVerificationEvidenceV1;
 use std::os::unix::fs::symlink;
@@ -111,7 +111,11 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
     if cold {
         timing.record(
             ConversionPhase::NativeArchiveParseAndSpool,
-            Duration::from_millis(7),
+            Duration::from_millis(6),
+        );
+        timing.record(
+            ConversionPhase::PayloadDerivationAndObjectStaging,
+            Duration::from_millis(1),
         );
         timing.record(
             ConversionPhase::CompleteArchiveCopy,
@@ -133,10 +137,24 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.repository_checksum_bytes_hashed = 5;
         timing.work.source_artifact_bytes = 5;
         timing.work.source_bytes_hashed = 5;
-        timing.work.native_payload_files_spooled = 1;
-        timing.work.native_payload_bytes_spooled = 5;
-        timing.work.native_payload_declared_bytes = 5;
-        timing.work.native_payload_bytes_hashed = 5;
+        timing.work.native_payload_entries = 2;
+        timing.work.native_payload_regular_files = 2;
+        timing.work.native_payload_files_spooled = 2;
+        timing.work.native_payload_bytes_spooled = 20;
+        timing.work.native_payload_declared_bytes = 20;
+        timing.work.native_payload_bytes_hashed = 20;
+        timing.work.payload_files_examined = 2;
+        timing.work.payload_chunks_derived = 4;
+        timing.work.unique_payload_chunks_derived = 3;
+        timing.work.payload_source_files_opened = 2;
+        timing.work.payload_source_bytes_read = 20;
+        timing.work.payload_chunk_identity_bytes_hashed = 12;
+        timing.work.payload_whole_content_bytes_hashed = 20;
+        timing.work.payload_crypto_bytes_hashed = 32;
+        timing.work.staged_object_bytes_written = 17;
+        timing.work.staged_object_deduplicated_bytes = 3;
+        timing.work.staged_object_deduplications = 1;
+        timing.work.staged_unique_objects = 2;
         timing.work.ccs_output_bytes = 23;
         timing.work.ccs_output_bytes_hashed = 23;
         timing.work.independent_transport_reopen_ccs_bytes = 23;
@@ -167,10 +185,10 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
     timing
 }
 
-fn valid_report() -> ConversionBenchmarkReportV5 {
+fn valid_report() -> ConversionBenchmarkReportV6 {
     let output = valid_output();
-    ConversionBenchmarkReportV5 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V5,
+    ConversionBenchmarkReportV6 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V6,
         environment: ConversionBenchmarkEnvironment {
             hardware_label: "fixture".to_string(),
             remi_version: "0".to_string(),
@@ -277,7 +295,7 @@ fn accepts_one_shared_or_two_concurrent_rpm_digest_passes() {
     else {
         unreachable!()
     };
-    timing.work.native_payload_bytes_hashed = 10;
+    timing.work.native_payload_bytes_hashed = 40;
 
     validate_report(&report).unwrap();
 }
@@ -316,18 +334,105 @@ fn rejects_rpm_projection_spool_reopens_and_impossible_hash_work() {
 }
 
 #[test]
-fn rejects_legacy_schema_and_converter_reopen_members() {
+fn rejects_inconsistent_fused_payload_preparation_work() {
+    for mutate in [
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.payload_files_examined = 1;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.payload_source_files_opened = 1;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.payload_source_bytes_read = 19;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.payload_source_files_reopened = 1;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.payload_source_bytes_reread = 1;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.payload_chunk_identity_bytes_hashed = 21;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.payload_whole_content_bytes_hashed = 19;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.payload_crypto_bytes_hashed = 31;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.staged_object_bytes_written = 16;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.staged_object_deduplicated_bytes = 2;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.staged_object_deduplications = 10;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.staged_unique_objects = 1;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.staged_object_canonical_bytes_reread = 1;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.staged_object_file_syncs = 1;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.staged_object_shard_syncs = 1;
+        },
+        |work: &mut crate::server::conversion_timing::ConversionWorkMetrics| {
+            work.unique_payload_chunks_derived = 5;
+        },
+    ] {
+        let mut report = valid_report();
+        let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+        else {
+            unreachable!()
+        };
+        mutate(&mut timing.work);
+
+        assert!(validate_report(&report).is_err());
+    }
+}
+
+#[test]
+fn rejects_missing_or_repeated_fused_payload_preparation_phase() {
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+    else {
+        unreachable!()
+    };
+    timing
+        .phases
+        .retain(|phase| phase.phase != ConversionPhase::PayloadDerivationAndObjectStaging);
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
+    else {
+        unreachable!()
+    };
+    timing.record(
+        ConversionPhase::PayloadDerivationAndObjectStaging,
+        Duration::ZERO,
+    );
+    assert!(validate_report(&report).is_err());
+}
+
+#[test]
+fn rejects_retired_schema_payload_fields_and_phases() {
     let mut legacy_schema = valid_report();
-    legacy_schema.schema_version = 4;
+    legacy_schema.schema_version = 5;
     assert!(validate_report(&legacy_schema).is_err());
 
     let mut missing_reopen_counter = serde_json::to_value(valid_report()).unwrap();
     missing_reopen_counter["repetitions"][0]["outcome"]["timing"]["work"]
         .as_object_mut()
         .unwrap()
-        .remove("native_payload_spool_file_reopens");
+        .remove("payload_source_files_reopened");
     let error =
-        serde_json::from_value::<ConversionBenchmarkReportV5>(missing_reopen_counter).unwrap_err();
+        serde_json::from_value::<ConversionBenchmarkReportV6>(missing_reopen_counter).unwrap_err();
     assert!(error.to_string().contains("missing field"), "{error}");
 
     let mut legacy_work = serde_json::to_value(valid_report()).unwrap();
@@ -335,10 +440,10 @@ fn rejects_legacy_schema_and_converter_reopen_members() {
         .as_object_mut()
         .unwrap()
         .insert(
-            "immediate_converter_reopen_ccs_bytes".to_string(),
-            serde_json::json!(23),
+            "payload_reference_bytes_read".to_string(),
+            serde_json::json!(20),
         );
-    let error = serde_json::from_value::<ConversionBenchmarkReportV5>(legacy_work).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkReportV6>(legacy_work).unwrap_err();
     assert!(error.to_string().contains("unknown field"), "{error}");
 
     let mut legacy_phase = serde_json::to_value(valid_report()).unwrap();
@@ -346,11 +451,19 @@ fn rejects_legacy_schema_and_converter_reopen_members() {
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({
-            "phase": "immediate_converter_reopen",
+            "phase": "payload_reference_derivation",
             "duration_ms": 1,
         }));
-    let error = serde_json::from_value::<ConversionBenchmarkReportV5>(legacy_phase).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkReportV6>(legacy_phase).unwrap_err();
     assert!(error.to_string().contains("unknown variant"), "{error}");
+
+    let mut legacy_nested = serde_json::to_value(valid_report()).unwrap();
+    legacy_nested["repetitions"][0]["outcome"]["timing"]
+        .as_object_mut()
+        .unwrap()
+        .insert("nested_phases".to_string(), serde_json::json!([]));
+    let error = serde_json::from_value::<ConversionBenchmarkReportV6>(legacy_nested).unwrap_err();
+    assert!(error.to_string().contains("unknown field"), "{error}");
 }
 
 #[test]
@@ -708,18 +821,6 @@ fn rejects_hot_evidence_outside_the_exact_cache_hit_path() {
     else {
         unreachable!()
     };
-    timing.record_nested(
-        ConversionNestedPhase::TemporaryObjectStaging,
-        ConversionPhase::PayloadObjectEmission,
-        Duration::from_millis(1),
-    );
-    assert!(validate_report(&report).is_err());
-
-    let mut report = valid_report();
-    let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[1].outcome
-    else {
-        unreachable!()
-    };
     timing.skipped_phases.swap(0, 1);
     assert!(validate_report(&report).is_err());
 
@@ -801,7 +902,7 @@ fn strict_schema_rejects_unknown_top_level_fields() {
         "portable_chunk_count": 1
     });
     let mut value = serde_json::json!({
-        "schema_version": CONVERSION_BENCHMARK_SCHEMA_V5,
+        "schema_version": CONVERSION_BENCHMARK_SCHEMA_V6,
         "environment": {
             "hardware_label": "fixture",
             "remi_version": "0",
@@ -861,6 +962,6 @@ fn strict_schema_rejects_unknown_top_level_fields() {
         .as_object_mut()
         .unwrap()
         .insert("legacy_v2_field".to_string(), serde_json::Value::Bool(true));
-    let error = serde_json::from_value::<ConversionBenchmarkReportV5>(value).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkReportV6>(value).unwrap_err();
     assert!(error.to_string().contains("unknown field"), "{error}");
 }

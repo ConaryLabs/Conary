@@ -1862,8 +1862,8 @@ test_check_release_matrix_rejects_raw_conversion_benchmark_upload() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '            remi-conversion-benchmark-public-v3.json' \
-        $'            remi-conversion-benchmark-public-v3.json\n            conversion-benchmark-v5.json'
+        '            remi-conversion-benchmark-public-v4.json' \
+        $'            remi-conversion-benchmark-public-v4.json\n            conversion-benchmark-v6.json'
 
     assert_check_release_matrix_fails \
         "$repo" \
@@ -1953,8 +1953,8 @@ test_check_release_matrix_rejects_fractional_conversion_benchmark_timing() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                type == "number" and . >= 0 and floor == .;' \
-        '                type == "number" and . >= 0;'
+        $'                and . <= 9007199254740991\n                and floor == .;' \
+        $'                and . <= 9007199254740991\n                and true;'
 
     assert_check_release_matrix_fails \
         "$repo" \

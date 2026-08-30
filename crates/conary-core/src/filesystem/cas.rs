@@ -30,7 +30,7 @@ mod stream;
 mod verified_batch;
 mod write_batch;
 
-pub(crate) use ephemeral::{EphemeralObjectStore, EphemeralObjectStoreMetrics};
+pub(crate) use ephemeral::{EphemeralObjectStageMetrics, EphemeralObjectStore};
 pub use liveness::CasObjectCollectionSession;
 pub(crate) use liveness::CasObjectLivenessLease;
 pub use stream::ExpectedReaderStoreMetrics;

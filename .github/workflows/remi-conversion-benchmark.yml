@@ -808,7 +808,10 @@ jobs:
             --argjson source_size_bytes "$SOURCE_SIZE_BYTES" '
               def sha256: type == "string" and test("^[0-9a-f]{64}$");
               def uint:
-                type == "number" and . >= 0 and floor == .;
+                type == "number"
+                and . >= 0
+                and . <= 9007199254740991
+                and floor == .;
               def positive_uint:
                 uint and . > 0;
               def expected_roots: [
@@ -826,7 +829,6 @@ jobs:
               def timing_shape_without_work:
                 (keys | sort) == [
                   "distro",
-                  "nested_phases",
                   "package",
                   "phases",
                   "skipped_phases",
@@ -856,12 +858,6 @@ jobs:
                 and all(.phases[];
                   (keys | sort) == ["duration_ms", "phase"]
                   and (.phase | type == "string" and length > 0)
-                  and (.duration_ms | uint))
-                and (.nested_phases | type == "array")
-                and all(.nested_phases[];
-                  (keys | sort) == ["duration_ms", "included_in", "phase"]
-                  and (.phase | type == "string" and length > 0)
-                  and (.included_in | type == "string" and length > 0)
                   and (.duration_ms | uint))
                 and (.skipped_phases | type == "array")
                 and all(.skipped_phases[]; type == "string" and length > 0)
@@ -908,27 +904,28 @@ jobs:
                   "native_payload_spool_file_syncs",
                   "native_source_archive_bytes_read",
                   "native_source_archive_opens",
+                  "payload_chunk_identity_bytes_hashed",
                   "payload_chunks_derived",
+                  "payload_crypto_bytes_hashed",
                   "payload_files_examined",
-                  "payload_files_reopened",
-                  "payload_object_bytes_read",
-                  "payload_reference_bytes_hashed",
-                  "payload_reference_bytes_read",
+                  "payload_source_bytes_read",
+                  "payload_source_bytes_reread",
+                  "payload_source_files_opened",
+                  "payload_source_files_reopened",
+                  "payload_whole_content_bytes_hashed",
                   "r2",
                   "repository_checksum_bytes_hashed",
-                  "second_pass_chunk_reference_bytes_hashed",
-                  "second_pass_reconstructed_content_bytes_hashed",
                   "signed_object_bytes",
                   "signed_object_count",
                   "source_artifact_bytes",
                   "source_bytes_hashed",
-                  "temporary_object_bytes_written",
-                  "temporary_object_canonical_bytes_reread",
-                  "temporary_object_file_syncs",
-                  "temporary_object_hits",
-                  "temporary_object_incoming_bytes_hashed",
-                  "temporary_object_misses",
-                  "temporary_object_shard_syncs",
+                  "staged_object_bytes_written",
+                  "staged_object_canonical_bytes_reread",
+                  "staged_object_deduplicated_bytes",
+                  "staged_object_deduplications",
+                  "staged_object_file_syncs",
+                  "staged_object_shard_syncs",
+                  "staged_unique_objects",
                   "unique_payload_chunks_derived"
                 ]
                 and ([to_entries[] | select(.key != "r2") | .value]
@@ -975,10 +972,9 @@ jobs:
                   | select(.phase == "native_archive_parse_and_spool"
                     or .phase == "artifact_identity_and_authority_validation"
                     or .phase == "metadata_lifecycle_and_authority_projection"
-                    or .phase == "payload_reference_derivation"
                     or .phase == "output_workspace_preparation"
+                    or .phase == "payload_derivation_and_object_staging"
                     or .phase == "control_projection_and_signing"
-                    or .phase == "payload_object_emission"
                     or .phase == "archive_assembly_and_gzip"
                     or .phase == "native_provenance_projection")
                   | .duration_ms] | add // 0);
@@ -1004,10 +1000,10 @@ jobs:
                 "setup",
                 "subject"
               ]
-              and .schema_version == 3
+              and .schema_version == 4
               and (.raw_report | keys | sort)
                 == ["schema_version", "sha256", "size_bytes"]
-              and .raw_report.schema_version == 5
+              and .raw_report.schema_version == 6
               and (.raw_report.sha256 | sha256)
               and (.raw_report.size_bytes | type == "number")
               and .raw_report.size_bytes > 0
@@ -1061,23 +1057,15 @@ jobs:
                 "native_archive_parse_and_spool",
                 "artifact_identity_and_authority_validation",
                 "metadata_lifecycle_and_authority_projection",
-                "payload_reference_derivation",
                 "output_workspace_preparation",
+                "payload_derivation_and_object_staging",
                 "control_projection_and_signing",
-                "payload_object_emission",
                 "archive_assembly_and_gzip",
                 "native_provenance_projection",
                 "complete_archive_copy",
                 "independent_transport_reopen",
                 "complete_archive_hash",
                 "database_persistence"
-              ]
-              and $cold.timing.nested_phases == [
-                {
-                  phase: "temporary_object_staging",
-                  included_in: "payload_object_emission",
-                  duration_ms: $cold.timing.nested_phases[0].duration_ms
-                }
               ]
               and $cold.timing.skipped_phases == [
                 "download",
@@ -1099,6 +1087,46 @@ jobs:
                 and $work.repository_checksum_bytes_hashed == $source_size_bytes
                 and $work.source_artifact_bytes == $source_size_bytes
                 and $work.source_bytes_hashed == $source_size_bytes
+                and $work.payload_files_examined == $work.native_payload_entries
+                and $work.payload_source_files_opened
+                  == $work.native_payload_regular_files
+                and $work.payload_source_files_reopened == 0
+                and $work.payload_source_bytes_read
+                  == $work.native_payload_declared_bytes
+                and $work.payload_source_bytes_reread == 0
+                and $work.payload_whole_content_bytes_hashed
+                  == $work.payload_source_bytes_read
+                and $work.payload_chunk_identity_bytes_hashed
+                  <= $work.payload_source_bytes_read
+                and $work.payload_chunk_identity_bytes_hashed
+                  <= (9007199254740991
+                    - $work.payload_whole_content_bytes_hashed)
+                and $work.payload_crypto_bytes_hashed
+                  == ($work.payload_chunk_identity_bytes_hashed
+                    + $work.payload_whole_content_bytes_hashed)
+                and $work.unique_payload_chunks_derived
+                  <= $work.payload_chunks_derived
+                and $work.staged_unique_objects
+                  <= (9007199254740991
+                    - $work.staged_object_deduplications)
+                and $work.payload_chunks_derived
+                  <= (9007199254740991
+                    - $work.payload_source_files_opened)
+                and ($work.staged_unique_objects
+                  + $work.staged_object_deduplications)
+                    <= ($work.payload_chunks_derived
+                      + $work.payload_source_files_opened)
+                and $work.staged_unique_objects == $output.signed_object_count
+                and $work.staged_object_bytes_written == $output.signed_object_bytes
+                and $work.staged_object_bytes_written
+                  <= (9007199254740991
+                    - $work.staged_object_deduplicated_bytes)
+                and ($work.staged_object_bytes_written
+                  + $work.staged_object_deduplicated_bytes)
+                    == $work.payload_source_bytes_read
+                and $work.staged_object_canonical_bytes_reread == 0
+                and $work.staged_object_file_syncs == 0
+                and $work.staged_object_shard_syncs == 0
                 and (if $profile == "fedora-44" then
                   $work.native_payload_files_spooled > 0
                   and $work.native_payload_bytes_spooled > 0
@@ -1138,7 +1166,6 @@ jobs:
                 "package_lookup",
                 "cache_lookup"
               ]
-              and $hot.timing.nested_phases == []
               and $hot.timing.skipped_phases == [
                 "local_artifact_admission",
                 "download",
@@ -1146,10 +1173,9 @@ jobs:
                 "native_archive_parse_and_spool",
                 "artifact_identity_and_authority_validation",
                 "metadata_lifecycle_and_authority_projection",
-                "payload_reference_derivation",
                 "output_workspace_preparation",
+                "payload_derivation_and_object_staging",
                 "control_projection_and_signing",
-                "payload_object_emission",
                 "archive_assembly_and_gzip",
                 "native_provenance_projection",
                 "complete_archive_copy",
@@ -1178,7 +1204,7 @@ jobs:
               exit 1
           }
 
-          cp -- "$local_transport" remi-conversion-benchmark-public-v3.json
+          cp -- "$local_transport" remi-conversion-benchmark-public-v4.json
           {
             echo "result=success"
             echo "benchmark_id=$benchmark_id"
@@ -1205,7 +1231,7 @@ jobs:
         with:
           name: remi-conversion-benchmark-${{ inputs.deployment_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            remi-conversion-benchmark-public-v3.json
+            remi-conversion-benchmark-public-v4.json
             remi-conversion-source-verification-v1.json
             remi-deployment-inspection.json
             remi-candidate-manifest.json
@@ -1246,7 +1272,7 @@ jobs:
               | "- iteration \(.iteration) `\(.cache_state)`: "
                 + "conversion core \(.views.conversion_core.duration_ms) ms; "
                 + "end to end \(.views.end_to_end.duration_ms) ms"' \
-              remi-conversion-benchmark-public-v3.json
+              remi-conversion-benchmark-public-v4.json
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail closed on unsuccessful benchmark result

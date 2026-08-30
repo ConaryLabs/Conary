@@ -1,11 +1,11 @@
 // apps/remi/src/server/conversion/benchmark/report.rs
-//! Strict schema-v5 validation and durable report publication.
+//! Strict schema-v6 validation and durable report publication.
 
 use super::{
-    CONVERSION_BENCHMARK_SCHEMA_V5, ConversionBenchmarkCatalogAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V6, ConversionBenchmarkCatalogAuthority,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkEvidence,
     ConversionBenchmarkOutcome, ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage,
-    ConversionBenchmarkReportV5, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, PublishedInode,
+    ConversionBenchmarkReportV6, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, PublishedInode,
     REPORT_FILE_NAME, conversion_core_duration, rollback_failed_publication, sync_parent,
     validate_sha256,
 };
@@ -22,17 +22,16 @@ use std::path::Path;
 const HOT_EXECUTED_PHASES: [ConversionPhase; 2] =
     [ConversionPhase::PackageLookup, ConversionPhase::CacheLookup];
 
-const HOT_SKIPPED_PHASES: [ConversionPhase; 18] = [
+const HOT_SKIPPED_PHASES: [ConversionPhase; 17] = [
     ConversionPhase::LocalArtifactAdmission,
     ConversionPhase::Download,
     ConversionPhase::Checksum,
     ConversionPhase::NativeArchiveParseAndSpool,
     ConversionPhase::ArtifactIdentityAndAuthorityValidation,
     ConversionPhase::MetadataLifecycleAndAuthorityProjection,
-    ConversionPhase::PayloadReferenceDerivation,
     ConversionPhase::OutputWorkspacePreparation,
+    ConversionPhase::PayloadDerivationAndObjectStaging,
     ConversionPhase::ControlProjectionAndSigning,
-    ConversionPhase::PayloadObjectEmission,
     ConversionPhase::ArchiveAssemblyAndGzip,
     ConversionPhase::NativeProvenanceProjection,
     ConversionPhase::CompleteArchiveCopy,
@@ -43,9 +42,9 @@ const HOT_SKIPPED_PHASES: [ConversionPhase; 18] = [
     ConversionPhase::DatabasePersistence,
 ];
 
-pub(super) fn validate_report(report: &ConversionBenchmarkReportV5) -> Result<()> {
+pub(super) fn validate_report(report: &ConversionBenchmarkReportV6) -> Result<()> {
     ensure!(
-        report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V5,
+        report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V6,
         "conversion benchmark schema {} is unsupported",
         report.schema_version
     );
@@ -165,7 +164,7 @@ fn validate_terminal_failure(
 }
 
 fn validate_completed_conversion(
-    report: &ConversionBenchmarkReportV5,
+    report: &ConversionBenchmarkReportV6,
     repetition: &ConversionBenchmarkEvidence,
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
@@ -234,6 +233,7 @@ fn validate_completed_conversion(
             "cold benchmark source-artifact work contradicts the exact subject size"
         );
         validate_cold_native_parse(profile.package_format(), timing)?;
+        validate_cold_payload_preparation(timing)?;
         validate_cold_fused_cas(timing)?;
     } else {
         ensure!(
@@ -249,10 +249,6 @@ fn validate_completed_conversion(
             "hot benchmark executed phases differ from the exact cache-hit path"
         );
         ensure!(
-            timing.nested_phases.is_empty(),
-            "hot benchmark recorded nested conversion work"
-        );
-        ensure!(
             timing
                 .skipped_phases
                 .iter()
@@ -266,6 +262,61 @@ fn validate_completed_conversion(
             timing.work
         );
     }
+    Ok(())
+}
+
+fn validate_cold_payload_preparation(
+    timing: &crate::server::conversion_timing::ConversionTimingReport,
+) -> Result<()> {
+    let work = &timing.work;
+    let expected_crypto_bytes = work
+        .payload_chunk_identity_bytes_hashed
+        .checked_add(work.payload_whole_content_bytes_hashed)
+        .context("payload preparation cryptographic-byte count overflow")?;
+    let expected_source_bytes = work
+        .staged_object_bytes_written
+        .checked_add(work.staged_object_deduplicated_bytes)
+        .context("payload preparation staged-byte count overflow")?;
+    let staged_object_attempts = work
+        .staged_unique_objects
+        .checked_add(work.staged_object_deduplications)
+        .context("payload preparation staged-object attempt count overflow")?;
+    let maximum_staged_object_attempts = work
+        .payload_chunks_derived
+        .checked_add(work.payload_source_files_opened)
+        .context("payload preparation maximum object-attempt count overflow")?;
+    ensure!(
+        work.payload_files_examined == work.native_payload_entries
+            && work.payload_source_files_opened == work.native_payload_regular_files
+            && work.payload_source_bytes_read == work.native_payload_declared_bytes
+            && work.payload_source_files_reopened == 0
+            && work.payload_source_bytes_reread == 0
+            && work.payload_whole_content_bytes_hashed == work.payload_source_bytes_read
+            && work.payload_chunk_identity_bytes_hashed <= work.payload_source_bytes_read
+            && work.payload_crypto_bytes_hashed == expected_crypto_bytes
+            && work.staged_object_bytes_written == work.signed_object_bytes
+            && work.staged_unique_objects == work.signed_object_count
+            && staged_object_attempts <= maximum_staged_object_attempts
+            && expected_source_bytes == work.payload_source_bytes_read
+            && work.staged_object_canonical_bytes_reread == 0
+            && work.staged_object_file_syncs == 0
+            && work.staged_object_shard_syncs == 0
+            && work.unique_payload_chunks_derived <= work.payload_chunks_derived,
+        "cold benchmark did not derive and stage its exact payload in one physical source pass"
+    );
+    let mut phases = timing
+        .phases
+        .iter()
+        .filter(|phase| phase.phase == ConversionPhase::PayloadDerivationAndObjectStaging);
+    ensure!(
+        phases.next().is_some()
+            && phases.next().is_none()
+            && !timing
+                .skipped_phases
+                .iter()
+                .any(|phase| { phase.phase == ConversionPhase::PayloadDerivationAndObjectStaging }),
+        "cold benchmark did not record exactly one fused payload preparation phase"
+    );
     Ok(())
 }
 
@@ -371,7 +422,7 @@ fn validate_cold_fused_cas(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_successful_repetition(
-    report: &ConversionBenchmarkReportV5,
+    report: &ConversionBenchmarkReportV6,
     repetition: &ConversionBenchmarkEvidence,
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
@@ -574,7 +625,7 @@ fn validate_process_usage(usage: &ConversionBenchmarkProcessUsage, label: &str) 
 
 pub(super) fn publish_and_reopen_report(
     path: &Path,
-    report: &ConversionBenchmarkReportV5,
+    report: &ConversionBenchmarkReportV6,
 ) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
@@ -688,8 +739,8 @@ pub(super) fn publish_and_reopen_report(
             reopened_bytes == bytes,
             "reopened conversion benchmark report changed bytes"
         );
-        let reopened: ConversionBenchmarkReportV5 = serde_json::from_slice(&reopened_bytes)
-            .context("strictly reopen published conversion benchmark schema v5")?;
+        let reopened: ConversionBenchmarkReportV6 = serde_json::from_slice(&reopened_bytes)
+            .context("strictly reopen published conversion benchmark schema v6")?;
         validate_report(&reopened)?;
         ensure!(
             serde_json::to_value(&reopened)? == serde_json::to_value(report)?,

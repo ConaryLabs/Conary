@@ -5,12 +5,9 @@
 //! `builder.rs` focuses on scanning and assembling build state; this module
 //! owns the final archive-writing and manifest serialization steps.
 
-mod output_identity;
-
-use super::BuildResult;
+use super::{BuildResult, PayloadPreparationMetrics, PreparedPayloadObjectSet};
 use anyhow::{Context, Result};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,42 +15,32 @@ use std::time::{Duration, Instant};
 /// Exact phase and work evidence from one streamed CCS v3 package emission.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CcsPackageWriteMetrics {
+    pub payload_derivation_and_object_staging: Duration,
     pub control_projection_and_signing: Duration,
-    pub payload_object_emission: Duration,
-    pub temporary_object_staging: Duration,
     pub archive_assembly_and_gzip: Duration,
-    pub payload_files_traversed: u64,
-    pub payload_bytes_read: u64,
-    pub chunk_reference_bytes_hashed: u64,
-    pub reconstructed_content_bytes_hashed: u64,
-    pub temporary_object_incoming_bytes_hashed: u64,
-    pub temporary_object_bytes_written: u64,
-    pub temporary_object_canonical_bytes_reread: u64,
-    pub temporary_object_hits: u64,
-    pub temporary_object_misses: u64,
-    pub temporary_object_file_syncs: u64,
-    pub temporary_object_shard_syncs: u64,
+    pub payload_files_examined: u64,
+    pub payload_chunks_derived: u64,
+    pub unique_payload_chunks_derived: u64,
+    pub payload_source_files_opened: u64,
+    pub payload_source_bytes_read: u64,
+    pub payload_source_files_reopened: u64,
+    pub payload_source_bytes_reread: u64,
+    pub payload_chunk_identity_bytes_hashed: u64,
+    pub payload_whole_content_bytes_hashed: u64,
+    pub payload_crypto_bytes_hashed: u64,
+    pub staged_object_bytes_written: u64,
+    pub staged_object_deduplicated_bytes: u64,
+    pub staged_object_deduplications: u64,
+    pub staged_unique_objects: u64,
+    pub staged_object_canonical_bytes_reread: u64,
+    pub staged_object_file_syncs: u64,
+    pub staged_object_shard_syncs: u64,
     pub archive_members_traversed: u64,
     pub archive_input_bytes: u64,
     pub ccs_output_sha256: String,
     pub ccs_output_bytes: u64,
     pub ccs_output_bytes_hashed: u64,
     pub maximum_retained_staging_bytes: u64,
-}
-
-#[derive(Default)]
-struct PayloadObjectEmissionMetrics {
-    staging: Duration,
-    payload_bytes_read: u64,
-    chunk_reference_bytes_hashed: u64,
-    reconstructed_content_bytes_hashed: u64,
-    store: crate::filesystem::ExpectedReaderStoreMetrics,
-}
-
-#[derive(Default)]
-struct ArchiveTraversalMetrics {
-    members: u64,
-    input_bytes: u64,
 }
 
 /// Explicit ceiling for test-only in-memory fixture input.
@@ -178,62 +165,55 @@ pub fn write_v3_ccs_package_from_sources_with_metrics(
     build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
 ) -> Result<CcsPackageWriteMetrics> {
-    let mut by_path = std::collections::HashMap::with_capacity(payloads.len());
-    for file in payloads {
-        if by_path.insert(file.path.as_str(), file).is_some() {
-            anyhow::bail!("payload source path {} appears more than once", file.path);
-        }
-    }
-    write_v3_ccs_package_with_open(
+    let output_parent = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let prepared =
+        PreparedPayloadObjectSet::prepare_for_authority(payloads, authority, output_parent)?;
+    write_v3_ccs_package_from_prepared_with_metrics(
         authority,
+        &prepared,
         output_path,
         signing_key,
         debug_toml,
         build_attestation,
         foreign_conversion_boundary,
-        |path| {
-            by_path
-                .get(path)
-                .with_context(|| format!("missing payload source for {path}"))?
-                .open_content()
-                .map(|reader| reader as Box<dyn std::io::Read>)
-                .map_err(anyhow::Error::from)
-        },
     )
 }
 
-fn write_v3_ccs_package_with_open<'a>(
+/// Emit final controls and objects from one already authenticated preparation.
+pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
     authority: &crate::ccs::v3::AuthorityDocumentV3,
+    prepared: &PreparedPayloadObjectSet,
     output_path: &Path,
     signing_key: &super::super::signing::SigningKeyPair,
     debug_toml: Option<&str>,
     build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
     foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
-    mut open_payload: impl FnMut(&str) -> Result<Box<dyn std::io::Read + 'a>>,
 ) -> Result<CcsPackageWriteMetrics> {
     use crate::ccs::budget::CCS_BUDGET;
     use crate::ccs::v3::schema::PackageKindV3;
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
-    use tar::Builder;
+    use std::collections::BTreeMap;
 
-    let mut metrics = CcsPackageWriteMetrics::default();
+    let mut metrics = metrics_from_preparation(prepared.metrics());
     let control_started = Instant::now();
     // Authoring preflight and verification share one structural-budget owner,
     // so a package this writer emits is admissible to the reader by
     // construction rather than by coincidence.
     let census =
         crate::ccs::v3::authority_census(authority).map_err(|error| anyhow::anyhow!("{error}"))?;
-    let output_parent = output_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let temp_dir = tempfile::Builder::new()
-        .prefix(".conary-ccs-package-")
-        .tempdir_in(output_parent)?;
+    prepared.reconcile_authority(authority)?;
+    let PackageKindV3::Package(data) = &authority.kind else {
+        anyhow::bail!("v3 writer only writes package payloads");
+    };
+    for file in &data.files {
+        if !authority.components.contains_key(&file.component) {
+            anyhow::bail!("missing component {}", file.component);
+        }
+    }
     let manifest_cbor = authority.to_cbor()?;
     CCS_BUDGET.admit_encoded_authority(&census, manifest_cbor.len() as u64)?;
-    fs::write(temp_dir.path().join("MANIFEST"), &manifest_cbor)?;
     if let Some(debug_toml) = debug_toml {
         CCS_BUDGET.admit_control_bytes(
             crate::ccs::budget::BudgetDimension::DebugProjectionBytes,
@@ -241,20 +221,18 @@ fn write_v3_ccs_package_with_open<'a>(
             debug_toml.len() as u64,
             CCS_BUDGET.debug_projection_bytes_ceiling(&census)?,
         )?;
-        fs::write(temp_dir.path().join("MANIFEST.toml"), debug_toml)?;
     }
-    if let Some(build_attestation) = build_attestation {
-        let encoded = serde_json::to_string_pretty(build_attestation)?;
-        admit_attestation_document(&encoded, "MANIFEST.attestation.json")?;
-        fs::write(temp_dir.path().join("MANIFEST.attestation.json"), encoded)?;
+    let build_attestation_document = build_attestation
+        .map(serde_json::to_string_pretty)
+        .transpose()?;
+    if let Some(encoded) = build_attestation_document.as_deref() {
+        admit_attestation_document(encoded, "MANIFEST.attestation.json")?;
     }
-    if let Some(foreign_conversion_boundary) = foreign_conversion_boundary {
-        let encoded = serde_json::to_string_pretty(foreign_conversion_boundary)?;
-        admit_attestation_document(&encoded, "MANIFEST.conversion-boundary.json")?;
-        fs::write(
-            temp_dir.path().join("MANIFEST.conversion-boundary.json"),
-            encoded,
-        )?;
+    let foreign_conversion_boundary_document = foreign_conversion_boundary
+        .map(serde_json::to_string_pretty)
+        .transpose()?;
+    if let Some(encoded) = foreign_conversion_boundary_document.as_deref() {
+        admit_attestation_document(encoded, "MANIFEST.conversion-boundary.json")?;
     }
     let signature = signing_key.sign(&manifest_cbor);
     let signature_document = serde_json::to_string_pretty(&signature)?;
@@ -264,65 +242,38 @@ fn write_v3_ccs_package_with_open<'a>(
         signature_document.len() as u64,
         CCS_BUDGET.signature_bytes_ceiling(),
     )?;
-    fs::write(temp_dir.path().join("MANIFEST.sig"), signature_document)?;
-
-    let PackageKindV3::Package(data) = &authority.kind else {
-        anyhow::bail!("M4a v3 writer only writes package payloads");
-    };
+    let mut controls = BTreeMap::new();
+    controls.insert("MANIFEST", manifest_cbor.as_slice());
+    if let Some(encoded) = build_attestation_document.as_deref() {
+        controls.insert("MANIFEST.attestation.json", encoded.as_bytes());
+    }
+    if let Some(encoded) = foreign_conversion_boundary_document.as_deref() {
+        controls.insert("MANIFEST.conversion-boundary.json", encoded.as_bytes());
+    }
+    controls.insert("MANIFEST.sig", signature_document.as_bytes());
+    if let Some(debug_toml) = debug_toml {
+        controls.insert("MANIFEST.toml", debug_toml.as_bytes());
+    }
     metrics.control_projection_and_signing = control_started.elapsed();
 
-    let objects_dir = temp_dir.path().join("objects");
-    let object_store = crate::filesystem::EphemeralObjectStore::new(&objects_dir)?;
-    let emission_started = Instant::now();
-    for file in &data.files {
-        if !authority.components.contains_key(&file.component) {
-            anyhow::bail!("missing component {}", file.component);
-        }
-        if file.node.kind.is_regular() {
-            let emitted = write_file_objects(file, &object_store, open_payload(&file.path)?)?;
-            metrics.payload_files_traversed = checked_add(
-                metrics.payload_files_traversed,
-                1,
-                "payload file traversal count",
-            )?;
-            metrics.payload_bytes_read = checked_add(
-                metrics.payload_bytes_read,
-                emitted.payload_bytes_read,
-                "payload emission bytes",
-            )?;
-            metrics.chunk_reference_bytes_hashed = checked_add(
-                metrics.chunk_reference_bytes_hashed,
-                emitted.chunk_reference_bytes_hashed,
-                "second-pass chunk-reference bytes",
-            )?;
-            metrics.reconstructed_content_bytes_hashed = checked_add(
-                metrics.reconstructed_content_bytes_hashed,
-                emitted.reconstructed_content_bytes_hashed,
-                "second-pass reconstructed-content bytes",
-            )?;
-            metrics.temporary_object_staging += emitted.staging;
-            add_store_metrics(&mut metrics, emitted.store)?;
-        }
-    }
-    metrics.payload_object_emission = emission_started.elapsed();
-
     let archive_started = Instant::now();
-    let output_file = fs::File::create(output_path)?;
-    let identity_writer = output_identity::ArchiveIdentityWriter::new(output_file);
-    let encoder = GzEncoder::new(identity_writer, Compression::default());
-    let mut archive = Builder::new(encoder);
     let timestamp = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1_704_067_200);
-    let traversal = append_dir_with_mtime(&mut archive, temp_dir.path(), "", timestamp)?;
-    let identity = archive.into_inner()?.finish()?.finish();
+    let emitted = crate::ccs::archive_emitter::write_exact_archive(
+        output_path,
+        timestamp,
+        &controls,
+        prepared.inventory(),
+        |sha256| prepared.open_object(sha256),
+    )?;
     metrics.archive_assembly_and_gzip = archive_started.elapsed();
-    metrics.archive_members_traversed = traversal.members;
-    metrics.archive_input_bytes = traversal.input_bytes;
-    metrics.ccs_output_sha256 = identity.sha256;
-    metrics.ccs_output_bytes = identity.bytes;
-    metrics.ccs_output_bytes_hashed = identity.bytes;
+    metrics.archive_members_traversed = emitted.members;
+    metrics.archive_input_bytes = emitted.input_bytes;
+    metrics.ccs_output_sha256 = emitted.output_sha256;
+    metrics.ccs_output_bytes = emitted.output_bytes;
+    metrics.ccs_output_bytes_hashed = emitted.output_bytes;
     metrics.maximum_retained_staging_bytes = checked_add(
         metrics.archive_input_bytes,
         metrics.ccs_output_bytes,
@@ -331,184 +282,31 @@ fn write_v3_ccs_package_with_open<'a>(
     Ok(metrics)
 }
 
-fn write_file_objects(
-    file: &crate::ccs::v3::schema::FileAuthorityV3,
-    object_store: &crate::filesystem::EphemeralObjectStore,
-    mut reader: Box<dyn std::io::Read + '_>,
-) -> Result<PayloadObjectEmissionMetrics> {
-    use crate::ccs::v3::schema::FileContentLayoutV3;
-
-    let content = file.content.as_ref().with_context(|| {
-        format!(
-            "regular payload node {} has no content authority",
-            file.path
-        )
-    })?;
-    let mut metrics = PayloadObjectEmissionMetrics {
-        payload_bytes_read: content.size,
-        ..Default::default()
-    };
-    match &file.content_layout {
-        FileContentLayoutV3::WholeObject => {
-            let started = Instant::now();
-            let (_, stored) = object_store
-                .store_reader_expected_with_metrics(reader.as_mut(), content.size, &content.sha256)
-                .with_context(|| {
-                    format!(
-                        "payload for {} does not match signed v3 authority",
-                        file.path
-                    )
-                })?;
-            metrics.staging += started.elapsed();
-            add_ephemeral_store_metrics(&mut metrics.store, stored)?;
-            Ok(metrics)
-        }
-        FileContentLayoutV3::FastCdcV2020 {
-            min_size,
-            average_size,
-            max_size,
-            chunks,
-        } => {
-            let chunker =
-                crate::ccs::chunking::Chunker::with_sizes(*min_size, *average_size, *max_size);
-            let mut whole_hasher = crate::hash::Hasher::new(crate::hash::HashAlgorithm::Sha256);
-            let mut index = 0_usize;
-            let processed = chunker.visit_reader_chunks(reader, |chunk| {
-                let signed = chunks.get(index).with_context(|| {
-                    format!(
-                        "payload for {} produces an unsigned chunk at index {index}",
-                        file.path
-                    )
-                })?;
-                let actual = chunk.reference();
-                if &actual != signed {
-                    anyhow::bail!(
-                        "payload for {} chunk {index} is {}/{}, signed authority requires {}/{}",
-                        file.path,
-                        actual.sha256,
-                        actual.size,
-                        signed.sha256,
-                        signed.size
-                    );
-                }
-                whole_hasher.update(&chunk.data);
-                metrics.chunk_reference_bytes_hashed = checked_add(
-                    metrics.chunk_reference_bytes_hashed,
-                    u64::from(chunk.length),
-                    "second-pass chunk-reference bytes",
-                )?;
-                metrics.reconstructed_content_bytes_hashed = checked_add(
-                    metrics.reconstructed_content_bytes_hashed,
-                    u64::from(chunk.length),
-                    "second-pass reconstructed-content bytes",
-                )?;
-                let started = Instant::now();
-                let (_, stored) = object_store.store_reader_expected_with_metrics(
-                    &mut std::io::Cursor::new(&chunk.data),
-                    u64::from(chunk.length),
-                    &signed.sha256,
-                )?;
-                metrics.staging += started.elapsed();
-                add_ephemeral_store_metrics(&mut metrics.store, stored)?;
-                index += 1;
-                Ok(())
-            })?;
-            if index != chunks.len() {
-                anyhow::bail!(
-                    "payload for {} produces {index} chunks, signed authority requires {}",
-                    file.path,
-                    chunks.len()
-                );
-            }
-            let actual = whole_hasher.finalize().value;
-            if processed != content.size || actual != content.sha256 {
-                anyhow::bail!(
-                    "payload for {} reconstructs as {actual}/{processed}, signed whole-file authority requires {}/{}",
-                    file.path,
-                    content.sha256,
-                    content.size
-                );
-            }
-            Ok(metrics)
-        }
-        FileContentLayoutV3::NoContent => {
-            anyhow::bail!(
-                "regular payload node {} declares no content layout",
-                file.path
-            )
-        }
-    }
-}
-
 fn checked_add(left: u64, right: u64, label: &str) -> Result<u64> {
     left.checked_add(right)
         .with_context(|| format!("{label} overflow"))
 }
 
-fn add_ephemeral_store_metrics(
-    total: &mut crate::filesystem::ExpectedReaderStoreMetrics,
-    value: crate::filesystem::EphemeralObjectStoreMetrics,
-) -> Result<()> {
-    total.incoming_bytes_hashed = checked_add(
-        total.incoming_bytes_hashed,
-        value.incoming_bytes_hashed,
-        "temporary object incoming hash bytes",
-    )?;
-    total.temporary_bytes_written = checked_add(
-        total.temporary_bytes_written,
-        value.temporary_bytes_written,
-        "temporary object write bytes",
-    )?;
-    total.canonical_bytes_reread = checked_add(
-        total.canonical_bytes_reread,
-        value.canonical_bytes_reread,
-        "temporary object canonical reread bytes",
-    )?;
-    total.hits = checked_add(total.hits, value.hits, "temporary object hits")?;
-    total.misses = checked_add(total.misses, value.misses, "temporary object misses")?;
-    Ok(())
-}
-
-fn add_store_metrics(
-    total: &mut CcsPackageWriteMetrics,
-    value: crate::filesystem::ExpectedReaderStoreMetrics,
-) -> Result<()> {
-    total.temporary_object_incoming_bytes_hashed = checked_add(
-        total.temporary_object_incoming_bytes_hashed,
-        value.incoming_bytes_hashed,
-        "temporary object incoming hash bytes",
-    )?;
-    total.temporary_object_bytes_written = checked_add(
-        total.temporary_object_bytes_written,
-        value.temporary_bytes_written,
-        "temporary object write bytes",
-    )?;
-    total.temporary_object_canonical_bytes_reread = checked_add(
-        total.temporary_object_canonical_bytes_reread,
-        value.canonical_bytes_reread,
-        "temporary object canonical reread bytes",
-    )?;
-    total.temporary_object_hits = checked_add(
-        total.temporary_object_hits,
-        value.hits,
-        "temporary object hits",
-    )?;
-    total.temporary_object_misses = checked_add(
-        total.temporary_object_misses,
-        value.misses,
-        "temporary object misses",
-    )?;
-    total.temporary_object_file_syncs = checked_add(
-        total.temporary_object_file_syncs,
-        value.object_file_syncs,
-        "temporary object file syncs",
-    )?;
-    total.temporary_object_shard_syncs = checked_add(
-        total.temporary_object_shard_syncs,
-        value.shard_syncs,
-        "temporary object shard syncs",
-    )?;
-    Ok(())
+fn metrics_from_preparation(value: &PayloadPreparationMetrics) -> CcsPackageWriteMetrics {
+    CcsPackageWriteMetrics {
+        payload_derivation_and_object_staging: value.duration,
+        payload_files_examined: value.files_examined,
+        payload_chunks_derived: value.chunks_derived,
+        unique_payload_chunks_derived: value.unique_chunks_derived,
+        payload_source_files_opened: value.source_files_opened,
+        payload_source_bytes_read: value.source_bytes_read,
+        payload_source_files_reopened: value.source_files_reopened,
+        payload_source_bytes_reread: value.source_bytes_reread,
+        payload_chunk_identity_bytes_hashed: value.chunk_identity_bytes_hashed,
+        payload_whole_content_bytes_hashed: value.whole_content_bytes_hashed,
+        payload_crypto_bytes_hashed: value.crypto_bytes_hashed,
+        staged_object_bytes_written: value.staged_object_bytes_written,
+        staged_object_deduplicated_bytes: value.staged_object_deduplicated_bytes,
+        staged_object_deduplications: value.staged_object_deduplications,
+        staged_unique_objects: value.staged_unique_objects,
+        staged_object_canonical_bytes_reread: value.staged_object_canonical_bytes_reread,
+        ..Default::default()
+    }
 }
 
 /// Admit one attestation-class control document against the shared budget.
@@ -604,91 +402,6 @@ pub fn print_build_summary(result: &BuildResult) {
     }
 }
 
-fn append_dir_with_mtime<W: std::io::Write>(
-    archive: &mut tar::Builder<W>,
-    base_path: &Path,
-    archive_path: &str,
-    mtime: u64,
-) -> Result<ArchiveTraversalMetrics> {
-    let mut entries = Vec::new();
-    collect_archive_entries(base_path, archive_path, &mut entries)?;
-    let mut metrics = ArchiveTraversalMetrics::default();
-    for directories in [true, false] {
-        for (path, entry_archive_path, file_type) in &entries {
-            if file_type.is_dir() != directories {
-                continue;
-            }
-            metrics.members = checked_add(metrics.members, 1, "CCS archive member count")?;
-            if file_type.is_dir() {
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Directory);
-                header.set_mode(0o755);
-                header.set_size(0);
-                header.set_mtime(mtime);
-                header.set_cksum();
-
-                archive.append_data(&mut header, entry_archive_path, std::io::empty())?;
-            } else if file_type.is_file() {
-                let metadata = fs::metadata(path)?;
-                metrics.input_bytes = checked_add(
-                    metrics.input_bytes,
-                    metadata.len(),
-                    "CCS archive input bytes",
-                )?;
-                let mut content = fs::File::open(path)?;
-
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Regular);
-                header.set_mode(metadata.permissions().mode());
-                header.set_size(metadata.len());
-                header.set_mtime(mtime);
-                header.set_cksum();
-
-                archive.append_data(&mut header, entry_archive_path, &mut content)?;
-            } else if file_type.is_symlink() {
-                let target = fs::read_link(path)?;
-
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Symlink);
-                header.set_mode(0o777);
-                header.set_size(0);
-                header.set_mtime(mtime);
-                header.set_cksum();
-
-                archive.append_link(&mut header, entry_archive_path, &target)?;
-            }
-        }
-    }
-    Ok(metrics)
-}
-
-fn collect_archive_entries(
-    base_path: &Path,
-    archive_path: &str,
-    collected: &mut Vec<(std::path::PathBuf, String, std::fs::FileType)>,
-) -> Result<()> {
-    let mut entries = fs::read_dir(base_path)?.collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    for entry in entries {
-        let file_type = entry.file_type()?;
-        let file_name = entry.file_name();
-        let file_name_str = file_name.to_string_lossy();
-
-        let entry_archive_path = if archive_path.is_empty() {
-            file_name_str.to_string()
-        } else {
-            format!("{}/{}", archive_path, file_name_str)
-        };
-        let path = entry.path();
-        collected.push((path.clone(), entry_archive_path.clone(), file_type));
-        if file_type.is_dir() {
-            collect_archive_entries(&path, &entry_archive_path, collected)?;
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -761,5 +474,61 @@ mod tests {
             .find(|(_, is_file)| *is_file)
             .expect("archive carries files");
         assert_eq!(first_file, "MANIFEST", "{entries:?}");
+    }
+
+    #[test]
+    fn invalid_payload_never_replaces_an_existing_complete_archive() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("atomic.ccs");
+        fs::write(&path, b"previous complete archive").unwrap();
+        let authority = crate::ccs::v3::test_support::package_authority_with_one_file("atomic");
+        let payloads = std::collections::BTreeMap::from([(
+            "/usr/bin/hello".to_string(),
+            b"wrong payload".to_vec(),
+        )]);
+        let key = crate::ccs::signing::SigningKeyPair::generate();
+
+        assert!(
+            write_v3_ccs_package_from_bounded_memory_for_tests(
+                &authority, &payloads, &path, &key, None, None, None,
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(path).unwrap(), b"previous complete archive");
+    }
+
+    #[test]
+    fn generic_authoring_preserves_explicit_large_whole_object_layout() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("large-whole.ccs");
+        let bytes = vec![0x6d; crate::ccs::chunking::MIN_CHUNK_SIZE as usize * 2];
+        let mut authority =
+            crate::ccs::v3::test_support::package_authority_with_one_file("large-whole");
+        let crate::ccs::v3::schema::PackageKindV3::Package(package) = &mut authority.kind else {
+            unreachable!()
+        };
+        package.files[0].content.as_mut().unwrap().size = bytes.len() as u64;
+        package.files[0].content.as_mut().unwrap().sha256 = crate::hash::sha256(&bytes);
+        package.files[0].content_layout = crate::ccs::v3::schema::FileContentLayoutV3::WholeObject;
+        authority.components.get_mut("main").unwrap().total_size = bytes.len() as u64;
+        let payloads = std::collections::BTreeMap::from([("/usr/bin/hello".to_string(), bytes)]);
+        let key = crate::ccs::signing::SigningKeyPair::generate();
+
+        write_v3_ccs_package_from_bounded_memory_for_tests(
+            &authority, &payloads, &path, &key, None, None, None,
+        )
+        .unwrap();
+        let inspected = crate::ccs::archive_reader::inspect_untrusted_ccs_archive(
+            fs::File::open(path).unwrap(),
+        )
+        .unwrap();
+        let crate::ccs::v3::schema::PackageKindV3::Package(package) = &inspected.v3_authority.kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            package.files[0].content_layout,
+            crate::ccs::v3::schema::FileContentLayoutV3::WholeObject
+        );
     }
 }

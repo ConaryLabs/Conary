@@ -27,6 +27,7 @@ mod file_capabilities;
 mod input;
 pub mod native_provenance;
 pub mod payload_hints;
+mod payload_preparation;
 pub mod scriptlet_bundle;
 
 pub use converter::{
