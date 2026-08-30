@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-28
-revision: 3
-summary: Record commit-bound reproducible performance evidence, exact command resource metrics, and measured Remi optimization results
+last_updated: 2026-08-30
+revision: 5
+summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results
 ---
 
 # Performance evidence
@@ -32,6 +32,119 @@ a cache is cold or warm; the benchmark driver owns and proves that setup before
 passing the label. Network bytes, CAS work, SQLite statements, durability
 calls, complete-root scans, and internal phase timing remain separate typed
 counters rather than estimates derived from elapsed time.
+
+The current Remi conversion schema-v3 contract treats internal signed-archive
+authentication and permanent verified-CAS admission as one fused physical
+pass. Its full elapsed time is recorded once in the `timing.phases` entry named
+`independent_transport_reopen`; `durable_cas_ingestion` is skipped because
+there is no later object-source pass solely for CAS insertion. The
+archive-authentication and CAS incoming-byte counters describe the same shared
+object SHA-256 pass and must not be summed. Cold isolated evidence requires
+every signed object byte to be persistently written once. A hot repetition's
+conversion `timing.work` is all zero, while its separate benchmark output proof
+still reads and authenticates the persisted CCS after `end_to_end` returns.
+Required chunk-reconstruction validation remains inside the independent signed-
+archive verification boundaries; fusion removes only the later CAS-source pass.
+
+Three reopen fields must not be conflated:
+
+- `timing.phases[phase=immediate_converter_reopen]` is converter-owned signed
+  archive verification and contributes to `conversion_core` and `end_to_end`.
+- `timing.phases[phase=independent_transport_reopen]` is service-owned storage
+  verification after conversion and contributes to `end_to_end`. This is the
+  direct verified-CAS fusion boundary.
+- `output.independent_transport_reopen_ms` is the benchmark's post-conversion
+  proof. It contributes to outer repetition process wall time, but not to
+  `conversion_core` or `end_to_end`. The output proof's separate complete CCS
+  hash has the same boundary.
+
+## Remi direct verified-CAS pre-change anchor: 2026-08-30
+
+Protected production-XFS workflow
+[run 33282246922](https://github.com/FieldmouseWorks/Conary/actions/runs/33282246922)
+is the exact pre-#755 comparison anchor. It ran workflow commit
+`d5c7901734e8c0643f6b718480f56f6e07ef2a43`, selected deployment
+`33278154553`, and measured deployed Remi commit
+`2a8faeb9de6e29afc2883c3b52f87c24c306b3e4`, version 0.16.1, binary SHA-256
+`11680ebb982e49fb38c8eca1d87e87525c8298c8543de327b94e781f4a88bc02`.
+The pinned subject was Fedora profile `fedora-44`, revision
+`c758167a34de67e28a3c516efad0128182d1fe136a0606b2ecb9ef634ebd79e4`,
+package key
+`7646cb1313853d1a8ae069e3c42967fccdf417d178bc647bbaa500a3b1753fc4`,
+and the 1,881,853,676-byte source with SHA-256
+`986cfa5c47b82141f298aefa66b4c68008568b1d00abd80dece8e3d50cd7c73e`.
+
+The sole workflow artifact was ID `9723420073`, 35,038 bytes, with matching API
+and independently downloaded archive SHA-256
+`24778fc85b8073bc90daad75585181ec36e72321a3cdfb539622d2590255fb80`.
+Its public projection was 26,445 bytes with SHA-256
+`6df7d8becdc467a17d87558e1974a87b67ed5811a2b66d32f8717e75138a978f`;
+that projection binds the 30,186-byte private raw schema-v3 report at SHA-256
+`075324524bd620bf576654f67d2415f27ad80e2483c86a68fec3d16c15425408`.
+This commit-bound pre-change schema-v3 record retains the formerly executed CAS
+phase. It is immutable comparison input, not evidence satisfying the current
+fused-phase validation rule.
+
+| Measurement boundary | Cold value | Meaning for #755 |
+| --- | ---: | --- |
+| Repetition process wall | 295.524674 s | Includes conversion and later benchmark output proof |
+| `views.end_to_end` | 246.678 s | Service conversion call compared before and after |
+| `views.conversion_core` | 163.994 s | Includes converter-owned immediate reopen |
+| phase `immediate_converter_reopen` | 39.100 s | Converter verification; not the fusion target |
+| phase `independent_transport_reopen` | 38.282 s | Internal verification half of the fusion target |
+| phase `durable_cas_ingestion` | 17.974 s | Retired second object-source pass |
+| output `independent_transport_reopen_ms` | 40.099 s | Separate post-conversion proof; never credited |
+| output `independent_complete_archive_hash_ms` | 7.876 s | Separate post-conversion complete CCS hash |
+
+The correct pre-change target boundary and comparison formulas are:
+
+```text
+before_target_ms     = 38,282 + 17,974 = 56,256
+target_improvement   = 56,256 - fused_after_ms
+total_improvement    = 246,678 - total_after_ms
+before_residual_ms   = 246,678 - 56,256 = 190,422
+residual_improvement = 190,422 - (total_after_ms - fused_after_ms)
+```
+
+Deleting only the 17.974-second second pass with every other phase fixed gives
+`246.678 - 17.974 = 228.704` seconds. The 17.974-second saving is 7.286% of the
+cold total and 31.950% of the 56.256-second target boundary; 228.704 seconds is
+only the corresponding arithmetic total ceiling, not a latency forecast. The
+after report must execute one fused internal
+`independent_transport_reopen`, skip `durable_cas_ingestion` with the fixed
+reason `fused into independent transport reopen; no post-verification object
+pass`, and retain the separate output proof.
+
+Both repetitions produced the identical 1,950,687,822-byte CCS at SHA-256
+`3b7b0afbaf1b63d32c5c82aa783f1beb1c8278b16b4e4addd792ef94c02866a0`,
+transport SHA-256
+`37502b624ea15f5195fc139fec85a9c4b41213c659d431f175ae3ea8a7fc9fb8`,
+and 49,091-object, 2,639,374,118-byte signed set at SHA-256
+`cf4f448fdcf9f228febaf1767c98adbb0ca2053de4bfe231d7291f7ecf23d186`.
+A comparable after report must preserve that complete authority, subject, and
+output identity; only its deployed source commit and binary digest are expected
+to differ.
+
+Cold work hashed and persistently wrote 2,639,374,118 incoming CAS bytes across
+49,091 misses, with one staged-data barrier and one canonical-name barrier.
+`cas_canonical_bytes_reread`, `cas_fallback_object_syncs`, and
+`cas_fallback_directory_syncs` were all zero on XFS and must remain zero after
+fusion. In the fused result, verifier object hashing and CAS incoming hashing
+describe this same physical pass and must not be added. Hot conversion work,
+including all CAS counters and barriers, was zero. Its 0.412-second
+`end_to_end` view must be distinguished from 48.578324 seconds of outer process
+wall, which includes a 39.394-second independent output reopen and a
+7.891-second complete archive hash.
+
+All ten retained roots reported XFS. Exact profile and source queries demanded
+6,291,456 and 6,619,136 carrier bytes respectively across 11,102,527,488
+catalog bytes, with zero complete userspace catalog hashes,
+SQLite integrity scans, logical replays, short reads, or integrity failures.
+This anchor is one sample; its eventual exact before/after pair is paired
+evidence, not a distribution. `cold` means empty application conversion, cache,
+and CAS state; it does not mean the kernel page cache was dropped. R2 was
+intentionally excluded, and this evidence does not constitute a same-host
+native-package-manager performance comparison.
 
 ## Remi conversion baseline: 2026-08-15
 

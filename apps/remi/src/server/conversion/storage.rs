@@ -19,8 +19,7 @@ const R2_PUBLICATION_CONCURRENCY: usize = 16;
 
 pub(super) struct StoredTransport {
     pub(super) transport: conary_core::ccs::CcsTransportEnvelopeV1,
-    pub(super) verification_duration: Duration,
-    pub(super) cas_duration: Duration,
+    pub(super) verification_and_cas_duration: Duration,
     pub(super) cas_metrics: VerifiedObjectBatchMetrics,
     pub(super) r2_duration: Option<Duration>,
     pub(super) r2_work: crate::server::conversion_timing::ConversionR2Work,
@@ -150,14 +149,20 @@ impl ConversionService {
         )?;
         let policy = conary_core::ccs::TrustPolicy::strict(vec![signing_key.public_key_base64()]);
 
-        let verify_started = Instant::now();
+        let verify_and_cas_started = Instant::now();
         let local_artifact = package_path.to_path_buf();
+        let local_objects_dir = objects_dir.clone();
         let verification = tokio::task::spawn_blocking(move || {
-            conary_core::ccs::verify::verify_package(&local_artifact, &policy)
+            let cas =
+                CasStore::new(local_objects_dir).context("initialize signed CCS object CAS")?;
+            conary_core::ccs::verify::verify_package_into_cas(&local_artifact, &policy, &cas)
         })
         .await
-        .context("join emitted CCS transport verification task")??;
-        let verification_duration = verify_started.elapsed();
+        .context("join emitted CCS transport verification and CAS ingestion task")??;
+        let verification_and_cas_duration = verify_and_cas_started.elapsed();
+        let cas_metrics = verification
+            .verified_object_metrics()
+            .context("permanent CCS verification omitted verified-CAS work evidence")?;
         let transport =
             conary_core::ccs::CcsTransportEnvelopeV1::from_verified_archive(&verification)?;
         let exact_sizes = transport
@@ -170,18 +175,7 @@ impl ConversionService {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-
-        let local_objects_dir = objects_dir.clone();
-        let cas_started = Instant::now();
-        let verified_set = tokio::task::spawn_blocking(move || {
-            let cas =
-                CasStore::new(local_objects_dir).context("initialize signed CCS object CAS")?;
-            conary_core::ccs::transport::persist_verified_archive_objects(&verification, &cas)
-        })
-        .await
-        .context("join signed CCS object persistence task")??;
-        let cas_duration = cas_started.elapsed();
-        let cas_metrics = verified_set.metrics();
+        drop(verification);
 
         // Publish cache bookkeeping only after every durable write succeeds. A
         // failed R2 write must not leave a non-evictable local-only cache row.
@@ -213,8 +207,7 @@ impl ConversionService {
 
         Ok(StoredTransport {
             transport,
-            verification_duration,
-            cas_duration,
+            verification_and_cas_duration,
             cas_metrics,
             r2_duration,
             r2_work,
@@ -265,7 +258,18 @@ impl ConversionService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use conary_core::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
+    use conary_core::ccs::signing::SigningKeyPair;
+    use conary_core::ccs::v3::schema::{
+        AuthorityDocumentV3, ComponentAuthorityV3, FORMAT_VERSION_V3, FileAuthorityV3,
+        FileContentLayoutV3, LifecycleAuthorityV3, PackageDataV3, PackageIdentityV3,
+        PackageKindTagV3, PackageKindV3, ProvenanceAuthorityV3,
+    };
+    use conary_core::payload::{PayloadContentAuthority, PayloadNode};
+    use conary_core::repository::versioning::VersionScheme;
     use std::collections::HashSet;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -325,6 +329,97 @@ mod tests {
         }
     }
 
+    fn signed_package(root: &Path, signer: &SigningKeyPair, payload: &[u8]) -> std::path::PathBuf {
+        let path = root.join("direct-cas.ccs");
+        let payload_path = "/usr/bin/direct-cas".to_string();
+        let authority = AuthorityDocumentV3 {
+            format_version: FORMAT_VERSION_V3,
+            identity: PackageIdentityV3 {
+                name: "direct-cas".to_string(),
+                version: "1.0.0".to_string(),
+                version_scheme: VersionScheme::Conary,
+                release: "1".to_string(),
+                architecture: Some("x86_64".to_string()),
+                debian_multi_arch: None,
+                platform: Some("linux".to_string()),
+                kind: PackageKindTagV3::Package,
+            },
+            kind: PackageKindV3::Package(PackageDataV3 {
+                files: vec![FileAuthorityV3 {
+                    path: payload_path.clone(),
+                    node: PayloadNode::regular(0o755),
+                    content: Some(PayloadContentAuthority {
+                        sha256: conary_core::hash::sha256(payload),
+                        size: payload.len() as u64,
+                    }),
+                    content_layout: FileContentLayoutV3::WholeObject,
+                    component: "main".to_string(),
+                    config: None,
+                    conflict: Default::default(),
+                }],
+                ..Default::default()
+            }),
+            provided_capabilities: Vec::new(),
+            requirements: Vec::new(),
+            relations: Vec::new(),
+            execution_capabilities: None,
+            file_capabilities: Vec::new(),
+            components: BTreeMap::from([(
+                "main".to_string(),
+                ComponentAuthorityV3 {
+                    name: "main".to_string(),
+                    default: true,
+                    file_count: 1,
+                    total_size: payload.len() as u64,
+                },
+            )]),
+            lifecycle: LifecycleAuthorityV3::default(),
+            provenance: ProvenanceAuthorityV3 {
+                origin_class: Some("native-built".to_string()),
+                hardening_level: Some("hermetic".to_string()),
+                build_input_identity: Some("sha256:build-input".to_string()),
+                hermetic_evidence_hash: Some("sha256:evidence".to_string()),
+                foreign_conversion_boundary_hash: None,
+            },
+            debug_toml_sha256: None,
+        };
+        write_v3_ccs_package_from_bounded_memory_for_tests(
+            &authority,
+            &BTreeMap::from([(payload_path, payload.to_vec())]),
+            &path,
+            signer,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        path
+    }
+
+    fn direct_cas_service(
+        root: &Path,
+        signer: &SigningKeyPair,
+    ) -> (ConversionService, std::path::PathBuf) {
+        let keys_dir = root.join("keys");
+        let profile_dir = keys_dir.join("fedora-44");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::set_permissions(&keys_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&profile_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        crate::server::signing_authority::save_fixture_key_pair(
+            signer,
+            &profile_dir.join("targets.private"),
+            &profile_dir.join("targets.public"),
+        )
+        .unwrap();
+
+        let db_path = root.join("remi.db");
+        conary_core::db::init(&db_path).unwrap();
+        let chunk_dir = root.join("chunks");
+        let service = ConversionService::new(chunk_dir.clone(), root.join("cache"), db_path, None)
+            .with_repository_keys_dir(Some(keys_dir));
+        (service, chunk_dir)
+    }
+
     fn stored_objects(
         objects_dir: &Path,
         count: usize,
@@ -359,6 +454,91 @@ mod tests {
     #[test]
     fn calculate_sha256_rejects_a_missing_file() {
         assert!(ConversionService::calculate_sha256(Path::new("/nonexistent/file.pkg")).is_err());
+    }
+
+    #[tokio::test]
+    async fn remi_verification_streams_once_into_cold_and_warm_permanent_cas() {
+        let temp = tempfile::tempdir().unwrap();
+        let signer = SigningKeyPair::generate().with_key_id("targets");
+        let payload = b"direct verified CAS payload";
+        let package = signed_package(temp.path(), &signer, payload);
+        let (service, chunk_dir) = direct_cas_service(temp.path(), &signer);
+
+        let cold = service
+            .store_signed_ccs_path_with_timing(&package, "fedora-44")
+            .await
+            .unwrap();
+        assert_eq!(cold.transport.objects.len(), 1);
+        assert_eq!(cold.cas_metrics.misses, 1);
+        assert_eq!(cold.cas_metrics.hits, 0);
+        assert_eq!(cold.cas_metrics.incoming_bytes_hashed, payload.len() as u64);
+        assert_eq!(
+            cold.cas_metrics.persistent_bytes_written,
+            payload.len() as u64
+        );
+        assert_eq!(cold.cas_metrics.objects_hashed, 1);
+        assert_eq!(cold.cas_metrics.staged_data_barriers, 1);
+        assert_eq!(cold.cas_metrics.canonical_name_barriers, 1);
+        assert_eq!(cold.cas_metrics.canonical_bytes_reread, 0);
+        let object = &cold.transport.objects[0];
+        let cas = CasStore::new(chunk_dir.join("objects")).unwrap();
+        assert_eq!(
+            fs::read(cas.hash_to_path(&object.sha256).unwrap()).unwrap(),
+            payload
+        );
+        let conn = crate::server::open_runtime_db(&service.db_path).unwrap();
+        let persisted_size: i64 = conn
+            .query_row(
+                "SELECT size_bytes FROM chunk_access WHERE hash = ?1",
+                [&object.sha256],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(persisted_size, payload.len() as i64);
+        drop(conn);
+
+        let warm = service
+            .store_signed_ccs_path_with_timing(&package, "fedora-44")
+            .await
+            .unwrap();
+        assert_eq!(warm.transport, cold.transport);
+        assert_eq!(warm.cas_metrics.misses, 0);
+        assert_eq!(warm.cas_metrics.hits, 1);
+        assert_eq!(warm.cas_metrics.incoming_bytes_hashed, payload.len() as u64);
+        assert_eq!(warm.cas_metrics.objects_hashed, 1);
+        assert_eq!(warm.cas_metrics.persistent_bytes_written, 0);
+        assert_eq!(warm.cas_metrics.staged_data_barriers, 0);
+        assert_eq!(warm.cas_metrics.canonical_name_barriers, 0);
+        assert_eq!(warm.cas_metrics.canonical_bytes_reread, 0);
+    }
+
+    #[tokio::test]
+    async fn remi_direct_cas_verification_rejects_an_untrusted_archive_before_bookkeeping() {
+        let temp = tempfile::tempdir().unwrap();
+        let trusted = SigningKeyPair::generate().with_key_id("targets");
+        let untrusted = SigningKeyPair::generate().with_key_id("targets");
+        let package = signed_package(temp.path(), &untrusted, b"untrusted payload");
+        let (service, chunk_dir) = direct_cas_service(temp.path(), &trusted);
+
+        let error = match service
+            .store_signed_ccs_path_with_timing(&package, "fedora-44")
+            .await
+        {
+            Ok(_) => panic!("untrusted signed archive was stored"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("signature"));
+        assert_eq!(
+            fs::read_dir(chunk_dir.join("objects"))
+                .map(|entries| entries.count())
+                .unwrap_or(0),
+            0
+        );
+        let conn = crate::server::open_runtime_db(&service.db_path).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunk_access", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 
     #[tokio::test]
