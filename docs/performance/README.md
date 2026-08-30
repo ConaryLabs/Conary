@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-30
-revision: 7
+revision: 8
 summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results
 ---
 
@@ -254,6 +254,117 @@ into sealed same-directory staging, the sole verifier/direct-CAS finalizer, and
 the canonical published inode hash. The added fused authoring hash is real CPU
 work, so the arithmetic ceiling above is deliberately not treated as a
 realized forecast.
+
+## Single-finalizer measured result: 2026-08-30
+
+Protected production-XFS workflow
+[run 33295190850](https://github.com/FieldmouseWorks/Conary/actions/runs/33295190850)
+measured deployed merge commit
+`44a345e5650a8fefe21508f10b2c689abf00a1e6`, Remi 0.16.1, binary SHA-256
+`c7901e117e4903baf03e57557a2307af2c705efceb19e5eaa7d90aab34c15d51`.
+The binary came from exact protected candidate build
+[33294444190](https://github.com/FieldmouseWorks/Conary/actions/runs/33294444190)
+and successful `private-candidates` deployment
+[33295114338](https://github.com/FieldmouseWorks/Conary/actions/runs/33295114338).
+The run reused the #755 Fedora profile revision
+`c758167a34de67e28a3c516efad0128182d1fe136a0606b2ecb9ef634ebd79e4`,
+package key
+`7646cb1313853d1a8ae069e3c42967fccdf417d178bc647bbaa500a3b1753fc4`,
+and 1,881,853,676-byte source at SHA-256
+`986cfa5c47b82141f298aefa66b4c68008568b1d00abd80dece8e3d50cd7c73e`,
+complete catalog authority and subject, hardware label, and all ten 4,096-byte
+block XFS root geometries.
+
+The sole artifact was ID `9727280726`, named
+`remi-conversion-benchmark-33295114338-33295190850-1`, and 34,695 bytes.
+Its Actions API digest and an independently downloaded archive both had
+SHA-256
+`ef19a888d6e2fc0ffb6c2a0c886e40fc274732e225f9da75c939f2e85b311569`.
+The four-entry archive contained the public report and exact source,
+deployment, and candidate bindings. The 26,091-byte public schema-v2 report
+had SHA-256
+`d6202c7e5819b64c4ff43c889d37ab5ec19e38a868f6ac84ecc7552609313b0c`
+and bound the private 29,857-byte raw schema-v4 report at SHA-256
+`d94d9a0387f6d568d6c06d4c2c2c551e09529dd4382c499cd3c0e87ec9ce3841`.
+
+| Measurement boundary | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Cold repetition process wall | 281.729328 s | 265.826899 s | -15.902429 s (-5.645%) |
+| Cold `views.end_to_end` | 233.639 s | 212.009 s | -21.630 s (-9.258%) |
+| Cold `views.conversion_core` | 161.755 s | 132.486 s | -29.269 s (-18.095%) |
+| Retired `immediate_converter_reopen` | 38.720 s | absent | one complete disposable verifier removed |
+| `archive_assembly_and_gzip` | 50.199 s | 58.595 s | +8.396 s (+16.725%) |
+| `complete_archive_copy` | 0.000 s | 0.029 s | +0.029 s |
+| Retained `independent_transport_reopen` | 45.140 s | 52.954 s | +7.814 s (+17.311%) |
+| `complete_archive_hash` | 7.299 s | 7.278 s | -0.021 s (-0.288%) |
+| Hot `views.end_to_end` | 0.428 s | 0.419 s | -0.009 s (-2.103%) |
+| Hot repetition process wall | 48.167632 s | 53.733936 s | +5.566304 s (+11.556%) |
+
+The measured core is 9.451 seconds above the 123.035-second pass-removal
+ceiling, and measured end to end is 17.090 seconds above the 194.919-second
+ceiling, realizing 75.591% and 55.863% of the corresponding arithmetic
+pass-removal improvements. The authoring phase now includes the exact inline
+compressed-output hash and took 8.396 seconds longer in this sample. The
+retained verifier and direct-CAS phase took 7.814 seconds longer. These are
+observed phase changes, not causal attribution from one sample. The
+29-millisecond sealed staging copy did not create the feared multi-second copy
+boundary on this XFS run.
+
+The benchmark-only output proof remains outside both timing views. Its cold
+independent reopen changed from 39.380 to 45.731 seconds, while its complete
+archive hash changed from 7.899 to 7.265 seconds. Those changes explain why
+the outer process wall improved less than the end-to-end view. The hot
+conversion remained an exact cache hit with zero conversion work; its larger
+outer wall likewise reflects the independent output proof rather than hot-path
+conversion work.
+
+| Cold process resource | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| User CPU | 256.963429 s | 244.456278 s | -12.507151 s (-4.867%) |
+| System CPU | 16.915275 s | 14.533032 s | -2.382243 s (-14.083%) |
+| Total CPU | 273.878704 s | 258.989310 s | -14.889394 s (-5.436%) |
+| Process-lifetime peak RSS | 1,609,515,008 B | 1,541,996,544 B | -67,518,464 B (-4.195%) |
+| Logical reads | 36,602,432,246 B | 31,925,663,680 B | -4,676,768,566 B (-12.777%) |
+| Logical writes | 18,355,156,589 B | 15,715,782,001 B | -2,639,374,588 B (-14.379%) |
+| Storage reads | 3,901,267,968 B | 1,966,776,320 B | -1,934,491,648 B (-49.586%) |
+| Storage writes | 7,673,360,384 B | 7,673,380,864 B | +20,480 B (+0.000267%) |
+
+The logical-read reduction is within 585 bytes of the retired CCS reopen plus
+reconstructed-content work. The logical-write reduction is within 470 bytes
+of the exact signed object set. Those independent process counters support the
+typed pass-removal evidence without treating storage-read variation as causal.
+
+Schema v4 contains no executed or skipped `immediate_converter_reopen` phase
+and no retired immediate-reopen counters. It records exactly one internal
+verifier, after `complete_archive_copy` and before `complete_archive_hash`.
+The writer hashed all 1,950,687,824 CCS bytes inline, and the copy, retained
+reopen, canonical hash, and output geometry each bind that exact length. The
+retained verifier and CAS incoming counters each describe the same
+2,639,374,118 signed-object bytes and must not be added as separate passes.
+
+The stable signed set remained exact at SHA-256
+`cf4f448fdcf9f228febaf1767c98adbb0ca2053de4bfe231d7291f7ecf23d186`,
+49,091 objects, and 2,639,374,118 bytes. All substantive cold work counters
+matched #755 after excluding the retired/new schema fields and time-varying
+signed-wrapper geometry. The new CCS was 129 bytes smaller at SHA-256
+`b590929e13a8164bf939ce337c33a567b430f4e7bc4b9a56440849417ad25531`;
+its transport SHA-256 was
+`4d2383c289d748ea48a396404eb4826ea34a5f914f0cd2d602326c7a49cde4de`.
+Cold and hot identities and byte lengths matched within the run. The
+cross-run wrapper difference is the expected timestamped-signature variation,
+not payload-work drift.
+
+Cold CAS admission retained 49,091 misses, the exact signed byte count, one
+staged-data barrier, one canonical-name barrier, and zero hits, race losers,
+canonical reread bytes, or fallback syncs. R2 remained disabled. Both catalog
+reopens retained one portable-manifest validation and one stored binding check;
+their authenticated VFS reads had zero complete userspace hashes, SQLite
+integrity scans, logical replays, short reads, or integrity failures.
+
+This is one paired production sample, not a latency distribution. `cold`
+still means empty application conversion, cache, and CAS state rather than a
+dropped kernel page cache. It proves the exact single-finalizer physical-pass
+change and does not constitute a same-host native-package-manager comparison.
 
 ## Remi conversion baseline: 2026-08-15
 
