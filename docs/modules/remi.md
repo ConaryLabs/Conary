@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-30
-revision: 104
+revision: 105
 summary: Document filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v3 conversion and registered-reopen benchmark with signed cancelled-write phase deltas, terminal typed failure publication, and a path-free public evidence projection, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -1590,10 +1590,14 @@ The validator binds `end_to_end` to the timing total, recomputes
 reopen/hash byte count to equal the CCS size, and requires every hot output
 identity and byte geometry to equal the cold result. A commit-worthy
 baseline uses a clean exact source commit, preserves the complete JSON report,
-and compares identical authority, subject, environment, and signed-object-set
-identities. The recorded counters are regression evidence; they do not weaken
-conversion verification or storage authority. Performance baselines and
-measured optimizations live in [performance evidence](../performance/README.md).
+and compares identical authority, subject, parsed source, host/filesystem
+geometry, and signed-object-set identities while retaining each run's exact
+source commit and binary digest. Whole CCS and transport wrapper identities are
+exact within each cold/hot pair; their timestamped signatures make them
+time-varying across separately executed conversions. The recorded counters are
+regression evidence; they do not weaken conversion verification or storage
+authority. Performance baselines and measured optimizations live in
+[performance evidence](../performance/README.md).
 
 A successful command also atomically publishes
 `conversion-benchmark-public-v1.json`. This strict sidecar binds the exact raw
