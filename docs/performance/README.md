@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-30
-revision: 9
+revision: 10
 summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results
 ---
 
@@ -403,10 +403,94 @@ RPM projection now consumes typed, algorithm-tagged evidence derived from
 not reopen payload files to reconstruct that evidence. For this code-8
 FlightGear subject, the resulting improvement is projected at approximately
 10.3 seconds. That linear estimate applies the same run's independent complete
-archive SHA-256 rate (1,950,687,953 bytes in 7.265 seconds) to the hidden
+archive SHA-256 rate (1,950,687,824 bytes in 7.265 seconds) to the hidden
 2,757,056,284-byte reread; it is not a measurement and does not assume that
 many-file reopen overhead is identical. A protected schema-v5 production run
 must establish the realized change.
+
+## RPM file-digest fusion measured result: 2026-08-30
+
+Protected production-XFS workflow
+[run 33299133807](https://github.com/FieldmouseWorks/Conary/actions/runs/33299133807)
+measured deployed merge commit
+`7df65d2d2c68465948b06c4301b64ea1dd78fd6b`, Remi 0.16.1, binary SHA-256
+`4442fec7797c5416c92bb3418075b5794a5da7ca3dea69a2c130cf46e48753da`.
+The binary came from exact protected push-to-main candidate build
+[33298421092](https://github.com/FieldmouseWorks/Conary/actions/runs/33298421092)
+and successful `private-candidates` deployment
+[33299026425](https://github.com/FieldmouseWorks/Conary/actions/runs/33299026425),
+whose inspection selected that build. The run retained the exact #765 Fedora
+profile revision, package key, 1,881,853,676-byte source and source SHA-256,
+complete catalog authority and subject, production hardware, kernel, memory,
+and all ten 4,096-byte block XFS root geometries.
+
+The sole artifact was ID `9728447873`, named
+`remi-conversion-benchmark-33299026425-33299133807-1`, and 34,808 bytes. Its
+Actions API digest and an independently downloaded archive both had SHA-256
+`82148c62e6a645c39c44206e30fa597286edd8d9e7f64f7422378cdc34205773`.
+The four-entry archive contained the public report and exact source,
+deployment, and candidate bindings. The 26,208-byte public schema-v3 report
+had SHA-256
+`f1a4959dd92855e2a7655e2ce2141f76a083caed47a148eba633b57d56241fe2`
+and bound the private 29,978-byte raw schema-v5 report at SHA-256
+`8a32a7ca23a49ae945a6d78ec6e615a6da8601f6ab45e27f70ba1305bf9e91b4`.
+
+| Measurement boundary | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| `native_archive_parse_and_spool` | 23.567 s | 12.647 s | -10.920 s (-46.336%) |
+| Cold `views.conversion_core` | 132.486 s | 116.590 s | -15.896 s (-11.998%) |
+| Cold `views.end_to_end` | 212.009 s | 198.660 s | -13.349 s (-6.296%) |
+| Cold repetition process wall | 265.826899 s | 252.402529 s | -13.424370 s (-5.050%) |
+| `archive_assembly_and_gzip` | 58.595 s | 54.072 s | -4.523 s (-7.719%) |
+| `complete_archive_copy` | 0.029 s | 1.462 s | +1.433 s (+4,941.379%) |
+| Retained `independent_transport_reopen` | 52.954 s | 54.271 s | +1.317 s (+2.487%) |
+| Benchmark-proof independent reopen | 45.731 s | 45.583 s | -0.148 s (-0.324%) |
+| Hot `views.end_to_end` | 0.419 s | 0.386 s | -0.033 s (-7.876%) |
+| Hot repetition process wall | 53.733936 s | 54.044081 s | +0.310145 s (+0.577%) |
+
+The targeted phase improved by 10.920 seconds, closely matching and slightly
+exceeding the transparent approximately 10.3-second pre-change projection.
+The larger 15.896-second conversion-core improvement also includes a
+4.523-second lower archive-assembly sample. Conversely, the sealed archive
+copy and retained verifier sampled 1.433 and 1.317 seconds higher. Those
+observations explain the measured propagation boundaries but are not causal
+attribution from one sample. The separate benchmark-only output proof remained
+outside both timing views and was essentially flat.
+
+| Cold process resource | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| User CPU | 244.456278 s | 229.352956 s | -15.103322 s (-6.178%) |
+| System CPU | 14.533032 s | 14.873123 s | +0.340091 s (+2.340%) |
+| Total CPU | 258.989310 s | 244.226079 s | -14.763231 s (-5.700%) |
+| Process-lifetime peak RSS | 1,541,996,544 B | 1,544,904,704 B | +2,908,160 B (+0.189%) |
+| Logical reads | 31,925,663,680 B | 29,168,607,398 B | -2,757,056,282 B (-8.636%) |
+| Read syscalls | 2,233,144 | 2,153,361 | -79,783 (-3.573%) |
+| Logical writes | 15,715,782,001 B | 15,715,782,003 B | +2 B |
+| Storage reads | 1,966,776,320 B | 1,961,574,400 B | -5,201,920 B (-0.264%) |
+
+Schema v5 proves the physical change directly. The RPM projection's corrected
+baseline was 21,083 successful spool-file reopens, 2,757,056,284 reread bytes,
+and 5,514,112,568 cryptographic hash-input bytes. The measured result is zero
+reopens, zero reread bytes, and 2,757,056,284 hash-input bytes: one shared
+SHA-256 pass over the code-8 FlightGear content. The 2,757,056,282-byte
+process-level logical-read reduction is within two bytes of the eliminated
+reread and independently supports the typed counters.
+
+The source geometry stayed exact at 24,096 payload entries, 21,083 regular
+files, 21,636 spool files, 2,757,056,284 declared and spooled bytes, and
+2,761,335,228 decompressed archive bytes. The later CCS-emission boundary
+still reopened 21,083 payload files and read 2,757,056,284 object bytes; it is
+not the eliminated native-projection pass. The stable signed set remained
+exact at SHA-256
+`cf4f448fdcf9f228febaf1767c98adbb0ca2053de4bfe231d7291f7ecf23d186`,
+49,091 objects, and 2,639,374,118 bytes. Cold and hot outputs agreed within the
+run; cross-run CCS and transport digests changed only with the expected
+timestamped wrapper material.
+
+This is one paired production sample, not a latency distribution. `cold`
+still means empty application conversion, cache, and CAS state rather than a
+dropped kernel page cache. It proves the exact RPM file-digest fusion and does
+not constitute a same-host native-package-manager performance comparison.
 
 ## Remi conversion baseline: 2026-08-15
 
