@@ -15,7 +15,7 @@ use crate::ccs::attestation::{
     compute_build_output_identity_from_v3,
 };
 use crate::ccs::builder::{
-    BuildResult, CcsArchiveCompression, CcsPackageWriteMetrics,
+    BuildResult, CcsArchiveCompression, CcsPackageWriteMetrics, PreparedCcsWriteOptions,
     write_v3_ccs_package_from_prepared_with_metrics,
 };
 use crate::ccs::convert::native_provenance::NativeProvenance;
@@ -521,10 +521,12 @@ impl NativePackageConverter {
             &prepared_payload,
             &package_path,
             signing_key,
-            Some(&debug_toml),
-            None,
-            Some(&boundary),
-            self.archive_compression,
+            PreparedCcsWriteOptions {
+                debug_toml: Some(&debug_toml),
+                build_attestation: None,
+                foreign_conversion_boundary: Some(&boundary),
+                archive_compression: self.archive_compression,
+            },
         )
         .map_err(|e| {
             ConversionError::BuildError(format!(

@@ -59,8 +59,7 @@ impl CcsArchiveCompression {
             logical_parallelism
                 .checked_div(concurrent_conversions)
                 .unwrap_or(0)
-                .max(1)
-                .min(Self::MAX_WORKERS),
+                .clamp(1, Self::MAX_WORKERS),
         )
     }
 
@@ -102,6 +101,15 @@ impl Default for CcsArchiveCompression {
     fn default() -> Self {
         Self { workers: 1 }
     }
+}
+
+/// Complete control-plane and resource options for one prepared archive write.
+pub(crate) struct PreparedCcsWriteOptions<'a> {
+    pub(crate) debug_toml: Option<&'a str>,
+    pub(crate) build_attestation: Option<&'a crate::ccs::attestation::BuildAttestationEnvelope>,
+    pub(crate) foreign_conversion_boundary:
+        Option<&'a crate::ccs::attestation::ForeignConversionBoundary>,
+    pub(crate) archive_compression: CcsArchiveCompression,
 }
 
 /// Exact phase and work evidence from one streamed CCS v3 package emission.
@@ -273,10 +281,12 @@ pub fn write_v3_ccs_package_from_sources_with_metrics(
         &prepared,
         output_path,
         signing_key,
-        debug_toml,
-        build_attestation,
-        foreign_conversion_boundary,
-        CcsArchiveCompression::default(),
+        PreparedCcsWriteOptions {
+            debug_toml,
+            build_attestation,
+            foreign_conversion_boundary,
+            archive_compression: CcsArchiveCompression::default(),
+        },
     )
 }
 
@@ -286,10 +296,7 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
     prepared: &PreparedPayloadObjectSet,
     output_path: &Path,
     signing_key: &super::super::signing::SigningKeyPair,
-    debug_toml: Option<&str>,
-    build_attestation: Option<&crate::ccs::attestation::BuildAttestationEnvelope>,
-    foreign_conversion_boundary: Option<&crate::ccs::attestation::ForeignConversionBoundary>,
-    archive_compression: CcsArchiveCompression,
+    options: PreparedCcsWriteOptions<'_>,
 ) -> Result<CcsPackageWriteMetrics> {
     use crate::ccs::budget::CCS_BUDGET;
     use crate::ccs::v3::schema::PackageKindV3;
@@ -313,7 +320,7 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
     }
     let manifest_cbor = authority.to_cbor()?;
     CCS_BUDGET.admit_encoded_authority(&census, manifest_cbor.len() as u64)?;
-    if let Some(debug_toml) = debug_toml {
+    if let Some(debug_toml) = options.debug_toml {
         CCS_BUDGET.admit_control_bytes(
             crate::ccs::budget::BudgetDimension::DebugProjectionBytes,
             "MANIFEST.toml",
@@ -321,13 +328,15 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
             CCS_BUDGET.debug_projection_bytes_ceiling(&census)?,
         )?;
     }
-    let build_attestation_document = build_attestation
+    let build_attestation_document = options
+        .build_attestation
         .map(serde_json::to_string_pretty)
         .transpose()?;
     if let Some(encoded) = build_attestation_document.as_deref() {
         admit_attestation_document(encoded, "MANIFEST.attestation.json")?;
     }
-    let foreign_conversion_boundary_document = foreign_conversion_boundary
+    let foreign_conversion_boundary_document = options
+        .foreign_conversion_boundary
         .map(serde_json::to_string_pretty)
         .transpose()?;
     if let Some(encoded) = foreign_conversion_boundary_document.as_deref() {
@@ -350,7 +359,7 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
         controls.insert("MANIFEST.conversion-boundary.json", encoded.as_bytes());
     }
     controls.insert("MANIFEST.sig", signature_document.as_bytes());
-    if let Some(debug_toml) = debug_toml {
+    if let Some(debug_toml) = options.debug_toml {
         controls.insert("MANIFEST.toml", debug_toml.as_bytes());
     }
     metrics.control_projection_and_signing = control_started.elapsed();
@@ -365,7 +374,7 @@ pub(crate) fn write_v3_ccs_package_from_prepared_with_metrics(
         timestamp,
         &controls,
         prepared.inventory(),
-        archive_compression,
+        options.archive_compression,
         |sha256| prepared.open_object(sha256),
     )?;
     metrics.archive_assembly_and_gzip = archive_started.elapsed();
