@@ -32,7 +32,7 @@ pub enum ComposefsRuntimeUnavailable {
     KernelFilesystems,
     #[error("running system is missing loop-device support required for composefs metadata images")]
     LoopDevice,
-    #[error("mount.composefs helper not found in PATH or standard sbin/bin locations")]
+    #[error("executable mount.composefs helper not found in PATH or standard sbin/bin locations")]
     MountHelper,
 }
 
@@ -62,7 +62,7 @@ impl ComposefsRuntimeUnavailable {
                 "make /dev/loop-control or an existing loop device available to the Conary process"
             }
             Self::MountHelper => {
-                "install the composefs userspace package that provides mount.composefs"
+                "install the composefs userspace package that provides an executable mount.composefs"
             }
         }
     }
