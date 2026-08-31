@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-09-01
-revision: 15
+revision: 16
 status: active
 ---
 
@@ -318,6 +318,16 @@ package database.
 Profile member order is projected into apt-pkg candidate policy and native
 provider priority. Every exact package-oracle key binds through a private
 disk-backed index to one exact native package version and becomes a root.
+The pinned apt 3.0 dependency solver receives that exact root as a protected
+forced version and runs with non-strict pinning against the complete
+authenticated version universe. Native policy still orders dependency choices,
+so the highest-precedence candidate is selected whenever it permits a complete
+transaction; a lower authenticated version remains eligible only when the
+forced exact root cannot close with the candidate. The preliminary native
+candidate transaction remains the fast resolved result or contributes typed
+no-target evidence. Only its available-target failure enters the
+complete-version solver, through a fresh dependency cache that never reuses the
+failed candidate state.
 Required and pre-required groups participate in resolution; weak groups do
 not. Successful native transactions become exact closure package keys. A
 required group with no native target becomes an exact requiring-package key

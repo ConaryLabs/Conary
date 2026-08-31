@@ -1,9 +1,9 @@
 // crates/conary-core/src/repository/catalog/parity/debian/apt_pkg_shim.cpp
 
 #include <apt-pkg/configuration.h>
-#include <apt-pkg/algorithms.h>
 #include <apt-pkg/depcache.h>
 #include <apt-pkg/deblistparser.h>
+#include <apt-pkg/edsp.h>
 #include <apt-pkg/error.h>
 #include <apt-pkg/fileutl.h>
 #include <apt-pkg/init.h>
@@ -508,7 +508,8 @@ bool configure_resolution(std::string const &architecture) {
     _config->Set("APT::Architectures", architecture);
     _config->Set("APT::Install-Recommends", "false");
     _config->Set("APT::Install-Suggests", "false");
-    _config->Set("APT::Solver", "internal");
+    _config->Set("APT::Solver", "3.0");
+    _config->Set("APT::Solver::Strict-Pinning", "false");
     _config->Set("Dir::State::status", "/dev/null");
     _config->Set("Dir::Etc::sourcelist", "/dev/null");
     _config->Set("Dir::Etc::sourceparts", "/dev/null");
@@ -709,31 +710,42 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
         return false;
     }
 
-    EvidenceDepCache dependency_cache(handle.cache.get(), handle.policy.get());
-    if (!dependency_cache.Init(nullptr)) {
+    EvidenceDepCache dependency_probe(handle.cache.get(), handle.policy.get());
+    if (!dependency_probe.Init(nullptr)) {
         handle.error = apt_errors();
         return false;
     }
-    dependency_cache.SetCandidateVersion(root);
-    bool const marked = dependency_cache.MarkInstall(root.ParentPkg(), true, 0, true, true);
-    if (!dependency_cache[root.ParentPkg()].Install()) {
-        dependency_cache.allow_exact_root(root.ParentPkg());
-        if (!dependency_cache.MarkInstall(root.ParentPkg(), false, 0, true, false)) {
-            dependency_cache.retain_failed_exact_root(root);
+    dependency_probe.SetCandidateVersion(root);
+    bool const probe_marked = dependency_probe.MarkInstall(root.ParentPkg(), true, 0, true, true);
+    if (!dependency_probe[root.ParentPkg()].Install()) {
+        dependency_probe.allow_exact_root(root.ParentPkg());
+        if (!dependency_probe.MarkInstall(root.ParentPkg(), false, 0, true, false)) {
+            dependency_probe.retain_failed_exact_root(root);
         }
     }
     bool const provisional = collect_resolution(
-        handle, dependency_cache, root, marked, marked && dependency_cache.BrokenCount() == 0);
-    if (provisional && !handle.missing.empty()) {
+        handle, dependency_probe, root, probe_marked,
+        probe_marked && dependency_probe.BrokenCount() == 0);
+    if (provisional) {
         apt_errors();
         return true;
     }
     handle.closure.clear();
     handle.missing.clear();
     handle.error.clear();
-    pkgProblemResolver resolver(&dependency_cache);
-    resolver.Protect(root.ParentPkg());
-    bool const resolved = resolver.Resolve(false, nullptr);
+    apt_errors();
+
+    EvidenceDepCache dependency_cache(handle.cache.get(), handle.policy.get());
+    if (!dependency_cache.Init(nullptr)) {
+        handle.error = apt_errors();
+        return false;
+    }
+    dependency_cache.SetCandidateVersion(root);
+    dependency_cache.allow_exact_root(root.ParentPkg());
+    bool const marked = dependency_cache.MarkInstall(root.ParentPkg(), false, 0, true, false);
+    dependency_cache.MarkProtected(root.ParentPkg());
+    bool const resolved = marked && EDSP::ResolveExternal(
+        "3.0", dependency_cache, EDSP::Request::FORBID_REMOVE, nullptr);
     std::string const solver_errors = apt_errors();
     if (!collect_resolution(handle, dependency_cache, root, marked, resolved)) {
         if (!solver_errors.empty()) {
