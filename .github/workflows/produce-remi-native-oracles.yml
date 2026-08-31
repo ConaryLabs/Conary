@@ -146,6 +146,9 @@ jobs:
     needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:

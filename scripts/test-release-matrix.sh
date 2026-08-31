@@ -1852,6 +1852,19 @@ test_check_release_matrix_rejects_unbound_native_oracle_producer_source() {
         "native-oracle production exact deployed producer source and typed lane adapter"
 }
 
+test_check_release_matrix_rejects_container_native_oracle_shell() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '        shell: bash' \
+        '        shell: sh'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production uses Bash inside pinned job containers"
+}
+
 test_check_release_matrix_rejects_mutating_native_oracle_authority() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3036,6 +3049,7 @@ main() {
         test_check_release_matrix_rejects_loose_native_oracle_transport
         test_check_release_matrix_rejects_nonproduction_native_oracle_production
         test_check_release_matrix_rejects_unbound_native_oracle_producer_source
+        test_check_release_matrix_rejects_container_native_oracle_shell
         test_check_release_matrix_rejects_mutating_native_oracle_authority
         test_check_release_matrix_rejects_unserialized_site_deployment
         test_check_release_matrix_rejects_unserialized_r2_durability
