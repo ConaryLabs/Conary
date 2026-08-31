@@ -371,10 +371,10 @@ fn project_package(
         package.dependencies(DependencyField::Suggests)?,
         RepositoryRequirementKind::Suggests,
     )?;
-    extend_relations(
+    extend_supplements(
         &mut requirement_groups,
         package.dependencies(DependencyField::Supplements)?,
-        RepositoryRequirementKind::Supplements,
+        &provides,
     )?;
     extend_relations(
         &mut requirement_groups,
@@ -498,6 +498,147 @@ fn extend_relations(
         groups.push(project_requirement(dependency, kind)?);
     }
     Ok(())
+}
+
+fn extend_supplements(
+    groups: &mut Vec<CatalogRequirementGroupV1>,
+    dependencies: Vec<SolvDependency<'_>>,
+    provides: &[CatalogProvideRecordV1],
+) -> Result<()> {
+    for dependency in dependencies {
+        if classify_split_provides_supplement(&dependency, provides)? {
+            continue;
+        }
+        if dependency.is_prereq_marker() {
+            return Err(Error::ParseError(
+                "libsolv returned an RPM prerequisite marker in supplements".to_string(),
+            ));
+        }
+        groups.push(project_requirement(
+            dependency,
+            RepositoryRequirementKind::Supplements,
+        )?);
+    }
+    Ok(())
+}
+
+fn classify_split_provides_supplement(
+    dependency: &SolvDependency<'_>,
+    provides: &[CatalogProvideRecordV1],
+) -> Result<bool> {
+    if !dependency.is_relation() {
+        return Ok(false);
+    }
+    let relation = dependency.relation()?;
+    if relation.flags != ffi::REL_NAMESPACE {
+        return Ok(false);
+    }
+    let namespace = atomic_dependency(&relation.name_dependency()?, "namespace name")?;
+    let value = relation.evr_dependency()?;
+    let (nested_flags, prefix, path) = if value.is_relation() {
+        let nested = value.relation()?;
+        let prefix = nested.name_dependency()?;
+        let path = nested.evr_dependency()?;
+        (
+            nested.flags,
+            if prefix.is_relation() {
+                None
+            } else {
+                Some(prefix.atom()?)
+            },
+            if path.is_relation() {
+                None
+            } else {
+                Some(path.atom()?)
+            },
+        )
+    } else {
+        (0, None, None)
+    };
+    let (capability, path) = validate_split_provides_shape(
+        &namespace,
+        nested_flags,
+        prefix.as_deref(),
+        path.as_deref(),
+    )?;
+    let declared = provides.iter().any(|provide| {
+        provide.capability == capability
+            && provide.version.is_none()
+            && provide.version_relation.is_none()
+            && provide.kind == "generic"
+            && provide.raw.as_deref() == Some(capability.as_str())
+            && matches!(
+                &provide.provenance,
+                CapabilityProvenance::SourceDeclared {
+                    format: SourcePackageFormat::Rpm,
+                    ..
+                }
+            )
+    });
+    let file = provides.iter().any(|provide| {
+        provide.capability == path
+            && provide.kind == "file"
+            && matches!(
+                &provide.provenance,
+                CapabilityProvenance::SourceDerivedFile {
+                    format: SourcePackageFormat::Rpm
+                }
+            )
+    });
+    if !declared || !file {
+        return Err(Error::ConflictError(format!(
+            "libsolv split-provides supplement '{capability}' has no matching declared capability and file"
+        )));
+    }
+    Ok(true)
+}
+
+fn atomic_dependency(dependency: &SolvDependency<'_>, field: &str) -> Result<String> {
+    if dependency.is_relation() {
+        return Err(Error::ConflictError(format!(
+            "libsolv split-provides {field} is another relation"
+        )));
+    }
+    dependency.atom()
+}
+
+fn validate_split_provides_shape(
+    namespace: &str,
+    nested_flags: i32,
+    prefix: Option<&str>,
+    path: Option<&str>,
+) -> Result<(String, String)> {
+    if namespace != "namespace:splitprovides" {
+        return Err(Error::ConflictError(format!(
+            "libsolv returned unsupported RPM supplement namespace '{namespace}'"
+        )));
+    }
+    if nested_flags != ffi::REL_WITH {
+        return Err(Error::ConflictError(format!(
+            "libsolv split-provides namespace contains relation flag {nested_flags}, expected REL_WITH"
+        )));
+    }
+    let prefix = prefix.ok_or_else(|| {
+        Error::ConflictError(
+            "libsolv split-provides namespace has a non-atomic capability prefix".to_string(),
+        )
+    })?;
+    let path = path.ok_or_else(|| {
+        Error::ConflictError(
+            "libsolv split-provides namespace has a non-atomic file path".to_string(),
+        )
+    })?;
+    if prefix.is_empty()
+        || prefix.contains(':')
+        || prefix.chars().any(char::is_whitespace)
+        || !path.starts_with('/')
+        || path.chars().any(char::is_whitespace)
+    {
+        return Err(Error::ConflictError(format!(
+            "libsolv split-provides namespace has invalid operands '{prefix}' and '{path}'"
+        )));
+    }
+    Ok((format!("{prefix}:{path}"), path.to_string()))
 }
 
 fn project_requirement(

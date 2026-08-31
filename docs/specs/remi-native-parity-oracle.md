@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
-last_updated: 2026-08-31
-revision: 14
+last_updated: 2026-09-01
+revision: 15
 status: active
 ---
 
@@ -144,6 +144,17 @@ obey profile precedence only when every projected fact agrees. A contradictory
 duplicate fails the complete crawl. The private SQLite spool, canonical bundle
 write, and independent complete reopen use the same bounded contract as the
 ALPM producer.
+
+Pinned libsolv also derives
+`namespace:splitprovides(prefix with /path)` supplements from atomic
+source-declared `prefix:/path` provides. That `REL_NAMESPACE` tree is legacy
+installed-package update machinery, not an authenticated RPM `Supplements:`
+record. Before excluding it from source package facts, the producer requires an
+exact `namespace:splitprovides` wrapper, exact nested `REL_WITH` atoms, the
+matching atomic declared capability, and the matching complete filelist path.
+Unknown namespaces, malformed trees, or missing source facts fail closed.
+Source-declared rich supplements remain projected through typed relation IDs and
+must still agree with canonical RPM grammar.
 
 Build and invoke the host-linked RPM helper explicitly:
 
