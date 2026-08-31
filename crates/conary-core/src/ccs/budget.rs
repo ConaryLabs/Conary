@@ -375,7 +375,7 @@ pub struct CcsStructuralBudget {
     pub max_payload_object_bytes: u64,
     pub max_total_payload_bytes: u64,
     pub max_metadata_bytes: u64,
-    pub max_archive_compression_workers: usize,
+    pub max_archive_cpu_workers: usize,
     pub archive_compression_block_bytes: usize,
     pub max_cbor_nesting_depth: usize,
 }
@@ -414,26 +414,26 @@ impl CcsStructuralBudget {
         max_payload_object_bytes: MAX_TOTAL_PAYLOAD_BYTES,
         max_total_payload_bytes: MAX_TOTAL_PAYLOAD_BYTES,
         max_metadata_bytes: MAX_METADATA_BYTES,
-        max_archive_compression_workers: 64,
+        max_archive_cpu_workers: 64,
         archive_compression_block_bytes: 1024 * 1024,
         max_cbor_nesting_depth: 64,
     };
 
     /// Admit one per-archive compression worker allocation.
-    pub fn admit_archive_compression_workers(&self, workers: usize) -> BudgetResult<()> {
+    pub fn admit_archive_cpu_workers(&self, workers: usize) -> BudgetResult<()> {
         admit(
             BudgetDimension::ArchiveCompressionWorkers,
             "archive compression workers",
             u64::try_from(workers)
                 .map_err(|_| BudgetError::overflow("archive compression workers"))?,
-            u64::try_from(self.max_archive_compression_workers)
+            u64::try_from(self.max_archive_cpu_workers)
                 .map_err(|_| BudgetError::overflow("archive compression worker limit"))?,
         )
     }
 
     /// Conservative ceiling for buffered input and output compression blocks.
     pub fn archive_compression_buffer_ceiling_bytes(&self, workers: usize) -> BudgetResult<u64> {
-        self.admit_archive_compression_workers(workers)?;
+        self.admit_archive_cpu_workers(workers)?;
         let workers = u64::try_from(workers)
             .map_err(|_| BudgetError::overflow("archive compression workers"))?;
         let block = u64::try_from(self.archive_compression_block_bytes)
@@ -460,6 +460,41 @@ impl CcsStructuralBudget {
         block
             .checked_add(in_flight_bytes)
             .ok_or_else(|| BudgetError::overflow("archive compression buffer ceiling"))
+    }
+
+    /// Conservative ceiling for canonical MGZIP frames waiting on ordered
+    /// parallel archive decode.
+    pub fn archive_decode_buffer_ceiling_bytes(&self, workers: usize) -> BudgetResult<u64> {
+        self.admit_archive_cpu_workers(workers)?;
+        let workers =
+            u64::try_from(workers).map_err(|_| BudgetError::overflow("archive decode workers"))?;
+        let block = u64::try_from(self.archive_compression_block_bytes)
+            .map_err(|_| BudgetError::overflow("archive decode block bytes"))?;
+        let encoded = block
+            .checked_add(block / ARCHIVE_COMPRESSION_OUTPUT_SLACK_DIVISOR)
+            .and_then(|value| value.checked_add(ARCHIVE_COMPRESSION_OUTPUT_SLACK_BYTES + 28))
+            .ok_or_else(|| BudgetError::overflow("archive decode encoded block"))?;
+        let outstanding = workers
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(2))
+            .ok_or_else(|| BudgetError::overflow("archive decode outstanding blocks"))?;
+        product("archive decode compressed buffers", outstanding, encoded)?
+            .checked_add(product(
+                "archive decode ordered output buffers",
+                outstanding,
+                block,
+            )?)
+            .ok_or_else(|| BudgetError::overflow("archive decode buffer ceiling"))
+    }
+
+    /// Largest canonical encoded MGZIP frame admitted by the current writer.
+    pub(crate) fn archive_encoded_block_ceiling_bytes(&self) -> BudgetResult<u64> {
+        let block = u64::try_from(self.archive_compression_block_bytes)
+            .map_err(|_| BudgetError::overflow("archive compression block bytes"))?;
+        block
+            .checked_add(block / ARCHIVE_COMPRESSION_OUTPUT_SLACK_DIVISOR)
+            .and_then(|value| value.checked_add(ARCHIVE_COMPRESSION_OUTPUT_SLACK_BYTES + 28))
+            .ok_or_else(|| BudgetError::overflow("archive encoded block ceiling"))
     }
 
     /// Derive the complete source-archive decode budget from this owner.

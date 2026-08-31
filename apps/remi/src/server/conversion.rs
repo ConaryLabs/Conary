@@ -24,11 +24,11 @@ use crate::server::{BoundedCache, R2Store};
 use std::path::PathBuf;
 use std::sync::Arc;
 pub use types::{
-    CONVERSION_BENCHMARK_SCHEMA_V7, ConversionBenchmarkAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V8, ConversionBenchmarkAuthority,
     ConversionBenchmarkCatalogAuthority, ConversionBenchmarkCatalogQuery,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkConfig,
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
-    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV7,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV8,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSetup,
     ConversionBenchmarkSubject, ConversionBenchmarkView, ConversionBenchmarkViews,
     ScriptletPackageMetadata, ServerConversionResult,
@@ -57,8 +57,8 @@ pub struct ConversionService {
     database_writer: DatabaseWriter,
     /// Shared owner for complete repository publication operations.
     publication_coordinator: Arc<PublicationCoordinator>,
-    /// Shared live CPU authority for deterministic CCS archive writers.
-    archive_compression: conary_core::ccs::CcsArchiveCompressionAdmission,
+    /// Shared live CPU authority for deterministic CCS encode and verified decode.
+    archive_cpu: conary_core::ccs::CcsArchiveCpuAdmission,
 }
 
 impl ConversionService {
@@ -78,7 +78,7 @@ impl ConversionService {
             repository_keys_dir: None,
             database_writer: DatabaseWriter::default(),
             publication_coordinator: Arc::new(PublicationCoordinator::default()),
-            archive_compression: conary_core::ccs::CcsArchiveCompressionAdmission::default(),
+            archive_cpu: conary_core::ccs::CcsArchiveCpuAdmission::default(),
         }
     }
 
@@ -117,11 +117,11 @@ impl ConversionService {
         self
     }
 
-    pub(crate) fn with_archive_compression_admission(
+    pub(crate) fn with_archive_cpu_admission(
         mut self,
-        archive_compression: conary_core::ccs::CcsArchiveCompressionAdmission,
+        archive_cpu: conary_core::ccs::CcsArchiveCpuAdmission,
     ) -> Self {
-        self.archive_compression = archive_compression;
+        self.archive_cpu = archive_cpu;
         self
     }
 }
@@ -146,7 +146,7 @@ mod tests {
         assert!(service.catalog_authority.is_none());
         assert!(service.r2_store.is_none());
         assert!(service.repository_keys_dir.is_none());
-        assert_eq!(service.archive_compression.capacity(), 1);
+        assert_eq!(service.archive_cpu.capacity(), 1);
     }
 
     #[test]

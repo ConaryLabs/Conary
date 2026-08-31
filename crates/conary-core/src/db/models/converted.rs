@@ -18,12 +18,11 @@ mod validation;
 /// Current conversion algorithm version
 /// Bump this when making changes that require re-conversion of existing packages.
 ///
-/// Revision 16 cuts the persisted CCS scriptlet contract: the redundant
-/// `RpmRuntimeMetadata.critical` boolean leaves the contract entirely
-/// (`deny_unknown_fields` rejects old manifests naming it), and
-/// `NativeLifecycleEntry.native_slot` persists the typed `RpmScriptletSlot`
-/// class with exact wire strings instead of a free string.
-pub const CONVERSION_VERSION: i32 = 16;
+/// Revision 17 cuts the physical CCS carrier from single-member gzip to the
+/// sole fixed-block MGZIP grammar. Existing conversion records must become
+/// stale because their persisted proof keys predate that carrier boundary and
+/// cannot authorize artifacts current readers reject.
+pub const CONVERSION_VERSION: i32 = 17;
 /// Canonical digest of an empty repository-provide projection.
 pub const EMPTY_REPOSITORY_PROVIDES_DIGEST: &str =
     "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";

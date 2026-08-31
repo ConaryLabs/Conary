@@ -1,5 +1,5 @@
 // apps/remi/src/server/conversion/benchmark/tests.rs
-//! Registered-authority and operator-boundary tests for schema-v7 benchmarks.
+//! Registered-authority and operator-boundary tests for schema-v8 benchmarks.
 
 use super::*;
 use crate::server::catalog_authority::test_support::{ActiveCatalogFixture, package};
@@ -65,7 +65,7 @@ fn invalid_success_evidence_remains_fatal_without_reopen() {
 }
 
 #[test]
-fn schema_v7_vfs_query_delta_fails_closed_on_counter_regression() {
+fn schema_v8_vfs_query_delta_fails_closed_on_counter_regression() {
     assert!(
         portable_vfs_delta(
             PortableVfsMetricsV1::default(),

@@ -126,7 +126,24 @@ impl PendingConversionResult {
         policy: &crate::ccs::verify::TrustPolicy,
         cas: &crate::filesystem::CasStore,
     ) -> anyhow::Result<VerifiedConversionResult> {
-        let verification = crate::ccs::verify::verify_package_into_cas(staged_path, policy, cas)?;
+        let admission = crate::ccs::CcsArchiveCpuAdmission::for_current_process();
+        self.verify_staged_copy_into_cas_with_archive_cpu(staged_path, policy, cas, &admission)
+    }
+
+    /// Finalize one staged copy under an explicit shared archive-CPU authority.
+    pub fn verify_staged_copy_into_cas_with_archive_cpu(
+        self,
+        staged_path: &Path,
+        policy: &crate::ccs::verify::TrustPolicy,
+        cas: &crate::filesystem::CasStore,
+        admission: &crate::ccs::CcsArchiveCpuAdmission,
+    ) -> anyhow::Result<VerifiedConversionResult> {
+        let verification = crate::ccs::verify::verify_package_into_cas_with_archive_cpu_admission(
+            staged_path,
+            policy,
+            cas,
+            admission,
+        )?;
         self.finalize(staged_path.to_path_buf(), verification)
     }
 
@@ -252,7 +269,7 @@ pub struct NativePackageConverter {
     source_release: Option<String>,
     conversion_tool: String,
     signing_key: Option<Arc<SigningKeyPair>>,
-    archive_compression: crate::ccs::CcsArchiveCompressionAdmission,
+    archive_cpu: crate::ccs::CcsArchiveCpuAdmission,
 }
 
 impl NativePackageConverter {
@@ -264,7 +281,7 @@ impl NativePackageConverter {
             source_release: None,
             conversion_tool: "conary".to_string(),
             signing_key: None,
-            archive_compression: crate::ccs::CcsArchiveCompressionAdmission::default(),
+            archive_cpu: crate::ccs::CcsArchiveCpuAdmission::for_current_process(),
         }
     }
 
@@ -297,12 +314,12 @@ impl NativePackageConverter {
         self
     }
 
-    /// Attach the shared live compression-worker admission authority.
-    pub fn with_archive_compression_admission(
+    /// Attach the shared live archive encode/decode CPU authority.
+    pub fn with_archive_cpu_admission(
         mut self,
-        admission: crate::ccs::CcsArchiveCompressionAdmission,
+        admission: crate::ccs::CcsArchiveCpuAdmission,
     ) -> Self {
-        self.archive_compression = admission;
+        self.archive_cpu = admission;
         self
     }
 
@@ -520,9 +537,9 @@ impl NativePackageConverter {
         let metadata_lifecycle_and_authority_projection =
             metadata_before_payload_preparation + authority_projection_started.elapsed();
         let archive_admission_started = Instant::now();
-        let archive_compression = self.archive_compression.acquire().map_err(|error| {
+        let archive_compression = self.archive_cpu.acquire().map_err(|error| {
             ConversionError::BuildError(format!(
-                "Failed to acquire CCS archive compression workers: {error}"
+                "Failed to acquire CCS archive CPU workers: {error}"
             ))
         })?;
         let archive_admission_wait = archive_admission_started.elapsed();

@@ -78,11 +78,11 @@ pub use cache::ChunkCache;
 pub use catalog_authority::ProfileRevisionSelection;
 pub use config::RemiConfig;
 pub use conversion::{
-    CONVERSION_BENCHMARK_SCHEMA_V7, ConversionBenchmarkAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V8, ConversionBenchmarkAuthority,
     ConversionBenchmarkCatalogAuthority, ConversionBenchmarkCatalogQuery,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkConfig,
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
-    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV7,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV8,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSetup,
     ConversionBenchmarkSubject, ConversionBenchmarkView, ConversionBenchmarkViews,
     ConversionService, ServerConversionResult, run_conversion_benchmark_from_config,
@@ -327,10 +327,7 @@ impl ServerState {
             config.db_path.clone(),
         );
         let bounded_cache = BoundedCache::new(chunk_cache.clone());
-        let archive_compression =
-            conary_core::ccs::CcsArchiveCompressionAdmission::for_host_parallelism(
-                std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
-            )?;
+        let archive_cpu = conary_core::ccs::CcsArchiveCpuAdmission::for_current_process();
         let conversion_service = ConversionService::new(
             config.chunk_dir.clone(),
             config.cache_dir.clone(),
@@ -341,7 +338,7 @@ impl ServerState {
         .with_database_writer(database_writer.clone())
         .with_publication_coordinator(Arc::clone(&publication_coordinator))
         .with_bounded_cache(bounded_cache.clone())
-        .with_archive_compression_admission(archive_compression)
+        .with_archive_cpu_admission(archive_cpu)
         .with_repository_keys_dir(config.release_publish.repository_keys_dir.clone());
 
         // Initialize Bloom filter if enabled

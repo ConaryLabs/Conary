@@ -6,11 +6,11 @@ mod public_projection;
 mod report;
 
 use super::{
-    CONVERSION_BENCHMARK_SCHEMA_V7, ConversionBenchmarkAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V8, ConversionBenchmarkAuthority,
     ConversionBenchmarkCatalogAuthority, ConversionBenchmarkCatalogQuery,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkConfig,
     ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence, ConversionBenchmarkOutcome,
-    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV7,
+    ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV8,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkSetup,
     ConversionBenchmarkSubject, ConversionBenchmarkView, ConversionBenchmarkViews,
     ConversionService,
@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const REPORT_FILE_NAME: &str = "conversion-benchmark-v7.json";
+const REPORT_FILE_NAME: &str = "conversion-benchmark-v8.json";
 
 /// Run one network-independent conversion benchmark against a coherent copy
 /// of the deployed operational database and the deployed immutable catalogs.
@@ -46,7 +46,7 @@ const REPORT_FILE_NAME: &str = "conversion-benchmark-v7.json";
 pub async fn run_conversion_benchmark_from_config(
     remi_config: &RemiConfig,
     config: ConversionBenchmarkConfig,
-) -> Result<ConversionBenchmarkReportV7> {
+) -> Result<ConversionBenchmarkReportV8> {
     let prepare_probe = ProcessUsageProbe::start()?;
     validate_request(&config)?;
     remi_config.validate()?;
@@ -132,13 +132,10 @@ pub async fn run_conversion_benchmark_from_config(
         ])?,
     );
 
-    let archive_compression =
-        conary_core::ccs::CcsArchiveCompressionAdmission::for_host_parallelism(
-            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
-        )?;
+    let archive_cpu = conary_core::ccs::CcsArchiveCpuAdmission::for_current_process();
     let service = ConversionService::new(chunk_dir, cache_dir, benchmark_db, None)
         .with_catalog_authority(catalog_authority)
-        .with_archive_compression_admission(archive_compression)
+        .with_archive_cpu_admission(archive_cpu)
         .with_repository_keys_dir(Some(repository_keys_dir.clone()));
     let signing_key = Arc::new(load_role_key(
         &repository_keys_dir,
@@ -174,8 +171,8 @@ pub async fn run_conversion_benchmark_from_config(
         }
     }
 
-    let report = ConversionBenchmarkReportV7 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V7,
+    let report = ConversionBenchmarkReportV8 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V8,
         environment,
         authority,
         setup,

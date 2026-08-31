@@ -25,6 +25,7 @@ const R2_PUBLICATION_CONCURRENCY: usize = 16;
 pub(super) struct StoredTransport {
     pub(super) transport: conary_core::ccs::CcsTransportEnvelopeV1,
     pub(super) verification_and_cas_duration: Duration,
+    pub(super) archive_decode_metrics: conary_core::ccs::VerifiedArchiveDecodeMetrics,
     pub(super) cas_metrics: VerifiedObjectBatchMetrics,
     pub(super) r2_duration: Option<Duration>,
     pub(super) r2_work: crate::server::conversion_timing::ConversionR2Work,
@@ -161,6 +162,7 @@ impl ConversionService {
         let policy = conary_core::ccs::TrustPolicy::strict(vec![signing_key.public_key_base64()]);
 
         let local_objects_dir = objects_dir.clone();
+        let archive_cpu = self.archive_cpu.clone();
         let finalized = tokio::task::spawn_blocking(move || {
             let cas =
                 CasStore::new(local_objects_dir).context("initialize signed CCS object CAS")?;
@@ -168,6 +170,7 @@ impl ConversionService {
                 pending,
                 &policy,
                 &cas,
+                &archive_cpu,
                 &packages_dir,
                 after_publication,
             )
@@ -218,10 +221,16 @@ impl ConversionService {
         let verify_and_cas_started = Instant::now();
         let local_artifact = package_path.to_path_buf();
         let local_objects_dir = objects_dir.clone();
+        let archive_cpu = self.archive_cpu.clone();
         let verification = tokio::task::spawn_blocking(move || {
             let cas =
                 CasStore::new(local_objects_dir).context("initialize signed CCS object CAS")?;
-            conary_core::ccs::verify::verify_package_into_cas(&local_artifact, &policy, &cas)
+            conary_core::ccs::verify::verify_package_into_cas_with_archive_cpu_admission(
+                &local_artifact,
+                &policy,
+                &cas,
+                &archive_cpu,
+            )
         })
         .await
         .context("join emitted CCS transport verification and CAS ingestion task")??;
@@ -245,6 +254,9 @@ impl ConversionService {
         let cas_metrics = verification
             .verified_object_metrics()
             .context("permanent CCS verification omitted verified-CAS work evidence")?;
+        let archive_decode_metrics = verification
+            .archive_decode_metrics()
+            .context("permanent CCS verification omitted archive-decode work evidence")?;
         let transport =
             conary_core::ccs::CcsTransportEnvelopeV1::from_verified_archive(&verification)?;
         let exact_sizes = transport
@@ -301,6 +313,7 @@ impl ConversionService {
         Ok(StoredTransport {
             transport,
             verification_and_cas_duration,
+            archive_decode_metrics,
             cas_metrics,
             r2_duration,
             r2_work,

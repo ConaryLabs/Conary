@@ -22,13 +22,15 @@ mutate_ccs() {
     local source_ccs="$1"
     local output_ccs="$2"
     local mutator="$3"
-    local tmpdir
+    local tmpdir tmp_tar
     tmpdir="$(mktemp -d)"
+    tmp_tar="$(mktemp)"
     tar -xzf "$source_ccs" -C "$tmpdir"
     "$mutator" "$tmpdir"
     mapfile -t archive_entries < <(find "$tmpdir" -type f -printf '%P\n' | sort)
-    tar -czf "$output_ccs" -C "$tmpdir" "${archive_entries[@]}"
-    rm -rf "$tmpdir"
+    tar -cf "$tmp_tar" -C "$tmpdir" "${archive_entries[@]}"
+    python3 "$SCRIPT_DIR/repack-mgzip.py" "$tmp_tar" "$output_ccs"
+    rm -rf "$tmpdir" "$tmp_tar"
 }
 
 mutate_bad_checksum() {

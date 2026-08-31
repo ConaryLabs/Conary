@@ -17,6 +17,20 @@
 //! Membership is returned as a `bool` rather than a `Result` because the two
 //! readers carry different error types. Each caller states its own failure.
 
+/// Whether `path` has the sole canonical archive spelling.
+///
+/// Tar paths are slash-delimited regardless of the host. Empty components,
+/// root prefixes, trailing separators, and `.` or `..` aliases would give one
+/// logical entry multiple physical names and are therefore rejected.
+pub(crate) fn is_canonical_entry_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.ends_with('/')
+        && path
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..")
+}
+
 /// Component payload directory.
 pub const COMPONENTS_DIR: &str = "components";
 
@@ -74,6 +88,23 @@ mod tests {
     fn both_top_level_directories_are_known() {
         assert!(is_known_directory(COMPONENTS_DIR));
         assert!(is_known_directory(OBJECTS_DIR));
+    }
+
+    #[test]
+    fn canonical_paths_have_one_physical_spelling() {
+        for path in ["MANIFEST", "objects/ab/cdef", "MANIFEST.attestation.json"] {
+            assert!(is_canonical_entry_path(path), "{path}");
+        }
+        for path in [
+            "",
+            "/MANIFEST",
+            "./MANIFEST",
+            "objects//ab",
+            "objects/../MANIFEST",
+            "objects/",
+        ] {
+            assert!(!is_canonical_entry_path(path), "{path}");
+        }
     }
 
     /// The regression that motivated this module: `components` was dropped from

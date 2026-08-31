@@ -168,6 +168,17 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.ccs_output_bytes = 23;
         timing.work.ccs_output_bytes_hashed = 23;
         timing.work.independent_transport_reopen_ccs_bytes = 23;
+        timing.work.independent_transport_reopen_decode_workers = 1;
+        timing.work.independent_transport_reopen_decode_blocks = 1;
+        timing.work.independent_transport_reopen_decoded_bytes = 2048;
+        timing.work.independent_transport_reopen_decode_block_bytes =
+            conary_core::ccs::CCS_BUDGET.archive_compression_block_bytes as u64;
+        timing
+            .work
+            .independent_transport_reopen_decode_buffer_ceiling_bytes =
+            conary_core::ccs::CCS_BUDGET
+                .archive_decode_buffer_ceiling_bytes(1)
+                .unwrap();
         timing.work.complete_archive_hash_bytes = 23;
         timing.work.complete_archive_copy_bytes = 23;
         timing.work.signed_object_count = 2;
@@ -195,10 +206,10 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
     timing
 }
 
-fn valid_report() -> ConversionBenchmarkReportV7 {
+fn valid_report() -> ConversionBenchmarkReportV8 {
     let output = valid_output();
-    ConversionBenchmarkReportV7 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V7,
+    ConversionBenchmarkReportV8 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V8,
         environment: ConversionBenchmarkEnvironment {
             hardware_label: "fixture".to_string(),
             remi_version: "0".to_string(),
@@ -283,7 +294,7 @@ fn valid_report() -> ConversionBenchmarkReportV7 {
     }
 }
 
-fn cold_work_mut(report: &mut ConversionBenchmarkReportV7) -> &mut ConversionWorkMetrics {
+fn cold_work_mut(report: &mut ConversionBenchmarkReportV8) -> &mut ConversionWorkMetrics {
     let ConversionBenchmarkOutcome::Success { timing, .. } = &mut report.repetitions[0].outcome
     else {
         unreachable!()
@@ -441,7 +452,7 @@ fn rejects_missing_or_repeated_fused_payload_preparation_phase() {
 #[test]
 fn rejects_retired_schema_payload_fields_and_phases() {
     let mut legacy_schema = valid_report();
-    legacy_schema.schema_version = 6;
+    legacy_schema.schema_version = 7;
     assert!(validate_report(&legacy_schema).is_err());
 
     let mut missing_reopen_counter = serde_json::to_value(valid_report()).unwrap();
@@ -450,7 +461,7 @@ fn rejects_retired_schema_payload_fields_and_phases() {
         .unwrap()
         .remove("payload_source_files_reopened");
     let error =
-        serde_json::from_value::<ConversionBenchmarkReportV7>(missing_reopen_counter).unwrap_err();
+        serde_json::from_value::<ConversionBenchmarkReportV8>(missing_reopen_counter).unwrap_err();
     assert!(error.to_string().contains("missing field"), "{error}");
 
     let mut legacy_work = serde_json::to_value(valid_report()).unwrap();
@@ -461,7 +472,7 @@ fn rejects_retired_schema_payload_fields_and_phases() {
             "payload_reference_bytes_read".to_string(),
             serde_json::json!(20),
         );
-    let error = serde_json::from_value::<ConversionBenchmarkReportV7>(legacy_work).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkReportV8>(legacy_work).unwrap_err();
     assert!(error.to_string().contains("unknown field"), "{error}");
 
     let mut legacy_phase = serde_json::to_value(valid_report()).unwrap();
@@ -472,7 +483,7 @@ fn rejects_retired_schema_payload_fields_and_phases() {
             "phase": "payload_reference_derivation",
             "duration_ms": 1,
         }));
-    let error = serde_json::from_value::<ConversionBenchmarkReportV7>(legacy_phase).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkReportV8>(legacy_phase).unwrap_err();
     assert!(error.to_string().contains("unknown variant"), "{error}");
 
     let mut legacy_nested = serde_json::to_value(valid_report()).unwrap();
@@ -480,7 +491,7 @@ fn rejects_retired_schema_payload_fields_and_phases() {
         .as_object_mut()
         .unwrap()
         .insert("nested_phases".to_string(), serde_json::json!([]));
-    let error = serde_json::from_value::<ConversionBenchmarkReportV7>(legacy_nested).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkReportV8>(legacy_nested).unwrap_err();
     assert!(error.to_string().contains("unknown field"), "{error}");
 }
 
@@ -500,6 +511,26 @@ fn rejects_noncanonical_archive_compression_geometry() {
 
     let mut report = valid_report();
     cold_work_mut(&mut report).archive_compression_buffer_ceiling_bytes += 1;
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    cold_work_mut(&mut report).independent_transport_reopen_decode_workers = 0;
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    cold_work_mut(&mut report).independent_transport_reopen_decode_blocks += 1;
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    cold_work_mut(&mut report).independent_transport_reopen_decoded_bytes += 1;
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    cold_work_mut(&mut report).independent_transport_reopen_decode_block_bytes -= 1;
+    assert!(validate_report(&report).is_err());
+
+    let mut report = valid_report();
+    cold_work_mut(&mut report).independent_transport_reopen_decode_buffer_ceiling_bytes += 1;
     assert!(validate_report(&report).is_err());
 }
 
@@ -939,7 +970,7 @@ fn strict_schema_rejects_unknown_top_level_fields() {
         "portable_chunk_count": 1
     });
     let mut value = serde_json::json!({
-        "schema_version": CONVERSION_BENCHMARK_SCHEMA_V7,
+        "schema_version": CONVERSION_BENCHMARK_SCHEMA_V8,
         "environment": {
             "hardware_label": "fixture",
             "remi_version": "0",
@@ -999,6 +1030,6 @@ fn strict_schema_rejects_unknown_top_level_fields() {
         .as_object_mut()
         .unwrap()
         .insert("legacy_v2_field".to_string(), serde_json::Value::Bool(true));
-    let error = serde_json::from_value::<ConversionBenchmarkReportV7>(value).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkReportV8>(value).unwrap_err();
     assert!(error.to_string().contains("unknown field"), "{error}");
 }

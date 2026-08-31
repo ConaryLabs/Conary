@@ -479,6 +479,9 @@ impl ConversionService {
         timing.work.independent_transport_reopen_object_bytes_hashed = reopened_object_bytes;
         timing
             .work
+            .record_archive_decode(stored_conversion.stored_transport.archive_decode_metrics);
+        timing
+            .work
             .record_cas(stored_conversion.stored_transport.cas_metrics);
         timing.work.r2 = stored_conversion.stored_transport.r2_work.clone();
         timing.work.complete_archive_copy_bytes =
@@ -663,7 +666,7 @@ impl ConversionService {
         let converter = NativePackageConverter::new(options)
             .with_source_profile(source_profile)
             .with_conversion_tool("remi")
-            .with_archive_compression_admission(self.archive_compression.clone())
+            .with_archive_cpu_admission(self.archive_cpu.clone())
             .with_signing_key(std::sync::Arc::new(signing_key));
 
         let conversion_result = converter

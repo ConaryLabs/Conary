@@ -25,6 +25,7 @@ use conary_core::trust::generate::{generate_snapshot, generate_targets, generate
 use conary_core::trust::metadata::{
     RootMetadata, Signed, SnapshotMetadata, TargetsMetadata, TimestampMetadata,
 };
+use gzp::ZWriter;
 
 const PACKAGE_NAME: &str = "test-hello";
 const REPO_NAME: &str = "local-static";
@@ -441,11 +442,17 @@ fn replace_published_package_with_unsigned_package(fixture: &StaticRepoFixture) 
 fn rewrite_ccs_without_manifest_signature(package_path: &Path) {
     let unsigned_path = package_path.with_extension("unsigned.ccs");
     let input = fs::File::open(package_path).unwrap();
-    let decoder = flate2::read::GzDecoder::new(input);
+    let decoder = flate2::read::MultiGzDecoder::new(input);
     let mut archive = tar::Archive::new(decoder);
 
     let output = fs::File::create(&unsigned_path).unwrap();
-    let encoder = flate2::write::GzEncoder::new(output, flate2::Compression::default());
+    let encoder = gzp::par::compress::ParCompressBuilder::<gzp::deflate::Mgzip>::new()
+        .buffer_size(conary_core::ccs::CCS_BUDGET.archive_compression_block_bytes)
+        .unwrap()
+        .num_threads(1)
+        .unwrap()
+        .compression_level(flate2::Compression::default())
+        .from_writer(output);
     let mut builder = tar::Builder::new(encoder);
     let mut removed_signature = false;
 
@@ -469,7 +476,8 @@ fn rewrite_ccs_without_manifest_signature(package_path: &Path) {
     }
 
     assert!(removed_signature, "published package should be signed");
-    let encoder = builder.into_inner().unwrap();
+    builder.finish().unwrap();
+    let mut encoder = builder.into_inner().unwrap();
     encoder.finish().unwrap();
     fs::rename(unsigned_path, package_path).unwrap();
 }

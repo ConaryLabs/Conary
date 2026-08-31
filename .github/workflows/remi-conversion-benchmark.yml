@@ -890,6 +890,11 @@ jobs:
                   "complete_archive_hash_bytes",
                   "downloaded_bytes",
                   "independent_transport_reopen_ccs_bytes",
+                  "independent_transport_reopen_decode_block_bytes",
+                  "independent_transport_reopen_decode_blocks",
+                  "independent_transport_reopen_decode_buffer_ceiling_bytes",
+                  "independent_transport_reopen_decode_workers",
+                  "independent_transport_reopen_decoded_bytes",
                   "independent_transport_reopen_object_bytes_hashed",
                   "maximum_retained_staging_bytes",
                   "native_archive_entries_traversed",
@@ -1005,10 +1010,10 @@ jobs:
                 "setup",
                 "subject"
               ]
-              and .schema_version == 5
+              and .schema_version == 6
               and (.raw_report | keys | sort)
                 == ["schema_version", "sha256", "size_bytes"]
-              and .raw_report.schema_version == 7
+              and .raw_report.schema_version == 8
               and (.raw_report.sha256 | sha256)
               and (.raw_report.size_bytes | type == "number")
               and .raw_report.size_bytes > 0
@@ -1159,6 +1164,17 @@ jobs:
                 and $work.ccs_output_bytes_hashed == $output.ccs_size_bytes
                 and $work.independent_transport_reopen_ccs_bytes
                   == $output.ccs_size_bytes
+                and $work.independent_transport_reopen_decode_workers > 0
+                and $work.independent_transport_reopen_decode_workers <= 64
+                and $work.independent_transport_reopen_decoded_bytes
+                  == $work.archive_compression_input_bytes
+                and $work.independent_transport_reopen_decode_block_bytes == 1048576
+                and $work.independent_transport_reopen_decode_blocks
+                  == (($work.independent_transport_reopen_decoded_bytes + 1048575)
+                    / 1048576 | floor)
+                and $work.independent_transport_reopen_decode_buffer_ceiling_bytes
+                  == ((2 * $work.independent_transport_reopen_decode_workers + 2)
+                    * (1048576 + 1048576 + 104857 + 156))
                 and $work.complete_archive_hash_bytes == $output.ccs_size_bytes
                 and $work.complete_archive_copy_bytes == $output.ccs_size_bytes
                 and $work.signed_object_count == $output.signed_object_count
@@ -1219,7 +1235,7 @@ jobs:
               exit 1
           }
 
-          cp -- "$local_transport" remi-conversion-benchmark-public-v5.json
+          cp -- "$local_transport" remi-conversion-benchmark-public-v6.json
           {
             echo "result=success"
             echo "benchmark_id=$benchmark_id"
@@ -1246,7 +1262,7 @@ jobs:
         with:
           name: remi-conversion-benchmark-${{ inputs.deployment_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            remi-conversion-benchmark-public-v5.json
+            remi-conversion-benchmark-public-v6.json
             remi-conversion-source-verification-v1.json
             remi-deployment-inspection.json
             remi-candidate-manifest.json
@@ -1287,7 +1303,7 @@ jobs:
               | "- iteration \(.iteration) `\(.cache_state)`: "
                 + "conversion core \(.views.conversion_core.duration_ms) ms; "
                 + "end to end \(.views.end_to_end.duration_ms) ms"' \
-              remi-conversion-benchmark-public-v5.json
+              remi-conversion-benchmark-public-v6.json
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail closed on unsuccessful benchmark result

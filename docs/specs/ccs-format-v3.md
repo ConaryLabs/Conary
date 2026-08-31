@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-13
-revision: 12
+last_updated: 2026-08-31
+revision: 13
 summary: Canonical current signed CCS v3 identity, capability, archive, payload, and trust contract
 ---
 
@@ -16,7 +16,17 @@ and trust boundaries between producers and consumers.
 
 ## Archive Grammar
 
-A package is a gzip-compressed tar archive. Its accepted entries are:
+A package is a tar archive carried by canonical fixed-block MGZIP. Every gzip
+member has the exact 20-byte MGZIP header emitted by the current writer,
+including the little-endian total frame length. Every non-final member decodes
+to exactly 1 MiB; the final member decodes to between one byte and 1 MiB. Each
+raw-DEFLATE payload must finish at its declared frame boundary and its gzip
+CRC32 and ISIZE must match the decoded block. Members remain in their encoded
+order. Ordinary single-member gzip, short non-final blocks, reordered or
+substituted blocks, malformed or appended members, and bytes after the exact
+tar terminator are not a second current representation.
+
+The accepted tar entries are:
 
 | Path | Requirement | Authority |
 |---|---|---|
@@ -43,9 +53,12 @@ non-canonical object paths; archive path escapes; object/hash disagreement; any
 entry type not admitted for its path; and every structural-budget violation
 below.
 
-Tar ordering, timestamps, ownership, and compression are transport details.
-Writers emit deterministic ordering and normalized timestamps. They never
-become package authority.
+Tar ordering, timestamps, and ownership do not become signed package
+authority. Writers emit deterministic ordering and normalized timestamps.
+MGZIP framing is nevertheless the sole accepted physical archive grammar and
+participates in the verified physical archive identity. Existing CCS v3
+archives using the retired ordinary-gzip carrier must be rebuilt; readers and
+signers provide no compatibility decoder.
 
 ## Signed Authority
 

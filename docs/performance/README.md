@@ -33,17 +33,20 @@ passing the label. Network bytes, CAS work, SQLite statements, durability
 calls, complete-root scans, and internal phase timing remain separate typed
 counters rather than estimates derived from elapsed time.
 
-Schema v7 records the exact CCS compression geometry: tar-stream input bytes,
+Schema v8 records the exact CCS compression geometry: tar-stream input bytes,
 compression workers, fixed block bytes, block count, and the checked buffering
-ceiling. Fixed ordered blocks make gzip bytes independent of worker scheduling.
-Remi shares one live compression authority sized from detected host or cgroup
-logical parallelism and capped by the canonical CCS worker budget. An archive
-leases the currently idle authority only for final emission, so a lone
-conversion may use the complete CPU allowance while competing archive phases
-queue instead of oversubscribing it. No environment variable, configured job
-ceiling, or filesystem-specific backend selects archive representation.
+ceiling. The sole current carrier is canonical fixed-block MGZIP; ordinary
+single-member gzip is retired and existing pre-alpha CCS artifacts require
+rebuild. Fixed ordered blocks make carrier bytes independent of worker
+scheduling and allow authenticated reopen to decode them in parallel. Remi
+shares one live archive-CPU authority sized from detected host or cgroup logical
+parallelism and capped by the canonical CCS worker budget. Final emission and
+authenticated reopen each lease the currently idle authority, so a lone phase
+may use the complete CPU allowance while competing archive phases queue instead
+of oversubscribing it. No environment variable, configured job ceiling,
+compatibility decoder, or filesystem-specific backend selects representation.
 
-The current Remi conversion schema-v7 contract treats internal signed-archive
+The current Remi conversion schema-v8 contract treats internal signed-archive
 authentication and permanent verified-CAS admission as one fused physical
 pass. Its full elapsed time is recorded once in the `timing.phases` entry named
 `independent_transport_reopen`; `durable_cas_ingestion` is skipped because
@@ -55,6 +58,9 @@ conversion `timing.work` is all zero, while its separate benchmark output proof
 still reads and authenticates the persisted CCS after `end_to_end` returns.
 Required chunk-reconstruction validation remains inside the independent signed-
 archive verification boundaries; fusion removes only the later CAS-source pass.
+The reopen record also binds exact decode workers, decoded blocks and bytes,
+fixed block bytes, and the checked ordered-buffer ceiling. Those counters must
+match the authored tar-stream geometry before a report is accepted.
 
 Two current reopen fields must not be conflated:
 
@@ -66,7 +72,7 @@ Two current reopen fields must not be conflated:
   `conversion_core` or `end_to_end`. The output proof's separate complete CCS
   hash has the same boundary.
 
-Schema v7 retains the schema-v4 deletion of the former converter-owned
+Schema v8 retains the schema-v4 deletion of the former converter-owned
 `immediate_converter_reopen` phase and both
 `immediate_converter_reopen_*` inferred counters. The converter now returns an
 explicitly pending artifact; Remi verifies it once under the profile targets

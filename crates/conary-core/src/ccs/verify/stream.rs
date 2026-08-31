@@ -12,7 +12,7 @@ use crate::packages::payload::{PackagePayload, ReopenablePayload};
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
-use std::path::{Component, Path};
+use std::path::Path;
 
 #[cfg(test)]
 use super::content::expected_objects;
@@ -21,6 +21,7 @@ use crate::ccs::v3::schema::{FileContentLayoutV3, PackageKindV3};
 
 pub(super) struct StreamVerifiedArchive {
     pub archive_identity: super::VerifiedArchiveIdentity,
+    pub archive_decode_metrics: crate::ccs::archive_framing::ArchiveDecodeMetrics,
     pub authority: AuthorityDocumentV3,
     pub signature: PackageSignature,
     pub build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
@@ -63,8 +64,9 @@ pub(super) fn verify_archive<'a>(
     path: &Path,
     policy: &TrustPolicy,
     destination: super::object_sink::ObjectDestination<'a>,
+    workers: usize,
 ) -> Result<StreamVerifiedArchive> {
-    let mut archive = super::archive_identity::open(path)?;
+    let mut archive = super::archive_identity::open(path, workers)?;
     let mut metadata = MetadataState::default();
     let mut authenticated = None;
     let mut object_sink = None;
@@ -109,7 +111,7 @@ pub(super) fn verify_archive<'a>(
         }
         read_metadata_entry(&mut entry, &path, &mut metadata)?;
     }
-    let archive_identity = super::archive_identity::finish(archive)?;
+    let (archive_identity, archive_decode_metrics) = super::archive_identity::finish(archive)?;
 
     let authenticated = match authenticated {
         Some(value) => value,
@@ -156,6 +158,7 @@ pub(super) fn verify_archive<'a>(
     };
     Ok(StreamVerifiedArchive {
         archive_identity,
+        archive_decode_metrics,
         authority: authenticated.authority,
         signature: authenticated.signature,
         build_attestation: authenticated.build_attestation,
@@ -449,25 +452,12 @@ fn canonical_entry_path(entry: &tar::Entry<'_, ArchiveDecoder>) -> Result<String
 }
 
 fn canonical_path(path: &str) -> Result<String> {
-    if path.is_empty() || path.starts_with('/') || path.ends_with('/') {
+    if !crate::ccs::archive_layout::is_canonical_entry_path(path) {
         return Err(
             VerifyError::PackageError(format!("noncanonical CCS archive path {path:?}")).into(),
         );
     }
-    let parsed = Path::new(path);
-    if parsed
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-        || path.split('/').any(str::is_empty)
-    {
-        return Err(
-            VerifyError::PackageError(format!("noncanonical CCS archive path {path:?}")).into(),
-        );
-    }
-    let normalized = parsed
-        .to_str()
-        .context("CCS archive entry path is not valid UTF-8")?;
-    Ok(normalized.to_string())
+    Ok(path.to_string())
 }
 
 fn require_known_directory(path: &str) -> Result<()> {
@@ -483,8 +473,10 @@ mod tests {
     use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
     use crate::ccs::signing::SigningKeyPair;
     use flate2::Compression;
-    use flate2::read::GzDecoder as ReadGzDecoder;
     use flate2::write::GzEncoder;
+    use gzp::ZWriter;
+    use gzp::deflate::Mgzip;
+    use gzp::par::compress::ParCompressBuilder;
     use std::fs::File;
     use std::io::Write;
     use tar::{Archive, Builder, EntryType, Header};
@@ -513,7 +505,9 @@ mod tests {
         .unwrap();
         let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
 
-        let mut archive = Archive::new(ReadGzDecoder::new(File::open(&path).unwrap()));
+        let mut archive = Archive::new(crate::ccs::archive_framing::MgzipDecoder::new(
+            File::open(&path).unwrap(),
+        ));
         let entries = archive
             .entries()
             .unwrap()
@@ -544,7 +538,7 @@ mod tests {
     ) {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("chunked.ccs");
-        let bytes = (0..(crate::ccs::chunking::MAX_CHUNK_SIZE as usize * 5))
+        let bytes = (0..(crate::ccs::chunking::MAX_CHUNK_SIZE as usize * 20))
             .map(|index| ((index * 31 + index / 251) % 256) as u8)
             .collect::<Vec<_>>();
         let chunk_references = crate::ccs::chunking::Chunker::new()
@@ -590,7 +584,9 @@ mod tests {
     }
 
     fn read_entries(path: &Path) -> Vec<TestEntry> {
-        let mut archive = Archive::new(ReadGzDecoder::new(File::open(path).unwrap()));
+        let mut archive = Archive::new(crate::ccs::archive_framing::MgzipDecoder::new(
+            File::open(path).unwrap(),
+        ));
         archive
             .entries()
             .unwrap()
@@ -632,7 +628,13 @@ mod tests {
     }
 
     fn write_fixture(path: &Path, entries: &[TestEntry]) {
-        let encoder = GzEncoder::new(File::create(path).unwrap(), Compression::default());
+        let encoder = ParCompressBuilder::<Mgzip>::new()
+            .buffer_size(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)
+            .unwrap()
+            .num_threads(1)
+            .unwrap()
+            .compression_level(Compression::default())
+            .from_writer(File::create(path).unwrap());
         let mut archive = Builder::new(encoder);
         for entry in entries {
             let mut header = Header::new_gnu();
@@ -688,6 +690,7 @@ mod tests {
             &path,
             &policy,
             super::super::object_sink::ObjectDestination::Spool,
+            1,
         )
         .unwrap();
         assert_eq!(verified.payload.files().len(), 2);
@@ -743,6 +746,7 @@ mod tests {
             path,
             policy,
             super::super::object_sink::ObjectDestination::Spool,
+            1,
         ) {
             Ok(_) => panic!("mutated archive unexpectedly verified"),
             Err(error) => format!("{error:#}"),
@@ -751,14 +755,20 @@ mod tests {
 
     fn decoded_tar(path: &Path) -> Vec<u8> {
         let mut decoded = Vec::new();
-        ReadGzDecoder::new(File::open(path).unwrap())
+        crate::ccs::archive_framing::MgzipDecoder::new(File::open(path).unwrap())
             .read_to_end(&mut decoded)
             .unwrap();
         decoded
     }
 
-    fn write_gzip_payload(path: &Path, payload: &[u8]) {
-        let mut encoder = GzEncoder::new(File::create(path).unwrap(), Compression::default());
+    fn write_mgzip_payload(path: &Path, payload: &[u8]) {
+        let mut encoder = ParCompressBuilder::<Mgzip>::new()
+            .buffer_size(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)
+            .unwrap()
+            .num_threads(1)
+            .unwrap()
+            .compression_level(Compression::default())
+            .from_writer(File::create(path).unwrap());
         encoder.write_all(payload).unwrap();
         encoder.finish().unwrap();
     }
@@ -889,6 +899,7 @@ mod tests {
                 &truncated,
                 &policy,
                 super::super::object_sink::ObjectDestination::Spool,
+                1,
             )
             .is_err()
         );
@@ -916,30 +927,30 @@ mod tests {
         assert!(raw[raw.len() - 1024..].iter().all(|byte| *byte == 0));
 
         let missing = temp.path().join("missing-terminator.ccs");
-        write_gzip_payload(&missing, &raw[..raw.len() - 512]);
+        write_mgzip_payload(&missing, &raw[..raw.len() - 512]);
         assert!(error_text(&missing, &policy).contains("noncanonical length"));
 
         let extra = temp.path().join("extra-terminator.ccs");
         let mut extra_raw = raw.clone();
         extra_raw.extend_from_slice(&[0_u8; 512]);
-        write_gzip_payload(&extra, &extra_raw);
+        write_mgzip_payload(&extra, &extra_raw);
         assert!(error_text(&extra, &policy).contains("terminator/padding exceeds"));
 
         let nonzero = temp.path().join("nonzero-terminator.ccs");
         let mut nonzero_raw = raw;
         *nonzero_raw.last_mut().unwrap() = 1;
-        write_gzip_payload(&nonzero, &nonzero_raw);
+        write_mgzip_payload(&nonzero, &nonzero_raw);
         assert!(error_text(&nonzero, &policy).contains("non-zero data"));
     }
 
     #[test]
-    fn rejects_appended_tar_data_and_second_gzip_member() {
+    fn rejects_appended_tar_data_and_noncanonical_gzip_member() {
         let (temp, _, policy, base) = fixture();
 
         let appended_tar = temp.path().join("appended-tar.ccs");
         let mut raw = decoded_tar(&base);
         raw.extend_from_slice(b"unsigned appended tar bytes");
-        write_gzip_payload(&appended_tar, &raw);
+        write_mgzip_payload(&appended_tar, &raw);
         assert!(error_text(&appended_tar, &policy).contains("non-zero data"));
 
         let appended_gzip = temp.path().join("appended-gzip.ccs");
@@ -949,7 +960,47 @@ mod tests {
         member.write_all(b"second member").unwrap();
         bytes.extend(member.finish().unwrap());
         std::fs::write(&appended_gzip, bytes).unwrap();
-        assert!(error_text(&appended_gzip, &policy).contains("second gzip member"));
+        assert!(error_text(&appended_gzip, &policy).contains("noncanonical MGZIP header"));
+    }
+
+    #[test]
+    fn reordered_and_substituted_mgzip_blocks_fail_before_archive_authority_escapes() {
+        let (temp, _, signer, base, _) = chunked_fixture();
+        let policy = TrustPolicy::strict(vec![signer.public_key_base64()]);
+        let bytes = std::fs::read(base).unwrap();
+        let mut ranges = Vec::new();
+        let mut offset = 0_usize;
+        while offset < bytes.len() {
+            let frame_bytes =
+                u32::from_le_bytes(bytes[offset + 16..offset + 20].try_into().unwrap()) as usize;
+            ranges.push(offset..offset + frame_bytes);
+            offset += frame_bytes;
+        }
+        assert_eq!(offset, bytes.len());
+        assert!(
+            ranges.len() >= 2,
+            "fixture must span canonical MGZIP blocks"
+        );
+
+        let reordered = temp.path().join("reordered-mgzip.ccs");
+        let mut reordered_bytes = Vec::with_capacity(bytes.len());
+        reordered_bytes.extend_from_slice(&bytes[ranges[1].clone()]);
+        reordered_bytes.extend_from_slice(&bytes[ranges[0].clone()]);
+        for range in &ranges[2..] {
+            reordered_bytes.extend_from_slice(&bytes[range.clone()]);
+        }
+        std::fs::write(&reordered, reordered_bytes).unwrap();
+        assert!(!error_text(&reordered, &policy).is_empty());
+
+        let substituted = temp.path().join("substituted-mgzip.ccs");
+        let mut substituted_bytes = Vec::with_capacity(bytes.len());
+        substituted_bytes.extend_from_slice(&bytes[ranges[0].clone()]);
+        substituted_bytes.extend_from_slice(&bytes[ranges[0].clone()]);
+        for range in &ranges[2..] {
+            substituted_bytes.extend_from_slice(&bytes[range.clone()]);
+        }
+        std::fs::write(&substituted, substituted_bytes).unwrap();
+        assert!(!error_text(&substituted, &policy).is_empty());
     }
 
     #[test]

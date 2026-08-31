@@ -163,6 +163,28 @@ pub struct VerifiedArchiveIdentity {
     bytes: u64,
 }
 
+/// Exact bounded worker and block geometry used by authenticated archive decode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VerifiedArchiveDecodeMetrics {
+    pub workers: u64,
+    pub blocks: u64,
+    pub decoded_bytes: u64,
+    pub block_bytes: u64,
+    pub buffer_ceiling_bytes: u64,
+}
+
+impl From<crate::ccs::archive_framing::ArchiveDecodeMetrics> for VerifiedArchiveDecodeMetrics {
+    fn from(value: crate::ccs::archive_framing::ArchiveDecodeMetrics) -> Self {
+        Self {
+            workers: value.workers,
+            blocks: value.blocks,
+            decoded_bytes: value.decoded_bytes,
+            block_bytes: value.block_bytes,
+            buffer_ceiling_bytes: value.buffer_ceiling_bytes,
+        }
+    }
+}
+
 impl VerifiedArchiveIdentity {
     fn new(sha256: String, bytes: u64) -> Self {
         Self { sha256, bytes }
@@ -187,6 +209,7 @@ impl VerifiedArchiveIdentity {
 #[derive(Debug, Clone)]
 pub struct VerifiedCcsArchive {
     archive_identity: Option<VerifiedArchiveIdentity>,
+    archive_decode_metrics: Option<VerifiedArchiveDecodeMetrics>,
     authority: crate::ccs::v3::AuthorityDocumentV3,
     signature: PackageSignature,
     build_attestation: Option<crate::ccs::attestation::BuildAttestationEnvelope>,
@@ -217,6 +240,11 @@ impl VerifiedCcsArchive {
     /// Exact compressed byte length covered by [`Self::archive_sha256`].
     pub fn archive_bytes(&self) -> Option<u64> {
         self.archive_identity().map(VerifiedArchiveIdentity::bytes)
+    }
+
+    /// Exact parallel decode geometry when this capability came from an archive.
+    pub fn archive_decode_metrics(&self) -> Option<VerifiedArchiveDecodeMetrics> {
+        self.archive_decode_metrics
     }
 
     pub fn authority(&self) -> &crate::ccs::v3::AuthorityDocumentV3 {
@@ -282,7 +310,22 @@ impl VerifiedCcsArchive {
 /// Verify current CCS authority, signature trust, diagnostic projections, and
 /// every payload object before returning an install/publication capability.
 pub fn verify_package(path: &Path, policy: &TrustPolicy) -> Result<VerifiedCcsArchive> {
-    verify_package_to(path, policy, object_sink::ObjectDestination::Spool)
+    let admission = crate::ccs::CcsArchiveCpuAdmission::for_current_process();
+    verify_package_with_archive_cpu_admission(path, policy, &admission)
+}
+
+/// Verify one archive with an explicit shared aggregate archive-CPU authority.
+pub fn verify_package_with_archive_cpu_admission(
+    path: &Path,
+    policy: &TrustPolicy,
+    admission: &crate::ccs::CcsArchiveCpuAdmission,
+) -> Result<VerifiedCcsArchive> {
+    verify_package_to(
+        path,
+        policy,
+        object_sink::ObjectDestination::Spool,
+        admission,
+    )
 }
 
 /// Verify a current CCS archive directly into one permanent SHA-256 CAS.
@@ -295,19 +338,39 @@ pub fn verify_package_into_cas(
     policy: &TrustPolicy,
     cas: &crate::filesystem::CasStore,
 ) -> Result<VerifiedCcsArchive> {
-    verify_package_to(path, policy, object_sink::ObjectDestination::Permanent(cas))
+    let admission = crate::ccs::CcsArchiveCpuAdmission::for_current_process();
+    verify_package_into_cas_with_archive_cpu_admission(path, policy, cas, &admission)
+}
+
+/// Verify directly into permanent CAS under one shared archive-CPU authority.
+pub fn verify_package_into_cas_with_archive_cpu_admission(
+    path: &Path,
+    policy: &TrustPolicy,
+    cas: &crate::filesystem::CasStore,
+    admission: &crate::ccs::CcsArchiveCpuAdmission,
+) -> Result<VerifiedCcsArchive> {
+    verify_package_to(
+        path,
+        policy,
+        object_sink::ObjectDestination::Permanent(cas),
+        admission,
+    )
 }
 
 fn verify_package_to(
     path: &Path,
     policy: &TrustPolicy,
     destination: object_sink::ObjectDestination<'_>,
+    admission: &crate::ccs::CcsArchiveCpuAdmission,
 ) -> Result<VerifiedCcsArchive> {
     policy.validate()?;
-    let verified = stream::verify_archive(path, policy, destination)
+    let lease = admission.acquire()?;
+    let verified = stream::verify_archive(path, policy, destination, lease.workers())
         .with_context(|| format!("verify streaming CCS v3 archive {}", path.display()))?;
+    drop(lease);
     Ok(VerifiedCcsArchive {
         archive_identity: Some(verified.archive_identity),
+        archive_decode_metrics: Some(verified.archive_decode_metrics.into()),
         authority: verified.authority,
         signature: verified.signature,
         build_attestation: verified.build_attestation,
@@ -509,6 +572,40 @@ mod tests {
             verified.archive_bytes(),
             Some(independent_bytes.len() as u64)
         );
+    }
+
+    #[test]
+    fn authenticated_decode_reports_exact_parallel_geometry_and_releases_admission() {
+        let signer = SigningKeyPair::generate();
+        let (_temp, path, policy) = package(&signer);
+        let admission = crate::ccs::CcsArchiveCpuAdmission::with_capacity(4).unwrap();
+
+        let verified =
+            verify_package_with_archive_cpu_admission(&path, &policy, &admission).unwrap();
+        let metrics = verified.archive_decode_metrics().unwrap();
+        assert_eq!(metrics.workers, 4);
+        assert_eq!(
+            metrics.block_bytes,
+            crate::ccs::CCS_BUDGET.archive_compression_block_bytes as u64
+        );
+        assert_eq!(
+            metrics.blocks,
+            metrics.decoded_bytes.div_ceil(metrics.block_bytes)
+        );
+        assert_eq!(
+            metrics.buffer_ceiling_bytes,
+            crate::ccs::CCS_BUDGET
+                .archive_decode_buffer_ceiling_bytes(4)
+                .unwrap()
+        );
+        drop(verified);
+
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.push(0x1f);
+        std::fs::write(&path, bytes).unwrap();
+        assert!(verify_package_with_archive_cpu_admission(&path, &policy, &admission).is_err());
+        let lease = admission.acquire().unwrap();
+        assert_eq!(lease.workers(), 4);
     }
 
     #[test]

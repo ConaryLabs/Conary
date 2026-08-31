@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-31
-revision: 72
+revision: 73
 summary: Convert foreign packages through lossless source authority, decode-pass typed native digest evidence, one-pass authenticated payload layout derivation and object staging, atomic exact archive emission, typed pending-to-verified finalization, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
@@ -35,7 +35,7 @@ Apply typed install prefix (default `/`) to source-root children
      |
   Sign MANIFEST authority (Ed25519)
      |
-  Output .ccs archive (tar.gz with MANIFEST + MANIFEST.toml + objects/)
+  Output .ccs archive (fixed-block MGZIP tar with MANIFEST + MANIFEST.toml + objects/)
 ```
 
 Foreign conversion opens each regular content owner exactly once. That pass
@@ -52,7 +52,7 @@ durable CAS authority. Before signing, the writer compares every prepared node,
 content layout, and exact unique `(digest, size)` inventory with the projected
 v3 authority. It then writes the object root and occupied fan-out directories,
 in-memory controls, and the lexically ordered object set through one private
-same-directory temporary tar/gzip output while hashing every compressed byte.
+same-directory temporary tar/MGZIP output while hashing every compressed byte.
 Only the completed file is changed to mode `0644` and atomically published;
 short, extra, changed, missing, or conflicting evidence leaves the final path
 unchanged. Caller-owned independent archive reopen and persistence remain the
@@ -356,7 +356,7 @@ unverified. The pending value must be consumed by exactly one caller-selected
 finalizer before it becomes `VerifiedConversionResult`: `verify` uses a
 bounded spool and `verify_into_cas` uses one permanent SHA-256 CAS batch;
 same-directory publication can select `verify_staged_copy_into_cas`. The
-writer hashes every compressed output byte below gzip during the existing
+writer hashes every compressed output byte below MGZIP during the existing
 write and binds that exact hash and length into the pending value without an
 output reread. Every finalizer requires the verified archive identity,
 canonical authority, and exact signer to equal the authored result under the
@@ -597,13 +597,17 @@ cumulative payload, archive entries, metadata, and framing overhead; those
 dimensions replace a guessed global decompression ceiling without weakening
 decompression-bomb resistance. `docs/specs/ccs-format-v3.md` owns the contract.
 
-Final CCS archive compression uses one shared live worker authority bounded by
-the detected host or cgroup logical CPU allowance and the canonical CCS worker
-limit. A writer acquires that authority only around ordered final archive
-emission and records its exact worker count and derived buffer ceiling. A lone
-writer therefore consumes idle compression capacity, while a competing writer
-queues rather than creating an unbounded second compression pool. Fixed block
-ordering keeps package bytes independent of admitted worker count.
+Final CCS archive compression and authenticated reopen use one shared live
+worker authority bounded by the detected host or cgroup logical CPU allowance
+and the canonical CCS worker limit. An encoder or decoder leases all idle
+workers around its ordered archive phase and records the exact worker, block,
+byte, and derived buffer-ceiling work. A lone archive consumes idle CPU
+capacity, while a competing archive phase queues instead of oversubscribing
+the process. The sole physical carrier is ordered fixed-block MGZIP with exact
+1 MiB non-final blocks; ordinary gzip has no compatibility path. Fixed block
+ordering keeps package bytes independent of admitted worker count, while
+ordered parallel decode preserves tar semantics and verifies every frame CRC
+before authenticated authority can escape.
 
 RPM, Debian, Arch, and eopkg extraction retain regular payloads in a shared
 `PayloadSpool` lifetime backed by `Arc<TempDir>`. Each parser streams bounded

@@ -413,6 +413,7 @@ pub fn verify_binary(binary_path: &Path, expected_version: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gzp::ZWriter;
     use std::io::{Read, Write};
 
     fn create_test_db() -> rusqlite::Connection {
@@ -470,7 +471,7 @@ mod tests {
     fn replace_current_object_bytes(path: &Path, hash: &str, replacement: &[u8]) {
         let target = format!("objects/{}/{}", &hash[..2], &hash[2..]);
         let file = std::fs::File::open(path).unwrap();
-        let decoder = flate2::read::GzDecoder::new(file);
+        let decoder = crate::ccs::archive_framing::MgzipDecoder::new(file);
         let mut archive = tar::Archive::new(decoder);
         let mut entries = Vec::new();
         let mut replaced = false;
@@ -492,11 +493,18 @@ mod tests {
         assert!(replaced, "current CCS fixture object {hash} was not found");
 
         let file = std::fs::File::create(path).unwrap();
-        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let encoder = gzp::par::compress::ParCompressBuilder::<gzp::deflate::Mgzip>::new()
+            .buffer_size(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)
+            .unwrap()
+            .num_threads(1)
+            .unwrap()
+            .compression_level(flate2::Compression::default())
+            .from_writer(file);
         let mut builder = tar::Builder::new(encoder);
         for (entry_path, bytes) in entries {
             append_test_tar_entry(&mut builder, entry_path.to_str().unwrap(), &bytes);
         }
+        builder.finish().unwrap();
         builder.into_inner().unwrap().finish().unwrap();
     }
 
@@ -589,8 +597,15 @@ mod tests {
         let ccs_path = dir.path().join("legacy-direct-binary.ccs");
 
         let file = std::fs::File::create(&ccs_path).unwrap();
-        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-        let builder = tar::Builder::new(encoder);
+        let encoder = gzp::par::compress::ParCompressBuilder::<gzp::deflate::Mgzip>::new()
+            .buffer_size(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)
+            .unwrap()
+            .num_threads(1)
+            .unwrap()
+            .compression_level(flate2::Compression::default())
+            .from_writer(file);
+        let mut builder = tar::Builder::new(encoder);
+        builder.finish().unwrap();
         builder.into_inner().unwrap().finish().unwrap();
 
         let key = crate::ccs::signing::SigningKeyPair::generate();

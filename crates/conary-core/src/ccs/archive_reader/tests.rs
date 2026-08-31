@@ -4,7 +4,9 @@ use super::*;
 use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
 use crate::ccs::signing::SigningKeyPair;
 use flate2::Compression;
-use flate2::write::GzEncoder;
+use gzp::ZWriter;
+use gzp::deflate::Mgzip;
+use gzp::par::compress::ParCompressBuilder;
 use std::io::Write;
 use tar::Builder;
 
@@ -39,16 +41,36 @@ fn entry(path: &str, content: Vec<u8>) -> (String, Vec<u8>) {
 }
 
 fn archive_of(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    {
-        let encoder = GzEncoder::new(&mut bytes, Compression::default());
-        let mut builder = Builder::new(encoder);
-        for (path, content) in entries {
-            append(&mut builder, path, content);
-        }
-        builder.into_inner().unwrap().finish().unwrap();
+    let encoder = ParCompressBuilder::<Mgzip>::new()
+        .buffer_size(CCS_BUDGET.archive_compression_block_bytes)
+        .unwrap()
+        .num_threads(1)
+        .unwrap()
+        .compression_level(Compression::default())
+        .from_writer(Vec::new());
+    let mut builder = Builder::new(encoder);
+    for (path, content) in entries {
+        append(&mut builder, path, content);
     }
-    bytes
+    builder.into_inner().unwrap().finish().unwrap()
+}
+
+fn archive_with_raw_path(path: &str, content: &[u8]) -> Vec<u8> {
+    let encoder = ParCompressBuilder::<Mgzip>::new()
+        .buffer_size(CCS_BUDGET.archive_compression_block_bytes)
+        .unwrap()
+        .num_threads(1)
+        .unwrap()
+        .compression_level(Compression::default())
+        .from_writer(Vec::new());
+    let mut builder = Builder::new(encoder);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(content.len() as u64);
+    header.set_mode(0o644);
+    header.as_mut_bytes()[..path.len()].copy_from_slice(path.as_bytes());
+    header.set_cksum();
+    builder.append(&header, content).unwrap();
+    builder.into_inner().unwrap().finish().unwrap()
 }
 
 #[test]
@@ -112,6 +134,33 @@ fn current_contract_detection_rejects_retired_formats() {
 }
 
 #[test]
+fn current_contract_detection_returns_false_for_an_ordinary_gzip_native_archive() {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(b"ordinary native package bytes").unwrap();
+    let bytes = encoder.finish().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("native.pkg.tar.gz");
+    std::fs::write(&path, bytes).unwrap();
+
+    assert!(!has_current_ccs_archive_contract(path).unwrap());
+}
+
+#[test]
+fn inspection_rejects_an_appended_noncanonical_gzip_member() {
+    let (_temp, path) = current_package();
+    let mut bytes = std::fs::read(path).unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(b"appended retired member").unwrap();
+    bytes.extend(encoder.finish().unwrap());
+
+    let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("noncanonical MGZIP header"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn inspection_rejects_noncanonical_object_paths() {
     let authority = crate::ccs::v3::test_support::package_authority_with_one_file("bad-object");
     let bytes = archive_of(&[
@@ -127,10 +176,37 @@ fn inspection_rejects_noncanonical_object_paths() {
 fn inspection_rejects_duplicate_manifest_authority() {
     let authority = crate::ccs::v3::test_support::package_authority_with_one_file("duplicate");
     let raw = authority.to_cbor().unwrap();
-    let bytes = archive_of(&[entry("MANIFEST", raw.clone()), entry("./MANIFEST", raw)]);
+    let bytes = archive_of(&[entry("MANIFEST", raw.clone()), entry("MANIFEST", raw)]);
 
     let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
     assert!(error.to_string().contains("duplicate MANIFEST"));
+}
+
+#[test]
+fn inspection_rejects_noncanonical_path_aliases() {
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("aliased");
+    let bytes = archive_with_raw_path("./MANIFEST", &authority.to_cbor().unwrap());
+
+    let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("noncanonical CCS archive path"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn inspection_rejects_metadata_after_payload_objects() {
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("reordered");
+    let payload = b"hello world\n".to_vec();
+    let hash = crate::hash::sha256(&payload);
+    let bytes = archive_of(&[
+        entry("MANIFEST", authority.to_cbor().unwrap()),
+        entry(&format!("objects/{}/{}", &hash[..2], &hash[2..]), payload),
+        entry("MANIFEST.sig", b"{}".to_vec()),
+    ]);
+
+    let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
+    assert!(error.to_string().contains("appears after payload objects"));
 }
 
 #[test]

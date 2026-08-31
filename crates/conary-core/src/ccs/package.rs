@@ -289,8 +289,7 @@ mod tests {
     use crate::filesystem::CasStore;
     use crate::payload::PayloadNodeKind;
     use flate2::Compression;
-    use flate2::read::GzDecoder;
-    use flate2::write::GzEncoder;
+    use gzp::ZWriter;
     use std::fs::{self, File};
     use std::io::Read;
     use tar::{Archive, Builder};
@@ -339,11 +338,17 @@ arch = "noarch"
 
     fn truncate_first_object(source_path: &Path, output_path: &Path) {
         let source_file = File::open(source_path).unwrap();
-        let decoder = GzDecoder::new(source_file);
+        let decoder = crate::ccs::archive_framing::MgzipDecoder::new(source_file);
         let mut archive = Archive::new(decoder);
 
         let output_file = File::create(output_path).unwrap();
-        let encoder = GzEncoder::new(output_file, Compression::default());
+        let encoder = gzp::par::compress::ParCompressBuilder::<gzp::deflate::Mgzip>::new()
+            .buffer_size(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)
+            .unwrap()
+            .num_threads(1)
+            .unwrap()
+            .compression_level(Compression::default())
+            .from_writer(output_file);
         let mut builder = Builder::new(encoder);
         let mut truncated = false;
         for entry in archive.entries().unwrap() {
@@ -367,7 +372,8 @@ arch = "noarch"
                 .unwrap();
         }
         assert!(truncated, "test package must contain an object payload");
-        let encoder = builder.into_inner().unwrap();
+        builder.finish().unwrap();
+        let mut encoder = builder.into_inner().unwrap();
         encoder.finish().unwrap();
     }
 

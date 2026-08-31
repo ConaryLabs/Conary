@@ -12,7 +12,7 @@ use conary_core::ccs::v3::schema::{
 use conary_core::ccs::verify::{TrustPolicy, verify_package};
 use conary_core::payload::{PayloadContentAuthority, PayloadNode};
 use flate2::Compression;
-use flate2::write::GzEncoder;
+use gzp::ZWriter;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -192,7 +192,13 @@ fn v3_authority(name: &str) -> AuthorityDocumentV3 {
 fn write_raw_v3_manifest_only(package_path: &Path, authority: &AuthorityDocumentV3) {
     let manifest_cbor = authority.to_cbor().unwrap();
     let output = fs::File::create(package_path).unwrap();
-    let encoder = GzEncoder::new(output, Compression::default());
+    let encoder = gzp::par::compress::ParCompressBuilder::<gzp::deflate::Mgzip>::new()
+        .buffer_size(conary_core::ccs::CCS_BUDGET.archive_compression_block_bytes)
+        .unwrap()
+        .num_threads(1)
+        .unwrap()
+        .compression_level(Compression::default())
+        .from_writer(output);
     let mut archive = Builder::new(encoder);
     let mut header = tar::Header::new_gnu();
     header.set_size(manifest_cbor.len() as u64);
@@ -201,6 +207,7 @@ fn write_raw_v3_manifest_only(package_path: &Path, authority: &AuthorityDocument
     archive
         .append_data(&mut header, "MANIFEST", manifest_cbor.as_slice())
         .unwrap();
+    archive.finish().unwrap();
     archive.into_inner().unwrap().finish().unwrap();
 }
 

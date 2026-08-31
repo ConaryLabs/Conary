@@ -343,35 +343,15 @@ fn test_converter_with_signing_key(
     }
 }
 
-fn repack_ccs_at_gzip_level_zero(source: &std::path::Path, destination: &std::path::Path) {
-    use std::io::Read;
+fn append_noncanonical_mgzip_tail(source: &std::path::Path, destination: &std::path::Path) {
+    use std::io::Write;
 
-    let decoder = flate2::read::GzDecoder::new(std::fs::File::open(source).unwrap());
-    let mut source_archive = tar::Archive::new(decoder);
-    let entries = source_archive
-        .entries()
+    let mut bytes = std::fs::read(source).unwrap();
+    bytes.push(0x1f);
+    std::fs::File::create(destination)
         .unwrap()
-        .map(|entry| {
-            let mut entry = entry.unwrap();
-            let header = entry.header().clone();
-            let path = entry.path().unwrap().into_owned();
-            let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes).unwrap();
-            (header, path, bytes)
-        })
-        .collect::<Vec<_>>();
-
-    let encoder = flate2::write::GzEncoder::new(
-        std::fs::File::create(destination).unwrap(),
-        flate2::Compression::none(),
-    );
-    let mut destination_archive = tar::Builder::new(encoder);
-    for (mut header, path, bytes) in entries {
-        destination_archive
-            .append_data(&mut header, path, bytes.as_slice())
-            .unwrap();
-    }
-    destination_archive.into_inner().unwrap().finish().unwrap();
+        .write_all(&bytes)
+        .unwrap();
 }
 
 #[test]
@@ -531,7 +511,7 @@ fn pending_conversion_rejects_same_authority_resigned_by_another_trusted_key() {
 }
 
 #[test]
-fn pending_conversion_rejects_a_same_authority_same_signer_canonical_repack() {
+fn pending_conversion_rejects_a_noncanonical_mgzip_repack() {
     let temp_dir = tempfile::tempdir().unwrap();
     let converter = passive_test_converter(&temp_dir.path().join("authored"));
     let metadata = make_test_metadata();
@@ -546,21 +526,21 @@ fn pending_conversion_rejects_a_same_authority_same_signer_canonical_repack() {
         .unwrap();
     let authored_path = pending.unverified_package_path().to_path_buf();
     let repacked_path = temp_dir.path().join("repacked.ccs");
-    repack_ccs_at_gzip_level_zero(&authored_path, &repacked_path);
+    append_noncanonical_mgzip_tail(&authored_path, &repacked_path);
 
-    let authored = crate::ccs::verify::verify_package(&authored_path, &converter.policy).unwrap();
-    let repacked = crate::ccs::verify::verify_package(&repacked_path, &converter.policy).unwrap();
-    assert_eq!(repacked.authority(), authored.authority());
-    assert_eq!(repacked.signature(), authored.signature());
-    assert_ne!(repacked.archive_identity(), authored.archive_identity());
-    drop((authored, repacked));
+    let repacked_error =
+        crate::ccs::verify::verify_package(&repacked_path, &converter.policy).unwrap_err();
+    assert!(
+        format!("{repacked_error:#}").contains("truncated canonical MGZIP header"),
+        "{repacked_error:#}"
+    );
 
     let error = pending
         .verify_staged_copy(&repacked_path, &converter.policy)
         .unwrap_err();
 
     assert!(
-        format!("{error:#}").contains("archive identity differs from the authored"),
+        format!("{error:#}").contains("truncated canonical MGZIP header"),
         "{error:#}"
     );
 }

@@ -8,13 +8,12 @@
 //! establish package trust: mutation and publication callers must pass the
 //! result through `ccs::verify::verify_package`.
 
-use crate::ccs::archive_layout::is_lower_hex;
+use crate::ccs::archive_layout::{is_canonical_entry_path, is_lower_hex};
 use crate::ccs::budget::{AuthorityCensus, BudgetDimension, CCS_BUDGET};
 use crate::ccs::builder::ComponentData;
 use crate::ccs::manifest::CcsManifest;
 use crate::ccs::v3::AuthorityDocumentV3;
 use anyhow::Context;
-use flate2::read::GzDecoder;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
@@ -54,36 +53,46 @@ pub struct UntrustedCcsArchive {
 
 /// Structurally inspect a CCS v3 archive without granting trust.
 pub fn inspect_untrusted_ccs_archive<R: Read>(reader: R) -> anyhow::Result<UntrustedCcsArchive> {
-    let mut archive = Archive::new(GzDecoder::new(reader));
+    let mut archive = Archive::new(crate::ccs::archive_framing::MgzipDecoder::new(reader));
     let mut state = InspectionState::default();
     let mut entries_seen = 0_u64;
+    let mut objects_started = false;
 
     for entry in archive.entries()? {
         entries_seen += 1;
         CCS_BUDGET.admit_archive_entry(entries_seen)?;
         let mut entry = entry?;
         let path = canonical_entry_path(&entry)?;
+        let is_object = path.starts_with("objects/");
+
+        if objects_started && (entry.header().entry_type().is_dir() || !is_object) {
+            anyhow::bail!("CCS metadata or directory entry {path:?} appears after payload objects");
+        }
 
         if entry.header().entry_type().is_dir() {
             require_known_directory(&path)?;
             continue;
         }
+        objects_started |= is_object;
         state.read_regular_entry(&mut entry, &path)?;
     }
 
-    state.finish()
+    let inspection = state.finish()?;
+    crate::ccs::archive_framing::finish_canonical_tar(archive)
+        .context("finish canonical CCS tar/MGZIP structure")?;
+    Ok(inspection)
 }
 
 /// Identify the exact current CCS v3 archive contract independently of name.
 pub fn has_current_ccs_archive_contract(path: impl AsRef<Path>) -> anyhow::Result<bool> {
     let path = path.as_ref();
-    let mut file = File::open(path)?;
-    let mut magic = [0_u8; 2];
-    if file.read(&mut magic)? != magic.len() || magic != [0x1f, 0x8b] {
+    if !crate::ccs::archive_framing::has_canonical_prefix(File::open(path)?)? {
         return Ok(false);
     }
 
-    let mut archive = Archive::new(GzDecoder::new(File::open(path)?));
+    let mut archive = Archive::new(crate::ccs::archive_framing::MgzipDecoder::new(File::open(
+        path,
+    )?));
     let mut entries_seen = 0_u64;
     for entry in archive.entries()? {
         entries_seen += 1;
@@ -446,11 +455,13 @@ fn canonical_object_hash(path: &str) -> anyhow::Result<String> {
 }
 
 fn canonical_entry_path<R: Read>(entry: &tar::Entry<'_, R>) -> anyhow::Result<String> {
-    let path = entry.path()?;
-    let path = path
-        .to_str()
-        .context("CCS archive entry path is not valid UTF-8")?;
-    Ok(path.strip_prefix("./").unwrap_or(path).to_string())
+    let path = entry.path_bytes();
+    let path =
+        std::str::from_utf8(path.as_ref()).context("CCS archive entry path is not valid UTF-8")?;
+    if !is_canonical_entry_path(path) {
+        anyhow::bail!("noncanonical CCS archive path {path:?}");
+    }
+    Ok(path.to_string())
 }
 
 #[cfg(test)]
