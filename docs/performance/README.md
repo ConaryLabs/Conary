@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-31
-revision: 16
-summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results including one-pass CCS payload preparation and bounded parallel archive compression
+revision: 17
+summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results including one-pass CCS payload preparation and parallel CCS emission and authenticated reopen
 ---
 
 # Performance evidence
@@ -639,6 +639,81 @@ or integrity failure.
 This is one paired production sample, not a latency distribution. `cold`
 still means empty application conversion, cache, and CAS state rather than a
 dropped kernel page cache. It proves the exact one-pass payload-preparation
+change and does not constitute a same-host native-package-manager performance
+comparison.
+
+## Parallel authenticated CCS reopen measured result: 2026-08-31
+
+Protected production-XFS workflow
+[run 33362032155](https://github.com/FieldmouseWorks/Conary/actions/runs/33362032155)
+measured deployed merge commit
+`dd2f7c84cc2f6c4b915afd28b33c2c13821dfa17`, Remi 0.16.1, binary SHA-256
+`c3af979f0ff4a7ab9e9725aeef0bcc3e5012d383646a4030ba17ad260f7a2720`.
+The binary came from exact protected push-to-main candidate build
+[33360645683](https://github.com/FieldmouseWorks/Conary/actions/runs/33360645683)
+and successful `private-candidates` deployment
+[33361885025](https://github.com/FieldmouseWorks/Conary/actions/runs/33361885025).
+The run replayed the exact profile revision, package key, credential-free
+source URL, 1,881,853,676-byte source, source SHA-256, catalog authority,
+subject, 12-CPU production host, and ten 4,096-byte block XFS root geometries
+from the pre-change run 33347361189.
+
+The sole artifact was ID `9747217191`, named
+`remi-conversion-benchmark-33361885025-33362032155-1`, and 35,614 bytes. Its
+Actions API digest was SHA-256
+`21c18e53c84b8cb0d12eeca92ddc242b9f7cb31b6f2016fe1a44e6e54fadad03`.
+The 27,006-byte public schema-v6 report had SHA-256
+`8acbfb8d5a1b0f8122c3f2d04d030c016ed9bf1d8045d97444f4bcb3e2aff6ea`
+and bound the 30,699-byte private raw schema-v8 report at SHA-256
+`2434cc8388fc15ba87f3678d7241ba0eae88e58497eb4e72594f31103fc0d1be`.
+
+| Measurement boundary | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Retained `independent_transport_reopen` | 53.157 s | 44.300 s | -8.857 s (-16.662%) |
+| Benchmark-proof independent reopen | 45.640 s | 35.184 s | -10.456 s (-22.910%) |
+| Hot benchmark-proof independent reopen | 45.471 s | 35.019 s | -10.452 s (-22.986%) |
+| Cold `views.end_to_end` | 134.055 s | 126.666 s | -7.389 s (-5.512%) |
+| Cold repetition process wall | 187.880970 s | 169.952003 s | -17.928967 s (-9.543%) |
+| Cold `views.conversion_core` | 49.773 s | 49.418 s | -0.355 s (-0.713%) |
+| `archive_assembly_and_gzip` | 10.476 s | 10.176 s | -0.300 s (-2.864%) |
+| Hot repetition process wall | 54.105633 s | 43.620956 s | -10.484677 s (-19.378%) |
+
+The service-owned phase includes storage finalization around the exact fused
+archive verifier. Its 8.857-second improvement therefore differs from the
+10.456-second improvement in the separately timed exact benchmark proof. Both
+boundaries improved in both the cold and hot repetitions. The 7.389-second
+end-to-end reduction is the product-facing result; the larger outer-process
+reduction also includes the benchmark-only post-conversion proof and is not
+credited to service conversion.
+
+Raw schema v8 proves that authenticated reopen admitted all 12 available CPUs
+and decoded 2,569 canonical 1,048,576-byte MGZIP blocks in archive order. It
+authenticated 1,950,894,143 compressed bytes, produced 2,693,046,784 decoded
+bytes, SHA-256 verified all 49,091 signed objects and 2,639,374,118 object
+bytes, and stayed below its exact 57,256,290-byte ordered-buffer ceiling. Cold
+CAS admission recorded 49,091 misses, persisted the complete signed set, and
+performed one staged-data barrier and one canonical-name barrier with zero
+fallback syncs or canonical rereads. Compression retained 12 workers over the
+same block geometry and stayed below its 56,102,001-byte buffer ceiling.
+
+| Cold process resource | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| User CPU | 230.730380 s | 227.773073 s | -2.957307 s (-1.282%) |
+| System CPU | 14.540782 s | 14.417874 s | -0.122908 s (-0.845%) |
+| Total CPU | 245.271162 s | 242.190947 s | -3.080215 s (-1.256%) |
+| Process-lifetime peak RSS | 1,603,022,848 B | 1,608,368,128 B | +5,345,280 B (+0.333%) |
+
+The stable signed object set remained byte-identical at SHA-256
+`cf4f448fdcf9f228febaf1767c98adbb0ca2053de4bfe231d7291f7ecf23d186`,
+49,091 objects, and 2,639,374,118 bytes. Cold and hot outputs agreed within the
+new run. The sole-representation hard cut intentionally changed physical CCS
+and transport identity from ordinary gzip to canonical fixed-block MGZIP. The
+CCS grew from 1,950,834,192 to 1,950,894,143 bytes, an increase of 59,951 bytes
+or 0.0031%; this is framing overhead rather than signed-object drift.
+
+This is one paired production sample, not a latency distribution. `cold`
+still means empty application conversion, cache, and CAS state rather than a
+dropped kernel page cache. It proves the exact parallel authenticated-reopen
 change and does not constitute a same-host native-package-manager performance
 comparison.
 
