@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use super::ffi::{AptResolution, AptResolutionOutcome};
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1, PROFILE_REVISION_SCHEMA_V2,
@@ -473,6 +474,118 @@ fn apt_pkg_rejects_malformed_relation_without_dropping_the_stanza() {
     .unwrap();
     let error = AptPackages::open(&packages_path).unwrap_err();
     assert!(error.to_string().contains("rejected Debian relation field"));
+}
+
+#[test]
+fn apt_pkg_resolves_shadowed_exact_roots_with_compatible_native_versions() {
+    let directory = tempfile::tempdir().unwrap();
+    let newer = "1:26.04+20260818";
+    let older = "1:26.04+20260417";
+    let high_packages = [
+        resolution_stanza(
+            "language-pack-hr-base",
+            newer,
+            "amd64",
+            'a',
+            &format!("Depends: language-pack-hr (>= {newer})\n"),
+        ),
+        resolution_stanza(
+            "language-pack-hr",
+            newer,
+            "amd64",
+            'b',
+            &format!("Depends: language-pack-hr-base (>= {newer})\n"),
+        ),
+    ]
+    .concat();
+    let low_packages = [
+        resolution_stanza(
+            "language-pack-hr-base",
+            older,
+            "amd64",
+            'c',
+            &format!("Depends: language-pack-hr (>= {older})\n"),
+        ),
+        resolution_stanza(
+            "language-pack-hr",
+            older,
+            "amd64",
+            'd',
+            &format!("Depends: language-pack-hr-base (>= {older})\n"),
+        ),
+        resolution_stanza(
+            "absent-root",
+            "1",
+            "amd64",
+            'e',
+            "Depends: absent-dependency (>= 2)\n",
+        ),
+        resolution_stanza(
+            "incompatible-root",
+            "1",
+            "amd64",
+            'f',
+            "Depends: too-old (>= 2)\n",
+        ),
+        resolution_stanza("too-old", "1", "amd64", '1', ""),
+    ]
+    .concat();
+    let paths = [high_packages, low_packages]
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, packages)| {
+            let source = write_resolution_packages(
+                directory.path(),
+                &format!("source-{ordinal}"),
+                &packages,
+            );
+            let staged = directory
+                .path()
+                .join(format!("member-{ordinal}_Packages.zst"));
+            fs::copy(source, &staged).unwrap();
+            staged
+        })
+        .collect::<Vec<_>>();
+    let mut apt = AptResolution::open(&paths, "amd64").unwrap();
+
+    for root_version in [older, newer] {
+        let AptResolutionOutcome::Resolved(packages) = apt
+            .resolve("language-pack-hr-base", root_version, "amd64")
+            .unwrap()
+        else {
+            panic!("language pack root {root_version} must resolve");
+        };
+        let identities = packages
+            .into_iter()
+            .map(|package| (package.name, package.version))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            identities,
+            [
+                ("language-pack-hr".to_string(), root_version.to_string()),
+                (
+                    "language-pack-hr-base".to_string(),
+                    root_version.to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            "the protected root and its compatible dependency must retain one exact version"
+        );
+    }
+
+    for (root, native_text) in [
+        ("absent-root", "absent-dependency (>= 2)"),
+        ("incompatible-root", "too-old (>= 2)"),
+    ] {
+        let AptResolutionOutcome::Unresolved(missing) = apt.resolve(root, "1", "amd64").unwrap()
+        else {
+            panic!("{root} must retain typed unresolved evidence");
+        };
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].requiring.name, root);
+        assert_eq!(missing[0].native_text, native_text);
+    }
 }
 
 #[test]

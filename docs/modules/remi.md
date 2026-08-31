@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-01
-revision: 113
+revision: 114
 summary: Document filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -886,8 +886,15 @@ as native repository priority, excludes weak relations, and reopens complete
 filelists for typed file-provider resolution. The Debian producer uses private
 volatile apt-pkg source indexes and empty installed state, projects profile
 order into candidate and provider priority, records exact native transactions,
-and retains only required or pre-required groups that have no native target as
-typed unresolved evidence. All three bind closures and missing groups back to
+and forces each exact root through apt 3.0's complete-version solver with
+non-strict pinning. Native policy still prefers the highest-precedence
+dependency version that permits a complete transaction, while a shadowed lower
+version remains eligible when required by the protected exact root. A separate
+native-candidate probe remains the fast resolved result or contributes required
+or pre-required groups with no native target as typed unresolved evidence. Only
+its available-target failure enters the complete-version solver, and that
+solver never reuses the failed candidate state. All three bind closures and
+missing groups back to
 exact package-oracle authority, reject architecture/conflict/identity or input
 drift, write the canonical resolution bundle, and fully reopen it before
 success. Conary separately replays the exact verified profile catalog into a
