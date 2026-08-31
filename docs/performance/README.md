@@ -680,8 +680,9 @@ and bound the 30,699-byte private raw schema-v8 report at SHA-256
 
 The service-owned phase includes storage finalization around the exact fused
 archive verifier. Its 8.857-second improvement therefore differs from the
-10.456-second improvement in the separately timed exact benchmark proof. Both
-boundaries improved in both the cold and hot repetitions. The 7.389-second
+10.456-second improvement in the separately timed exact benchmark proof. The
+service-owned boundary executes only in the cold conversion; the separate
+benchmark proof improved in both cold and hot repetitions. The 7.389-second
 end-to-end reduction is the product-facing result; the larger outer-process
 reduction also includes the benchmark-only post-conversion proof and is not
 credited to service conversion.
