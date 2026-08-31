@@ -55,6 +55,24 @@ fn archive_of(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
     builder.into_inner().unwrap().finish().unwrap()
 }
 
+fn archive_with_raw_path(path: &str, content: &[u8]) -> Vec<u8> {
+    let encoder = ParCompressBuilder::<Mgzip>::new()
+        .buffer_size(CCS_BUDGET.archive_compression_block_bytes)
+        .unwrap()
+        .num_threads(1)
+        .unwrap()
+        .compression_level(Compression::default())
+        .from_writer(Vec::new());
+    let mut builder = Builder::new(encoder);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(content.len() as u64);
+    header.set_mode(0o644);
+    header.as_mut_bytes()[..path.len()].copy_from_slice(path.as_bytes());
+    header.set_cksum();
+    builder.append(&header, content).unwrap();
+    builder.into_inner().unwrap().finish().unwrap()
+}
+
 #[test]
 fn inspection_is_explicitly_untrusted_and_v3_only() {
     let (_temp, path) = current_package();
@@ -158,10 +176,37 @@ fn inspection_rejects_noncanonical_object_paths() {
 fn inspection_rejects_duplicate_manifest_authority() {
     let authority = crate::ccs::v3::test_support::package_authority_with_one_file("duplicate");
     let raw = authority.to_cbor().unwrap();
-    let bytes = archive_of(&[entry("MANIFEST", raw.clone()), entry("./MANIFEST", raw)]);
+    let bytes = archive_of(&[entry("MANIFEST", raw.clone()), entry("MANIFEST", raw)]);
 
     let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
     assert!(error.to_string().contains("duplicate MANIFEST"));
+}
+
+#[test]
+fn inspection_rejects_noncanonical_path_aliases() {
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("aliased");
+    let bytes = archive_with_raw_path("./MANIFEST", &authority.to_cbor().unwrap());
+
+    let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("noncanonical CCS archive path"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn inspection_rejects_metadata_after_payload_objects() {
+    let authority = crate::ccs::v3::test_support::package_authority_with_one_file("reordered");
+    let payload = b"hello world\n".to_vec();
+    let hash = crate::hash::sha256(&payload);
+    let bytes = archive_of(&[
+        entry("MANIFEST", authority.to_cbor().unwrap()),
+        entry(&format!("objects/{}/{}", &hash[..2], &hash[2..]), payload),
+        entry("MANIFEST.sig", b"{}".to_vec()),
+    ]);
+
+    let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
+    assert!(error.to_string().contains("appears after payload objects"));
 }
 
 #[test]

@@ -12,7 +12,7 @@ fn record_authority_manifest_entry(
     contents: Vec<u8>,
     manifest_bytes: &mut Option<Vec<u8>>,
 ) -> Result<()> {
-    if entry_path != "MANIFEST" && entry_path != "./MANIFEST" {
+    if entry_path != "MANIFEST" {
         return Ok(());
     }
     if manifest_bytes.is_some() {
@@ -273,7 +273,7 @@ mod tests {
 
         let mut duplicate = Some(vec![1]);
         assert!(
-            record_authority_manifest_entry("./MANIFEST", vec![2], &mut duplicate)
+            record_authority_manifest_entry("MANIFEST", vec![2], &mut duplicate)
                 .unwrap_err()
                 .to_string()
                 .contains("duplicate MANIFEST")

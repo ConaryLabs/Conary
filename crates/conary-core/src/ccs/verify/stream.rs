@@ -12,7 +12,7 @@ use crate::packages::payload::{PackagePayload, ReopenablePayload};
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
-use std::path::{Component, Path};
+use std::path::Path;
 
 #[cfg(test)]
 use super::content::expected_objects;
@@ -452,25 +452,12 @@ fn canonical_entry_path(entry: &tar::Entry<'_, ArchiveDecoder>) -> Result<String
 }
 
 fn canonical_path(path: &str) -> Result<String> {
-    if path.is_empty() || path.starts_with('/') || path.ends_with('/') {
+    if !crate::ccs::archive_layout::is_canonical_entry_path(path) {
         return Err(
             VerifyError::PackageError(format!("noncanonical CCS archive path {path:?}")).into(),
         );
     }
-    let parsed = Path::new(path);
-    if parsed
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-        || path.split('/').any(str::is_empty)
-    {
-        return Err(
-            VerifyError::PackageError(format!("noncanonical CCS archive path {path:?}")).into(),
-        );
-    }
-    let normalized = parsed
-        .to_str()
-        .context("CCS archive entry path is not valid UTF-8")?;
-    Ok(normalized.to_string())
+    Ok(path.to_string())
 }
 
 fn require_known_directory(path: &str) -> Result<()> {
