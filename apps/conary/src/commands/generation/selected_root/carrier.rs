@@ -72,8 +72,12 @@ mod tests {
         ArtifactWriteInputs, BootAssetsManifest, CasObjectVerification, write_generation_artifact,
     };
     use conary_core::generation::metadata::GenerationMetadata;
-    use conary_core::generation::root_manifest::GenerationRootManifest;
-    use conary_core::payload::PayloadIdentity;
+    use conary_core::generation::root_manifest::{
+        GenerationRootEntry, GenerationRootManifest, build_erofs_image_from_root_manifest,
+    };
+    use conary_core::payload::{
+        PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, ResolvedPayloadNode,
+    };
     use conary_core::runtime_root::ConaryRuntimeRoot;
     use std::path::Path;
 
@@ -124,11 +128,53 @@ mod tests {
         let mut manifest = GenerationRootManifest::read_from(&generation_dir).unwrap();
         let uid = u64::from(unsafe { libc::geteuid() });
         let gid = u64::from(unsafe { libc::getegid() });
+        let resolved = |kind: PayloadNodeKind, mode: u32| {
+            let mut source = PayloadNode::regular(mode);
+            source.kind = kind;
+            source.mode = match &source.kind {
+                PayloadNodeKind::Directory => libc::S_IFDIR | mode,
+                _ => libc::S_IFREG | mode,
+            };
+            source.user = PayloadIdentity::Numeric { id: uid };
+            source.group = PayloadIdentity::Numeric { id: gid };
+            ResolvedPayloadNode::from_numeric_source(source).unwrap()
+        };
         manifest.root.source.user = PayloadIdentity::Numeric { id: uid };
         manifest.root.source.group = PayloadIdentity::Numeric { id: gid };
         manifest.root.uid = uid;
         manifest.root.gid = gid;
-        manifest.write_to(&generation_dir).unwrap();
+        let content = b"verified carrier fallback authority";
+        let cas = conary_core::filesystem::CasStore::new(runtime_root.join("objects")).unwrap();
+        let sha256 = cas.store(content).unwrap();
+        manifest.entries = vec![
+            GenerationRootEntry {
+                path: "/usr".to_string(),
+                node: resolved(PayloadNodeKind::Directory, 0o755),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: "/usr/bin".to_string(),
+                node: resolved(PayloadNodeKind::Directory, 0o755),
+                content: None,
+            },
+            GenerationRootEntry {
+                path: "/usr/bin/carrier-fallback-proof".to_string(),
+                node: resolved(
+                    PayloadNodeKind::Regular {
+                        hardlink_identity: None,
+                    },
+                    0o644,
+                ),
+                content: Some(PayloadContentAuthority {
+                    sha256,
+                    size: content.len() as u64,
+                }),
+            },
+        ];
+        let build = build_erofs_image_from_root_manifest(&manifest, &generation_dir).unwrap();
+        metadata.erofs_size = Some(i64::try_from(build.image_size).unwrap());
+        metadata.cas_objects_referenced =
+            Some(i64::try_from(build.cas_objects_referenced).unwrap());
 
         let boot_assets: BootAssetsManifest = serde_json::from_slice(
             &std::fs::read(generation_dir.join("boot-assets/manifest.json")).unwrap(),
@@ -175,6 +221,11 @@ mod tests {
         ));
         assert!(session_dir.join("lower").is_dir());
         assert!(!session_dir.join("root").exists());
+        assert_eq!(
+            std::fs::read_to_string(session_dir.join("lower/usr/bin/carrier-fallback-proof"))
+                .unwrap(),
+            "verified carrier fallback authority"
+        );
     }
 
     #[test]
