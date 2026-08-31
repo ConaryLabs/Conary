@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-08-31
-revision: 13
+revision: 14
 status: active
 ---
 
@@ -115,6 +115,15 @@ conflict-checked deduplication; there is no skip input. A private bounded spool
 orders selected rows by package key without retaining the complete profile in
 Rust memory. Success means the two-file bundle has been durably written and
 independently reopened through the strict shared verifier.
+
+ALPM soname-v1 provides containing `=`, including `libacl.so=1-64`, are atomic
+soname identities rather than package-version relations. libalpm's generic
+dependency handle exposes the same bytes as a name, equality mode, and version;
+the producer requires those fields to reconstruct the exact native text, then
+uses the pinned ALPM grammar's soname classification as semantic authority.
+Soname-v2 identities remain atomic by the same rule. Ordinary package and
+virtual relations continue to require exact normalized libalpm name and version
+agreement, so this distinction adds no permissive fallback.
 
 RPM package-fact evidence is produced only with the explicit
 `native-rpm-oracle` feature and exact libsolv 0.7.36 runtime. Ordinary Conary

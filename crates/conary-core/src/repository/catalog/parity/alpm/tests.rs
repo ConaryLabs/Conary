@@ -227,7 +227,7 @@ fn fixture_databases(
     let beta_digest = digest('c');
     let conflict_digest = digest('d');
     let mut alpha = PackageFixture::new("alpha", &alpha_digest);
-    alpha.provides = &["virtual-alpha=1.0", "lib:libalpha.so.1"];
+    alpha.provides = &["virtual-alpha=1.0", "libacl.so=1-64", "lib:libalpha.so.1"];
     alpha.depends = &["runtime>=1", "lib:libc.so.6"];
     alpha.optional = &["optional>=2: useful extra"];
     alpha.conflicts = &["old-alpha<1"];
@@ -304,6 +304,15 @@ fn producer_accounts_for_every_native_row_and_reopens_bundle() {
             .iter()
             .any(|provide| provide.kind == "soname")
     );
+    let soname_v1 = alpha
+        .provides
+        .iter()
+        .find(|provide| provide.capability == "libacl.so=1-64")
+        .expect("versioned soname-v1 provide missing");
+    assert_eq!(soname_v1.kind, "soname");
+    assert_eq!(soname_v1.version, None);
+    assert_eq!(soname_v1.version_relation, None);
+    assert_eq!(soname_v1.raw.as_deref(), Some("libacl.so=1-64"));
     for kind in ["depends", "optional", "conflict", "replace"] {
         assert!(
             alpha
