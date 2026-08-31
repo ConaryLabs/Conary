@@ -7,6 +7,7 @@
 //! whether composefs generation mounts are actually possible.
 
 use std::ffi::OsStr;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -165,7 +166,7 @@ fn find_mount_composefs_in_path_with_fallbacks(
     if let Some(path_env) = path_env {
         for dir in std::env::split_paths(path_env) {
             let candidate = dir.join("mount.composefs");
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 return Some(candidate);
             }
         }
@@ -174,7 +175,12 @@ fn find_mount_composefs_in_path_with_fallbacks(
     fallback_candidates
         .iter()
         .map(PathBuf::from)
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 fn find_mount_composefs_in_path(path_env: Option<&OsStr>) -> Option<PathBuf> {
@@ -354,6 +360,7 @@ mod tests {
         let helper_dir = tempfile::TempDir::new().unwrap();
         let helper_path = helper_dir.path().join("mount.composefs");
         std::fs::write(&helper_path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&helper_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         assert!(
             check_composefs_runtime_support(
@@ -436,10 +443,30 @@ mod tests {
     }
 
     #[test]
+    fn composefs_runtime_support_rejects_a_non_executable_mount_helper() {
+        let helper_dir = tempfile::TempDir::new().unwrap();
+        let helper_path = helper_dir.path().join("mount.composefs");
+        std::fs::write(&helper_path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&helper_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(
+            find_mount_composefs_in_path_with_fallbacks(Some(helper_dir.path().as_os_str()), &[],)
+                .is_none()
+        );
+
+        std::fs::set_permissions(&helper_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            find_mount_composefs_in_path_with_fallbacks(Some(helper_dir.path().as_os_str()), &[],),
+            Some(helper_path)
+        );
+    }
+
+    #[test]
     fn test_composefs_runtime_support_requires_loop_devices() {
         let helper_dir = tempfile::TempDir::new().unwrap();
         let helper_path = helper_dir.path().join("mount.composefs");
         std::fs::write(&helper_path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&helper_path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let err = check_composefs_runtime_support(
             "nodev\toverlay\nnodev\terofs\n",
