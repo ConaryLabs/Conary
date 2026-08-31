@@ -33,27 +33,6 @@ impl CcsArchiveCompression {
         Ok(Self { workers })
     }
 
-    /// Allocate each concurrent conversion an equal whole-core share.
-    pub fn for_concurrent_conversions(
-        logical_parallelism: usize,
-        concurrent_conversions: usize,
-    ) -> Result<Self> {
-        anyhow::ensure!(
-            logical_parallelism > 0,
-            "logical parallelism must be greater than zero"
-        );
-        anyhow::ensure!(
-            concurrent_conversions > 0,
-            "concurrent conversion count must be greater than zero"
-        );
-        Self::with_workers(
-            logical_parallelism
-                .checked_div(concurrent_conversions)
-                .unwrap_or(0)
-                .clamp(1, crate::ccs::CCS_BUDGET.max_archive_compression_workers),
-        )
-    }
-
     /// Number of concurrent compression workers owned by one archive.
     pub fn workers(self) -> usize {
         self.workers

@@ -15,7 +15,7 @@ use crate::ccs::attestation::{
     compute_build_output_identity_from_v3,
 };
 use crate::ccs::builder::{
-    BuildResult, CcsArchiveCompression, CcsPackageWriteMetrics, PreparedCcsWriteOptions,
+    BuildResult, CcsPackageWriteMetrics, PreparedCcsWriteOptions,
     write_v3_ccs_package_from_prepared_with_metrics,
 };
 use crate::ccs::convert::native_provenance::NativeProvenance;
@@ -252,7 +252,7 @@ pub struct NativePackageConverter {
     source_release: Option<String>,
     conversion_tool: String,
     signing_key: Option<Arc<SigningKeyPair>>,
-    archive_compression: CcsArchiveCompression,
+    archive_compression: crate::ccs::CcsArchiveCompressionAdmission,
 }
 
 impl NativePackageConverter {
@@ -264,7 +264,7 @@ impl NativePackageConverter {
             source_release: None,
             conversion_tool: "conary".to_string(),
             signing_key: None,
-            archive_compression: CcsArchiveCompression::default(),
+            archive_compression: crate::ccs::CcsArchiveCompressionAdmission::default(),
         }
     }
 
@@ -297,9 +297,12 @@ impl NativePackageConverter {
         self
     }
 
-    /// Set the checked per-archive compression worker budget.
-    pub fn with_archive_compression(mut self, compression: CcsArchiveCompression) -> Self {
-        self.archive_compression = compression;
+    /// Attach the shared live compression-worker admission authority.
+    pub fn with_archive_compression_admission(
+        mut self,
+        admission: crate::ccs::CcsArchiveCompressionAdmission,
+    ) -> Self {
+        self.archive_compression = admission;
         self
     }
 
@@ -516,6 +519,11 @@ impl NativePackageConverter {
         })?);
         let metadata_lifecycle_and_authority_projection =
             metadata_before_payload_preparation + authority_projection_started.elapsed();
+        let archive_compression = self.archive_compression.acquire().map_err(|error| {
+            ConversionError::BuildError(format!(
+                "Failed to acquire CCS archive compression workers: {error}"
+            ))
+        })?;
         let ccs_write = write_v3_ccs_package_from_prepared_with_metrics(
             &authority,
             &prepared_payload,
@@ -525,7 +533,7 @@ impl NativePackageConverter {
                 debug_toml: Some(&debug_toml),
                 build_attestation: None,
                 foreign_conversion_boundary: Some(&boundary),
-                archive_compression: self.archive_compression,
+                archive_compression: archive_compression.compression(),
             },
         )
         .map_err(|e| {

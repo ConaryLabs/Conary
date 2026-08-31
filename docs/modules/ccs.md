@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-30
-revision: 71
+last_updated: 2026-08-31
+revision: 72
 summary: Convert foreign packages through lossless source authority, decode-pass typed native digest evidence, one-pass authenticated payload layout derivation and object staging, atomic exact archive emission, typed pending-to-verified finalization, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
@@ -596,6 +596,14 @@ buffers. Tar decoders enforce declared size per entry, then independently bound
 cumulative payload, archive entries, metadata, and framing overhead; those
 dimensions replace a guessed global decompression ceiling without weakening
 decompression-bomb resistance. `docs/specs/ccs-format-v3.md` owns the contract.
+
+Final CCS archive compression uses one shared live worker authority bounded by
+the detected host or cgroup logical CPU allowance and the canonical CCS worker
+limit. A writer acquires that authority only around ordered final archive
+emission and records its exact worker count and derived buffer ceiling. A lone
+writer therefore consumes idle compression capacity, while a competing writer
+queues rather than creating an unbounded second compression pool. Fixed block
+ordering keeps package bytes independent of admitted worker count.
 
 RPM, Debian, Arch, and eopkg extraction retain regular payloads in a shared
 `PayloadSpool` lifetime backed by `Arc<TempDir>`. Each parser streams bounded

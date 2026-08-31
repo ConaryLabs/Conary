@@ -663,7 +663,7 @@ impl ConversionService {
         let converter = NativePackageConverter::new(options)
             .with_source_profile(source_profile)
             .with_conversion_tool("remi")
-            .with_archive_compression(self.archive_compression)
+            .with_archive_compression_admission(self.archive_compression.clone())
             .with_signing_key(std::sync::Arc::new(signing_key));
 
         let conversion_result = converter

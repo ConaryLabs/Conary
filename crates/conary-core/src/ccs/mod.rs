@@ -40,8 +40,8 @@ pub use budget::{
     CcsStructuralBudget,
 };
 pub use builder::{
-    BuildResult, BuilderError, CcsArchiveCompression, CcsBuilder, CcsInstallPrefix, ChunkStats,
-    ComponentData, FileEntry,
+    BuildResult, BuilderError, CcsArchiveCompression, CcsArchiveCompressionAdmission,
+    CcsArchiveCompressionLease, CcsBuilder, CcsInstallPrefix, ChunkStats, ComponentData, FileEntry,
 };
 pub use chunking::{
     Chunk, ChunkReference, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats,

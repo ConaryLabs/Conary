@@ -132,13 +132,13 @@ pub async fn run_conversion_benchmark_from_config(
         ])?,
     );
 
-    let archive_compression = conary_core::ccs::CcsArchiveCompression::for_concurrent_conversions(
-        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
-        server.max_concurrent_conversions,
-    )?;
+    let archive_compression =
+        conary_core::ccs::CcsArchiveCompressionAdmission::for_host_parallelism(
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+        )?;
     let service = ConversionService::new(chunk_dir, cache_dir, benchmark_db, None)
         .with_catalog_authority(catalog_authority)
-        .with_archive_compression(archive_compression)
+        .with_archive_compression_admission(archive_compression)
         .with_repository_keys_dir(Some(repository_keys_dir.clone()));
     let signing_key = Arc::new(load_role_key(
         &repository_keys_dir,
