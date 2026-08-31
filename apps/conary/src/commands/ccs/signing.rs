@@ -93,8 +93,10 @@ pub async fn cmd_ccs_keygen(output: &str, key_id: Option<String>, force: bool) -
 pub async fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>) -> Result<()> {
     use conary_core::ccs::signing::SigningKeyPair;
     use flate2::Compression;
-    use flate2::read::GzDecoder;
-    use flate2::write::GzEncoder;
+    use flate2::read::MultiGzDecoder;
+    use gzp::ZWriter;
+    use gzp::deflate::Mgzip;
+    use gzp::par::compress::ParCompressBuilder;
     use std::fs::File;
     use tar::{Archive, Builder as TarBuilder};
 
@@ -122,7 +124,7 @@ pub async fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>)
 
     // Open and read the package.
     let file = File::open(package_path)?;
-    let decoder = GzDecoder::new(file);
+    let decoder = MultiGzDecoder::new(file);
     let mut archive = Archive::new(decoder);
 
     // Create temp directory for extraction
@@ -175,14 +177,40 @@ pub async fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>)
         .unwrap_or_else(|| Path::new("."));
     let staged = tempfile::NamedTempFile::new_in(output_parent)?;
     let output_file = staged.reopen()?;
-    let encoder = GzEncoder::new(output_file, Compression::default());
+    let archive_cpu = conary_core::ccs::CcsArchiveCpuAdmission::for_current_process();
+    let archive_cpu_lease = archive_cpu.acquire()?;
+    let encoder = ParCompressBuilder::<Mgzip>::new()
+        .buffer_size(conary_core::ccs::CCS_BUDGET.archive_compression_block_bytes)?
+        .num_threads(archive_cpu_lease.workers())?
+        .compression_level(Compression::default())
+        .from_writer(output_file);
     let mut archive = TarBuilder::new(encoder);
 
-    // Add all files from temp directory
-    archive.append_dir_all(".", temp_dir.path())?;
+    // Re-emit only the canonical regular entries. `append_dir_all(".", ...)`
+    // creates a `./` root entry that the current layout correctly rejects.
+    let mut archive_entries = walkdir::WalkDir::new(temp_dir.path())
+        .min_depth(1)
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    archive_entries.retain(|entry| entry.file_type().is_file());
+    archive_entries.sort_by(|left, right| left.path().cmp(right.path()));
+    for entry in archive_entries {
+        let archive_path = entry.path().strip_prefix(temp_dir.path())?;
+        let mut source = File::open(entry.path())?;
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_size(source.metadata()?.len());
+        header.set_cksum();
+        archive.append_data(&mut header, archive_path, &mut source)?;
+    }
 
-    let encoder = archive.into_inner()?;
+    let mut encoder = archive.into_inner()?;
     encoder.finish()?;
+    drop(archive_cpu_lease);
     conary_core::ccs::verify::verify_package(
         staged.path(),
         &conary_core::ccs::TrustPolicy::strict(vec![signing_key.public_key_base64()]),
@@ -209,7 +237,9 @@ pub async fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>)
 
 #[cfg(test)]
 mod tests {
-    use super::{record_authority_manifest_entry, require_current_authority_manifest};
+    use super::{
+        cmd_ccs_sign, record_authority_manifest_entry, require_current_authority_manifest,
+    };
 
     #[test]
     fn signing_requires_current_authority_and_never_falls_back_to_toml() {
@@ -248,5 +278,34 @@ mod tests {
                 .to_string()
                 .contains("duplicate MANIFEST")
         );
+    }
+
+    #[tokio::test]
+    async fn signing_rewrites_a_multiblock_package_with_the_current_carrier() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/adversarial/large/large-package.ccs");
+        let output = temp.path().join("signed.ccs");
+        let private_key = temp.path().join("signing.private");
+        let public_key = temp.path().join("signing.public");
+        let signing_key = conary_core::ccs::SigningKeyPair::generate().with_key_id("resigner");
+        signing_key
+            .save_to_files(&private_key, &public_key)
+            .unwrap();
+
+        cmd_ccs_sign(
+            source.to_str().unwrap(),
+            private_key.to_str().unwrap(),
+            Some(output.to_string_lossy().into_owned()),
+        )
+        .await
+        .unwrap();
+
+        let verified = conary_core::ccs::verify::verify_package(
+            &output,
+            &conary_core::ccs::TrustPolicy::strict(vec![signing_key.public_key_base64()]),
+        )
+        .unwrap();
+        assert!(verified.archive_decode_metrics().unwrap().blocks > 1);
     }
 }

@@ -67,6 +67,7 @@ x509-cert.workspace = true
 # Used in commands/ccs/signing.rs for CCS package building
 tar.workspace = true
 flate2.workspace = true
+gzp.workspace = true
 
 # Async runtime (needed by main.rs)
 tokio.workspace = true
@@ -83,7 +84,6 @@ conary-core = { path = "../../crates/conary-core" }
 [dev-dependencies]
 axum.workspace = true
 ed25519-dalek.workspace = true
-gzp.workspace = true
 liblzma.workspace = true
 remi = { path = "../remi" }
 rpm = { workspace = true, features = ["signature-sequoia"] }
