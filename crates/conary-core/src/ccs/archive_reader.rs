@@ -76,9 +76,7 @@ pub fn inspect_untrusted_ccs_archive<R: Read>(reader: R) -> anyhow::Result<Untru
 /// Identify the exact current CCS v3 archive contract independently of name.
 pub fn has_current_ccs_archive_contract(path: impl AsRef<Path>) -> anyhow::Result<bool> {
     let path = path.as_ref();
-    let mut file = File::open(path)?;
-    let mut magic = [0_u8; 2];
-    if file.read(&mut magic)? != magic.len() || magic != [0x1f, 0x8b] {
+    if !crate::ccs::archive_framing::has_canonical_prefix(File::open(path)?)? {
         return Ok(false);
     }
 

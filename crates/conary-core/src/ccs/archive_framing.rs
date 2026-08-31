@@ -14,6 +14,19 @@ const FOOTER_BYTES: usize = 8;
 const FIXED_HEADER_PREFIX: [u8; 16] =
     [0x1f, 0x8b, 8, 4, 0, 0, 0, 0, 0, 255, 8, 0, b'I', b'G', 4, 0];
 
+pub(crate) fn has_canonical_prefix(mut reader: impl Read) -> io::Result<bool> {
+    let mut prefix = [0_u8; FIXED_HEADER_PREFIX.len()];
+    let mut filled = 0_usize;
+    while filled < prefix.len() {
+        let read = reader.read(&mut prefix[filled..])?;
+        if read == 0 {
+            return Ok(false);
+        }
+        filled += read;
+    }
+    Ok(prefix == FIXED_HEADER_PREFIX)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ArchiveDecodeMetrics {
     pub(crate) workers: u64,

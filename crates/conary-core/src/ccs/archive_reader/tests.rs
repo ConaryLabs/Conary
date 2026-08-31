@@ -116,6 +116,18 @@ fn current_contract_detection_rejects_retired_formats() {
 }
 
 #[test]
+fn current_contract_detection_returns_false_for_an_ordinary_gzip_native_archive() {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(b"ordinary native package bytes").unwrap();
+    let bytes = encoder.finish().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("native.pkg.tar.gz");
+    std::fs::write(&path, bytes).unwrap();
+
+    assert!(!has_current_ccs_archive_contract(path).unwrap());
+}
+
+#[test]
 fn inspection_rejects_noncanonical_object_paths() {
     let authority = crate::ccs::v3::test_support::package_authority_with_one_file("bad-object");
     let bytes = archive_of(&[
