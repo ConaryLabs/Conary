@@ -99,10 +99,9 @@ async fn run_conversion_crawl(
     .with_catalog_authority(authority)
     .with_database_writer(database_writer.clone())
     .with_bounded_cache(bounded_cache)
-    .with_archive_compression(
-        conary_core::ccs::CcsArchiveCompression::for_concurrent_conversions(
+    .with_archive_compression_admission(
+        conary_core::ccs::CcsArchiveCompressionAdmission::for_host_parallelism(
             std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
-            config.concurrency,
         )?,
     )
     .with_repository_keys_dir(Some(config.repository_keys_dir.clone()));

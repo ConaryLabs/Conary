@@ -484,18 +484,6 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(
-            CcsArchiveCompression::for_concurrent_conversions(12, 4)
-                .unwrap()
-                .workers(),
-            3
-        );
-        assert_eq!(
-            CcsArchiveCompression::for_concurrent_conversions(12, 32)
-                .unwrap()
-                .workers(),
-            1
-        );
     }
 
     #[test]

@@ -328,9 +328,8 @@ impl ServerState {
         );
         let bounded_cache = BoundedCache::new(chunk_cache.clone());
         let archive_compression =
-            conary_core::ccs::CcsArchiveCompression::for_concurrent_conversions(
+            conary_core::ccs::CcsArchiveCompressionAdmission::for_host_parallelism(
                 std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
-                config.max_concurrent_conversions,
             )?;
         let conversion_service = ConversionService::new(
             config.chunk_dir.clone(),
@@ -342,7 +341,7 @@ impl ServerState {
         .with_database_writer(database_writer.clone())
         .with_publication_coordinator(Arc::clone(&publication_coordinator))
         .with_bounded_cache(bounded_cache.clone())
-        .with_archive_compression(archive_compression)
+        .with_archive_compression_admission(archive_compression)
         .with_repository_keys_dir(config.release_publish.repository_keys_dir.clone());
 
         // Initialize Bloom filter if enabled

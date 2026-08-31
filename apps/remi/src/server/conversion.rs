@@ -57,8 +57,8 @@ pub struct ConversionService {
     database_writer: DatabaseWriter,
     /// Shared owner for complete repository publication operations.
     publication_coordinator: Arc<PublicationCoordinator>,
-    /// Checked CPU/memory budget for one deterministic CCS archive writer.
-    archive_compression: conary_core::ccs::CcsArchiveCompression,
+    /// Shared live CPU authority for deterministic CCS archive writers.
+    archive_compression: conary_core::ccs::CcsArchiveCompressionAdmission,
 }
 
 impl ConversionService {
@@ -78,7 +78,7 @@ impl ConversionService {
             repository_keys_dir: None,
             database_writer: DatabaseWriter::default(),
             publication_coordinator: Arc::new(PublicationCoordinator::default()),
-            archive_compression: conary_core::ccs::CcsArchiveCompression::default(),
+            archive_compression: conary_core::ccs::CcsArchiveCompressionAdmission::default(),
         }
     }
 
@@ -117,9 +117,9 @@ impl ConversionService {
         self
     }
 
-    pub(crate) fn with_archive_compression(
+    pub(crate) fn with_archive_compression_admission(
         mut self,
-        archive_compression: conary_core::ccs::CcsArchiveCompression,
+        archive_compression: conary_core::ccs::CcsArchiveCompressionAdmission,
     ) -> Self {
         self.archive_compression = archive_compression;
         self
@@ -146,7 +146,7 @@ mod tests {
         assert!(service.catalog_authority.is_none());
         assert!(service.r2_store.is_none());
         assert!(service.repository_keys_dir.is_none());
-        assert_eq!(service.archive_compression.workers(), 1);
+        assert_eq!(service.archive_compression.capacity(), 1);
     }
 
     #[test]

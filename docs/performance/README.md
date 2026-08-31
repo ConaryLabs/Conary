@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-31
-revision: 14
+revision: 15
 summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results including one-pass CCS payload preparation and bounded parallel archive compression
 ---
 
@@ -36,9 +36,12 @@ counters rather than estimates derived from elapsed time.
 Schema v7 records the exact CCS compression geometry: tar-stream input bytes,
 compression workers, fixed block bytes, block count, and the checked buffering
 ceiling. Fixed ordered blocks make gzip bytes independent of worker scheduling.
-Remi derives each conversion's worker budget from detected logical parallelism
-and configured conversion concurrency; no environment variable or
-filesystem-specific backend selects archive representation.
+Remi shares one live compression authority sized from detected host or cgroup
+logical parallelism and capped by the canonical CCS worker budget. An archive
+leases the currently idle authority only for final emission, so a lone
+conversion may use the complete CPU allowance while competing archive phases
+queue instead of oversubscribing it. No environment variable, configured job
+ceiling, or filesystem-specific backend selects archive representation.
 
 The current Remi conversion schema-v7 contract treats internal signed-archive
 authentication and permanent verified-CAS admission as one fused physical
