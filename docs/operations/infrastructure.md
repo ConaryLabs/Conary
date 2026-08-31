@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-08-31
-revision: 64
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
+revision: 65
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected pinned full-candidate native-oracle production, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -261,6 +261,24 @@ workflow.
   public-sanitized verification record, and the source deployment inspection;
   it grants no native-oracle production, conversion, proof, or activation
   authority.
+- The protected `produce-remi-native-oracles` workflow consumes only one
+  successful exact export run. Its production-environment authorization
+  independently reopens the exported transport and schema-3 deployment
+  inspection, requires canonical Fedora, Ubuntu, and Arch candidate order, and
+  requires the artifact-owned deployed commit to remain merged into `main`.
+  Each lane checks out that exact deployed producer source, never the newer
+  workflow head, then runs in the release-pinned Fedora 44, Ubuntu 26.04, or
+  Arch image with libsolv 0.7.36, apt-pkg 3.2.0, or the archived libalpm state.
+  `produce-native-oracle-lane.py` revalidates canonical input JSON, profile and
+  source digests, exact typed metadata roles, complete object inventory, size,
+  and SHA-256 before deriving producer arguments. It invokes the matching
+  package-fact producer followed by its exact-architecture resolution producer;
+  both operations completely reopen their output contracts before success.
+  Seven-day lane artifacts contain only the two canonical oracle bundles and
+  public-sanitized evidence binding their manifests, artifacts, counts,
+  implementation versions, candidate revision, export identity, and deployed
+  commit. The workflow has read-only GitHub permissions and no refresh,
+  conversion, proof, activation, SSH, or pointer-mutation authority.
 - Exact production conversion measurements use the protected
   `remi-conversion-benchmark` workflow. Dispatch names one successful
   `deploy-remi-candidate` run, a public profile, an immutable package key, and

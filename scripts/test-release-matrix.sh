@@ -280,6 +280,8 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/.github/workflows/deploy-remi-candidate.yml" "$repo/.github/workflows/deploy-remi-candidate.yml"
     cp "$REPO_ROOT/.github/workflows/export-remi-native-oracle-inputs.yml" \
         "$repo/.github/workflows/export-remi-native-oracle-inputs.yml"
+    cp "$REPO_ROOT/.github/workflows/produce-remi-native-oracles.yml" \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml"
     cp "$REPO_ROOT/.github/workflows/remi-conversion-benchmark.yml" \
         "$repo/.github/workflows/remi-conversion-benchmark.yml"
     cp "$REPO_ROOT/.github/workflows/remi-r2-durability.yml" \
@@ -289,6 +291,8 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/scripts/remi-candidate-artifact.sh" "$repo/scripts/remi-candidate-artifact.sh"
     cp "$REPO_ROOT/scripts/verify-native-oracle-input-transport.py" \
         "$repo/scripts/verify-native-oracle-input-transport.py"
+    cp "$REPO_ROOT/scripts/produce-native-oracle-lane.py" \
+        "$repo/scripts/produce-native-oracle-lane.py"
     cp "$REPO_ROOT/scripts/timed-linker.sh" "$repo/scripts/timed-linker.sh"
     cp "$REPO_ROOT/scripts/timed-rustc-wrapper.sh" "$repo/scripts/timed-rustc-wrapper.sh"
     cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
@@ -330,6 +334,10 @@ test_bootstrap_installer_contract() {
 
 test_native_oracle_transport_contract() {
     python3 "$REPO_ROOT/scripts/test-native-oracle-input-transport.py"
+}
+
+test_native_oracle_lane_contract() {
+    python3 "$REPO_ROOT/scripts/test-produce-native-oracle-lane.py"
 }
 
 replace_fixture_text_once() {
@@ -1818,6 +1826,58 @@ test_check_release_matrix_rejects_loose_native_oracle_transport() {
         "native-oracle transport strict tar, canonical manifest, inventory, and byte verification"
 }
 
+test_check_release_matrix_rejects_nonproduction_native_oracle_production() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '    environment: production' \
+        '    environment: staging'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production protected-main authorization"
+}
+
+test_check_release_matrix_rejects_unbound_native_oracle_producer_source() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '          ref: ${{ needs.authorize.outputs.deployed_commit }}' \
+        '          ref: ${{ github.sha }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact deployed producer source and typed lane adapter"
+}
+
+test_check_release_matrix_rejects_container_native_oracle_shell() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '        shell: bash' \
+        '        shell: sh'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production uses Bash inside pinned job containers"
+}
+
+test_check_release_matrix_rejects_mutating_native_oracle_authority() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '          python3 operator/scripts/produce-native-oracle-lane.py \' \
+        '          remi conversion-crawl && python3 operator/scripts/produce-native-oracle-lane.py \'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production generic or mutating authority"
+}
+
 test_check_release_matrix_rejects_unserialized_site_deployment() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2896,6 +2956,7 @@ main() {
     local -a tests=(
         test_bootstrap_installer_contract
         test_native_oracle_transport_contract
+        test_native_oracle_lane_contract
         test_resolve_tag_suite_canonical
         test_latest_version_from_list_uses_canonical_tags
         test_field_conary_test_deploy_mode
@@ -2986,6 +3047,10 @@ main() {
         test_check_release_matrix_rejects_workflow_head_as_deployed_candidate
         test_check_release_matrix_rejects_unmerged_deployed_candidate
         test_check_release_matrix_rejects_loose_native_oracle_transport
+        test_check_release_matrix_rejects_nonproduction_native_oracle_production
+        test_check_release_matrix_rejects_unbound_native_oracle_producer_source
+        test_check_release_matrix_rejects_container_native_oracle_shell
+        test_check_release_matrix_rejects_mutating_native_oracle_authority
         test_check_release_matrix_rejects_unserialized_site_deployment
         test_check_release_matrix_rejects_unserialized_r2_durability
         test_check_release_matrix_rejects_unprotected_conversion_benchmark_source
