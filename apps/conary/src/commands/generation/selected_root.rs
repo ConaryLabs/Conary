@@ -2,6 +2,7 @@
 
 //! Rollback-safe writable roots for generation-aware transaction execution.
 
+mod carrier;
 mod config_state;
 mod deferred_ima;
 mod overlay_session;
@@ -18,6 +19,7 @@ use anyhow::{Context, Result, bail};
 use conary_core::db::models::GenerationPublication;
 use conary_core::filesystem::CasStore;
 use conary_core::generation::artifact::GenerationArtifact;
+use conary_core::generation::composefs::ComposefsRuntimeUnavailable;
 use conary_core::generation::root_manifest::{
     CapturedSelectedRoot, SelectedRootSnapshot, materialize_captured_selected_root,
     scan_selected_root,
@@ -27,6 +29,7 @@ use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use carrier::current_generation_lower_mode;
 use deferred_ima::DeferredImaAuthority;
 use overlay_session::SelectedRootOverlaySession;
 use publication_authority::latest_selected_root_snapshot;
@@ -452,6 +455,22 @@ fn prepare_current_root(
     session_dir: &Path,
     require_materialized: bool,
 ) -> Result<PreparedSelectedRoot> {
+    prepare_current_root_with_probe(
+        conn,
+        runtime_root,
+        session_dir,
+        require_materialized,
+        conary_core::generation::composefs::probe_composefs_mount_runtime,
+    )
+}
+
+fn prepare_current_root_with_probe(
+    conn: &rusqlite::Connection,
+    runtime_root: &ConaryRuntimeRoot,
+    session_dir: &Path,
+    require_materialized: bool,
+    probe: impl FnOnce() -> std::result::Result<PathBuf, ComposefsRuntimeUnavailable>,
+) -> Result<PreparedSelectedRoot> {
     let cas = CasStore::new(runtime_root.objects_dir())?;
     if let Some((snapshot, captured)) = latest_selected_root_snapshot(conn)? {
         let selected_root =
@@ -464,13 +483,8 @@ fn prepare_current_root(
         conary_core::generation::mount::current_generation(runtime_root.root())?
     {
         let generation_path = runtime_root.generation_path(generation);
-        let artifact = if require_materialized {
-            conary_core::generation::artifact::load_generation_artifact(&generation_path)?
-        } else {
-            conary_core::generation::artifact::load_generation_artifact_with_verified_cas(
-                &generation_path,
-            )?
-        };
+        let lower_mode = current_generation_lower_mode(require_materialized, probe);
+        let artifact = lower_mode.load_artifact(&generation_path)?;
         let mut captured = CapturedSelectedRoot {
             generation: artifact.generation_root.clone(),
             state: artifact.mutable_state.clone(),
@@ -492,8 +506,10 @@ fn prepare_current_root(
             snapshot = active_snapshot;
             captured = active_captured;
         }
-        if require_materialized {
-            let selected_root = selected_root_materialization_destination(session_dir, true)?;
+        if lower_mode.requires_materialization() {
+            lower_mode.record_materialized_fallback(generation);
+            let selected_root =
+                selected_root_materialization_destination(session_dir, require_materialized)?;
             materialize_captured_selected_root(&captured, &cas, &selected_root)?;
             return Ok(PreparedSelectedRoot::Materialized { captured, snapshot });
         }

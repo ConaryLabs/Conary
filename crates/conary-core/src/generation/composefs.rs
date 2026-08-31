@@ -16,6 +16,57 @@ use tracing::debug;
 
 use crate::filesystem::fsverity::{FsVerityError, enable_fsverity};
 
+/// Typed reason the running host cannot mount a composefs generation.
+///
+/// Ordinary package transactions may use this result to select their
+/// verified materialized-lower path. Generation build, switch, and export
+/// surfaces treat it as a preflight refusal with the matching recovery route.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ComposefsRuntimeUnavailable {
+    #[error("failed to read the running kernel filesystem registry: {detail}")]
+    FilesystemRegistry { detail: String },
+    #[error(
+        "running kernel did not register overlayfs and/or EROFS, and loading the missing filesystem module through kmod failed"
+    )]
+    KernelFilesystems,
+    #[error("running system is missing loop-device support required for composefs metadata images")]
+    LoopDevice,
+    #[error("mount.composefs helper not found in PATH or standard sbin/bin locations")]
+    MountHelper,
+}
+
+impl ComposefsRuntimeUnavailable {
+    /// Stable diagnostic class for typed status and plan results.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::FilesystemRegistry { .. } => "filesystem_registry_unavailable",
+            Self::KernelFilesystems => "kernel_filesystems_unavailable",
+            Self::LoopDevice => "loop_device_unavailable",
+            Self::MountHelper => "mount_helper_unavailable",
+        }
+    }
+
+    /// Exact operator action for generation-model features requiring composefs.
+    #[must_use]
+    pub const fn recovery(&self) -> &'static str {
+        match self {
+            Self::FilesystemRegistry { .. } => {
+                "restore readable /proc/filesystems before using generation-model features"
+            }
+            Self::KernelFilesystems => {
+                "boot a kernel with overlayfs and EROFS support, or install the matching loadable kernel modules"
+            }
+            Self::LoopDevice => {
+                "make /dev/loop-control or an existing loop device available to the Conary process"
+            }
+            Self::MountHelper => {
+                "install the composefs userspace package that provides mount.composefs"
+            }
+        }
+    }
+}
+
 /// Capabilities detected during preflight.
 #[derive(Debug)]
 pub struct ComposefsCaps {
@@ -144,25 +195,51 @@ fn check_composefs_runtime_support(
     load_and_confirm: &impl Fn(&str) -> bool,
     path_env: Option<&OsStr>,
     loop_device_available: bool,
-) -> std::result::Result<PathBuf, String> {
+) -> std::result::Result<PathBuf, ComposefsRuntimeUnavailable> {
     if !has_required_composefs_filesystems(proc_filesystems, load_and_confirm) {
-        return Err(
-            "running kernel did not register overlayfs and/or EROFS, and loading the missing \
-             filesystem module through kmod failed"
-                .to_string(),
-        );
+        return Err(ComposefsRuntimeUnavailable::KernelFilesystems);
     }
 
     if !loop_device_available {
-        return Err(
-            "running system is missing loop-device support required for composefs metadata images"
-                .to_string(),
-        );
+        return Err(ComposefsRuntimeUnavailable::LoopDevice);
     }
 
-    find_mount_composefs_in_path(path_env).ok_or_else(|| {
-        "mount.composefs helper not found in PATH or standard sbin/bin locations".to_string()
-    })
+    find_mount_composefs_in_path(path_env).ok_or(ComposefsRuntimeUnavailable::MountHelper)
+}
+
+fn probe_composefs_mount_runtime_with(
+    load_and_confirm: &impl Fn(&str) -> bool,
+) -> std::result::Result<PathBuf, ComposefsRuntimeUnavailable> {
+    let proc_filesystems = std::fs::read_to_string("/proc/filesystems").map_err(|error| {
+        ComposefsRuntimeUnavailable::FilesystemRegistry {
+            detail: error.to_string(),
+        }
+    })?;
+
+    check_composefs_runtime_support(
+        &proc_filesystems,
+        load_and_confirm,
+        std::env::var_os("PATH").as_deref(),
+        has_loop_device_support(),
+    )
+}
+
+/// Probe only the already-active authority required to mount an existing
+/// generation.
+///
+/// This performs no module load and creates no fs-verity probe file. It is
+/// therefore suitable for transaction carrier selection before any package,
+/// database, changeset, generation, or selected-root filesystem mutation. A
+/// capable but not-yet-loaded kernel module conservatively selects the
+/// verified materialized lower for the ordinary package loop.
+pub fn probe_composefs_mount_runtime() -> std::result::Result<PathBuf, ComposefsRuntimeUnavailable>
+{
+    probe_composefs_mount_runtime_with(&|_| false)
+}
+
+fn probe_composefs_mount_runtime_with_module_loading()
+-> std::result::Result<PathBuf, ComposefsRuntimeUnavailable> {
+    probe_composefs_mount_runtime_with(&load_and_confirm_running_filesystem)
 }
 
 /// Check if the running kernel/userspace can support composefs mounts.
@@ -177,18 +254,7 @@ fn check_composefs_runtime_support(
 /// - the `mount.composefs` userspace helper in the runtime environment
 #[must_use]
 pub fn supports_composefs() -> bool {
-    let proc_filesystems = match std::fs::read_to_string("/proc/filesystems") {
-        Ok(contents) => contents,
-        Err(_) => return false,
-    };
-
-    check_composefs_runtime_support(
-        &proc_filesystems,
-        &load_and_confirm_running_filesystem,
-        std::env::var_os("PATH").as_deref(),
-        has_loop_device_support(),
-    )
-    .is_ok()
+    probe_composefs_mount_runtime_with_module_loading().is_ok()
 }
 
 /// Check if fs-verity is supported on the filesystem containing the given path.
@@ -251,21 +317,11 @@ pub fn supports_fsverity(path: &Path) -> bool {
 ///
 /// Returns capabilities on success, or an error if composefs is not supported.
 pub fn preflight_composefs(cas_dir: &Path) -> Result<ComposefsCaps> {
-    let proc_filesystems = std::fs::read_to_string("/proc/filesystems").map_err(|e| {
+    let mount_helper = probe_composefs_mount_runtime_with_module_loading().map_err(|reason| {
         Error::IoError(format!(
-            "Failed to read /proc/filesystems while checking composefs runtime support: {e}"
-        ))
-    })?;
-    let mount_helper = check_composefs_runtime_support(
-        &proc_filesystems,
-        &load_and_confirm_running_filesystem,
-        std::env::var_os("PATH").as_deref(),
-        has_loop_device_support(),
-    )
-    .map_err(|reason| {
-        Error::IoError(format!(
-            "Composefs runtime support incomplete: {reason}. \
-             Conary requires overlayfs + EROFS + loop-device support and the mount.composefs helper."
+            "Composefs runtime support incomplete ({}): {reason}. Recovery: {}.",
+            reason.code(),
+            reason.recovery(),
         ))
     })?;
 
@@ -316,7 +372,8 @@ mod tests {
             true,
         )
         .unwrap_err();
-        assert!(err.contains("overlayfs"));
+        assert_eq!(err, ComposefsRuntimeUnavailable::KernelFilesystems);
+        assert!(err.to_string().contains("overlayfs"));
     }
 
     /// A stock Fedora 44 host ships erofs and overlayfs as modules and loads
@@ -371,12 +428,11 @@ mod tests {
     #[test]
     fn test_composefs_runtime_support_requires_mount_helper() {
         let err = find_mount_composefs_in_path_with_fallbacks(None, &[])
-            .ok_or_else(|| {
-                "mount.composefs helper not found in PATH or standard sbin/bin locations"
-                    .to_string()
-            })
+            .ok_or(ComposefsRuntimeUnavailable::MountHelper)
             .unwrap_err();
-        assert!(err.contains("mount.composefs"));
+        assert_eq!(err.code(), "mount_helper_unavailable");
+        assert!(err.to_string().contains("mount.composefs"));
+        assert!(err.recovery().contains("composefs userspace package"));
     }
 
     #[test]
@@ -392,7 +448,25 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert!(err.contains("loop-device"));
+        assert_eq!(err, ComposefsRuntimeUnavailable::LoopDevice);
+        assert!(err.to_string().contains("loop-device"));
+    }
+
+    #[test]
+    fn runtime_unavailability_classes_have_stable_recovery_routes() {
+        let cases = [
+            ComposefsRuntimeUnavailable::FilesystemRegistry {
+                detail: "missing procfs".to_string(),
+            },
+            ComposefsRuntimeUnavailable::KernelFilesystems,
+            ComposefsRuntimeUnavailable::LoopDevice,
+            ComposefsRuntimeUnavailable::MountHelper,
+        ];
+
+        for unavailable in cases {
+            assert!(!unavailable.code().is_empty());
+            assert!(!unavailable.recovery().is_empty());
+        }
     }
 
     #[test]

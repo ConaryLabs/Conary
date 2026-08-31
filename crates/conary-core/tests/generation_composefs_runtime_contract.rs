@@ -130,6 +130,28 @@ fn composefs_mount_path_does_not_retain_plain_erofs_fallbacks() {
 }
 
 #[test]
+fn basic_package_transactions_materialize_verified_generation_authority_when_carrier_is_unavailable()
+ {
+    let selected_root_rs = fs::read_to_string(app_source("commands/generation/selected_root.rs"))
+        .expect("failed to read selected-root transaction owner");
+
+    assert!(
+        selected_root_rs.contains("probe_composefs_mount_runtime")
+            && selected_root_rs.contains("MaterializedUnavailable"),
+        "selected-root carrier selection must use typed composefs unavailability rather than mount error text"
+    );
+    assert!(
+        selected_root_rs.contains("load_generation_artifact_with_verified_cas")
+            && selected_root_rs.contains("materialize_captured_selected_root"),
+        "the fallback must reopen and materialize the exact current-generation artifact authority"
+    );
+    assert!(
+        !selected_root_rs.contains("falling back to plain EROFS"),
+        "transaction fallback must materialize typed authority, never weaken the generation mount contract"
+    );
+}
+
+#[test]
 fn live_generation_mounts_do_not_request_verity_from_digest_presence_alone() {
     let composefs_ops_rs = fs::read_to_string(app_source("commands/composefs_ops.rs"))
         .expect("failed to read commands/composefs_ops.rs");

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-08-27",
+  "last_updated": "2026-08-31",
   "current_milestone": "first_external_tester_loop",
   "published_release": {
     "version": "0.16.1",
@@ -9,8 +9,8 @@
   },
   "tester_authority": {
     "state": "unassigned",
-    "reason": "The W7 ordinary-package gate passed, but no tester release is assigned while typed public reads (#638), the signed zero-exclusion universe (#598), daily-driver floor (#122, #534, #132, #642, #643), synchronized public release (#639), and performance/usefulness proof (#121, #149) remain open.",
-    "blocking_issues": [638, 598, 122, 534, 132, 642, 643, 639, 121, 149]
+    "reason": "The W7 ordinary-package gate and typed public reads (#638) passed, but no tester release is assigned while the signed zero-exclusion universe (#598), daily-driver floor (#122, #534, #718, #132, #642, #643), synchronized public release (#639), and performance/usefulness proof (#121, #149) remain open.",
+    "blocking_issues": [598, 122, 534, 718, 132, 642, 643, 639, 121, 149]
   },
   "gates": {
     "ordinary_package_journey": {
@@ -22,7 +22,7 @@
       "issue": 637
     },
     "public_read_surfaces": {
-      "state": "blocked",
+      "state": "passed",
       "issue": 638
     },
     "public_universe": {
@@ -32,7 +32,7 @@
     },
     "daily_driver_floor": {
       "state": "blocked",
-      "issues": [122, 534, 132, 642, 643]
+      "issues": [122, 534, 718, 132, 642, 643]
     },
     "synchronized_release": {
       "state": "blocked",

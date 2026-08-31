@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-27
-revision: 10
+last_updated: 2026-08-31
+revision: 11
 status: postponed
 target_release: unassigned
 summary: Postponed multi-venue launch packet for the first cross-distro tester loop
@@ -201,7 +201,7 @@ failed attempts are useful evidence.
 - [x] Pass #110's ordinary-package corpus gate through PR #487 without treating
   release proof as corpus proof.
 - [ ] Activate #598's signed zero-exclusion public universe behind #638's typed
-  read surface; complete the #122/#534/#132/#642/#643 daily-driver floor,
+  read surface; complete the #122/#534/#718/#132/#642/#643 daily-driver floor,
   #639's synchronized release, and #121/#149 launch proof; then assign the
   re-proven suite as exact tester authority.
 - [ ] Obtain GitHub Support confirmation that cached pre-rewrite pull-request
