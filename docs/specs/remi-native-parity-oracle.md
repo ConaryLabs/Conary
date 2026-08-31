@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
-last_updated: 2026-08-27
-revision: 12
+last_updated: 2026-08-31
+revision: 13
 status: active
 ---
 
@@ -37,6 +37,20 @@ bundle, then independently reopens every byte. Extra or missing entries,
 symlinks, noncanonical JSON, object tamper, and candidate supersession fail the
 operation. The bundle is an input carrier only; the pinned ALPM, libsolv, or
 apt-pkg implementation remains the sole native fact and resolution authority.
+
+The protected production producer accepts only one successful exact export
+run. It independently reopens the transport and deployment evidence, requires
+the artifact-owned deployed commit to be merged, and checks out that commit as
+producer source separately from the protected workflow/operator checkout.
+Three pinned container lanes derive every member and object argument from the
+canonical input contract: Fedora 44 uses libsolv 0.7.36, Ubuntu 26.04 uses
+apt-pkg 3.2.0, and Arch uses the pinned archive/libalpm image. A lane succeeds
+only after both its package-fact producer and exact-architecture resolution
+producer complete their strict output reopen. Short-lived sanitized evidence
+binds both manifests and artifacts to the input manifest, profile revision,
+export identity, implementation version, architecture, and deployed commit.
+The operation is read-only and carries no refresh, conversion, proof,
+activation, or public-pointer authority.
 
 `NativeParityOracleV1` is the sole parity manifest authority. It binds the
 exact profile revision digest, profile logical digest, ordered source members,

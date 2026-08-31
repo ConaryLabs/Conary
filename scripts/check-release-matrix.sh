@@ -11,10 +11,12 @@ site_deploy_workflow=".github/workflows/deploy-site.yml"
 candidate_build_workflow=".github/workflows/build-remi-candidate.yml"
 candidate_deploy_workflow=".github/workflows/deploy-remi-candidate.yml"
 native_oracle_export_workflow=".github/workflows/export-remi-native-oracle-inputs.yml"
+native_oracle_production_workflow=".github/workflows/produce-remi-native-oracles.yml"
 conversion_benchmark_workflow=".github/workflows/remi-conversion-benchmark.yml"
 r2_durability_workflow=".github/workflows/remi-r2-durability.yml"
 conversion_workflow_checker="scripts/check-remi-conversion-workflow.py"
 native_oracle_transport_verifier="scripts/verify-native-oracle-input-transport.py"
+native_oracle_lane_producer="scripts/produce-native-oracle-lane.py"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
 candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
 candidate_artifact_script="scripts/remi-candidate-artifact.sh"
@@ -461,6 +463,16 @@ forbid_match "$native_oracle_export_workflow" 'bash -s|/v1/admin|conversion-craw
 python3 -I "$conversion_workflow_checker" .
 require_match "$native_oracle_transport_verifier" 'object_pairs_hook=reject_duplicate_key[\s\S]*canonical_json\(value\) != data[\s\S]*tarfile\.open\(path, mode="r:"\)[\s\S]*member\.isdir\(\) or member\.isreg\(\)[\s\S]*hashlib\.sha256\(data\)\.hexdigest\(\) != digest[\s\S]*set\(members\) != expected_names' 'native-oracle transport strict tar, canonical manifest, inventory, and byte verification'
 require_match "$native_oracle_transport_verifier" 'PUBLIC_PROFILES = \("fedora-44", "ubuntu-26\.04", "arch"\)[\s\S]*digest_json\(value\) != expected_digest[\s\S]*digest_json\(revision\) != observed_digest[\s\S]*observed_inventory != expected_inventory' 'native-oracle transport exact candidate, revision, source, and inventory bindings'
+require_match "$native_oracle_production_workflow" 'workflow_dispatch:[\s\S]*export_run_id:[\s\S]*required: true[\s\S]*permissions:[\s\S]*actions: read[\s\S]*contents: read[\s\S]*cancel-in-progress: false' 'native-oracle production exact export input and read-only permissions'
+require_job_match "$native_oracle_production_workflow" authorize 'timeout-minutes: 20[\s\S]*environment: production[\s\S]*GITHUB_REF" == refs/heads/main[\s\S]*git merge-base --is-ancestor HEAD origin/main' 'native-oracle production protected-main authorization'
+require_job_match "$native_oracle_production_workflow" authorize 'actions/runs/\$\{EXPORT_RUN_ID\}[\s\S]*\.event == "workflow_dispatch"[\s\S]*\.conclusion == "success"[\s\S]*\.head_branch == "main"[\s\S]*export-remi-native-oracle-inputs\.yml[\s\S]*expected one exact unexpired export artifact' 'native-oracle production exact successful protected export source'
+require_job_match "$native_oracle_production_workflow" authorize 'deployment_evidence_schema_version == 3[\s\S]*completion_mode == "private-candidates"[\s\S]*\["fedora-44", "ubuntu-26\.04", "arch"\][\s\S]*git merge-base --is-ancestor "\$deployed_commit" origin/main[\s\S]*verify-native-oracle-input-transport\.py' 'native-oracle production reopens exact deployed candidate and transport authority'
+require_job_match "$native_oracle_production_workflow" produce "${fedora_release_image}[\s\S]*${debian_parity_image}[\s\S]*${arch_release_image}[\s\S]*libsolv-devel-0\.7\.36-2\.fc44\.x86_64[\s\S]*libapt-pkg-dev=3\.2\.0[\s\S]*${arch_archive_pattern}" 'native-oracle production pinned native images and implementations'
+require_job_match "$native_oracle_production_workflow" produce 'ref: \$\{\{ needs\.authorize\.outputs\.deployed_commit \}\}[\s\S]*git rev-parse HEAD[\s\S]*cargo build --release -p conary-core[\s\S]*produce-native-oracle-lane\.py[\s\S]*package-producer[\s\S]*resolution-producer' 'native-oracle production exact deployed producer source and typed lane adapter'
+require_job_match "$native_oracle_production_workflow" produce 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f[\s\S]*remi-native-oracles-[\s\S]*if-no-files-found: error[\s\S]*retention-days: 7' 'native-oracle production exact short-lived output artifacts'
+require_job_match "$native_oracle_production_workflow" complete 'if: \$\{\{ always\(\) \}\}[\s\S]*needs: produce[\s\S]*test "\$PRODUCER_RESULT" = success' 'native-oracle production requires every producer lane'
+forbid_match "$native_oracle_production_workflow" 'conversion-crawl|promotion-(prove|activate)|/v1/admin|sudo -n (bash|sh)|ssh ' 'native-oracle production generic or mutating authority'
+require_match "$native_oracle_lane_producer" 'PUBLIC_PROFILES = \("fedora-44", "ubuntu-26\.04", "arch"\)[\s\S]*canonical_json\(value\) != data[\s\S]*native-oracle object directory disagrees[\s\S]*profile_revision_sha256[\s\S]*source_snapshot_sha256[\s\S]*authenticated roles changed[\s\S]*package_oracle_manifest_sha256' 'native-oracle lane strict typed ordering, digest, role, and oracle binding'
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'obsolete public verify URL'
 forbid_match "$deploy_workflow" '24273700060' 'retired one-time conaryd bootstrap exception'
 forbid_match "$deploy_workflow" 'deploy_asset_ref' 'retired bootstrap-only deploy asset ref'
