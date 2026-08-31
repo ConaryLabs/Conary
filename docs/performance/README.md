@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-31
-revision: 13
+revision: 14
 summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results including one-pass CCS payload preparation and bounded parallel archive compression
 ---
 
@@ -632,6 +632,69 @@ still means empty application conversion, cache, and CAS state rather than a
 dropped kernel page cache. It proves the exact one-pass payload-preparation
 change and does not constitute a same-host native-package-manager performance
 comparison.
+
+## Bounded CCS archive compression measured result: 2026-08-31
+
+Protected production-XFS workflow
+[run 33342689150](https://github.com/FieldmouseWorks/Conary/actions/runs/33342689150)
+measured deployed merge commit
+`59351ae565a975d670eff308f1edfc132b727cf0`, Remi 0.16.1, binary SHA-256
+`bcd250ab054d550ed345f281a24667a04ea6a35e753b919b150ea76a4182afcb`.
+The binary came from exact protected push-to-main candidate build
+[33341943297](https://github.com/FieldmouseWorks/Conary/actions/runs/33341943297)
+and successful `private-candidates` deployment
+[33342593675](https://github.com/FieldmouseWorks/Conary/actions/runs/33342593675).
+The run retained the exact profile revision, package key, source URL,
+1,881,853,676-byte source, source SHA-256, catalog authority, subject, 12-CPU
+production host, and all ten 4,096-byte block XFS root geometries from run
+33305607313.
+
+The sole artifact was ID `9741132874`, named
+`remi-conversion-benchmark-33342593675-33342689150-1`, and 34,945 bytes. Its
+Actions API digest was SHA-256
+`6404a2da5eeb1b9bea68c3b181c1f507e30ce4f77ac8d0709482e8ae1430c358`.
+The 26,340-byte public schema-v5 report had SHA-256
+`a6b8f408fe2b2e2836313a49a4504ce3e6eba814cb73d47bea9bd1e9cba6ed73`
+and bound the private 30,013-byte raw schema-v7 report at SHA-256
+`5bc3b3fb7ac3fcc23328f362ba904ac14eaaa31beb0c42ed8c323ec5fe22c4b2`.
+
+| Measurement boundary | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| `archive_assembly_and_gzip` | 53.990 s | 45.318 s | -8.672 s (-16.062%) |
+| Cold `views.conversion_core` | 92.986 s | 84.885 s | -8.101 s (-8.712%) |
+| Cold `views.end_to_end` | 175.527 s | 165.997 s | -9.530 s (-5.429%) |
+| Cold repetition process wall | 228.975566 s | 219.849033 s | -9.126533 s (-3.986%) |
+| `payload_derivation_and_object_staging` | 25.306 s | 25.613 s | +0.307 s (+1.213%) |
+| `complete_archive_copy` | 2.539 s | 0.189 s | -2.350 s (-92.556%) |
+| Retained `independent_transport_reopen` | 52.796 s | 53.210 s | +0.414 s (+0.784%) |
+| `complete_archive_hash` | 7.293 s | 7.455 s | +0.162 s (+2.221%) |
+| CCS output | 1,950,609,956 B | 1,950,834,192 B | +224,236 B (+0.0115%) |
+
+Schema v7 proves the exact compression geometry: 2,693,046,784 input bytes,
+1,048,576-byte blocks, 2,569 blocks, one worker, and a 7,654,987-byte checked
+input/output buffering ceiling. The deployment kept `max_concurrent` at 32;
+dividing the 12 available logical CPUs across that configured admission ceiling
+therefore selected one worker. The measured 16.062% archive improvement came
+from the ordered blocked gzp/zlib-rs hard cut without production parallelism;
+the local multi-worker probe is not credited to this result. The signed object
+set stayed byte-identical at SHA-256
+`cf4f448fdcf9f228febaf1767c98adbb0ca2053de4bfe231d7291f7ecf23d186`,
+49,091 objects, and 2,639,374,118 bytes.
+
+| Cold process resource | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| User CPU | 205.588164 s | 208.539662 s | +2.951498 s (+1.436%) |
+| System CPU | 14.658700 s | 13.226128 s | -1.432572 s (-9.773%) |
+| Total CPU | 220.246864 s | 221.765790 s | +1.518926 s (+0.690%) |
+| Process-lifetime peak RSS | 1,544,351,744 B | 1,492,045,824 B | -52,305,920 B (-3.387%) |
+
+This is one paired production sample, not a latency distribution. The archive
+change accounts for the conversion-core reduction within ordinary neighboring
+phase noise; the much lower complete-copy sample is not attributed to the
+compression implementation. The new dominant measured conversion boundary is
+the retained authenticated `independent_transport_reopen` at 53.210 seconds,
+followed by archive assembly/compression at 45.318 seconds. No same-host native
+package-manager diagnostic has yet been recorded for this subject.
 
 ## Remi conversion baseline: 2026-08-15
 
