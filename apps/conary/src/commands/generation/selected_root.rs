@@ -18,7 +18,6 @@ use crate::commands::{LiveRootFile, LiveRootStats, LiveRootTransaction};
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::GenerationPublication;
 use conary_core::filesystem::CasStore;
-use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::composefs::ComposefsRuntimeUnavailable;
 use conary_core::generation::root_manifest::{
     CapturedSelectedRoot, SelectedRootSnapshot, materialize_captured_selected_root,
@@ -29,7 +28,7 @@ use conary_core::transaction::{TransactionConfig, TransactionEngine};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use carrier::current_generation_lower_mode;
+use carrier::{PreparedSelectedRoot, current_generation_lower_mode};
 use deferred_ima::DeferredImaAuthority;
 use overlay_session::SelectedRootOverlaySession;
 use publication_authority::latest_selected_root_snapshot;
@@ -39,36 +38,6 @@ enum SelectedRootBacking {
     /// Try sessions retain a complete tree for later namespace exposure. The
     /// test mount bypass exercises that same explicit non-production boundary.
     Materialized,
-}
-
-enum PreparedSelectedRoot {
-    Materialized {
-        captured: CapturedSelectedRoot,
-        snapshot: SelectedRootSnapshot,
-    },
-    CurrentGeneration {
-        artifact: Box<GenerationArtifact>,
-        captured: CapturedSelectedRoot,
-        snapshot: SelectedRootSnapshot,
-    },
-}
-
-impl PreparedSelectedRoot {
-    fn captured(&self) -> &CapturedSelectedRoot {
-        match self {
-            Self::Materialized { captured, .. } | Self::CurrentGeneration { captured, .. } => {
-                captured
-            }
-        }
-    }
-
-    fn snapshot(&self) -> SelectedRootSnapshot {
-        match self {
-            Self::Materialized { snapshot, .. } | Self::CurrentGeneration { snapshot, .. } => {
-                *snapshot
-            }
-        }
-    }
 }
 
 /// One isolated selected-root view with one transaction-owned rollback authority.
@@ -174,6 +143,17 @@ impl LockedRuntimeRoot {
             session_id,
             transaction_engine,
         } = self;
+        let mut overlay_capabilities = if materialized_backing {
+            None
+        } else {
+            match SelectedRootOverlaySession::preflight(&session_dir) {
+                Ok(capabilities) => Some(capabilities),
+                Err(error) => {
+                    let _ = fs::remove_dir_all(&session_dir);
+                    return Err(error);
+                }
+            }
+        };
         let prepared =
             match prepare_current_root(conn, &runtime_root, &session_dir, materialized_backing) {
                 Ok(prepared) => prepared,
@@ -196,7 +176,13 @@ impl LockedRuntimeRoot {
                 SelectedRootBacking::Materialized
             }
             PreparedSelectedRoot::Materialized { .. } => {
-                match SelectedRootOverlaySession::begin_materialized(&session_dir, prior) {
+                match SelectedRootOverlaySession::begin_materialized(
+                    &session_dir,
+                    prior,
+                    overlay_capabilities
+                        .take()
+                        .expect("OverlayFS capability preflight must precede root preparation"),
+                ) {
                     Ok(overlay) => SelectedRootBacking::Overlay(overlay),
                     Err(error) => {
                         let _ = fs::remove_dir_all(&session_dir);
@@ -211,6 +197,9 @@ impl LockedRuntimeRoot {
                     prior,
                     artifact,
                     cas,
+                    overlay_capabilities
+                        .take()
+                        .expect("OverlayFS capability preflight must precede root preparation"),
                 ) {
                     Ok(overlay) => SelectedRootBacking::Overlay(overlay),
                     Err(error) => {

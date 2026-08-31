@@ -4,7 +4,38 @@
 
 use conary_core::generation::artifact::GenerationArtifact;
 use conary_core::generation::composefs::ComposefsRuntimeUnavailable;
+use conary_core::generation::root_manifest::{CapturedSelectedRoot, SelectedRootSnapshot};
 use std::path::{Path, PathBuf};
+
+pub(super) enum PreparedSelectedRoot {
+    Materialized {
+        captured: CapturedSelectedRoot,
+        snapshot: SelectedRootSnapshot,
+    },
+    CurrentGeneration {
+        artifact: Box<GenerationArtifact>,
+        captured: CapturedSelectedRoot,
+        snapshot: SelectedRootSnapshot,
+    },
+}
+
+impl PreparedSelectedRoot {
+    pub(super) fn captured(&self) -> &CapturedSelectedRoot {
+        match self {
+            Self::Materialized { captured, .. } | Self::CurrentGeneration { captured, .. } => {
+                captured
+            }
+        }
+    }
+
+    pub(super) fn snapshot(&self) -> SelectedRootSnapshot {
+        match self {
+            Self::Materialized { snapshot, .. } | Self::CurrentGeneration { snapshot, .. } => {
+                *snapshot
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CurrentGenerationLowerMode {

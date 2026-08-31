@@ -134,20 +134,33 @@ fn basic_package_transactions_materialize_verified_generation_authority_when_car
  {
     let selected_root_rs = fs::read_to_string(app_source("commands/generation/selected_root.rs"))
         .expect("failed to read selected-root transaction owner");
+    let carrier_rs = fs::read_to_string(app_source("commands/generation/selected_root/carrier.rs"))
+        .expect("failed to read selected-root carrier owner");
 
     assert!(
         selected_root_rs.contains("probe_composefs_mount_runtime")
-            && selected_root_rs.contains("MaterializedUnavailable"),
+            && carrier_rs.contains("MaterializedUnavailable"),
         "selected-root carrier selection must use typed composefs unavailability rather than mount error text"
     );
     assert!(
-        selected_root_rs.contains("load_generation_artifact_with_verified_cas")
+        carrier_rs.contains("load_generation_artifact_with_verified_cas")
             && selected_root_rs.contains("materialize_captured_selected_root"),
         "the fallback must reopen and materialize the exact current-generation artifact authority"
     );
     assert!(
         !selected_root_rs.contains("falling back to plain EROFS"),
         "transaction fallback must materialize typed authority, never weaken the generation mount contract"
+    );
+
+    let overlay_preflight = selected_root_rs
+        .find("SelectedRootOverlaySession::preflight")
+        .expect("selected-root preparation must functionally preflight OverlayFS");
+    let root_preparation = selected_root_rs
+        .find("prepare_current_root(conn")
+        .expect("selected-root preparation call not found");
+    assert!(
+        overlay_preflight < root_preparation,
+        "the exact OverlayFS carrier must be proven before selected-root snapshot preparation can mutate database authority"
     );
 }
 

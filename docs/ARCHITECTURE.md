@@ -517,9 +517,10 @@ are derived only for generation artifacts, retained materialization, recovery,
 rollback publication, and GC reachability. Normal
 `apps/conary/src/commands/generation/selected_root/carrier.rs` owns the typed
 direct-composefs versus verified-materialized-lower decision. Runtime
-selected-root sessions mount the functionally proven OverlayFS profile
-over exact immutable lower authority, freeze and strictly unmount before
-decoding the transaction upper, and never perform complete before/after
+selected-root sessions functionally prove the exact OverlayFS profile before
+snapshot preparation can write database authority, then reuse that proof when
+mounting over the exact immutable lower. They freeze and strictly unmount
+before decoding the transaction upper, and never perform complete before/after
 selected-root scans. With no pending publication debt, the current verified
 generation `root.erofs` mounts directly as the immutable-content lower and the
 typed `/etc`, `/var`, and `/srv` manifest is the top lower layer. Before that
