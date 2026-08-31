@@ -14,6 +14,7 @@ pub(super) const REL_LT: i32 = 4;
 pub(super) const REL_AND: i32 = 16;
 pub(super) const REL_OR: i32 = 17;
 pub(super) const REL_WITH: i32 = 18;
+pub(super) const REL_NAMESPACE: i32 = 19;
 pub(super) const REL_COND: i32 = 22;
 pub(super) const REL_ELSE: i32 = 26;
 pub(super) const REL_WITHOUT: i32 = 28;

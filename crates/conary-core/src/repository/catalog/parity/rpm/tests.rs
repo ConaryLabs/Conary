@@ -257,6 +257,7 @@ fn profile(snapshots: &[SourceSnapshotV1]) -> ProfileRevisionV2 {
 fn fixture(
     directory: &Path,
     conflicting_duplicate: bool,
+    complete_split_provide: bool,
 ) -> (Vec<(PathBuf, PathBuf)>, Vec<SourceSnapshotV1>) {
     let alpha_checksum = digest('a');
     let shared_checksum = digest('b');
@@ -266,6 +267,7 @@ fn fixture(
     <rpm:provides>
       <rpm:entry name="alpha" flags="EQ" epoch="0" ver="1.2" rel="3.fc44"/>
       <rpm:entry name="virtual-alpha" flags="GE" epoch="0" ver="2" rel="1"/>
+      <rpm:entry name="ceph-test:/usr/bin/ceph-kvstore-tool"/>
     </rpm:provides>
     <rpm:requires>
       <rpm:entry name="glibc" flags="GE" epoch="0" ver="2.40" rel="1.fc44"/>
@@ -284,7 +286,15 @@ fn fixture(
     alpha.release = "3.fc44";
     alpha.size = 123;
     alpha.format = alpha_format;
-    alpha.files = &["/usr/bin/alpha", "/usr/share/alpha/data"];
+    alpha.files = if complete_split_provide {
+        &[
+            "/usr/bin/alpha",
+            "/usr/bin/ceph-kvstore-tool",
+            "/usr/share/alpha/data",
+        ]
+    } else {
+        &["/usr/bin/alpha", "/usr/share/alpha/data"]
+    };
     let shared_core = PackageFixture::simple("shared", &shared_checksum);
     let core_packages = [alpha, shared_core.clone()];
     let core = write_metadata(directory, "fedora-core", &core_packages);
@@ -325,7 +335,7 @@ fn inputs<'a>(
 #[test]
 fn producer_projects_complete_typed_rpm_facts_and_reopens_bundle() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, snapshots) = fixture(directory.path(), false);
+    let (metadata, snapshots) = fixture(directory.path(), false, true);
     let profile = profile(&snapshots);
     let output = directory.path().join("oracle");
 
@@ -359,6 +369,21 @@ fn producer_projects_complete_typed_rpm_facts_and_reopens_bundle() {
             && provide.version.as_deref() == Some("2-1")
             && provide.version_relation == Some(ProvideVersionRelation::GreaterOrEqual)
     }));
+    assert!(alpha.provides.iter().any(|provide| {
+        provide.capability == "ceph-test:/usr/bin/ceph-kvstore-tool" && provide.kind == "generic"
+    }));
+    assert!(alpha.provides.iter().any(|provide| {
+        provide.capability == "/usr/bin/ceph-kvstore-tool" && provide.kind == "file"
+    }));
+    assert_eq!(
+        alpha
+            .requirement_groups
+            .iter()
+            .filter(|group| group.kind == "supplements")
+            .count(),
+        1,
+        "libsolv split-provides machinery must not become a source supplement"
+    );
     for kind in [
         "depends",
         "pre_depends",
@@ -394,7 +419,7 @@ fn producer_projects_complete_typed_rpm_facts_and_reopens_bundle() {
 #[test]
 fn producer_rejects_changed_authenticated_rpmmd_bytes() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, snapshots) = fixture(directory.path(), false);
+    let (metadata, snapshots) = fixture(directory.path(), false, true);
     let profile = profile(&snapshots);
     fs::OpenOptions::new()
         .append(true)
@@ -414,9 +439,85 @@ fn producer_rejects_changed_authenticated_rpmmd_bytes() {
 }
 
 #[test]
+fn producer_rejects_split_provide_without_matching_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let (metadata, snapshots) = fixture(directory.path(), false, false);
+    let profile = profile(&snapshots);
+
+    let error = produce_rpm_parity_oracle(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &directory.path().join("oracle"),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(error.to_string().contains(
+        "split-provides supplement 'ceph-test:/usr/bin/ceph-kvstore-tool' has no matching"
+    ));
+}
+
+#[test]
+fn split_provides_shape_rejects_namespace_and_tree_mutations() {
+    assert_eq!(
+        validate_split_provides_shape(
+            "namespace:splitprovides",
+            ffi::REL_WITH,
+            Some("ceph-test"),
+            Some("/usr/bin/ceph-kvstore-tool"),
+        )
+        .unwrap(),
+        (
+            "ceph-test:/usr/bin/ceph-kvstore-tool".to_string(),
+            "/usr/bin/ceph-kvstore-tool".to_string(),
+        )
+    );
+    for (namespace, flags, prefix, path) in [
+        (
+            "namespace:language",
+            ffi::REL_WITH,
+            Some("ceph-test"),
+            Some("/usr/bin/ceph-kvstore-tool"),
+        ),
+        (
+            "namespace:splitprovides",
+            ffi::REL_AND,
+            Some("ceph-test"),
+            Some("/usr/bin/ceph-kvstore-tool"),
+        ),
+        (
+            "namespace:splitprovides",
+            ffi::REL_WITH,
+            None,
+            Some("/usr/bin/ceph-kvstore-tool"),
+        ),
+        (
+            "namespace:splitprovides",
+            ffi::REL_WITH,
+            Some("ceph-test"),
+            None,
+        ),
+        (
+            "namespace:splitprovides",
+            ffi::REL_WITH,
+            Some("ceph:test"),
+            Some("/usr/bin/ceph-kvstore-tool"),
+        ),
+        (
+            "namespace:splitprovides",
+            ffi::REL_WITH,
+            Some("ceph-test"),
+            Some("usr/bin/ceph-kvstore-tool"),
+        ),
+    ] {
+        assert!(validate_split_provides_shape(namespace, flags, prefix, path).is_err());
+    }
+}
+
+#[test]
 fn producer_rejects_conflicting_exact_identity() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, snapshots) = fixture(directory.path(), true);
+    let (metadata, snapshots) = fixture(directory.path(), true, true);
     let profile = profile(&snapshots);
 
     let error = produce_rpm_parity_oracle(
@@ -433,7 +534,7 @@ fn producer_rejects_conflicting_exact_identity() {
 #[test]
 fn producer_requires_exact_rpm_metadata_roles() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, mut snapshots) = fixture(directory.path(), false);
+    let (metadata, mut snapshots) = fixture(directory.path(), false, true);
     snapshots[0].authenticated_objects.pop();
     let profile = profile(&snapshots);
 
@@ -450,7 +551,7 @@ fn producer_requires_exact_rpm_metadata_roles() {
 #[test]
 fn resolution_producer_emits_complete_closures_and_typed_unresolved_groups() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, snapshots) = fixture(directory.path(), false);
+    let (metadata, snapshots) = fixture(directory.path(), false, true);
     let profile = profile(&snapshots);
     let package_output = directory.path().join("package-oracle");
     produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
