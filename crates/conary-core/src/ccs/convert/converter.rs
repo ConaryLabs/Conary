@@ -519,12 +519,14 @@ impl NativePackageConverter {
         })?);
         let metadata_lifecycle_and_authority_projection =
             metadata_before_payload_preparation + authority_projection_started.elapsed();
+        let archive_admission_started = Instant::now();
         let archive_compression = self.archive_compression.acquire().map_err(|error| {
             ConversionError::BuildError(format!(
                 "Failed to acquire CCS archive compression workers: {error}"
             ))
         })?;
-        let ccs_write = write_v3_ccs_package_from_prepared_with_metrics(
+        let archive_admission_wait = archive_admission_started.elapsed();
+        let ccs_write_result = write_v3_ccs_package_from_prepared_with_metrics(
             &authority,
             &prepared_payload,
             &package_path,
@@ -535,13 +537,15 @@ impl NativePackageConverter {
                 foreign_conversion_boundary: Some(&boundary),
                 archive_compression: archive_compression.compression(),
             },
-        )
-        .map_err(|e| {
+        );
+        drop(archive_compression);
+        let mut ccs_write = ccs_write_result.map_err(|e| {
             ConversionError::BuildError(format!(
                 "Failed to write signed current CCS package with conversion boundary: {}",
                 e
             ))
         })?;
+        ccs_write.archive_assembly_and_gzip += archive_admission_wait;
         let authored_archive_identity = AuthoredArchiveIdentity {
             sha256: ccs_write.ccs_output_sha256.clone(),
             bytes: ccs_write.ccs_output_bytes,
