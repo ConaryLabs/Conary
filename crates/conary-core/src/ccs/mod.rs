@@ -10,7 +10,7 @@
 //! - Declarative hook execution
 
 mod archive_emitter;
-mod archive_framing;
+pub(crate) mod archive_framing;
 pub mod archive_layout;
 pub mod archive_reader;
 pub mod attestation;
