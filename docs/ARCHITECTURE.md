@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-29
-revision: 60
-summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and filesystem-independent chunk attestation, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier security, generation GC, and service boundaries
+last_updated: 2026-08-31
+revision: 61
+summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and filesystem-independent chunk attestation, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier selection and security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -515,9 +515,12 @@ changed subtrees, and affected hardlink groups; unchanged entries remain in
 the parent snapshot without enumeration or cloning. Complete sorted manifests
 are derived only for generation artifacts, retained materialization, recovery,
 rollback publication, and GC reachability. Normal
-runtime selected-root sessions mount the functionally proven OverlayFS profile
-over exact immutable lower authority, freeze and strictly unmount before
-decoding the transaction upper, and never perform complete before/after
+`apps/conary/src/commands/generation/selected_root/carrier.rs` owns the typed
+direct-composefs versus verified-materialized-lower decision. Runtime
+selected-root sessions functionally prove the exact OverlayFS profile before
+snapshot preparation can write database authority, then reuse that proof when
+mounting over the exact immutable lower. They freeze and strictly unmount
+before decoding the transaction upper, and never perform complete before/after
 selected-root scans. With no pending publication debt, the current verified
 generation `root.erofs` mounts directly as the immutable-content lower and the
 typed `/etc`, `/var`, and `/srv` manifest is the top lower layer. Before that
@@ -526,11 +529,18 @@ an `/etc`-scoped delta against the indexed generation snapshot, so user edits,
 whiteout deletions, new paths, and OverlayFS markers become the transaction's
 typed prior authority while pristine lower-only paths remain intact. The
 session strictly unmounts the transaction overlay before that nested composefs
-mount.
-Recoverable snapshots and first-generation database authority still use an
+mount. Carrier selection happens under the runtime mutation lock and before
+selected-root mutation. If the already-active kernel/userspace contract lacks
+registered EROFS or OverlayFS, loop-device access, or `mount.composefs`, the
+ordinary package loop independently reopens the complete generation artifact
+and CAS inventory and materializes that same typed root as the immutable
+lower. Artifact or CAS failure remains fatal; only typed carrier
+unavailability selects materialization. Generation build, switch, export, and
+boot keep their stricter composefs preflight and recovery contract.
+
+Recoverable snapshots and first-generation database authority also use an
 explicit materialized lower. Retained try-session trees remain a separate
-materialization consumer until their namespace contract is migrated; they are
-not a fallback for normal mutation.
+materialization consumer for namespace exposure.
 
 Publication and rollback rows reference the same SQLite-selected-root snapshot
 lineage by foreign key. The retired filesystem candidate and complete
@@ -540,7 +550,7 @@ and repository inputs. It retains revision 39's generation database mutation
 epoch and replaces repository chunk-list columns with signed transport
 envelopes.
 
-1. **Select**: Use the latest cumulative selected-root snapshot as lower authority when publication debt is pending. Otherwise decode the current generation's sparse config upper into the indexed prior snapshot, then mount the verified composefs image directly beneath that updated typed mutable-state layer; only first-generation database authority still reconstructs the complete lower
+1. **Select**: Use the latest cumulative selected-root snapshot as lower authority when publication debt is pending. Otherwise decode the current generation's sparse config upper into the indexed prior snapshot, then either mount the verified composefs image directly beneath that updated typed mutable-state layer or, when the typed direct-carrier probe is unavailable, materialize the same verified generation authority; first-generation database authority also reconstructs the complete lower
 2. **Mutate**: Apply payload changes, typed native lifecycle, CCS hooks, triggers, and config decisions inside that isolated root
 3. **Record**: Freeze and strictly unmount, decode the upper into a typed changed-path delta, validate and append only affected indexed authority, and bind recoverable publication debt to that child snapshot before committing package state
 4. **Build**: Validate the captured manifests and serialize the immutable manifest to EROFS using verified CAS content

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-01
-revision: 1
+last_updated: 2026-08-31
+revision: 2
 summary: Host requirements for the Conary limited preview, split by tier
 ---
 
@@ -15,8 +15,9 @@ Covers: `install`, `remove`, `update`, `search`, `list`, adopt/unadopt, and
 `try`. This is everything the first external tester loop asks you to run.
 
 - Fedora 44, Ubuntu 26.04 LTS, or Arch Linux
-- Stock distribution kernel - no composefs, UEFI, or special boot-stack
-  requirement
+- Stock distribution kernel with OverlayFS - no `mount.composefs` helper,
+  loop-device, UEFI, or special boot-stack requirement. If direct composefs is
+  unavailable, the transaction uses a verified materialized-generation lower.
 - x86_64
 - Root access (`sudo`)
 - A VM, snapshot, or non-critical host (preview etiquette, not a technical
@@ -28,6 +29,7 @@ Covers: generation build/switch/rollback, `system generation export`, and
 next-boot activation. NOT required for the basic package loop above.
 
 - Linux 6.2+ with composefs support, overlayfs, and `CONFIG_EROFS_FS`
+- Loop-device access and the `mount.composefs` userspace helper
 - systemd
 - UEFI boot stack
 - Sufficient disk for generation artifacts under `/conary`

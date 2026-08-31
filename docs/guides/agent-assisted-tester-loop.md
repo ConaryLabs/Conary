@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-27
-revision: 17
+last_updated: 2026-08-31
+revision: 18
 status: paused
 summary: Preserve the v0.16.1 tester-loop shape while signed-universe, daily-driver, and synchronized-release gates complete
 ---
@@ -105,8 +105,12 @@ Expected:
 - a stock distribution kernel
 - working `sudo`
 
-The basic package loop does not require composefs, UEFI, or special boot-stack
-support. Those only matter for generation-model features outside this test.
+The basic package loop does not require the `mount.composefs` helper, loop
+devices, UEFI, or special boot-stack support. When direct composefs mounting is
+unavailable, transactions materialize the same verified current-generation
+manifest and CAS authority as their isolated lower. OverlayFS remains a stock
+kernel requirement for live mutation isolation. Composefs and the wider boot
+stack matter only for generation-model features outside this test.
 
 ## Download And Verify
 

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-29
-revision: 33
+last_updated: 2026-08-31
+revision: 34
 summary: Track Conary's signed-universe launch gate, daily-driver floor, synchronized preview release, and external tester milestone
 proof_baseline: "W7/#110 closed through PR #487; immutable v0.16.1 remains historical release evidence rather than tester authority; #598 owns first complete signed public universe; external tester result remains 0/10"
 current_milestone: first external tester loop
@@ -410,8 +410,10 @@ the stated scope, not whether a workstream happens to be active.
 - **Phase 2 -- daily-driver floor:** #534 proves that a supported normal apply
   publishes its exact changeset before success or returns a typed recoverable
   partial outcome; #122 rejects complete materialization conflicts before any
-  mutation; and #132's first three ranked slices establish correct TTY progress,
-  one warning/error voice, and one grouped transaction summary. #642 gives
+  mutation; #718 keeps the basic package loop independent of composefs by
+  selecting a verified materialized generation lower when the direct carrier
+  is unavailable; and #132's first three ranked slices establish correct TTY
+  progress, one warning/error voice, and one grouped transaction summary. #642 gives
   removal the same non-mutating plan/apply control as install and update. #643
   provides one read-only typed status result for release, repository,
   generation/publication, carrier, and database health.
@@ -430,7 +432,7 @@ the stated scope, not whether a workstream happens to be active.
   full-system replacement proof do not enter this launch lane without a new
   issue-backed dependency justified by launch or tester evidence.
 - **Gate:** #598 zero-exclusion evidence, #638 read-surface agreement, the
-  #122/#534/#132/#642/#643 floor, #639 released public-artifact proof, and
+  #122/#534/#718/#132/#642/#643 floor, #639 released public-artifact proof, and
   #121/#149 launch proof are complete.
   The announcement claim remains the individual-package cross-distribution
   bridge recorded in `launch-status.json`; #272 owns any later full-system

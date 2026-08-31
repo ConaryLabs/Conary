@@ -34,13 +34,32 @@ struct MountedGenerationLower {
 }
 
 impl SelectedRootOverlaySession {
+    /// Functionally prove the exact transaction OverlayFS profile before any
+    /// selected-root snapshot or package authority can be mutated.
+    pub(super) fn preflight(session_dir: &Path) -> Result<SelectedRootOverlayCapabilities> {
+        let profile = SelectedRootOverlayProfile::trusted();
+        probe_selected_root_overlay_profile(session_dir, &profile).with_context(|| {
+            format!(
+                "selected-root OverlayFS capability preflight failed on {}; recovery: boot a kernel with OverlayFS support and run Conary with mount and trusted-xattr privileges on a compatible workspace filesystem",
+                session_dir.display()
+            )
+        })
+    }
+
     /// Probe the actual workspace, admit the materialized immutable lower, and
     /// mount the exact profile before lifecycle mutation can begin.
     pub(super) fn begin_materialized(
         session_dir: &Path,
         prior: &CapturedSelectedRoot,
+        capabilities: SelectedRootOverlayCapabilities,
     ) -> Result<Self> {
-        Self::begin_with_lowers(session_dir, prior, &[session_dir.join("lower")], None)
+        Self::begin_with_lowers(
+            session_dir,
+            prior,
+            &[session_dir.join("lower")],
+            None,
+            capabilities,
+        )
     }
 
     /// Mount the current generation image directly beneath its typed mutable
@@ -50,6 +69,7 @@ impl SelectedRootOverlaySession {
         prior: &CapturedSelectedRoot,
         artifact: &GenerationArtifact,
         cas: &CasStore,
+        capabilities: SelectedRootOverlayCapabilities,
     ) -> Result<Self> {
         fs::create_dir_all(session_dir)?;
         let state_lower = session_dir.join("lower-state");
@@ -85,6 +105,7 @@ impl SelectedRootOverlaySession {
             prior,
             &[state_lower, generation_lower.mount_point.clone()],
             Some(generation_lower),
+            capabilities,
         )
     }
 
@@ -93,6 +114,7 @@ impl SelectedRootOverlaySession {
         prior: &CapturedSelectedRoot,
         lowers: &[PathBuf],
         generation_lower: Option<MountedGenerationLower>,
+        capabilities: SelectedRootOverlayCapabilities,
     ) -> Result<Self> {
         fs::create_dir_all(session_dir).with_context(|| {
             format!(
@@ -101,8 +123,6 @@ impl SelectedRootOverlaySession {
             )
         })?;
         let profile = SelectedRootOverlayProfile::trusted();
-        let capabilities = probe_selected_root_overlay_profile(session_dir, &profile)
-            .context("selected-root OverlayFS capability preflight failed")?;
 
         let upper = session_dir.join("upper");
         let work = session_dir.join("work");

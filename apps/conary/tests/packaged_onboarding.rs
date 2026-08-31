@@ -171,3 +171,38 @@ fn native_release_packages_disable_unpublished_debug_subpackages() {
         "Arch PKGBUILD must disable automatic debug split packages"
     );
 }
+
+#[test]
+fn basic_package_loop_does_not_declare_composefs_as_a_native_runtime_dependency() {
+    let rpm = read_packaging_file("packaging/rpm/conary.spec");
+    let rpm_requires = rpm
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Requires:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !rpm_requires.contains("composefs"),
+        "Fedora package transactions use the verified materialized lower when composefs is unavailable"
+    );
+
+    let deb = read_packaging_file("packaging/deb/debian/control");
+    let deb_depends = deb
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Depends:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !deb_depends.contains("composefs"),
+        "Ubuntu package transactions must not acquire the Tier 2 composefs stack"
+    );
+
+    let arch = read_packaging_file("packaging/arch/PKGBUILD");
+    let arch_depends = arch
+        .lines()
+        .find(|line| line.trim_start().starts_with("depends=("))
+        .expect("Arch PKGBUILD runtime dependencies");
+    assert!(
+        !arch_depends.contains("composefs"),
+        "Arch package transactions must remain independent of the Tier 2 composefs stack"
+    );
+}
