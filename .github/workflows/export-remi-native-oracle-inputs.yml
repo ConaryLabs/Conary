@@ -73,9 +73,6 @@ jobs:
               echo "source run is not an exact successful protected-main Remi deployment" >&2
               exit 1
             }
-          head_sha="$(jq -r '.head_sha' <<<"$source_run")"
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
-
       - name: Download exact sanitized deployment inspection
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -88,7 +85,6 @@ jobs:
       - name: Reopen exact candidate identity from deployment evidence
         id: candidates
         env:
-          DEPLOYED_COMMIT_SHA: ${{ steps.deployment.outputs.head_sha }}
           INSPECTION_DIR: ${{ runner.temp }}/deployment-inspection
         shell: bash
         run: |
@@ -98,12 +94,11 @@ jobs:
             echo "deployment artifact has no plain final inspection" >&2
             exit 1
           }
-          jq -e \
-            --arg commit "$DEPLOYED_COMMIT_SHA" '
+          jq -e '
               . as $inspection
               | .deployment_evidence_schema_version == 3
               and .inspection_available == true
-              and .deployment.commit_sha == $commit
+              and (.deployment.commit_sha | test("^[0-9a-f]{40}$"))
               and (.deployment.binary_sha256 | test("^[0-9a-f]{64}$"))
               and .deployment.completion_mode == "private-candidates"
               and .deployment.outcome == "complete"
@@ -133,11 +128,17 @@ jobs:
                       and $candidate.latest_refresh.started_at >= .started_at
                       and $candidate.latest_refresh.finished_at <= .finished_at)))
             ' "$inspection" >/dev/null || {
-              echo "deployment evidence does not prove one exact complete private candidate set" >&2
-              exit 1
+            echo "deployment evidence does not prove one exact complete private candidate set" >&2
+            exit 1
+          }
+          deployed_commit="$(jq -r '.deployment.commit_sha' "$inspection")"
+          git merge-base --is-ancestor "$deployed_commit" origin/main || {
+            echo "deployed candidate must already be merged into origin/main" >&2
+            exit 1
           }
           cp -- "$inspection" remi-deployment-inspection.json
           {
+            echo "deployed_commit=$deployed_commit"
             echo "fedora=$(jq -r '.candidates[0].profile_revision_sha256' "$inspection")"
             echo "ubuntu=$(jq -r '.candidates[1].profile_revision_sha256' "$inspection")"
             echo "arch=$(jq -r '.candidates[2].profile_revision_sha256' "$inspection")"
@@ -272,7 +273,7 @@ jobs:
       - name: Record exact export handoff
         env:
           DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
-          DEPLOYED_COMMIT_SHA: ${{ steps.deployment.outputs.head_sha }}
+          DEPLOYED_COMMIT_SHA: ${{ steps.candidates.outputs.deployed_commit }}
           EXPORT_ID: ${{ steps.export.outputs.export_id }}
           TRANSPORT_SHA256: ${{ steps.export.outputs.transport_sha256 }}
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}

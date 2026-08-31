@@ -1779,6 +1779,32 @@ test_check_release_matrix_rejects_unserialized_native_oracle_export() {
         "native-oracle export serialized with candidate and release deployment"
 }
 
+test_check_release_matrix_rejects_workflow_head_as_deployed_candidate() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '          deployed_commit="$(jq -r '\''.deployment.commit_sha'\'' "$inspection")"' \
+        '          deployed_commit="$(git rev-parse HEAD)"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export reopens the exact merged deployed candidate from refresh-bound evidence"
+}
+
+test_check_release_matrix_rejects_unmerged_deployed_candidate() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '          git merge-base --is-ancestor "$deployed_commit" origin/main || {' \
+        '          true || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export reopens the exact merged deployed candidate from refresh-bound evidence"
+}
+
 test_check_release_matrix_rejects_loose_native_oracle_transport() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2957,6 +2983,8 @@ main() {
         test_check_release_matrix_rejects_unprotected_native_oracle_source
         test_check_release_matrix_rejects_nonproduction_native_oracle_export
         test_check_release_matrix_rejects_unserialized_native_oracle_export
+        test_check_release_matrix_rejects_workflow_head_as_deployed_candidate
+        test_check_release_matrix_rejects_unmerged_deployed_candidate
         test_check_release_matrix_rejects_loose_native_oracle_transport
         test_check_release_matrix_rejects_unserialized_site_deployment
         test_check_release_matrix_rejects_unserialized_r2_durability
