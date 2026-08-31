@@ -11,6 +11,7 @@ use std::thread::JoinHandle;
 
 const HEADER_BYTES: usize = 20;
 const FOOTER_BYTES: usize = 8;
+const EXPECTED_TAR_TRAILING_ZERO_BYTES: u64 = 512;
 const FIXED_HEADER_PREFIX: [u8; 16] =
     [0x1f, 0x8b, 8, 4, 0, 0, 0, 0, 0, 255, 8, 0, b'I', b'G', 4, 0];
 
@@ -207,6 +208,42 @@ impl<R: Read> Read for MgzipDecoder<R> {
             self.current = Cursor::new(decode_frame(frame)?);
         }
     }
+}
+
+/// Exhaust the physical carrier and require the sole canonical tar tail.
+///
+/// `tar::Archive::entries` stops after the first zero terminator block. Every
+/// caller that accepts structure must therefore drain the remaining block and
+/// MGZIP frames explicitly instead of letting an appended member disappear.
+pub(crate) fn finish_canonical_tar<R: Read>(archive: tar::Archive<R>) -> io::Result<R> {
+    let mut reader = archive.into_inner();
+    let mut trailing = 0_u64;
+    let mut buffer = [0_u8; 512];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        if buffer[..read].iter().any(|byte| *byte != 0) {
+            return Err(invalid_data(
+                "CCS archive carries non-zero data after the canonical tar terminator",
+            ));
+        }
+        trailing = trailing
+            .checked_add(read as u64)
+            .ok_or_else(|| invalid_data("CCS tar-padding arithmetic overflow"))?;
+        if trailing > EXPECTED_TAR_TRAILING_ZERO_BYTES {
+            return Err(invalid_data(format!(
+                "CCS tar terminator/padding exceeds {EXPECTED_TAR_TRAILING_ZERO_BYTES} bytes"
+            )));
+        }
+    }
+    if trailing != EXPECTED_TAR_TRAILING_ZERO_BYTES {
+        return Err(invalid_data(format!(
+            "CCS tar terminator/padding has noncanonical length {trailing}; expected {EXPECTED_TAR_TRAILING_ZERO_BYTES}"
+        )));
+    }
+    Ok(reader)
 }
 
 struct DecodeJob {

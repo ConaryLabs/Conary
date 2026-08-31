@@ -2,14 +2,12 @@
 
 //! Exact compressed CCS archive identity and canonical stream completion.
 
-use super::{VerifiedArchiveIdentity, VerifyError};
+use super::VerifiedArchiveIdentity;
 use anyhow::{Context, Result};
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 use tar::Archive;
-
-const EXPECTED_TAR_TRAILING_ZERO_BYTES: u64 = 512;
 
 pub(super) type ArchiveDecoder =
     crate::ccs::archive_framing::ParallelMgzipDecoder<ArchiveIdentityReader<File>>;
@@ -29,39 +27,8 @@ pub(super) fn finish(
     VerifiedArchiveIdentity,
     crate::ccs::archive_framing::ArchiveDecodeMetrics,
 )> {
-    let mut decoder = archive.into_inner();
-    let mut trailing = 0_u64;
-    let mut buffer = [0_u8; 512];
-    loop {
-        let read = decoder
-            .read(&mut buffer)
-            .context("finish canonical CCS MGZIP blocks and verify CRC/footer")?;
-        if read == 0 {
-            break;
-        }
-        if buffer[..read].iter().any(|byte| *byte != 0) {
-            return Err(VerifyError::PackageError(
-                "CCS archive carries non-zero data after the canonical tar terminator".to_string(),
-            )
-            .into());
-        }
-        trailing = trailing
-            .checked_add(read as u64)
-            .context("CCS tar-padding arithmetic overflow")?;
-        if trailing > EXPECTED_TAR_TRAILING_ZERO_BYTES {
-            return Err(VerifyError::PackageError(format!(
-                "CCS tar terminator/padding exceeds {EXPECTED_TAR_TRAILING_ZERO_BYTES} bytes"
-            ))
-            .into());
-        }
-    }
-    if trailing != EXPECTED_TAR_TRAILING_ZERO_BYTES {
-        return Err(VerifyError::PackageError(format!(
-            "CCS tar terminator/padding has noncanonical length {trailing}; expected {EXPECTED_TAR_TRAILING_ZERO_BYTES}"
-        ))
-        .into());
-    }
-
+    let decoder = crate::ccs::archive_framing::finish_canonical_tar(archive)
+        .context("finish canonical CCS MGZIP blocks and verify CRC/footer")?;
     let (compressed, decode_metrics) = decoder.finish()?;
     let (sha256, bytes) = compressed.finish();
     Ok((VerifiedArchiveIdentity::new(sha256, bytes), decode_metrics))

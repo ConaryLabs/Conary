@@ -128,6 +128,21 @@ fn current_contract_detection_returns_false_for_an_ordinary_gzip_native_archive(
 }
 
 #[test]
+fn inspection_rejects_an_appended_noncanonical_gzip_member() {
+    let (_temp, path) = current_package();
+    let mut bytes = std::fs::read(path).unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(b"appended retired member").unwrap();
+    bytes.extend(encoder.finish().unwrap());
+
+    let error = inspect_untrusted_ccs_archive(std::io::Cursor::new(bytes)).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("noncanonical MGZIP header"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn inspection_rejects_noncanonical_object_paths() {
     let authority = crate::ccs::v3::test_support::package_authority_with_one_file("bad-object");
     let bytes = archive_of(&[

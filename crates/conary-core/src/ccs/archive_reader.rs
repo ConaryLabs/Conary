@@ -70,7 +70,10 @@ pub fn inspect_untrusted_ccs_archive<R: Read>(reader: R) -> anyhow::Result<Untru
         state.read_regular_entry(&mut entry, &path)?;
     }
 
-    state.finish()
+    let inspection = state.finish()?;
+    crate::ccs::archive_framing::finish_canonical_tar(archive)
+        .context("finish canonical CCS tar/MGZIP structure")?;
+    Ok(inspection)
 }
 
 /// Identify the exact current CCS v3 archive contract independently of name.
