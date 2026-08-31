@@ -389,7 +389,7 @@ fn project_provide(
                 "libalpm provided invalid ALPM capability '{raw}': {error}"
             ))
         })?;
-    let (capability, kind, version) = match parsed {
+    let (capability, kind, version, relation_fields) = match parsed {
         alpm_types::RelationOrSoname::Relation(relation) => {
             let version = relation
                 .version_requirement
@@ -408,16 +408,27 @@ fn project_provide(
             } else {
                 RepositoryCapabilityKind::Virtual
             };
-            (capability, kind, version)
+            (capability, kind, version, true)
         }
-        alpm_types::RelationOrSoname::SonameV1(soname) => {
-            (soname.to_string(), RepositoryCapabilityKind::Soname, None)
-        }
-        alpm_types::RelationOrSoname::SonameV2(soname) => {
-            (soname.to_string(), RepositoryCapabilityKind::Soname, None)
-        }
+        alpm_types::RelationOrSoname::SonameV1(soname) => (
+            soname.to_string(),
+            RepositoryCapabilityKind::Soname,
+            None,
+            false,
+        ),
+        alpm_types::RelationOrSoname::SonameV2(soname) => (
+            soname.to_string(),
+            RepositoryCapabilityKind::Soname,
+            None,
+            false,
+        ),
     };
-    if dependency.name() != capability || dependency.version().map(ToString::to_string) != version {
+    let fields_agree = if relation_fields {
+        dependency.name() == capability && dependency.version().map(ToString::to_string) == version
+    } else {
+        dependency_relation_text(dependency)? == raw
+    };
+    if !fields_agree {
         return Err(Error::ConflictError(format!(
             "libalpm dependency fields disagree with normalized provide '{raw}'"
         )));
