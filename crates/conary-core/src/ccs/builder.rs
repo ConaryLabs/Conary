@@ -19,12 +19,12 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
-mod compression_admission;
+mod cpu_admission;
 mod package_writer;
 mod payload_preparation;
 mod source;
 
-pub use compression_admission::{CcsArchiveCompressionAdmission, CcsArchiveCompressionLease};
+pub use cpu_admission::{CcsArchiveCpuAdmission, CcsArchiveCpuLease};
 pub use package_writer::{
     CcsArchiveCompression, CcsPackageWriteMetrics, print_build_summary,
     write_signed_current_ccs_package, write_v3_ccs_package_from_bounded_memory_for_tests,

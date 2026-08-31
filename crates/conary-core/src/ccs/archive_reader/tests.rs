@@ -4,7 +4,9 @@ use super::*;
 use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
 use crate::ccs::signing::SigningKeyPair;
 use flate2::Compression;
-use flate2::write::GzEncoder;
+use gzp::ZWriter;
+use gzp::deflate::Mgzip;
+use gzp::par::compress::ParCompressBuilder;
 use std::io::Write;
 use tar::Builder;
 
@@ -39,16 +41,18 @@ fn entry(path: &str, content: Vec<u8>) -> (String, Vec<u8>) {
 }
 
 fn archive_of(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    {
-        let encoder = GzEncoder::new(&mut bytes, Compression::default());
-        let mut builder = Builder::new(encoder);
-        for (path, content) in entries {
-            append(&mut builder, path, content);
-        }
-        builder.into_inner().unwrap().finish().unwrap();
+    let encoder = ParCompressBuilder::<Mgzip>::new()
+        .buffer_size(CCS_BUDGET.archive_compression_block_bytes)
+        .unwrap()
+        .num_threads(1)
+        .unwrap()
+        .compression_level(Compression::default())
+        .from_writer(Vec::new());
+    let mut builder = Builder::new(encoder);
+    for (path, content) in entries {
+        append(&mut builder, path, content);
     }
-    bytes
+    builder.into_inner().unwrap().finish().unwrap()
 }
 
 #[test]

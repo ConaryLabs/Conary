@@ -14,7 +14,6 @@ use crate::ccs::builder::ComponentData;
 use crate::ccs::manifest::CcsManifest;
 use crate::ccs::v3::AuthorityDocumentV3;
 use anyhow::Context;
-use flate2::read::GzDecoder;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
@@ -54,7 +53,7 @@ pub struct UntrustedCcsArchive {
 
 /// Structurally inspect a CCS v3 archive without granting trust.
 pub fn inspect_untrusted_ccs_archive<R: Read>(reader: R) -> anyhow::Result<UntrustedCcsArchive> {
-    let mut archive = Archive::new(GzDecoder::new(reader));
+    let mut archive = Archive::new(crate::ccs::archive_framing::MgzipDecoder::new(reader));
     let mut state = InspectionState::default();
     let mut entries_seen = 0_u64;
 
@@ -83,7 +82,9 @@ pub fn has_current_ccs_archive_contract(path: impl AsRef<Path>) -> anyhow::Resul
         return Ok(false);
     }
 
-    let mut archive = Archive::new(GzDecoder::new(File::open(path)?));
+    let mut archive = Archive::new(crate::ccs::archive_framing::MgzipDecoder::new(File::open(
+        path,
+    )?));
     let mut entries_seen = 0_u64;
     for entry in archive.entries()? {
         entries_seen += 1;

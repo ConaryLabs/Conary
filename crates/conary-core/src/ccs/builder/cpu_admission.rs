@@ -1,9 +1,9 @@
-// crates/conary-core/src/ccs/builder/compression_admission.rs
-//! Work-conserving CPU admission for final CCS archive compression.
+// conary-core/src/ccs/builder/cpu_admission.rs
+//! Work-conserving CPU admission for CCS archive encode and decode.
 
 use super::package_writer::CcsArchiveCompression;
 use anyhow::{Context, Result, ensure};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 #[derive(Debug)]
 struct AdmissionState {
@@ -17,18 +17,17 @@ struct AdmissionInner {
     available: Condvar,
 }
 
-/// Shared authority for the aggregate number of CCS compression workers.
+/// Shared authority for the aggregate number of CCS archive CPU workers.
 ///
-/// An archive leases all workers that are idle when it reaches final emission.
-/// That keeps the authority work-conserving for a lone conversion and queues a
-/// later archive rather than oversubscribing the process. The lease is released
-/// as soon as the archive writer returns.
+/// Encode and authenticated decode each lease all idle workers. That keeps the
+/// authority work-conserving for a lone conversion and queues a later archive
+/// phase rather than oversubscribing the process.
 #[derive(Clone, Debug)]
-pub struct CcsArchiveCompressionAdmission {
+pub struct CcsArchiveCpuAdmission {
     inner: Arc<AdmissionInner>,
 }
 
-impl CcsArchiveCompressionAdmission {
+impl CcsArchiveCpuAdmission {
     /// Construct an exact checked aggregate worker capacity.
     pub fn with_capacity(capacity: usize) -> Result<Self> {
         CcsArchiveCompression::with_workers(capacity)?;
@@ -49,36 +48,50 @@ impl CcsArchiveCompressionAdmission {
             logical_parallelism > 0,
             "logical parallelism must be greater than zero"
         );
-        Self::with_capacity(
-            logical_parallelism.min(crate::ccs::CCS_BUDGET.max_archive_compression_workers),
-        )
+        Self::with_capacity(logical_parallelism.min(crate::ccs::CCS_BUDGET.max_archive_cpu_workers))
     }
 
-    /// Aggregate compression-worker capacity shared by every clone.
+    /// Process-wide host/cgroup authority shared by default archive callers.
+    pub fn for_current_process() -> Self {
+        static ADMISSION: OnceLock<CcsArchiveCpuAdmission> = OnceLock::new();
+        ADMISSION
+            .get_or_init(|| {
+                Self::for_host_parallelism(
+                    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+                )
+                .expect("detected host parallelism is always admissible")
+            })
+            .clone()
+    }
+
+    /// Aggregate archive-worker capacity shared by every clone.
     pub fn capacity(&self) -> usize {
         self.inner.capacity
     }
 
     /// Lease all currently idle workers, waiting when another archive owns the
     /// complete capacity.
-    pub fn acquire(&self) -> Result<CcsArchiveCompressionLease> {
-        let mut state =
-            self.inner.state.lock().map_err(|_| {
-                anyhow::anyhow!("CCS archive compression admission lock is poisoned")
-            })?;
+    pub fn acquire(&self) -> Result<CcsArchiveCpuLease> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("CCS archive CPU admission lock is poisoned"))?;
         while state.available_workers == 0 {
-            state = self.inner.available.wait(state).map_err(|_| {
-                anyhow::anyhow!("CCS archive compression admission lock is poisoned")
-            })?;
+            state = self
+                .inner
+                .available
+                .wait(state)
+                .map_err(|_| anyhow::anyhow!("CCS archive CPU admission lock is poisoned"))?;
         }
 
         let workers = state.available_workers;
         let compression = CcsArchiveCompression::with_workers(workers)
-            .context("admit live CCS archive compression worker lease")?;
+            .context("admit live CCS archive CPU worker lease")?;
         state.available_workers = 0;
         drop(state);
 
-        Ok(CcsArchiveCompressionLease {
+        Ok(CcsArchiveCpuLease {
             compression,
             workers,
             inner: Arc::clone(&self.inner),
@@ -86,28 +99,33 @@ impl CcsArchiveCompressionAdmission {
     }
 }
 
-impl Default for CcsArchiveCompressionAdmission {
+impl Default for CcsArchiveCpuAdmission {
     fn default() -> Self {
-        Self::with_capacity(1).expect("one CCS compression worker is always admissible")
+        Self::with_capacity(1).expect("one CCS archive CPU worker is always admissible")
     }
 }
 
-/// RAII lease retaining one archive's exact checked compression geometry.
+/// RAII lease retaining one archive phase's exact checked CPU capacity.
 #[derive(Debug)]
-pub struct CcsArchiveCompressionLease {
+pub struct CcsArchiveCpuLease {
     compression: CcsArchiveCompression,
     workers: usize,
     inner: Arc<AdmissionInner>,
 }
 
-impl CcsArchiveCompressionLease {
+impl CcsArchiveCpuLease {
     /// Exact compression geometry authorized for this archive emission.
     pub fn compression(&self) -> CcsArchiveCompression {
         self.compression
     }
+
+    /// Exact worker capacity authorized for archive encode or decode.
+    pub fn workers(&self) -> usize {
+        self.workers
+    }
 }
 
-impl Drop for CcsArchiveCompressionLease {
+impl Drop for CcsArchiveCpuLease {
     fn drop(&mut self) {
         let mut state = self
             .inner
@@ -117,10 +135,10 @@ impl Drop for CcsArchiveCompressionLease {
         state.available_workers = state
             .available_workers
             .checked_add(self.workers)
-            .expect("CCS compression worker lease release cannot overflow");
+            .expect("CCS archive CPU worker lease release cannot overflow");
         assert!(
             state.available_workers <= self.inner.capacity,
-            "CCS compression worker lease released more than the authority capacity"
+            "CCS archive CPU worker lease released more than the authority capacity"
         );
         self.inner.available.notify_one();
     }
@@ -134,7 +152,7 @@ mod tests {
 
     #[test]
     fn lone_archive_saturates_live_capacity_and_release_restores_it() {
-        let admission = CcsArchiveCompressionAdmission::with_capacity(4).unwrap();
+        let admission = CcsArchiveCpuAdmission::with_capacity(4).unwrap();
         let first = admission.acquire().unwrap();
         assert_eq!(first.compression().workers(), 4);
         drop(first);
@@ -145,7 +163,7 @@ mod tests {
 
     #[test]
     fn concurrent_archive_waits_instead_of_oversubscribing_capacity() {
-        let admission = CcsArchiveCompressionAdmission::with_capacity(4).unwrap();
+        let admission = CcsArchiveCpuAdmission::with_capacity(4).unwrap();
         let first = admission.acquire().unwrap();
         let waiting_admission = admission.clone();
         let (ready_sender, ready_receiver) = mpsc::channel();
@@ -168,10 +186,10 @@ mod tests {
 
     #[test]
     fn exact_capacity_rejects_zero_and_over_budget_values() {
-        assert!(CcsArchiveCompressionAdmission::with_capacity(0).is_err());
+        assert!(CcsArchiveCpuAdmission::with_capacity(0).is_err());
         assert!(
-            CcsArchiveCompressionAdmission::with_capacity(
-                crate::ccs::CCS_BUDGET.max_archive_compression_workers + 1,
+            CcsArchiveCpuAdmission::with_capacity(
+                crate::ccs::CCS_BUDGET.max_archive_cpu_workers + 1,
             )
             .is_err()
         );
@@ -179,10 +197,10 @@ mod tests {
 
     #[test]
     fn host_parallelism_is_capped_by_the_canonical_budget() {
-        let admission = CcsArchiveCompressionAdmission::for_host_parallelism(usize::MAX).unwrap();
+        let admission = CcsArchiveCpuAdmission::for_host_parallelism(usize::MAX).unwrap();
         assert_eq!(
             admission.capacity(),
-            crate::ccs::CCS_BUDGET.max_archive_compression_workers
+            crate::ccs::CCS_BUDGET.max_archive_cpu_workers
         );
     }
 }

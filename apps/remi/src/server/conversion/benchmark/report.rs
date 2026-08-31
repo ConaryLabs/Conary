@@ -1,11 +1,11 @@
 // apps/remi/src/server/conversion/benchmark/report.rs
-//! Strict schema-v7 validation and durable report publication.
+//! Strict schema-v8 validation and durable report publication.
 
 use super::{
-    CONVERSION_BENCHMARK_SCHEMA_V7, ConversionBenchmarkCatalogAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V8, ConversionBenchmarkCatalogAuthority,
     ConversionBenchmarkCatalogReopen, ConversionBenchmarkCatalogSetup, ConversionBenchmarkEvidence,
     ConversionBenchmarkOutcome, ConversionBenchmarkOutputProof, ConversionBenchmarkProcessUsage,
-    ConversionBenchmarkReportV7, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, PublishedInode,
+    ConversionBenchmarkReportV8, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1, PublishedInode,
     REPORT_FILE_NAME, conversion_core_duration, rollback_failed_publication, sync_parent,
     validate_sha256,
 };
@@ -42,9 +42,9 @@ const HOT_SKIPPED_PHASES: [ConversionPhase; 17] = [
     ConversionPhase::DatabasePersistence,
 ];
 
-pub(super) fn validate_report(report: &ConversionBenchmarkReportV7) -> Result<()> {
+pub(super) fn validate_report(report: &ConversionBenchmarkReportV8) -> Result<()> {
     ensure!(
-        report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V7,
+        report.schema_version == CONVERSION_BENCHMARK_SCHEMA_V8,
         "conversion benchmark schema {} is unsupported",
         report.schema_version
     );
@@ -164,7 +164,7 @@ fn validate_terminal_failure(
 }
 
 fn validate_completed_conversion(
-    report: &ConversionBenchmarkReportV7,
+    report: &ConversionBenchmarkReportV8,
     repetition: &ConversionBenchmarkEvidence,
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
@@ -374,8 +374,24 @@ fn validate_cold_fused_cas(
 ) -> Result<()> {
     let work = &timing.work;
     let expected_cas_barriers = u64::from(work.signed_object_count > 0);
+    let decode_workers = usize::try_from(work.independent_transport_reopen_decode_workers)
+        .context("archive decode worker count exceeds usize")?;
+    let decode_block_bytes =
+        u64::try_from(conary_core::ccs::CCS_BUDGET.archive_compression_block_bytes)
+            .context("archive decode block bytes exceed u64")?;
     ensure!(
         work.independent_transport_reopen_object_bytes_hashed == work.signed_object_bytes
+            && decode_workers > 0
+            && work.independent_transport_reopen_decoded_bytes
+                == work.archive_compression_input_bytes
+            && work.independent_transport_reopen_decode_block_bytes == decode_block_bytes
+            && work.independent_transport_reopen_decode_blocks
+                == work
+                    .independent_transport_reopen_decoded_bytes
+                    .div_ceil(decode_block_bytes)
+            && work.independent_transport_reopen_decode_buffer_ceiling_bytes
+                == conary_core::ccs::CCS_BUDGET
+                    .archive_decode_buffer_ceiling_bytes(decode_workers)?
             && work.cas_incoming_bytes_hashed == work.signed_object_bytes
             && work.cas_persistent_bytes_written == work.signed_object_bytes
             && work.cas_objects_hashed == work.signed_object_count
@@ -444,7 +460,7 @@ fn validate_cold_fused_cas(
 
 #[allow(clippy::too_many_arguments)]
 fn validate_successful_repetition(
-    report: &ConversionBenchmarkReportV7,
+    report: &ConversionBenchmarkReportV8,
     repetition: &ConversionBenchmarkEvidence,
     cache_state: &str,
     timing: &crate::server::conversion_timing::ConversionTimingReport,
@@ -647,7 +663,7 @@ fn validate_process_usage(usage: &ConversionBenchmarkProcessUsage, label: &str) 
 
 pub(super) fn publish_and_reopen_report(
     path: &Path,
-    report: &ConversionBenchmarkReportV7,
+    report: &ConversionBenchmarkReportV8,
 ) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
@@ -761,8 +777,8 @@ pub(super) fn publish_and_reopen_report(
             reopened_bytes == bytes,
             "reopened conversion benchmark report changed bytes"
         );
-        let reopened: ConversionBenchmarkReportV7 = serde_json::from_slice(&reopened_bytes)
-            .context("strictly reopen published conversion benchmark schema v7")?;
+        let reopened: ConversionBenchmarkReportV8 = serde_json::from_slice(&reopened_bytes)
+            .context("strictly reopen published conversion benchmark schema v8")?;
         validate_report(&reopened)?;
         ensure!(
             serde_json::to_value(&reopened)? == serde_json::to_value(report)?,

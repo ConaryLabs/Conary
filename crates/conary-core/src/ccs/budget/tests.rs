@@ -492,9 +492,9 @@ fn derived_ceilings_are_stated_in_terms_of_structural_dimensions() {
 }
 
 #[test]
-fn compression_limits_and_buffer_ceiling_share_the_canonical_budget() {
+fn archive_cpu_limits_and_buffer_ceilings_share_the_canonical_budget() {
     let budget = CCS_BUDGET;
-    let workers = budget.max_archive_compression_workers;
+    let workers = budget.max_archive_cpu_workers;
     let block = u64::try_from(budget.archive_compression_block_bytes).unwrap();
     let worker_count = u64::try_from(workers).unwrap();
     let in_flight = worker_count * ARCHIVE_COMPRESSION_IN_FLIGHT_BLOCKS_PER_WORKER
@@ -504,7 +504,7 @@ fn compression_limits_and_buffer_ceiling_share_the_canonical_budget() {
         + ARCHIVE_COMPRESSION_OUTPUT_SLACK_BYTES;
     let expected = block + in_flight * (block + compressed);
 
-    budget.admit_archive_compression_workers(workers).unwrap();
+    budget.admit_archive_cpu_workers(workers).unwrap();
     assert_eq!(
         budget
             .archive_compression_buffer_ceiling_bytes(workers)
@@ -512,9 +512,15 @@ fn compression_limits_and_buffer_ceiling_share_the_canonical_budget() {
         expected
     );
 
-    let error = budget
-        .admit_archive_compression_workers(workers + 1)
-        .unwrap_err();
+    let decode_outstanding = worker_count * 2 + 2;
+    let decode_encoded = compressed + 28;
+    let decode_expected = decode_outstanding * (block + decode_encoded);
+    assert_eq!(
+        budget.archive_decode_buffer_ceiling_bytes(workers).unwrap(),
+        decode_expected
+    );
+
+    let error = budget.admit_archive_cpu_workers(workers + 1).unwrap_err();
     assert_eq!(error.dimension, BudgetDimension::ArchiveCompressionWorkers);
     assert_eq!(error.observed, worker_count + 1);
     assert_eq!(error.limit, worker_count);

@@ -5,7 +5,7 @@
 use anyhow::{Context, Result, bail};
 use flate2::Compression;
 use gzp::ZWriter;
-use gzp::deflate::Gzip;
+use gzp::deflate::Mgzip;
 use gzp::par::compress::{ParCompress, ParCompressBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -30,7 +30,7 @@ pub(crate) struct ArchiveEmissionMetrics {
 
 /// Emit controls and authenticated objects through the sole CCS archive order.
 ///
-/// The final path is published only after every exact-size source, tar, gzip,
+/// The final path is published only after every exact-size source, tar, MGZIP,
 /// and output-identity operation succeeds. Callers retain authority over the
 /// supplied control bytes and object inventory; this function owns only their
 /// deterministic physical archive representation.
@@ -70,7 +70,7 @@ pub(crate) fn write_exact_archive(
     let identity;
     {
         let identity_writer = ArchiveIdentityWriter::new(staged.reopen()?);
-        let encoder = ParallelGzipWriter::new(identity_writer, compression)?;
+        let encoder = ParallelMgzipWriter::new(identity_writer, compression)?;
         let mut archive = Builder::new(encoder);
 
         let mut directory = Header::new_gnu();
@@ -157,16 +157,16 @@ struct ParallelCompressionMetrics {
     buffer_ceiling_bytes: u64,
 }
 
-struct ParallelGzipWriter<W: Write + Send + 'static> {
-    inner: ParCompress<'static, Gzip, W>,
+struct ParallelMgzipWriter<W: Write + Send + 'static> {
+    inner: ParCompress<'static, Mgzip, W>,
     input_bytes: u64,
     workers: usize,
 }
 
-impl<W: Write + Send + 'static> ParallelGzipWriter<W> {
+impl<W: Write + Send + 'static> ParallelMgzipWriter<W> {
     fn new(writer: W, compression: crate::ccs::builder::CcsArchiveCompression) -> Result<Self> {
         let workers = compression.workers();
-        let inner = ParCompressBuilder::<Gzip>::new()
+        let inner = ParCompressBuilder::<Mgzip>::new()
             .buffer_size(crate::ccs::CCS_BUDGET.archive_compression_block_bytes)?
             .num_threads(workers)?
             .compression_level(Compression::default())
@@ -199,7 +199,7 @@ impl<W: Write + Send + 'static> ParallelGzipWriter<W> {
     }
 }
 
-impl<W: Write + Send + 'static> Write for ParallelGzipWriter<W> {
+impl<W: Write + Send + 'static> Write for ParallelMgzipWriter<W> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         let written = self.inner.write(buffer)?;
         self.input_bytes = self
@@ -344,7 +344,6 @@ impl<W: Write> Write for ArchiveIdentityWriter<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::read::GzDecoder;
     use std::io::Cursor;
     use std::path::PathBuf;
 
@@ -415,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn parallel_compression_is_worker_independent_and_one_gzip_member() {
+    fn parallel_compression_is_worker_independent_and_canonical_mgzip() {
         let temp = tempfile::tempdir().unwrap();
         let one_worker = temp.path().join("one.ccs");
         let four_workers = temp.path().join("four.ccs");
@@ -463,14 +462,8 @@ mod tests {
                 > one_metrics.compression_buffer_ceiling_bytes
         );
 
-        let mut compressed = one.as_slice();
-        let mut decoder = flate2::bufread::GzDecoder::new(&mut compressed);
+        let mut decoder = crate::ccs::archive_framing::MgzipDecoder::new(one.as_slice());
         io::copy(&mut decoder, &mut io::sink()).unwrap();
-        drop(decoder);
-        assert!(
-            compressed.is_empty(),
-            "archive carried a second gzip member"
-        );
     }
 
     #[test]
@@ -479,10 +472,8 @@ mod tests {
 
         assert!(CcsArchiveCompression::with_workers(0).is_err());
         assert!(
-            CcsArchiveCompression::with_workers(
-                crate::ccs::CCS_BUDGET.max_archive_compression_workers + 1
-            )
-            .is_err()
+            CcsArchiveCompression::with_workers(crate::ccs::CCS_BUDGET.max_archive_cpu_workers + 1)
+                .is_err()
         );
     }
 
@@ -528,7 +519,8 @@ mod tests {
 
         assert_eq!(opened_objects, expected_object_order);
 
-        let decoder = GzDecoder::new(fs::File::open(&output).unwrap());
+        let decoder =
+            crate::ccs::archive_framing::MgzipDecoder::new(fs::File::open(&output).unwrap());
         let mut archive = tar::Archive::new(decoder);
         let mut reconstructed = Vec::new();
         for entry in archive.entries().unwrap() {
@@ -610,7 +602,7 @@ mod tests {
                 .all(|(_, _, _, entry_mtime, _)| *entry_mtime == mtime)
         );
 
-        // Exhausting the decoder validates the gzip trailer as well as the
+        // Exhausting the decoder validates every MGZIP trailer as well as the
         // tar reader's member stream. Only tar end padding may remain.
         let mut decoder = archive.into_inner();
         let mut tar_tail = Vec::new();

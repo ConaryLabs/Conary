@@ -10,6 +10,7 @@
 //! - Declarative hook execution
 
 mod archive_emitter;
+mod archive_framing;
 pub mod archive_layout;
 pub mod archive_reader;
 pub mod attestation;
@@ -40,8 +41,8 @@ pub use budget::{
     CcsStructuralBudget,
 };
 pub use builder::{
-    BuildResult, BuilderError, CcsArchiveCompression, CcsArchiveCompressionAdmission,
-    CcsArchiveCompressionLease, CcsBuilder, CcsInstallPrefix, ChunkStats, ComponentData, FileEntry,
+    BuildResult, BuilderError, CcsArchiveCompression, CcsArchiveCpuAdmission, CcsArchiveCpuLease,
+    CcsBuilder, CcsInstallPrefix, ChunkStats, ComponentData, FileEntry,
 };
 pub use chunking::{
     Chunk, ChunkReference, ChunkStore, ChunkedFile, Chunker, DeltaStats, StoreStats,
@@ -81,4 +82,6 @@ pub use target_contract::{
 pub use transport::{
     CCS_TRANSPORT_SCHEMA_V1, CcsTransportEnvelopeV1, CcsTransportObjectV1, PreparedCcsTransport,
 };
-pub use verify::{TrustPolicy, VerifiedArchiveIdentity, VerifiedCcsArchive};
+pub use verify::{
+    TrustPolicy, VerifiedArchiveDecodeMetrics, VerifiedArchiveIdentity, VerifiedCcsArchive,
+};

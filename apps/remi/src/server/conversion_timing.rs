@@ -108,6 +108,11 @@ pub struct ConversionWorkMetrics {
     pub ccs_output_bytes_hashed: u64,
     pub independent_transport_reopen_ccs_bytes: u64,
     pub independent_transport_reopen_object_bytes_hashed: u64,
+    pub independent_transport_reopen_decode_workers: u64,
+    pub independent_transport_reopen_decode_blocks: u64,
+    pub independent_transport_reopen_decoded_bytes: u64,
+    pub independent_transport_reopen_decode_block_bytes: u64,
+    pub independent_transport_reopen_decode_buffer_ceiling_bytes: u64,
     pub complete_archive_hash_bytes: u64,
     pub complete_archive_copy_bytes: u64,
     pub maximum_retained_staging_bytes: u64,
@@ -197,6 +202,18 @@ impl ConversionWorkMetrics {
         self.cas_fallback_object_syncs = metrics.fallback_object_syncs;
         self.cas_fallback_directory_syncs = metrics.fallback_directory_syncs;
         self.cas_canonical_bytes_reread = metrics.canonical_bytes_reread;
+    }
+
+    pub fn record_archive_decode(
+        &mut self,
+        metrics: conary_core::ccs::VerifiedArchiveDecodeMetrics,
+    ) {
+        self.independent_transport_reopen_decode_workers = metrics.workers;
+        self.independent_transport_reopen_decode_blocks = metrics.blocks;
+        self.independent_transport_reopen_decoded_bytes = metrics.decoded_bytes;
+        self.independent_transport_reopen_decode_block_bytes = metrics.block_bytes;
+        self.independent_transport_reopen_decode_buffer_ceiling_bytes =
+            metrics.buffer_ceiling_bytes;
     }
 }
 
@@ -402,6 +419,31 @@ mod tests {
         assert_eq!(work.archive_input_bytes, 240);
         assert_eq!(work.ccs_output_bytes_hashed, 180);
         assert_eq!(work.maximum_retained_staging_bytes, 420);
+    }
+
+    #[test]
+    fn authenticated_reopen_work_maps_exact_parallel_decode_geometry() {
+        let mut work = ConversionWorkMetrics::default();
+
+        work.record_archive_decode(conary_core::ccs::VerifiedArchiveDecodeMetrics {
+            workers: 6,
+            blocks: 41,
+            decoded_bytes: 41_943_040,
+            block_bytes: 1_048_576,
+            buffer_ceiling_bytes: 15_728_640,
+        });
+
+        assert_eq!(work.independent_transport_reopen_decode_workers, 6);
+        assert_eq!(work.independent_transport_reopen_decode_blocks, 41);
+        assert_eq!(work.independent_transport_reopen_decoded_bytes, 41_943_040);
+        assert_eq!(
+            work.independent_transport_reopen_decode_block_bytes,
+            1_048_576
+        );
+        assert_eq!(
+            work.independent_transport_reopen_decode_buffer_ceiling_bytes,
+            15_728_640
+        );
     }
 
     #[test]

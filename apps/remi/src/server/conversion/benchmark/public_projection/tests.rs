@@ -1,7 +1,7 @@
 // apps/remi/src/server/conversion/benchmark/public_projection/tests.rs
 use super::*;
 use crate::server::conversion::{
-    CONVERSION_BENCHMARK_SCHEMA_V7, ConversionBenchmarkCatalogAuthority,
+    CONVERSION_BENCHMARK_SCHEMA_V8, ConversionBenchmarkCatalogAuthority,
     ConversionBenchmarkCatalogQuery, ConversionBenchmarkCatalogReopen,
     ConversionBenchmarkCatalogSetup, ConversionBenchmarkEnvironment, ConversionBenchmarkEvidence,
     ConversionBenchmarkRootIdentity, ConversionBenchmarkSelectionKind, ConversionBenchmarkView,
@@ -198,6 +198,17 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
         timing.work.ccs_output_bytes = 23;
         timing.work.ccs_output_bytes_hashed = 23;
         timing.work.independent_transport_reopen_ccs_bytes = 23;
+        timing.work.independent_transport_reopen_decode_workers = 1;
+        timing.work.independent_transport_reopen_decode_blocks = 1;
+        timing.work.independent_transport_reopen_decoded_bytes = 2048;
+        timing.work.independent_transport_reopen_decode_block_bytes =
+            conary_core::ccs::CCS_BUDGET.archive_compression_block_bytes as u64;
+        timing
+            .work
+            .independent_transport_reopen_decode_buffer_ceiling_bytes =
+            conary_core::ccs::CCS_BUDGET
+                .archive_decode_buffer_ceiling_bytes(1)
+                .unwrap();
         timing.work.complete_archive_hash_bytes = 23;
         timing.work.complete_archive_copy_bytes = 23;
         timing.work.signed_object_count = 2;
@@ -242,10 +253,10 @@ fn valid_timing(cold: bool) -> ConversionTimingReport {
     timing
 }
 
-fn valid_report() -> ConversionBenchmarkReportV7 {
+fn valid_report() -> ConversionBenchmarkReportV8 {
     let output = valid_output();
-    ConversionBenchmarkReportV7 {
-        schema_version: CONVERSION_BENCHMARK_SCHEMA_V7,
+    ConversionBenchmarkReportV8 {
+        schema_version: CONVERSION_BENCHMARK_SCHEMA_V8,
         environment: ConversionBenchmarkEnvironment {
             hardware_label: "production-xfs".to_string(),
             remi_version: "0.1.0".to_string(),
@@ -339,7 +350,7 @@ fn valid_report() -> ConversionBenchmarkReportV7 {
     }
 }
 
-fn publish_raw(root: &Path, report: &ConversionBenchmarkReportV7) -> std::path::PathBuf {
+fn publish_raw(root: &Path, report: &ConversionBenchmarkReportV8) -> std::path::PathBuf {
     let raw_path = root.join(super::super::REPORT_FILE_NAME);
     super::super::report::publish_and_reopen_report(&raw_path, report)
         .expect("publish raw benchmark fixture");
@@ -363,7 +374,7 @@ fn assert_no_key(value: &Value, forbidden: &str) {
     }
 }
 
-fn assert_publication_rejected(report: &ConversionBenchmarkReportV7) -> String {
+fn assert_publication_rejected(report: &ConversionBenchmarkReportV8) -> String {
     let root = tempfile::tempdir().expect("create rejected-publication root");
     let raw_path = publish_raw(root.path(), report);
     let public_path = root.path().join(PUBLIC_REPORT_FILE_NAME);
@@ -411,10 +422,10 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
     ] {
         assert_no_key(&value, retired);
     }
-    assert_eq!(value["schema_version"], PUBLIC_REPORT_SCHEMA_V5);
+    assert_eq!(value["schema_version"], PUBLIC_REPORT_SCHEMA_V6);
     assert_eq!(
         value["raw_report"]["schema_version"],
-        CONVERSION_BENCHMARK_SCHEMA_V7
+        CONVERSION_BENCHMARK_SCHEMA_V8
     );
     assert_eq!(
         value["raw_report"]["sha256"],
@@ -510,21 +521,21 @@ fn projection_omits_private_fields_and_preserves_exact_evidence() {
 }
 
 #[test]
-fn public_schema_v5_rejects_legacy_public_and_raw_versions() {
+fn public_schema_v6_rejects_legacy_public_and_raw_versions() {
     let report = valid_report();
     let raw_bytes = serde_json::to_vec(&report).unwrap();
     let mut public = project_report(&raw_bytes, &report).unwrap();
 
-    public.schema_version = 4;
+    public.schema_version = 5;
     assert!(validate_public_report(&public).is_err());
 
-    public.schema_version = PUBLIC_REPORT_SCHEMA_V5;
-    public.raw_report.schema_version = 6;
+    public.schema_version = PUBLIC_REPORT_SCHEMA_V6;
+    public.raw_report.schema_version = 7;
     assert!(validate_public_report(&public).is_err());
 }
 
 #[test]
-fn public_schema_v5_requires_exact_payload_source_reopen_work() {
+fn public_schema_v6_requires_exact_payload_source_reopen_work() {
     let report = valid_report();
     let raw_bytes = serde_json::to_vec(&report).unwrap();
     let public = project_report(&raw_bytes, &report).unwrap();
@@ -534,12 +545,12 @@ fn public_schema_v5_requires_exact_payload_source_reopen_work() {
         .unwrap()
         .remove("payload_source_files_reopened");
 
-    let error = serde_json::from_value::<ConversionBenchmarkPublicReportV5>(value).unwrap_err();
+    let error = serde_json::from_value::<ConversionBenchmarkPublicReportV6>(value).unwrap_err();
     assert!(error.to_string().contains("missing field"), "{error}");
 }
 
 #[test]
-fn public_schema_v5_rejects_retired_payload_shape() {
+fn public_schema_v6_rejects_retired_payload_shape() {
     let report = valid_report();
     let raw_bytes = serde_json::to_vec(&report).unwrap();
 
@@ -553,7 +564,7 @@ fn public_schema_v5_rejects_retired_payload_shape() {
             serde_json::json!(20),
         );
     let error =
-        serde_json::from_value::<ConversionBenchmarkPublicReportV5>(legacy_work).unwrap_err();
+        serde_json::from_value::<ConversionBenchmarkPublicReportV6>(legacy_work).unwrap_err();
     assert!(error.to_string().contains("unknown field"), "{error}");
 
     let mut legacy_nested =
@@ -563,7 +574,7 @@ fn public_schema_v5_rejects_retired_payload_shape() {
         .unwrap()
         .insert("nested_phases".to_string(), serde_json::json!([]));
     let error =
-        serde_json::from_value::<ConversionBenchmarkPublicReportV5>(legacy_nested).unwrap_err();
+        serde_json::from_value::<ConversionBenchmarkPublicReportV6>(legacy_nested).unwrap_err();
     assert!(error.to_string().contains("unknown field"), "{error}");
 
     let mut legacy_phase =
@@ -576,7 +587,7 @@ fn public_schema_v5_rejects_retired_payload_shape() {
             "duration_ms": 1,
         }));
     let error =
-        serde_json::from_value::<ConversionBenchmarkPublicReportV5>(legacy_phase).unwrap_err();
+        serde_json::from_value::<ConversionBenchmarkPublicReportV6>(legacy_phase).unwrap_err();
     assert!(error.to_string().contains("unknown variant"), "{error}");
 }
 

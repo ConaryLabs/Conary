@@ -4,31 +4,38 @@
 
 use super::{VerifiedArchiveIdentity, VerifyError};
 use anyhow::{Context, Result};
-use flate2::bufread::GzDecoder;
 use std::fs::File;
-use std::io::{self, BufReader, Read};
+use std::io::{self, Read};
 use std::path::Path;
 use tar::Archive;
 
 const EXPECTED_TAR_TRAILING_ZERO_BYTES: u64 = 512;
 
-pub(super) type ArchiveDecoder = GzDecoder<BufReader<ArchiveIdentityReader<File>>>;
+pub(super) type ArchiveDecoder =
+    crate::ccs::archive_framing::ParallelMgzipDecoder<ArchiveIdentityReader<File>>;
 
-pub(super) fn open(path: &Path) -> Result<Archive<ArchiveDecoder>> {
+pub(super) fn open(path: &Path, workers: usize) -> Result<Archive<ArchiveDecoder>> {
     let file = File::open(path).with_context(|| format!("open CCS package {}", path.display()))?;
     let reader = ArchiveIdentityReader::new(file);
-    Ok(Archive::new(GzDecoder::new(BufReader::new(reader))))
+    Ok(Archive::new(
+        crate::ccs::archive_framing::ParallelMgzipDecoder::new(reader, workers)?,
+    ))
 }
 
-/// Finish the one canonical tar/gzip member before exposing its exact identity.
-pub(super) fn finish(archive: Archive<ArchiveDecoder>) -> Result<VerifiedArchiveIdentity> {
+/// Finish the canonical tar/MGZIP stream before exposing its exact identity.
+pub(super) fn finish(
+    archive: Archive<ArchiveDecoder>,
+) -> Result<(
+    VerifiedArchiveIdentity,
+    crate::ccs::archive_framing::ArchiveDecodeMetrics,
+)> {
     let mut decoder = archive.into_inner();
     let mut trailing = 0_u64;
     let mut buffer = [0_u8; 512];
     loop {
         let read = decoder
             .read(&mut buffer)
-            .context("finish CCS gzip member and verify its CRC/footer")?;
+            .context("finish canonical CCS MGZIP blocks and verify CRC/footer")?;
         if read == 0 {
             break;
         }
@@ -55,16 +62,9 @@ pub(super) fn finish(archive: Archive<ArchiveDecoder>) -> Result<VerifiedArchive
         .into());
     }
 
-    let mut compressed = decoder.into_inner();
-    let mut extra = [0_u8; 1];
-    if compressed.read(&mut extra)? != 0 {
-        return Err(VerifyError::PackageError(
-            "CCS package carries trailing compressed bytes or a second gzip member".to_string(),
-        )
-        .into());
-    }
-    let (sha256, bytes) = compressed.into_inner().finish();
-    Ok(VerifiedArchiveIdentity::new(sha256, bytes))
+    let (compressed, decode_metrics) = decoder.finish()?;
+    let (sha256, bytes) = compressed.finish();
+    Ok((VerifiedArchiveIdentity::new(sha256, bytes), decode_metrics))
 }
 
 pub(super) struct ArchiveIdentityReader<R> {

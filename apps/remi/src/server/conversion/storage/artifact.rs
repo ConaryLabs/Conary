@@ -133,6 +133,7 @@ pub(super) fn stage_finalize_and_publish_then<F>(
     pending: PendingConversionResult,
     policy: &TrustPolicy,
     cas: &CasStore,
+    archive_cpu: &conary_core::ccs::CcsArchiveCpuAdmission,
     packages_dir: &Path,
     after_publication: F,
 ) -> Result<FinalizedConversionArtifact>
@@ -147,7 +148,12 @@ where
     )?;
 
     let verification_started = Instant::now();
-    let finalized = pending.verify_staged_copy_into_cas(staged.path(), policy, cas)?;
+    let finalized = pending.verify_staged_copy_into_cas_with_archive_cpu(
+        staged.path(),
+        policy,
+        cas,
+        archive_cpu,
+    )?;
     let verification_and_cas_duration = verification_started.elapsed();
     let verified_identity = finalized.archive_identity().clone();
     staged.require_binding("verified conversion staging artifact")?;

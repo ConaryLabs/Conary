@@ -29,7 +29,7 @@ impl CcsArchiveCompression {
             workers > 0,
             "CCS archive compression requires at least one worker"
         );
-        crate::ccs::CCS_BUDGET.admit_archive_compression_workers(workers)?;
+        crate::ccs::CCS_BUDGET.admit_archive_cpu_workers(workers)?;
         Ok(Self { workers })
     }
 
@@ -510,8 +510,9 @@ mod tests {
         )
         .unwrap();
 
-        let mut archive =
-            tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&path).unwrap()));
+        let mut archive = tar::Archive::new(crate::ccs::archive_framing::MgzipDecoder::new(
+            fs::File::open(&path).unwrap(),
+        ));
         let entries = archive
             .entries()
             .unwrap()

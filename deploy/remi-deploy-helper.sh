@@ -993,8 +993,8 @@ benchmark_remi_conversion() {
     staged_source="/tmp/remi-conversion-source-${run_id}.native"
     trusted_config="${run_root}/remi.toml"
     trusted_source="${run_root}/source.native"
-    raw_report="${work_root}/conversion-benchmark-v7.json"
-    public_sidecar="${work_root}/conversion-benchmark-public-v5.json"
+    raw_report="${work_root}/conversion-benchmark-v8.json"
+    public_sidecar="${work_root}/conversion-benchmark-public-v6.json"
     transport="/tmp/remi-conversion-benchmark-${run_id}.json"
 
     BENCHMARK_FAILURE_STAGE=binary-config-authority
@@ -1184,7 +1184,7 @@ benchmark_remi_conversion() {
     raw_sha256="$(sha256sum "$raw_report" | cut -d ' ' -f 1)"
     raw_bytes="$(stat -c '%s' "$raw_report")"
     (( raw_bytes > 0 )) || die "conversion benchmark raw report is empty"
-    jq -e '.schema_version == 7 and type == "object"' "$raw_report" >/dev/null ||
+    jq -e '.schema_version == 8 and type == "object"' "$raw_report" >/dev/null ||
         die "conversion benchmark raw report has an invalid schema"
 
     BENCHMARK_FAILURE_STAGE=public-sidecar-validation
@@ -1198,8 +1198,8 @@ benchmark_remi_conversion() {
         --arg raw_sha256 "$raw_sha256" \
         --argjson raw_bytes "$raw_bytes" '
         type == "object"
-        and .schema_version == 5
-        and .raw_report.schema_version == 7
+        and .schema_version == 6
+        and .raw_report.schema_version == 8
         and .raw_report.sha256 == $raw_sha256
         and .raw_report.size_bytes == $raw_bytes
     ' "$public_sidecar" >/dev/null ||
