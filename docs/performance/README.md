@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-08-31
-revision: 15
+revision: 16
 summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results including one-pass CCS payload preparation and bounded parallel archive compression
 ---
 
@@ -635,6 +635,69 @@ still means empty application conversion, cache, and CAS state rather than a
 dropped kernel page cache. It proves the exact one-pass payload-preparation
 change and does not constitute a same-host native-package-manager performance
 comparison.
+
+## Live CCS compression admission measured result: 2026-08-31
+
+Protected production-XFS workflow
+[run 33347361189](https://github.com/FieldmouseWorks/Conary/actions/runs/33347361189)
+measured deployed merge commit
+`beebba8c92d604f2a923d6ec36c88a57628da2ed`, Remi 0.16.1, binary SHA-256
+`e79d5637e38daed22a38149852b8e228104fce991f2c7a69d0260a437969273b`.
+The binary came from exact protected push-to-main candidate build
+[33346365078](https://github.com/FieldmouseWorks/Conary/actions/runs/33346365078)
+and successful `private-candidates` deployment
+[33347202715](https://github.com/FieldmouseWorks/Conary/actions/runs/33347202715).
+The run replayed the exact profile revision, package key, credential-free
+source URL, 1,881,853,676-byte source, source SHA-256, catalog authority,
+subject, 12-CPU production host, and ten 4,096-byte block XFS root geometries
+from run 33342689150.
+
+The sole artifact was ID `9742554883`, named
+`remi-conversion-benchmark-33347202715-33347361189-1`, and 34,955 bytes. Its
+Actions API digest was SHA-256
+`cb4a943e30f8000b5ed6a9a308ce5cd28f1d34d23354ef623228fdc58fc2ad07`.
+The 26,352-byte public schema-v5 report had SHA-256
+`feb55f170537381ab4a31101d7ecbd79ba3360ac22c21e786001433205eae6ac`
+and bound the private 30,025-byte raw schema-v7 report at SHA-256
+`5aad8f2ecfbfe31b8103460706099df1d883fb8ca613f332cef098d390612dbe`.
+
+| Measurement boundary | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| `archive_assembly_and_gzip` | 45.318 s | 10.476 s | -34.842 s (-76.883%) |
+| Cold `views.conversion_core` | 84.885 s | 49.773 s | -35.112 s (-41.364%) |
+| Cold `views.end_to_end` | 165.997 s | 134.055 s | -31.942 s (-19.243%) |
+| Cold repetition process wall | 219.849033 s | 187.880970 s | -31.968063 s (-14.541%) |
+| `payload_derivation_and_object_staging` | 25.613 s | 25.378 s | -0.235 s (-0.918%) |
+| Retained `independent_transport_reopen` | 53.210 s | 53.157 s | -0.053 s (-0.100%) |
+| `complete_archive_hash` | 7.455 s | 7.374 s | -0.081 s (-1.087%) |
+| `complete_archive_copy` | 0.189 s | 4.041 s | +3.852 s (+2,038.095%) |
+| CCS output | 1,950,834,192 B | 1,950,834,192 B | unchanged |
+
+Schema v7 proves that live admission selected 12 workers rather than the prior
+static one-worker allocation. Both runs compressed 2,693,046,784 input bytes
+as 2,569 ordered 1,048,576-byte blocks. The canonical checked input/output
+buffering ceiling rose from 7,654,987 bytes to 56,102,001 bytes. The signed
+payload set remained exact at SHA-256
+`cf4f448fdcf9f228febaf1767c98adbb0ca2053de4bfe231d7291f7ecf23d186`,
+49,091 objects, and 2,639,374,118 bytes, and cold/hot output identity agreed
+within the run. Fixed ordered blocks retain separate unit proof that archive
+bytes are independent of worker scheduling for identical controls.
+
+| Cold process resource | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| User CPU | 208.539662 s | 230.730380 s | +22.190718 s (+10.641%) |
+| System CPU | 13.226128 s | 14.540782 s | +1.314654 s (+9.940%) |
+| Total CPU | 221.765790 s | 245.271162 s | +23.505372 s (+10.599%) |
+| Process-lifetime peak RSS | 1,492,045,824 B | 1,603,022,848 B | +110,977,024 B (+7.438%) |
+
+This is one paired production sample, not a latency distribution. It proves
+that work-conserving live CPU admission accounts for the archive and
+conversion-core reduction while preserving the canonical memory bound; the
+complete-copy swing is ordinary neighboring-phase noise and is not attributed
+to compression. The retained authenticated `independent_transport_reopen` is
+now the dominant measured boundary at 53.157 seconds, while archive assembly
+is 10.476 seconds. No same-host native-package-manager diagnostic has yet been
+recorded for this subject.
 
 ## Bounded CCS archive compression measured result: 2026-08-31
 
