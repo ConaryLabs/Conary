@@ -1039,6 +1039,82 @@ fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
 }
 
 #[test]
+fn resolution_producer_excludes_relaxed_chain_reached_only_through_shadowed_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b', 'c', 'd', 'e'].map(digest);
+    let root_format = r#"
+    <rpm:provides><rpm:entry name="shadow-chain-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="shared-shadow-runtime"/></rpm:requires>
+    <rpm:conflicts><rpm:entry name="visible-shadow-runtime"/></rpm:conflicts>"#;
+    let high_shadow_format = r#"<rpm:provides><rpm:entry name="shadow-runtime"/></rpm:provides>"#;
+    let visible_format = r#"
+    <rpm:provides>
+      <rpm:entry name="visible-shadow-runtime"/>
+      <rpm:entry name="shared-shadow-runtime"/>
+    </rpm:provides>"#;
+    let helper_format = r#"
+    <rpm:provides><rpm:entry name="shadow-chain-helper"/></rpm:provides>
+    <rpm:requires><rpm:entry name="shadow-chain-terminal-missing"/></rpm:requires>"#;
+    let low_shadow_format = r#"
+    <rpm:provides>
+      <rpm:entry name="shadow-runtime"/>
+      <rpm:entry name="shared-shadow-runtime"/>
+    </rpm:provides>
+    <rpm:requires><rpm:entry name="shadow-chain-helper"/></rpm:requires>"#;
+
+    let mut high_shadow = PackageFixture::simple("shadow-runtime", &checksums[0]);
+    high_shadow.version = "2";
+    high_shadow.format = high_shadow_format;
+    let mut visible = PackageFixture::simple("visible-shadow-runtime", &checksums[1]);
+    visible.format = visible_format;
+    let mut helper = PackageFixture::simple("shadow-chain-helper", &checksums[2]);
+    helper.format = helper_format;
+    let updates = write_metadata(
+        directory.path(),
+        "fedora-updates",
+        &[high_shadow, visible, helper],
+    );
+
+    let mut root = PackageFixture::simple("shadow-chain-root", &checksums[3]);
+    root.format = root_format;
+    let mut low_shadow = PackageFixture::simple("shadow-runtime", &checksums[4]);
+    low_shadow.format = low_shadow_format;
+    let base = write_metadata(directory.path(), "fedora-base", &[root, low_shadow]);
+
+    let metadata = vec![updates, base];
+    let snapshots = metadata
+        .iter()
+        .zip(["fedora-updates", "fedora-base"])
+        .map(|((primary, filelists), repository)| source_snapshot(repository, primary, filelists))
+        .collect::<Vec<_>>();
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 5;
+
+    let observed = resolve_named_root(
+        &directory,
+        &profile,
+        &snapshots,
+        &metadata,
+        "shadow-chain-root",
+    );
+    let root = observed.package("shadow-chain-root");
+    let blocked_group = root
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("shared-shadow-runtime"))
+        .unwrap();
+    assert_eq!(
+        observed.outcome,
+        NativeResolutionOutcomeV1::Unresolved {
+            dependencies: vec![NativeUnresolvedDependencyV1 {
+                requiring_package_key_sha256: root.package_key_sha256.clone(),
+                requirement_group_sha256: native_requirement_group_sha256(blocked_group).unwrap(),
+            }],
+        }
+    );
+}
+
+#[test]
 fn resolution_producer_projects_rich_required_helper_terminal_missing_edge() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b'].map(digest);

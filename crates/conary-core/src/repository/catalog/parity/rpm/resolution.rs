@@ -355,6 +355,18 @@ fn unresolved_outcome(
                     &shadowed,
                     problems.iter().chain(&residual_problems),
                 )?;
+                let mut final_dependencies = BTreeSet::new();
+                for problem in &problems {
+                    let (strict_dependencies, _) = project_unresolved_problem(
+                        pool,
+                        package_index,
+                        root,
+                        architecture,
+                        &problem.rules,
+                        &visibility,
+                    )?;
+                    final_dependencies.extend(strict_dependencies);
+                }
                 for problem in &residual_problems {
                     let (residual_dependencies, nested_probe) = project_unresolved_problem(
                         pool,
@@ -370,8 +382,9 @@ fn unresolved_outcome(
                             root.name
                         )));
                     }
-                    dependencies.extend(residual_dependencies);
+                    final_dependencies.extend(residual_dependencies);
                 }
+                dependencies = final_dependencies;
             }
         }
     }
