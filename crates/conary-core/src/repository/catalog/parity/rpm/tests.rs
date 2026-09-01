@@ -1041,17 +1041,19 @@ fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
 #[test]
 fn resolution_producer_excludes_relaxed_chain_reached_only_through_shadowed_provider() {
     let directory = tempfile::tempdir().unwrap();
-    let checksums = ['a', 'b', 'c', 'd', 'e'].map(digest);
+    let checksums = ['a', 'b', 'c', 'd', 'e', 'f'].map(digest);
     let root_format = r#"
     <rpm:provides><rpm:entry name="shadow-chain-root"/></rpm:provides>
-    <rpm:requires><rpm:entry name="shared-shadow-runtime"/></rpm:requires>
-    <rpm:conflicts><rpm:entry name="visible-shadow-runtime"/></rpm:conflicts>"#;
+    <rpm:requires><rpm:entry name="shared-shadow-runtime"/></rpm:requires>"#;
     let high_shadow_format = r#"<rpm:provides><rpm:entry name="shadow-runtime"/></rpm:provides>"#;
     let visible_format = r#"
     <rpm:provides>
       <rpm:entry name="visible-shadow-runtime"/>
       <rpm:entry name="shared-shadow-runtime"/>
     </rpm:provides>"#;
+    let preferred_visible_format = r#"
+    <rpm:provides><rpm:entry name="visible-shadow-runtime"/></rpm:provides>
+    <rpm:requires><rpm:entry name="missing-visible-preferred-runtime"/></rpm:requires>"#;
     let helper_format = r#"
     <rpm:provides><rpm:entry name="shadow-chain-helper"/></rpm:provides>
     <rpm:requires><rpm:entry name="shadow-chain-terminal-missing"/></rpm:requires>"#;
@@ -1066,18 +1068,21 @@ fn resolution_producer_excludes_relaxed_chain_reached_only_through_shadowed_prov
     high_shadow.version = "2";
     high_shadow.format = high_shadow_format;
     let mut visible = PackageFixture::simple("visible-shadow-runtime", &checksums[1]);
+    visible.architecture = "i686";
     visible.format = visible_format;
     let mut helper = PackageFixture::simple("shadow-chain-helper", &checksums[2]);
     helper.format = helper_format;
+    let mut preferred_visible = PackageFixture::simple("visible-shadow-runtime", &checksums[3]);
+    preferred_visible.format = preferred_visible_format;
     let updates = write_metadata(
         directory.path(),
         "fedora-updates",
-        &[high_shadow, visible, helper],
+        &[high_shadow, visible, helper, preferred_visible],
     );
 
-    let mut root = PackageFixture::simple("shadow-chain-root", &checksums[3]);
+    let mut root = PackageFixture::simple("shadow-chain-root", &checksums[4]);
     root.format = root_format;
-    let mut low_shadow = PackageFixture::simple("shadow-runtime", &checksums[4]);
+    let mut low_shadow = PackageFixture::simple("shadow-runtime", &checksums[5]);
     low_shadow.format = low_shadow_format;
     let base = write_metadata(directory.path(), "fedora-base", &[root, low_shadow]);
 
@@ -1088,7 +1093,7 @@ fn resolution_producer_excludes_relaxed_chain_reached_only_through_shadowed_prov
         .map(|((primary, filelists), repository)| source_snapshot(repository, primary, filelists))
         .collect::<Vec<_>>();
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 5;
+    profile.counts.packages = 6;
 
     let observed = resolve_named_root(
         &directory,
@@ -1112,6 +1117,63 @@ fn resolution_producer_excludes_relaxed_chain_reached_only_through_shadowed_prov
             }],
         }
     );
+}
+
+#[test]
+fn resolution_producer_rejects_root_conflict_inside_strict_priority_problem() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b', 'c', 'd'].map(digest);
+    let root_format = r#"
+    <rpm:provides><rpm:entry name="strict-conflict-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="shared-strict-conflict-runtime"/></rpm:requires>
+    <rpm:conflicts><rpm:entry name="visible-strict-conflict-runtime"/></rpm:conflicts>"#;
+    let high_shadow_format =
+        r#"<rpm:provides><rpm:entry name="shadowed-strict-conflict-runtime"/></rpm:provides>"#;
+    let visible_format = r#"
+    <rpm:provides>
+      <rpm:entry name="visible-strict-conflict-runtime"/>
+      <rpm:entry name="shared-strict-conflict-runtime"/>
+    </rpm:provides>"#;
+    let low_shadow_format = r#"
+    <rpm:provides>
+      <rpm:entry name="shadowed-strict-conflict-runtime"/>
+      <rpm:entry name="shared-strict-conflict-runtime"/>
+    </rpm:provides>"#;
+
+    let mut high_shadow = PackageFixture::simple("shadowed-strict-conflict-runtime", &checksums[0]);
+    high_shadow.version = "2";
+    high_shadow.format = high_shadow_format;
+    let mut visible = PackageFixture::simple("visible-strict-conflict-runtime", &checksums[1]);
+    visible.format = visible_format;
+    let updates = write_metadata(directory.path(), "fedora-updates", &[high_shadow, visible]);
+
+    let mut root = PackageFixture::simple("strict-conflict-root", &checksums[2]);
+    root.format = root_format;
+    let mut low_shadow = PackageFixture::simple("shadowed-strict-conflict-runtime", &checksums[3]);
+    low_shadow.format = low_shadow_format;
+    let base = write_metadata(directory.path(), "fedora-base", &[root, low_shadow]);
+
+    let metadata = vec![updates, base];
+    let snapshots = metadata
+        .iter()
+        .zip(["fedora-updates", "fedora-base"])
+        .map(|((primary, filelists), repository)| source_snapshot(repository, primary, filelists))
+        .collect::<Vec<_>>();
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 4;
+    let package_output = directory.path().join("package-oracle");
+    produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
+
+    let conflict = produce_rpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &directory.path().join("strict-root-conflict-resolution"),
+    )
+    .unwrap_err();
+    assert!(matches!(conflict, Error::ConflictError(_)));
+    assert!(conflict.to_string().contains("problem rule 0x105"));
 }
 
 #[test]
@@ -1342,6 +1404,59 @@ fn resolve_named_root(
 }
 
 #[test]
+fn resolution_producer_rejects_inferior_arch_provider_without_strict_priority() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b', 'c'].map(digest);
+    let root_format = r#"
+    <rpm:provides><rpm:entry name="inferior-provider-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="inferior-only-capability"/></rpm:requires>"#;
+    let inferior_format = r#"
+    <rpm:provides>
+      <rpm:entry name="inferior-provider"/>
+      <rpm:entry name="inferior-only-capability"/>
+    </rpm:provides>"#;
+    let preferred_format = r#"
+    <rpm:provides><rpm:entry name="inferior-provider"/></rpm:provides>
+    <rpm:requires><rpm:entry name="missing-preferred-architecture-runtime"/></rpm:requires>"#;
+
+    let mut root = PackageFixture::simple("inferior-provider-root", &checksums[0]);
+    root.format = root_format;
+    let mut inferior = PackageFixture::simple("inferior-provider", &checksums[1]);
+    inferior.architecture = "i686";
+    inferior.format = inferior_format;
+    let mut preferred = PackageFixture::simple("inferior-provider", &checksums[2]);
+    preferred.format = preferred_format;
+    let metadata = vec![write_metadata(
+        directory.path(),
+        "fedora-base",
+        &[root, inferior, preferred],
+    )];
+    let snapshots = vec![source_snapshot(
+        "fedora-base",
+        &metadata[0].0,
+        &metadata[0].1,
+    )];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 3;
+    let package_output = directory.path().join("package-oracle");
+    produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
+
+    let architecture = produce_rpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &directory.path().join("inferior-provider-resolution"),
+    )
+    .unwrap_err();
+    assert!(matches!(architecture, Error::ConfigError(_)));
+    assert!(
+        architecture.to_string().contains("rule 0x600"),
+        "{architecture}"
+    );
+}
+
+#[test]
 fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b'].map(digest);
@@ -1373,11 +1488,9 @@ fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
         "x86_64",
         &directory.path().join("conflict-resolution"),
     )
-    .unwrap();
-    assert_eq!(conflict.artifact.counts.roots, 2);
-    assert_eq!(conflict.artifact.counts.resolved_roots, 1);
-    assert_eq!(conflict.artifact.counts.unresolved_roots, 1);
-    assert_eq!(conflict.artifact.counts.unresolved_dependencies, 1);
+    .unwrap_err();
+    assert!(matches!(conflict, Error::ConflictError(_)));
+    assert!(conflict.to_string().contains("problem rule"));
 
     let architecture = produce_rpm_resolution_oracle(
         &profile,
