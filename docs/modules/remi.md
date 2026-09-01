@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-01
-revision: 118
-summary: Document filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed strict-priority RPM unresolved-dependency projection, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 124
+summary: Document filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed strict-priority RPM unresolved-dependency projection over the final reachable unshadowed requiring frontier with strict-problem-scoped ancillary policy rules, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -893,10 +893,33 @@ transaction packages and typed missing-dependency records. The RPM producer
 uses exact libsolv transaction and problem-rule IDs, applies profile precedence
 as native repository priority, excludes weak relations, and reopens complete
 filelists for typed file-provider resolution. Its resolution projection schema
-2 preserves every exact authenticated root while projecting a hard requirement
-whose only matching provider is excluded by strict repository priority as a
-typed unresolved dependency; it does not disable precedence or substitute a
-shadowed provider. The Debian producer uses private
+3 preserves every exact authenticated root while projecting a hard requirement
+as a typed unresolved dependency when libsolv reports no provider or reports
+that its providers cannot install because of strict repository priority,
+architecture precedence, or a package conflict. It projects every contributing
+hard required edge in that problem rather than laundering a genuine conflict as
+one missing edge. An edge is emitted only when its requiring package is the
+exact root or a provider reachable from the root through hard required edges
+that strict priority does not shadow, and a required edge whose reachable
+providers explain the failure with missing or required edges of their own
+yields to those deeper edges, so the projection reports the same terminal
+frontier Conary's candidate resolver sees. A problem containing both strict
+priority and provider-policy rules is solved again without strict priority
+solely to discover residual hard required edges. When that probe remains
+unresolved, both the original and residual problem edges are reprojected under
+one final visibility derived from both problem sets; the provisional strict
+projection is discarded. Edges owned by a shadowed provider are validated but
+excluded from both problem sets. Package-conflict and inferior-architecture
+rules are tolerated only as ancillary provider-side rules within a problem that
+itself contains strict-priority authority. A conflict involving the exact root,
+either policy rule in a residual probe, or either policy rule outside a strict
+problem remains fatal; inferior-architecture-only provider failures stay
+conservative until the native-resolution survey in #810 establishes broader
+production shapes. The residual probe discovers only additional missing and
+hard required edges; its diagnostic closure is never emitted or used as a
+provider substitution. Problem identity is preserved through the native shim.
+The producer does not disable precedence or substitute a shadowed
+provider. The Debian producer uses private
 volatile apt-pkg source indexes and empty installed state, projects profile
 order into candidate and provider priority, records exact native transactions,
 and forces each exact root through apt 3.0's complete-version solver with

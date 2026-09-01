@@ -47,13 +47,21 @@ unsafe extern "C" {
         precedence: c_int,
     ) -> c_int;
     fn conary_solv_set_architecture(handle: *mut c_void, architecture: *const c_char) -> c_int;
-    fn conary_solv_solve(handle: *mut c_void, root_index: usize) -> c_int;
+    fn conary_solv_solve(
+        handle: *mut c_void,
+        root_index: usize,
+        strict_repo_priority: c_int,
+    ) -> c_int;
     fn conary_solv_closure_count(handle: *mut c_void) -> usize;
     fn conary_solv_closure_package_index(handle: *mut c_void, index: usize) -> usize;
-    fn conary_solv_problem_rule_count(handle: *mut c_void) -> usize;
+    fn conary_solv_strict_shadowed_count(handle: *mut c_void) -> usize;
+    fn conary_solv_strict_shadowed_package_index(handle: *mut c_void, index: usize) -> usize;
+    fn conary_solv_problem_count(handle: *mut c_void) -> usize;
+    fn conary_solv_problem_rule_count(handle: *mut c_void, problem_index: usize) -> usize;
     fn conary_solv_problem_rule(
         handle: *mut c_void,
-        index: usize,
+        problem_index: usize,
+        rule_index: usize,
         rule_type: *mut c_int,
         from_index: *mut usize,
         to_index: *mut usize,
@@ -64,6 +72,9 @@ unsafe extern "C" {
         package_index: usize,
         dependency: c_int,
     ) -> c_int;
+    fn conary_solv_provider_count(handle: *mut c_void, dependency: c_int) -> usize;
+    fn conary_solv_provider_index(handle: *mut c_void, dependency: c_int, position: usize)
+    -> usize;
     fn conary_solv_package_count(handle: *mut c_void) -> usize;
     fn conary_solv_package_member(handle: *mut c_void, index: usize) -> u32;
     fn conary_solv_package_name(handle: *mut c_void, index: usize) -> *const c_char;
@@ -152,7 +163,28 @@ impl SolvPool {
     }
 
     pub(super) fn solve(&mut self, root_index: usize) -> Result<SolvResolution> {
-        let result = unsafe { conary_solv_solve(self.handle.as_ptr(), root_index) };
+        self.solve_with_strict_repo_priority(root_index, true)
+    }
+
+    pub(super) fn solve_without_strict_repo_priority(
+        &mut self,
+        root_index: usize,
+    ) -> Result<SolvResolution> {
+        self.solve_with_strict_repo_priority(root_index, false)
+    }
+
+    fn solve_with_strict_repo_priority(
+        &mut self,
+        root_index: usize,
+        strict_repo_priority: bool,
+    ) -> Result<SolvResolution> {
+        let result = unsafe {
+            conary_solv_solve(
+                self.handle.as_ptr(),
+                root_index,
+                i32::from(strict_repo_priority),
+            )
+        };
         match result {
             1 => {
                 let count = unsafe { conary_solv_closure_count(self.handle.as_ptr()) };
@@ -171,36 +203,45 @@ impl SolvPool {
                 Ok(SolvResolution::Resolved(packages))
             }
             0 => {
-                let count = unsafe { conary_solv_problem_rule_count(self.handle.as_ptr()) };
-                let mut rules = Vec::with_capacity(count);
-                for index in 0..count {
-                    let mut rule_type = 0;
-                    let mut from_index = usize::MAX;
-                    let mut to_index = usize::MAX;
-                    let mut dependency = 0;
-                    let found = unsafe {
-                        conary_solv_problem_rule(
-                            self.handle.as_ptr(),
-                            index,
-                            &mut rule_type,
-                            &mut from_index,
-                            &mut to_index,
-                            &mut dependency,
-                        )
+                let problem_count = unsafe { conary_solv_problem_count(self.handle.as_ptr()) };
+                let mut problems = Vec::with_capacity(problem_count);
+                for problem_index in 0..problem_count {
+                    let rule_count = unsafe {
+                        conary_solv_problem_rule_count(self.handle.as_ptr(), problem_index)
                     };
-                    if found != 1 {
-                        return Err(Error::InternalError(
-                            "libsolv problem rule disappeared during typed inspection".to_string(),
-                        ));
+                    let mut rules = Vec::with_capacity(rule_count);
+                    for rule_index in 0..rule_count {
+                        let mut rule_type = 0;
+                        let mut from_index = usize::MAX;
+                        let mut to_index = usize::MAX;
+                        let mut dependency = 0;
+                        let found = unsafe {
+                            conary_solv_problem_rule(
+                                self.handle.as_ptr(),
+                                problem_index,
+                                rule_index,
+                                &mut rule_type,
+                                &mut from_index,
+                                &mut to_index,
+                                &mut dependency,
+                            )
+                        };
+                        if found != 1 {
+                            return Err(Error::InternalError(
+                                "libsolv problem rule disappeared during typed inspection"
+                                    .to_string(),
+                            ));
+                        }
+                        rules.push(SolvProblemRule {
+                            rule_type,
+                            from_index: (from_index != usize::MAX).then_some(from_index),
+                            to_index: (to_index != usize::MAX).then_some(to_index),
+                            dependency,
+                        });
                     }
-                    rules.push(SolvProblemRule {
-                        rule_type,
-                        from_index: (from_index != usize::MAX).then_some(from_index),
-                        to_index: (to_index != usize::MAX).then_some(to_index),
-                        dependency,
-                    });
+                    problems.push(SolvProblem { rules });
                 }
-                Ok(SolvResolution::Unresolved(rules))
+                Ok(SolvResolution::Unresolved(problems))
             }
             _ => Err(Error::ConfigError(self.last_error()?)),
         }
@@ -222,6 +263,53 @@ impl SolvPool {
                 "libsolv problem dependency {dependency} is not bound to its requiring package"
             ))),
         }
+    }
+
+    /// Package indexes the most recent solve excluded through libsolv's own
+    /// strict repository-priority rules.
+    pub(super) fn strict_shadowed_packages(&self) -> Result<Vec<usize>> {
+        let count = unsafe { conary_solv_strict_shadowed_count(self.handle.as_ptr()) };
+        if count == usize::MAX {
+            return Err(Error::InternalError(
+                "libsolv strict-priority rules are unavailable outside a solve".to_string(),
+            ));
+        }
+        let mut packages = Vec::with_capacity(count);
+        for index in 0..count {
+            let package_index =
+                unsafe { conary_solv_strict_shadowed_package_index(self.handle.as_ptr(), index) };
+            if package_index == usize::MAX {
+                return Err(Error::ConflictError(
+                    "libsolv strict-priority rule names a package outside the authenticated RPM profile"
+                        .to_string(),
+                ));
+            }
+            packages.push(package_index);
+        }
+        Ok(packages)
+    }
+
+    /// Package indexes that libsolv's prepared provider index binds to one
+    /// dependency, excluding the pool's system solvable.
+    pub(super) fn providers(&self, dependency: i32) -> Result<Vec<usize>> {
+        let count = unsafe { conary_solv_provider_count(self.handle.as_ptr(), dependency) };
+        if count == usize::MAX {
+            return Err(Error::InternalError(format!(
+                "libsolv provider index for dependency {dependency} is unavailable outside a solve"
+            )));
+        }
+        let mut providers = Vec::with_capacity(count);
+        for position in 0..count {
+            let index =
+                unsafe { conary_solv_provider_index(self.handle.as_ptr(), dependency, position) };
+            if index == usize::MAX {
+                return Err(Error::ConflictError(format!(
+                    "libsolv provider of dependency {dependency} lies outside the authenticated RPM profile"
+                )));
+            }
+            providers.push(index);
+        }
+        Ok(providers)
     }
 
     pub(super) fn package_count(&self) -> usize {
@@ -258,7 +346,11 @@ impl SolvPool {
 
 pub(super) enum SolvResolution {
     Resolved(Vec<usize>),
-    Unresolved(Vec<SolvProblemRule>),
+    Unresolved(Vec<SolvProblem>),
+}
+
+pub(super) struct SolvProblem {
+    pub(super) rules: Vec<SolvProblemRule>,
 }
 
 pub(super) struct SolvProblemRule {

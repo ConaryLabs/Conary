@@ -2,13 +2,13 @@
 
 //! Independent libsolv-backed RPM native resolution evidence production.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::ffi::{RequiredKind, SolvProblemRule, SolvResolution};
+use super::ffi::{RequiredKind, SolvProblem, SolvProblemRule, SolvResolution};
 use super::{
     PINNED_LIBSOLV_VERSION, RPM_PARITY_PROJECTION_SCHEMA_V1, RpmParityMemberInput, SolvPool,
     produce_rpm_parity_oracle, project_package, project_requirement, stage_verified_metadata,
@@ -29,11 +29,12 @@ use crate::repository::catalog::parity::{
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 /// Projection contract for libsolv transaction results and typed problem rules.
-pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
+pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V3: u32 = 3;
 
 const SOLVER_RULE_PKG_NOT_INSTALLABLE: i32 = 0x101;
 const SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP: i32 = 0x102;
 const SOLVER_RULE_PKG_REQUIRES: i32 = 0x103;
+const SOLVER_RULE_PKG_CONFLICTS: i32 = 0x105;
 const SOLVER_RULE_JOB: i32 = 0x400;
 const SOLVER_RULE_JOB_UNSUPPORTED: i32 = 0x404;
 const SOLVER_RULE_INFARCH: i32 = 0x600;
@@ -101,7 +102,7 @@ pub fn produce_rpm_resolution_oracle(
         ecosystem: NativeParityEcosystemV1::Rpm,
         name: "libsolv".to_string(),
         version: PINNED_LIBSOLV_VERSION.to_string(),
-        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V2,
+        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V3,
     };
     fs::create_dir(output)?;
     let mut writer = NativeResolutionOracleWriter::create(
@@ -305,45 +306,231 @@ fn resolve_exact_root(
             })
         }
         SolvResolution::Unresolved(rules) => {
-            unresolved_outcome(pool, package_index, root, architecture, rules)
+            unresolved_outcome(pool, package_index, root_index, root, architecture, rules)
         }
     }
 }
 
 fn unresolved_outcome(
+    pool: &mut SolvPool,
+    package_index: &PackageResolutionIndex,
+    root_index: usize,
+    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    architecture: &str,
+    problems: Vec<SolvProblem>,
+) -> Result<NativeResolutionOutcomeV1> {
+    let mut dependencies = BTreeSet::new();
+    let mut requires_residual_probe = false;
+    let shadowed = pool
+        .strict_shadowed_packages()?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let visibility = StrictVisibility::derive(pool, root_index, &shadowed, &problems)?;
+    for problem in &problems {
+        let (problem_dependencies, problem_requires_residual_probe) = project_unresolved_problem(
+            pool,
+            package_index,
+            root,
+            architecture,
+            &problem.rules,
+            &visibility,
+        )?;
+        dependencies.extend(problem_dependencies);
+        requires_residual_probe |= problem_requires_residual_probe;
+    }
+    if requires_residual_probe {
+        match pool.solve_without_strict_repo_priority(root_index)? {
+            SolvResolution::Resolved(packages) => {
+                if !packages.contains(&root_index) {
+                    return Err(Error::ConflictError(format!(
+                        "libsolv residual probe for '{}' omitted its exact root",
+                        root.name
+                    )));
+                }
+            }
+            SolvResolution::Unresolved(residual_problems) => {
+                let visibility = StrictVisibility::derive(
+                    pool,
+                    root_index,
+                    &shadowed,
+                    problems.iter().chain(&residual_problems),
+                )?;
+                let mut final_dependencies = BTreeSet::new();
+                for problem in &problems {
+                    let (strict_dependencies, _) = project_unresolved_problem(
+                        pool,
+                        package_index,
+                        root,
+                        architecture,
+                        &problem.rules,
+                        &visibility,
+                    )?;
+                    final_dependencies.extend(strict_dependencies);
+                }
+                for problem in &residual_problems {
+                    let (residual_dependencies, nested_probe) = project_unresolved_problem(
+                        pool,
+                        package_index,
+                        root,
+                        architecture,
+                        &problem.rules,
+                        &visibility,
+                    )?;
+                    if nested_probe {
+                        return Err(Error::InternalError(format!(
+                            "libsolv residual probe for '{}' retained strict-priority authority",
+                            root.name
+                        )));
+                    }
+                    final_dependencies.extend(residual_dependencies);
+                }
+                dependencies = final_dependencies;
+            }
+        }
+    }
+    if dependencies.is_empty() {
+        return Err(Error::ConflictError(format!(
+            "libsolv reported exact root '{}' unresolved without a typed missing requirement",
+            root.name
+        )));
+    }
+    Ok(NativeResolutionOutcomeV1::Unresolved {
+        dependencies: dependencies.into_iter().collect(),
+    })
+}
+
+/// Requiring packages that Conary's candidate resolver can also reach under
+/// the strict solve's repository-priority authority.
+struct StrictVisibility {
+    /// Exact root whose own policy failures may never be projected as missing
+    /// provider edges.
+    root_index: usize,
+    /// The exact root plus every provider reachable from it through hard
+    /// required edges that strict repository priority does not shadow.
+    reachable: BTreeSet<usize>,
+    /// Packages owning a missing-dependency or required edge of their own.
+    edge_owners: BTreeSet<usize>,
+}
+
+impl StrictVisibility {
+    /// `shadowed` comes from the strict solve's own priority rules because a
+    /// problem explanation may cite a shadowed provider's other defects
+    /// without citing the strict-priority rule itself.
+    fn derive<'a>(
+        pool: &SolvPool,
+        root_index: usize,
+        shadowed: &BTreeSet<usize>,
+        problems: impl IntoIterator<Item = &'a SolvProblem>,
+    ) -> Result<Self> {
+        let mut edge_owners = BTreeSet::new();
+        let mut required: BTreeMap<usize, Vec<i32>> = BTreeMap::new();
+        for rule in problems.into_iter().flat_map(|problem| &problem.rules) {
+            let Some(from_index) = rule.from_index else {
+                continue;
+            };
+            match rule.rule_type {
+                SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => {
+                    edge_owners.insert(from_index);
+                }
+                SOLVER_RULE_PKG_REQUIRES if rule.dependency != 0 => {
+                    edge_owners.insert(from_index);
+                    required
+                        .entry(from_index)
+                        .or_default()
+                        .push(rule.dependency);
+                }
+                _ => {}
+            }
+        }
+        let mut reachable = BTreeSet::from([root_index]);
+        let mut frontier = vec![root_index];
+        while let Some(index) = frontier.pop() {
+            for dependency in required.get(&index).into_iter().flatten() {
+                for provider in pool.providers(*dependency)? {
+                    if !shadowed.contains(&provider) && reachable.insert(provider) {
+                        frontier.push(provider);
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            root_index,
+            reachable,
+            edge_owners,
+        })
+    }
+
+    fn requiring_package_is_visible(&self, requiring_index: Option<usize>) -> bool {
+        requiring_index.is_some_and(|index| self.reachable.contains(&index))
+    }
+
+    /// A required edge is terminal for Conary only when none of its visible
+    /// providers explains the failure with an edge of its own; otherwise the
+    /// deeper edge is the one Conary reports.
+    fn required_edge_is_terminal(&self, pool: &SolvPool, dependency: i32) -> Result<bool> {
+        Ok(!pool.providers(dependency)?.iter().any(|provider| {
+            self.reachable.contains(provider) && self.edge_owners.contains(provider)
+        }))
+    }
+}
+
+fn project_unresolved_problem(
     pool: &SolvPool,
     package_index: &PackageResolutionIndex,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     architecture: &str,
-    rules: Vec<SolvProblemRule>,
-) -> Result<NativeResolutionOutcomeV1> {
+    rules: &[SolvProblemRule],
+    visibility: &StrictVisibility,
+) -> Result<(BTreeSet<NativeUnresolvedDependencyV1>, bool)> {
     let mut dependencies = BTreeSet::new();
-    let strict_repo_priority = rules
+    let has_required_edge = rules
+        .iter()
+        .any(|rule| rule.rule_type == SOLVER_RULE_PKG_REQUIRES);
+    let has_strict_repo_priority = rules
         .iter()
         .any(|rule| rule.rule_type == SOLVER_RULE_STRICT_REPO_PRIORITY);
+    let has_provider_policy_rule = rules.iter().any(|rule| {
+        rule.rule_type == SOLVER_RULE_PKG_CONFLICTS || rule.rule_type == SOLVER_RULE_INFARCH
+    });
+    let tolerates_provider_policy_rules = has_required_edge && has_strict_repo_priority;
     for rule in rules {
         match rule.rule_type {
             SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => {
-                dependencies.insert(project_unresolved_dependency(
+                let dependency = project_unresolved_dependency(
                     pool,
                     package_index,
                     root,
                     rule.from_index,
                     rule.dependency,
                     "missing-dependency",
-                )?);
+                )?;
+                if visibility.requiring_package_is_visible(rule.from_index) {
+                    dependencies.insert(dependency);
+                }
             }
-            SOLVER_RULE_PKG_REQUIRES if strict_repo_priority => {
-                dependencies.insert(project_unresolved_dependency(
+            SOLVER_RULE_PKG_REQUIRES => {
+                let dependency = project_unresolved_dependency(
                     pool,
                     package_index,
                     root,
                     rule.from_index,
                     rule.dependency,
-                    "strict-priority requirement",
-                )?);
+                    "uninstallable requirement",
+                )?;
+                if visibility.requiring_package_is_visible(rule.from_index)
+                    && visibility.required_edge_is_terminal(pool, rule.dependency)?
+                {
+                    dependencies.insert(dependency);
+                }
             }
-            SOLVER_RULE_PKG_REQUIRES | SOLVER_RULE_JOB => {}
+            SOLVER_RULE_JOB => {}
+            SOLVER_RULE_PKG_CONFLICTS
+                if tolerates_provider_policy_rules
+                    && rule.from_index != Some(visibility.root_index)
+                    && rule.to_index != Some(visibility.root_index) =>
+            {
+                validate_required_provider_conflict_rule(pool, package_index, root, rule)?;
+            }
             SOLVER_RULE_STRICT_REPO_PRIORITY => {
                 let excluded_index = rule.from_index.ok_or_else(|| {
                     Error::ConflictError(format!(
@@ -365,10 +552,22 @@ fn unresolved_outcome(
                     root.name, architecture
                 )));
             }
+            SOLVER_RULE_INFARCH
+                if tolerates_provider_policy_rules
+                    && rule.from_index != Some(visibility.root_index)
+                    && rule.to_index != Some(visibility.root_index) =>
+            {
+                validate_required_provider_inferior_arch_rule(pool, package_index, root, rule)?;
+            }
             SOLVER_RULE_JOB_UNSUPPORTED | SOLVER_RULE_INFARCH => {
                 return Err(Error::ConfigError(format!(
-                    "libsolv rejected exact root '{}' for target architecture '{}'",
-                    root.name, architecture
+                    "libsolv rejected exact root '{}' for target architecture '{}' with rule {:#x} (from={:?}, to={:?}, dependency={})",
+                    root.name,
+                    architecture,
+                    rule.rule_type,
+                    rule.from_index,
+                    rule.to_index,
+                    rule.dependency
                 )));
             }
             rule_type => {
@@ -379,15 +578,69 @@ fn unresolved_outcome(
             }
         }
     }
-    if dependencies.is_empty() {
+    Ok((
+        dependencies,
+        has_strict_repo_priority && has_provider_policy_rule,
+    ))
+}
+
+fn validate_required_provider_inferior_arch_rule(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndex,
+    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    rule: &SolvProblemRule,
+) -> Result<()> {
+    let inferior_index = rule.from_index.ok_or_else(|| {
+        Error::ConflictError(format!(
+            "libsolv required-provider inferior-architecture rule for '{}' has no package",
+            root.name
+        ))
+    })?;
+    if rule.to_index.is_some() || rule.dependency == 0 {
         return Err(Error::ConflictError(format!(
-            "libsolv reported exact root '{}' unresolved without a typed missing requirement",
+            "libsolv required-provider inferior-architecture rule for '{}' has unexpected target or package-name dependency",
             root.name
         )));
     }
-    Ok(NativeResolutionOutcomeV1::Unresolved {
-        dependencies: dependencies.into_iter().collect(),
-    })
+    package_index.package_key(inferior_index)?;
+    let package_name = pool.package(inferior_index)?.name()?;
+    if pool.dependency(rule.dependency)?.atom()? != package_name {
+        return Err(Error::ConflictError(format!(
+            "libsolv required-provider inferior-architecture rule for '{}' names a different package",
+            root.name
+        )));
+    }
+    Ok(())
+}
+
+fn validate_required_provider_conflict_rule(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndex,
+    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    rule: &SolvProblemRule,
+) -> Result<()> {
+    let conflicting_index = rule.from_index.ok_or_else(|| {
+        Error::ConflictError(format!(
+            "libsolv required-provider package-conflict rule for '{}' has no conflicting package",
+            root.name
+        ))
+    })?;
+    let provided_index = rule.to_index.ok_or_else(|| {
+        Error::ConflictError(format!(
+            "libsolv required-provider package-conflict rule for '{}' has no provider package",
+            root.name
+        ))
+    })?;
+    if rule.dependency == 0 {
+        return Err(Error::ConflictError(format!(
+            "libsolv required-provider package-conflict rule for '{}' has no conflicting dependency",
+            root.name
+        )));
+    }
+    package_index.package_key(conflicting_index)?;
+    package_index.package_key(provided_index)?;
+    pool.dependency(rule.dependency)?.text()?;
+    Ok(())
 }
 
 fn project_unresolved_dependency(
