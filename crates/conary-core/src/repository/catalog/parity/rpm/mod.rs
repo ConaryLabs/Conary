@@ -307,7 +307,7 @@ fn project_package(
         .ok_or_else(|| Error::InternalError("RPM input/member accounting drift".to_string()))?
         .source_snapshot;
     let name = package.name()?;
-    let version = canonical_rpm_evr(&package.evr()?).to_string();
+    let version = canonical_rpm_evr(&package.evr()?)?.to_string();
     let architecture = Some(package.arch()?);
     let checksum = package.checksum()?;
     validate_sha256(&checksum, &name)?;
@@ -430,7 +430,7 @@ fn project_provide(
         let relation = dependency.relation()?;
         let version_relation = provide_relation(relation.flags)?;
         let capability = relation.name_dependency()?.atom()?;
-        let version = canonical_rpm_evr(&relation.evr_dependency()?.atom()?).to_string();
+        let version = canonical_rpm_evr(&relation.evr_dependency()?.atom()?)?.to_string();
         (capability, Some(version), Some(version_relation))
     } else {
         (dependency.atom()?, None, None)
@@ -789,7 +789,7 @@ fn decode_expression(dependency: &SolvDependency<'_>) -> Result<RepositoryRequir
                 || flags == ffi::REL_LT | ffi::REL_EQ =>
         {
             let name = relation.name_dependency()?.atom()?;
-            let version = canonical_rpm_evr(&relation.evr_dependency()?.atom()?).to_string();
+            let version = canonical_rpm_evr(&relation.evr_dependency()?.atom()?)?.to_string();
             let operator = match relation.flags {
                 ffi::REL_GT => ">",
                 ffi::REL_EQ => "=",
@@ -952,8 +952,10 @@ fn capability_kind(kind: RepositoryCapabilityKind) -> &'static str {
     }
 }
 
-fn canonical_rpm_evr(value: &str) -> &str {
-    value.strip_prefix("0:").unwrap_or(value)
+fn canonical_rpm_evr(value: &str) -> Result<&str> {
+    let value = crate::repository::rpm_dependency::canonicalize_source_rpm_evr(value)
+        .map_err(Error::ParseError)?;
+    Ok(value.strip_prefix("0:").unwrap_or(value))
 }
 
 fn validate_sha256(value: &str, package: &str) -> Result<()> {
