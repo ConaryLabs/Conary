@@ -6,16 +6,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use conary_core::repository::catalog::{
     ProfileRevisionV2, RpmParityMemberInput, SourceSnapshotV1, produce_rpm_resolution_oracle,
+    produce_rpm_resolution_survey,
 };
 use serde::de::DeserializeOwned;
 
 const MAX_INPUT_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Parser)]
-#[command(about = "Produce a strict libsolv RPM full-universe resolution bundle")]
+#[command(
+    about = "Produce a strict libsolv RPM resolution bundle or diagnostics survey",
+    group(ArgGroup::new("destination").required(true).multiple(false).args(["output", "survey"]))
+)]
 struct Arguments {
     /// Exact ProfileRevisionV2 manifest.
     #[arg(long)]
@@ -43,7 +47,11 @@ struct Arguments {
 
     /// New directory that will receive manifest.json and roots.jsonl.
     #[arg(long)]
-    output: PathBuf,
+    output: Option<PathBuf>,
+
+    /// New diagnostics-only NativeResolutionSurveyV1 JSON file.
+    #[arg(long)]
+    survey: Option<PathBuf>,
 }
 
 fn main() {
@@ -80,14 +88,36 @@ fn run(arguments: Arguments) -> Result<()> {
             },
         )
         .collect::<Vec<_>>();
-    produce_rpm_resolution_oracle(
-        &profile,
-        &inputs,
-        &arguments.package_oracle,
-        &arguments.architecture,
-        &arguments.output,
-    )
-    .context("produce RPM resolution oracle")?;
+    match (arguments.output, arguments.survey) {
+        (Some(output), None) => {
+            produce_rpm_resolution_oracle(
+                &profile,
+                &inputs,
+                &arguments.package_oracle,
+                &arguments.architecture,
+                &output,
+            )
+            .context("produce RPM resolution oracle")?;
+        }
+        (None, Some(output)) => {
+            let survey = produce_rpm_resolution_survey(
+                &profile,
+                &inputs,
+                &arguments.package_oracle,
+                &arguments.architecture,
+                &output,
+            )
+            .context("produce RPM resolution survey")?;
+            if survey.total_failures != 0 {
+                bail!(
+                    "RPM resolution survey recorded {} failed roots; inventory written to {}",
+                    survey.total_failures,
+                    output.display()
+                );
+            }
+        }
+        _ => unreachable!("clap requires exactly one resolution destination"),
+    }
     Ok(())
 }
 

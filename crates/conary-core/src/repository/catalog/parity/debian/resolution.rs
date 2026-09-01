@@ -15,15 +15,22 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::repository::catalog::ProfileRevisionV2;
+use crate::repository::catalog::parity::resolution_survey::{
+    NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
+    RootOutcomeSink,
+};
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
     NativeParityOracleReader, NativeParityOracleV1, NativeResolutionInstalledStateV1,
     NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
-    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1, NativeResolutionRootV1,
+    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
+    NativeResolutionSurveyDebianMissingV1, NativeResolutionSurveyDebianPackageV1,
+    NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
+    NativeResolutionSurveyNativeExplanationV1, NativeResolutionSurveyV1,
     NativeUnresolvedDependencyV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
-    write_native_resolution_oracle_manifest,
+    write_native_resolution_oracle_manifest, write_native_resolution_survey,
 };
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
@@ -55,6 +62,57 @@ pub fn produce_debian_resolution_oracle(
     architecture: &str,
     output: &Path,
 ) -> Result<NativeResolutionOracleV1> {
+    let ResolutionProduct::Oracle(manifest) = produce_debian_resolution(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        ResolutionDestination::Oracle(output),
+    )?
+    else {
+        unreachable!("Debian oracle destination returned survey")
+    };
+    Ok(manifest)
+}
+
+/// Walk every exact Debian root and write one diagnostics-only failure survey.
+pub fn produce_debian_resolution_survey(
+    profile: &ProfileRevisionV2,
+    inputs: &[DebianParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    output: &Path,
+) -> Result<NativeResolutionSurveyV1> {
+    let ResolutionProduct::Survey(survey) = produce_debian_resolution(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        ResolutionDestination::Survey(output),
+    )?
+    else {
+        unreachable!("Debian survey destination returned oracle")
+    };
+    Ok(survey)
+}
+
+enum ResolutionDestination<'a> {
+    Oracle(&'a Path),
+    Survey(&'a Path),
+}
+
+enum ResolutionProduct {
+    Oracle(NativeResolutionOracleV1),
+    Survey(NativeResolutionSurveyV1),
+}
+
+fn produce_debian_resolution(
+    profile: &ProfileRevisionV2,
+    inputs: &[DebianParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    destination: ResolutionDestination<'_>,
+) -> Result<ResolutionProduct> {
     let policy = NativeResolutionPolicyV1 {
         architecture: architecture.to_string(),
         installed_state: NativeResolutionInstalledStateV1::Empty,
@@ -83,67 +141,199 @@ pub fn produce_debian_resolution_oracle(
         version: PINNED_APT_PKG_VERSION.to_string(),
         projection_schema: DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1,
     };
-    fs::create_dir(output)?;
-    let mut writer = NativeResolutionOracleWriter::create(
-        output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
-        profile,
-        package_oracle.manifest(),
-        implementation,
-        policy,
-    )?;
+    match destination {
+        ResolutionDestination::Oracle(output) => {
+            fs::create_dir(output)?;
+            let mut writer = NativeResolutionOracleWriter::create(
+                output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
+                profile,
+                package_oracle.manifest(),
+                implementation,
+                policy,
+            )?;
+            walk_resolution_roots(
+                &package_oracle,
+                &mut apt,
+                &package_index,
+                architecture,
+                RootOutcomeSink::Strict(&mut writer),
+            )?;
+            let manifest = writer.finish()?;
+            write_native_resolution_oracle_manifest(output, &manifest)?;
+            let reopened =
+                verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
+            if reopened.manifest() != &manifest {
+                return Err(Error::InternalError(
+                    "reopened Debian resolution manifest differs from produced manifest"
+                        .to_string(),
+                ));
+            }
+            Ok(ResolutionProduct::Oracle(manifest))
+        }
+        ResolutionDestination::Survey(output) => {
+            let mut collector = NativeResolutionSurveyCollector::new(
+                profile,
+                package_oracle.manifest(),
+                implementation,
+                policy,
+            )?;
+            walk_resolution_roots(
+                &package_oracle,
+                &mut apt,
+                &package_index,
+                architecture,
+                RootOutcomeSink::Survey(&mut collector),
+            )?;
+            let survey = collector.finish()?;
+            write_native_resolution_survey(output, &survey)?;
+            Ok(ResolutionProduct::Survey(survey))
+        }
+    }
+}
+
+fn walk_resolution_roots(
+    package_oracle: &NativeParityOracleReader,
+    apt: &mut AptResolution,
+    package_index: &PackageResolutionIndex,
+    architecture: &str,
+    mut sink: RootOutcomeSink<'_>,
+) -> Result<()> {
     package_oracle.for_each_package(|root| {
-        let root_architecture = root.architecture.as_deref().ok_or_else(|| {
+        let result = resolve_exact_root(apt, package_index, &root, architecture);
+        sink.root(&root, result)
+    })
+}
+
+fn resolve_exact_root(
+    apt: &mut AptResolution,
+    package_index: &PackageResolutionIndex,
+    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    target_architecture: &str,
+) -> NativeRootResolutionResult {
+    let Some(root_architecture) = root.architecture.as_deref() else {
+        return Err(NativeRootResolutionError::new(
             Error::ConflictError(format!(
                 "Debian package-oracle root '{}' has no architecture",
                 root.name
-            ))
+            )),
+            NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+            debian_unavailable(),
+        ));
+    };
+    let native = apt
+        .resolve(&root.name, &root.version, root_architecture)
+        .map_err(|error| {
+            let reason = if root_architecture != target_architecture && root_architecture != "all" {
+                NativeResolutionSurveyErrorReasonV1::NativeArchitectureRejected
+            } else {
+                NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+            };
+            NativeRootResolutionError::new(error, reason, debian_unavailable())
         })?;
-        let outcome = match apt.resolve(&root.name, &root.version, root_architecture)? {
-            AptResolutionOutcome::Resolved(packages) => {
-                let closure = packages
-                    .iter()
-                    .map(|identity| package_index.package_key(identity))
-                    .collect::<Result<BTreeSet<_>>>()?;
-                if !closure.contains(&root.package_key_sha256) {
-                    return Err(Error::ConflictError(format!(
+    let explanation = debian_explanation(&native);
+    match native {
+        AptResolutionOutcome::Resolved(packages) => {
+            let closure = packages
+                .iter()
+                .map(|identity| package_index.package_key(identity))
+                .collect::<Result<BTreeSet<_>>>()
+                .map_err(|error| {
+                    NativeRootResolutionError::new(
+                        error,
+                        NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
+                        explanation.clone(),
+                    )
+                })?;
+            if !closure.contains(&root.package_key_sha256) {
+                return Err(NativeRootResolutionError::new(
+                    Error::ConflictError(format!(
                         "apt-pkg closure for '{}' omits its exact root",
                         root.name
-                    )));
-                }
-                NativeResolutionOutcomeV1::Resolved {
-                    closure_package_keys_sha256: closure.into_iter().collect(),
-                }
+                    )),
+                    NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
+                    explanation,
+                ));
             }
-            AptResolutionOutcome::Unresolved(missing) => {
-                let dependencies = missing
-                    .iter()
-                    .map(|missing| package_index.missing_requirement(missing))
-                    .collect::<Result<BTreeSet<_>>>()?;
-                if dependencies.is_empty() {
-                    return Err(Error::ConflictError(format!(
+            Ok(NativeResolutionOutcomeV1::Resolved {
+                closure_package_keys_sha256: closure.into_iter().collect(),
+            })
+        }
+        AptResolutionOutcome::Unresolved(missing) => {
+            let dependencies = missing
+                .iter()
+                .map(|missing| package_index.missing_requirement(missing))
+                .collect::<Result<BTreeSet<_>>>()
+                .map_err(|error| {
+                    NativeRootResolutionError::new(
+                        error,
+                        NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                        explanation.clone(),
+                    )
+                })?;
+            if dependencies.is_empty() {
+                return Err(NativeRootResolutionError::new(
+                    Error::ConflictError(format!(
                         "apt-pkg reported exact root '{}' unresolved without a typed missing requirement",
                         root.name
-                    )));
-                }
-                NativeResolutionOutcomeV1::Unresolved {
-                    dependencies: dependencies.into_iter().collect(),
-                }
+                    )),
+                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                    explanation,
+                ));
             }
-        };
-        writer.root(&NativeResolutionRootV1 {
-            root_package_key_sha256: root.package_key_sha256,
-            outcome,
-        })
-    })?;
-    let manifest = writer.finish()?;
-    write_native_resolution_oracle_manifest(output, &manifest)?;
-    let reopened = verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
-    if reopened.manifest() != &manifest {
-        return Err(Error::InternalError(
-            "reopened Debian resolution manifest differs from produced manifest".to_string(),
-        ));
+            Ok(NativeResolutionOutcomeV1::Unresolved {
+                dependencies: dependencies.into_iter().collect(),
+            })
+        }
     }
-    Ok(manifest)
+}
+
+fn debian_explanation(outcome: &AptResolutionOutcome) -> NativeResolutionSurveyNativeExplanationV1 {
+    let result = match outcome {
+        AptResolutionOutcome::Resolved(packages) => {
+            NativeResolutionSurveyDebianResultV1::Resolved {
+                packages: packages.iter().map(debian_package).collect(),
+            }
+        }
+        AptResolutionOutcome::Unresolved(missing) => {
+            NativeResolutionSurveyDebianResultV1::Unresolved {
+                missing: missing
+                    .iter()
+                    .map(|missing| NativeResolutionSurveyDebianMissingV1 {
+                        requiring: debian_package(&missing.requiring),
+                        relation_kind: match missing.kind {
+                            AptRelationKind::Depends => "depends",
+                            AptRelationKind::PreDepends => "pre_depends",
+                            AptRelationKind::Recommends => "recommends",
+                            AptRelationKind::Suggests => "suggests",
+                            AptRelationKind::Enhances => "enhances",
+                            AptRelationKind::Conflicts => "conflicts",
+                            AptRelationKind::Breaks => "breaks",
+                            AptRelationKind::Replaces => "replaces",
+                        }
+                        .to_string(),
+                        dependency: missing.native_text.clone(),
+                    })
+                    .collect(),
+            }
+        }
+    };
+    NativeResolutionSurveyNativeExplanationV1::Debian { result }
+}
+
+fn debian_package(identity: &AptNativeIdentity) -> NativeResolutionSurveyDebianPackageV1 {
+    NativeResolutionSurveyDebianPackageV1 {
+        name: identity.name.clone(),
+        version: identity.version.clone(),
+        architecture: identity.architecture.clone(),
+    }
+}
+
+fn debian_unavailable() -> NativeResolutionSurveyNativeExplanationV1 {
+    NativeResolutionSurveyNativeExplanationV1::Debian {
+        result: NativeResolutionSurveyDebianResultV1::Unavailable {
+            reason: "apt_pkg_returned_no_typed_resolution".to_string(),
+        },
+    }
 }
 
 fn stage_solver_inputs(

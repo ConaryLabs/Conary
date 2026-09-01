@@ -15,15 +15,22 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::repository::catalog::ProfileRevisionV2;
+use crate::repository::catalog::parity::resolution_survey::{
+    NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
+    RootOutcomeSink,
+};
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityOracleReader,
     NativeParityOracleV1, NativeParityPackageV1, NativeResolutionInstalledStateV1,
     NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
-    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1, NativeResolutionRootV1,
-    NativeUnresolvedDependencyV1, native_requirement_group_sha256,
+    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
+    NativeResolutionSurveyAlpmConflictV1, NativeResolutionSurveyAlpmMissingV1,
+    NativeResolutionSurveyAlpmPackageV1, NativeResolutionSurveyAlpmResultV1,
+    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
-    write_native_resolution_oracle_manifest,
+    write_native_resolution_oracle_manifest, write_native_resolution_survey,
 };
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
@@ -38,6 +45,57 @@ pub fn produce_alpm_resolution_oracle(
     architecture: &str,
     output: &Path,
 ) -> Result<NativeResolutionOracleV1> {
+    let ResolutionProduct::Oracle(manifest) = produce_alpm_resolution(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        ResolutionDestination::Oracle(output),
+    )?
+    else {
+        unreachable!("ALPM oracle destination returned survey")
+    };
+    Ok(manifest)
+}
+
+/// Walk every exact ALPM root and write one diagnostics-only failure survey.
+pub fn produce_alpm_resolution_survey(
+    profile: &ProfileRevisionV2,
+    inputs: &[AlpmParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    output: &Path,
+) -> Result<NativeResolutionSurveyV1> {
+    let ResolutionProduct::Survey(survey) = produce_alpm_resolution(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        ResolutionDestination::Survey(output),
+    )?
+    else {
+        unreachable!("ALPM survey destination returned oracle")
+    };
+    Ok(survey)
+}
+
+enum ResolutionDestination<'a> {
+    Oracle(&'a Path),
+    Survey(&'a Path),
+}
+
+enum ResolutionProduct {
+    Oracle(NativeResolutionOracleV1),
+    Survey(NativeResolutionSurveyV1),
+}
+
+fn produce_alpm_resolution(
+    profile: &ProfileRevisionV2,
+    inputs: &[AlpmParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    destination: ResolutionDestination<'_>,
+) -> Result<ResolutionProduct> {
     let policy = NativeResolutionPolicyV1 {
         architecture: architecture.to_string(),
         installed_state: NativeResolutionInstalledStateV1::Empty,
@@ -60,30 +118,69 @@ pub fn produce_alpm_resolution_oracle(
         projection_schema: ALPM_RESOLUTION_PROJECTION_SCHEMA_V1,
     };
 
-    fs::create_dir(output)?;
-    let mut writer = NativeResolutionOracleWriter::create(
-        output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
-        profile,
-        package_oracle.manifest(),
-        implementation,
-        policy,
-    )?;
-    package_oracle.for_each_package(|root| {
-        let outcome = resolve_exact_root(&mut alpm, profile, inputs, &package_index, &root)?;
-        writer.root(&NativeResolutionRootV1 {
-            root_package_key_sha256: root.package_key_sha256,
-            outcome,
-        })
-    })?;
-    let manifest = writer.finish()?;
-    write_native_resolution_oracle_manifest(output, &manifest)?;
-    let reopened = verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
-    if reopened.manifest() != &manifest {
-        return Err(Error::InternalError(
-            "reopened ALPM resolution manifest differs from produced manifest".to_string(),
-        ));
+    match destination {
+        ResolutionDestination::Oracle(output) => {
+            fs::create_dir(output)?;
+            let mut writer = NativeResolutionOracleWriter::create(
+                output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
+                profile,
+                package_oracle.manifest(),
+                implementation,
+                policy,
+            )?;
+            walk_resolution_roots(
+                &package_oracle,
+                &mut alpm,
+                profile,
+                inputs,
+                &package_index,
+                RootOutcomeSink::Strict(&mut writer),
+            )?;
+            let manifest = writer.finish()?;
+            write_native_resolution_oracle_manifest(output, &manifest)?;
+            let reopened =
+                verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
+            if reopened.manifest() != &manifest {
+                return Err(Error::InternalError(
+                    "reopened ALPM resolution manifest differs from produced manifest".to_string(),
+                ));
+            }
+            Ok(ResolutionProduct::Oracle(manifest))
+        }
+        ResolutionDestination::Survey(output) => {
+            let mut collector = NativeResolutionSurveyCollector::new(
+                profile,
+                package_oracle.manifest(),
+                implementation,
+                policy,
+            )?;
+            walk_resolution_roots(
+                &package_oracle,
+                &mut alpm,
+                profile,
+                inputs,
+                &package_index,
+                RootOutcomeSink::Survey(&mut collector),
+            )?;
+            let survey = collector.finish()?;
+            write_native_resolution_survey(output, &survey)?;
+            Ok(ResolutionProduct::Survey(survey))
+        }
     }
-    Ok(manifest)
+}
+
+fn walk_resolution_roots(
+    package_oracle: &NativeParityOracleReader,
+    alpm: &mut Alpm,
+    profile: &ProfileRevisionV2,
+    inputs: &[AlpmParityMemberInput<'_>],
+    package_index: &PackageResolutionIndex,
+    mut sink: RootOutcomeSink<'_>,
+) -> Result<()> {
+    package_oracle.for_each_package(|root| {
+        let result = resolve_exact_root(alpm, profile, inputs, package_index, &root);
+        sink.root(&root, result)
+    })
 }
 
 struct PackageResolutionIndex {
@@ -225,23 +322,45 @@ fn resolve_exact_root(
     inputs: &[AlpmParityMemberInput<'_>],
     package_index: &PackageResolutionIndex,
     root: &NativeParityPackageV1,
-) -> Result<NativeResolutionOutcomeV1> {
-    let root_package = locate_exact_root(alpm, profile, inputs, root)?;
+) -> NativeRootResolutionResult {
+    let root_package = locate_exact_root(alpm, profile, inputs, root).map_err(|error| {
+        NativeRootResolutionError::new(
+            error,
+            NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+            alpm_unavailable("exact_root_not_available_to_native_solver"),
+        )
+    })?;
     let flags = TransFlag::DB_ONLY | TransFlag::NO_LOCK | TransFlag::NO_HOOKS;
-    alpm.trans_init(flags)
-        .map_err(|error| Error::InitError(format!("initialize libalpm transaction: {error}")))?;
+    alpm.trans_init(flags).map_err(|error| {
+        NativeRootResolutionError::new(
+            Error::InitError(format!("initialize libalpm transaction: {error}")),
+            NativeResolutionSurveyErrorReasonV1::TransactionInitializationFailed,
+            alpm_unavailable("transaction_initialization_failed"),
+        )
+    })?;
     if let Err(error) = alpm.trans_add_pkg(root_package) {
         let error = error.error.to_string();
         let release = alpm.trans_release();
-        release.map_err(|release_error| {
-            Error::InternalError(format!(
-                "add exact ALPM root failed with {error}; releasing transaction also failed: {release_error}"
-            ))
-        })?;
-        return Err(Error::ConfigError(format!(
-            "add exact ALPM root '{}' to transaction: {error}",
-            root.name
-        )));
+        let (error, reason) = match release {
+            Ok(()) => (
+                Error::ConfigError(format!(
+                    "add exact ALPM root '{}' to transaction: {error}",
+                    root.name
+                )),
+                NativeResolutionSurveyErrorReasonV1::TransactionAddRootFailed,
+            ),
+            Err(release_error) => (
+                Error::InternalError(format!(
+                    "add exact ALPM root failed with {error}; releasing transaction also failed: {release_error}"
+                )),
+                NativeResolutionSurveyErrorReasonV1::TransactionReleaseFailed,
+            ),
+        };
+        return Err(NativeRootResolutionError::new(
+            error,
+            reason,
+            alpm_unavailable("transaction_add_root_failed"),
+        ));
     }
 
     let outcome = resolve_initialized_transaction(alpm, profile, inputs, package_index, root);
@@ -249,14 +368,25 @@ fn resolve_exact_root(
     match (outcome, release) {
         (Ok(outcome), Ok(())) => Ok(outcome),
         (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(release_error)) => Err(Error::InternalError(format!(
-            "release prepared ALPM transaction for '{}': {release_error}",
-            root.name
-        ))),
-        (Err(error), Err(release_error)) => Err(Error::InternalError(format!(
-            "ALPM resolution for '{}' failed with {error}; releasing transaction also failed: {release_error}",
-            root.name
-        ))),
+        (Ok(_), Err(release_error)) => Err(NativeRootResolutionError::new(
+            Error::InternalError(format!(
+                "release prepared ALPM transaction for '{}': {release_error}",
+                root.name
+            )),
+            NativeResolutionSurveyErrorReasonV1::TransactionReleaseFailed,
+            alpm_unavailable("transaction_release_failed"),
+        )),
+        (Err(mut error), Err(release_error)) => {
+            let message = error.error_message();
+            error.replace_error(
+                Error::InternalError(format!(
+                    "ALPM resolution for '{}' failed with {message}; releasing transaction also failed: {release_error}",
+                    root.name
+                )),
+                NativeResolutionSurveyErrorReasonV1::TransactionReleaseFailed,
+            );
+            Err(error)
+        }
     }
 }
 
@@ -266,93 +396,216 @@ fn resolve_initialized_transaction(
     inputs: &[AlpmParityMemberInput<'_>],
     package_index: &PackageResolutionIndex,
     root: &NativeParityPackageV1,
-) -> Result<NativeResolutionOutcomeV1> {
+) -> NativeRootResolutionResult {
     enum Preparation {
         Prepared,
-        Unsatisfied(Vec<(String, String)>),
-        InvalidArchitecture,
-        Conflict,
+        Unsatisfied(
+            Vec<(String, String)>,
+            NativeResolutionSurveyNativeExplanationV1,
+        ),
+        InvalidArchitecture(NativeResolutionSurveyNativeExplanationV1),
+        Conflict(NativeResolutionSurveyNativeExplanationV1),
         Unexpected(alpm::Error),
     }
 
-    let preparation = match alpm.trans_prepare() {
-        Ok(()) => Preparation::Prepared,
-        Err(error) => {
-            let error_class = error.error();
-            match error.data() {
-                Some(PrepareData::UnsatisfiedDeps(dependencies)) => Preparation::Unsatisfied(
-                    dependencies
-                        .iter()
-                        .map(|dependency| {
-                            Ok((
-                                dependency.target().to_string(),
-                                native_requirement_group_sha256(&project_requirement(
-                                    dependency.depend(),
-                                    RepositoryRequirementKind::Depends,
-                                )?)?,
-                            ))
+    let preparation = {
+        let prepare_result = alpm.trans_prepare();
+        match prepare_result {
+            Ok(()) => Preparation::Prepared,
+            Err(error) => {
+                let error_class = error.error();
+                match error.data() {
+                    Some(PrepareData::UnsatisfiedDeps(dependencies)) => {
+                        let explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
+                            result: NativeResolutionSurveyAlpmResultV1::Unsatisfied {
+                                missing: dependencies
+                                    .iter()
+                                    .map(|dependency| NativeResolutionSurveyAlpmMissingV1 {
+                                        target: dependency.target().to_string(),
+                                        dependency: dependency.depend().to_string(),
+                                        causing_package: dependency
+                                            .causing_pkg()
+                                            .map(str::to_string),
+                                    })
+                                    .collect(),
+                            },
+                        };
+                        let missing = dependencies
+                            .iter()
+                            .map(|dependency| {
+                                Ok((
+                                    dependency.target().to_string(),
+                                    native_requirement_group_sha256(&project_requirement(
+                                        dependency.depend(),
+                                        RepositoryRequirementKind::Depends,
+                                    )?)?,
+                                ))
+                            })
+                            .collect::<Result<Vec<_>>>()
+                            .map_err(|error| {
+                                NativeRootResolutionError::new(
+                                    error,
+                                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                                    explanation.clone(),
+                                )
+                            })?;
+                        Preparation::Unsatisfied(missing, explanation)
+                    }
+                    Some(PrepareData::PkgInvalidArch(_)) => {
+                        Preparation::InvalidArchitecture(
+                            NativeResolutionSurveyNativeExplanationV1::Alpm {
+                                result: NativeResolutionSurveyAlpmResultV1::InvalidArchitecture {
+                                    packages: Vec::new(),
+                                    detail_unavailable_reason: Some(
+                                        "pinned_alpm_binding_does_not_safely_expose_invalid_architecture_entries"
+                                            .to_string(),
+                                    ),
+                                },
+                            },
+                        )
+                    }
+                    Some(PrepareData::ConflictingDeps(conflicts)) => {
+                        Preparation::Conflict(NativeResolutionSurveyNativeExplanationV1::Alpm {
+                            result: NativeResolutionSurveyAlpmResultV1::Conflicts {
+                                conflicts: conflicts
+                                    .iter()
+                                    .map(|conflict| NativeResolutionSurveyAlpmConflictV1 {
+                                        package1: alpm_package_explanation(conflict.package1()),
+                                        package2: alpm_package_explanation(conflict.package2()),
+                                        reason: conflict.reason().to_string(),
+                                    })
+                                    .collect(),
+                            },
                         })
-                        .collect::<Result<Vec<_>>>()?,
-                ),
-                Some(PrepareData::PkgInvalidArch(_)) => Preparation::InvalidArchitecture,
-                Some(PrepareData::ConflictingDeps(_)) => Preparation::Conflict,
-                None => Preparation::Unexpected(error_class),
+                    }
+                    None => Preparation::Unexpected(error_class),
+                }
             }
         }
     };
 
     match preparation {
         Preparation::Prepared => {
-            let closure = transaction_packages(alpm, profile, inputs, root)?
+            let explanation = alpm_prepared_explanation(alpm);
+            let closure = transaction_packages(alpm, profile, inputs, root)
+                .map_err(|error| {
+                    NativeRootResolutionError::new(
+                        error,
+                        NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
+                        explanation.clone(),
+                    )
+                })?
                 .into_values()
                 .collect::<BTreeSet<_>>();
             if !closure.contains(&root.package_key_sha256) {
-                return Err(Error::ConflictError(format!(
-                    "libalpm prepared closure for '{}' omits its exact root",
-                    root.name
-                )));
+                return Err(NativeRootResolutionError::new(
+                    Error::ConflictError(format!(
+                        "libalpm prepared closure for '{}' omits its exact root",
+                        root.name
+                    )),
+                    NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
+                    explanation,
+                ));
             }
             Ok(NativeResolutionOutcomeV1::Resolved {
                 closure_package_keys_sha256: closure.into_iter().collect(),
             })
         }
-        Preparation::Unsatisfied(missing) => {
-            let packages = transaction_packages(alpm, profile, inputs, root)?;
+        Preparation::Unsatisfied(missing, explanation) => {
+            let packages = transaction_packages(alpm, profile, inputs, root).map_err(|error| {
+                NativeRootResolutionError::new(
+                    error,
+                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                    explanation.clone(),
+                )
+            })?;
             let mut dependencies = BTreeSet::new();
             for (requiring_name, requirement_group_sha256) in missing {
-                let requiring_package_key_sha256 = package_index.bind_required_group(
-                    &requiring_name,
-                    &requirement_group_sha256,
-                    packages.get(&requiring_name).map(String::as_str),
-                )?;
+                let requiring_package_key_sha256 = package_index
+                    .bind_required_group(
+                        &requiring_name,
+                        &requirement_group_sha256,
+                        packages.get(&requiring_name).map(String::as_str),
+                    )
+                    .map_err(|error| {
+                        NativeRootResolutionError::new(
+                            error,
+                            NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                            explanation.clone(),
+                        )
+                    })?;
                 dependencies.insert(NativeUnresolvedDependencyV1 {
                     requiring_package_key_sha256,
                     requirement_group_sha256,
                 });
             }
             if dependencies.is_empty() {
-                return Err(Error::ConflictError(format!(
-                    "libalpm reported unsatisfied dependencies for '{}' without typed records",
-                    root.name
-                )));
+                return Err(NativeRootResolutionError::new(
+                    Error::ConflictError(format!(
+                        "libalpm reported unsatisfied dependencies for '{}' without typed records",
+                        root.name
+                    )),
+                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                    explanation,
+                ));
             }
             Ok(NativeResolutionOutcomeV1::Unresolved {
                 dependencies: dependencies.into_iter().collect(),
             })
         }
-        Preparation::InvalidArchitecture => Err(Error::ConfigError(format!(
-            "libalpm rejected architecture '{}' while resolving exact root '{}'",
-            alpm.architectures().first().unwrap_or("<unset>"),
-            root.name
-        ))),
-        Preparation::Conflict => Err(Error::ConflictError(format!(
-            "libalpm found a package conflict while resolving exact root '{}'",
-            root.name
-        ))),
-        Preparation::Unexpected(error) => Err(Error::ConfigError(format!(
-            "libalpm failed to prepare exact root '{}' with unexpected error {error}",
-            root.name
-        ))),
+        Preparation::InvalidArchitecture(explanation) => Err(NativeRootResolutionError::new(
+            Error::ConfigError(format!(
+                "libalpm rejected architecture '{}' while resolving exact root '{}'",
+                alpm.architectures().first().unwrap_or("<unset>"),
+                root.name
+            )),
+            NativeResolutionSurveyErrorReasonV1::NativeArchitectureRejected,
+            explanation,
+        )),
+        Preparation::Conflict(explanation) => Err(NativeRootResolutionError::new(
+            Error::ConflictError(format!(
+                "libalpm found a package conflict while resolving exact root '{}'",
+                root.name
+            )),
+            NativeResolutionSurveyErrorReasonV1::NativePackageConflict,
+            explanation,
+        )),
+        Preparation::Unexpected(error) => Err(NativeRootResolutionError::new(
+            Error::ConfigError(format!(
+                "libalpm failed to prepare exact root '{}' with unexpected error {error}",
+                root.name
+            )),
+            NativeResolutionSurveyErrorReasonV1::NativeSolverUnexpectedFailure,
+            alpm_unavailable("libalpm_returned_no_typed_prepare_data"),
+        )),
+    }
+}
+
+fn alpm_prepared_explanation(alpm: &Alpm) -> NativeResolutionSurveyNativeExplanationV1 {
+    NativeResolutionSurveyNativeExplanationV1::Alpm {
+        result: NativeResolutionSurveyAlpmResultV1::Prepared {
+            packages: alpm
+                .trans_add()
+                .iter()
+                .map(alpm_package_explanation)
+                .collect(),
+        },
+    }
+}
+
+fn alpm_package_explanation(package: &Package) -> NativeResolutionSurveyAlpmPackageV1 {
+    NativeResolutionSurveyAlpmPackageV1 {
+        name: package.name().to_string(),
+        version: package.version().to_string(),
+        architecture: package.arch().map(str::to_string),
+    }
+}
+
+fn alpm_unavailable(reason: &str) -> NativeResolutionSurveyNativeExplanationV1 {
+    NativeResolutionSurveyNativeExplanationV1::Alpm {
+        result: NativeResolutionSurveyAlpmResultV1::Unavailable {
+            reason: reason.to_string(),
+        },
     }
 }
 

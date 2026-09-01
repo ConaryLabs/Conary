@@ -28,7 +28,10 @@ use crate::repository::versioning::VersionScheme;
 
 mod resolution;
 
-pub use resolution::{ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, produce_alpm_resolution_oracle};
+pub use resolution::{
+    ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, produce_alpm_resolution_oracle,
+    produce_alpm_resolution_survey,
+};
 
 pub const ALPM_PARITY_PROJECTION_SCHEMA_V1: u32 = 1;
 

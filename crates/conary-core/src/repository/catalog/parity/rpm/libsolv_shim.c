@@ -28,6 +28,7 @@ typedef struct {
     Solver *solver;
     Transaction *transaction;
     Queue closure;
+    Queue problem_ids;
     Queue problem_rules;
     Queue problem_rule_ranges;
     Queue strict_shadowed;
@@ -91,6 +92,7 @@ clear_resolution(ConarySolv *handle)
         handle->solver = NULL;
     }
     queue_empty(&handle->closure);
+    queue_empty(&handle->problem_ids);
     queue_empty(&handle->problem_rules);
     queue_empty(&handle->problem_rule_ranges);
     queue_empty(&handle->strict_shadowed);
@@ -284,6 +286,7 @@ conary_solv_create(void)
     }
     pool_setdisttype(handle->pool, DISTTYPE_RPM);
     queue_init(&handle->closure);
+    queue_init(&handle->problem_ids);
     queue_init(&handle->problem_rules);
     queue_init(&handle->problem_rule_ranges);
     queue_init(&handle->strict_shadowed);
@@ -297,6 +300,7 @@ conary_solv_free(ConarySolv *handle)
         return;
     clear_resolution(handle);
     queue_free(&handle->closure);
+    queue_free(&handle->problem_ids);
     queue_free(&handle->problem_rules);
     queue_free(&handle->problem_rule_ranges);
     queue_free(&handle->strict_shadowed);
@@ -418,6 +422,7 @@ conary_solv_solve(ConarySolv *handle, size_t root_index,
             Queue rules;
             queue_init(&rules);
             solver_findallproblemrules(handle->solver, problem, &rules);
+            queue_push(&handle->problem_ids, problem);
             int start = handle->problem_rules.count;
             for (int index = 0; index < rules.count; index++)
                 queue_push(&handle->problem_rules, rules.elements[index]);
@@ -425,7 +430,8 @@ conary_solv_solve(ConarySolv *handle, size_t root_index,
                         handle->problem_rules.count - start);
             queue_free(&rules);
         }
-        if (!handle->problem_rule_ranges.count || !handle->problem_rules.count) {
+        if (!handle->problem_rule_ranges.count || !handle->problem_rules.count ||
+            handle->problem_ids.count != handle->problem_rule_ranges.count / 2) {
             set_error(handle, "solve RPM root", "problems carried no typed rules");
             return -1;
         }
@@ -487,7 +493,7 @@ conary_solv_problem_rule_count(ConarySolv *handle, size_t problem_index)
 
 int
 conary_solv_problem_rule(ConarySolv *handle, size_t problem_index,
-                         size_t rule_index, int *type,
+                         size_t rule_index, int *problem, int *type,
                          size_t *from_index, size_t *to_index, int *dependency)
 {
     if (!handle || !handle->solver ||
@@ -501,6 +507,8 @@ conary_solv_problem_rule(ConarySolv *handle, size_t problem_index,
     Id dep = 0;
     SolverRuleinfo info = solver_ruleinfo(
         handle->solver, handle->problem_rules.elements[index], &from, &to, &dep);
+    if (problem)
+        *problem = handle->problem_ids.elements[problem_index];
     if (type)
         *type = (int)info;
     if (from_index)

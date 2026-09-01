@@ -7,9 +7,11 @@ use std::path::{Path, PathBuf};
 use super::ffi::{AptResolution, AptResolutionOutcome};
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1, PROFILE_REVISION_SCHEMA_V2,
-    ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1,
-    SourceStreamV1, native_requirement_group_sha256, verify_native_parity_oracle_bundle,
+    CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1,
+    NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
+    NativeResolutionSurveyNativeExplanationV1, PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
+    native_requirement_group_sha256, verify_native_parity_oracle_bundle,
     verify_native_resolution_oracle_bundle,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
@@ -800,4 +802,96 @@ fn resolution_producer_rejects_conflicts_and_incompatible_roots() {
             .to_string()
             .contains("incompatible target architecture")
     );
+}
+
+#[test]
+fn resolution_survey_records_all_failures_and_isolates_later_roots() {
+    let directory = tempfile::tempdir().unwrap();
+    let package_text = [
+        resolution_stanza(
+            "conflict-root",
+            "1.0-1",
+            "amd64",
+            'a',
+            "Depends: blocker\nConflicts: blocker\n",
+        ),
+        resolution_stanza("blocker", "1.0-1", "amd64", 'b', ""),
+        resolution_stanza("foreign-root", "1.0-1", "arm64", 'c', ""),
+        resolution_stanza("healthy-after-failures", "1.0-1", "amd64", 'd', ""),
+    ]
+    .concat();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &package_text,
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 4;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+
+    assert_eq!(survey.counts.roots_walked, 4);
+    assert_eq!(survey.counts.resolved_roots, 2);
+    assert_eq!(survey.counts.unresolved_roots, 0);
+    assert_eq!(survey.counts.failed_roots, 2);
+    assert!(survey.failures.iter().any(|failure| {
+        failure.name == "conflict-root"
+            && failure.error_kind.reason == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+    }));
+    assert!(survey.failures.iter().any(|failure| {
+        failure.name == "foreign-root"
+            && failure.error_kind.reason
+                == NativeResolutionSurveyErrorReasonV1::NativeArchitectureRejected
+    }));
+    for failure in &survey.failures {
+        let NativeResolutionSurveyNativeExplanationV1::Debian {
+            result: NativeResolutionSurveyDebianResultV1::Unavailable { reason },
+        } = &failure.native_explanation
+        else {
+            panic!("apt-pkg failure without a typed result must say evidence is unavailable");
+        };
+        assert_eq!(reason, "apt_pkg_returned_no_typed_resolution");
+    }
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut root_order = Vec::new();
+    package_reader
+        .for_each_package(|root| {
+            root_order.push(root.name);
+            Ok(())
+        })
+        .unwrap();
+    let failure_names = survey
+        .failures
+        .iter()
+        .map(|failure| failure.name.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(root_order.iter().enumerate().any(|(index, name)| {
+        failure_names.contains(name)
+            && root_order[index + 1..]
+                .iter()
+                .any(|later| !failure_names.contains(later))
+    }));
+    assert!(!directory.path().join("manifest.json").exists());
+    assert!(!directory.path().join("roots.jsonl").exists());
+
+    let strict = produce_debian_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("strict-resolution"),
+    )
+    .unwrap_err();
+    assert_eq!(strict.to_string(), survey.failures[0].error_message);
 }

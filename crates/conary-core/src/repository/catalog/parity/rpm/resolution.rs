@@ -16,15 +16,22 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::repository::catalog::ProfileRevisionV2;
+use crate::repository::catalog::parity::resolution_survey::{
+    NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
+    RootOutcomeSink,
+};
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
     NativeParityOracleReader, NativeParityOracleV1, NativeResolutionInstalledStateV1,
     NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
-    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1, NativeResolutionRootV1,
-    NativeUnresolvedDependencyV1, native_requirement_group_sha256,
-    verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
-    write_native_resolution_oracle_manifest,
+    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
+    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeResolutionSurveyRpmPackageV1, NativeResolutionSurveyRpmProblemV1,
+    NativeResolutionSurveyRpmRuleV1, NativeResolutionSurveyV1, NativeUnresolvedDependencyV1,
+    native_requirement_group_sha256, verify_native_parity_oracle_bundle,
+    verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
+    write_native_resolution_survey,
 };
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
@@ -60,6 +67,57 @@ pub fn produce_rpm_resolution_oracle(
     architecture: &str,
     output: &Path,
 ) -> Result<NativeResolutionOracleV1> {
+    let ResolutionProduct::Oracle(manifest) = produce_rpm_resolution(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        ResolutionDestination::Oracle(output),
+    )?
+    else {
+        unreachable!("RPM oracle destination returned survey")
+    };
+    Ok(manifest)
+}
+
+/// Walk every exact RPM root and write one diagnostics-only failure survey.
+pub fn produce_rpm_resolution_survey(
+    profile: &ProfileRevisionV2,
+    inputs: &[RpmParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    output: &Path,
+) -> Result<NativeResolutionSurveyV1> {
+    let ResolutionProduct::Survey(survey) = produce_rpm_resolution(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        ResolutionDestination::Survey(output),
+    )?
+    else {
+        unreachable!("RPM survey destination returned oracle")
+    };
+    Ok(survey)
+}
+
+enum ResolutionDestination<'a> {
+    Oracle(&'a Path),
+    Survey(&'a Path),
+}
+
+enum ResolutionProduct {
+    Oracle(NativeResolutionOracleV1),
+    Survey(NativeResolutionSurveyV1),
+}
+
+fn produce_rpm_resolution(
+    profile: &ProfileRevisionV2,
+    inputs: &[RpmParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    destination: ResolutionDestination<'_>,
+) -> Result<ResolutionProduct> {
     let policy = NativeResolutionPolicyV1 {
         architecture: architecture.to_string(),
         installed_state: NativeResolutionInstalledStateV1::Empty,
@@ -104,32 +162,77 @@ pub fn produce_rpm_resolution_oracle(
         version: PINNED_LIBSOLV_VERSION.to_string(),
         projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V3,
     };
-    fs::create_dir(output)?;
-    let mut writer = NativeResolutionOracleWriter::create(
-        output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
-        profile,
-        package_oracle.manifest(),
-        implementation,
-        policy,
-    )?;
-    package_oracle.for_each_package(|root| {
-        let root_index = package_index.selected_native_index(&root.package_key_sha256)?;
-        let outcome =
-            resolve_exact_root(&mut pool, &package_index, root_index, &root, architecture)?;
-        writer.root(&NativeResolutionRootV1 {
-            root_package_key_sha256: root.package_key_sha256,
-            outcome,
-        })
-    })?;
-    let manifest = writer.finish()?;
-    write_native_resolution_oracle_manifest(output, &manifest)?;
-    let reopened = verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
-    if reopened.manifest() != &manifest {
-        return Err(Error::InternalError(
-            "reopened RPM resolution manifest differs from produced manifest".to_string(),
-        ));
+    match destination {
+        ResolutionDestination::Oracle(output) => {
+            fs::create_dir(output)?;
+            let mut writer = NativeResolutionOracleWriter::create(
+                output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
+                profile,
+                package_oracle.manifest(),
+                implementation,
+                policy,
+            )?;
+            walk_resolution_roots(
+                &package_oracle,
+                &mut pool,
+                &package_index,
+                architecture,
+                RootOutcomeSink::Strict(&mut writer),
+            )?;
+            let manifest = writer.finish()?;
+            write_native_resolution_oracle_manifest(output, &manifest)?;
+            let reopened =
+                verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
+            if reopened.manifest() != &manifest {
+                return Err(Error::InternalError(
+                    "reopened RPM resolution manifest differs from produced manifest".to_string(),
+                ));
+            }
+            Ok(ResolutionProduct::Oracle(manifest))
+        }
+        ResolutionDestination::Survey(output) => {
+            let mut collector = NativeResolutionSurveyCollector::new(
+                profile,
+                package_oracle.manifest(),
+                implementation,
+                policy,
+            )?;
+            walk_resolution_roots(
+                &package_oracle,
+                &mut pool,
+                &package_index,
+                architecture,
+                RootOutcomeSink::Survey(&mut collector),
+            )?;
+            let survey = collector.finish()?;
+            write_native_resolution_survey(output, &survey)?;
+            Ok(ResolutionProduct::Survey(survey))
+        }
     }
-    Ok(manifest)
+}
+
+fn walk_resolution_roots(
+    package_oracle: &NativeParityOracleReader,
+    pool: &mut SolvPool,
+    package_index: &PackageResolutionIndex,
+    architecture: &str,
+    mut sink: RootOutcomeSink<'_>,
+) -> Result<()> {
+    package_oracle.for_each_package(|root| {
+        let result = match package_index.selected_native_index(&root.package_key_sha256) {
+            Ok(root_index) => {
+                resolve_exact_root(pool, package_index, root_index, &root, architecture)
+            }
+            Err(error) => Err(NativeRootResolutionError::new(
+                error,
+                NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+                NativeResolutionSurveyNativeExplanationV1::Rpm {
+                    problems: Vec::new(),
+                },
+            )),
+        };
+        sink.root(&root, result)
+    })
 }
 
 fn require_rpm_package_oracle(manifest: &NativeParityOracleV1) -> Result<()> {
@@ -288,25 +391,65 @@ fn resolve_exact_root(
     root_index: usize,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     architecture: &str,
-) -> Result<NativeResolutionOutcomeV1> {
-    match pool.solve(root_index)? {
+) -> NativeRootResolutionResult {
+    let resolution = pool.solve(root_index).map_err(|error| {
+        NativeRootResolutionError::new(
+            error,
+            NativeResolutionSurveyErrorReasonV1::NativeSolverFailed,
+            NativeResolutionSurveyNativeExplanationV1::Rpm {
+                problems: Vec::new(),
+            },
+        )
+    })?;
+    match resolution {
         SolvResolution::Resolved(packages) => {
             let closure = packages
                 .into_iter()
                 .map(|index| package_index.package_key(index))
-                .collect::<Result<BTreeSet<_>>>()?;
+                .collect::<Result<BTreeSet<_>>>()
+                .map_err(|error| {
+                    NativeRootResolutionError::new(
+                        error,
+                        NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
+                        NativeResolutionSurveyNativeExplanationV1::Rpm {
+                            problems: Vec::new(),
+                        },
+                    )
+                })?;
             if !closure.contains(&root.package_key_sha256) {
-                return Err(Error::ConflictError(format!(
-                    "libsolv closure for '{}' omits its exact root",
-                    root.name
-                )));
+                return Err(NativeRootResolutionError::new(
+                    Error::ConflictError(format!(
+                        "libsolv closure for '{}' omits its exact root",
+                        root.name
+                    )),
+                    NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
+                    NativeResolutionSurveyNativeExplanationV1::Rpm {
+                        problems: Vec::new(),
+                    },
+                ));
             }
             Ok(NativeResolutionOutcomeV1::Resolved {
                 closure_package_keys_sha256: closure.into_iter().collect(),
             })
         }
-        SolvResolution::Unresolved(rules) => {
-            unresolved_outcome(pool, package_index, root_index, root, architecture, rules)
+        SolvResolution::Unresolved(problems) => {
+            let mut explanation = rpm_explanation(pool, package_index, &problems);
+            unresolved_outcome(
+                pool,
+                package_index,
+                root_index,
+                root,
+                architecture,
+                problems,
+                &mut explanation,
+            )
+            .map_err(|error| {
+                NativeRootResolutionError::new(
+                    error,
+                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                    explanation,
+                )
+            })
         }
     }
 }
@@ -318,6 +461,7 @@ fn unresolved_outcome(
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     architecture: &str,
     problems: Vec<SolvProblem>,
+    explanation: &mut NativeResolutionSurveyNativeExplanationV1,
 ) -> Result<NativeResolutionOutcomeV1> {
     let mut dependencies = BTreeSet::new();
     let mut requires_residual_probe = false;
@@ -349,6 +493,7 @@ fn unresolved_outcome(
                 }
             }
             SolvResolution::Unresolved(residual_problems) => {
+                extend_rpm_explanation(pool, package_index, explanation, &residual_problems);
                 let visibility = StrictVisibility::derive(
                     pool,
                     root_index,
@@ -641,6 +786,140 @@ fn validate_required_provider_conflict_rule(
     package_index.package_key(provided_index)?;
     pool.dependency(rule.dependency)?.text()?;
     Ok(())
+}
+
+fn rpm_explanation(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndex,
+    problems: &[SolvProblem],
+) -> NativeResolutionSurveyNativeExplanationV1 {
+    NativeResolutionSurveyNativeExplanationV1::Rpm {
+        problems: problems
+            .iter()
+            .map(|problem| NativeResolutionSurveyRpmProblemV1 {
+                problem: problem.problem,
+                rules: problem
+                    .rules
+                    .iter()
+                    .map(|rule| {
+                        let (from, from_unavailable_reason) =
+                            rpm_package_field(pool, package_index, rule.from_index);
+                        let (to, to_unavailable_reason) =
+                            rpm_package_field(pool, package_index, rule.to_index);
+                        let (dependency, dependency_unavailable_reason) =
+                            rpm_dependency_field(pool, rule.dependency);
+                        NativeResolutionSurveyRpmRuleV1 {
+                            rule_type_numeric: rule.rule_type,
+                            rule_type_symbolic: rpm_rule_type_symbolic(rule.rule_type).to_string(),
+                            from_native_index: rule
+                                .from_index
+                                .and_then(|index| index.try_into().ok()),
+                            from,
+                            from_unavailable_reason,
+                            to_native_index: rule.to_index.and_then(|index| index.try_into().ok()),
+                            to,
+                            to_unavailable_reason,
+                            dependency_id: (rule.dependency != 0).then_some(rule.dependency),
+                            dependency,
+                            dependency_unavailable_reason,
+                        }
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+/// Preserve residual-probe rules in the same diagnostic explanation captured
+/// from the strict solve before either problem set is projected.
+fn extend_rpm_explanation(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndex,
+    explanation: &mut NativeResolutionSurveyNativeExplanationV1,
+    residual_problems: &[SolvProblem],
+) {
+    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems } = explanation else {
+        unreachable!("RPM resolver carried a non-RPM survey explanation")
+    };
+    let NativeResolutionSurveyNativeExplanationV1::Rpm {
+        problems: residual_explanation,
+    } = rpm_explanation(pool, package_index, residual_problems)
+    else {
+        unreachable!("RPM rule projection returned a non-RPM survey explanation")
+    };
+    problems.extend(residual_explanation);
+}
+
+fn rpm_package_field(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndex,
+    index: Option<usize>,
+) -> (Option<NativeResolutionSurveyRpmPackageV1>, Option<String>) {
+    let Some(index) = index else {
+        return (None, None);
+    };
+    let result: Result<NativeResolutionSurveyRpmPackageV1> = (|| {
+        let package = pool.package(index)?;
+        Ok(NativeResolutionSurveyRpmPackageV1 {
+            package_key_sha256: package_index.package_key(index)?,
+            name: package.name()?,
+            evr: package.evr()?,
+            architecture: package.arch()?,
+        })
+    })();
+    match result {
+        Ok(package) => (Some(package), None),
+        Err(_) => (
+            None,
+            Some("native_package_projection_unavailable".to_string()),
+        ),
+    }
+}
+
+fn rpm_dependency_field(pool: &SolvPool, dependency: i32) -> (Option<String>, Option<String>) {
+    if dependency == 0 {
+        return (None, None);
+    }
+    match pool.dependency(dependency).and_then(|value| value.text()) {
+        Ok(text) => (Some(text), None),
+        Err(_) => (None, Some("native_dependency_text_unavailable".to_string())),
+    }
+}
+
+fn rpm_rule_type_symbolic(rule_type: i32) -> &'static str {
+    match rule_type {
+        0 => "SOLVER_RULE_UNKNOWN",
+        0x100 => "SOLVER_RULE_PKG",
+        SOLVER_RULE_PKG_NOT_INSTALLABLE => "SOLVER_RULE_PKG_NOT_INSTALLABLE",
+        SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => "SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP",
+        SOLVER_RULE_PKG_REQUIRES => "SOLVER_RULE_PKG_REQUIRES",
+        0x104 => "SOLVER_RULE_PKG_SELF_CONFLICT",
+        0x105 => "SOLVER_RULE_PKG_CONFLICTS",
+        0x106 => "SOLVER_RULE_PKG_SAME_NAME",
+        0x107 => "SOLVER_RULE_PKG_OBSOLETES",
+        0x108 => "SOLVER_RULE_PKG_IMPLICIT_OBSOLETES",
+        0x109 => "SOLVER_RULE_PKG_INSTALLED_OBSOLETES",
+        0x10a => "SOLVER_RULE_PKG_RECOMMENDS",
+        0x10b => "SOLVER_RULE_PKG_CONSTRAINS",
+        0x10c => "SOLVER_RULE_PKG_SUPPLEMENTS",
+        0x200 => "SOLVER_RULE_UPDATE",
+        0x300 => "SOLVER_RULE_FEATURE",
+        SOLVER_RULE_JOB => "SOLVER_RULE_JOB",
+        0x401 => "SOLVER_RULE_JOB_NOTHING_PROVIDES_DEP",
+        0x402 => "SOLVER_RULE_JOB_PROVIDED_BY_SYSTEM",
+        0x403 => "SOLVER_RULE_JOB_UNKNOWN_PACKAGE",
+        SOLVER_RULE_JOB_UNSUPPORTED => "SOLVER_RULE_JOB_UNSUPPORTED",
+        0x500 => "SOLVER_RULE_DISTUPGRADE",
+        SOLVER_RULE_INFARCH => "SOLVER_RULE_INFARCH",
+        0x700 => "SOLVER_RULE_CHOICE",
+        0x800 => "SOLVER_RULE_LEARNT",
+        0x900 => "SOLVER_RULE_BEST",
+        0xa00 => "SOLVER_RULE_YUMOBS",
+        0xb00 => "SOLVER_RULE_RECOMMENDS",
+        0xc00 => "SOLVER_RULE_BLACK",
+        SOLVER_RULE_STRICT_REPO_PRIORITY => "SOLVER_RULE_STRICT_REPO_PRIORITY",
+        _ => "SOLVER_RULE_UNRECOGNIZED",
+    }
 }
 
 fn project_unresolved_dependency(

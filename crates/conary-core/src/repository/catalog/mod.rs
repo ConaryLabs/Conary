@@ -48,38 +48,50 @@ pub use contract::{
 #[cfg(feature = "native-alpm-oracle")]
 pub use parity::{
     ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, AlpmParityMemberInput,
-    produce_alpm_parity_oracle, produce_alpm_resolution_oracle,
+    produce_alpm_parity_oracle, produce_alpm_resolution_oracle, produce_alpm_resolution_survey,
 };
 pub use parity::{
     CONARY_RESOLUTION_PROJECTION_SCHEMA_V1, ConaryResolutionCandidateV1,
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_PARITY_MANIFEST_FILE_NAME,
     NATIVE_PARITY_ORACLE_SCHEMA_V1, NATIVE_PARITY_PACKAGE_FILE_NAME,
     NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
-    NATIVE_RESOLUTION_ORACLE_SCHEMA_V1, NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityArtifactV1,
-    NativeParityComparisonError, NativeParityComparisonV1, NativeParityCountsV1,
-    NativeParityEcosystemV1, NativeParityFactV1, NativeParityImplementationV1,
-    NativeParityMismatchV1, NativeParityOracleReader, NativeParityOracleV1,
-    NativeParityOracleWriter, NativeParityPackageIdentityV1, NativeParityPackageV1,
-    NativeResolutionArtifactV1, NativeResolutionComparisonError, NativeResolutionComparisonV1,
-    NativeResolutionCountsV1, NativeResolutionInstalledStateV1, NativeResolutionMismatchV1,
-    NativeResolutionOracleReader, NativeResolutionOracleV1, NativeResolutionOracleWriter,
-    NativeResolutionOutcomeKindV1, NativeResolutionOutcomeV1, NativeResolutionPolicyV1,
-    NativeResolutionProviderPolicyV1, NativeResolutionRequirementPolicyV1,
-    NativeResolutionRootPolicyV1, NativeResolutionRootV1, NativeUnresolvedDependencyV1,
+    NATIVE_RESOLUTION_ORACLE_SCHEMA_V1, NATIVE_RESOLUTION_ROOT_FILE_NAME,
+    NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT, NATIVE_RESOLUTION_SURVEY_SCHEMA_V1,
+    NativeParityArtifactV1, NativeParityComparisonError, NativeParityComparisonV1,
+    NativeParityCountsV1, NativeParityEcosystemV1, NativeParityFactV1,
+    NativeParityImplementationV1, NativeParityMismatchV1, NativeParityOracleReader,
+    NativeParityOracleV1, NativeParityOracleWriter, NativeParityPackageIdentityV1,
+    NativeParityPackageV1, NativeResolutionArtifactV1, NativeResolutionComparisonError,
+    NativeResolutionComparisonV1, NativeResolutionCountsV1, NativeResolutionInstalledStateV1,
+    NativeResolutionMismatchV1, NativeResolutionOracleReader, NativeResolutionOracleV1,
+    NativeResolutionOracleWriter, NativeResolutionOutcomeKindV1, NativeResolutionOutcomeV1,
+    NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
+    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1, NativeResolutionRootV1,
+    NativeResolutionSurveyAlpmConflictV1, NativeResolutionSurveyAlpmMissingV1,
+    NativeResolutionSurveyAlpmPackageV1, NativeResolutionSurveyAlpmResultV1,
+    NativeResolutionSurveyCountsV1, NativeResolutionSurveyDebianMissingV1,
+    NativeResolutionSurveyDebianPackageV1, NativeResolutionSurveyDebianResultV1,
+    NativeResolutionSurveyErrorCountV1, NativeResolutionSurveyErrorKindV1,
+    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyErrorVariantV1,
+    NativeResolutionSurveyFailureV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeResolutionSurveyRpmPackageV1, NativeResolutionSurveyRpmProblemV1,
+    NativeResolutionSurveyRpmRuleV1, NativeResolutionSurveyV1, NativeUnresolvedDependencyV1,
     compare_native_parity_oracle, compare_native_resolution_oracle,
     native_requirement_group_sha256, produce_conary_resolution_candidate,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     write_native_parity_oracle_manifest, write_native_resolution_oracle_manifest,
+    write_native_resolution_survey,
 };
 #[cfg(feature = "native-debian-oracle")]
 pub use parity::{
     DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1,
     DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
+    produce_debian_resolution_survey,
 };
 #[cfg(feature = "native-rpm-oracle")]
 pub use parity::{
     RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V3, RpmParityMemberInput,
-    produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
+    produce_rpm_parity_oracle, produce_rpm_resolution_oracle, produce_rpm_resolution_survey,
 };
 pub use portable_integrity::{
     PORTABLE_CHUNK_MANIFEST_SCHEMA_V1, PORTABLE_CHUNK_SIZE_V1, PortableChunkManifestV1,

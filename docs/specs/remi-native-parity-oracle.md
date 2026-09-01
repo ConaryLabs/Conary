@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
+summary: Define strict native parity artifacts and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
 last_updated: 2026-09-01
-revision: 19
+revision: 20
 status: active
 ---
 
@@ -249,6 +249,72 @@ typed policy to native and Conary evidence. It merge-walks one root pair at a
 time and reports typed oracle-only root, candidate-only root, outcome,
 dependency-closure, or unresolved-dependency drift. Diagnostic strings and
 native solver error prose never establish the result.
+
+### Diagnostics-only resolution survey
+
+The three native resolution binaries also accept `--survey <FILE>`. Exactly
+one of `--output <DIRECTORY>` and `--survey <FILE>` is required. Survey mode
+walks every exact package-oracle root even when a native result cannot be
+projected into the strict resolution contract. It writes one create-only
+canonical `NativeResolutionSurveyV1` JSON file, refuses to replace an existing
+path, and exits non-zero after writing when any root failed so unattended
+diagnostics cannot look successful.
+
+`NativeResolutionSurveyV1` schema 1 binds the profile identity and revision
+digest, package-oracle manifest digest, native implementation and projection
+schema, fixed resolution policy, and target architecture. Its counts record
+roots walked, resolved, unresolved, and failed plus a canonical histogram
+keyed by the originating typed Conary `Error` variant and a stable short
+reason. Each retained failure records the exact root package key,
+name/version/release/architecture, full sanitized error message, and typed
+native explanation. The inventory retains at most 5,000 failure records while
+reporting the uncapped `total_failures`, retained count, limit, and explicit
+`truncated` state.
+
+RPM explanations preserve every libsolv problem and every rule in that
+problem, including numeric and symbolic `SOLVER_RULE_*` type, native index,
+from/to package key plus name-EVR-architecture, dependency ID, and dependency
+text. If strict-priority projection runs a residual probe, the strict problems
+precede every residual-probe problem in the explanation; both sets are captured
+before their respective projection. Any native field that cannot safely be
+projected carries an explicit unavailability reason. Debian explanations retain
+the selected native package identities or typed missing requirements when
+apt-pkg returns them; an
+apt-pkg failure that exposes no typed result says so. ALPM explanations retain
+prepared package identities, typed missing requirements, and package-conflict
+records. The pinned Rust ALPM binding cannot safely dereference its
+invalid-architecture detail list, so that typed result records the detail as
+unavailable rather than inventing or unsafely reading it.
+
+Survey collection and strict writing share the same per-root resolution path.
+libsolv clears the previous solver/transaction before each solve, apt-pkg
+clears result storage and constructs fresh dependency caches per root, and
+libalpm releases every transaction before the next root. A failed root
+therefore cannot contaminate a later solve.
+
+Survey JSON is a diagnostics aid only. It never creates `manifest.json` or
+`roots.jsonl`, is not a `NativeResolutionOracleV1` bundle, and has no parity,
+comparison, promotion-proof, activation, or publication authority. Promotion
+continues to require the strict bundle and complete independent reopen. Survey
+records contain package identities and native solver evidence only; private
+paths, credentials, tokens, environment data, and host details are forbidden.
+
+For any ecosystem, use the same authenticated inputs as strict production and
+replace the output destination, for example:
+
+```bash
+cargo run -p conary-core --features native-rpm-oracle \
+  --bin conary-rpm-resolution-oracle -- \
+  --profile-manifest profile.json \
+  --source-snapshot fedora-source.json \
+  --primary primary.xml.gz --filelists filelists.xml.zst \
+  --package-oracle rpm-oracle \
+  --architecture x86_64 \
+  --survey rpm-resolution-survey.json
+```
+
+The Debian and ALPM binaries use the same `--survey <FILE>` alternative with
+their existing `--packages` and `--database` member inputs respectively.
 
 ALPM resolution evidence is produced by the same explicit
 `native-alpm-oracle` feature and pinned libalpm runtime as the package-fact

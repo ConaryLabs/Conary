@@ -8,10 +8,11 @@ use flate2::{Compression, GzBuilder};
 
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1, NativeUnresolvedDependencyV1,
-    PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
-    SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1, native_requirement_group_sha256,
-    verify_native_resolution_oracle_bundle,
+    CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1,
+    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
+    native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::{
@@ -1096,6 +1097,51 @@ fn resolution_producer_rejects_transitive_provider_conflict_in_strict_residual_p
     let package_output = directory.path().join("package-oracle");
     produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
 
+    let survey = produce_rpm_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &directory
+            .path()
+            .join("strict-residual-conflict-survey.json"),
+    )
+    .unwrap();
+    let failure = survey
+        .failures
+        .iter()
+        .find(|failure| failure.name == "shadow-chain-root")
+        .unwrap();
+    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems } = &failure.native_explanation
+    else {
+        panic!("RPM survey failure must carry libsolv problems");
+    };
+    assert_eq!(problems.len(), 2);
+    assert!(
+        problems[0]
+            .rules
+            .iter()
+            .any(|rule| rule.rule_type_numeric == 0xd00)
+    );
+    assert!(
+        problems[0]
+            .rules
+            .iter()
+            .any(|rule| rule.rule_type_numeric == 0x105)
+    );
+    assert!(
+        problems[1]
+            .rules
+            .iter()
+            .all(|rule| rule.rule_type_numeric != 0xd00)
+    );
+    assert!(
+        problems[1]
+            .rules
+            .iter()
+            .any(|rule| rule.rule_type_numeric == 0x105)
+    );
+
     let conflict = produce_rpm_resolution_oracle(
         &profile,
         &inputs(&snapshots, &metadata),
@@ -1530,6 +1576,120 @@ fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
     )
     .unwrap_err();
     assert!(matches!(drift, Error::ChecksumMismatch { .. }));
+}
+
+#[test]
+fn resolution_survey_records_all_failures_rules_and_later_healthy_roots() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b', 'c', 'd'].map(digest);
+    let mut conflict = PackageFixture::simple("conflict-root", &checksums[0]);
+    conflict.format = r#"
+    <rpm:provides><rpm:entry name="conflict-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="blocker"/></rpm:requires>
+    <rpm:conflicts><rpm:entry name="blocker"/></rpm:conflicts>"#;
+    let mut blocker = PackageFixture::simple("blocker", &checksums[1]);
+    blocker.format = r#"<rpm:provides><rpm:entry name="blocker"/></rpm:provides>"#;
+    let mut foreign = PackageFixture::simple("foreign-root", &checksums[2]);
+    foreign.architecture = "aarch64";
+    let healthy = PackageFixture::simple("healthy-after-failures", &checksums[3]);
+    let packages = [conflict, blocker, foreign, healthy];
+    let metadata = vec![write_metadata(directory.path(), "fedora-core", &packages)];
+    let snapshots = vec![source_snapshot(
+        "fedora-core",
+        &metadata[0].0,
+        &metadata[0].1,
+    )];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 4;
+    let package_output = directory.path().join("package-oracle");
+    produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
+
+    let survey_path = directory.path().join("survey.json");
+    let survey = produce_rpm_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &survey_path,
+    )
+    .unwrap();
+
+    assert_eq!(survey.counts.roots_walked, 4);
+    assert_eq!(survey.counts.resolved_roots, 2);
+    assert_eq!(survey.counts.unresolved_roots, 0);
+    assert_eq!(survey.counts.failed_roots, 2);
+    assert_eq!(survey.total_failures, 2);
+    assert!(!survey.truncated);
+    assert_eq!(survey.failures.len(), 2);
+    assert!(survey.failures.iter().any(|failure| {
+        failure.name == "foreign-root"
+            && failure.error_kind.reason
+                == NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed
+    }));
+    let conflict_failure = survey
+        .failures
+        .iter()
+        .find(|failure| failure.name == "conflict-root")
+        .unwrap();
+    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems } =
+        &conflict_failure.native_explanation
+    else {
+        panic!("RPM survey failure must carry libsolv problems");
+    };
+    assert!(!problems.is_empty());
+    let rules = problems
+        .iter()
+        .flat_map(|problem| &problem.rules)
+        .collect::<Vec<_>>();
+    assert!(rules.iter().any(|rule| {
+        rule.rule_type_numeric == 0x105
+            && rule.rule_type_symbolic == "SOLVER_RULE_PKG_CONFLICTS"
+            && rule.from.as_ref().is_some_and(|package| {
+                package.name == "conflict-root"
+                    && package.evr == "1.0-1.fc44"
+                    && package.architecture == "x86_64"
+            })
+            && rule
+                .to
+                .as_ref()
+                .is_some_and(|package| package.name == "blocker")
+            && rule.dependency.as_deref() == Some("blocker")
+    }));
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut root_order = Vec::new();
+    package_reader
+        .for_each_package(|root| {
+            root_order.push(root.name);
+            Ok(())
+        })
+        .unwrap();
+    let failure_names = survey
+        .failures
+        .iter()
+        .map(|failure| failure.name.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(root_order.iter().enumerate().any(|(index, name)| {
+        failure_names.contains(name)
+            && root_order[index + 1..]
+                .iter()
+                .any(|later| !failure_names.contains(later))
+    }));
+    assert!(!directory.path().join("manifest.json").exists());
+    assert!(!directory.path().join("roots.jsonl").exists());
+
+    let strict = produce_rpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &directory.path().join("strict-resolution"),
+    )
+    .unwrap_err();
+    assert_eq!(strict.to_string(), survey.failures[0].error_message);
+    assert_eq!(
+        strict.to_string(),
+        "Configuration error: libsolv found exact root 'foreign-root' not installable under target architecture 'x86_64'"
+    );
 }
 
 #[test]
