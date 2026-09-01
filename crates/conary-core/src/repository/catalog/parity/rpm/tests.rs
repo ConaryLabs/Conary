@@ -823,6 +823,101 @@ fn resolution_producer_uses_precedence_variants_files_rich_and_strong_requiremen
 }
 
 #[test]
+fn resolution_producer_projects_strict_priority_blocked_dependency() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b', 'c', 'd'].map(digest);
+    let high_root_format = r#"
+    <rpm:provides><rpm:entry name="strict-root" flags="EQ" epoch="0" ver="2.0" rel="1.fc44"/></rpm:provides>
+    <rpm:requires><rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="2.0" rel="1.fc44"/></rpm:requires>"#;
+    let high_runtime_format = r#"
+    <rpm:provides><rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="2.0" rel="1.fc44"/></rpm:provides>"#;
+    let low_root_format = r#"
+    <rpm:provides><rpm:entry name="strict-root" flags="EQ" epoch="0" ver="1.0" rel="1.fc44"/></rpm:provides>
+    <rpm:requires><rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="1.0" rel="1.fc44"/></rpm:requires>"#;
+    let low_runtime_format = r#"
+    <rpm:provides><rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="1.0" rel="1.fc44"/></rpm:provides>"#;
+
+    let mut high_root = PackageFixture::simple("strict-root", &checksums[0]);
+    high_root.version = "2.0";
+    high_root.format = high_root_format;
+    let mut high_runtime = PackageFixture::simple("strict-runtime", &checksums[1]);
+    high_runtime.version = "2.0";
+    high_runtime.format = high_runtime_format;
+    let high = write_metadata(
+        directory.path(),
+        "fedora-updates",
+        &[high_root, high_runtime],
+    );
+
+    let mut low_root = PackageFixture::simple("strict-root", &checksums[2]);
+    low_root.format = low_root_format;
+    let mut low_runtime = PackageFixture::simple("strict-runtime", &checksums[3]);
+    low_runtime.format = low_runtime_format;
+    let low = write_metadata(directory.path(), "fedora-base", &[low_root, low_runtime]);
+
+    let metadata = vec![high, low];
+    let snapshots = metadata
+        .iter()
+        .zip(["fedora-updates", "fedora-base"])
+        .map(|((primary, filelists), repository)| source_snapshot(repository, primary, filelists))
+        .collect::<Vec<_>>();
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 4;
+    let package_output = directory.path().join("package-oracle");
+    produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
+    let resolution_output = directory.path().join("resolution-oracle");
+    let manifest = produce_rpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &resolution_output,
+    )
+    .unwrap();
+
+    assert_eq!(manifest.implementation.projection_schema, 2);
+    assert_eq!(manifest.artifact.counts.roots, 4);
+    assert_eq!(manifest.artifact.counts.resolved_roots, 3);
+    assert_eq!(manifest.artifact.counts.unresolved_roots, 1);
+
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut low_root = None;
+    package_reader
+        .for_each_package(|package| {
+            if package.name == "strict-root" && package.version == "1.0-1.fc44" {
+                low_root = Some(package);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let low_root = low_root.unwrap();
+    let blocked_group = low_root
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("strict-runtime = 1.0-1.fc44"))
+        .unwrap();
+    let expected = NativeResolutionOutcomeV1::Unresolved {
+        dependencies: vec![NativeUnresolvedDependencyV1 {
+            requiring_package_key_sha256: low_root.package_key_sha256.clone(),
+            requirement_group_sha256: native_requirement_group_sha256(blocked_group).unwrap(),
+        }],
+    };
+    let resolution_reader =
+        verify_native_resolution_oracle_bundle(&resolution_output, &profile, &package_reader)
+            .unwrap();
+    let mut observed = None;
+    resolution_reader
+        .for_each_root(|root| {
+            if root.root_package_key_sha256 == low_root.package_key_sha256 {
+                observed = Some(root.outcome);
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(observed.unwrap(), expected);
+}
+
+#[test]
 fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b'].map(digest);
