@@ -875,7 +875,7 @@ fn resolution_producer_projects_strict_priority_blocked_dependency() {
     )
     .unwrap();
 
-    assert_eq!(manifest.implementation.projection_schema, 2);
+    assert_eq!(manifest.implementation.projection_schema, 3);
     assert_eq!(manifest.artifact.counts.roots, 4);
     assert_eq!(manifest.artifact.counts.resolved_roots, 3);
     assert_eq!(manifest.artifact.counts.unresolved_roots, 1);
@@ -910,6 +910,126 @@ fn resolution_producer_projects_strict_priority_blocked_dependency() {
         .for_each_root(|root| {
             if root.root_package_key_sha256 == low_root.package_key_sha256 {
                 observed = Some(root.outcome);
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(observed.unwrap(), expected);
+}
+
+#[test]
+fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b', 'c', 'd', 'e', 'f'].map(digest);
+    let root_format = r#"
+    <rpm:provides><rpm:entry name="postgresql"/></rpm:provides>
+    <rpm:requires>
+      <rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="1" rel="1.fc44"/>
+      <rpm:entry name="libpq.so.private18-5"/>
+      <rpm:entry name="libpq.so.private18-5()(64bit)"/>
+    </rpm:requires>"#;
+    let strict_high_format = r#"
+    <rpm:provides><rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="2" rel="1.fc44"/></rpm:provides>"#;
+    let strict_low_format = r#"
+    <rpm:provides><rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="1" rel="1.fc44"/></rpm:provides>"#;
+    let private_i686_format = r#"
+    <rpm:provides>
+      <rpm:entry name="postgresql-private-libs"/>
+      <rpm:entry name="postgresql-private-libs-any"/>
+      <rpm:entry name="libpq.so.private18-5"/>
+    </rpm:provides>
+    <rpm:conflicts><rpm:entry name="postgresql-private-libs-any"/></rpm:conflicts>"#;
+    let private_x86_64_format = r#"
+    <rpm:provides>
+      <rpm:entry name="postgresql-private-libs"/>
+      <rpm:entry name="postgresql-private-libs-any"/>
+      <rpm:entry name="libpq.so.private18-5()(64bit)"/>
+    </rpm:provides>
+    <rpm:conflicts><rpm:entry name="postgresql-private-libs-any"/></rpm:conflicts>"#;
+
+    let mut strict_high = PackageFixture::simple("strict-runtime", &checksums[0]);
+    strict_high.version = "2";
+    strict_high.format = strict_high_format;
+    let mut updated_i686 = PackageFixture::simple("postgresql-private-libs", &checksums[1]);
+    updated_i686.architecture = "i686";
+    updated_i686.version = "18.4";
+    updated_i686.format = private_i686_format;
+    let mut updated_x86_64 = PackageFixture::simple("postgresql-private-libs", &checksums[2]);
+    updated_x86_64.version = "18.4";
+    updated_x86_64.format = private_x86_64_format;
+    let updates = write_metadata(
+        directory.path(),
+        "fedora-updates",
+        &[strict_high, updated_i686, updated_x86_64],
+    );
+
+    let mut root = PackageFixture::simple("postgresql", &checksums[3]);
+    root.architecture = "i686";
+    root.version = "18.3";
+    root.format = root_format;
+    let mut strict_low = PackageFixture::simple("strict-runtime", &checksums[4]);
+    strict_low.format = strict_low_format;
+    let mut private_low = PackageFixture::simple("postgresql-private-libs", &checksums[5]);
+    private_low.architecture = "i686";
+    private_low.version = "18.3";
+    private_low.format = private_i686_format;
+    let base = write_metadata(
+        directory.path(),
+        "fedora-base",
+        &[root, strict_low, private_low],
+    );
+
+    let metadata = vec![updates, base];
+    let snapshots = metadata
+        .iter()
+        .zip(["fedora-updates", "fedora-base"])
+        .map(|((primary, filelists), repository)| source_snapshot(repository, primary, filelists))
+        .collect::<Vec<_>>();
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 6;
+    let package_output = directory.path().join("package-oracle");
+    produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
+    let resolution_output = directory.path().join("resolution-oracle");
+    let manifest = produce_rpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &resolution_output,
+    )
+    .unwrap();
+
+    assert_eq!(manifest.implementation.projection_schema, 3);
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut root = None;
+    package_reader
+        .for_each_package(|package| {
+            if package.name == "postgresql" {
+                root = Some(package);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let root = root.unwrap();
+    let blocked_group = root
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("strict-runtime = 1-1.fc44"))
+        .unwrap();
+    let expected = NativeResolutionOutcomeV1::Unresolved {
+        dependencies: vec![NativeUnresolvedDependencyV1 {
+            requiring_package_key_sha256: root.package_key_sha256.clone(),
+            requirement_group_sha256: native_requirement_group_sha256(blocked_group).unwrap(),
+        }],
+    };
+    let resolution_reader =
+        verify_native_resolution_oracle_bundle(&resolution_output, &profile, &package_reader)
+            .unwrap();
+    let mut observed = None;
+    resolution_reader
+        .for_each_root(|candidate| {
+            if candidate.root_package_key_sha256 == root.package_key_sha256 {
+                observed = Some(candidate.outcome);
             }
             Ok(())
         })

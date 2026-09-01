@@ -78,7 +78,7 @@ pub use parity::{
 };
 #[cfg(feature = "native-rpm-oracle")]
 pub use parity::{
-    RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V2, RpmParityMemberInput,
+    RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V3, RpmParityMemberInput,
     produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
 };
 pub use portable_integrity::{

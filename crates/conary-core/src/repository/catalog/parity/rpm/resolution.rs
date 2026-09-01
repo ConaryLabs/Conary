@@ -29,11 +29,12 @@ use crate::repository::catalog::parity::{
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 /// Projection contract for libsolv transaction results and typed problem rules.
-pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
+pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V3: u32 = 3;
 
 const SOLVER_RULE_PKG_NOT_INSTALLABLE: i32 = 0x101;
 const SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP: i32 = 0x102;
 const SOLVER_RULE_PKG_REQUIRES: i32 = 0x103;
+const SOLVER_RULE_PKG_CONFLICTS: i32 = 0x105;
 const SOLVER_RULE_JOB: i32 = 0x400;
 const SOLVER_RULE_JOB_UNSUPPORTED: i32 = 0x404;
 const SOLVER_RULE_INFARCH: i32 = 0x600;
@@ -101,7 +102,7 @@ pub fn produce_rpm_resolution_oracle(
         ecosystem: NativeParityEcosystemV1::Rpm,
         name: "libsolv".to_string(),
         version: PINNED_LIBSOLV_VERSION.to_string(),
-        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V2,
+        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V3,
     };
     fs::create_dir(output)?;
     let mut writer = NativeResolutionOracleWriter::create(
@@ -344,6 +345,9 @@ fn unresolved_outcome(
                 )?);
             }
             SOLVER_RULE_PKG_REQUIRES | SOLVER_RULE_JOB => {}
+            SOLVER_RULE_PKG_CONFLICTS if strict_repo_priority => {
+                validate_strict_priority_conflict_rule(pool, package_index, root, &rule)?;
+            }
             SOLVER_RULE_STRICT_REPO_PRIORITY => {
                 let excluded_index = rule.from_index.ok_or_else(|| {
                     Error::ConflictError(format!(
@@ -365,10 +369,18 @@ fn unresolved_outcome(
                     root.name, architecture
                 )));
             }
+            SOLVER_RULE_INFARCH if strict_repo_priority => {
+                validate_strict_priority_inferior_arch_rule(pool, package_index, root, &rule)?;
+            }
             SOLVER_RULE_JOB_UNSUPPORTED | SOLVER_RULE_INFARCH => {
                 return Err(Error::ConfigError(format!(
-                    "libsolv rejected exact root '{}' for target architecture '{}'",
-                    root.name, architecture
+                    "libsolv rejected exact root '{}' for target architecture '{}' with rule {:#x} (from={:?}, to={:?}, dependency={})",
+                    root.name,
+                    architecture,
+                    rule.rule_type,
+                    rule.from_index,
+                    rule.to_index,
+                    rule.dependency
                 )));
             }
             rule_type => {
@@ -388,6 +400,65 @@ fn unresolved_outcome(
     Ok(NativeResolutionOutcomeV1::Unresolved {
         dependencies: dependencies.into_iter().collect(),
     })
+}
+
+fn validate_strict_priority_inferior_arch_rule(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndex,
+    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    rule: &SolvProblemRule,
+) -> Result<()> {
+    let inferior_index = rule.from_index.ok_or_else(|| {
+        Error::ConflictError(format!(
+            "libsolv strict-priority inferior-architecture rule for '{}' has no package",
+            root.name
+        ))
+    })?;
+    if rule.to_index.is_some() || rule.dependency == 0 {
+        return Err(Error::ConflictError(format!(
+            "libsolv strict-priority inferior-architecture rule for '{}' has unexpected target or package-name dependency",
+            root.name
+        )));
+    }
+    package_index.package_key(inferior_index)?;
+    let package_name = pool.package(inferior_index)?.name()?;
+    if pool.dependency(rule.dependency)?.atom()? != package_name {
+        return Err(Error::ConflictError(format!(
+            "libsolv strict-priority inferior-architecture rule for '{}' names a different package",
+            root.name
+        )));
+    }
+    Ok(())
+}
+
+fn validate_strict_priority_conflict_rule(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndex,
+    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    rule: &SolvProblemRule,
+) -> Result<()> {
+    let conflicting_index = rule.from_index.ok_or_else(|| {
+        Error::ConflictError(format!(
+            "libsolv strict-priority package-conflict rule for '{}' has no conflicting package",
+            root.name
+        ))
+    })?;
+    let provided_index = rule.to_index.ok_or_else(|| {
+        Error::ConflictError(format!(
+            "libsolv strict-priority package-conflict rule for '{}' has no provider package",
+            root.name
+        ))
+    })?;
+    if rule.dependency == 0 {
+        return Err(Error::ConflictError(format!(
+            "libsolv strict-priority package-conflict rule for '{}' has no conflicting dependency",
+            root.name
+        )));
+    }
+    package_index.package_key(conflicting_index)?;
+    package_index.package_key(provided_index)?;
+    pool.dependency(rule.dependency)?.text()?;
+    Ok(())
 }
 
 fn project_unresolved_dependency(
