@@ -18,6 +18,8 @@ use crate::repository::{
     OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy, RpmMetadataAuthority,
 };
 
+mod split_provides;
+
 #[derive(Clone)]
 struct PackageFixture<'a> {
     name: &'a str,
@@ -43,6 +45,15 @@ impl<'a> PackageFixture<'a> {
             files: &["/usr/share/fixture"],
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum SplitProvideFileCoverage {
+    Missing,
+    Exact,
+    Descendant,
+    LexicalPrefix,
+    ForeignDescendant,
 }
 
 fn digest(byte: char) -> String {
@@ -257,7 +268,7 @@ fn profile(snapshots: &[SourceSnapshotV1]) -> ProfileRevisionV2 {
 fn fixture(
     directory: &Path,
     conflicting_duplicate: bool,
-    complete_split_provide: bool,
+    split_provide_file_coverage: SplitProvideFileCoverage,
 ) -> (Vec<(PathBuf, PathBuf)>, Vec<SourceSnapshotV1>) {
     let alpha_checksum = digest('a');
     let shared_checksum = digest('b');
@@ -267,7 +278,7 @@ fn fixture(
     <rpm:provides>
       <rpm:entry name="alpha" flags="EQ" epoch="0" ver="1.2" rel="3.fc44"/>
       <rpm:entry name="virtual-alpha" flags="GE" epoch="0" ver="2" rel="1"/>
-      <rpm:entry name="ceph-test:/usr/bin/ceph-kvstore-tool"/>
+      <rpm:entry name="cmocka-test:/usr/lib/cmake/cmocka"/>
     </rpm:provides>
     <rpm:requires>
       <rpm:entry name="glibc" flags="GE" epoch="0" ver="2.40" rel="1.fc44"/>
@@ -288,20 +299,37 @@ fn fixture(
     alpha.release = "3.fc44";
     alpha.size = 123;
     alpha.format = alpha_format;
-    alpha.files = if complete_split_provide {
-        &[
+    alpha.files = match split_provide_file_coverage {
+        SplitProvideFileCoverage::Missing | SplitProvideFileCoverage::ForeignDescendant => {
+            &["/usr/bin/alpha", "/usr/share/alpha/data"]
+        }
+        SplitProvideFileCoverage::Exact => &[
             "/usr/bin/alpha",
-            "/usr/bin/ceph-kvstore-tool",
+            "/usr/lib/cmake/cmocka",
             "/usr/share/alpha/data",
-        ]
-    } else {
-        &["/usr/bin/alpha", "/usr/share/alpha/data"]
+        ],
+        SplitProvideFileCoverage::Descendant => &[
+            "/usr/bin/alpha",
+            "/usr/lib/cmake/cmocka/cmocka-config.cmake",
+            "/usr/share/alpha/data",
+        ],
+        SplitProvideFileCoverage::LexicalPrefix => &[
+            "/usr/bin/alpha",
+            "/usr/lib/cmake/cmockable/cmocka-config.cmake",
+            "/usr/share/alpha/data",
+        ],
     };
     let shared_core = PackageFixture::simple("shared", &shared_checksum);
     let core_packages = [alpha, shared_core.clone()];
     let core = write_metadata(directory, "fedora-core", &core_packages);
 
-    let beta = PackageFixture::simple("beta", &beta_checksum);
+    let mut beta = PackageFixture::simple("beta", &beta_checksum);
+    if matches!(
+        split_provide_file_coverage,
+        SplitProvideFileCoverage::ForeignDescendant
+    ) {
+        beta.files = &["/usr/lib/cmake/cmocka/cmocka-config.cmake"];
+    }
     let mut shared_updates = shared_core;
     if conflicting_duplicate {
         shared_updates.checksum = &conflict_checksum;
@@ -337,7 +365,7 @@ fn inputs<'a>(
 #[test]
 fn producer_projects_complete_typed_rpm_facts_and_reopens_bundle() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, snapshots) = fixture(directory.path(), false, true);
+    let (metadata, snapshots) = fixture(directory.path(), false, SplitProvideFileCoverage::Exact);
     let profile = profile(&snapshots);
     let output = directory.path().join("oracle");
 
@@ -372,10 +400,10 @@ fn producer_projects_complete_typed_rpm_facts_and_reopens_bundle() {
             && provide.version_relation == Some(ProvideVersionRelation::GreaterOrEqual)
     }));
     assert!(alpha.provides.iter().any(|provide| {
-        provide.capability == "ceph-test:/usr/bin/ceph-kvstore-tool" && provide.kind == "generic"
+        provide.capability == "cmocka-test:/usr/lib/cmake/cmocka" && provide.kind == "generic"
     }));
     assert!(alpha.provides.iter().any(|provide| {
-        provide.capability == "/usr/bin/ceph-kvstore-tool" && provide.kind == "file"
+        provide.capability == "/usr/lib/cmake/cmocka" && provide.kind == "file"
     }));
     assert_eq!(
         alpha
@@ -471,7 +499,7 @@ fn canonical_rpm_text_preserves_left_nested_and_flat_with_trees() {
 #[test]
 fn producer_rejects_changed_authenticated_rpmmd_bytes() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, snapshots) = fixture(directory.path(), false, true);
+    let (metadata, snapshots) = fixture(directory.path(), false, SplitProvideFileCoverage::Exact);
     let profile = profile(&snapshots);
     fs::OpenOptions::new()
         .append(true)
@@ -491,85 +519,9 @@ fn producer_rejects_changed_authenticated_rpmmd_bytes() {
 }
 
 #[test]
-fn producer_rejects_split_provide_without_matching_file() {
-    let directory = tempfile::tempdir().unwrap();
-    let (metadata, snapshots) = fixture(directory.path(), false, false);
-    let profile = profile(&snapshots);
-
-    let error = produce_rpm_parity_oracle(
-        &profile,
-        &inputs(&snapshots, &metadata),
-        &directory.path().join("oracle"),
-    )
-    .unwrap_err();
-
-    assert!(matches!(error, Error::ConflictError(_)));
-    assert!(error.to_string().contains(
-        "split-provides supplement 'ceph-test:/usr/bin/ceph-kvstore-tool' has no matching"
-    ));
-}
-
-#[test]
-fn split_provides_shape_rejects_namespace_and_tree_mutations() {
-    assert_eq!(
-        validate_split_provides_shape(
-            "namespace:splitprovides",
-            ffi::REL_WITH,
-            Some("ceph-test"),
-            Some("/usr/bin/ceph-kvstore-tool"),
-        )
-        .unwrap(),
-        (
-            "ceph-test:/usr/bin/ceph-kvstore-tool".to_string(),
-            "/usr/bin/ceph-kvstore-tool".to_string(),
-        )
-    );
-    for (namespace, flags, prefix, path) in [
-        (
-            "namespace:language",
-            ffi::REL_WITH,
-            Some("ceph-test"),
-            Some("/usr/bin/ceph-kvstore-tool"),
-        ),
-        (
-            "namespace:splitprovides",
-            ffi::REL_AND,
-            Some("ceph-test"),
-            Some("/usr/bin/ceph-kvstore-tool"),
-        ),
-        (
-            "namespace:splitprovides",
-            ffi::REL_WITH,
-            None,
-            Some("/usr/bin/ceph-kvstore-tool"),
-        ),
-        (
-            "namespace:splitprovides",
-            ffi::REL_WITH,
-            Some("ceph-test"),
-            None,
-        ),
-        (
-            "namespace:splitprovides",
-            ffi::REL_WITH,
-            Some("ceph:test"),
-            Some("/usr/bin/ceph-kvstore-tool"),
-        ),
-        (
-            "namespace:splitprovides",
-            ffi::REL_WITH,
-            Some("ceph-test"),
-            Some("usr/bin/ceph-kvstore-tool"),
-        ),
-    ] {
-        assert!(validate_split_provides_shape(namespace, flags, prefix, path).is_err());
-    }
-}
-
-#[test]
 fn producer_rejects_conflicting_exact_identity() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, snapshots) = fixture(directory.path(), true, true);
+    let (metadata, snapshots) = fixture(directory.path(), true, SplitProvideFileCoverage::Exact);
     let profile = profile(&snapshots);
 
     let error = produce_rpm_parity_oracle(
@@ -586,7 +538,8 @@ fn producer_rejects_conflicting_exact_identity() {
 #[test]
 fn producer_requires_exact_rpm_metadata_roles() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, mut snapshots) = fixture(directory.path(), false, true);
+    let (metadata, mut snapshots) =
+        fixture(directory.path(), false, SplitProvideFileCoverage::Exact);
     snapshots[0].authenticated_objects.pop();
     let profile = profile(&snapshots);
 
@@ -603,7 +556,7 @@ fn producer_requires_exact_rpm_metadata_roles() {
 #[test]
 fn resolution_producer_emits_complete_closures_and_typed_unresolved_groups() {
     let directory = tempfile::tempdir().unwrap();
-    let (metadata, snapshots) = fixture(directory.path(), false, true);
+    let (metadata, snapshots) = fixture(directory.path(), false, SplitProvideFileCoverage::Exact);
     let profile = profile(&snapshots);
     let package_output = directory.path().join("package-oracle");
     produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
