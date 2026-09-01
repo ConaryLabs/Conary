@@ -50,10 +50,12 @@ unsafe extern "C" {
     fn conary_solv_solve(handle: *mut c_void, root_index: usize) -> c_int;
     fn conary_solv_closure_count(handle: *mut c_void) -> usize;
     fn conary_solv_closure_package_index(handle: *mut c_void, index: usize) -> usize;
-    fn conary_solv_problem_rule_count(handle: *mut c_void) -> usize;
+    fn conary_solv_problem_count(handle: *mut c_void) -> usize;
+    fn conary_solv_problem_rule_count(handle: *mut c_void, problem_index: usize) -> usize;
     fn conary_solv_problem_rule(
         handle: *mut c_void,
-        index: usize,
+        problem_index: usize,
+        rule_index: usize,
         rule_type: *mut c_int,
         from_index: *mut usize,
         to_index: *mut usize,
@@ -171,36 +173,45 @@ impl SolvPool {
                 Ok(SolvResolution::Resolved(packages))
             }
             0 => {
-                let count = unsafe { conary_solv_problem_rule_count(self.handle.as_ptr()) };
-                let mut rules = Vec::with_capacity(count);
-                for index in 0..count {
-                    let mut rule_type = 0;
-                    let mut from_index = usize::MAX;
-                    let mut to_index = usize::MAX;
-                    let mut dependency = 0;
-                    let found = unsafe {
-                        conary_solv_problem_rule(
-                            self.handle.as_ptr(),
-                            index,
-                            &mut rule_type,
-                            &mut from_index,
-                            &mut to_index,
-                            &mut dependency,
-                        )
+                let problem_count = unsafe { conary_solv_problem_count(self.handle.as_ptr()) };
+                let mut problems = Vec::with_capacity(problem_count);
+                for problem_index in 0..problem_count {
+                    let rule_count = unsafe {
+                        conary_solv_problem_rule_count(self.handle.as_ptr(), problem_index)
                     };
-                    if found != 1 {
-                        return Err(Error::InternalError(
-                            "libsolv problem rule disappeared during typed inspection".to_string(),
-                        ));
+                    let mut rules = Vec::with_capacity(rule_count);
+                    for rule_index in 0..rule_count {
+                        let mut rule_type = 0;
+                        let mut from_index = usize::MAX;
+                        let mut to_index = usize::MAX;
+                        let mut dependency = 0;
+                        let found = unsafe {
+                            conary_solv_problem_rule(
+                                self.handle.as_ptr(),
+                                problem_index,
+                                rule_index,
+                                &mut rule_type,
+                                &mut from_index,
+                                &mut to_index,
+                                &mut dependency,
+                            )
+                        };
+                        if found != 1 {
+                            return Err(Error::InternalError(
+                                "libsolv problem rule disappeared during typed inspection"
+                                    .to_string(),
+                            ));
+                        }
+                        rules.push(SolvProblemRule {
+                            rule_type,
+                            from_index: (from_index != usize::MAX).then_some(from_index),
+                            to_index: (to_index != usize::MAX).then_some(to_index),
+                            dependency,
+                        });
                     }
-                    rules.push(SolvProblemRule {
-                        rule_type,
-                        from_index: (from_index != usize::MAX).then_some(from_index),
-                        to_index: (to_index != usize::MAX).then_some(to_index),
-                        dependency,
-                    });
+                    problems.push(SolvProblem { rules });
                 }
-                Ok(SolvResolution::Unresolved(rules))
+                Ok(SolvResolution::Unresolved(problems))
             }
             _ => Err(Error::ConfigError(self.last_error()?)),
         }
@@ -258,7 +269,11 @@ impl SolvPool {
 
 pub(super) enum SolvResolution {
     Resolved(Vec<usize>),
-    Unresolved(Vec<SolvProblemRule>),
+    Unresolved(Vec<SolvProblem>),
+}
+
+pub(super) struct SolvProblem {
+    pub(super) rules: Vec<SolvProblemRule>,
 }
 
 pub(super) struct SolvProblemRule {

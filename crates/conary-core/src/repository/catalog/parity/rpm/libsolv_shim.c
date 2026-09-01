@@ -29,6 +29,7 @@ typedef struct {
     Transaction *transaction;
     Queue closure;
     Queue problem_rules;
+    Queue problem_rule_ranges;
     int fileprovides_added;
     char error[512];
 } ConarySolv;
@@ -90,6 +91,7 @@ clear_resolution(ConarySolv *handle)
     }
     queue_empty(&handle->closure);
     queue_empty(&handle->problem_rules);
+    queue_empty(&handle->problem_rule_ranges);
 }
 
 static int
@@ -243,6 +245,7 @@ conary_solv_create(void)
     pool_setdisttype(handle->pool, DISTTYPE_RPM);
     queue_init(&handle->closure);
     queue_init(&handle->problem_rules);
+    queue_init(&handle->problem_rule_ranges);
     return handle;
 }
 
@@ -254,6 +257,7 @@ conary_solv_free(ConarySolv *handle)
     clear_resolution(handle);
     queue_free(&handle->closure);
     queue_free(&handle->problem_rules);
+    queue_free(&handle->problem_rule_ranges);
     pool_free(handle->pool);
     free(handle->packages);
     free(handle->members);
@@ -368,11 +372,14 @@ conary_solv_solve(ConarySolv *handle, size_t root_index)
             Queue rules;
             queue_init(&rules);
             solver_findallproblemrules(handle->solver, problem, &rules);
+            int start = handle->problem_rules.count;
             for (int index = 0; index < rules.count; index++)
-                queue_pushunique(&handle->problem_rules, rules.elements[index]);
+                queue_push(&handle->problem_rules, rules.elements[index]);
+            queue_push2(&handle->problem_rule_ranges, start,
+                        handle->problem_rules.count - start);
             queue_free(&rules);
         }
-        if (!handle->problem_rules.count) {
+        if (!handle->problem_rule_ranges.count || !handle->problem_rules.count) {
             set_error(handle, "solve RPM root", "problems carried no typed rules");
             return -1;
         }
@@ -403,17 +410,30 @@ conary_solv_closure_package_index(ConarySolv *handle, size_t index)
 }
 
 size_t
-conary_solv_problem_rule_count(ConarySolv *handle)
+conary_solv_problem_count(ConarySolv *handle)
 {
-    return handle ? (size_t)handle->problem_rules.count : 0;
+    return handle ? (size_t)handle->problem_rule_ranges.count / 2 : 0;
+}
+
+size_t
+conary_solv_problem_rule_count(ConarySolv *handle, size_t problem_index)
+{
+    if (!handle || problem_index >= conary_solv_problem_count(handle))
+        return 0;
+    return (size_t)handle->problem_rule_ranges.elements[problem_index * 2 + 1];
 }
 
 int
-conary_solv_problem_rule(ConarySolv *handle, size_t index, int *type,
+conary_solv_problem_rule(ConarySolv *handle, size_t problem_index,
+                         size_t rule_index, int *type,
                          size_t *from_index, size_t *to_index, int *dependency)
 {
-    if (!handle || !handle->solver || index >= (size_t)handle->problem_rules.count)
+    if (!handle || !handle->solver ||
+        problem_index >= conary_solv_problem_count(handle) ||
+        rule_index >= conary_solv_problem_rule_count(handle, problem_index))
         return 0;
+    size_t index = (size_t)handle->problem_rule_ranges.elements[problem_index * 2] +
+                   rule_index;
     Id from = 0;
     Id to = 0;
     Id dep = 0;

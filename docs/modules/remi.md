@@ -898,7 +898,9 @@ whose only matching provider is excluded by strict repository priority as a
 typed unresolved dependency. A strict-priority multilib problem validates and
 retains libsolv's contributing inferior-architecture and package-conflict rules
 without treating those ancillary rules as an architecture-only root rejection;
-it does not disable precedence or substitute a shadowed provider. The Debian producer uses private
+problem identity is preserved through the native shim so a separate conflict or
+architecture problem remains fatal. The producer does not disable precedence or
+substitute a shadowed provider. The Debian producer uses private
 volatile apt-pkg source indexes and empty installed state, projects profile
 order into candidate and provider priority, records exact native transactions,
 and forces each exact root through apt 3.0's complete-version solver with

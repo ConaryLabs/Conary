@@ -8,7 +8,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::ffi::{RequiredKind, SolvProblemRule, SolvResolution};
+use super::ffi::{RequiredKind, SolvProblem, SolvProblemRule, SolvResolution};
 use super::{
     PINNED_LIBSOLV_VERSION, RPM_PARITY_PROJECTION_SCHEMA_V1, RpmParityMemberInput, SolvPool,
     produce_rpm_parity_oracle, project_package, project_requirement, stage_verified_metadata,
@@ -316,8 +316,36 @@ fn unresolved_outcome(
     package_index: &PackageResolutionIndex,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     architecture: &str,
-    rules: Vec<SolvProblemRule>,
+    problems: Vec<SolvProblem>,
 ) -> Result<NativeResolutionOutcomeV1> {
+    let mut dependencies = BTreeSet::new();
+    for problem in problems {
+        dependencies.extend(project_unresolved_problem(
+            pool,
+            package_index,
+            root,
+            architecture,
+            problem.rules,
+        )?);
+    }
+    if dependencies.is_empty() {
+        return Err(Error::ConflictError(format!(
+            "libsolv reported exact root '{}' unresolved without a typed missing requirement",
+            root.name
+        )));
+    }
+    Ok(NativeResolutionOutcomeV1::Unresolved {
+        dependencies: dependencies.into_iter().collect(),
+    })
+}
+
+fn project_unresolved_problem(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndex,
+    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    architecture: &str,
+    rules: Vec<SolvProblemRule>,
+) -> Result<BTreeSet<NativeUnresolvedDependencyV1>> {
     let mut dependencies = BTreeSet::new();
     let strict_repo_priority = rules
         .iter()
@@ -393,13 +421,11 @@ fn unresolved_outcome(
     }
     if dependencies.is_empty() {
         return Err(Error::ConflictError(format!(
-            "libsolv reported exact root '{}' unresolved without a typed missing requirement",
+            "libsolv reported one problem for exact root '{}' without a typed missing requirement",
             root.name
         )));
     }
-    Ok(NativeResolutionOutcomeV1::Unresolved {
-        dependencies: dependencies.into_iter().collect(),
-    })
+    Ok(dependencies)
 }
 
 fn validate_strict_priority_inferior_arch_rule(
