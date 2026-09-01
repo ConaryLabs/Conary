@@ -321,9 +321,36 @@ fn unresolved_outcome(
 ) -> Result<NativeResolutionOutcomeV1> {
     let mut dependencies = BTreeSet::new();
     let mut requires_residual_probe = false;
+    let mut strict_eligible_requiring_indices = BTreeSet::new();
+    let mut strict_shadowed_indices = BTreeSet::new();
+    for problem in &problems {
+        for rule in &problem.rules {
+            // A requires rule proves that the package contributes an edge to
+            // the strict solve. A nothing-provides rule alone may belong to a
+            // shadowed provider inspected while explaining that solve.
+            if rule.rule_type == SOLVER_RULE_PKG_REQUIRES
+                && let Some(requiring_index) = rule.from_index
+            {
+                strict_eligible_requiring_indices.insert(requiring_index);
+            }
+            if rule.rule_type == SOLVER_RULE_STRICT_REPO_PRIORITY
+                && let Some(shadowed_index) = rule.from_index
+            {
+                strict_shadowed_indices.insert(shadowed_index);
+            }
+        }
+    }
+    strict_eligible_requiring_indices.retain(|index| !strict_shadowed_indices.contains(index));
+    strict_eligible_requiring_indices.insert(root_index);
     for problem in problems {
-        let (problem_dependencies, problem_requires_residual_probe) =
-            project_unresolved_problem(pool, package_index, root, architecture, problem.rules)?;
+        let (problem_dependencies, problem_requires_residual_probe) = project_unresolved_problem(
+            pool,
+            package_index,
+            root,
+            architecture,
+            problem.rules,
+            &strict_eligible_requiring_indices,
+        )?;
         dependencies.extend(problem_dependencies);
         requires_residual_probe |= problem_requires_residual_probe;
     }
@@ -345,6 +372,7 @@ fn unresolved_outcome(
                         root,
                         architecture,
                         problem.rules,
+                        &strict_eligible_requiring_indices,
                     )?;
                     if nested_probe {
                         return Err(Error::InternalError(format!(
@@ -374,6 +402,7 @@ fn project_unresolved_problem(
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     architecture: &str,
     rules: Vec<SolvProblemRule>,
+    eligible_requiring_indices: &BTreeSet<usize>,
 ) -> Result<(BTreeSet<NativeUnresolvedDependencyV1>, bool)> {
     let mut dependencies = BTreeSet::new();
     let has_required_edge = rules
@@ -388,24 +417,34 @@ fn project_unresolved_problem(
     for rule in rules {
         match rule.rule_type {
             SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => {
-                dependencies.insert(project_unresolved_dependency(
+                let requiring_index = rule.from_index;
+                let dependency = project_unresolved_dependency(
                     pool,
                     package_index,
                     root,
-                    rule.from_index,
+                    requiring_index,
                     rule.dependency,
                     "missing-dependency",
-                )?);
+                )?;
+                if requiring_index.is_some_and(|index| eligible_requiring_indices.contains(&index))
+                {
+                    dependencies.insert(dependency);
+                }
             }
             SOLVER_RULE_PKG_REQUIRES => {
-                dependencies.insert(project_unresolved_dependency(
+                let requiring_index = rule.from_index;
+                let dependency = project_unresolved_dependency(
                     pool,
                     package_index,
                     root,
-                    rule.from_index,
+                    requiring_index,
                     rule.dependency,
                     "uninstallable requirement",
-                )?);
+                )?;
+                if requiring_index.is_some_and(|index| eligible_requiring_indices.contains(&index))
+                {
+                    dependencies.insert(dependency);
+                }
             }
             SOLVER_RULE_JOB => {}
             SOLVER_RULE_PKG_CONFLICTS if has_required_edge => {
@@ -453,12 +492,6 @@ fn project_unresolved_problem(
                 )));
             }
         }
-    }
-    if dependencies.is_empty() {
-        return Err(Error::ConflictError(format!(
-            "libsolv reported one problem for exact root '{}' without a typed missing requirement",
-            root.name
-        )));
     }
     Ok((
         dependencies,

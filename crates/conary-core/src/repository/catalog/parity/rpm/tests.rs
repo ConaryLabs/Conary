@@ -931,7 +931,8 @@ fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
     let strict_high_format = r#"
     <rpm:provides><rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="2" rel="1.fc44"/></rpm:provides>"#;
     let strict_low_format = r#"
-    <rpm:provides><rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="1" rel="1.fc44"/></rpm:provides>"#;
+    <rpm:provides><rpm:entry name="strict-runtime" flags="EQ" epoch="0" ver="1" rel="1.fc44"/></rpm:provides>
+    <rpm:requires><rpm:entry name="shadowed-only-missing"/></rpm:requires>"#;
     let private_i686_format = r#"
     <rpm:provides>
       <rpm:entry name="postgresql-private-libs"/>
