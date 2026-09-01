@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-09-01
-revision: 16
+revision: 17
 status: active
 ---
 
@@ -139,11 +139,15 @@ SHA-256 and size, declared and complete file providers, required and
 prerequisite relations, recommends, suggests, supplements, enhances,
 conflicts, and obsoletes. Rich dependency trees are decoded through libsolv's
 typed relation IDs and must agree with Conary's canonical typed RPM grammar;
-native display text alone cannot establish parity. Exact-identity duplicates
-obey profile precedence only when every projected fact agrees. A contradictory
-duplicate fails the complete crawl. The private SQLite spool, canonical bundle
-write, and independent complete reopen use the same bounded contract as the
-ALPM producer.
+native display text alone cannot establish parity. The producer derives its
+canonical RPM text from that typed tree, flattening only RPM's right-associated
+`with` spine and retaining parentheses wherever omission would change
+association. It reparses that lossless text through the canonical RPM grammar
+and requires exact typed agreement. Exact-identity duplicates obey profile
+precedence only when every projected fact agrees. A contradictory duplicate
+fails the complete crawl. The private SQLite spool, canonical bundle write,
+and independent complete reopen use the same bounded contract as the ALPM
+producer.
 
 Pinned libsolv also derives
 `namespace:splitprovides(prefix with /path)` supplements from atomic
