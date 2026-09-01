@@ -29,7 +29,7 @@ use crate::repository::catalog::parity::{
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 /// Projection contract for libsolv transaction results and typed problem rules.
-pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V1: u32 = 1;
+pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
 
 const SOLVER_RULE_PKG_NOT_INSTALLABLE: i32 = 0x101;
 const SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP: i32 = 0x102;
@@ -37,6 +37,7 @@ const SOLVER_RULE_PKG_REQUIRES: i32 = 0x103;
 const SOLVER_RULE_JOB: i32 = 0x400;
 const SOLVER_RULE_JOB_UNSUPPORTED: i32 = 0x404;
 const SOLVER_RULE_INFARCH: i32 = 0x600;
+const SOLVER_RULE_STRICT_REPO_PRIORITY: i32 = 0xd00;
 
 const CREATE_INDEX: &str = "
 CREATE TABLE oracle_packages (
@@ -100,7 +101,7 @@ pub fn produce_rpm_resolution_oracle(
         ecosystem: NativeParityEcosystemV1::Rpm,
         name: "libsolv".to_string(),
         version: PINNED_LIBSOLV_VERSION.to_string(),
-        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V1,
+        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V2,
     };
     fs::create_dir(output)?;
     let mut writer = NativeResolutionOracleWriter::create(
@@ -317,32 +318,47 @@ fn unresolved_outcome(
     rules: Vec<SolvProblemRule>,
 ) -> Result<NativeResolutionOutcomeV1> {
     let mut dependencies = BTreeSet::new();
+    let strict_repo_priority = rules
+        .iter()
+        .any(|rule| rule.rule_type == SOLVER_RULE_STRICT_REPO_PRIORITY);
     for rule in rules {
         match rule.rule_type {
             SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => {
-                let requiring_index = rule.from_index.ok_or_else(|| {
+                dependencies.insert(project_unresolved_dependency(
+                    pool,
+                    package_index,
+                    root,
+                    rule.from_index,
+                    rule.dependency,
+                    "missing-dependency",
+                )?);
+            }
+            SOLVER_RULE_PKG_REQUIRES if strict_repo_priority => {
+                dependencies.insert(project_unresolved_dependency(
+                    pool,
+                    package_index,
+                    root,
+                    rule.from_index,
+                    rule.dependency,
+                    "strict-priority requirement",
+                )?);
+            }
+            SOLVER_RULE_PKG_REQUIRES | SOLVER_RULE_JOB => {}
+            SOLVER_RULE_STRICT_REPO_PRIORITY => {
+                let excluded_index = rule.from_index.ok_or_else(|| {
                     Error::ConflictError(format!(
-                        "libsolv missing-dependency rule for '{}' has no requiring package",
+                        "libsolv strict-priority rule for '{}' has no excluded package",
                         root.name
                     ))
                 })?;
-                if rule.dependency == 0 {
+                if rule.to_index.is_some() || rule.dependency != 0 {
                     return Err(Error::ConflictError(format!(
-                        "libsolv missing-dependency rule for '{}' has no dependency ID",
+                        "libsolv strict-priority rule for '{}' has unexpected target or dependency",
                         root.name
                     )));
                 }
-                let kind = match pool.required_kind(requiring_index, rule.dependency)? {
-                    RequiredKind::Depends => RepositoryRequirementKind::Depends,
-                    RequiredKind::PreDepends => RepositoryRequirementKind::PreDepends,
-                };
-                let group = project_requirement(pool.dependency(rule.dependency)?, kind)?;
-                dependencies.insert(NativeUnresolvedDependencyV1 {
-                    requiring_package_key_sha256: package_index.package_key(requiring_index)?,
-                    requirement_group_sha256: native_requirement_group_sha256(&group)?,
-                });
+                package_index.package_key(excluded_index)?;
             }
-            SOLVER_RULE_PKG_REQUIRES | SOLVER_RULE_JOB => {}
             SOLVER_RULE_PKG_NOT_INSTALLABLE => {
                 return Err(Error::ConfigError(format!(
                     "libsolv found exact root '{}' not installable under target architecture '{}'",
@@ -371,5 +387,36 @@ fn unresolved_outcome(
     }
     Ok(NativeResolutionOutcomeV1::Unresolved {
         dependencies: dependencies.into_iter().collect(),
+    })
+}
+
+fn project_unresolved_dependency(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndex,
+    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    requiring_index: Option<usize>,
+    dependency: i32,
+    rule_description: &str,
+) -> Result<NativeUnresolvedDependencyV1> {
+    let requiring_index = requiring_index.ok_or_else(|| {
+        Error::ConflictError(format!(
+            "libsolv {rule_description} rule for '{}' has no requiring package",
+            root.name
+        ))
+    })?;
+    if dependency == 0 {
+        return Err(Error::ConflictError(format!(
+            "libsolv {rule_description} rule for '{}' has no dependency ID",
+            root.name
+        )));
+    }
+    let kind = match pool.required_kind(requiring_index, dependency)? {
+        RequiredKind::Depends => RepositoryRequirementKind::Depends,
+        RequiredKind::PreDepends => RepositoryRequirementKind::PreDepends,
+    };
+    let group = project_requirement(pool.dependency(dependency)?, kind)?;
+    Ok(NativeUnresolvedDependencyV1 {
+        requiring_package_key_sha256: package_index.package_key(requiring_index)?,
+        requirement_group_sha256: native_requirement_group_sha256(&group)?,
     })
 }

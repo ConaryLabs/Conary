@@ -283,7 +283,7 @@ jobs:
             fedora-44)
               jq -e '
                 .package_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:1,version:"0.7.36"} and
-                .resolution_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:1,version:"0.7.36"}
+                .resolution_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:2,version:"0.7.36"}
               ' "$evidence" >/dev/null
               ;;
             ubuntu-26.04)
