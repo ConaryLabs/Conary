@@ -1039,21 +1039,22 @@ fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
 }
 
 #[test]
-fn resolution_producer_excludes_relaxed_chain_reached_only_through_shadowed_provider() {
+fn resolution_producer_rejects_transitive_provider_conflict_in_strict_residual_probe() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b', 'c', 'd', 'e', 'f'].map(digest);
     let root_format = r#"
     <rpm:provides><rpm:entry name="shadow-chain-root"/></rpm:provides>
-    <rpm:requires><rpm:entry name="shared-shadow-runtime"/></rpm:requires>"#;
+    <rpm:requires>
+      <rpm:entry name="shared-shadow-runtime"/>
+      <rpm:entry name="visible-shadow-blocker"/>
+    </rpm:requires>"#;
     let high_shadow_format = r#"<rpm:provides><rpm:entry name="shadow-runtime"/></rpm:provides>"#;
     let visible_format = r#"
     <rpm:provides>
       <rpm:entry name="visible-shadow-runtime"/>
       <rpm:entry name="shared-shadow-runtime"/>
-    </rpm:provides>"#;
-    let preferred_visible_format = r#"
-    <rpm:provides><rpm:entry name="visible-shadow-runtime"/></rpm:provides>
-    <rpm:requires><rpm:entry name="missing-visible-preferred-runtime"/></rpm:requires>"#;
+    </rpm:provides>
+    <rpm:conflicts><rpm:entry name="visible-shadow-blocker"/></rpm:conflicts>"#;
     let helper_format = r#"
     <rpm:provides><rpm:entry name="shadow-chain-helper"/></rpm:provides>
     <rpm:requires><rpm:entry name="shadow-chain-terminal-missing"/></rpm:requires>"#;
@@ -1068,16 +1069,14 @@ fn resolution_producer_excludes_relaxed_chain_reached_only_through_shadowed_prov
     high_shadow.version = "2";
     high_shadow.format = high_shadow_format;
     let mut visible = PackageFixture::simple("visible-shadow-runtime", &checksums[1]);
-    visible.architecture = "i686";
     visible.format = visible_format;
     let mut helper = PackageFixture::simple("shadow-chain-helper", &checksums[2]);
     helper.format = helper_format;
-    let mut preferred_visible = PackageFixture::simple("visible-shadow-runtime", &checksums[3]);
-    preferred_visible.format = preferred_visible_format;
+    let blocker = PackageFixture::simple("visible-shadow-blocker", &checksums[3]);
     let updates = write_metadata(
         directory.path(),
         "fedora-updates",
-        &[high_shadow, visible, helper, preferred_visible],
+        &[high_shadow, visible, helper, blocker],
     );
 
     let mut root = PackageFixture::simple("shadow-chain-root", &checksums[4]);
@@ -1094,29 +1093,19 @@ fn resolution_producer_excludes_relaxed_chain_reached_only_through_shadowed_prov
         .collect::<Vec<_>>();
     let mut profile = profile(&snapshots);
     profile.counts.packages = 6;
+    let package_output = directory.path().join("package-oracle");
+    produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
 
-    let observed = resolve_named_root(
-        &directory,
+    let conflict = produce_rpm_resolution_oracle(
         &profile,
-        &snapshots,
-        &metadata,
-        "shadow-chain-root",
-    );
-    let root = observed.package("shadow-chain-root");
-    let blocked_group = root
-        .requirement_groups
-        .iter()
-        .find(|group| group.native_text.as_deref() == Some("shared-shadow-runtime"))
-        .unwrap();
-    assert_eq!(
-        observed.outcome,
-        NativeResolutionOutcomeV1::Unresolved {
-            dependencies: vec![NativeUnresolvedDependencyV1 {
-                requiring_package_key_sha256: root.package_key_sha256.clone(),
-                requirement_group_sha256: native_requirement_group_sha256(blocked_group).unwrap(),
-            }],
-        }
-    );
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &directory.path().join("strict-residual-conflict-resolution"),
+    )
+    .unwrap_err();
+    assert!(matches!(conflict, Error::ConflictError(_)));
+    assert!(conflict.to_string().contains("problem rule 0x105"));
 }
 
 #[test]

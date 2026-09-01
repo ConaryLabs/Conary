@@ -334,10 +334,6 @@ fn unresolved_outcome(
             architecture,
             &problem.rules,
             &visibility,
-            ProjectionScope {
-                root_index,
-                context: ProjectionContext::Strict,
-            },
         )?;
         dependencies.extend(problem_dependencies);
         requires_residual_probe |= problem_requires_residual_probe;
@@ -368,10 +364,6 @@ fn unresolved_outcome(
                         architecture,
                         &problem.rules,
                         &visibility,
-                        ProjectionScope {
-                            root_index,
-                            context: ProjectionContext::Strict,
-                        },
                     )?;
                     final_dependencies.extend(strict_dependencies);
                 }
@@ -383,10 +375,6 @@ fn unresolved_outcome(
                         architecture,
                         &problem.rules,
                         &visibility,
-                        ProjectionScope {
-                            root_index,
-                            context: ProjectionContext::ResidualOfStrictProbe,
-                        },
                     )?;
                     if nested_probe {
                         return Err(Error::InternalError(format!(
@@ -414,6 +402,9 @@ fn unresolved_outcome(
 /// Requiring packages that Conary's candidate resolver can also reach under
 /// the strict solve's repository-priority authority.
 struct StrictVisibility {
+    /// Exact root whose own policy failures may never be projected as missing
+    /// provider edges.
+    root_index: usize,
     /// The exact root plus every provider reachable from it through hard
     /// required edges that strict repository priority does not shadow.
     reachable: BTreeSet<usize>,
@@ -463,6 +454,7 @@ impl StrictVisibility {
             }
         }
         Ok(Self {
+            root_index,
             reachable,
             edge_owners,
         })
@@ -482,22 +474,6 @@ impl StrictVisibility {
     }
 }
 
-#[derive(Clone, Copy)]
-enum ProjectionContext {
-    /// Problem returned by the original strict-priority solve. Provider-policy
-    /// rules need authority from a strict-priority rule in this same problem.
-    Strict,
-    /// Problem returned by the diagnostic probe that one strict-priority plus
-    /// provider-policy problem explicitly triggered.
-    ResidualOfStrictProbe,
-}
-
-#[derive(Clone, Copy)]
-struct ProjectionScope {
-    root_index: usize,
-    context: ProjectionContext,
-}
-
 fn project_unresolved_problem(
     pool: &SolvPool,
     package_index: &PackageResolutionIndex,
@@ -505,7 +481,6 @@ fn project_unresolved_problem(
     architecture: &str,
     rules: &[SolvProblemRule],
     visibility: &StrictVisibility,
-    scope: ProjectionScope,
 ) -> Result<(BTreeSet<NativeUnresolvedDependencyV1>, bool)> {
     let mut dependencies = BTreeSet::new();
     let has_required_edge = rules
@@ -517,9 +492,7 @@ fn project_unresolved_problem(
     let has_provider_policy_rule = rules.iter().any(|rule| {
         rule.rule_type == SOLVER_RULE_PKG_CONFLICTS || rule.rule_type == SOLVER_RULE_INFARCH
     });
-    let tolerates_provider_policy_rules = has_required_edge
-        && (has_strict_repo_priority
-            || matches!(scope.context, ProjectionContext::ResidualOfStrictProbe));
+    let tolerates_provider_policy_rules = has_required_edge && has_strict_repo_priority;
     for rule in rules {
         match rule.rule_type {
             SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => {
@@ -553,8 +526,8 @@ fn project_unresolved_problem(
             SOLVER_RULE_JOB => {}
             SOLVER_RULE_PKG_CONFLICTS
                 if tolerates_provider_policy_rules
-                    && rule.from_index != Some(scope.root_index)
-                    && rule.to_index != Some(scope.root_index) =>
+                    && rule.from_index != Some(visibility.root_index)
+                    && rule.to_index != Some(visibility.root_index) =>
             {
                 validate_required_provider_conflict_rule(pool, package_index, root, rule)?;
             }
@@ -581,8 +554,8 @@ fn project_unresolved_problem(
             }
             SOLVER_RULE_INFARCH
                 if tolerates_provider_policy_rules
-                    && rule.from_index != Some(scope.root_index)
-                    && rule.to_index != Some(scope.root_index) =>
+                    && rule.from_index != Some(visibility.root_index)
+                    && rule.to_index != Some(visibility.root_index) =>
             {
                 validate_required_provider_inferior_arch_rule(pool, package_index, root, rule)?;
             }
