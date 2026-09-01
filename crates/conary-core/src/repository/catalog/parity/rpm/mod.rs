@@ -576,7 +576,7 @@ fn classify_split_provides_supplement(
             )
     });
     let file = provides.iter().any(|provide| {
-        provide.capability == path
+        split_provides_path_is_covered(&provide.capability, &path)
             && provide.kind == "file"
             && matches!(
                 &provide.provenance,
@@ -591,6 +591,25 @@ fn classify_split_provides_supplement(
         )));
     }
     Ok(true)
+}
+
+fn split_provides_path_is_covered(candidate: &str, path: &str) -> bool {
+    is_canonical_split_provides_path(candidate)
+        && (candidate == path
+            || candidate
+                .strip_prefix(path)
+                .is_some_and(|suffix| suffix.starts_with('/') && suffix.len() > 1))
+}
+
+fn is_canonical_split_provides_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path != "/"
+        && !path.ends_with('/')
+        && !path.chars().any(char::is_whitespace)
+        && !path
+            .split('/')
+            .skip(1)
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
 }
 
 fn atomic_dependency(dependency: &SolvDependency<'_>, field: &str) -> Result<String> {
@@ -631,8 +650,7 @@ fn validate_split_provides_shape(
     if prefix.is_empty()
         || prefix.contains(':')
         || prefix.chars().any(char::is_whitespace)
-        || !path.starts_with('/')
-        || path.chars().any(char::is_whitespace)
+        || !is_canonical_split_provides_path(path)
     {
         return Err(Error::ConflictError(format!(
             "libsolv split-provides namespace has invalid operands '{prefix}' and '{path}'"

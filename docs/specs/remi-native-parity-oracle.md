@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict content-addressed artifacts for independent native package facts and dependency resolution across one complete immutable profile candidate
 last_updated: 2026-09-01
-revision: 17
+revision: 18
 status: active
 ---
 
@@ -155,8 +155,11 @@ source-declared `prefix:/path` provides. That `REL_NAMESPACE` tree is legacy
 installed-package update machinery, not an authenticated RPM `Supplements:`
 record. Before excluding it from source package facts, the producer requires an
 exact `namespace:splitprovides` wrapper, exact nested `REL_WITH` atoms, the
-matching atomic declared capability, and the matching complete filelist path.
-Unknown namespaces, malformed trees, or missing source facts fail closed.
+matching atomic declared capability, and same-package authenticated file
+coverage. Coverage is either the exact declared path or a strict descendant
+separated by `/`; lexical-prefix lookalikes and files owned only by another
+package fail closed. Unknown namespaces, malformed trees or paths, and missing
+source facts also fail closed.
 Source-declared rich supplements remain projected through typed relation IDs and
 must still agree with canonical RPM grammar.
 
