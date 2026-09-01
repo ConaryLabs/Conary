@@ -306,27 +306,56 @@ fn resolve_exact_root(
             })
         }
         SolvResolution::Unresolved(rules) => {
-            unresolved_outcome(pool, package_index, root, architecture, rules)
+            unresolved_outcome(pool, package_index, root_index, root, architecture, rules)
         }
     }
 }
 
 fn unresolved_outcome(
-    pool: &SolvPool,
+    pool: &mut SolvPool,
     package_index: &PackageResolutionIndex,
+    root_index: usize,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     architecture: &str,
     problems: Vec<SolvProblem>,
 ) -> Result<NativeResolutionOutcomeV1> {
     let mut dependencies = BTreeSet::new();
+    let mut requires_residual_probe = false;
     for problem in problems {
-        dependencies.extend(project_unresolved_problem(
-            pool,
-            package_index,
-            root,
-            architecture,
-            problem.rules,
-        )?);
+        let (problem_dependencies, problem_requires_residual_probe) =
+            project_unresolved_problem(pool, package_index, root, architecture, problem.rules)?;
+        dependencies.extend(problem_dependencies);
+        requires_residual_probe |= problem_requires_residual_probe;
+    }
+    if requires_residual_probe {
+        match pool.solve_without_strict_repo_priority(root_index)? {
+            SolvResolution::Resolved(packages) => {
+                if !packages.contains(&root_index) {
+                    return Err(Error::ConflictError(format!(
+                        "libsolv residual probe for '{}' omitted its exact root",
+                        root.name
+                    )));
+                }
+            }
+            SolvResolution::Unresolved(problems) => {
+                for problem in problems {
+                    let (residual_dependencies, nested_probe) = project_unresolved_problem(
+                        pool,
+                        package_index,
+                        root,
+                        architecture,
+                        problem.rules,
+                    )?;
+                    if nested_probe {
+                        return Err(Error::InternalError(format!(
+                            "libsolv residual probe for '{}' retained strict-priority authority",
+                            root.name
+                        )));
+                    }
+                    dependencies.extend(residual_dependencies);
+                }
+            }
+        }
     }
     if dependencies.is_empty() {
         return Err(Error::ConflictError(format!(
@@ -345,11 +374,17 @@ fn project_unresolved_problem(
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     architecture: &str,
     rules: Vec<SolvProblemRule>,
-) -> Result<BTreeSet<NativeUnresolvedDependencyV1>> {
+) -> Result<(BTreeSet<NativeUnresolvedDependencyV1>, bool)> {
     let mut dependencies = BTreeSet::new();
-    let strict_repo_priority = rules
+    let has_required_edge = rules
+        .iter()
+        .any(|rule| rule.rule_type == SOLVER_RULE_PKG_REQUIRES);
+    let has_strict_repo_priority = rules
         .iter()
         .any(|rule| rule.rule_type == SOLVER_RULE_STRICT_REPO_PRIORITY);
+    let has_provider_policy_rule = rules.iter().any(|rule| {
+        rule.rule_type == SOLVER_RULE_PKG_CONFLICTS || rule.rule_type == SOLVER_RULE_INFARCH
+    });
     for rule in rules {
         match rule.rule_type {
             SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => {
@@ -362,19 +397,19 @@ fn project_unresolved_problem(
                     "missing-dependency",
                 )?);
             }
-            SOLVER_RULE_PKG_REQUIRES if strict_repo_priority => {
+            SOLVER_RULE_PKG_REQUIRES => {
                 dependencies.insert(project_unresolved_dependency(
                     pool,
                     package_index,
                     root,
                     rule.from_index,
                     rule.dependency,
-                    "strict-priority requirement",
+                    "uninstallable requirement",
                 )?);
             }
-            SOLVER_RULE_PKG_REQUIRES | SOLVER_RULE_JOB => {}
-            SOLVER_RULE_PKG_CONFLICTS if strict_repo_priority => {
-                validate_strict_priority_conflict_rule(pool, package_index, root, &rule)?;
+            SOLVER_RULE_JOB => {}
+            SOLVER_RULE_PKG_CONFLICTS if has_required_edge => {
+                validate_required_provider_conflict_rule(pool, package_index, root, &rule)?;
             }
             SOLVER_RULE_STRICT_REPO_PRIORITY => {
                 let excluded_index = rule.from_index.ok_or_else(|| {
@@ -397,8 +432,8 @@ fn project_unresolved_problem(
                     root.name, architecture
                 )));
             }
-            SOLVER_RULE_INFARCH if strict_repo_priority => {
-                validate_strict_priority_inferior_arch_rule(pool, package_index, root, &rule)?;
+            SOLVER_RULE_INFARCH if has_required_edge => {
+                validate_required_provider_inferior_arch_rule(pool, package_index, root, &rule)?;
             }
             SOLVER_RULE_JOB_UNSUPPORTED | SOLVER_RULE_INFARCH => {
                 return Err(Error::ConfigError(format!(
@@ -425,10 +460,13 @@ fn project_unresolved_problem(
             root.name
         )));
     }
-    Ok(dependencies)
+    Ok((
+        dependencies,
+        has_strict_repo_priority && has_provider_policy_rule,
+    ))
 }
 
-fn validate_strict_priority_inferior_arch_rule(
+fn validate_required_provider_inferior_arch_rule(
     pool: &SolvPool,
     package_index: &PackageResolutionIndex,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
@@ -436,13 +474,13 @@ fn validate_strict_priority_inferior_arch_rule(
 ) -> Result<()> {
     let inferior_index = rule.from_index.ok_or_else(|| {
         Error::ConflictError(format!(
-            "libsolv strict-priority inferior-architecture rule for '{}' has no package",
+            "libsolv required-provider inferior-architecture rule for '{}' has no package",
             root.name
         ))
     })?;
     if rule.to_index.is_some() || rule.dependency == 0 {
         return Err(Error::ConflictError(format!(
-            "libsolv strict-priority inferior-architecture rule for '{}' has unexpected target or package-name dependency",
+            "libsolv required-provider inferior-architecture rule for '{}' has unexpected target or package-name dependency",
             root.name
         )));
     }
@@ -450,14 +488,14 @@ fn validate_strict_priority_inferior_arch_rule(
     let package_name = pool.package(inferior_index)?.name()?;
     if pool.dependency(rule.dependency)?.atom()? != package_name {
         return Err(Error::ConflictError(format!(
-            "libsolv strict-priority inferior-architecture rule for '{}' names a different package",
+            "libsolv required-provider inferior-architecture rule for '{}' names a different package",
             root.name
         )));
     }
     Ok(())
 }
 
-fn validate_strict_priority_conflict_rule(
+fn validate_required_provider_conflict_rule(
     pool: &SolvPool,
     package_index: &PackageResolutionIndex,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
@@ -465,19 +503,19 @@ fn validate_strict_priority_conflict_rule(
 ) -> Result<()> {
     let conflicting_index = rule.from_index.ok_or_else(|| {
         Error::ConflictError(format!(
-            "libsolv strict-priority package-conflict rule for '{}' has no conflicting package",
+            "libsolv required-provider package-conflict rule for '{}' has no conflicting package",
             root.name
         ))
     })?;
     let provided_index = rule.to_index.ok_or_else(|| {
         Error::ConflictError(format!(
-            "libsolv strict-priority package-conflict rule for '{}' has no provider package",
+            "libsolv required-provider package-conflict rule for '{}' has no provider package",
             root.name
         ))
     })?;
     if rule.dependency == 0 {
         return Err(Error::ConflictError(format!(
-            "libsolv strict-priority package-conflict rule for '{}' has no conflicting dependency",
+            "libsolv required-provider package-conflict rule for '{}' has no conflicting dependency",
             root.name
         )));
     }

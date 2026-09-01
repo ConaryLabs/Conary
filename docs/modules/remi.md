@@ -894,13 +894,17 @@ uses exact libsolv transaction and problem-rule IDs, applies profile precedence
 as native repository priority, excludes weak relations, and reopens complete
 filelists for typed file-provider resolution. Its resolution projection schema
 3 preserves every exact authenticated root while projecting a hard requirement
-whose only matching provider is excluded by strict repository priority as a
-typed unresolved dependency. A strict-priority multilib problem validates and
-retains libsolv's contributing inferior-architecture and package-conflict rules
-without treating those ancillary rules as an architecture-only root rejection;
-problem identity is preserved through the native shim so a separate conflict or
-architecture problem remains fatal. The producer does not disable precedence or
-substitute a shadowed provider. The Debian producer uses private
+as a typed unresolved dependency when libsolv reports no provider or reports
+that its providers cannot install because of strict repository priority,
+architecture precedence, or a package conflict. It projects every contributing
+hard required edge in that problem rather than laundering a genuine conflict as
+one missing edge. A problem containing both strict priority and provider-policy
+rules is solved again without strict priority solely to discover and union any
+residual hard required edges; that diagnostic closure is never emitted or used
+as a provider substitution. Problem identity is preserved through the native shim;
+architecture, conflict, or installability failures without a hard required edge
+remain fatal. The producer does not disable precedence or substitute a shadowed
+provider. The Debian producer uses private
 volatile apt-pkg source indexes and empty installed state, projects profile
 order into candidate and provider priority, records exact native transactions,
 and forces each exact root through apt 3.0's complete-version solver with

@@ -334,7 +334,8 @@ conary_solv_set_architecture(ConarySolv *handle, const char *architecture)
 }
 
 int
-conary_solv_solve(ConarySolv *handle, size_t root_index)
+conary_solv_solve(ConarySolv *handle, size_t root_index,
+                  int strict_repo_priority)
 {
     if (!handle || root_index >= handle->package_count)
         return -1;
@@ -351,7 +352,8 @@ conary_solv_solve(ConarySolv *handle, size_t root_index)
             return -1;
         }
         solver_set_flag(handle->solver, SOLVER_FLAG_IGNORE_RECOMMENDED, 1);
-        solver_set_flag(handle->solver, SOLVER_FLAG_STRICT_REPO_PRIORITY, 1);
+        solver_set_flag(handle->solver, SOLVER_FLAG_STRICT_REPO_PRIORITY,
+                        strict_repo_priority ? 1 : 0);
 
         Queue jobs;
         queue_init(&jobs);

@@ -1069,9 +1069,11 @@ fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
         "x86_64",
         &directory.path().join("conflict-resolution"),
     )
-    .unwrap_err();
-    assert!(matches!(conflict, Error::ConflictError(_)));
-    assert!(conflict.to_string().contains("problem rule"));
+    .unwrap();
+    assert_eq!(conflict.artifact.counts.roots, 2);
+    assert_eq!(conflict.artifact.counts.resolved_roots, 1);
+    assert_eq!(conflict.artifact.counts.unresolved_roots, 1);
+    assert_eq!(conflict.artifact.counts.unresolved_dependencies, 1);
 
     let architecture = produce_rpm_resolution_oracle(
         &profile,

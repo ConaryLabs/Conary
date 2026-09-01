@@ -47,7 +47,11 @@ unsafe extern "C" {
         precedence: c_int,
     ) -> c_int;
     fn conary_solv_set_architecture(handle: *mut c_void, architecture: *const c_char) -> c_int;
-    fn conary_solv_solve(handle: *mut c_void, root_index: usize) -> c_int;
+    fn conary_solv_solve(
+        handle: *mut c_void,
+        root_index: usize,
+        strict_repo_priority: c_int,
+    ) -> c_int;
     fn conary_solv_closure_count(handle: *mut c_void) -> usize;
     fn conary_solv_closure_package_index(handle: *mut c_void, index: usize) -> usize;
     fn conary_solv_problem_count(handle: *mut c_void) -> usize;
@@ -154,7 +158,28 @@ impl SolvPool {
     }
 
     pub(super) fn solve(&mut self, root_index: usize) -> Result<SolvResolution> {
-        let result = unsafe { conary_solv_solve(self.handle.as_ptr(), root_index) };
+        self.solve_with_strict_repo_priority(root_index, true)
+    }
+
+    pub(super) fn solve_without_strict_repo_priority(
+        &mut self,
+        root_index: usize,
+    ) -> Result<SolvResolution> {
+        self.solve_with_strict_repo_priority(root_index, false)
+    }
+
+    fn solve_with_strict_repo_priority(
+        &mut self,
+        root_index: usize,
+        strict_repo_priority: bool,
+    ) -> Result<SolvResolution> {
+        let result = unsafe {
+            conary_solv_solve(
+                self.handle.as_ptr(),
+                root_index,
+                i32::from(strict_repo_priority),
+            )
+        };
         match result {
             1 => {
                 let count = unsafe { conary_solv_closure_count(self.handle.as_ptr()) };
