@@ -272,6 +272,8 @@ fn fixture(
     <rpm:requires>
       <rpm:entry name="glibc" flags="GE" epoch="0" ver="2.40" rel="1.fc44"/>
       <rpm:entry name="(feature-a or feature-b)"/>
+      <rpm:entry name="((python3.14dist(semver) >= 3.0.2 with python3.14dist(semver) &lt; 3.1) with python3.14dist(semver) >= 3.0.2)"/>
+      <rpm:entry name="(python3.14dist(semver) >= 3.0.2 with python3.14dist(semver) &lt; 3.1 with python3.14dist(semver) >= 3.0.2)"/>
       <rpm:entry name="setup" pre="1"/>
     </rpm:requires>
     <rpm:recommends><rpm:entry name="recommended"/></rpm:recommends>
@@ -408,12 +410,62 @@ fn producer_projects_complete_typed_rpm_facts_and_reopens_bundle() {
         .find(|group| group.native_text.as_deref() == Some("(feature-a or feature-b)"))
         .unwrap();
     assert!(rich.expression_json.contains("\"operator\":\"or\""));
+    let left_nested = alpha
+        .requirement_groups
+        .iter()
+        .find(|group| {
+            group.native_text.as_deref()
+                == Some(
+                    "((python3.14dist(semver) >= 3.0.2 with python3.14dist(semver) < 3.1) with python3.14dist(semver) >= 3.0.2)",
+                )
+        })
+        .unwrap();
+    let flat = alpha
+        .requirement_groups
+        .iter()
+        .find(|group| {
+            group.native_text.as_deref()
+                == Some(
+                    "(python3.14dist(semver) >= 3.0.2 with python3.14dist(semver) < 3.1 with python3.14dist(semver) >= 3.0.2)",
+                )
+        })
+        .unwrap();
+    assert_ne!(left_nested.expression_json, flat.expression_json);
     let shared = packages
         .iter()
         .find(|package| package.name == "shared")
         .unwrap();
     assert_eq!(shared.member_ordinal, 0);
     assert_eq!(shared.repository_identity, "fedora-core");
+}
+
+#[test]
+fn canonical_rpm_text_preserves_left_nested_and_flat_with_trees() {
+    let left_text = "((python3.14dist(semver) >= 3.0.2 with python3.14dist(semver) < 3.1) with python3.14dist(semver) >= 3.0.2)";
+    let flat_text = "(python3.14dist(semver) >= 3.0.2 with python3.14dist(semver) < 3.1 with python3.14dist(semver) >= 3.0.2)";
+    let left = crate::repository::rpm_dependency::parse_rpm_dependency(
+        RepositoryRequirementKind::Depends,
+        left_text,
+    )
+    .unwrap();
+    let flat = crate::repository::rpm_dependency::parse_rpm_dependency(
+        RepositoryRequirementKind::Depends,
+        flat_text,
+    )
+    .unwrap();
+
+    assert_ne!(left, flat);
+    assert_eq!(canonical_rpm_dependency_text(&left), left_text);
+    assert_eq!(canonical_rpm_dependency_text(&flat), flat_text);
+
+    let error = project_decoded_requirement(
+        RepositoryRequirementKind::Depends,
+        flat_text.to_string(),
+        left,
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(error.to_string().contains("typed relation tree disagrees"));
 }
 
 #[test]
