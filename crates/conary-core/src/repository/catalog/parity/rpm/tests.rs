@@ -288,7 +288,10 @@ fn fixture(
       <rpm:entry name="setup" pre="1"/>
     </rpm:requires>
     <rpm:recommends><rpm:entry name="recommended"/></rpm:recommends>
-    <rpm:suggests><rpm:entry name="suggested"/></rpm:suggests>
+    <rpm:suggests>
+      <rpm:entry name="suggested"/>
+      <rpm:entry name="(nvidia-query-resource-opengl-libs(x86-32) = :1.0.0-23.fc44 if libGL(x86-32))"/>
+    </rpm:suggests>
     <rpm:supplements><rpm:entry name="(alpha unless desktop)"/></rpm:supplements>
     <rpm:enhances><rpm:entry name="enhanced"/></rpm:enhances>
     <rpm:conflicts><rpm:entry name="old-alpha" flags="LT" epoch="0" ver="1" rel="0"/></rpm:conflicts>
@@ -459,6 +462,17 @@ fn producer_projects_complete_typed_rpm_facts_and_reopens_bundle() {
         })
         .unwrap();
     assert_ne!(left_nested.expression_json, flat.expression_json);
+    let empty_epoch = alpha
+        .requirement_groups
+        .iter()
+        .find(|group| {
+            group.native_text.as_deref()
+                == Some(
+                    "(nvidia-query-resource-opengl-libs(x86-32) = 1.0.0-23.fc44 if libGL(x86-32))",
+                )
+        })
+        .unwrap();
+    assert!(empty_epoch.expression_json.contains("= 1.0.0-23.fc44"));
     let shared = packages
         .iter()
         .find(|package| package.name == "shared")
@@ -494,6 +508,23 @@ fn canonical_rpm_text_preserves_left_nested_and_flat_with_trees() {
     .unwrap_err();
     assert!(matches!(error, Error::ConflictError(_)));
     assert!(error.to_string().contains("typed relation tree disagrees"));
+}
+
+#[test]
+fn native_rpm_evr_canonicalizes_source_empty_and_zero_epochs() {
+    assert_eq!(
+        canonical_rpm_evr(":1.0.0-23.fc44").unwrap(),
+        "1.0.0-23.fc44"
+    );
+    assert_eq!(
+        canonical_rpm_evr("0:1.0.0-23.fc44").unwrap(),
+        "1.0.0-23.fc44"
+    );
+    assert_eq!(
+        canonical_rpm_evr("2:1.0.0-23.fc44").unwrap(),
+        "2:1.0.0-23.fc44"
+    );
+    assert!(canonical_rpm_evr(":1:1.0.0-23.fc44").is_err());
 }
 
 #[test]
