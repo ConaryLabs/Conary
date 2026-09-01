@@ -30,6 +30,7 @@ typedef struct {
     Queue closure;
     Queue problem_rules;
     Queue problem_rule_ranges;
+    Queue strict_shadowed;
     int fileprovides_added;
     char error[512];
 } ConarySolv;
@@ -92,6 +93,45 @@ clear_resolution(ConarySolv *handle)
     queue_empty(&handle->closure);
     queue_empty(&handle->problem_rules);
     queue_empty(&handle->problem_rule_ranges);
+    queue_empty(&handle->strict_shadowed);
+}
+
+/*
+ * Packages the current solve disabled through libsolv's own strict
+ * repository-priority rules. A problem explanation and
+ * solver_describe_decision report only the first reason a package was decided
+ * out, so a shadowed provider with its own missing dependency never surfaces
+ * the priority rule there. Rule IDs are dense from 1 and solver_ruleclass
+ * answers SOLVER_RULE_UNKNOWN past the last rule, so the rule set is walked
+ * directly.
+ */
+static int
+collect_strict_shadowed(ConarySolv *handle)
+{
+    Solver *solver = handle->solver;
+    Queue literals;
+    queue_init(&literals);
+    for (Id rule = 1;; rule++) {
+        SolverRuleinfo class = solver_ruleclass(solver, rule);
+        if (class == SOLVER_RULE_UNKNOWN)
+            break;
+        if (class != SOLVER_RULE_STRICT_REPO_PRIORITY)
+            continue;
+        queue_empty(&literals);
+        solver_ruleliterals(solver, rule, &literals);
+        /* Pinned libsolv creates every strict-priority rule as the unary
+         * exclusion (-package). Keep that public rule-shape invariant typed
+         * instead of guessing which literal carries authority. */
+        if (literals.count != 1 || literals.elements[0] >= 0) {
+            set_error(handle, "inspect RPM strict-priority rules",
+                      "strict-priority rule is not a unary package exclusion");
+            queue_free(&literals);
+            return 0;
+        }
+        queue_pushunique(&handle->strict_shadowed, -literals.elements[0]);
+    }
+    queue_free(&literals);
+    return 1;
 }
 
 static int
@@ -246,6 +286,7 @@ conary_solv_create(void)
     queue_init(&handle->closure);
     queue_init(&handle->problem_rules);
     queue_init(&handle->problem_rule_ranges);
+    queue_init(&handle->strict_shadowed);
     return handle;
 }
 
@@ -258,6 +299,7 @@ conary_solv_free(ConarySolv *handle)
     queue_free(&handle->closure);
     queue_free(&handle->problem_rules);
     queue_free(&handle->problem_rule_ranges);
+    queue_free(&handle->strict_shadowed);
     pool_free(handle->pool);
     free(handle->packages);
     free(handle->members);
@@ -361,14 +403,16 @@ conary_solv_solve(ConarySolv *handle, size_t root_index,
                     handle->packages[root_index]);
         int result = solver_solve(handle->solver, &jobs);
         queue_free(&jobs);
-        if (result == 0)
-            break;
-        if (add_problem_file_providers(handle)) {
+        if (result != 0 && add_problem_file_providers(handle)) {
             solver_free(handle->solver);
             handle->solver = NULL;
             pool_freewhatprovides(handle->pool);
             continue;
         }
+        if (!collect_strict_shadowed(handle))
+            return -1;
+        if (result == 0)
+            break;
         Id problem = 0;
         while ((problem = solver_next_problem(handle->solver, problem)) != 0) {
             Queue rules;
@@ -409,6 +453,22 @@ conary_solv_closure_package_index(ConarySolv *handle, size_t index)
     if (!handle || index >= (size_t)handle->closure.count)
         return SIZE_MAX;
     return package_index_for_id(handle, handle->closure.elements[index]);
+}
+
+size_t
+conary_solv_strict_shadowed_count(ConarySolv *handle)
+{
+    if (!handle || !handle->solver)
+        return SIZE_MAX;
+    return (size_t)handle->strict_shadowed.count;
+}
+
+size_t
+conary_solv_strict_shadowed_package_index(ConarySolv *handle, size_t index)
+{
+    if (!handle || !handle->solver || index >= (size_t)handle->strict_shadowed.count)
+        return SIZE_MAX;
+    return package_index_for_id(handle, handle->strict_shadowed.elements[index]);
 }
 
 size_t
@@ -476,6 +536,45 @@ conary_solv_required_kind(ConarySolv *handle, size_t package_index,
         }
     }
     return found;
+}
+
+static Id
+provider_offset(ConarySolv *handle, int dependency)
+{
+    /* Rule data from a live solver references whatprovides offsets, so the
+     * index is read as prepared by that solve and never rebuilt here. */
+    if (!handle || !handle->pool || !handle->pool->whatprovides || dependency == 0)
+        return -1;
+    return pool_whatprovides(handle->pool, (Id)dependency);
+}
+
+size_t
+conary_solv_provider_count(ConarySolv *handle, int dependency)
+{
+    Id offset = provider_offset(handle, dependency);
+    if (offset < 0)
+        return SIZE_MAX;
+    size_t count = 0;
+    for (Id *provider = handle->pool->whatprovidesdata + offset; *provider; provider++)
+        if (*provider != SYSTEMSOLVABLE)
+            count++;
+    return count;
+}
+
+size_t
+conary_solv_provider_index(ConarySolv *handle, int dependency, size_t position)
+{
+    Id offset = provider_offset(handle, dependency);
+    if (offset < 0)
+        return SIZE_MAX;
+    size_t seen = 0;
+    for (Id *provider = handle->pool->whatprovidesdata + offset; *provider; provider++) {
+        if (*provider == SYSTEMSOLVABLE)
+            continue;
+        if (seen++ == position)
+            return package_index_for_id(handle, *provider);
+    }
+    return SIZE_MAX;
 }
 
 size_t

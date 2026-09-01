@@ -1039,6 +1039,233 @@ fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
 }
 
 #[test]
+fn resolution_producer_projects_rich_required_helper_terminal_missing_edge() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b'].map(digest);
+    let root_format = r#"
+    <rpm:provides><rpm:entry name="chain-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="(chain-helper or unavailable-chain-alternative)"/></rpm:requires>"#;
+    let helper_format = r#"
+    <rpm:provides><rpm:entry name="chain-helper"/></rpm:provides>
+    <rpm:requires><rpm:entry name="absent-capability"/></rpm:requires>"#;
+    let mut root = PackageFixture::simple("chain-root", &checksums[0]);
+    root.format = root_format;
+    let mut helper = PackageFixture::simple("chain-helper", &checksums[1]);
+    helper.format = helper_format;
+    let metadata = vec![write_metadata(
+        directory.path(),
+        "fedora-base",
+        &[root, helper],
+    )];
+    let snapshots = vec![source_snapshot(
+        "fedora-base",
+        &metadata[0].0,
+        &metadata[0].1,
+    )];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 2;
+
+    let observed = resolve_named_root(&directory, &profile, &snapshots, &metadata, "chain-root");
+    let helper = observed.package("chain-helper");
+    let terminal_group = helper
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("absent-capability"))
+        .unwrap();
+    assert_eq!(
+        observed.outcome,
+        NativeResolutionOutcomeV1::Unresolved {
+            dependencies: vec![NativeUnresolvedDependencyV1 {
+                requiring_package_key_sha256: helper.package_key_sha256.clone(),
+                requirement_group_sha256: native_requirement_group_sha256(terminal_group).unwrap(),
+            }],
+        }
+    );
+}
+
+#[test]
+fn resolution_producer_projects_reachable_helper_terminal_missing_file_edge() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b'].map(digest);
+    let root_format = r#"
+    <rpm:provides><rpm:entry name="file-chain-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="/usr/libexec/file-chain-helper"/></rpm:requires>"#;
+    let helper_format = r#"
+    <rpm:provides><rpm:entry name="file-chain-helper"/></rpm:provides>
+    <rpm:requires><rpm:entry name="/usr/libexec/absent-chain-runtime"/></rpm:requires>"#;
+    let mut root = PackageFixture::simple("file-chain-root", &checksums[0]);
+    root.format = root_format;
+    let mut helper = PackageFixture::simple("file-chain-helper", &checksums[1]);
+    helper.format = helper_format;
+    helper.files = &["/usr/libexec/file-chain-helper"];
+    let metadata = vec![write_metadata(
+        directory.path(),
+        "fedora-base",
+        &[root, helper],
+    )];
+    let snapshots = vec![source_snapshot(
+        "fedora-base",
+        &metadata[0].0,
+        &metadata[0].1,
+    )];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 2;
+
+    let observed = resolve_named_root(
+        &directory,
+        &profile,
+        &snapshots,
+        &metadata,
+        "file-chain-root",
+    );
+    let helper = observed.package("file-chain-helper");
+    let terminal_group = helper
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("/usr/libexec/absent-chain-runtime"))
+        .unwrap();
+    assert_eq!(
+        observed.outcome,
+        NativeResolutionOutcomeV1::Unresolved {
+            dependencies: vec![NativeUnresolvedDependencyV1 {
+                requiring_package_key_sha256: helper.package_key_sha256.clone(),
+                requirement_group_sha256: native_requirement_group_sha256(terminal_group).unwrap(),
+            }],
+        }
+    );
+}
+
+#[test]
+fn resolution_producer_prefers_visible_provider_edge_over_shadowed_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b', 'c'].map(digest);
+    let root_format = r#"
+    <rpm:provides><rpm:entry name="mixed-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="mixed-runtime" flags="GE" epoch="0" ver="1" rel="1.fc44"/></rpm:requires>"#;
+    let visible_runtime_format = r#"
+    <rpm:provides><rpm:entry name="mixed-runtime" flags="EQ" epoch="0" ver="1" rel="2.fc44"/></rpm:provides>
+    <rpm:requires><rpm:entry name="absent-capability"/></rpm:requires>"#;
+    let shadowed_runtime_format = r#"
+    <rpm:provides><rpm:entry name="mixed-runtime" flags="EQ" epoch="0" ver="1" rel="1.fc44"/></rpm:provides>"#;
+
+    let mut visible_runtime = PackageFixture::simple("mixed-runtime", &checksums[0]);
+    visible_runtime.release = "2.fc44";
+    visible_runtime.format = visible_runtime_format;
+    let updates = write_metadata(directory.path(), "fedora-updates", &[visible_runtime]);
+
+    let mut root = PackageFixture::simple("mixed-root", &checksums[1]);
+    root.format = root_format;
+    let mut shadowed_runtime = PackageFixture::simple("mixed-runtime", &checksums[2]);
+    shadowed_runtime.format = shadowed_runtime_format;
+    let base = write_metadata(directory.path(), "fedora-base", &[root, shadowed_runtime]);
+
+    let metadata = vec![updates, base];
+    let snapshots = metadata
+        .iter()
+        .zip(["fedora-updates", "fedora-base"])
+        .map(|((primary, filelists), repository)| source_snapshot(repository, primary, filelists))
+        .collect::<Vec<_>>();
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 3;
+
+    let observed = resolve_named_root(&directory, &profile, &snapshots, &metadata, "mixed-root");
+    let visible_runtime = observed.package_with_checksum("mixed-runtime", &checksums[0]);
+    let terminal_group = visible_runtime
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("absent-capability"))
+        .unwrap();
+    assert_eq!(
+        observed.outcome,
+        NativeResolutionOutcomeV1::Unresolved {
+            dependencies: vec![NativeUnresolvedDependencyV1 {
+                requiring_package_key_sha256: visible_runtime.package_key_sha256.clone(),
+                requirement_group_sha256: native_requirement_group_sha256(terminal_group).unwrap(),
+            }],
+        }
+    );
+}
+
+struct ObservedRoot {
+    packages: Vec<crate::repository::catalog::parity::NativeParityPackageV1>,
+    outcome: NativeResolutionOutcomeV1,
+}
+
+impl ObservedRoot {
+    fn package(&self, name: &str) -> &crate::repository::catalog::parity::NativeParityPackageV1 {
+        let mut matches = self.packages.iter().filter(|package| package.name == name);
+        let package = matches.next().unwrap();
+        assert!(matches.next().is_none(), "package name {name} is ambiguous");
+        package
+    }
+
+    fn package_with_checksum(
+        &self,
+        name: &str,
+        checksum: &str,
+    ) -> &crate::repository::catalog::parity::NativeParityPackageV1 {
+        let checksum = format!("sha256:{checksum}");
+        self.packages
+            .iter()
+            .find(|package| package.name == name && package.checksum == checksum)
+            .unwrap()
+    }
+}
+
+/// Produce both oracles under schema 3 and return the named root's outcome
+/// with every projected package.
+fn resolve_named_root(
+    directory: &tempfile::TempDir,
+    profile: &ProfileRevisionV2,
+    snapshots: &[SourceSnapshotV1],
+    metadata: &[(PathBuf, PathBuf)],
+    root_name: &str,
+) -> ObservedRoot {
+    let package_output = directory.path().join("package-oracle");
+    produce_rpm_parity_oracle(profile, &inputs(snapshots, metadata), &package_output).unwrap();
+    let resolution_output = directory.path().join("resolution-oracle");
+    let manifest = produce_rpm_resolution_oracle(
+        profile,
+        &inputs(snapshots, metadata),
+        &package_output,
+        "x86_64",
+        &resolution_output,
+    )
+    .unwrap();
+    assert_eq!(manifest.implementation.projection_schema, 3);
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, profile).unwrap();
+    let mut packages = Vec::new();
+    package_reader
+        .for_each_package(|package| {
+            packages.push(package);
+            Ok(())
+        })
+        .unwrap();
+    let root_key = packages
+        .iter()
+        .find(|package| package.name == root_name)
+        .unwrap()
+        .package_key_sha256
+        .clone();
+    let resolution_reader =
+        verify_native_resolution_oracle_bundle(&resolution_output, profile, &package_reader)
+            .unwrap();
+    let mut outcome = None;
+    resolution_reader
+        .for_each_root(|candidate| {
+            if candidate.root_package_key_sha256 == root_key {
+                outcome = Some(candidate.outcome);
+            }
+            Ok(())
+        })
+        .unwrap();
+    ObservedRoot {
+        packages,
+        outcome: outcome.unwrap(),
+    }
+}
+
+#[test]
 fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b'].map(digest);

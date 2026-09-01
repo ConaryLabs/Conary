@@ -2,7 +2,7 @@
 
 //! Independent libsolv-backed RPM native resolution evidence production.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -321,35 +321,19 @@ fn unresolved_outcome(
 ) -> Result<NativeResolutionOutcomeV1> {
     let mut dependencies = BTreeSet::new();
     let mut requires_residual_probe = false;
-    let mut strict_eligible_requiring_indices = BTreeSet::new();
-    let mut strict_shadowed_indices = BTreeSet::new();
+    let shadowed = pool
+        .strict_shadowed_packages()?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let visibility = StrictVisibility::derive(pool, root_index, &shadowed, &problems)?;
     for problem in &problems {
-        for rule in &problem.rules {
-            // A requires rule proves that the package contributes an edge to
-            // the strict solve. A nothing-provides rule alone may belong to a
-            // shadowed provider inspected while explaining that solve.
-            if rule.rule_type == SOLVER_RULE_PKG_REQUIRES
-                && let Some(requiring_index) = rule.from_index
-            {
-                strict_eligible_requiring_indices.insert(requiring_index);
-            }
-            if rule.rule_type == SOLVER_RULE_STRICT_REPO_PRIORITY
-                && let Some(shadowed_index) = rule.from_index
-            {
-                strict_shadowed_indices.insert(shadowed_index);
-            }
-        }
-    }
-    strict_eligible_requiring_indices.retain(|index| !strict_shadowed_indices.contains(index));
-    strict_eligible_requiring_indices.insert(root_index);
-    for problem in problems {
         let (problem_dependencies, problem_requires_residual_probe) = project_unresolved_problem(
             pool,
             package_index,
             root,
             architecture,
-            problem.rules,
-            &strict_eligible_requiring_indices,
+            &problem.rules,
+            &visibility,
         )?;
         dependencies.extend(problem_dependencies);
         requires_residual_probe |= problem_requires_residual_probe;
@@ -364,15 +348,21 @@ fn unresolved_outcome(
                     )));
                 }
             }
-            SolvResolution::Unresolved(problems) => {
-                for problem in problems {
+            SolvResolution::Unresolved(residual_problems) => {
+                let visibility = StrictVisibility::derive(
+                    pool,
+                    root_index,
+                    &shadowed,
+                    problems.iter().chain(&residual_problems),
+                )?;
+                for problem in &residual_problems {
                     let (residual_dependencies, nested_probe) = project_unresolved_problem(
                         pool,
                         package_index,
                         root,
                         architecture,
-                        problem.rules,
-                        &strict_eligible_requiring_indices,
+                        &problem.rules,
+                        &visibility,
                     )?;
                     if nested_probe {
                         return Err(Error::InternalError(format!(
@@ -396,13 +386,84 @@ fn unresolved_outcome(
     })
 }
 
+/// Requiring packages that Conary's candidate resolver can also reach under
+/// the strict solve's repository-priority authority.
+struct StrictVisibility {
+    /// The exact root plus every provider reachable from it through hard
+    /// required edges that strict repository priority does not shadow.
+    reachable: BTreeSet<usize>,
+    /// Packages owning a missing-dependency or required edge of their own.
+    edge_owners: BTreeSet<usize>,
+}
+
+impl StrictVisibility {
+    /// `shadowed` comes from the strict solve's own priority rules because a
+    /// problem explanation may cite a shadowed provider's other defects
+    /// without citing the strict-priority rule itself.
+    fn derive<'a>(
+        pool: &SolvPool,
+        root_index: usize,
+        shadowed: &BTreeSet<usize>,
+        problems: impl IntoIterator<Item = &'a SolvProblem>,
+    ) -> Result<Self> {
+        let mut edge_owners = BTreeSet::new();
+        let mut required: BTreeMap<usize, Vec<i32>> = BTreeMap::new();
+        for rule in problems.into_iter().flat_map(|problem| &problem.rules) {
+            let Some(from_index) = rule.from_index else {
+                continue;
+            };
+            match rule.rule_type {
+                SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => {
+                    edge_owners.insert(from_index);
+                }
+                SOLVER_RULE_PKG_REQUIRES if rule.dependency != 0 => {
+                    edge_owners.insert(from_index);
+                    required
+                        .entry(from_index)
+                        .or_default()
+                        .push(rule.dependency);
+                }
+                _ => {}
+            }
+        }
+        let mut reachable = BTreeSet::from([root_index]);
+        let mut frontier = vec![root_index];
+        while let Some(index) = frontier.pop() {
+            for dependency in required.get(&index).into_iter().flatten() {
+                for provider in pool.providers(*dependency)? {
+                    if !shadowed.contains(&provider) && reachable.insert(provider) {
+                        frontier.push(provider);
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            reachable,
+            edge_owners,
+        })
+    }
+
+    fn requiring_package_is_visible(&self, requiring_index: Option<usize>) -> bool {
+        requiring_index.is_some_and(|index| self.reachable.contains(&index))
+    }
+
+    /// A required edge is terminal for Conary only when none of its visible
+    /// providers explains the failure with an edge of its own; otherwise the
+    /// deeper edge is the one Conary reports.
+    fn required_edge_is_terminal(&self, pool: &SolvPool, dependency: i32) -> Result<bool> {
+        Ok(!pool.providers(dependency)?.iter().any(|provider| {
+            self.reachable.contains(provider) && self.edge_owners.contains(provider)
+        }))
+    }
+}
+
 fn project_unresolved_problem(
     pool: &SolvPool,
     package_index: &PackageResolutionIndex,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     architecture: &str,
-    rules: Vec<SolvProblemRule>,
-    eligible_requiring_indices: &BTreeSet<usize>,
+    rules: &[SolvProblemRule],
+    visibility: &StrictVisibility,
 ) -> Result<(BTreeSet<NativeUnresolvedDependencyV1>, bool)> {
     let mut dependencies = BTreeSet::new();
     let has_required_edge = rules
@@ -417,38 +478,36 @@ fn project_unresolved_problem(
     for rule in rules {
         match rule.rule_type {
             SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => {
-                let requiring_index = rule.from_index;
                 let dependency = project_unresolved_dependency(
                     pool,
                     package_index,
                     root,
-                    requiring_index,
+                    rule.from_index,
                     rule.dependency,
                     "missing-dependency",
                 )?;
-                if requiring_index.is_some_and(|index| eligible_requiring_indices.contains(&index))
-                {
+                if visibility.requiring_package_is_visible(rule.from_index) {
                     dependencies.insert(dependency);
                 }
             }
             SOLVER_RULE_PKG_REQUIRES => {
-                let requiring_index = rule.from_index;
                 let dependency = project_unresolved_dependency(
                     pool,
                     package_index,
                     root,
-                    requiring_index,
+                    rule.from_index,
                     rule.dependency,
                     "uninstallable requirement",
                 )?;
-                if requiring_index.is_some_and(|index| eligible_requiring_indices.contains(&index))
+                if visibility.requiring_package_is_visible(rule.from_index)
+                    && visibility.required_edge_is_terminal(pool, rule.dependency)?
                 {
                     dependencies.insert(dependency);
                 }
             }
             SOLVER_RULE_JOB => {}
             SOLVER_RULE_PKG_CONFLICTS if has_required_edge => {
-                validate_required_provider_conflict_rule(pool, package_index, root, &rule)?;
+                validate_required_provider_conflict_rule(pool, package_index, root, rule)?;
             }
             SOLVER_RULE_STRICT_REPO_PRIORITY => {
                 let excluded_index = rule.from_index.ok_or_else(|| {
@@ -472,7 +531,7 @@ fn project_unresolved_problem(
                 )));
             }
             SOLVER_RULE_INFARCH if has_required_edge => {
-                validate_required_provider_inferior_arch_rule(pool, package_index, root, &rule)?;
+                validate_required_provider_inferior_arch_rule(pool, package_index, root, rule)?;
             }
             SOLVER_RULE_JOB_UNSUPPORTED | SOLVER_RULE_INFARCH => {
                 return Err(Error::ConfigError(format!(

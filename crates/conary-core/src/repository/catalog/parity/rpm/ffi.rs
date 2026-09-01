@@ -54,6 +54,8 @@ unsafe extern "C" {
     ) -> c_int;
     fn conary_solv_closure_count(handle: *mut c_void) -> usize;
     fn conary_solv_closure_package_index(handle: *mut c_void, index: usize) -> usize;
+    fn conary_solv_strict_shadowed_count(handle: *mut c_void) -> usize;
+    fn conary_solv_strict_shadowed_package_index(handle: *mut c_void, index: usize) -> usize;
     fn conary_solv_problem_count(handle: *mut c_void) -> usize;
     fn conary_solv_problem_rule_count(handle: *mut c_void, problem_index: usize) -> usize;
     fn conary_solv_problem_rule(
@@ -70,6 +72,9 @@ unsafe extern "C" {
         package_index: usize,
         dependency: c_int,
     ) -> c_int;
+    fn conary_solv_provider_count(handle: *mut c_void, dependency: c_int) -> usize;
+    fn conary_solv_provider_index(handle: *mut c_void, dependency: c_int, position: usize)
+    -> usize;
     fn conary_solv_package_count(handle: *mut c_void) -> usize;
     fn conary_solv_package_member(handle: *mut c_void, index: usize) -> u32;
     fn conary_solv_package_name(handle: *mut c_void, index: usize) -> *const c_char;
@@ -258,6 +263,53 @@ impl SolvPool {
                 "libsolv problem dependency {dependency} is not bound to its requiring package"
             ))),
         }
+    }
+
+    /// Package indexes the most recent solve excluded through libsolv's own
+    /// strict repository-priority rules.
+    pub(super) fn strict_shadowed_packages(&self) -> Result<Vec<usize>> {
+        let count = unsafe { conary_solv_strict_shadowed_count(self.handle.as_ptr()) };
+        if count == usize::MAX {
+            return Err(Error::InternalError(
+                "libsolv strict-priority rules are unavailable outside a solve".to_string(),
+            ));
+        }
+        let mut packages = Vec::with_capacity(count);
+        for index in 0..count {
+            let package_index =
+                unsafe { conary_solv_strict_shadowed_package_index(self.handle.as_ptr(), index) };
+            if package_index == usize::MAX {
+                return Err(Error::ConflictError(
+                    "libsolv strict-priority rule names a package outside the authenticated RPM profile"
+                        .to_string(),
+                ));
+            }
+            packages.push(package_index);
+        }
+        Ok(packages)
+    }
+
+    /// Package indexes that libsolv's prepared provider index binds to one
+    /// dependency, excluding the pool's system solvable.
+    pub(super) fn providers(&self, dependency: i32) -> Result<Vec<usize>> {
+        let count = unsafe { conary_solv_provider_count(self.handle.as_ptr(), dependency) };
+        if count == usize::MAX {
+            return Err(Error::InternalError(format!(
+                "libsolv provider index for dependency {dependency} is unavailable outside a solve"
+            )));
+        }
+        let mut providers = Vec::with_capacity(count);
+        for position in 0..count {
+            let index =
+                unsafe { conary_solv_provider_index(self.handle.as_ptr(), dependency, position) };
+            if index == usize::MAX {
+                return Err(Error::ConflictError(format!(
+                    "libsolv provider of dependency {dependency} lies outside the authenticated RPM profile"
+                )));
+            }
+            providers.push(index);
+        }
+        Ok(providers)
     }
 
     pub(super) fn package_count(&self) -> usize {
