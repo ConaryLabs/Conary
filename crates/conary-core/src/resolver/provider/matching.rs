@@ -8,10 +8,7 @@
 //! All functions now work with `(version: &str, scheme: VersionScheme)` pairs
 //! from `PackageIdentity` instead of the former `ConaryPackageVersion` enum.
 
-use crate::repository::architecture::{
-    NativeResolutionArchitectureDecisionV1, native_resolution_architecture_decision,
-    require_profile_host_architecture_token,
-};
+use crate::Result;
 use crate::repository::dependency_model::{
     DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
     RequirementArchitectureQualifier,
@@ -23,60 +20,50 @@ use crate::repository::versioning::{
 };
 use crate::resolver::identity::PackageIdentity;
 use crate::version::VersionConstraint;
-use crate::{Error, Result};
 
 use super::types::{CapabilityExpression, ConaryConstraint};
 
-/// Check source-native architecture semantics before version/capability
-/// matching. Every repository candidate must carry an explicit architecture.
+/// Apply Debian dependency-qualifier semantics to an admitted candidate.
+///
+/// Repository-row native admission happens before the candidate receives a
+/// solver ID. No other package scheme has match-time architecture semantics.
 pub(crate) fn constraint_architecture_matches_package(
     constraint: &ConaryConstraint,
     package: &PackageIdentity,
     native_architecture: &str,
 ) -> Result<bool> {
-    let Some(package_architecture) = package.architecture.as_deref() else {
-        return Ok(false);
-    };
-    let Some(package_multi_arch) = valid_multi_arch_authority(package) else {
-        return Ok(false);
-    };
     Ok(match constraint {
         ConaryConstraint::RpmRuntime(_) => false,
-        ConaryConstraint::Requested(_)
-        | ConaryConstraint::ExactRepositoryPackage(_)
-        | ConaryConstraint::ProviderExpression { .. } => {
-            repository_candidate_matches_native(package, native_architecture)?
-        }
         ConaryConstraint::Repository {
             scheme: VersionScheme::Debian,
             architecture_qualifier,
             depending_architecture,
             ..
-        } => debian_architecture_matches(
-            architecture_qualifier,
-            depending_architecture,
-            native_architecture,
-            package.version_scheme,
-            package_architecture,
-            package_multi_arch,
-        ),
-        ConaryConstraint::Repository {
-            scheme,
-            depending_architecture,
-            ..
-        } => package_architectures_match(
-            package.version_scheme,
-            package_architecture,
-            *scheme,
-            depending_architecture,
-            native_architecture,
-        ),
+        } => {
+            let Some(package_architecture) = package.architecture.as_deref() else {
+                return Ok(false);
+            };
+            let Some(package_multi_arch) = valid_multi_arch_authority(package) else {
+                return Ok(false);
+            };
+            debian_architecture_matches(
+                architecture_qualifier,
+                depending_architecture,
+                native_architecture,
+                package.version_scheme,
+                package_architecture,
+                package_multi_arch,
+            )
+        }
+        ConaryConstraint::Requested(_)
+        | ConaryConstraint::ExactRepositoryPackage(_)
+        | ConaryConstraint::ProviderExpression { .. }
+        | ConaryConstraint::Repository { .. } => true,
     })
 }
 
-/// Match dependency architecture authority against one exact provided
-/// capability. Debian provider qualifiers are independent of the owning
-/// package architecture and therefore cannot be checked at package scope.
+/// Apply Debian dependency/provider qualifier semantics to an admitted
+/// capability provider.
 pub(crate) fn constraint_architecture_matches_provide(
     constraint: &ConaryConstraint,
     package: &PackageIdentity,
@@ -87,121 +74,38 @@ pub(crate) fn constraint_architecture_matches_provide(
     if matches!(constraint, ConaryConstraint::RpmRuntime(_)) {
         return Ok(false);
     }
-    let Some(package_architecture) = package.architecture.as_deref() else {
-        return Ok(false);
-    };
-    let Some(package_multi_arch) = valid_multi_arch_authority(package) else {
-        return Ok(false);
-    };
     Ok(match constraint {
         ConaryConstraint::Repository {
             scheme: VersionScheme::Debian,
             architecture_qualifier,
             depending_architecture,
             ..
-        } => debian_provide_architecture_matches(
-            architecture_qualifier,
-            depending_architecture,
-            native_architecture,
-            DebianProvideArchitecture {
-                package_scheme: package.version_scheme,
-                package_architecture,
-                package_multi_arch,
-                provide_scheme,
-                provide_qualifier: qualifier,
-            },
-        ),
-        ConaryConstraint::Repository {
-            scheme,
-            depending_architecture,
-            ..
-        } => provide_architecture_matches_exact_target(
-            package.version_scheme,
-            package_architecture,
-            provide_scheme,
-            qualifier,
-            *scheme,
-            depending_architecture,
-            native_architecture,
-        ),
+        } => {
+            let Some(package_architecture) = package.architecture.as_deref() else {
+                return Ok(false);
+            };
+            let Some(package_multi_arch) = valid_multi_arch_authority(package) else {
+                return Ok(false);
+            };
+            debian_provide_architecture_matches(
+                architecture_qualifier,
+                depending_architecture,
+                native_architecture,
+                DebianProvideArchitecture {
+                    package_scheme: package.version_scheme,
+                    package_architecture,
+                    package_multi_arch,
+                    provide_scheme,
+                    provide_qualifier: qualifier,
+                },
+            )
+        }
         ConaryConstraint::Requested(_)
         | ConaryConstraint::ExactRepositoryPackage(_)
-        | ConaryConstraint::ProviderExpression { .. } => {
-            repository_candidate_matches_native(package, native_architecture)?
-                && provide_architecture_matches_native_target(
-                    package.version_scheme,
-                    package_architecture,
-                    provide_scheme,
-                    qualifier,
-                    native_architecture,
-                )
-        }
+        | ConaryConstraint::ProviderExpression { .. }
+        | ConaryConstraint::Repository { .. } => true,
         ConaryConstraint::RpmRuntime(_) => unreachable!("returned above"),
     })
-}
-
-fn repository_candidate_matches_native(
-    package: &PackageIdentity,
-    native_architecture: &str,
-) -> Result<bool> {
-    let Some(architecture) = package.architecture.as_deref() else {
-        return Ok(false);
-    };
-    if package.repo_package_id.is_none() {
-        return Ok(PackageSelector::is_machine_architecture_compatible(
-            package.version_scheme,
-            Some(architecture),
-            native_architecture,
-        ));
-    }
-    match package.version_scheme {
-        VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
-            let profile = repository_candidate_profile(package)?;
-            require_profile_host_architecture_token(profile, native_architecture)?;
-            Ok(matches!(
-                native_resolution_architecture_decision(profile, architecture).into_result()?,
-                NativeResolutionArchitectureDecisionV1::Admitted
-            ))
-        }
-        VersionScheme::Conary | VersionScheme::Eopkg => {
-            // Conary and Eopkg do not have the typed foreign-profile
-            // architecture authority owned by RPM, dpkg, and ALPM.
-            Ok(PackageSelector::is_machine_architecture_compatible(
-                package.version_scheme,
-                Some(architecture),
-                native_architecture,
-            ))
-        }
-    }
-}
-
-fn repository_candidate_profile(
-    package: &PackageIdentity,
-) -> Result<&'static crate::repository::supported_profiles::SupportedProfile> {
-    let profile_id = package.repository_profile.as_deref().ok_or_else(|| {
-        Error::ConfigError(format!(
-            "repository package '{}-{}' has no source profile for native admission",
-            package.name, package.version
-        ))
-    })?;
-    let profile =
-        crate::repository::supported_profiles::profile_by_id(profile_id).ok_or_else(|| {
-            Error::ConfigError(format!(
-                "repository package '{}-{}' declares unsupported source profile '{}'",
-                package.name, package.version, profile_id
-            ))
-        })?;
-    if profile.version_scheme() != package.version_scheme {
-        return Err(Error::ConfigError(format!(
-            "repository package '{}-{}' scheme '{}' conflicts with source profile '{}' scheme '{}'",
-            package.name,
-            package.version,
-            package.version_scheme.as_str(),
-            profile.id(),
-            profile.version_scheme().as_str()
-        )));
-    }
-    Ok(profile)
 }
 
 fn debian_architecture_matches(
@@ -666,30 +570,6 @@ mod tests {
             architecture_qualifier: qualifier,
             depending_architecture: "amd64".to_string(),
         }
-    }
-
-    #[test]
-    fn repository_native_matching_rejects_a_host_outside_the_profile_target() {
-        let mut candidate = package("aarch64", DebianMultiArch::No);
-        candidate.version_scheme = VersionScheme::Rpm;
-        candidate.debian_multi_arch = None;
-        candidate.repository_name = "fedora".to_string();
-        candidate.repository_profile = Some("fedora-44".to_string());
-
-        let error = repository_candidate_matches_native(&candidate, "aarch64").unwrap_err();
-        assert!(matches!(
-            error,
-            Error::ProfileArchitectureMismatch {
-                profile,
-                expected,
-                actual,
-            } if profile == "fedora-44" && expected == "x86_64" && actual == "aarch64"
-        ));
-
-        candidate.architecture = Some("x86_64".to_string());
-        assert!(repository_candidate_matches_native(&candidate, "x86_64").unwrap());
-        candidate.architecture = Some("noarch".to_string());
-        assert!(repository_candidate_matches_native(&candidate, "x86_64").unwrap());
     }
 
     #[test]

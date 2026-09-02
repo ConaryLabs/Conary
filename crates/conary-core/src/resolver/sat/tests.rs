@@ -859,7 +859,7 @@ fn debian_multi_arch_qualifiers_reach_sat_without_name_suffix_matching() {
         repository_id,
         "liballowed",
         "1",
-        "arm64",
+        "amd64",
         DebianMultiArch::Allowed,
     );
 
@@ -1195,7 +1195,7 @@ fn debian_explicit_any_provide_reaches_sat_as_architecture_authority() {
         repository_id,
         "mail-provider",
         "1",
-        "arm64",
+        "amd64",
         DebianMultiArch::No,
     );
     let mut provide = RepositoryProvide::new(
