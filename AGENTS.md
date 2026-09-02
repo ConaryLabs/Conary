@@ -63,7 +63,10 @@ Conary is pre-alpha until a durable roadmap milestone says otherwise. Make
 issue-backed hard cuts: replace the current schema or interface, state the
 rebuild impact, and remove superseded migrations, adapters, routes, flags, and
 compatibility paths in the same slice. Do not run old and new authorities in
-parallel.
+parallel. When a persisted schema changes, every reader of stored data must
+classify the obsolete form as typed non-authority (rebuild or fencing state),
+never through a compatibility deserializer and never as an error that blocks
+the rebuild path.
 
 Cross-distribution package installation is the primary product path. The
 source package format owns lifecycle ABI, dependencies, versions, payload, and

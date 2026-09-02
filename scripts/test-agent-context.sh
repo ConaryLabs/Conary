@@ -456,10 +456,20 @@ real_list="$("$script" --list)"
 grep -q $'^packaging\t' <<<"$real_list" || fail "real map --list missing packaging slug"
 grep -q $'^profiles\t' <<<"$real_list" || fail "real map --list missing profiles slug"
 grep -q $'^resolution\t' <<<"$real_list" || fail "real map --list missing resolution slug"
+grep -q $'^native-parity\t' <<<"$real_list" || fail "real map --list missing native-parity slug"
 grep -q $'^canonical-map\t' <<<"$real_list" || fail "real map --list missing canonical-map slug"
 grep -q $'^release\t' <<<"$real_list" || fail "real map --list missing release slug"
 grep -q $'^database-state\t' <<<"$real_list" || fail "real map --list missing database-state slug"
-[[ "$(wc -l <<<"$real_list")" -eq 18 ]] || fail "real map --list did not print 18 cards"
+[[ "$(wc -l <<<"$real_list")" -eq 19 ]] || fail "real map --list did not print 19 cards"
+
+executed_fields="$({
+    while IFS=$'\t' read -r slug _; do
+        "$script" --feature "$slug" --brief
+    done <<<"$real_list"
+})"
+if grep -q -- '--features native-' <<<"$executed_fields"; then
+    fail "real map has a native-feature command in an executed field"
+fi
 
 "$script" --path apps/conary/src/commands/install/mod.rs > "$tmp/real-install.out"
 grep -q '^slug: install$' "$tmp/real-install.out" \
@@ -488,6 +498,24 @@ grep -q '^slug: generation$' "$tmp/real-config-transaction.out" \
 "$script" --path crates/conary-core/src/resolver/sat/relations.rs > "$tmp/real-resolution.out"
 grep -q '^slug: resolution$' "$tmp/real-resolution.out" \
     || fail "SAT relation path did not route to the resolution card"
+for native_parity_path in \
+    .github/workflows/export-remi-native-oracle-inputs.yml \
+    .github/workflows/produce-remi-native-oracles.yml \
+    crates/conary-core/build.rs \
+    crates/conary-core/src/repository/architecture.rs \
+    crates/conary-core/src/repository/catalog/parity/mod.rs \
+    crates/conary-core/src/repository/catalog/parity/resolution_survey.rs \
+    crates/conary-core/src/repository/catalog/parity/candidate_resolution.rs \
+    docs/specs/remi-native-parity-oracle.md \
+    scripts/produce-native-oracle-lane.py \
+    scripts/test-produce-native-oracle-lane.py \
+    scripts/test-native-oracle-input-transport.py \
+    scripts/verify-native-oracle-input-transport.py \
+    apps/remi/src/server/universe_revision_inspection.rs; do
+    "$script" --path "$native_parity_path" > "$tmp/real-native-parity.out"
+    grep -q '^slug: native-parity$' "$tmp/real-native-parity.out" \
+        || fail "$native_parity_path did not route to the native-parity card"
+done
 "$script" --path crates/conary-core/src/canonical/exchange.rs > "$tmp/real-canonical-map.out"
 grep -q '^slug: canonical-map$' "$tmp/real-canonical-map.out" \
     || fail "canonical exchange did not route to the canonical-map card"
