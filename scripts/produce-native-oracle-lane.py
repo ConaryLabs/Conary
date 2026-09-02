@@ -40,6 +40,8 @@ LANES = {
 }
 SHA256_LENGTH = 64
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+NATIVE_PACKAGE_ORACLE_SCHEMA = 1
+NATIVE_RESOLUTION_ORACLE_SCHEMA = 2
 
 
 def canonical_json(value: Any) -> bytes:
@@ -217,6 +219,7 @@ def oracle_evidence(
     profile: dict[str, Any],
     lane: dict[str, Any],
     label: str,
+    required_schema: int,
     package_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     plain_directory(directory, f"{label} directory")
@@ -224,8 +227,8 @@ def oracle_evidence(
         raise ValueError(f"{label} entries are incomplete or unexpected")
     manifest, manifest_bytes = load_canonical(directory / "manifest.json", f"{label} manifest")
     artifact = plain_file(directory / artifact_name, f"{label} artifact")
-    if manifest.get("schema_version") != 1:
-        raise ValueError(f"{label} schema must be 1")
+    if manifest.get("schema_version") != required_schema:
+        raise ValueError(f"{label} schema must be {required_schema}")
     if manifest.get("profile") != profile["revision"]["profile"] or manifest.get("profile_revision_sha256") != profile["profile_revision_sha256"]:
         raise ValueError(f"{label} does not bind the exact profile revision")
     if manifest.get("members") != profile["revision"].get("members"):
@@ -248,6 +251,7 @@ def oracle_evidence(
         ):
             raise ValueError("native resolution target architecture drifted")
     return {
+        "schema_version": manifest["schema_version"],
         "manifest_sha256": sha256(manifest_bytes),
         "artifact": {
             "name": artifact_name,
@@ -306,13 +310,21 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         ))
         invoke(resolution_command, "native resolution producer")
 
-    package = oracle_evidence(package_output, "packages.jsonl", profile, lane, "native package oracle")
+    package = oracle_evidence(
+        package_output,
+        "packages.jsonl",
+        profile,
+        lane,
+        "native package oracle",
+        NATIVE_PACKAGE_ORACLE_SCHEMA,
+    )
     resolution = oracle_evidence(
         resolution_output,
         "roots.jsonl",
         profile,
         lane,
         "native resolution oracle",
+        NATIVE_RESOLUTION_ORACLE_SCHEMA,
         package["manifest_sha256"],
     )
     evidence = {

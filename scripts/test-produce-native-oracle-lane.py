@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -52,9 +53,9 @@ elif "debian" in name:
     ecosystem, implementation, version = "debian", "apt-pkg", "3.2.0"
 else:
     ecosystem, implementation, version = "alpm", "libalpm", "15.0.0"
-impl = {"ecosystem": ecosystem, "name": implementation, "projection_schema": 1, "version": version}
 revision_sha = hashlib.sha256(canonical(profile)).hexdigest()
 if "--package-oracle" not in args:
+    impl = {"ecosystem": ecosystem, "name": implementation, "projection_schema": 1, "version": version}
     artifact = output / "packages.jsonl"
     artifact.write_bytes(b"")
     manifest = {
@@ -67,6 +68,8 @@ if "--package-oracle" not in args:
         "schema_version": 1,
     }
 else:
+    resolution_projection = {"rpm": 4, "debian": 2, "alpm": 2}[ecosystem]
+    impl = {"ecosystem": ecosystem, "name": implementation, "projection_schema": resolution_projection, "version": version}
     artifact = output / "roots.jsonl"
     artifact.write_bytes(b"")
     package_manifest = (Path(one("--package-oracle")) / "manifest.json").read_bytes()
@@ -79,13 +82,41 @@ else:
         "profile": profile["profile"],
         "profile_logical_digest_sha256": "b" * 64,
         "profile_revision_sha256": revision_sha,
-        "schema_version": 1,
+        "schema_version": 2,
     }
 (output / "manifest.json").write_bytes(canonical(manifest))
 '''
 
 
 class NativeOracleLaneTests(unittest.TestCase):
+    def test_pinned_oracle_schemas_match_rust_authority(self) -> None:
+        def constant(path: Path, name: str) -> int:
+            match = re.search(
+                rf"^pub const {name}: u32 = ([0-9]+);$",
+                path.read_text(),
+                re.MULTILINE,
+            )
+            self.assertIsNotNone(match, f"missing Rust constant {name}")
+            return int(match.group(1))
+
+        script = PRODUCER.read_text()
+        package_pin = re.search(r"^NATIVE_PACKAGE_ORACLE_SCHEMA = ([0-9]+)$", script, re.MULTILINE)
+        resolution_pin = re.search(r"^NATIVE_RESOLUTION_ORACLE_SCHEMA = ([0-9]+)$", script, re.MULTILINE)
+        self.assertIsNotNone(package_pin)
+        self.assertIsNotNone(resolution_pin)
+        parity_root = REPO_ROOT / "crates/conary-core/src/repository/catalog/parity"
+        self.assertEqual(
+            int(package_pin.group(1)),
+            constant(parity_root / "contract.rs", "NATIVE_PARITY_ORACLE_SCHEMA_V1"),
+        )
+        self.assertEqual(
+            int(resolution_pin.group(1)),
+            constant(
+                parity_root / "resolution_contract.rs",
+                "NATIVE_RESOLUTION_ORACLE_SCHEMA_V2",
+            ),
+        )
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
@@ -149,7 +180,7 @@ class NativeOracleLaneTests(unittest.TestCase):
                 "--architecture", architecture,
                 "--package-producer", str(package),
                 "--resolution-producer", str(resolution),
-                "--output-root", str(self.root / "output"),
+                "--output-root", str(self.root / f"output-{profile}"),
                 "--export-id", "slice6-test",
                 "--deployed-commit", COMMIT,
             ],
@@ -163,9 +194,31 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         evidence = json.loads(result.stdout)
         self.assertEqual(evidence["profile"], "fedora-44")
+        self.assertEqual(evidence["package_oracle"]["schema_version"], 1)
+        self.assertEqual(evidence["resolution_oracle"]["schema_version"], 2)
         self.assertEqual(evidence["package_oracle"]["implementation"]["version"], "0.7.36")
+        self.assertEqual(evidence["resolution_oracle"]["implementation"]["projection_schema"], 4)
         self.assertEqual(evidence["resolution_oracle"]["implementation"]["name"], "libsolv")
-        self.assertEqual((self.root / "output" / "evidence.json").read_bytes(), canonical(evidence))
+        self.assertEqual(
+            (self.root / "output-fedora-44" / "evidence.json").read_bytes(),
+            canonical(evidence),
+        )
+
+    def test_fake_matches_current_resolution_projection_schemas(self) -> None:
+        for profile, architecture, projection_schema in (
+            ("fedora-44", "x86_64", 4),
+            ("ubuntu-26.04", "amd64", 2),
+            ("arch", "x86_64", 2),
+        ):
+            with self.subTest(profile=profile):
+                result = self.run_lane(profile, architecture)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                evidence = json.loads(result.stdout)
+                self.assertEqual(evidence["resolution_oracle"]["schema_version"], 2)
+                self.assertEqual(
+                    evidence["resolution_oracle"]["implementation"]["projection_schema"],
+                    projection_schema,
+                )
 
     def test_rejects_reordered_public_profiles(self) -> None:
         self.manifest["profiles"].reverse()

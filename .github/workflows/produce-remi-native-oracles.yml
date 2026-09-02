@@ -279,17 +279,21 @@ jobs:
         run: |
           set -euo pipefail
           evidence="${RUNNER_TEMP}/native-oracles-${PROFILE}/evidence.json"
+          jq -e '
+            .package_oracle.schema_version == 1 and
+            .resolution_oracle.schema_version == 2
+          ' "$evidence" >/dev/null
           case "$PROFILE" in
             fedora-44)
               jq -e '
                 .package_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:1,version:"0.7.36"} and
-                .resolution_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:3,version:"0.7.36"}
+                .resolution_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:4,version:"0.7.36"}
               ' "$evidence" >/dev/null
               ;;
             ubuntu-26.04)
               jq -e '
                 .package_oracle.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:1,version:"3.2.0"} and
-                .resolution_oracle.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:1,version:"3.2.0"}
+                .resolution_oracle.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:2,version:"3.2.0"}
               ' "$evidence" >/dev/null
               ;;
             arch)
@@ -300,7 +304,7 @@ jobs:
                 .package_oracle.implementation.version == .resolution_oracle.implementation.version and
                 .resolution_oracle.implementation.ecosystem == "alpm" and
                 .resolution_oracle.implementation.name == "libalpm" and
-                .resolution_oracle.implementation.projection_schema == 1
+                .resolution_oracle.implementation.projection_schema == 2
               ' "$evidence" >/dev/null
               ;;
           esac
