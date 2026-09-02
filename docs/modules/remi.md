@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-02
-revision: 129
+revision: 130
 summary: Document profile-owned native-only typed architecture admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native resolution projection surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -80,10 +80,14 @@ architecture, each member's role, precedence, required state, ordered source
 identity, and one composed
 profile catalog under `catalogs/profiles/<manifest-sha256>/`. Core contract and
 bundle verification live in `crates/conary-core/src/repository/catalog/`.
-Profile catalog projection version 3 is the current hard cut. Existing schema-2
-profile revisions and projection-version-2 profile catalogs do not carry the
-architecture authority, are invalid, and must be rebuilt by refresh; no
-compatibility reader or migration adapter remains.
+Profile catalog projection version 3 is the current hard cut. Upgrade-tolerant
+inspection classifies a stored schema-2 profile revision as
+`ObsoleteSchema { found: 2, required: 3 }`; refresh records that non-reuse
+decision and composes a schema-3 replacement. Deployment and readiness report
+the obsolete active or candidate revision as unpopulated until that refresh
+finishes. Serving and promotion remain strict: schema-2 profile revisions and
+projection-version-2 profile catalogs never become readable authority, and no
+compatibility deserializer or migration adapter remains.
 Every serving projection resolves a package origin back to that manifest.
 When two members publish the same source-independent native package identity,
 profile composition retains the member with the exact higher declared

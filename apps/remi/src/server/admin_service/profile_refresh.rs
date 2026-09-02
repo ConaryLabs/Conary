@@ -307,14 +307,37 @@ async fn stage_profile_catalog_with_heartbeat(
 ) -> anyhow::Result<(StagedProfileCatalog, ProfileHeartbeat)> {
     let heartbeat = spawn_profile_heartbeat(roots, run)?;
     let staged = async {
-        let reusable_sources =
-            source_reuse::registered_source_reuse(roots, source_profile, plans).await?;
+        let reusable = source_reuse::registered_source_reuse(roots, source_profile, plans).await?;
+        match &reusable.decision {
+            source_reuse::ReuseDecision::NoReusableRevision => tracing::info!(
+                source_profile,
+                reuse_decision = "no_reusable_revision",
+                "profile refresh selected no registered source reuse"
+            ),
+            source_reuse::ReuseDecision::Reused {
+                profile_revision_sha256,
+                sources,
+            } => tracing::info!(
+                source_profile,
+                profile_revision_sha256,
+                sources,
+                reuse_decision = "reused",
+                "profile refresh selected registered source reuse"
+            ),
+            source_reuse::ReuseDecision::ObsoleteSchema { found, required } => tracing::info!(
+                source_profile,
+                found,
+                required,
+                reuse_decision = "obsolete_schema",
+                "profile refresh rejected an obsolete profile revision for reuse"
+            ),
+        }
         let sources = stage_profile_sources(
             &run.run_id,
             source_profile,
             ProfileSourceStageInput {
                 repositories,
-                reusable_sources,
+                reusable_sources: reusable.sources,
             },
             &roots.keyring_dir,
             &roots.catalog_candidate_dir,
@@ -346,10 +369,29 @@ async fn reusable_profile_catalog(
         let authority = roots.catalog_authority.clone();
         let inspected_selection = selection.clone();
         let inspection = tokio::task::spawn_blocking(move || {
-            authority.inspect_selected_profile(&inspected_selection)
+            authority.inspect_selected_profile_for_upgrade(&inspected_selection)
         })
         .await
         .context("reusable profile inspection task panicked")??;
+        let inspection = match inspection {
+            crate::server::catalog_authority::ProfileRevisionInspection::Current(inspection) => {
+                inspection
+            }
+            crate::server::catalog_authority::ProfileRevisionInspection::ObsoleteSchema {
+                found,
+                required,
+            } => {
+                tracing::info!(
+                    source_profile,
+                    profile_revision_sha256 = %selection.profile_revision_sha256,
+                    found,
+                    required,
+                    reuse_decision = "obsolete_schema",
+                    "profile refresh rejected an obsolete profile catalog for reuse"
+                );
+                continue;
+            }
+        };
         if !profile_revision_matches_contract(&inspection.manifest, source_profile, members) {
             continue;
         }
@@ -484,8 +526,15 @@ async fn current_catalog_matches_plan(
                 .map(|catalog| profile_members_match_plan(&catalog.manifest().members, &plans));
         }
         authority
-            .inspect_active_profile(&source_profile)
-            .map(|catalog| profile_members_match_plan(&catalog.manifest.members, &plans))
+            .inspect_active_profile_for_upgrade(&source_profile)
+            .map(|inspection| match inspection {
+                crate::server::catalog_authority::ProfileRevisionInspection::Current(catalog) => {
+                    profile_members_match_plan(&catalog.manifest.members, &plans)
+                }
+                crate::server::catalog_authority::ProfileRevisionInspection::ObsoleteSchema {
+                    ..
+                } => false,
+            })
     })
     .await
     .is_ok_and(|result| result.unwrap_or(false))

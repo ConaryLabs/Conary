@@ -363,6 +363,34 @@ fn private_candidate_population_comes_from_the_exact_current_candidate() {
 }
 
 #[test]
+fn obsolete_profile_revisions_are_unpopulated_deployment_state() {
+    use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
+
+    let active = ActiveCatalogFixture::new();
+    let active_revision = active.activate("fedora-44", 1, Vec::new());
+    let obsolete_active = active.replace_with_obsolete_schema(&active_revision);
+    let configured = vec![("fedora-44".to_string(), 2)];
+    let profiles =
+        inspect_deployment_profiles(&active.connection(), active.authority(), &configured)
+            .expect("inspect obsolete active revision");
+    assert_eq!(
+        profiles[0].profile_revision_sha256.as_deref(),
+        Some(obsolete_active.as_str())
+    );
+    assert_eq!(profiles[0].packages, 0);
+    assert_eq!(profiles[0].converted_packages, 0);
+
+    let candidate = ActiveCatalogFixture::new();
+    let candidate_revision = candidate.candidate("fedora-44", 1, Vec::new());
+    candidate.replace_with_obsolete_schema(&candidate_revision);
+    let candidates =
+        inspect_deployment_candidates(&candidate.connection(), candidate.authority(), &configured)
+            .expect("inspect obsolete candidate revision");
+    assert!(candidates[0].profile_revision_sha256.is_none());
+    assert_eq!(candidates[0].packages, 0);
+}
+
+#[test]
 fn repopulation_requires_current_conversions_and_the_matching_signed_universe() {
     let profile = DeploymentProfileState {
         profile: "fedora-44".to_string(),

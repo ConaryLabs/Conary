@@ -444,8 +444,25 @@ fn inspect_deployment_profiles(
             continue;
         };
         let inspection = authority
-            .inspect_active_profile(profile)
+            .inspect_active_profile_for_upgrade(profile)
             .with_context(|| format!("inspect active immutable profile '{profile}'"))?;
+        let inspection = match inspection {
+            crate::server::catalog_authority::ProfileRevisionInspection::Current(inspection) => {
+                inspection
+            }
+            crate::server::catalog_authority::ProfileRevisionInspection::ObsoleteSchema {
+                ..
+            } => {
+                profiles.push(DeploymentProfileState {
+                    profile: profile.clone(),
+                    configured_sources: *configured_sources,
+                    profile_revision_sha256: Some(pointer.profile_revision_sha256),
+                    packages: 0,
+                    converted_packages: 0,
+                });
+                continue;
+            }
+        };
         if inspection.pointer != pointer {
             bail!("active profile '{profile}' changed during deployment inspection");
         }

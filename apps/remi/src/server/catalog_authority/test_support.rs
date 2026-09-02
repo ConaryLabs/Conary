@@ -103,6 +103,56 @@ impl ActiveCatalogFixture {
         &self.catalog_dir
     }
 
+    pub(crate) fn replace_with_obsolete_schema(&self, revision: &str) -> String {
+        let conn = self.connection();
+        let resource = RemiCatalogResource::find_by_sha256(&conn, revision)
+            .expect("read current profile resource")
+            .expect("current profile resource exists");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&resource.manifest_json).expect("parse current profile manifest");
+        let object = manifest
+            .as_object_mut()
+            .expect("profile manifest is an object");
+        object.insert("schema_version".to_string(), serde_json::Value::from(2));
+        object.remove("target_architecture");
+        let manifest_json = String::from_utf8(
+            conary_core::json::canonical_json(&manifest)
+                .expect("serialize obsolete profile manifest"),
+        )
+        .expect("obsolete profile manifest is UTF-8");
+        let obsolete_revision = conary_core::hash::sha256(manifest_json.as_bytes());
+        RemiCatalogResource {
+            resource_sha256: obsolete_revision.clone(),
+            manifest_json,
+            ..resource
+        }
+        .insert(&conn)
+        .expect("insert obsolete profile resource");
+        for mut member in RemiProfileRevisionMember::list_for_revision(&conn, revision)
+            .expect("list current profile members")
+        {
+            member.profile_revision_sha256 = obsolete_revision.clone();
+            member
+                .insert(&conn)
+                .expect("insert obsolete profile member");
+        }
+        conn.execute(
+            "UPDATE remi_active_profile_revisions
+             SET profile_revision_sha256 = ?1
+             WHERE profile_revision_sha256 = ?2",
+            rusqlite::params![&obsolete_revision, revision],
+        )
+        .expect("select obsolete active profile revision");
+        conn.execute(
+            "UPDATE repository_sync_runs
+             SET candidate_profile_digest = ?1
+             WHERE candidate_profile_digest = ?2",
+            rusqlite::params![&obsolete_revision, revision],
+        )
+        .expect("select obsolete candidate profile revision");
+        obsolete_revision
+    }
+
     pub(crate) fn connection(&self) -> rusqlite::Connection {
         conary_core::db::open_fast(&self.db_path).expect("open fixture database")
     }

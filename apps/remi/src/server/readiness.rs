@@ -276,7 +276,14 @@ fn active_profile_is_populated(
     catalog_authority: &CatalogAuthority,
     profile: &str,
 ) -> anyhow::Result<bool> {
-    let inspection = catalog_authority.inspect_active_profile(profile)?;
+    let inspection = match catalog_authority.inspect_active_profile_for_upgrade(profile)? {
+        crate::server::catalog_authority::ProfileRevisionInspection::Current(inspection) => {
+            inspection
+        }
+        crate::server::catalog_authority::ProfileRevisionInspection::ObsoleteSchema { .. } => {
+            return Ok(false);
+        }
+    };
     conary_core::repository::supported_profiles::profile_by_public_id(profile)
         .ok_or_else(|| anyhow::anyhow!("profile '{profile}' has no public support contract"))?;
     if inspection.manifest.validate_member_contract().is_err() {
@@ -421,6 +428,20 @@ mod tests {
         schema::ensure_current(&conn).expect("initialize current schema");
         conary_core::db::models::RemiRuntimeSession::begin(&conn, 1)
             .expect("install readiness runtime session");
+    }
+
+    #[test]
+    fn obsolete_active_profile_is_not_ready_instead_of_unavailable() {
+        use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
+
+        let fixture = ActiveCatalogFixture::new();
+        let revision = fixture.activate("fedora-44", 1, Vec::new());
+        fixture.replace_with_obsolete_schema(&revision);
+
+        assert!(
+            !active_profile_is_populated(fixture.authority(), "fedora-44")
+                .expect("classify obsolete active profile")
+        );
     }
 
     fn configure_profile(db_path: &Path, profile: &str) -> i64 {
