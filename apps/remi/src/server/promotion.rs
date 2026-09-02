@@ -70,7 +70,13 @@ struct ActiveUniverseBinding {
     sequence: u64,
     promotion_evidence_sha256: String,
     conversion_crawl_sha256: String,
-    manifest: RemiUniverseManifestV2,
+    manifest: ActiveUniverseManifest,
+}
+
+#[derive(Debug)]
+enum ActiveUniverseManifest {
+    Current(RemiUniverseManifestV2),
+    ObsoleteProfileSchema,
 }
 
 struct PromotionProfile {
@@ -127,6 +133,7 @@ pub(crate) async fn activate_remi_promotion(
     let reopened_objects = reopen_all_objects(&spool, object_authority).await?;
 
     if let Some(active_binding) = active.as_ref()
+        && let ActiveUniverseManifest::Current(active_manifest) = &active_binding.manifest
         && active_matches(
             active_binding,
             &profiles,
@@ -137,7 +144,7 @@ pub(crate) async fn activate_remi_promotion(
     {
         verify_published_bundle(
             &config.catalog_dir,
-            &active_binding.manifest,
+            active_manifest,
             &active_binding.manifest_sha256,
             &profile_physical_attestations,
         )?;
@@ -511,14 +518,18 @@ fn load_active_universe(conn: &Connection) -> Result<Option<ActiveUniverseBindin
     .optional()?
     .map(
         |(manifest_sha256, sequence, promotion_evidence, conversion_crawl, manifest_json)| {
-            let manifest: RemiUniverseManifestV2 = serde_json::from_str(&manifest_json)
-                .context("parse active Remi universe manifest")?;
-            manifest.validate().map_err(anyhow::Error::from)?;
-            ensure!(
-                manifest.manifest_sha256()? == manifest_sha256
-                    && manifest.sequence == u64::try_from(sequence)?,
-                "active Remi universe pointer disagrees with its manifest"
-            );
+            let manifest = match super::universe_revision_inspection::inspect_stored_universe_manifest_v2(
+                &manifest_sha256,
+                sequence,
+                &manifest_json,
+            )? {
+                super::universe_revision_inspection::StoredUniverseManifestV2::Current(manifest) => {
+                    ActiveUniverseManifest::Current(manifest)
+                }
+                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteProfileSchema => {
+                    ActiveUniverseManifest::ObsoleteProfileSchema
+                }
+            };
             Ok(ActiveUniverseBinding {
                 manifest_sha256,
                 sequence: u64::try_from(sequence)?,
@@ -538,6 +549,9 @@ fn active_matches(
     promotion_evidence_sha256: &str,
     conversion_crawl_sha256: &str,
 ) -> Result<bool> {
+    let ActiveUniverseManifest::Current(active_manifest) = &active.manifest else {
+        return Ok(false);
+    };
     let mut expected_profiles = profiles
         .iter()
         .map(|profile| &profile.manifest)
@@ -546,11 +560,10 @@ fn active_matches(
     Ok(profiles.iter().all(|profile| profile.activation.is_none())
         && active.promotion_evidence_sha256 == promotion_evidence_sha256
         && active.conversion_crawl_sha256 == conversion_crawl_sha256
-        && active.manifest.canonical_map.sha256
+        && active_manifest.canonical_map.sha256
             == conary_core::hash::sha256(&canonical_bytes(canonical_map)?)
-        && active.manifest.profiles.len() == profiles.len()
-        && active
-            .manifest
+        && active_manifest.profiles.len() == profiles.len()
+        && active_manifest
             .profiles
             .iter()
             .zip(expected_profiles)

@@ -290,6 +290,24 @@ async fn refresh_native_profile_inner(
     Ok((results, reuse_decision))
 }
 
+#[cfg(test)]
+pub(crate) async fn refresh_native_profile_for_upgrade_test(
+    state: &std::sync::Arc<tokio::sync::RwLock<ServerState>>,
+    source_profile: String,
+    repositories: Vec<Repository>,
+    staged_source_selection: ProfileRevisionSelection,
+) -> Result<Vec<RepoRefreshResult>, ServiceError> {
+    refresh_native_profile_inner(
+        state,
+        source_profile,
+        repositories,
+        true,
+        Some(staged_source_selection),
+    )
+    .await
+    .map(|(results, _)| results)
+}
+
 fn profile_stage_service_error(error: &anyhow::Error) -> ServiceError {
     if let Some(conary_core::Error::CatalogScratchCapacity(capacity)) = error
         .chain()

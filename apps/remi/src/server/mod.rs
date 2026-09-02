@@ -69,6 +69,7 @@ pub mod security;
 pub(crate) mod signing_authority;
 pub mod test_db;
 mod universe_publish;
+pub(crate) mod universe_revision_inspection;
 mod universe_validation;
 
 pub(crate) use analytics::AnalyticsRecorder;

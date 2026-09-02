@@ -316,18 +316,20 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         Some((sha256, sequence, promotion_evidence, conversion_crawl, manifest_json)) => {
             let sequence =
                 u64::try_from(sequence).context("active universe sequence is negative")?;
-            let manifest = serde_json::from_str::<RemiUniverseManifestV2>(&manifest_json)
-                .context("parse active Remi universe manifest")?;
-            manifest.validate().map_err(anyhow::Error::from)?;
-            if manifest.sequence != sequence || manifest.manifest_sha256()? != sha256 {
-                bail!("active Remi universe pointer disagrees with its manifest authority");
-            }
+            let manifest = match super::universe_revision_inspection::inspect_stored_universe_manifest_v2(
+                &sha256,
+                i64::try_from(sequence).context("active universe sequence exceeds SQLite INTEGER range")?,
+                &manifest_json,
+            )? {
+                super::universe_revision_inspection::StoredUniverseManifestV2::Current(manifest) => Some(manifest),
+                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteProfileSchema => None,
+            };
             (
                 Some(sha256),
                 sequence,
                 Some(promotion_evidence),
                 Some(conversion_crawl),
-                Some(manifest),
+                manifest,
             )
         }
         None => (None, 0, None, None, None),
