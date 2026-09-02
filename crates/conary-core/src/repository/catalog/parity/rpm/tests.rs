@@ -1483,7 +1483,7 @@ fn resolution_producer_excludes_cross_machine_provider_from_provider_index() {
     let root = root.unwrap();
     let missing = root.requirement_groups.first().unwrap();
     let resolution_reader = verify_native_resolution_oracle_bundle(
-        &directory.path().join("inferior-provider-resolution"),
+        directory.path().join("inferior-provider-resolution"),
         &profile,
         &package_reader,
     )
