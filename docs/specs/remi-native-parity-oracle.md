@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define strict native parity artifacts with profile-owned source-derived three-valued architecture admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
+summary: Define strict native parity artifacts with profile-owned source-derived full machine-identity admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
 last_updated: 2026-09-02
-revision: 23
+revision: 24
 status: active
 ---
 
@@ -272,19 +272,32 @@ free-form policy: the installed state is empty, every exact package variant is
 requested as its exact root, only required and pre-required groups enter the
 positive solve, optional and build groups are excluded, and provider choice
 uses native repository precedence. `architecture_admission: native_only`
-admits only the effective native machine architecture, source-authoritative
-compatible aliases, and the source scheme's architecture-independent token
-(`noarch`, `all`, or `any`). Its decision is the closed runtime enum
-`Admitted`, `Excluded { class: NativeMachineArchitectureClassV1 }`, or
+admits only equality of the complete source-derived machine identity and the
+source scheme's architecture-independent token (`noarch`, `all`, or `any`),
+which resolves to the target identity for comparison. Its decision is the
+closed runtime enum
+`Admitted`, `Excluded { identity: NativeMachineIdentityV1 }`, or
 `UnknownArchitectureToken { scheme, token }`. Only `Excluded` may produce
 `not_installable { reason: architecture_excluded }`. Unknown tokens return the
 typed producer error and the diagnostics-only survey records the separate
 `unknown_architecture_token` error kind. This resolution-time branch is an
 invariant guard because the package oracle must already have rejected the row.
+`NativeMachineIdentityV1` preserves the dimensions published by each pinned
+table. A dpkg identity contains the `cputable` GNU CPU name, pointer bits, and
+endianness plus the `tupletable` ABI, libc, and OS components. An RPM identity
+contains the exact `arch_canon` result; `arch_compat` and `buildarch_compat`
+only establish that a token is known and never grant native-only equality. A
+makepkg identity contains exact `CARCH`. Cross-scheme identities exist only
+where those fields justify the complete mapping: Debian `amd64`, `arm64`,
+`ppc64el`, `s390x`, `riscv64`, and `i386` map respectively to RPM
+`x86_64`, `aarch64`, `ppc64le`, `s390x`, `riscv64`, and `i686`; the pinned
+Arch `x86_64` `CARCH` joins the first mapping. Debian `armhf` does not equal
+RPM `armv7hl`, and `armel` does not equal `armv5tel` or `armv7l`, because the
+vendored fields do not establish the missing ARM ISA/float-ABI equivalence.
 Native solvers apply their pinned package-manager architecture policy to
-provider selection, while the Conary candidate resolver uses the same checked
-source-derived token classes for root and provider matching. A different
-policy requires a schema change.
+provider selection, while the Conary candidate resolver uses the same full
+identities for root and provider matching. A different policy requires a
+schema change.
 The three native producers and the Conary candidate producer derive the solver
 architecture from the profile revision. Their `--architecture` or operator
 input is only an assertion: a mismatch returns the typed

@@ -40,7 +40,7 @@ pub use debian::{
 };
 
 pub use crate::repository::architecture::{
-    NativeMachineArchitectureClassV1, NativeResolutionArchitectureDecisionV1,
+    NativeMachineEndiannessV1, NativeMachineIdentityV1, NativeResolutionArchitectureDecisionV1,
 };
 pub use candidate_resolution::{
     CONARY_RESOLUTION_PROJECTION_SCHEMA_V2, ConaryResolutionCandidateV1,

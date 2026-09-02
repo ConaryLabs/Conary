@@ -96,6 +96,41 @@ fn architecture_equivalence_requires_both_owning_schemes() {
 }
 
 #[test]
+fn ordinary_matching_preserves_abi_dimensions() {
+    for (scheme, package, native) in [
+        (VersionScheme::Debian, "armel", "armhf"),
+        (VersionScheme::Debian, "mips", "mipsel"),
+        (VersionScheme::Debian, "mips64", "mips64el"),
+        (VersionScheme::Debian, "ppc64", "ppc64el"),
+        (VersionScheme::Debian, "sparc", "sparc64"),
+        (VersionScheme::Rpm, "armv7l", "armv7hl"),
+    ] {
+        assert!(!PackageSelector::is_architecture_compatible(
+            scheme,
+            Some(package),
+            native,
+        ));
+    }
+}
+
+#[test]
+fn independent_tokens_resolve_to_the_same_native_identity_across_schemes() {
+    for (left_scheme, left, right_scheme, right) in [
+        (VersionScheme::Rpm, "noarch", VersionScheme::Debian, "all"),
+        (VersionScheme::Debian, "all", VersionScheme::Arch, "any"),
+        (VersionScheme::Arch, "any", VersionScheme::Rpm, "x86_64"),
+    ] {
+        assert!(package_architectures_match(
+            left_scheme,
+            left,
+            right_scheme,
+            right,
+            "x86_64",
+        ));
+    }
+}
+
+#[test]
 fn test_debian_all_architecture_compatible() {
     assert!(PackageSelector::is_architecture_compatible(
         VersionScheme::Debian,

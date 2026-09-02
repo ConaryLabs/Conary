@@ -469,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_installed_respects_requested_architecture() {
+    fn test_check_installed_respects_exact_rpm_arch_canon_identity() {
         let (_temp, conn) = create_test_db();
         conn.execute(
             "INSERT INTO troves (
@@ -493,7 +493,7 @@ mod tests {
             .unwrap();
         assert!(mismatched.is_none());
 
-        let alias_match = resolver
+        let arch_compat_only = resolver
             .check_installed(
                 "nginx",
                 &ResolutionOptions {
@@ -502,6 +502,17 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(matches!(alias_match, Some(PackageSource::Installed { .. })));
+        assert!(arch_compat_only.is_none());
+
+        let exact = resolver
+            .check_installed(
+                "nginx",
+                &ResolutionOptions {
+                    architecture: Some("x86_64".to_string()),
+                    ..ResolutionOptions::default()
+                },
+            )
+            .unwrap();
+        assert!(matches!(exact, Some(PackageSource::Installed { .. })));
     }
 }

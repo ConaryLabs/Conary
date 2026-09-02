@@ -14,7 +14,7 @@
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use crate::repository::architecture::{
-    KnownPackageArchitecture, NativeMachineArchitectureClassV1, host_machine_class,
+    KnownPackageArchitecture, NativeMachineIdentityV1, host_machine_identity,
     known_package_architecture, native_resolution_architecture_decision,
 };
 use crate::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
@@ -460,7 +460,7 @@ pub fn package_architectures_match(
 /// Typed machine identity shared only by non-admission literal comparisons.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MachineArchitecture {
-    Known(NativeMachineArchitectureClassV1),
+    Known(NativeMachineIdentityV1),
     Literal(String),
 }
 
@@ -476,7 +476,10 @@ fn effective_machine_architecture(
 }
 
 fn is_architecture_independent(scheme: VersionScheme, architecture: &str) -> bool {
-    known_package_architecture(scheme, architecture) == Some(KnownPackageArchitecture::Independent)
+    matches!(
+        known_package_architecture(scheme, architecture),
+        Some(KnownPackageArchitecture::Independent)
+    )
 }
 
 fn package_machine_architecture(scheme: VersionScheme, architecture: &str) -> MachineArchitecture {
@@ -489,7 +492,7 @@ fn package_machine_architecture(scheme: VersionScheme, architecture: &str) -> Ma
 }
 
 fn native_machine_architecture(architecture: &str) -> MachineArchitecture {
-    host_machine_class(architecture)
+    host_machine_identity(architecture)
         .map(MachineArchitecture::Known)
         .unwrap_or_else(|| MachineArchitecture::Literal(architecture.to_string()))
 }

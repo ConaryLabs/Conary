@@ -2,41 +2,68 @@
 
 //! Pinned source-derived package architecture authority.
 
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
 use crate::error::{Error, Result};
 use crate::repository::versioning::VersionScheme;
 
-/// Machine classes projected from the pinned upstream architecture tables.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeMachineArchitectureClassV1 {
-    X86_64,
-    X86_64V2,
-    X86_64V3,
-    X86_64V4,
-    X86_64X32,
-    X86_32,
-    Aarch64,
-    Alpha,
-    Arc,
-    Arm32,
-    E2k,
-    Hppa,
-    Ia64,
-    LoongArch64,
-    M68k,
-    Mips,
-    Nios2,
-    OpenRisc,
-    PowerPc32,
-    PowerPc64,
-    PowerPc64Le,
-    RiscV64,
-    S390,
-    S390x,
-    SuperH,
-    Sparc,
-    Sparc64,
-    Universal,
-    Xtensa,
+const RPM_TABLES: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/architecture/rpm-6.0.1-rpmrc-architecture-tables.txt"
+));
+const DPKG_CPUTABLE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/architecture/dpkg-1.23.7-cputable"
+));
+const DPKG_TUPLETABLE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/architecture/dpkg-1.23.7-tupletable"
+));
+const ARCH_TABLE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/architecture/arch-2026-08-02-architecture-authority.txt"
+));
+
+/// Endianness stated by dpkg's pinned `cputable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NativeMachineEndiannessV1 {
+    Big,
+    Little,
+}
+
+/// Exact machine identity projected from the owning pinned architecture table.
+///
+/// The variants deliberately retain the dimensions each upstream authority
+/// actually publishes. `CrossScheme` is used only where those published fields
+/// justify one complete identity across package schemes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NativeMachineIdentityV1 {
+    CrossScheme {
+        cpu: String,
+        cpu_bits: u16,
+        endianness: NativeMachineEndiannessV1,
+        abi: String,
+        libc: String,
+        os: String,
+    },
+    Dpkg {
+        cpu: String,
+        cpu_bits: u16,
+        endianness: NativeMachineEndiannessV1,
+        abi: String,
+        libc: String,
+        os: String,
+    },
+    Rpm {
+        canonical_architecture: String,
+    },
+    Makepkg {
+        carch: String,
+    },
+    Conary {
+        architecture: String,
+    },
 }
 
 /// Three-valued native-only architecture admission.
@@ -44,7 +71,7 @@ pub enum NativeMachineArchitectureClassV1 {
 pub enum NativeResolutionArchitectureDecisionV1 {
     Admitted,
     Excluded {
-        class: NativeMachineArchitectureClassV1,
+        identity: NativeMachineIdentityV1,
     },
     UnknownArchitectureToken {
         scheme: VersionScheme,
@@ -71,10 +98,34 @@ impl NativeResolutionArchitectureDecisionV1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KnownPackageArchitecture {
     Independent,
-    Machine(NativeMachineArchitectureClassV1),
+    Machine(NativeMachineIdentityV1),
+}
+
+#[derive(Debug)]
+struct DpkgCpu {
+    gnu_name: String,
+    bits: u16,
+    endianness: NativeMachineEndiannessV1,
+}
+
+#[derive(Debug)]
+struct ArchitectureAuthority {
+    rpm: BTreeMap<String, KnownPackageArchitecture>,
+    debian: BTreeMap<String, KnownPackageArchitecture>,
+    arch: BTreeMap<String, KnownPackageArchitecture>,
+}
+
+static ARCHITECTURE_AUTHORITY: OnceLock<ArchitectureAuthority> = OnceLock::new();
+
+fn authority() -> &'static ArchitectureAuthority {
+    ARCHITECTURE_AUTHORITY.get_or_init(|| ArchitectureAuthority {
+        rpm: parse_rpm_authority(),
+        debian: parse_dpkg_authority(),
+        arch: parse_makepkg_authority(),
+    })
 }
 
 /// Reject a package architecture that is absent from its pinned source table.
@@ -101,23 +152,20 @@ pub fn native_resolution_architecture_decision(
             token: package_token.to_string(),
         };
     };
-    if package == KnownPackageArchitecture::Independent {
-        return NativeResolutionArchitectureDecisionV1::Admitted;
-    }
-    let KnownPackageArchitecture::Machine(class) = package else {
-        unreachable!("independent architecture returned above")
-    };
-    let Some(target_class) = target_machine_class(scheme, target_token) else {
+    let Some(target_identity) = target_machine_identity(scheme, target_token) else {
         return NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken {
             scheme,
             token: target_token.to_string(),
         };
     };
-    let admitted = class == target_class;
-    if admitted {
+    let identity = match package {
+        KnownPackageArchitecture::Independent => target_identity.clone(),
+        KnownPackageArchitecture::Machine(identity) => identity,
+    };
+    if identity == target_identity {
         NativeResolutionArchitectureDecisionV1::Admitted
     } else {
-        NativeResolutionArchitectureDecisionV1::Excluded { class }
+        NativeResolutionArchitectureDecisionV1::Excluded { identity }
     }
 }
 
@@ -126,169 +174,244 @@ pub(crate) fn known_package_architecture(
     token: &str,
 ) -> Option<KnownPackageArchitecture> {
     match scheme {
-        VersionScheme::Rpm => rpm_architecture(token),
-        VersionScheme::Debian => debian_architecture(token),
-        VersionScheme::Arch => arch_architecture(token),
+        VersionScheme::Rpm => authority().rpm.get(token).cloned(),
+        VersionScheme::Debian => authority().debian.get(token).cloned(),
+        VersionScheme::Arch => authority().arch.get(token).cloned(),
         VersionScheme::Conary => conary_architecture(token),
         VersionScheme::Eopkg => None,
     }
 }
 
-fn target_machine_class(
-    scheme: VersionScheme,
-    token: &str,
-) -> Option<NativeMachineArchitectureClassV1> {
+fn target_machine_identity(scheme: VersionScheme, token: &str) -> Option<NativeMachineIdentityV1> {
     match known_package_architecture(scheme, token) {
-        Some(KnownPackageArchitecture::Machine(class)) => Some(class),
+        Some(KnownPackageArchitecture::Machine(identity)) => Some(identity),
         Some(KnownPackageArchitecture::Independent) => None,
-        None => host_machine_class(token),
+        None => host_machine_identity(token),
     }
 }
 
-pub(crate) fn host_machine_class(token: &str) -> Option<NativeMachineArchitectureClassV1> {
-    use NativeMachineArchitectureClassV1 as Class;
+pub(crate) fn host_machine_identity(token: &str) -> Option<NativeMachineIdentityV1> {
     match token {
-        "x86_64" | "amd64" => Some(Class::X86_64),
-        "x86" | "i386" | "i686" => Some(Class::X86_32),
-        "aarch64" | "arm64" => Some(Class::Aarch64),
-        "arm" | "armv7" | "armhf" => Some(Class::Arm32),
-        "powerpc64le" | "ppc64le" | "ppc64el" => Some(Class::PowerPc64Le),
-        "s390x" => Some(Class::S390x),
-        "riscv64" => Some(Class::RiscV64),
+        "x86_64" | "amd64" => Some(shared_identity("x86_64")),
+        "x86" | "i386" | "i686" => Some(shared_identity("i686")),
+        "aarch64" | "arm64" => Some(shared_identity("aarch64")),
+        "powerpc64le" | "ppc64le" | "ppc64el" => Some(shared_identity("powerpc64le")),
+        "s390x" => Some(shared_identity("s390x")),
+        "riscv64" => Some(shared_identity("riscv64")),
         _ => None,
     }
 }
 
-fn rpm_architecture(token: &str) -> Option<KnownPackageArchitecture> {
-    use KnownPackageArchitecture::{Independent, Machine};
-    use NativeMachineArchitectureClassV1 as Class;
-    let class = match token {
-        "noarch" => return Some(Independent),
-        "fat" => Class::Universal,
-        "x86_64" | "amd64" | "ia32e" | "em64t" => Class::X86_64,
-        "x86_64_v2" => Class::X86_64V2,
-        "x86_64_v3" => Class::X86_64V3,
-        "x86_64_v4" => Class::X86_64V4,
-        "athlon" | "geode" | "pentium3" | "pentium4" | "i386" | "i486" | "i586" | "i686"
-        | "osfmach3_i386" | "osfmach3_i486" | "osfmach3_i586" | "osfmach3_i686" => Class::X86_32,
-        "alpha" | "alphaev5" | "alphaev56" | "alphaev6" | "alphaev67" | "alphapca56" | "axp" => {
-            Class::Alpha
+fn parse_rpm_authority() -> BTreeMap<String, KnownPackageArchitecture> {
+    let mut architectures = BTreeMap::new();
+    for line in data_lines(RPM_TABLES) {
+        let fields = line.split(':').map(str::trim).collect::<Vec<_>>();
+        match fields.first().copied() {
+            Some("arch_canon") => {
+                let input = fields[1];
+                let canonical = fields[2]
+                    .split_whitespace()
+                    .next()
+                    .expect("rpm arch_canon fixture has a canonical architecture");
+                let identity = rpm_identity(canonical);
+                architectures.insert(input.to_string(), identity.clone());
+                architectures
+                    .entry(canonical.to_string())
+                    .or_insert(identity);
+            }
+            Some("arch_compat" | "buildarch_compat") => {
+                for token in std::iter::once(fields[1]).chain(fields[2].split_whitespace()) {
+                    architectures
+                        .entry(token.to_string())
+                        .or_insert_with(|| rpm_identity(token));
+                }
+            }
+            _ => panic!("unexpected RPM architecture fixture line: {line}"),
         }
-        "sparc" | "sun4" | "sun4c" | "sun4d" | "sun4m" | "sparcv8" => Class::Sparc,
-        "sparc64" | "sparc64v" | "sparcv9" | "sparcv9v" | "sun4u" => Class::Sparc64,
-        "IP" | "sgi" | "mips" | "mipsel" | "mips64" | "mips64el" | "mipsr6" | "mipsr6el"
-        | "mips64r6" | "mips64r6el" => Class::Mips,
-        "ppc" | "ppc8260" | "ppc8560" | "ppc32dy4" | "ppciseries" | "ppcpseries" | "powerpc"
-        | "powerppc" | "rs6000" | "osfmach3_ppc" => Class::PowerPc32,
-        "ppc64" | "ppc64iseries" | "ppc64p7" | "ppc64pseries" => Class::PowerPc64,
-        "ppc64le" => Class::PowerPc64Le,
-        "m68k" | "m68kmint" | "atarist" | "atariste" | "ataritt" | "atariclone" | "falcon"
-        | "milan" | "hades" => Class::M68k,
-        "ia64" => Class::Ia64,
-        "armv3l" | "armv4b" | "armv4l" | "armv4tl" | "armv5tl" | "armv5tel" | "armv5tejl"
-        | "armv6l" | "armv6hl" | "armv7l" | "armv7hl" | "armv7hnl" | "armv8l" | "armv8hl"
-        | "armv8hnl" | "armv8hcnl" => Class::Arm32,
-        "s390" | "i370" => Class::S390,
-        "s390x" => Class::S390x,
-        "sh" | "sh3" | "sh4" | "sh4a" => Class::SuperH,
-        "xtensa" => Class::Xtensa,
-        "aarch64" => Class::Aarch64,
-        "riscv" | "riscv64" => Class::RiscV64,
-        "loongarch64" => Class::LoongArch64,
-        "e2k" | "e2kv4" | "e2kv5" | "e2kv6" | "e2k1cp" | "e2k8c" | "e2k8c2" | "e2k16c"
-        | "e2k2c3" => Class::E2k,
-        "hppa1.0" | "hppa1.1" | "hppa1.2" | "hppa2.0" | "parisc" => Class::Hppa,
-        _ => return None,
-    };
-    Some(Machine(class))
-}
-
-fn debian_architecture(token: &str) -> Option<KnownPackageArchitecture> {
-    use KnownPackageArchitecture::{Independent, Machine};
-    use NativeMachineArchitectureClassV1 as Class;
-    if token == "all" {
-        return Some(Independent);
     }
-    let class = match token {
-        "x32" => Class::X86_64X32,
-        "armel" | "armhf" | "uclibc-linux-armel" | "musl-linux-armhf" => Class::Arm32,
-        "mipsn32" | "mipsn32el" | "mipsn32r6" | "mipsn32r6el" => Class::Mips,
-        "hurd-amd64" | "dragonflybsd-amd64" | "freebsd-amd64" | "darwin-amd64"
-        | "solaris-amd64" => Class::X86_64,
-        "hurd-i386" | "freebsd-i386" | "darwin-i386" | "solaris-i386" => Class::X86_32,
-        "freebsd-arm" | "darwin-arm" => Class::Arm32,
-        "freebsd-arm64" | "darwin-arm64" => Class::Aarch64,
-        "freebsd-powerpc" | "darwin-powerpc" | "aix-powerpc" => Class::PowerPc32,
-        "freebsd-ppc64" | "darwin-ppc64" | "aix-ppc64" => Class::PowerPc64,
-        "freebsd-riscv" => Class::RiscV64,
-        "solaris-sparc" => Class::Sparc,
-        "solaris-sparc64" => Class::Sparc64,
-        "mint-m68k" => Class::M68k,
-        _ => debian_cpu_class(token).or_else(|| {
-            let cpu = token
-                .strip_prefix("uclibc-linux-")
-                .or_else(|| token.strip_prefix("musl-linux-"))
-                .or_else(|| token.strip_prefix("openbsd-"))
-                .or_else(|| token.strip_prefix("netbsd-"))?;
-            debian_cpu_class(cpu)
-        })?,
-    };
-    Some(Machine(class))
+    architectures
 }
 
-fn debian_cpu_class(token: &str) -> Option<NativeMachineArchitectureClassV1> {
-    use NativeMachineArchitectureClassV1 as Class;
-    match token {
-        "alpha" => Some(Class::Alpha),
-        "amd64" => Some(Class::X86_64),
-        "arc" => Some(Class::Arc),
-        "arm" | "armeb" => Some(Class::Arm32),
-        "arm64" => Some(Class::Aarch64),
-        "hppa" => Some(Class::Hppa),
-        "loong64" => Some(Class::LoongArch64),
-        "i386" => Some(Class::X86_32),
-        "ia64" => Some(Class::Ia64),
-        "m68k" => Some(Class::M68k),
-        "mips" | "mipsel" | "mipsr6" | "mipsr6el" | "mips64" | "mips64el" | "mips64r6"
-        | "mips64r6el" => Some(Class::Mips),
-        "nios2" => Some(Class::Nios2),
-        "or1k" => Some(Class::OpenRisc),
-        "powerpc" | "powerpcel" => Some(Class::PowerPc32),
-        "ppc64" => Some(Class::PowerPc64),
-        "ppc64el" => Some(Class::PowerPc64Le),
-        "riscv64" => Some(Class::RiscV64),
-        "s390" => Some(Class::S390),
-        "s390x" => Some(Class::S390x),
-        "sh3" | "sh3eb" | "sh4" | "sh4eb" => Some(Class::SuperH),
-        "sparc" => Some(Class::Sparc),
-        "sparc64" => Some(Class::Sparc64),
+fn rpm_identity(canonical: &str) -> KnownPackageArchitecture {
+    if canonical == "noarch" {
+        return KnownPackageArchitecture::Independent;
+    }
+    let identity = match canonical {
+        "x86_64" => shared_identity("x86_64"),
+        "i686" => shared_identity("i686"),
+        "aarch64" => shared_identity("aarch64"),
+        "ppc64le" => shared_identity("powerpc64le"),
+        "s390x" => shared_identity("s390x"),
+        "riscv64" => shared_identity("riscv64"),
+        exact => NativeMachineIdentityV1::Rpm {
+            canonical_architecture: exact.to_string(),
+        },
+    };
+    KnownPackageArchitecture::Machine(identity)
+}
+
+fn parse_dpkg_authority() -> BTreeMap<String, KnownPackageArchitecture> {
+    let cpus = data_lines(DPKG_CPUTABLE)
+        .map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            let endianness = match fields[4] {
+                "big" => NativeMachineEndiannessV1::Big,
+                "little" => NativeMachineEndiannessV1::Little,
+                value => panic!("unexpected dpkg cputable endianness: {value}"),
+            };
+            (
+                fields[0].to_string(),
+                DpkgCpu {
+                    gnu_name: fields[1].to_string(),
+                    bits: fields[3]
+                        .parse()
+                        .expect("dpkg cputable pointer bits are numeric"),
+                    endianness,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut architectures = BTreeMap::new();
+    architectures.insert("all".to_string(), KnownPackageArchitecture::Independent);
+    for line in data_lines(DPKG_TUPLETABLE) {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        let tuple_template = fields[0];
+        let output_template = fields[1];
+        if tuple_template.contains("<cpu>") || output_template.contains("<cpu>") {
+            for (cpu_name, cpu) in &cpus {
+                let tuple = tuple_template.replace("<cpu>", cpu_name);
+                let output = output_template.replace("<cpu>", cpu_name);
+                architectures
+                    .entry(output)
+                    .or_insert_with(|| dpkg_identity(&tuple, cpu_name, cpu));
+            }
+        } else {
+            let cpu_name = tuple_template
+                .rsplit('-')
+                .next()
+                .expect("dpkg tuple has a CPU component");
+            // tupletable's historical FreeBSD spelling is `riscv`; cputable
+            // owns its machine dimensions under the `riscv64` CPU row.
+            let cpu_lookup_name = if cpu_name == "riscv" {
+                "riscv64"
+            } else {
+                cpu_name
+            };
+            let cpu = cpus
+                .get(cpu_lookup_name)
+                .unwrap_or_else(|| panic!("dpkg tuple references unknown CPU '{cpu_name}'"));
+            architectures
+                .entry(output_template.to_string())
+                .or_insert_with(|| dpkg_identity(tuple_template, cpu_name, cpu));
+        }
+    }
+    architectures
+}
+
+fn dpkg_identity(tuple: &str, cpu_name: &str, cpu: &DpkgCpu) -> KnownPackageArchitecture {
+    let fields = tuple.splitn(4, '-').collect::<Vec<_>>();
+    assert_eq!(fields.len(), 4, "dpkg tuple must contain four components");
+    let (abi, libc, os) = (fields[0], fields[1], fields[2]);
+    let identity = match shared_dpkg_cpu(cpu_name, abi, libc, os) {
+        Some(shared) => shared,
+        None => NativeMachineIdentityV1::Dpkg {
+            cpu: cpu.gnu_name.clone(),
+            cpu_bits: cpu.bits,
+            endianness: cpu.endianness,
+            abi: abi.to_string(),
+            libc: libc.to_string(),
+            os: os.to_string(),
+        },
+    };
+    KnownPackageArchitecture::Machine(identity)
+}
+
+fn shared_dpkg_cpu(
+    cpu_name: &str,
+    abi: &str,
+    libc: &str,
+    os: &str,
+) -> Option<NativeMachineIdentityV1> {
+    if (abi, libc, os) != ("base", "gnu", "linux") {
+        return None;
+    }
+    match cpu_name {
+        "amd64" => Some(shared_identity("x86_64")),
+        "i386" => Some(shared_identity("i686")),
+        "arm64" => Some(shared_identity("aarch64")),
+        "ppc64el" => Some(shared_identity("powerpc64le")),
+        "s390x" => Some(shared_identity("s390x")),
+        "riscv64" => Some(shared_identity("riscv64")),
         _ => None,
     }
 }
 
-fn arch_architecture(token: &str) -> Option<KnownPackageArchitecture> {
-    use KnownPackageArchitecture::{Independent, Machine};
-    match token {
-        "any" => Some(Independent),
-        "x86_64" => Some(Machine(NativeMachineArchitectureClassV1::X86_64)),
-        _ => None,
+fn parse_makepkg_authority() -> BTreeMap<String, KnownPackageArchitecture> {
+    let carch = data_lines(ARCH_TABLE)
+        .find_map(|line| line.strip_prefix("CARCH="))
+        .expect("makepkg fixture declares CARCH");
+    let mut architectures = BTreeMap::new();
+    architectures.insert(carch.to_string(), makepkg_identity(carch));
+    for token in data_lines(ARCH_TABLE).filter_map(|line| line.strip_prefix("PACKAGE_ARCH=")) {
+        let identity = if token == "any" {
+            KnownPackageArchitecture::Independent
+        } else {
+            makepkg_identity(token)
+        };
+        architectures.insert(token.to_string(), identity);
     }
+    architectures
+}
+
+fn makepkg_identity(carch: &str) -> KnownPackageArchitecture {
+    let identity = match carch {
+        "x86_64" => shared_identity("x86_64"),
+        exact => NativeMachineIdentityV1::Makepkg {
+            carch: exact.to_string(),
+        },
+    };
+    KnownPackageArchitecture::Machine(identity)
 }
 
 fn conary_architecture(token: &str) -> Option<KnownPackageArchitecture> {
     use KnownPackageArchitecture::{Independent, Machine};
-    use NativeMachineArchitectureClassV1 as Class;
-    match token {
-        "noarch" => Some(Independent),
-        "x86_64" => Some(Machine(Class::X86_64)),
-        "i686" => Some(Machine(Class::X86_32)),
-        "aarch64" => Some(Machine(Class::Aarch64)),
-        "armv7" => Some(Machine(Class::Arm32)),
-        "ppc64le" => Some(Machine(Class::PowerPc64Le)),
-        "s390x" => Some(Machine(Class::S390x)),
-        "riscv64" => Some(Machine(Class::RiscV64)),
-        _ => None,
+    let identity = match token {
+        "noarch" => return Some(Independent),
+        "x86_64" => shared_identity("x86_64"),
+        "i686" => shared_identity("i686"),
+        "aarch64" => shared_identity("aarch64"),
+        "ppc64le" => shared_identity("powerpc64le"),
+        "s390x" => shared_identity("s390x"),
+        "riscv64" => shared_identity("riscv64"),
+        exact @ "armv7" => NativeMachineIdentityV1::Conary {
+            architecture: exact.to_string(),
+        },
+        _ => return None,
+    };
+    Some(Machine(identity))
+}
+
+fn shared_identity(cpu: &str) -> NativeMachineIdentityV1 {
+    let (cpu_bits, endianness) = match cpu {
+        "x86_64" | "aarch64" | "powerpc64le" | "riscv64" => (64, NativeMachineEndiannessV1::Little),
+        "i686" => (32, NativeMachineEndiannessV1::Little),
+        "s390x" => (64, NativeMachineEndiannessV1::Big),
+        _ => panic!("unknown cross-scheme CPU identity '{cpu}'"),
+    };
+    NativeMachineIdentityV1::CrossScheme {
+        cpu: cpu.to_string(),
+        cpu_bits,
+        endianness,
+        abi: "base".to_string(),
+        libc: "gnu".to_string(),
+        os: "linux".to_string(),
     }
+}
+
+fn data_lines(data: &str) -> impl Iterator<Item = &str> {
+    data.lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
 }
 
 #[cfg(test)]
