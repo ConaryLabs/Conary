@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts with profile-owned source-derived full machine-identity admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
 last_updated: 2026-09-02
-revision: 25
+revision: 26
 status: active
 ---
 
@@ -294,13 +294,17 @@ invariant guard because the package oracle must already have rejected the row.
 is a separate typed dimension: dpkg contributes `gnu`, `musl`, or `uclibc`
 from `tupletable`; RPM and ALPM contribute their profile-declared implied
 glibc ABI. The profile registry owns the required target package ABI.
-Native-only admission requires both package/host machine equality and
-package/profile ABI equality. RPM `arch_compat` and `buildarch_compat` still
-only establish that a token is known and never grant native-only equality.
-Native solvers apply their pinned package-manager architecture policy to
-provider selection, while the Conary candidate resolver uses the same full
-identities for root and provider matching. A different policy requires a
-schema change.
+Native-only admission requires both package/profile-target machine equality
+and package/profile ABI equality. The shared decision accepts the selected
+profile and package architecture; it does not accept a host architecture. RPM
+`arch_compat` and `buildarch_compat` still only establish that a token is known
+and never grant native-only equality. Native solvers apply their pinned
+package-manager architecture policy to provider selection, while the Conary
+candidate resolver uses the same profile-bound full identities for RPM,
+Debian, and Arch roots and providers. Conary and Eopkg repository candidates
+remain on their explicit scheme-owned machine-matching paths because those
+schemes have no typed foreign-profile architecture authority. A different
+policy requires a schema change.
 The three native producers and the Conary candidate producer derive the solver
 architecture from the profile revision. Their `--architecture` or operator
 input is only an assertion: a mismatch returns the typed

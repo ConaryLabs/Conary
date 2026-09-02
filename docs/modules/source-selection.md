@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-02
-revision: 56
-summary: Document libc-independent compile-target host machine identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+revision: 57
+summary: Document profile-bound RPM, Debian, and Arch admission, scheme-owned Conary and Eopkg machine matching, libc-independent host identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -130,10 +130,17 @@ hard-float executables.
 
 Package libc/ABI remains separate typed source-format authority. The
 supported-profile registry declares Ubuntu's dpkg `gnu` ABI and Fedora/Arch's
-implied glibc ABI. Native-only admission requires both package machine equality
-with the host and package ABI equality with that exact profile target. RPM and
-dpkg architecture tokens remain format-wide because their pinned upstream
-tables define those vocabularies. ALPM has no format-wide vocabulary:
+implied glibc ABI. For RPM, Debian, and Arch, native-only admission derives the
+target machine solely from the selected profile's typed `target_architecture`
+and requires both package machine equality and package ABI equality with that
+profile target. The host identity separately validates that the selected
+profile is usable on this host; a different machine returns
+`ProfileArchitectureMismatch` and never defines another package admission set.
+Conary and Eopkg have no corresponding foreign-profile architecture authority,
+so their repository candidates retain their explicit scheme-owned machine
+matching and do not require a source profile. RPM and dpkg architecture tokens
+remain format-wide because their pinned upstream tables define those
+vocabularies. ALPM has no format-wide vocabulary:
 `pacman.conf(5)` configures `Architecture` as `auto`/`uname -m` or an explicit
 list, and libalpm compares package `%ARCH%` literally while always accepting
 `any`. Each ALPM profile therefore declares exactly its own machine token set
