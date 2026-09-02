@@ -15,7 +15,8 @@ use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use crate::repository::architecture::{
     KnownPackageArchitecture, NativeMachineIdentityV1, host_machine_identity,
-    known_package_architecture, native_resolution_architecture_decision,
+    known_package_architecture, native_host_machine_identity,
+    native_resolution_architecture_decision, native_resolution_architecture_decision_for_identity,
 };
 use crate::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
 use crate::repository::versioning::{
@@ -67,7 +68,7 @@ pub struct PackageSelector;
 
 impl PackageSelector {
     /// Detect the current system architecture
-    pub fn detect_architecture() -> String {
+    pub fn detect_architecture() -> Result<String> {
         super::registry::detect_system_arch()
     }
 
@@ -103,6 +104,27 @@ impl PackageSelector {
         }
     }
 
+    /// Check source-native package admission against a typed host identity.
+    pub fn is_architecture_compatible_with_identity(
+        scheme: VersionScheme,
+        pkg_arch: Option<&str>,
+        host: &NativeMachineIdentityV1,
+    ) -> bool {
+        let Some(architecture) = pkg_arch else {
+            return false;
+        };
+        match scheme {
+            VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
+                native_resolution_architecture_decision_for_identity(scheme, architecture, host)
+                    .is_admitted()
+            }
+            VersionScheme::Conary | VersionScheme::Eopkg => {
+                package_machine_architecture(scheme, architecture)
+                    == MachineArchitecture::Known(host.clone())
+            }
+        }
+    }
+
     /// Search for packages by name with selection options
     ///
     /// Returns all matching packages with their repository information,
@@ -117,7 +139,8 @@ impl PackageSelector {
                 .validate_source_identities()
                 .map_err(Error::ConfigError)?;
         }
-        let detected_arch = Self::detect_architecture();
+        let detected_arch = Self::detect_architecture()?;
+        let detected_identity = native_host_machine_identity()?;
         let system_arch = options.architecture.as_deref().unwrap_or(&detected_arch);
 
         debug!(
@@ -155,13 +178,16 @@ impl PackageSelector {
             }
 
             // Filter by architecture
-            if options.architecture_scope == ArchitectureScope::Native
-                && !Self::is_architecture_compatible(
+            let architecture_compatible = if options.architecture.is_some() {
+                Self::is_architecture_compatible(scheme, Some(package_architecture), system_arch)
+            } else {
+                Self::is_architecture_compatible_with_identity(
                     scheme,
                     Some(package_architecture),
-                    system_arch,
+                    &detected_identity,
                 )
-            {
+            };
+            if options.architecture_scope == ArchitectureScope::Native && !architecture_compatible {
                 debug!(
                     "Skipping package {} {} with incompatible arch {:?}",
                     pkg.name, pkg.version, pkg.architecture

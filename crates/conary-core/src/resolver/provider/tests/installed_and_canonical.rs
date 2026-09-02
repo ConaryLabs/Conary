@@ -26,7 +26,7 @@ fn installed_capability_requirements_are_not_filtered_by_name_shape() {
         insert_installed_requirement(&conn, trove_id, VersionScheme::Rpm, capability);
     }
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
     provider.load_installed_packages().unwrap();
 
     let deps = provider.dependencies.values().next().unwrap();
@@ -58,7 +58,7 @@ fn installed_arch_package_in_provider_selection() {
     );
     trove.insert(&conn).unwrap();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
     provider.load_installed_packages().unwrap();
 
     let solvable = provider
@@ -103,7 +103,7 @@ fn native_ccs_package_uses_explicit_conary_version_scheme() {
     );
     trove.insert(&conn).unwrap();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
     provider.load_installed_packages().unwrap();
 
     let solvable = provider
@@ -147,7 +147,7 @@ fn canonical_index_loads_cross_distro_equivalents() {
     );
     arch.insert(&conn).unwrap();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
     provider.load_canonical_index().unwrap();
 
     let equivalents = provider.canonical_equivalents("libssl3");
@@ -169,7 +169,7 @@ fn canonical_index_loads_cross_distro_equivalents() {
 fn canonical_index_empty_when_no_mappings() {
     let (_dir, conn) = setup_test_db();
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
     provider.load_canonical_index().unwrap();
 
     assert!(provider.canonical_equivalents("anything").is_empty());

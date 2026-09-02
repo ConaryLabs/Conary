@@ -152,17 +152,160 @@ fn table_justified_cross_scheme_identities_are_equal() {
 }
 
 #[test]
-fn tables_do_not_justify_arm_float_abi_cross_scheme_aliases() {
-    assert_ne!(
+fn arm_float_abi_remains_exact_across_native_tokens() {
+    assert_eq!(
         machine(VersionScheme::Debian, "armhf"),
         machine(VersionScheme::Rpm, "armv7hl")
     );
-    for rpm in ["armv5tel", "armv7l"] {
-        assert_ne!(
-            machine(VersionScheme::Debian, "armel"),
-            machine(VersionScheme::Rpm, rpm)
+    assert_eq!(
+        machine(VersionScheme::Debian, "armel"),
+        machine(VersionScheme::Rpm, "armv7l")
+    );
+    assert_ne!(
+        machine(VersionScheme::Debian, "armhf"),
+        machine(VersionScheme::Debian, "armel")
+    );
+}
+
+fn target_facts(
+    triple: &str,
+    arch: &str,
+    pointer_width: u16,
+    endianness: NativeMachineEndiannessV1,
+    abi: &str,
+) -> NativeHostTargetFactsV1 {
+    NativeHostTargetFactsV1 {
+        target_triple: triple.to_string(),
+        target_arch: arch.to_string(),
+        pointer_width,
+        endianness,
+        target_abi: abi.to_string(),
+        target_env: "gnu".to_string(),
+        target_os: "linux".to_string(),
+    }
+}
+
+#[test]
+fn supported_host_targets_equal_their_pinned_native_tokens() {
+    let targets = [
+        (
+            target_facts(
+                "x86_64-unknown-linux-gnu",
+                "x86_64",
+                64,
+                NativeMachineEndiannessV1::Little,
+                "",
+            ),
+            "amd64",
+            "x86_64",
+            Some("x86_64"),
+        ),
+        (
+            target_facts(
+                "armv7-unknown-linux-gnueabihf",
+                "arm",
+                32,
+                NativeMachineEndiannessV1::Little,
+                "eabihf",
+            ),
+            "armhf",
+            "armv7hl",
+            None,
+        ),
+        (
+            target_facts(
+                "arm-unknown-linux-gnueabi",
+                "arm",
+                32,
+                NativeMachineEndiannessV1::Little,
+                "eabi",
+            ),
+            "armel",
+            "armv7l",
+            None,
+        ),
+        (
+            target_facts(
+                "aarch64-unknown-linux-gnu",
+                "aarch64",
+                64,
+                NativeMachineEndiannessV1::Little,
+                "",
+            ),
+            "arm64",
+            "aarch64",
+            None,
+        ),
+        (
+            target_facts(
+                "powerpc64le-unknown-linux-gnu",
+                "powerpc64",
+                64,
+                NativeMachineEndiannessV1::Little,
+                "",
+            ),
+            "ppc64el",
+            "ppc64le",
+            None,
+        ),
+        (
+            target_facts(
+                "s390x-unknown-linux-gnu",
+                "s390x",
+                64,
+                NativeMachineEndiannessV1::Big,
+                "",
+            ),
+            "s390x",
+            "s390x",
+            None,
+        ),
+        (
+            target_facts(
+                "riscv64gc-unknown-linux-gnu",
+                "riscv64",
+                64,
+                NativeMachineEndiannessV1::Little,
+                "",
+            ),
+            "riscv64",
+            "riscv64",
+            None,
+        ),
+    ];
+
+    for (facts, debian, rpm, arch) in targets {
+        let identity = native_machine_identity_from_target_facts(&facts).unwrap();
+        assert_eq!(identity, machine(VersionScheme::Debian, debian), "{debian}");
+        assert_eq!(identity, machine(VersionScheme::Rpm, rpm), "{rpm}");
+        if let Some(arch) = arch {
+            assert_eq!(identity, machine(VersionScheme::Arch, arch), "{arch}");
+        }
+        assert_eq!(
+            native_token_for_machine_identity(VersionScheme::Debian, &identity).as_deref(),
+            Some(debian)
+        );
+        assert_eq!(
+            native_token_for_machine_identity(VersionScheme::Rpm, &identity).as_deref(),
+            Some(rpm)
         );
     }
+}
+
+#[test]
+fn unsupported_host_target_names_its_exact_triple() {
+    let facts = target_facts(
+        "mips64-unknown-linux-gnuabi64",
+        "mips64",
+        64,
+        NativeMachineEndiannessV1::Big,
+        "abi64",
+    );
+    assert!(matches!(
+        native_machine_identity_from_target_facts(&facts),
+        Err(Error::UnsupportedNativeHostTarget { triple })
+            if triple == "mips64-unknown-linux-gnuabi64"
+    ));
 }
 
 #[test]

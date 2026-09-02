@@ -34,9 +34,11 @@ impl AnyParser {
 
 /// Detect the system architecture
 ///
-/// Returns the architecture in RPM format (x86_64, aarch64, etc.)
-pub fn detect_system_arch() -> String {
-    std::env::consts::ARCH.to_string()
+/// Returns the architecture in RPM format (x86_64, aarch64, etc.).
+///
+/// This legacy string adapter derives from typed compile-target identity.
+pub fn detect_system_arch() -> Result<String> {
+    native_architecture_for_scheme(crate::repository::versioning::VersionScheme::Rpm)
 }
 
 /// Convert system architecture to Debian's naming convention
@@ -59,15 +61,15 @@ pub fn arch_to_debian(arch: &str) -> String {
 /// package token grammar.
 pub fn native_architecture_for_scheme(
     scheme: crate::repository::versioning::VersionScheme,
-) -> String {
-    let architecture = detect_system_arch();
-    match scheme {
-        crate::repository::versioning::VersionScheme::Debian => arch_to_debian(&architecture),
-        crate::repository::versioning::VersionScheme::Rpm
-        | crate::repository::versioning::VersionScheme::Arch
-        | crate::repository::versioning::VersionScheme::Eopkg
-        | crate::repository::versioning::VersionScheme::Conary => architecture,
-    }
+) -> Result<String> {
+    let facts = crate::repository::architecture::native_host_target_facts();
+    let identity =
+        crate::repository::architecture::native_machine_identity_from_target_facts(&facts)?;
+    crate::repository::architecture::native_token_for_machine_identity(scheme, &identity).ok_or(
+        Error::UnsupportedNativeHostTarget {
+            triple: facts.target_triple,
+        },
+    )
 }
 
 /// Explicit package-metadata format for a repository.
@@ -256,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_detect_system_arch_returns_valid_string() {
-        let arch = detect_system_arch();
+        let arch = detect_system_arch().unwrap();
         assert!(!arch.is_empty());
         // Should be one of the known architectures
         let known_arches = [
@@ -293,8 +295,9 @@ mod tests {
         // Unknown arches pass through unchanged
         assert_eq!(arch_to_debian("unknown"), "unknown");
         assert_eq!(
-            native_architecture_for_scheme(crate::repository::versioning::VersionScheme::Debian),
-            arch_to_debian(&detect_system_arch())
+            native_architecture_for_scheme(crate::repository::versioning::VersionScheme::Debian)
+                .unwrap(),
+            arch_to_debian(&detect_system_arch().unwrap())
         );
     }
 

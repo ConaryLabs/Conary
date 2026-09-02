@@ -23,7 +23,7 @@ async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
         conary_core::db::models::TroveType::Package,
         conary_core::repository::versioning::VersionScheme::Conary,
     );
-    existing.architecture = Some(conary_core::repository::registry::detect_system_arch());
+    existing.architecture = Some(conary_core::repository::registry::detect_system_arch().unwrap());
     let existing_id = existing.insert(&conn).unwrap();
     drop(conn);
 
@@ -136,7 +136,7 @@ async fn ccs_noarch_replacement_uses_transaction_trove_for_dependent_validation(
     std::fs::create_dir_all(&install_root).unwrap();
     conary_core::db::init(db_path_str).unwrap();
 
-    let native_architecture = conary_core::repository::registry::detect_system_arch();
+    let native_architecture = conary_core::repository::registry::detect_system_arch().unwrap();
     let conn = conary_core::db::open(db_path_str).unwrap();
     // Insert the native slot first so the old first-compatible-row selection
     // chooses the wrong trove; the exact noarch rule must choose the second.

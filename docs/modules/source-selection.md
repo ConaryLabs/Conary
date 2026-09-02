@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-02
-revision: 54
-summary: Document typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+revision: 55
+summary: Document compile-target-derived typed host machine identity, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -119,6 +119,19 @@ profile remains an optional feed preset during W10 and is copied into native
 package rows when present; it is not required for repository identity or
 refresh authority. The superseded
 `data/distros.toml` catalog was deleted in M4d.
+
+Host-native admission derives `NativeMachineIdentityV1` from the Rust compile
+target's exact triple plus `target_arch`, pointer width, endianness,
+`target_abi`, `target_env`, and target OS. The closed derivation distinguishes
+`armv7-unknown-linux-gnueabihf` from `arm-unknown-linux-gnueabi`; it does not
+interpret Rust's shared raw `arm` token as package ABI authority. The resulting
+identity is projected to an ecosystem token only through the pinned RPM,
+dpkg, or Arch architecture table used to parse package tokens. Package search,
+provider resolution, CCS preflight inputs, generation targets, and the legacy
+`detect_system_arch` string adapter all begin at this typed identity. An
+unmapped compile target returns `UnsupportedNativeHostTarget` with its exact
+triple before resolution or mutation; there is no pass-through token or host
+default.
 
 An accepted Remi conversion remains server-owned work until the typed job
 status reaches `ready` or `failed`. The client continues to observe `pending`

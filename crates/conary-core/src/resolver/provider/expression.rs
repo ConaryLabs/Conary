@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn mixed_runtime_or_expression_never_interns_a_fake_package_provider() {
         let (_directory, connection) = provider();
-        let mut provider = ConaryProvider::new(&connection);
+        let mut provider = ConaryProvider::new(&connection).unwrap();
         let expression = SolverExpression::Or(vec![atom("missing"), runtime_atom()]);
 
         let requirements = provider.compile_root_requirements(&[expression]).unwrap();
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn runtime_true_is_removed_from_mixed_and_expression() {
         let (_directory, connection) = provider();
-        let mut provider = ConaryProvider::new(&connection);
+        let mut provider = ConaryProvider::new(&connection).unwrap();
         let expression = SolverExpression::And(vec![atom("bash"), runtime_atom()]);
 
         let requirements = provider.compile_root_requirements(&[expression]).unwrap();

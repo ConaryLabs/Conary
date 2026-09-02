@@ -285,7 +285,7 @@ impl Trove {
         let installed = crate::resolver::requirements::load_installed_package_identities(conn)?;
         let requirements =
             super::installed_requirement_group::InstalledRequirementGroup::list_all(conn)?;
-        let native_architecture = crate::repository::registry::detect_system_arch();
+        let native_architecture = crate::repository::registry::detect_system_arch()?;
         let mut orphans = Vec::new();
 
         for trove in Self::list_packages(conn)?

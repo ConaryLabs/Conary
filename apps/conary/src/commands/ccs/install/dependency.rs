@@ -63,7 +63,7 @@ pub(super) fn validate_incoming_version_against_dependents(
     }
     after.push(incoming.clone());
 
-    let native_architecture = conary_core::repository::registry::detect_system_arch();
+    let native_architecture = conary_core::repository::registry::detect_system_arch()?;
     let mut violations = Vec::new();
     for dependent in &before {
         let Some(trove_id) = dependent.installed_trove_id else {
@@ -153,7 +153,7 @@ mod tests {
             TroveType::Package,
             scheme,
         );
-        trove.architecture = Some(conary_core::repository::registry::detect_system_arch());
+        trove.architecture = Some(conary_core::repository::registry::detect_system_arch().unwrap());
         trove.insert(conn).unwrap()
     }
 
@@ -267,7 +267,7 @@ mod tests {
             .first()
             .and_then(|trove| trove.id)
             .unwrap();
-        let native_architecture = conary_core::repository::registry::detect_system_arch();
+        let native_architecture = conary_core::repository::registry::detect_system_arch().unwrap();
         let incoming = incoming_identity(
             "dep-liba",
             "2.0.0",
@@ -317,7 +317,7 @@ mod tests {
             .first()
             .and_then(|trove| trove.id)
             .unwrap();
-        let native_architecture = conary_core::repository::registry::detect_system_arch();
+        let native_architecture = conary_core::repository::registry::detect_system_arch().unwrap();
         let incoming = incoming_identity(
             "dep-liba",
             "2.0",
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn incoming_ccs_that_drops_an_old_capability_breaks_its_installed_dependent() {
         let (_temp, conn) = database();
-        let native_architecture = conary_core::repository::registry::detect_system_arch();
+        let native_architecture = conary_core::repository::registry::detect_system_arch().unwrap();
         let old_id = package_with_capability(
             &conn,
             "parallel-provider",
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn untouched_parallel_same_name_capability_survives_an_exact_replacement() {
         let (_temp, conn) = database();
-        let native_architecture = conary_core::repository::registry::detect_system_arch();
+        let native_architecture = conary_core::repository::registry::detect_system_arch().unwrap();
         let parallel_architecture = alternate_architecture(&native_architecture);
         let outgoing_id = package_with_capability(
             &conn,

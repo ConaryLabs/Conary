@@ -113,7 +113,7 @@ pub(crate) fn repository_expression_to_solver(
     expression: &RepositoryRequirementExpression,
     scheme: VersionScheme,
 ) -> Result<SolverExpression> {
-    let native_architecture = crate::repository::registry::native_architecture_for_scheme(scheme);
+    let native_architecture = crate::repository::registry::native_architecture_for_scheme(scheme)?;
     repository_expression_to_solver_for_architecture(expression, scheme, &native_architecture)
 }
 

@@ -18,7 +18,7 @@ fn with_provide(mut identity: PackageIdentity, name: &str) -> PackageIdentity {
 #[test]
 fn installed_virtual_provider_is_favored_over_its_repository_copy() {
     let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
     let capability = provider.intern_name("/usr/bin").unwrap();
     let installed = provider
         .add_solvable(with_provide(

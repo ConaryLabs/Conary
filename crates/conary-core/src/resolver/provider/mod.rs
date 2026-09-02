@@ -136,13 +136,16 @@ pub struct ConaryProvider<'db> {
 
 impl<'db> ConaryProvider<'db> {
     /// Create a new provider backed by the given database connection.
-    pub fn new(conn: &'db rusqlite::Connection) -> Self {
+    pub fn new(conn: &'db rusqlite::Connection) -> Result<Self> {
         Self::new_with_policy(conn, ResolutionPolicy::new())
     }
 
     /// Create a new provider with an explicit source-selection policy.
-    pub fn new_with_policy(conn: &'db rusqlite::Connection, policy: ResolutionPolicy) -> Self {
-        Self {
+    pub fn new_with_policy(
+        conn: &'db rusqlite::Connection,
+        policy: ResolutionPolicy,
+    ) -> Result<Self> {
+        Ok(Self {
             names: Vec::new(),
             name_to_id: HashMap::new(),
             solvables: Vec::new(),
@@ -172,9 +175,9 @@ impl<'db> ConaryProvider<'db> {
             provides_index: None,
             policy,
             root_request_names: HashSet::new(),
-            native_architecture: crate::repository::registry::detect_system_arch(),
+            native_architecture: crate::repository::registry::detect_system_arch()?,
             conn,
-        }
+        })
     }
 
     pub fn set_root_request_names(&mut self, names: impl IntoIterator<Item = String>) {

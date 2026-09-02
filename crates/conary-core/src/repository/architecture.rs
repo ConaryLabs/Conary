@@ -32,6 +32,21 @@ pub enum NativeMachineEndiannessV1 {
     Little,
 }
 
+/// Exact Rust compile-target facts used to derive native package identity.
+///
+/// Tests construct this value explicitly so every supported cross target is
+/// proved without depending on the machine that runs the test.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeHostTargetFactsV1 {
+    pub target_triple: String,
+    pub target_arch: String,
+    pub pointer_width: u16,
+    pub endianness: NativeMachineEndiannessV1,
+    pub target_abi: String,
+    pub target_env: String,
+    pub target_os: String,
+}
+
 /// Exact machine identity projected from the owning pinned architecture table.
 ///
 /// The variants deliberately retain the dimensions each upstream authority
@@ -169,6 +184,254 @@ pub fn native_resolution_architecture_decision(
     }
 }
 
+/// Decide native-only admission against an already-derived host identity.
+#[must_use]
+pub fn native_resolution_architecture_decision_for_identity(
+    scheme: VersionScheme,
+    package_token: &str,
+    target_identity: &NativeMachineIdentityV1,
+) -> NativeResolutionArchitectureDecisionV1 {
+    let Some(package) = known_package_architecture(scheme, package_token) else {
+        return NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken {
+            scheme,
+            token: package_token.to_string(),
+        };
+    };
+    let identity = match package {
+        KnownPackageArchitecture::Independent => target_identity.clone(),
+        KnownPackageArchitecture::Machine(identity) => identity,
+    };
+    if identity == *target_identity {
+        NativeResolutionArchitectureDecisionV1::Admitted
+    } else {
+        NativeResolutionArchitectureDecisionV1::Excluded { identity }
+    }
+}
+
+/// Return the current compile target's exact facts.
+#[must_use]
+pub fn native_host_target_facts() -> NativeHostTargetFactsV1 {
+    let target_arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "x86") {
+        "x86"
+    } else if cfg!(target_arch = "arm") {
+        "arm"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else if cfg!(target_arch = "powerpc64") {
+        "powerpc64"
+    } else if cfg!(target_arch = "s390x") {
+        "s390x"
+    } else if cfg!(target_arch = "riscv64") {
+        "riscv64"
+    } else {
+        std::env::consts::ARCH
+    };
+    let pointer_width = if cfg!(target_pointer_width = "64") {
+        64
+    } else if cfg!(target_pointer_width = "32") {
+        32
+    } else {
+        0
+    };
+    let endianness = if cfg!(target_endian = "big") {
+        NativeMachineEndiannessV1::Big
+    } else {
+        NativeMachineEndiannessV1::Little
+    };
+    let target_abi = if cfg!(target_abi = "eabihf") {
+        "eabihf"
+    } else if cfg!(target_abi = "eabi") {
+        "eabi"
+    } else {
+        ""
+    };
+    let target_env = if cfg!(target_env = "gnu") {
+        "gnu"
+    } else if cfg!(target_env = "musl") {
+        "musl"
+    } else if cfg!(target_env = "uclibc") {
+        "uclibc"
+    } else {
+        ""
+    };
+    let target_os = if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        std::env::consts::OS
+    };
+    NativeHostTargetFactsV1 {
+        target_triple: env!("CONARY_BUILD_TARGET").to_string(),
+        target_arch: target_arch.to_string(),
+        pointer_width,
+        endianness,
+        target_abi: target_abi.to_string(),
+        target_env: target_env.to_string(),
+        target_os: target_os.to_string(),
+    }
+}
+
+/// Derive one host identity from exact compile-target facts and pinned dpkg authority.
+pub fn native_machine_identity_from_target_facts(
+    facts: &NativeHostTargetFactsV1,
+) -> Result<NativeMachineIdentityV1> {
+    let debian_token = match (
+        facts.target_triple.as_str(),
+        facts.target_arch.as_str(),
+        facts.pointer_width,
+        facts.endianness,
+        facts.target_abi.as_str(),
+        facts.target_env.as_str(),
+        facts.target_os.as_str(),
+    ) {
+        (
+            "x86_64-unknown-linux-gnu",
+            "x86_64",
+            64,
+            NativeMachineEndiannessV1::Little,
+            "",
+            "gnu",
+            "linux",
+        ) => "amd64",
+        (
+            "armv7-unknown-linux-gnueabihf",
+            "arm",
+            32,
+            NativeMachineEndiannessV1::Little,
+            "eabihf",
+            "gnu",
+            "linux",
+        ) => "armhf",
+        (
+            "arm-unknown-linux-gnueabi",
+            "arm",
+            32,
+            NativeMachineEndiannessV1::Little,
+            "eabi",
+            "gnu",
+            "linux",
+        ) => "armel",
+        (
+            "aarch64-unknown-linux-gnu",
+            "aarch64",
+            64,
+            NativeMachineEndiannessV1::Little,
+            "",
+            "gnu",
+            "linux",
+        ) => "arm64",
+        (
+            "powerpc64le-unknown-linux-gnu",
+            "powerpc64",
+            64,
+            NativeMachineEndiannessV1::Little,
+            "",
+            "gnu",
+            "linux",
+        ) => "ppc64el",
+        (
+            "s390x-unknown-linux-gnu",
+            "s390x",
+            64,
+            NativeMachineEndiannessV1::Big,
+            "",
+            "gnu",
+            "linux",
+        ) => "s390x",
+        (
+            "riscv64gc-unknown-linux-gnu",
+            "riscv64",
+            64,
+            NativeMachineEndiannessV1::Little,
+            "",
+            "gnu",
+            "linux",
+        ) => "riscv64",
+        _ => {
+            return Err(Error::UnsupportedNativeHostTarget {
+                triple: facts.target_triple.clone(),
+            });
+        }
+    };
+    match known_package_architecture(VersionScheme::Debian, debian_token) {
+        Some(KnownPackageArchitecture::Machine(identity)) => Ok(identity),
+        _ => Err(Error::UnsupportedNativeHostTarget {
+            triple: facts.target_triple.clone(),
+        }),
+    }
+}
+
+/// Derive the running binary's native machine identity.
+pub fn native_host_machine_identity() -> Result<NativeMachineIdentityV1> {
+    native_machine_identity_from_target_facts(&native_host_target_facts())
+}
+
+/// Project a typed identity to the exact native token owned by one pinned table.
+#[must_use]
+pub fn native_token_for_machine_identity(
+    scheme: VersionScheme,
+    identity: &NativeMachineIdentityV1,
+) -> Option<String> {
+    match scheme {
+        VersionScheme::Rpm => data_lines(RPM_TABLES).find_map(|line| {
+            let fields = line.split(':').map(str::trim).collect::<Vec<_>>();
+            if fields.first().copied() != Some("arch_canon") {
+                return None;
+            }
+            let canonical = fields[2].split_whitespace().next()?;
+            (known_package_architecture(VersionScheme::Rpm, canonical)
+                == Some(KnownPackageArchitecture::Machine(identity.clone())))
+            .then(|| canonical.to_string())
+        }),
+        VersionScheme::Debian => preferred_dpkg_token(identity),
+        VersionScheme::Arch => data_lines(ARCH_TABLE)
+            .find_map(|line| line.strip_prefix("CARCH="))
+            .filter(|token| {
+                known_package_architecture(VersionScheme::Arch, token)
+                    == Some(KnownPackageArchitecture::Machine(identity.clone()))
+            })
+            .map(str::to_string),
+        VersionScheme::Conary | VersionScheme::Eopkg => [
+            "x86_64", "i686", "armv7", "aarch64", "ppc64le", "s390x", "riscv64",
+        ]
+        .into_iter()
+        .find(|token| {
+            known_package_architecture(VersionScheme::Conary, token)
+                == Some(KnownPackageArchitecture::Machine(identity.clone()))
+        })
+        .map(str::to_string),
+    }
+}
+
+fn preferred_dpkg_token(identity: &NativeMachineIdentityV1) -> Option<String> {
+    let cpus = data_lines(DPKG_CPUTABLE)
+        .map(|line| {
+            line.split_whitespace()
+                .next()
+                .expect("dpkg CPU row has a name")
+        })
+        .collect::<Vec<_>>();
+    for line in data_lines(DPKG_TUPLETABLE) {
+        let output = line.split_whitespace().nth(1)?;
+        if output.contains("<cpu>") {
+            for cpu in &cpus {
+                let token = output.replace("<cpu>", cpu);
+                if known_package_architecture(VersionScheme::Debian, &token)
+                    == Some(KnownPackageArchitecture::Machine(identity.clone()))
+                {
+                    return Some(token);
+                }
+            }
+        } else if known_package_architecture(VersionScheme::Debian, output)
+            == Some(KnownPackageArchitecture::Machine(identity.clone()))
+        {
+            return Some(output.to_string());
+        }
+    }
+    None
+}
+
 pub(crate) fn known_package_architecture(
     scheme: VersionScheme,
     token: &str,
@@ -191,7 +454,7 @@ fn target_machine_identity(scheme: VersionScheme, token: &str) -> Option<NativeM
 }
 
 pub(crate) fn host_machine_identity(token: &str) -> Option<NativeMachineIdentityV1> {
-    match token {
+    let common = match token {
         "x86_64" | "amd64" => Some(shared_identity("x86_64")),
         "x86" | "i386" | "i686" => Some(shared_identity("i686")),
         "aarch64" | "arm64" => Some(shared_identity("aarch64")),
@@ -199,7 +462,25 @@ pub(crate) fn host_machine_identity(token: &str) -> Option<NativeMachineIdentity
         "s390x" => Some(shared_identity("s390x")),
         "riscv64" => Some(shared_identity("riscv64")),
         _ => None,
+    };
+    if common.is_some() {
+        return common;
     }
+    let identities = [
+        VersionScheme::Rpm,
+        VersionScheme::Debian,
+        VersionScheme::Arch,
+    ]
+    .into_iter()
+    .filter_map(|scheme| known_package_architecture(scheme, token))
+    .filter_map(|architecture| match architecture {
+        KnownPackageArchitecture::Machine(identity) => Some(identity),
+        KnownPackageArchitecture::Independent => None,
+    })
+    .collect::<std::collections::BTreeSet<_>>();
+    (identities.len() == 1)
+        .then(|| identities.into_iter().next())
+        .flatten()
 }
 
 fn parse_rpm_authority() -> BTreeMap<String, KnownPackageArchitecture> {
@@ -243,6 +524,8 @@ fn rpm_identity(canonical: &str) -> KnownPackageArchitecture {
         "ppc64le" => shared_identity("powerpc64le"),
         "s390x" => shared_identity("s390x"),
         "riscv64" => shared_identity("riscv64"),
+        "armv7hl" => arm_identity("eabihf"),
+        "armv7l" => arm_identity("eabi"),
         exact => NativeMachineIdentityV1::Rpm {
             canonical_architecture: exact.to_string(),
         },
@@ -333,16 +616,17 @@ fn shared_dpkg_cpu(
     libc: &str,
     os: &str,
 ) -> Option<NativeMachineIdentityV1> {
-    if (abi, libc, os) != ("base", "gnu", "linux") {
+    if (libc, os) != ("gnu", "linux") {
         return None;
     }
-    match cpu_name {
-        "amd64" => Some(shared_identity("x86_64")),
-        "i386" => Some(shared_identity("i686")),
-        "arm64" => Some(shared_identity("aarch64")),
-        "ppc64el" => Some(shared_identity("powerpc64le")),
-        "s390x" => Some(shared_identity("s390x")),
-        "riscv64" => Some(shared_identity("riscv64")),
+    match (cpu_name, abi) {
+        ("arm", "eabihf" | "eabi") => Some(arm_identity(abi)),
+        ("amd64", "base") => Some(shared_identity("x86_64")),
+        ("i386", "base") => Some(shared_identity("i686")),
+        ("arm64", "base") => Some(shared_identity("aarch64")),
+        ("ppc64el", "base") => Some(shared_identity("powerpc64le")),
+        ("s390x", "base") => Some(shared_identity("s390x")),
+        ("riscv64", "base") => Some(shared_identity("riscv64")),
         _ => None,
     }
 }
@@ -384,12 +668,21 @@ fn conary_architecture(token: &str) -> Option<KnownPackageArchitecture> {
         "ppc64le" => shared_identity("powerpc64le"),
         "s390x" => shared_identity("s390x"),
         "riscv64" => shared_identity("riscv64"),
-        exact @ "armv7" => NativeMachineIdentityV1::Conary {
-            architecture: exact.to_string(),
-        },
+        "armv7" => arm_identity("eabihf"),
         _ => return None,
     };
     Some(Machine(identity))
+}
+
+fn arm_identity(abi: &str) -> NativeMachineIdentityV1 {
+    NativeMachineIdentityV1::CrossScheme {
+        cpu: "arm".to_string(),
+        cpu_bits: 32,
+        endianness: NativeMachineEndiannessV1::Little,
+        abi: abi.to_string(),
+        libc: "gnu".to_string(),
+        os: "linux".to_string(),
+    }
 }
 
 fn shared_identity(cpu: &str) -> NativeMachineIdentityV1 {

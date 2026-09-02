@@ -204,7 +204,7 @@ pub(crate) fn validate_prepared_install_dependencies(
     prepared: &PreparedInstall,
     target_state: &TargetStateView,
 ) -> Result<()> {
-    let native_architecture = conary_core::repository::registry::detect_system_arch();
+    let native_architecture = conary_core::repository::registry::detect_system_arch()?;
     let mut unsatisfied = Vec::new();
     for requirement in prepared.pkg.requirements().iter().filter(|requirement| {
         matches!(

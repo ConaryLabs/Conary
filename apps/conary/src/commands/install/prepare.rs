@@ -83,7 +83,7 @@ pub fn check_upgrade_status(
             trove.architecture.as_deref(),
             pkg.version_scheme(),
             pkg.architecture(),
-        ) {
+        )? {
             if trove.version == pkg.version()
                 && trove.package_release.as_deref() == pkg.package_release()
             {
@@ -155,17 +155,17 @@ fn architectures_share_install_slot(
     installed: Option<&str>,
     incoming_scheme: VersionScheme,
     incoming: Option<&str>,
-) -> bool {
-    match (installed, incoming) {
+) -> Result<bool> {
+    Ok(match (installed, incoming) {
         (Some(installed), Some(incoming)) => package_architectures_match(
             installed_scheme,
             installed,
             incoming_scheme,
             incoming,
-            &conary_core::repository::registry::detect_system_arch(),
+            &conary_core::repository::registry::detect_system_arch()?,
         ),
         _ => false,
-    }
+    })
 }
 
 fn compare_installed_and_incoming_versions(

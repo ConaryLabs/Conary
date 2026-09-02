@@ -17,7 +17,7 @@ pub(super) fn build_provider_for_install<'conn>(
     requests: &[(String, VersionConstraint)],
     policy: &ResolutionPolicy,
 ) -> Result<ConaryProvider<'conn>> {
-    let mut provider = ConaryProvider::new_with_policy(conn, policy.clone());
+    let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
     provider.set_root_request_names(requests.iter().map(|(name, _)| name.clone()));
     provider.load_installed_packages()?;
     provider.build_provides_index()?;
@@ -36,7 +36,7 @@ pub(super) fn build_provider_for_requirement_expressions<'conn>(
     expressions: &[SolverExpression],
     policy: &ResolutionPolicy,
 ) -> Result<ConaryProvider<'conn>> {
-    let mut provider = ConaryProvider::new_with_policy(conn, policy.clone());
+    let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
     provider.set_root_request_names(requirement_names(expressions));
     provider.load_installed_packages()?;
     provider.build_provides_index()?;

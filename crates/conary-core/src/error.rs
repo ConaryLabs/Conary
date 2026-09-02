@@ -140,6 +140,10 @@ pub enum Error {
     #[error("Unknown architecture token for {scheme}: '{token}'")]
     UnknownArchitectureToken { scheme: String, token: String },
 
+    /// The compile target cannot be projected through pinned package architecture authority.
+    #[error("Unsupported native host target '{triple}'")]
+    UnsupportedNativeHostTarget { triple: String },
+
     /// Eligible package candidates remain tied without a comparable version
     /// contract or an explicit repository/priority winner.
     #[error(

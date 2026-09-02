@@ -10,7 +10,7 @@ use rusqlite::Connection;
 
 #[test]
 fn test_detect_architecture() {
-    let arch = PackageSelector::detect_architecture();
+    let arch = PackageSelector::detect_architecture().unwrap();
     // Should return one of the known architectures
     assert!(!arch.is_empty());
     // On most development machines, this will be x86_64
