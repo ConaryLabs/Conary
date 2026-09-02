@@ -9,8 +9,8 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 pub use types::{
-    ProfilePackageFormat, ProfileSourceMemberContract, ProfileSourceRole, SupportTier,
-    SupportedProfile, SupportedRoute,
+    ProfilePackageFormat, ProfileSourceMemberContract, ProfileSourceRole,
+    ProfileTargetArchitecture, SupportTier, SupportedProfile, SupportedRoute,
 };
 
 use types::{CatalogDocument, SupportedProfile as Profile};
@@ -55,6 +55,10 @@ fn validate_catalog(profiles: Vec<types::ProfileDocument>) -> Vec<SupportedProfi
         assert!(
             !profile.repology_repo().trim().is_empty(),
             "profile Repology repository id must not be empty"
+        );
+        assert!(
+            !profile.target_architecture().as_str().is_empty(),
+            "profile target architecture must not be empty"
         );
         assert!(
             !profile.members().is_empty(),

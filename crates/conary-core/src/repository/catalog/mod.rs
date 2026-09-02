@@ -40,7 +40,7 @@ pub use capacity::{
     CatalogScratchCapacityError, CatalogSourceCandidateScratchV1,
 };
 pub use contract::{
-    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,
+    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2,
     ProfileSourceMemberV2, SOURCE_CATALOG_PROJECTION_VERSION_V2, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
     SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,

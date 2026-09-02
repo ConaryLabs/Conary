@@ -27,7 +27,7 @@ use futures::{StreamExt, stream::FuturesUnordered};
 
 use super::catalog_authority::PinnedProfileCatalog;
 
-pub(crate) const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 2;
+pub(crate) const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 3;
 const MAX_CONCURRENT_SOURCE_FETCHES: usize = 4;
 
 #[derive(Default)]

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-02
-revision: 128
-summary: Document native-only typed architecture admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native resolution projection surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 129
+summary: Document profile-owned native-only typed architecture admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native resolution projection surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -39,8 +39,10 @@ roots are transient refresh inputs and become immutable source-catalog evidence;
 they are not mutable repository revision state. Reconciliation replaces a
 repository transactionally when those source inputs change; ordinary enabled,
 precedence, and expiry changes preserve the enrollment. The supported-profile
-catalog independently declares the exact repository identities, roles, and
-precedence required for each complete profile. The hosted manifest must match
+catalog independently declares the exact target machine architecture,
+repository identities, roles, and precedence required for each complete
+profile. Its closed `ProfileTargetArchitecture` authority declares Fedora 44
+`x86_64`, Ubuntu 26.04 `amd64`, and Arch `x86_64`. The hosted manifest must match
 every public declaration exactly: Fedora includes release and updates; Ubuntu
 includes release, updates, security, and backports across main, restricted,
 universe, and multiverse; Arch includes core, extra, and multilib. The same
@@ -73,10 +75,15 @@ and a canonical `SourceSnapshotV1` manifest under
 `<storage.root>/catalogs/sources/<manifest-sha256>/`. The manifest binds exact
 source, repository, stream, parser-projection, authenticated root and child
 objects, catalog bytes, logical digest, and row counts. A strict
-`ProfileRevisionV2` then binds each member's role, precedence, required state,
-ordered source identity, and one composed
+profile-revision schema 3 `ProfileRevisionV2` then binds that typed target
+architecture, each member's role, precedence, required state, ordered source
+identity, and one composed
 profile catalog under `catalogs/profiles/<manifest-sha256>/`. Core contract and
 bundle verification live in `crates/conary-core/src/repository/catalog/`.
+Profile catalog projection version 3 is the current hard cut. Existing schema-2
+profile revisions and projection-version-2 profile catalogs do not carry the
+architecture authority, are invalid, and must be rebuilt by refresh; no
+compatibility reader or migration adapter remains.
 Every serving projection resolves a package origin back to that manifest.
 When two members publish the same source-independent native package identity,
 profile composition retains the member with the exact higher declared
@@ -878,7 +885,13 @@ solver closure and unresolved-dependency evidence. It binds the exact profile
 and package-oracle manifest, pinned solver implementation/version, target
 architecture, and one fixed typed policy: empty installed state, every exact
 package as a root, required/pre-required groups only, and native
-provider/repository precedence. Its `native_only` architecture admission uses
+provider/repository precedence. The policy architecture must equal the profile
+revision's typed target architecture during bundle binding, comparison, and
+promotion proof validation. Native and Conary producers derive the solver
+architecture from that field; `--architecture` is retained only as a checked
+operator assertion, and a mismatch fails with typed
+`ProfileArchitectureMismatch` before any root walk or output bundle. Its
+`native_only` architecture admission uses
 the selector's typed rpmrc/dpkg-cputable/CARCH-derived machine identity and
 admits source-native plus architecture-independent packages. Every package root
 has exactly one canonical resolved closure, typed unresolved set, or

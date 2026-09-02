@@ -1049,8 +1049,47 @@ check_third_party_divergence() {
     fi
 }
 
+check_profile_architecture_authority() {
+    require_file "crates/conary-core/src/repository/supported_profiles/catalog.toml" || return
+    require_file "crates/conary-core/src/repository/catalog/contract.rs" || return
+    require_file "apps/remi/src/server/catalog_refresh.rs" || return
+    require_file "scripts/verify-native-oracle-input-transport.py" || return
+    require_file "docs/specs/remi-native-parity-oracle.md" || return
+    require_file "docs/modules/remi.md" || return
+
+    require_match \
+        "crates/conary-core/src/repository/catalog/contract.rs" \
+        'PROFILE_REVISION_SCHEMA_V3: u32 = 3' \
+        'profile revision schema 3 authority'
+    require_match \
+        "apps/remi/src/server/catalog_refresh.rs" \
+        'PROFILE_CATALOG_PROJECTION_VERSION: u32 = 3' \
+        'profile catalog projection version 3 authority'
+    require_match \
+        "scripts/verify-native-oracle-input-transport.py" \
+        'value\["schema_version"\].*!= 3' \
+        'native-oracle transport profile revision schema 3'
+    require_match \
+        "scripts/verify-native-oracle-input-transport.py" \
+        'value\["target_architecture"\]' \
+        'native-oracle transport target architecture binding'
+    require_match \
+        "crates/conary-core/src/repository/supported_profiles/catalog.toml" \
+        'target_architecture = "amd64"' \
+        'typed Ubuntu profile architecture'
+    require_match \
+        "docs/specs/remi-native-parity-oracle.md" \
+        'supported-profile registry is the sole target-architecture authority' \
+        'native parity architecture authority claim'
+    require_match \
+        "docs/modules/remi.md" \
+        'ProfileArchitectureMismatch' \
+        'Remi architecture mismatch claim'
+}
+
 check_neutral_planning_layout
 check_third_party_divergence
+check_profile_architecture_authority
 check_live_doc_location_claims
 check_assistant_context_budget
 check_canonical_doc_frontmatter

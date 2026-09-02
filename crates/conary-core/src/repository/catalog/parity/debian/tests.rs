@@ -9,7 +9,7 @@ use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1,
     NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
-    NativeResolutionSurveyNativeExplanationV1, PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2,
+    NativeResolutionSurveyNativeExplanationV1, PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2,
     SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
     native_requirement_group_sha256, verify_native_parity_oracle_bundle,
     verify_native_resolution_oracle_bundle,
@@ -175,8 +175,10 @@ fn source_snapshot(repository: &str, packages: &Path) -> SourceSnapshotV1 {
 
 fn profile(snapshots: &[SourceSnapshotV1]) -> ProfileRevisionV2 {
     ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile: "ubuntu-26.04".to_string(),
+        target_architecture:
+            crate::repository::supported_profiles::ProfileTargetArchitecture::Amd64,
         projection_version: 1,
         members: snapshots
             .iter()
@@ -794,16 +796,20 @@ fn resolution_producer_rejects_conflicts_and_incompatible_roots() {
     .unwrap_err();
     assert!(matches!(conflict, Error::ConflictError(_)));
 
+    let mismatched_output = directory.path().join("architecture-resolution");
     let architecture = produce_debian_resolution_oracle(
         &profile,
         &inputs(&snapshots, &packages),
         &package_output,
         "arm64",
-        &directory.path().join("architecture-resolution"),
+        &mismatched_output,
     )
-    .unwrap();
-    assert_eq!(architecture.implementation.projection_schema, 2);
-    assert_eq!(architecture.artifact.counts.not_installable_roots, 2);
+    .unwrap_err();
+    assert!(matches!(
+        architecture,
+        Error::ProfileArchitectureMismatch { .. }
+    ));
+    assert!(!mismatched_output.exists());
 }
 
 #[test]

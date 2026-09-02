@@ -237,7 +237,7 @@ struct PromotionProveArgs {
     #[arg(long = "native-resolution", required = true, value_parser = parse_profile_path)]
     native_resolutions: Vec<ProfilePathBinding>,
 
-    /// Native target architecture as PROFILE=ARCH; repeat in canonical order.
+    /// Profile-architecture assertion as PROFILE=ARCH; repeat in canonical order.
     #[arg(long = "architecture", required = true, value_parser = parse_profile_value)]
     architectures: Vec<ProfileValueBinding>,
 

@@ -6,7 +6,7 @@ use conary_core::db::models::{
     RepositorySourcePolicy, RepositoryUpdateMode,
 };
 use conary_core::repository::catalog::{
-    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,
+    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2,
     ProfileSourceMemberV2, SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
     verify_registered_source_catalog_bundle,
 };
@@ -182,8 +182,10 @@ fn reusable_manifest() -> ProfileRevisionV2 {
         },
     ];
     ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile: "fedora-44".to_string(),
+        target_architecture:
+            conary_core::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
         projection_version: PROFILE_CATALOG_PROJECTION_VERSION,
         catalog: CatalogArtifactV1 {
             sha256: "c".repeat(64),

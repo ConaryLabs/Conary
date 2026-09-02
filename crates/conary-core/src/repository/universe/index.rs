@@ -518,7 +518,7 @@ mod tests {
     use crate::repository::catalog::{
         CATALOG_CONTENT_SCHEMA_V1, CatalogContentV1, CatalogPackageOriginV1,
         CatalogPackageRecordV1, CatalogProvideRecordV1, CatalogRequirementAtomV1,
-        CatalogRequirementGroupV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
+        CatalogRequirementGroupV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3,
         ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1,
         write_catalog_candidate,
     };
@@ -686,8 +686,10 @@ mod tests {
         .unwrap();
         let binding = write_catalog_candidate(&catalog_path, &content).unwrap();
         let revision = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            schema_version: PROFILE_REVISION_SCHEMA_V3,
             profile: PROFILE.to_string(),
+            target_architecture:
+                crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
             projection_version: 1,
             members: profile_members(),
             catalog: binding.artifact.clone(),
@@ -1022,8 +1024,10 @@ mod tests {
         let evidence = profile_evidence();
         let binding = writer.finish(evidence).unwrap();
         let revision = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            schema_version: PROFILE_REVISION_SCHEMA_V3,
             profile: PROFILE.to_string(),
+            target_architecture:
+                crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
             projection_version: 1,
             members: profile_members(),
             catalog: binding.artifact.clone(),

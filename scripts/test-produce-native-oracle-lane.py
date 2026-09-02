@@ -105,11 +105,11 @@ class NativeOracleLaneTests(unittest.TestCase):
         profiles = []
         objects: dict[str, int] = {}
         configurations = (
-            ("fedora-44", ("rpm_primary", "rpm_filelists")),
-            ("ubuntu-26.04", ("debian_packages",)),
-            ("arch", ("arch_database",)),
+            ("fedora-44", "x86_64", ("rpm_primary", "rpm_filelists")),
+            ("ubuntu-26.04", "amd64", ("debian_packages",)),
+            ("arch", "x86_64", ("arch_database",)),
         )
-        for profile, roles in configurations:
+        for profile, target_architecture, roles in configurations:
             authenticated = []
             for role in roles:
                 data = f"{profile}:{role}".encode()
@@ -118,7 +118,12 @@ class NativeOracleLaneTests(unittest.TestCase):
                 objects[object_digest] = len(data)
                 authenticated.append({"role": role, "sha256": object_digest, "size": len(data)})
             source = {"authenticated_objects": authenticated, "source_profile": profile}
-            revision = {"members": [{"ordinal": 0, "source_snapshot_sha256": digest(source)}], "profile": profile}
+            revision = {
+                "members": [{"ordinal": 0, "source_snapshot_sha256": digest(source)}],
+                "profile": profile,
+                "schema_version": 3,
+                "target_architecture": target_architecture,
+            }
             profiles.append({"profile_revision_sha256": digest(revision), "revision": revision, "sources": [source]})
         return {
             "objects": [{"sha256": key, "size": objects[key]} for key in sorted(objects)],
@@ -197,7 +202,7 @@ class NativeOracleLaneTests(unittest.TestCase):
     def test_rejects_wrong_target_architecture(self) -> None:
         result = self.run_lane(architecture="amd64")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("architecture must be x86_64", result.stderr)
+        self.assertIn("architecture must match profile authority x86_64", result.stderr)
 
 
 if __name__ == "__main__":

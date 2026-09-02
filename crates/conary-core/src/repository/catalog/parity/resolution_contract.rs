@@ -84,6 +84,12 @@ impl NativeResolutionPolicyV1 {
         validate_identity(&self.architecture, "native resolution architecture")?;
         self.architecture_admission.validate()
     }
+
+    pub fn validate_for_profile(&self, profile: &ProfileRevisionV2) -> Result<()> {
+        self.validate()?;
+        profile.require_target_architecture(&self.architecture)?;
+        Ok(())
+    }
 }
 
 /// Counts for one complete per-root resolution stream.
@@ -207,6 +213,7 @@ impl NativeResolutionOracleV1 {
     ) -> Result<()> {
         self.validate()?;
         package_oracle.validate_profile(profile)?;
+        self.policy.validate_for_profile(profile)?;
         if self.profile != profile.profile
             || self.profile_revision_sha256 != profile.manifest_sha256()?
             || self.profile_logical_digest_sha256 != profile.logical_digest_sha256

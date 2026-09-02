@@ -5,7 +5,7 @@
 use super::{
     CatalogBindingV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
     CatalogPackageRecordV1, CatalogProfileCandidateScratchV1, CatalogProfileMemberScratchV1,
-    CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
+    CatalogReader, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3,
     ProfileRevisionV2, ProfileSourceMemberV2, SourceSnapshotV1,
 };
 use crate::error::{Error, Result};
@@ -325,9 +325,16 @@ fn bind_profile_revision(
     members: Vec<ProfileSourceMemberV2>,
     binding: &CatalogBindingV1,
 ) -> Result<ProfileRevisionV2> {
+    let supported =
+        crate::repository::supported_profiles::profile_by_id(&profile).ok_or_else(|| {
+            Error::ConfigError(format!(
+                "profile revision names unknown profile '{profile}'"
+            ))
+        })?;
     let manifest = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile,
+        target_architecture: supported.target_architecture(),
         projection_version,
         members,
         catalog: binding.artifact.clone(),

@@ -7,12 +7,12 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::repository::supported_profiles::ProfileSourceRole;
+use crate::repository::supported_profiles::{ProfileSourceRole, ProfileTargetArchitecture};
 use crate::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
 
 pub const SOURCE_SNAPSHOT_SCHEMA_V1: u32 = 1;
 pub const SOURCE_CATALOG_PROJECTION_VERSION_V2: u32 = 2;
-pub const PROFILE_REVISION_SCHEMA_V2: u32 = 2;
+pub const PROFILE_REVISION_SCHEMA_V3: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,6 +122,7 @@ pub struct ProfileSourceMemberV2 {
 pub struct ProfileRevisionV2 {
     pub schema_version: u32,
     pub profile: String,
+    pub target_architecture: ProfileTargetArchitecture,
     pub projection_version: u32,
     pub members: Vec<ProfileSourceMemberV2>,
     pub catalog: CatalogArtifactV1,
@@ -217,13 +218,27 @@ impl SourceSnapshotV1 {
 
 impl ProfileRevisionV2 {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != PROFILE_REVISION_SCHEMA_V2 {
+        if self.schema_version != PROFILE_REVISION_SCHEMA_V3 {
             return Err(Error::ConfigError(format!(
                 "profile revision schema {} is unsupported; expected {}",
-                self.schema_version, PROFILE_REVISION_SCHEMA_V2
+                self.schema_version, PROFILE_REVISION_SCHEMA_V3
             )));
         }
         validate_storage_component(&self.profile, "profile revision profile")?;
+        let supported = crate::repository::supported_profiles::profile_by_id(&self.profile)
+            .ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "profile revision names unknown profile '{}'",
+                    self.profile
+                ))
+            })?;
+        if self.target_architecture != supported.target_architecture() {
+            return Err(Error::ProfileArchitectureMismatch {
+                profile: self.profile.clone(),
+                expected: supported.target_architecture().as_str().to_string(),
+                actual: self.target_architecture.as_str().to_string(),
+            });
+        }
         if self.projection_version == 0 {
             return Err(Error::ConfigError(
                 "profile revision projection version must be positive".to_string(),
@@ -314,6 +329,20 @@ impl ProfileRevisionV2 {
             }
         }
         Ok(())
+    }
+
+    /// Validate an operator assertion and return the profile-owned architecture.
+    pub fn require_target_architecture(&self, supplied: &str) -> Result<&'static str> {
+        self.validate()?;
+        let expected = self.target_architecture.as_str();
+        if supplied != expected {
+            return Err(Error::ProfileArchitectureMismatch {
+                profile: self.profile.clone(),
+                expected: expected.to_string(),
+                actual: supplied.to_string(),
+            });
+        }
+        Ok(expected)
     }
 
     pub fn manifest_sha256(&self) -> Result<String> {
@@ -570,8 +599,9 @@ mod tests {
     fn profile_revision_requires_declared_member_order_and_unique_identity() {
         let snapshot_id = source_snapshot().manifest_sha256().unwrap();
         let mut revision = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            schema_version: PROFILE_REVISION_SCHEMA_V3,
             profile: "arch".to_string(),
+            target_architecture: ProfileTargetArchitecture::X86_64,
             projection_version: 1,
             members: vec![
                 ProfileSourceMemberV2 {
@@ -624,6 +654,15 @@ mod tests {
         };
         revision.validate().unwrap();
         revision.validate_member_contract().unwrap();
+        let mut wrong_architecture = revision.clone();
+        wrong_architecture.target_architecture = ProfileTargetArchitecture::Amd64;
+        assert!(matches!(
+            wrong_architecture.validate(),
+            Err(Error::ProfileArchitectureMismatch { .. })
+        ));
+        let mut retired_schema = revision.clone();
+        retired_schema.schema_version = 2;
+        assert!(retired_schema.validate().is_err());
         let first = revision.manifest_sha256().unwrap();
         revision.members[1].ordinal = 2;
         assert!(revision.validate().is_err());

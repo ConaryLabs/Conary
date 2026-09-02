@@ -174,13 +174,11 @@ fn validate_inputs(inputs: &[RemiPromotionProofProfileInput]) -> Result<()> {
         );
         validate_sha256(&input.selection.profile_revision_sha256)?;
         ensure!(
-            !input.architecture.is_empty()
-                && input
-                    .architecture
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')),
-            "promotion-proof architecture for '{}' is invalid",
-            expected.id()
+            input.architecture == expected.target_architecture().as_str(),
+            "promotion-proof architecture for '{}' must match profile authority '{}'; got '{}'",
+            expected.id(),
+            expected.target_architecture().as_str(),
+            input.architecture
         );
     }
     Ok(())
@@ -306,8 +304,13 @@ mod tests {
         inputs[0].selection.profile_revision_sha256 = "A".repeat(64);
         assert!(validate_inputs(&inputs).is_err());
         let mut inputs = valid_inputs();
-        inputs[0].architecture = "x86 64".to_string();
-        assert!(validate_inputs(&inputs).is_err());
+        inputs[0].architecture = "aarch64".to_string();
+        let error = validate_inputs(&inputs).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("must match profile authority 'x86_64'")
+        );
     }
 
     #[test]

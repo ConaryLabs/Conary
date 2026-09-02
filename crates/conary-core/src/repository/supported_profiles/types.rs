@@ -14,6 +14,7 @@ pub(super) struct ProfileDocument {
     pub id: String,
     pub display_name: String,
     pub release: String,
+    pub target_architecture: ProfileTargetArchitecture,
     pub support_tier: SupportTier,
     #[serde(default)]
     pub release_date: Option<String>,
@@ -21,6 +22,24 @@ pub(super) struct ProfileDocument {
     pub eol: Option<String>,
     pub members: Vec<ProfileSourceMemberContract>,
     pub identity: ProfileIdentityDocument,
+}
+
+/// Exact source-ecosystem machine architecture owned by one supported profile.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileTargetArchitecture {
+    X86_64,
+    Amd64,
+}
+
+impl ProfileTargetArchitecture {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Amd64 => "amd64",
+        }
+    }
 }
 
 /// Product support state for one exact source profile.
@@ -182,6 +201,11 @@ impl SupportedProfile {
     #[must_use]
     pub fn support_tier(&self) -> SupportTier {
         self.document.support_tier
+    }
+
+    #[must_use]
+    pub fn target_architecture(&self) -> ProfileTargetArchitecture {
+        self.document.target_architecture
     }
 
     #[must_use]

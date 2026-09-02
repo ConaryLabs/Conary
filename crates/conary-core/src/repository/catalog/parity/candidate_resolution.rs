@@ -51,6 +51,7 @@ pub fn produce_conary_resolution_candidate(
     architecture: &str,
     output: &Path,
 ) -> Result<ConaryResolutionCandidateV1> {
+    let architecture = profile.require_target_architecture(architecture)?;
     let package_oracle = verify_native_parity_oracle_bundle(package_oracle_directory, profile)?;
     compare_native_parity_oracle(profile, catalog, &package_oracle).map_err(|error| {
         Error::ConflictError(format!(

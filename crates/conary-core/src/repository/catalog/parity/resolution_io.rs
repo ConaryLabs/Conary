@@ -49,7 +49,7 @@ impl NativeResolutionOracleWriter {
         policy: NativeResolutionPolicyV1,
     ) -> Result<Self> {
         package_oracle.validate_profile(profile)?;
-        policy.validate()?;
+        policy.validate_for_profile(profile)?;
         let path = path.as_ref();
         validate_candidate_path(path)?;
         let mut options = OpenOptions::new();

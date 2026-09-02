@@ -10,7 +10,7 @@ use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionNotInstallableReasonV1,
     NativeResolutionOutcomeV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2,
+    NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2,
     SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
     native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
 };
@@ -236,8 +236,10 @@ fn source_snapshot(repository: &str, primary: &Path, filelists: &Path) -> Source
 
 fn profile(snapshots: &[SourceSnapshotV1]) -> ProfileRevisionV2 {
     ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile: "fedora-44".to_string(),
+        target_architecture:
+            crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
         projection_version: 1,
         members: snapshots
             .iter()
@@ -1544,15 +1546,20 @@ fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
     assert!(matches!(conflict, Error::ConflictError(_)));
     assert!(conflict.to_string().contains("problem rule"));
 
+    let mismatched_output = directory.path().join("architecture-resolution");
     let architecture = produce_rpm_resolution_oracle(
         &profile,
         &inputs(&snapshots, &metadata),
         &package_output,
         "aarch64",
-        &directory.path().join("architecture-resolution"),
+        &mismatched_output,
     )
-    .unwrap();
-    assert_eq!(architecture.artifact.counts.not_installable_roots, 2);
+    .unwrap_err();
+    assert!(matches!(
+        architecture,
+        Error::ProfileArchitectureMismatch { .. }
+    ));
+    assert!(!mismatched_output.exists());
 
     let package_rows_path = package_output.join(NATIVE_PARITY_PACKAGE_FILE_NAME);
     let package_rows = fs::read(&package_rows_path).unwrap();

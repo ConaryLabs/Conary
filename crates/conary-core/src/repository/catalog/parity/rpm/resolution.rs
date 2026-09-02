@@ -121,6 +121,7 @@ fn produce_rpm_resolution(
     architecture: &str,
     destination: ResolutionDestination<'_>,
 ) -> Result<ResolutionProduct> {
+    let architecture = profile.require_target_architecture(architecture)?;
     let policy = NativeResolutionPolicyV1 {
         architecture: architecture.to_string(),
         architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,

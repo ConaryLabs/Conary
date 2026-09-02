@@ -20,21 +20,18 @@ from typing import Any
 PUBLIC_PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
 LANES = {
     "fedora-44": {
-        "architecture": "x86_64",
         "ecosystem": "rpm",
         "implementation": "libsolv",
         "roles": ("rpm_primary", "rpm_filelists"),
         "flags": ("--primary", "--filelists"),
     },
     "ubuntu-26.04": {
-        "architecture": "amd64",
         "ecosystem": "debian",
         "implementation": "apt-pkg",
         "roles": ("debian_packages",),
         "flags": ("--packages",),
     },
     "arch": {
-        "architecture": "x86_64",
         "ecosystem": "alpm",
         "implementation": "libalpm",
         "roles": ("arch_database",),
@@ -167,6 +164,14 @@ def validate_input(root: Path, selected_profile: str) -> tuple[dict[str, Any], d
     revision = profile["revision"]
     if not isinstance(revision, dict):
         raise ValueError(f"{selected_profile} revision must be an object")
+    if revision.get("schema_version") != 3:
+        raise ValueError(f"{selected_profile} profile revision schema must be 3")
+    target_architecture = revision.get("target_architecture")
+    if (
+        not isinstance(target_architecture, str)
+        or re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", target_architecture) is None
+    ):
+        raise ValueError(f"{selected_profile} target architecture is invalid")
     observed_revision = require_sha256(profile["profile_revision_sha256"], f"{selected_profile} revision")
     if sha256(canonical_json(revision)) != observed_revision:
         raise ValueError(f"{selected_profile} revision digest drifted")
@@ -237,7 +242,10 @@ def oracle_evidence(
         if manifest.get("package_oracle_manifest_sha256") != package_manifest_sha256:
             raise ValueError("native resolution does not bind the exact package oracle")
         policy = manifest.get("policy")
-        if not isinstance(policy, dict) or policy.get("architecture") != lane["architecture"]:
+        if (
+            not isinstance(policy, dict)
+            or policy.get("architecture") != profile["revision"]["target_architecture"]
+        ):
             raise ValueError("native resolution target architecture drifted")
     return {
         "manifest_sha256": sha256(manifest_bytes),
@@ -256,8 +264,11 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
     output_root = arguments.output_root.resolve()
     lane = LANES[arguments.profile]
     manifest, profile, input_manifest_sha256 = validate_input(input_root, arguments.profile)
-    if arguments.architecture != lane["architecture"]:
-        raise ValueError(f"{arguments.profile} architecture must be {lane['architecture']}")
+    target_architecture = profile["revision"]["target_architecture"]
+    if arguments.architecture != target_architecture:
+        raise ValueError(
+            f"{arguments.profile} architecture must match profile authority {target_architecture}"
+        )
     if output_root.exists():
         raise ValueError("native-oracle lane output already exists")
     output_root.parent.mkdir(parents=True, exist_ok=True)
@@ -311,7 +322,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         "input_manifest_sha256": input_manifest_sha256,
         "profile": arguments.profile,
         "profile_revision_sha256": profile["profile_revision_sha256"],
-        "target_architecture": arguments.architecture,
+        "target_architecture": target_architecture,
         "package_oracle": package,
         "resolution_oracle": resolution,
     }

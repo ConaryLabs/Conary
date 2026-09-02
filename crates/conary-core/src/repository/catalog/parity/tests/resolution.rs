@@ -388,20 +388,23 @@ fn comparison_rejects_policy_drift_before_accepting_equal_rows() {
 
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join(NATIVE_RESOLUTION_ROOT_FILE_NAME);
-    let mut changed_policy = policy(ecosystem);
-    changed_policy.architecture = "aarch64".to_string();
     let mut writer = NativeResolutionOracleWriter::create(
         &path,
         &candidate.profile,
         package_oracle.reader.manifest(),
         solver_implementation(ecosystem, "conary-resolvo"),
-        changed_policy,
+        policy(ecosystem),
     )
     .unwrap();
     for root in &roots {
         writer.root(root).unwrap();
     }
-    let manifest = writer.finish().unwrap();
+    let mut manifest = writer.finish().unwrap();
+    manifest.policy.architecture = "aarch64".to_string();
+    assert!(matches!(
+        manifest.validate_binding(&candidate.profile, package_oracle.reader.manifest()),
+        Err(crate::Error::ProfileArchitectureMismatch { .. })
+    ));
     let changed = NativeResolutionOracleReader::open_verified(&path, &manifest).unwrap();
     let error = compare_native_resolution_oracle(
         &candidate.profile,

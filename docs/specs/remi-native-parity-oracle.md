@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define strict native parity artifacts with native-only architecture admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
+summary: Define strict native parity artifacts with profile-owned native-only architecture admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
 last_updated: 2026-09-02
-revision: 21
+revision: 22
 status: active
 ---
 
@@ -15,6 +15,14 @@ exact `ProfileRevisionV2`. It is distinct from the hosted
 `phase4-native-pm-parity` suite: that suite proves deterministic one-package
 lifecycle and CLI behavior, while this contract covers every package admitted
 to one immutable profile candidate.
+
+The supported-profile registry is the sole target-architecture authority.
+Its closed `ProfileTargetArchitecture` value declares Fedora 44 `x86_64`,
+Ubuntu 26.04 `amd64`, and Arch `x86_64`; profile-revision schema 3 carries that
+typed value into every `ProfileRevisionV2`. Profile catalog projection version
+3 is the only current producer. Schema-2 profile revisions and
+projection-version-2 profile catalogs lack this binding, are invalid, and must
+be rebuilt from authenticated sources. There is no compatibility reader.
 
 ## Exact input handoff
 
@@ -220,6 +228,9 @@ dependency closure and unresolved dependencies. Its manifest binds the exact
 `ProfileRevisionV2`, the exact `NativeParityOracleV1` manifest digest, the
 solver implementation and version, its projection schema, the target
 architecture, normalized counts, and the SHA-256 and size of `roots.jsonl`.
+The resolution policy architecture must equal the bound profile revision's
+typed target architecture during manifest binding, comparison, and promotion
+proof validation.
 
 Schema 2 fixes the resolution policy rather than accepting solver flags or
 free-form policy: the installed state is empty, every exact package variant is
@@ -230,6 +241,11 @@ only the effective native machine architecture and the source scheme's
 architecture-independent token (`noarch`, `all`, or `any`). The admission
 decision is made by Conary's typed rpmrc/dpkg-cputable/CARCH-derived selector
 authority on every producer side. A different policy requires a schema change.
+The three native producers and the Conary candidate producer derive the solver
+architecture from the profile revision. Their `--architecture` or operator
+input is only an assertion: a mismatch returns the typed
+`ProfileArchitectureMismatch` error before any root is walked or output bundle
+is created.
 
 There is exactly one canonical row for every package key in the bound package
 oracle. A row records exactly one outcome:

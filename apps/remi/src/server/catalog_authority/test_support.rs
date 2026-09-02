@@ -11,7 +11,7 @@ use conary_core::db::models::{
 use conary_core::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CATALOG_FILE_NAME, CatalogArtifactV1, CatalogContentV1,
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1,
-    PROFILE_REVISION_SCHEMA_V2, PortableManifestAttestationV1, ProfileRevisionV2,
+    PROFILE_REVISION_SCHEMA_V3, PortableManifestAttestationV1, ProfileRevisionV2,
     ProfileSourceMemberV2, SOURCE_METADATA_DIRECTORY_NAME, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
     SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1, portable_chunk_count_v1,
@@ -473,8 +473,13 @@ impl ActiveCatalogFixture {
         let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
             .expect("write catalog candidate");
         let manifest = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            schema_version: PROFILE_REVISION_SCHEMA_V3,
             profile: profile.to_string(),
+            target_architecture: conary_core::repository::supported_profiles::profile_by_id(
+                profile,
+            )
+            .expect("known active catalog fixture profile")
+            .target_architecture(),
             projection_version: crate::server::catalog_refresh::PROFILE_CATALOG_PROJECTION_VERSION,
             members,
             catalog: binding.artifact.clone(),

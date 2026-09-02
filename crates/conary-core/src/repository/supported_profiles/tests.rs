@@ -35,6 +35,23 @@ fn catalog_assigns_exact_typed_support_tiers() {
 }
 
 #[test]
+fn catalog_owns_exact_typed_target_architectures() {
+    let architectures = profiles()
+        .iter()
+        .map(|profile| (profile.id(), profile.target_architecture()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        architectures,
+        vec![
+            ("fedora-44", ProfileTargetArchitecture::X86_64),
+            ("ubuntu-26.04", ProfileTargetArchitecture::Amd64),
+            ("arch", ProfileTargetArchitecture::X86_64),
+            ("solus", ProfileTargetArchitecture::X86_64),
+        ]
+    );
+}
+
+#[test]
 fn catalog_declares_complete_exact_repository_membership() {
     let fedora = profile_by_public_id("fedora-44").unwrap();
     assert_eq!(fedora.members().len(), 2);

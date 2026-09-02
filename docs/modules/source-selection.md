@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-28
-revision: 53
-summary: Document typed profile support tiers and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+last_updated: 2026-09-02
+revision: 54
+summary: Document typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -84,7 +84,8 @@ replatform may need to realign.
 
 The repository feed catalog makes
 `crates/conary-core/src/repository/supported_profiles/` the source of truth for
-configured feed IDs, package format, version scheme, and Remi route-family
+configured feed IDs, package format, version scheme, typed target machine
+architecture, and Remi route-family
 mapping. Fedora 44, Ubuntu 26.04, and Arch are the public feeds, not the only
 destination systems Conary supports. Solus is a candidate profile available to
 private refresh and conformance work without public route, universe, key, seed,

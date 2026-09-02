@@ -128,6 +128,14 @@ pub enum Error {
     #[error("Conflict: {0}")]
     ConflictError(String),
 
+    /// Operator-supplied architecture disagrees with the selected profile authority.
+    #[error("Architecture mismatch for profile '{profile}': expected '{expected}', got '{actual}'")]
+    ProfileArchitectureMismatch {
+        profile: String,
+        expected: String,
+        actual: String,
+    },
+
     /// Eligible package candidates remain tied without a comparable version
     /// contract or an explicit repository/priority winner.
     #[error(

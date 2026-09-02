@@ -94,8 +94,13 @@ fn candidate_fixture_with(
     let path = directory.path().join("catalog.sqlite");
     let binding = write_catalog_candidate(&path, &content).unwrap();
     let profile = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile: profile_name(ecosystem).to_string(),
+        target_architecture: crate::repository::supported_profiles::profile_by_public_id(
+            profile_name(ecosystem),
+        )
+        .unwrap()
+        .target_architecture(),
         projection_version: 1,
         members,
         catalog: binding.artifact.clone(),
@@ -247,6 +252,37 @@ fn complete_candidate_crawl_reopens_and_matches_native_resolution() {
         .unwrap();
         assert_eq!(reopened.manifest(), &produced.manifest);
     }
+}
+
+#[test]
+fn candidate_producer_rejects_operator_architecture_before_writing_roots() {
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let candidate = candidate_fixture(ecosystem);
+    let package_oracle = oracle(&candidate, ecosystem, rows(&candidate));
+    let native = write_native_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        &expected_roots(&candidate),
+    );
+    let output_parent = tempfile::tempdir().unwrap();
+    let output = output_parent.path().join("candidate-resolution");
+
+    let error = produce_conary_resolution_candidate(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        native.path(),
+        "aarch64",
+        &output,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::Error::ProfileArchitectureMismatch { .. }
+    ));
+    assert!(!output.exists());
 }
 
 #[test]

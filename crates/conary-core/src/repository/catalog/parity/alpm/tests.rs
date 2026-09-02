@@ -11,7 +11,7 @@ use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NATIVE_PARITY_PACKAGE_FILE_NAME, NativeParityOracleWriter,
     NativeResolutionOutcomeV1, NativeResolutionSurveyAlpmResultV1,
     NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
-    PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
+    PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
     native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
     write_native_parity_oracle_manifest,
@@ -184,8 +184,10 @@ fn source_snapshot(repository: &str, database: &Path) -> SourceSnapshotV1 {
 fn profile(snapshots: &[SourceSnapshotV1]) -> ProfileRevisionV2 {
     let repositories = ["arch-core-x86_64", "arch-extra-x86_64"];
     ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile: "arch".to_string(),
+        target_architecture:
+            crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
         projection_version: 1,
         members: snapshots
             .iter()
@@ -624,16 +626,17 @@ fn resolution_producer_excludes_non_native_roots_and_rejects_conflicting_closure
     )
     .unwrap();
 
-    let excluded = produce_alpm_resolution_oracle(
+    let mismatched_output = directory.path().join("wrong-architecture");
+    let error = produce_alpm_resolution_oracle(
         &wrong_profile,
         &inputs(&snapshots, &databases),
         &package_output,
         "aarch64",
-        &directory.path().join("wrong-architecture"),
+        &mismatched_output,
     )
-    .unwrap();
-    assert_eq!(excluded.implementation.projection_schema, 2);
-    assert_eq!(excluded.artifact.counts.not_installable_roots, 11);
+    .unwrap_err();
+    assert!(matches!(error, Error::ProfileArchitectureMismatch { .. }));
+    assert!(!mismatched_output.exists());
 
     let conflict_directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(conflict_directory.path(), true);
