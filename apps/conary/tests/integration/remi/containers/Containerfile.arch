@@ -23,7 +23,7 @@ ARG INSTALL_MODE=binary
 RUN printf '%s\n' \
         'Server = https://archive.archlinux.org/repos/2026/08/02/$repo/os/$arch' \
         > /etc/pacman.d/mirrorlist \
-    && pacman -Syyu --noconfirm \
+    && pacman -Syyu --noconfirm --disable-download-timeout \
         ca-certificates \
         curl \
         diffutils \
@@ -38,7 +38,7 @@ COPY conary* /tmp/install/
 
 # Install: exact staged Arch package or raw binary
 RUN if [ "$INSTALL_MODE" = "package" ] && [ -f /tmp/install/conary-release.pkg.tar.zst ]; then \
-        pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst; \
+        pacman -U --noconfirm --disable-download-timeout /tmp/install/conary-release.pkg.tar.zst; \
     elif [ -f /tmp/install/conary ]; then \
         install -m 755 /tmp/install/conary /usr/bin/conary; \
     else \

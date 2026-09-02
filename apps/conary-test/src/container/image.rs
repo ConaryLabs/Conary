@@ -811,6 +811,11 @@ printf 'fixture\n' > "$output/$file"
             contents.contains("version 20260802.0.566770"),
             "Arch archive date must remain visibly coupled to pinned image provenance"
         );
+        assert!(
+            contents.contains("pacman -Syyu --noconfirm --disable-download-timeout")
+                && contents.contains("pacman -U --noconfirm --disable-download-timeout"),
+            "Arch synchronization and package installation must tolerate slow archive downloads"
+        );
     }
 
     #[test]
