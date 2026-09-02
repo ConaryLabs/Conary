@@ -250,7 +250,7 @@ fn search_rejects_unknown_architecture_instead_of_selecting_older_version() {
         &conn,
         "demo",
         &SelectionOptions {
-            architecture: Some("amd64".to_string()),
+            host_assertion: Some(HostArchitectureAssertion::new("amd64")),
             ..SelectionOptions::default()
         },
     )
@@ -291,7 +291,7 @@ fn fedora_selection_binds_packages_and_host_to_the_profile_target() {
         &conn,
         "profile-target-fixture",
         &SelectionOptions {
-            architecture: Some("x86_64".to_string()),
+            host_assertion: Some(HostArchitectureAssertion::new("x86_64")),
             ..SelectionOptions::default()
         },
     )
@@ -305,11 +305,34 @@ fn fedora_selection_binds_packages_and_host_to_the_profile_target() {
         std::collections::BTreeSet::from(["noarch", "x86_64"])
     );
 
+    let candidates = PackageSelector::search_packages(
+        &conn,
+        "profile-target-fixture",
+        &SelectionOptions {
+            variant: Some(PackageArchitectureVariant::from_package(
+                VersionScheme::Rpm,
+                "x86_64",
+            )),
+            host_assertion: Some(HostArchitectureAssertion::new("x86_64")),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap();
+    let architectures = candidates
+        .iter()
+        .map(|candidate| candidate.package.architecture.as_deref().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        architectures,
+        std::collections::BTreeSet::from(["noarch", "x86_64"]),
+        "a machine variant admits only that machine and independent packages"
+    );
+
     let error = PackageSelector::search_packages(
         &conn,
         "profile-target-fixture",
         &SelectionOptions {
-            architecture: Some("aarch64".to_string()),
+            host_assertion: Some(HostArchitectureAssertion::new("aarch64")),
             ..SelectionOptions::default()
         },
     )
@@ -321,6 +344,21 @@ fn fedora_selection_binds_packages_and_host_to_the_profile_target() {
             ref expected,
             ref actual,
         } if profile == "fedora-44" && expected == "x86_64" && actual == "aarch64"
+    ));
+
+    let error = PackageSelector::search_packages(
+        &conn,
+        "profile-target-fixture",
+        &SelectionOptions {
+            host_assertion: Some(HostArchitectureAssertion::new("definitely-not-a-machine")),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::UnknownArchitectureToken { ref scheme, ref token }
+            if scheme == "rpm" && token == "definitely-not-a-machine"
     ));
 }
 
@@ -825,7 +863,7 @@ fn permissive_policy_rejects_conflicting_package_and_repository_profiles() {
         &conn,
         "python",
         &SelectionOptions {
-            architecture: Some("x86_64".to_string()),
+            host_assertion: Some(HostArchitectureAssertion::new("x86_64")),
             policy: Some(ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Permissive)),
             is_root: true,
             ..Default::default()

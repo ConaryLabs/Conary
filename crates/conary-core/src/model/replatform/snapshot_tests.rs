@@ -43,6 +43,47 @@ fn replatform_target_lookup_uses_the_explicit_target_source() {
 }
 
 #[test]
+fn replatform_maps_architecture_independent_variants_across_source_schemes() {
+    let (_temp, conn) = create_test_db();
+
+    let mut repository = Repository::new(
+        "arch-core".to_string(),
+        "https://example.test/arch".to_string(),
+    );
+    repository.source_profile = Some("arch".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+
+    let mut target = RepositoryPackage::new(
+        repository_id,
+        "independent-data".to_string(),
+        "2.0-1".to_string(),
+        VersionScheme::Arch,
+        "sha256:target-independent".to_string(),
+        123,
+        "https://example.test/arch/independent-data.pkg.tar.zst".to_string(),
+    );
+    target.architecture = Some("any".to_string());
+    let target_id = target.insert(&conn).unwrap();
+
+    let mut installed = Trove::new_with_source(
+        "independent-data".to_string(),
+        "1.0-1".to_string(),
+        TroveType::Package,
+        InstallSource::Repository,
+        VersionScheme::Rpm,
+    );
+    installed.architecture = Some("noarch".to_string());
+    installed.source_profile = Some("fedora-44".to_string());
+
+    let selected = candidate_target_package(&conn, &installed, "arch")
+        .unwrap()
+        .expect("architecture-independent replatform target should be eligible");
+
+    assert_eq!(selected.id, Some(target_id));
+    assert_eq!(selected.architecture.as_deref(), Some("any"));
+}
+
+#[test]
 fn test_visible_realignment_candidates_counts_same_name_target_impls() {
     let (_temp, conn) = create_test_db();
 

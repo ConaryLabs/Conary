@@ -534,7 +534,9 @@ mod tests {
             &crate::repository::selector::SelectionOptions {
                 version: Some("2.0-1".to_string()),
                 repository: Some("browser-stable".to_string()),
-                architecture: Some("x86_64".to_string()),
+                variant: Some(
+                    crate::repository::selector::PackageArchitectureVariant::unscoped("x86_64"),
+                ),
                 ..Default::default()
             },
         )

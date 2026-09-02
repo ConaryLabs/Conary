@@ -109,7 +109,11 @@ mod tests {
         assert_eq!(sel_options.version, Some("1.0.0".to_string()));
         assert_eq!(sel_options.package_release, Some("3".to_string()));
         assert_eq!(sel_options.repository, Some("test-repo".to_string()));
-        assert_eq!(sel_options.architecture, Some("x86_64".to_string()));
+        assert_eq!(
+            sel_options.variant,
+            Some(PackageArchitectureVariant::unscoped("x86_64"))
+        );
+        assert_eq!(sel_options.host_assertion, None);
     }
 
     #[test]

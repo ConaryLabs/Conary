@@ -35,8 +35,10 @@ pub struct SelectionOptions {
     pub package_release: Option<String>,
     /// Specific repository to search (if None, search all enabled)
     pub repository: Option<String>,
-    /// Specific architecture to filter (if None, use system architecture)
-    pub architecture: Option<String>,
+    /// Package architecture variant requested by the caller.
+    pub variant: Option<PackageArchitectureVariant>,
+    /// Explicit assertion about the machine architecture used by a profile.
+    pub host_assertion: Option<HostArchitectureAssertion>,
     /// Whether discovery is target-native or intentionally all-architecture.
     pub architecture_scope: ArchitectureScope,
     /// Resolution policy to apply when filtering candidates.
@@ -45,6 +47,57 @@ pub struct SelectionOptions {
     /// Whether this selection is for a root (user-typed) request.
     /// Policy request-scope constraints only apply to root requests.
     pub is_root: bool,
+}
+
+/// A package-variant selector, optionally bound to the source scheme that
+/// supplied the token.
+///
+/// Installed package identities use [`Self::from_package`] so architecture-
+/// independent variants remain independent across replatforming. User-facing
+/// selectors that do not yet have a source scheme use [`Self::unscoped`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageArchitectureVariant {
+    scheme: Option<VersionScheme>,
+    token: String,
+}
+
+impl PackageArchitectureVariant {
+    #[must_use]
+    pub fn from_package(scheme: VersionScheme, token: impl Into<String>) -> Self {
+        Self {
+            scheme: Some(scheme),
+            token: token.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn unscoped(token: impl Into<String>) -> Self {
+        Self {
+            scheme: None,
+            token: token.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.token
+    }
+}
+
+/// A machine-architecture token asserted by the caller at a profile boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostArchitectureAssertion(String);
+
+impl HostArchitectureAssertion {
+    #[must_use]
+    pub fn new(token: impl Into<String>) -> Self {
+        Self(token.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Architecture discovery scope.
@@ -141,11 +194,20 @@ impl PackageSelector {
         }
         let detected_arch = Self::detect_architecture()?;
         let detected_identity = native_host_machine_identity()?;
-        let system_arch = options.architecture.as_deref().unwrap_or(&detected_arch);
+        let host_architecture = options
+            .host_assertion
+            .as_ref()
+            .map(HostArchitectureAssertion::as_str)
+            .unwrap_or(&detected_arch);
 
         debug!(
-            "Searching for package '{}' (arch: {})",
-            package_name, system_arch
+            "Searching for package '{}' (host arch: {}, variant: {:?})",
+            package_name,
+            host_architecture,
+            options
+                .variant
+                .as_ref()
+                .map(PackageArchitectureVariant::as_str)
         );
 
         // Find all matching packages
@@ -220,8 +282,8 @@ impl PackageSelector {
                                         repo.name, profile_id
                                     ))
                                 })?;
-                        if options.architecture.is_some() {
-                            require_profile_host_architecture_token(profile, system_arch)?;
+                        if options.host_assertion.is_some() {
+                            require_profile_host_architecture_token(profile, host_architecture)?;
                         } else {
                             require_profile_host_architecture(
                                 profile,
@@ -240,7 +302,7 @@ impl PackageSelector {
                         Self::is_machine_architecture_compatible(
                             scheme,
                             Some(package_architecture),
-                            system_arch,
+                            host_architecture,
                         )
                     }
                 };
@@ -251,6 +313,24 @@ impl PackageSelector {
                     );
                     continue;
                 }
+            }
+
+            if let Some(requested_variant) = options.variant.as_ref()
+                && !package_variant_matches(
+                    requested_variant,
+                    scheme,
+                    package_architecture,
+                    &detected_arch,
+                )
+            {
+                debug!(
+                    "Skipping package {} {} with variant {:?}; requested {}",
+                    pkg.name,
+                    pkg.version,
+                    pkg.architecture,
+                    requested_variant.as_str()
+                );
+                continue;
             }
 
             // Native source identity comes from the stream-bound repository
@@ -567,6 +647,41 @@ fn is_architecture_independent(scheme: VersionScheme, architecture: &str) -> boo
     matches!(
         known_package_architecture(scheme, architecture),
         Some(KnownPackageArchitecture::Independent)
+    )
+}
+
+fn package_variant_matches(
+    requested: &PackageArchitectureVariant,
+    candidate_scheme: VersionScheme,
+    candidate_architecture: &str,
+    native_architecture: &str,
+) -> bool {
+    let Some(requested_scheme) = requested.scheme else {
+        return PackageSelector::is_package_architecture_compatible(
+            candidate_scheme,
+            Some(candidate_architecture),
+            requested.as_str(),
+        );
+    };
+
+    let requested_is_independent =
+        is_architecture_independent(requested_scheme, requested.as_str());
+    let candidate_is_independent =
+        is_architecture_independent(candidate_scheme, candidate_architecture);
+
+    if requested_is_independent {
+        return candidate_is_independent;
+    }
+    if candidate_is_independent {
+        return true;
+    }
+
+    package_architectures_match(
+        requested_scheme,
+        requested.as_str(),
+        candidate_scheme,
+        candidate_architecture,
+        native_architecture,
     )
 }
 
