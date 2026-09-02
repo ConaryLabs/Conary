@@ -257,7 +257,7 @@ mod tests {
             "variant-repo".to_string(),
             "https://example.test/variant".to_string(),
         );
-        repo.source_profile = Some("fedora-44".to_string());
+        repo.source_profile = Some("solus".to_string());
         let repo_id = repo.insert(&conn).unwrap();
 
         let mut collection = Trove::new(
@@ -274,27 +274,27 @@ mod tests {
         for arch in ["x86_64", "aarch64"] {
             let mut installed = Trove::new_with_source(
                 "demo".to_string(),
-                "1.0.0".to_string(),
+                "1.0-1".to_string(),
                 TroveType::Package,
                 InstallSource::Repository,
-                conary_core::repository::versioning::VersionScheme::Rpm,
+                conary_core::repository::versioning::VersionScheme::Eopkg,
             );
             installed.architecture = Some(arch.to_string());
-            installed.source_profile = Some("fedora-44".to_string());
+            installed.source_profile = Some("solus".to_string());
             installed.installed_from_repository_id = Some(repo_id);
             installed.insert(&conn).unwrap();
 
             let mut candidate = RepositoryPackage::new(
                 repo_id,
                 "demo".to_string(),
-                "1.0.1".to_string(),
-                conary_core::repository::versioning::VersionScheme::Rpm,
+                "1.0-2".to_string(),
+                conary_core::repository::versioning::VersionScheme::Eopkg,
                 format!("sha256:demo-{arch}"),
                 123,
                 format!("https://example.test/variant/demo-1.0.1-{arch}.ccs"),
             );
             candidate.architecture = Some(arch.to_string());
-            candidate.source_profile = Some("fedora-44".to_string());
+            candidate.source_profile = Some("solus".to_string());
             candidate.insert(&conn).unwrap();
         }
         drop(conn);
