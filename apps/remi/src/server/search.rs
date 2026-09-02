@@ -855,9 +855,11 @@ mod tests {
             "/tmp/hello-2.ccs",
         );
         fixture.activate_universe(1);
-        let universe = PublicUniverseSnapshot::load(fixture.db_path())
-            .unwrap()
-            .unwrap();
+        let crate::server::public_universe::PublicUniverseLoadOutcome::Current(universe) =
+            PublicUniverseSnapshot::load(fixture.db_path()).unwrap()
+        else {
+            panic!("fixture public universe is not current")
+        };
 
         engine
             .rebuild_from_universe(fixture.db_path(), fixture.authority(), &universe)
@@ -967,9 +969,11 @@ mod tests {
         insert_stale_conversion(&conn, "fedora-44", &profile_revision, "gtk3", "3.24.0");
         drop(conn);
         fixture.activate_universe(1);
-        let universe = PublicUniverseSnapshot::load(fixture.db_path())
-            .unwrap()
-            .unwrap();
+        let crate::server::public_universe::PublicUniverseLoadOutcome::Current(universe) =
+            PublicUniverseSnapshot::load(fixture.db_path()).unwrap()
+        else {
+            panic!("fixture public universe is not current")
+        };
 
         let (_dir, engine) = create_test_engine();
         engine

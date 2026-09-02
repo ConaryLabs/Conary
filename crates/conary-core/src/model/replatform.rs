@@ -115,7 +115,12 @@ fn candidate_target_package(
     )?;
 
     let options = SelectionOptions {
-        architecture: trove.architecture.clone(),
+        variant: trove.architecture.as_deref().map(|architecture| {
+            crate::repository::selector::PackageArchitectureVariant::from_package(
+                trove.version_scheme,
+                architecture,
+            )
+        }),
         policy: Some(effective_policy.resolution),
         is_root: false,
         ..SelectionOptions::default()

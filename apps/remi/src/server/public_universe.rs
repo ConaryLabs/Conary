@@ -5,10 +5,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use conary_core::repository::universe::RemiUniverseManifestV2;
 use rusqlite::OptionalExtension;
 
 use super::catalog_authority::ProfileRevisionSelection;
+use super::universe_revision_inspection::{
+    StoredUniverseManifestV2, inspect_stored_universe_manifest_v2,
+};
 
 /// Stable identity shared by every projection of one public universe.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,11 +30,19 @@ pub(crate) struct PublicUniverseSnapshot {
     profiles: BTreeMap<String, ProfileRevisionSelection>,
 }
 
+/// Typed result of inspecting the stored active public-universe pointer.
+#[derive(Debug)]
+pub(crate) enum PublicUniverseLoadOutcome {
+    Current(PublicUniverseSnapshot),
+    NoActiveUniverse,
+    ObsoleteProfileSchema,
+}
+
 impl PublicUniverseSnapshot {
     /// Load the active pointer and immutable manifest in one SQLite statement.
-    /// An absent pointer is ordinary unavailability; malformed persisted
-    /// authority is an error.
-    pub(crate) fn load(db_path: &Path) -> Result<Option<Self>> {
+    /// An absent or obsolete pointer is typed unavailability; malformed
+    /// persisted authority remains an error.
+    pub(crate) fn load(db_path: &Path) -> Result<PublicUniverseLoadOutcome> {
         let conn = super::open_runtime_db(db_path)
             .context("open Remi operational database for public universe")?;
         let active = conn
@@ -55,7 +65,7 @@ impl PublicUniverseSnapshot {
             )
             .optional()?;
         let Some((manifest_sha256, sequence, manifest_json, durable)) = active else {
-            return Ok(None);
+            return Ok(PublicUniverseLoadOutcome::NoActiveUniverse);
         };
         ensure!(
             durable == Some(1),
@@ -64,17 +74,17 @@ impl PublicUniverseSnapshot {
         let manifest_json = manifest_json
             .context("active Remi universe pointer does not name an immutable manifest")?;
 
+        let manifest = match inspect_stored_universe_manifest_v2(
+            &manifest_sha256,
+            sequence,
+            &manifest_json,
+        )? {
+            StoredUniverseManifestV2::Current(manifest) => manifest,
+            StoredUniverseManifestV2::ObsoleteProfileSchema => {
+                return Ok(PublicUniverseLoadOutcome::ObsoleteProfileSchema);
+            }
+        };
         let sequence = u64::try_from(sequence).context("active universe sequence is negative")?;
-        let manifest = serde_json::from_str::<RemiUniverseManifestV2>(&manifest_json)
-            .context("parse active Remi universe manifest")?;
-        manifest
-            .validate()
-            .map_err(anyhow::Error::from)
-            .context("validate active Remi universe manifest")?;
-        ensure!(
-            manifest.sequence == sequence && manifest.manifest_sha256()? == manifest_sha256,
-            "active Remi universe pointer disagrees with its immutable manifest"
-        );
 
         let persisted_members = {
             let mut statement = conn.prepare(
@@ -123,7 +133,7 @@ impl PublicUniverseSnapshot {
                 )
             })
             .collect();
-        Ok(Some(Self {
+        Ok(PublicUniverseLoadOutcome::Current(Self {
             identity: PublicUniverseIdentity {
                 manifest_sha256,
                 sequence,

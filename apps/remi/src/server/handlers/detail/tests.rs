@@ -83,9 +83,12 @@ fn insert_stale_conversion(
 
 fn public_universe(fixture: &ActiveCatalogFixture) -> PublicUniverseSnapshot {
     fixture.activate_universe(1);
-    PublicUniverseSnapshot::load(fixture.db_path())
-        .unwrap()
-        .unwrap()
+    let crate::server::public_universe::PublicUniverseLoadOutcome::Current(universe) =
+        PublicUniverseSnapshot::load(fixture.db_path()).unwrap()
+    else {
+        panic!("fixture public universe is not current")
+    };
+    universe
 }
 
 #[test]

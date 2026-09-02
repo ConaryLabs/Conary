@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-02
-revision: 58
-summary: Document profile-bound RPM, Debian, and Arch admission, scheme-owned Conary and Eopkg machine matching, libc-independent host identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+last_updated: 2026-09-03
+revision: 60
+summary: Document distinct package-variant selection and host-architecture assertions, profile-bound RPM, Debian, and Arch admission, scheme-owned Conary and Eopkg machine matching, libc-independent host identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -146,6 +146,21 @@ list, and libalpm compares package `%ARCH%` literally while always accepting
 `any`. Each ALPM profile therefore declares exactly its own machine token set
 plus `any`; a token outside that set is `UnknownArchitectureToken`, not a
 silent non-native filter.
+
+Repository selection keeps package-variant requests separate from host
+assertions. A `PackageArchitectureVariant` selects the installed or explicitly
+requested package variant; update and replatform derive it from the installed
+package's source scheme. An architecture-independent installed variant selects
+only an independent target variant, including the target scheme's corresponding
+`noarch`, `all`, or `any` token during replatforming. A machine variant admits
+that same machine identity plus the target scheme's architecture-independent
+variant. `HostArchitectureAssertion` is a separate profile-bound check and may
+contain only a machine token; an independent package token can never become a
+host assertion. An unscoped package-variant request is validated against every
+candidate's pinned scheme authority before architecture-independent matching;
+ALPM uses the candidate's exact source profile for that validation. An unknown
+token returns `UnknownArchitectureToken` and cannot match `noarch`, `all`, or
+`any` by literal substitution.
 
 The SAT provider applies that repository-row admission exactly once, when a
 persisted row is promoted to a solvable. Excluded rows receive no `SolvableId`

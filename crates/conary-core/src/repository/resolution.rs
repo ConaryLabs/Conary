@@ -57,7 +57,9 @@ use crate::error::{Error, Result};
 use crate::label::Label;
 use crate::repository::remi::{RemiClient, RemiFetchRequest};
 use crate::repository::resolution_policy::ResolutionPolicy;
-use crate::repository::selector::{PackageSelector, PackageWithRepo, SelectionOptions};
+use crate::repository::selector::{
+    PackageArchitectureVariant, PackageSelector, PackageWithRepo, SelectionOptions,
+};
 use crate::repository::versioning::{VersionScheme, resolve_package_version_scheme};
 use crate::repository::{
     DownloadOptions, download_package_verified, download_static_package_verified,
@@ -100,7 +102,11 @@ impl ResolutionOptions {
             version: self.version.clone(),
             package_release: self.package_release.clone(),
             repository: self.repository.clone(),
-            architecture: self.architecture.clone(),
+            variant: self
+                .architecture
+                .clone()
+                .map(PackageArchitectureVariant::unscoped),
+            host_assertion: None,
             architecture_scope: crate::repository::selector::ArchitectureScope::Native,
             policy: self.policy.clone(),
             is_root: self.is_root,
@@ -478,13 +484,15 @@ impl<'a> PackageResolver<'a> {
 
         // Check if any installed version matches the requested version
         for trove in &installed {
-            let architecture_matches = options.architecture.as_deref().is_none_or(|requested| {
-                PackageSelector::is_package_architecture_compatible(
+            let architecture_matches = match options.architecture.as_deref() {
+                Some(requested) => PackageSelector::is_package_architecture_compatible(
                     trove.version_scheme,
+                    trove.source_profile.as_deref(),
                     trove.architecture.as_deref(),
                     requested,
-                )
-            });
+                )?,
+                None => true,
+            };
             let version_matches = match &options.version {
                 // Specific version requested - must match exactly
                 Some(requested) => &trove.version == requested,

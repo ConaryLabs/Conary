@@ -769,7 +769,7 @@ async fn run_server_on_runtime(
                 let rebuild_catalog_authority = state.read().await.catalog_authority.clone();
                 tokio::task::spawn_blocking(move || {
                     match public_universe::PublicUniverseSnapshot::load(&rebuild_db) {
-                        Ok(Some(universe)) => {
+                        Ok(public_universe::PublicUniverseLoadOutcome::Current(universe)) => {
                             if let Err(error) = rebuild_engine.rebuild_from_universe(
                                 &rebuild_db,
                                 &rebuild_catalog_authority,
@@ -778,9 +778,16 @@ async fn run_server_on_runtime(
                                 tracing::error!(%error, "Failed to rebuild public search index");
                             }
                         }
-                        Ok(None) => tracing::info!(
-                            "Search index remains unavailable until a signed universe is active"
-                        ),
+                        Ok(public_universe::PublicUniverseLoadOutcome::NoActiveUniverse) => {
+                            tracing::info!(
+                                "Search index remains unavailable until a signed universe is active"
+                            )
+                        }
+                        Ok(public_universe::PublicUniverseLoadOutcome::ObsoleteProfileSchema) => {
+                            tracing::info!(
+                                "Search index remains unavailable while obsolete public profiles are rebuilt"
+                            )
+                        }
                         Err(error) => {
                             tracing::error!(%error, "Failed to load public search authority")
                         }

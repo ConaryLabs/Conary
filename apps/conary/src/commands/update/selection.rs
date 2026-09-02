@@ -6,7 +6,7 @@ use super::super::{InstalledPackageSelector, resolve_installed_package};
 use anyhow::Result;
 use conary_core::db::models::{Repository, RepositoryPackage, SecurityAdvisorySupport, Trove};
 use conary_core::repository::{
-    PackageSelector, SelectionOptions,
+    PackageArchitectureVariant, PackageSelector, SelectionOptions,
     resolution_policy::ResolutionPolicy,
     versioning::{compare_package_identities, resolve_package_version_scheme},
 };
@@ -134,7 +134,10 @@ pub(super) fn select_update_candidate(
         version: None,
         package_release: None,
         repository: None,
-        architecture: trove.architecture.clone(),
+        variant: trove.architecture.as_deref().map(|architecture| {
+            PackageArchitectureVariant::from_package(trove.version_scheme, architecture)
+        }),
+        host_assertion: None,
         architecture_scope: conary_core::repository::selector::ArchitectureScope::Native,
         policy: Some(transaction_policy),
         is_root: false,
@@ -438,6 +441,52 @@ mod tests {
         installed
     }
 
+    fn seed_architecture_independent_update_fixture(
+        conn: &rusqlite::Connection,
+        name: &str,
+        scheme: VersionScheme,
+        profile: &str,
+        architecture: &str,
+    ) -> Trove {
+        let mut repo = Repository::new(
+            format!("{name}-repo"),
+            format!("https://example.test/{name}"),
+        );
+        repo.source_profile = Some(profile.to_string());
+        let repo_id = repo.insert(conn).unwrap();
+
+        let mut installed = Trove::new_with_source(
+            name.to_string(),
+            "1.0-1".to_string(),
+            TroveType::Package,
+            InstallSource::Repository,
+            scheme,
+        );
+        installed.architecture = Some(architecture.to_string());
+        installed.debian_multi_arch = (scheme == VersionScheme::Debian)
+            .then_some(conary_core::repository::dependency_model::DebianMultiArch::No);
+        installed.source_profile = Some(profile.to_string());
+        installed.installed_from_repository_id = Some(repo_id);
+        installed.insert(conn).unwrap();
+
+        let mut candidate = RepositoryPackage::new(
+            repo_id,
+            name.to_string(),
+            "1.0-2".to_string(),
+            scheme,
+            format!("sha256:{name}"),
+            123,
+            format!("https://example.test/{name}/{name}-1.0-2"),
+        );
+        candidate.architecture = Some(architecture.to_string());
+        candidate.debian_multi_arch = (scheme == VersionScheme::Debian)
+            .then_some(conary_core::repository::dependency_model::DebianMultiArch::No);
+        candidate.source_profile = Some(profile.to_string());
+        candidate.insert(conn).unwrap();
+
+        installed
+    }
+
     #[test]
     fn test_is_repo_version_newer_uses_debian_scheme() {
         let trove = Trove::new_with_source(
@@ -482,6 +531,42 @@ mod tests {
         );
 
         assert!(is_repo_version_newer(&trove, &candidate).unwrap());
+    }
+
+    #[test]
+    fn architecture_independent_installed_variants_find_updates() {
+        let (_temp, db_path) = create_test_db();
+        let conn = conary_core::db::open(&db_path).unwrap();
+
+        for (name, scheme, profile, architecture) in [
+            ("rpm-independent", VersionScheme::Rpm, "fedora-44", "noarch"),
+            (
+                "debian-independent",
+                VersionScheme::Debian,
+                "ubuntu-26.04",
+                "all",
+            ),
+            ("alpm-independent", VersionScheme::Arch, "arch", "any"),
+        ] {
+            let installed = seed_architecture_independent_update_fixture(
+                &conn,
+                name,
+                scheme,
+                profile,
+                architecture,
+            );
+            let selected = select_update_candidate(
+                &conn,
+                &installed,
+                false,
+                &ResolutionPolicy::new().with_mixing(DependencyMixingPolicy::Strict),
+            )
+            .unwrap()
+            .expect("architecture-independent package should find its update");
+
+            assert_eq!(selected.package.version, "1.0-2");
+            assert_eq!(selected.package.architecture.as_deref(), Some(architecture));
+        }
     }
 
     #[test]

@@ -109,7 +109,11 @@ mod tests {
         assert_eq!(sel_options.version, Some("1.0.0".to_string()));
         assert_eq!(sel_options.package_release, Some("3".to_string()));
         assert_eq!(sel_options.repository, Some("test-repo".to_string()));
-        assert_eq!(sel_options.architecture, Some("x86_64".to_string()));
+        assert_eq!(
+            sel_options.variant,
+            Some(PackageArchitectureVariant::unscoped("x86_64"))
+        );
+        assert_eq!(sel_options.host_assertion, None);
     }
 
     #[test]
@@ -516,5 +520,38 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(exact, Some(PackageSource::Installed { .. })));
+    }
+
+    #[test]
+    fn check_installed_rejects_unknown_unscoped_architecture_before_noarch_match() {
+        let (_temp, conn) = create_test_db();
+        conn.execute(
+            "INSERT INTO troves (
+                name, version, type, architecture, install_source, install_reason,
+                source_profile, version_scheme
+             ) VALUES (
+                'docs', '1.0', 'package', 'noarch', 'repository', 'explicit',
+                'fedora-44', 'rpm'
+             )",
+            [],
+        )
+        .unwrap();
+        let resolver = PackageResolver::new(&conn);
+
+        let error = resolver
+            .check_installed(
+                "docs",
+                &ResolutionOptions {
+                    architecture: Some("definitely-not-a-machine".to_string()),
+                    ..ResolutionOptions::default()
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::UnknownArchitectureToken { ref scheme, ref token }
+                if scheme == "rpm" && token == "definitely-not-a-machine"
+        ));
     }
 }

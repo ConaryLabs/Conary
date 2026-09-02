@@ -75,7 +75,10 @@ pub use resolution::{
     ResolutionOptions, resolve_package,
 };
 pub use retry::{RetryConfig, with_retry};
-pub use selector::{PackageSelector, PackageWithRepo, SelectionOptions};
+pub use selector::{
+    HostArchitectureAssertion, PackageArchitectureVariant, PackageSelector, PackageWithRepo,
+    SelectionOptions,
+};
 pub use static_repo::{
     PackageKeyEntry, PackageKeyStatus, PackageKeysFile, RepoIdentity, StaticIndex,
     StaticPackageEntry,
