@@ -14,8 +14,8 @@
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
 use crate::repository::architecture::{
-    KnownPackageArchitecture, NativeMachineIdentityV1, host_machine_identity,
-    known_package_architecture, native_host_machine_identity,
+    KnownPackageArchitecture, NativeMachineIdentityV1, NativeResolutionArchitectureDecisionV1,
+    host_machine_identity, known_package_architecture, native_host_machine_identity,
     native_resolution_architecture_decision, native_resolution_architecture_decision_for_identity,
 };
 use crate::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
@@ -115,11 +115,15 @@ impl PackageSelector {
         profile: &crate::repository::supported_profiles::SupportedProfile,
         pkg_arch: Option<&str>,
         system_arch: &str,
-    ) -> bool {
+    ) -> Result<bool> {
         let Some(architecture) = pkg_arch else {
-            return false;
+            return Ok(false);
         };
-        native_resolution_architecture_decision(profile, architecture, system_arch).is_admitted()
+        Ok(matches!(
+            native_resolution_architecture_decision(profile, architecture, system_arch)
+                .into_result()?,
+            NativeResolutionArchitectureDecisionV1::Admitted
+        ))
     }
 
     /// Check source-native package admission against a typed host identity.
@@ -127,12 +131,15 @@ impl PackageSelector {
         profile: &crate::repository::supported_profiles::SupportedProfile,
         pkg_arch: Option<&str>,
         host: &NativeMachineIdentityV1,
-    ) -> bool {
+    ) -> Result<bool> {
         let Some(architecture) = pkg_arch else {
-            return false;
+            return Ok(false);
         };
-        native_resolution_architecture_decision_for_identity(profile, architecture, host)
-            .is_admitted()
+        Ok(matches!(
+            native_resolution_architecture_decision_for_identity(profile, architecture, host)
+                .into_result()?,
+            NativeResolutionArchitectureDecisionV1::Admitted
+        ))
     }
 
     /// Search for packages by name with selection options
@@ -234,13 +241,13 @@ impl PackageSelector {
                             profile,
                             Some(package_architecture),
                             system_arch,
-                        )
+                        )?
                     } else {
                         Self::is_architecture_compatible_with_identity(
                             profile,
                             Some(package_architecture),
                             &detected_identity,
-                        )
+                        )?
                     }
                 }
                 VersionScheme::Conary | VersionScheme::Eopkg => {

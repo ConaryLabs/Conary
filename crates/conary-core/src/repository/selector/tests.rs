@@ -222,6 +222,48 @@ fn select_best_uses_debian_version_ordering() {
 }
 
 #[test]
+fn search_rejects_unknown_architecture_instead_of_selecting_older_version() {
+    let conn = test_db();
+
+    let mut repo = Repository::new(
+        "ubuntu-future".to_string(),
+        "https://archive.ubuntu.com/ubuntu".to_string(),
+    );
+    repo.source_profile = Some("ubuntu-26.04".to_string());
+    let repository_id = repo.insert(&conn).unwrap();
+
+    for (version, architecture) in [("1.0", "amd64"), ("2.0", "future-dpkg64")] {
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            "demo".to_string(),
+            version.to_string(),
+            VersionScheme::Debian,
+            format!("sha256:{version}"),
+            1,
+            format!("https://archive.ubuntu.com/ubuntu/pool/demo_{version}_{architecture}.deb"),
+        );
+        package.architecture = Some(architecture.to_string());
+        package.insert(&conn).unwrap();
+    }
+
+    let error = PackageSelector::find_best_package(
+        &conn,
+        "demo",
+        &SelectionOptions {
+            architecture: Some("amd64".to_string()),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::UnknownArchitectureToken { ref scheme, ref token }
+            if scheme == "debian" && token == "future-dpkg64"
+    ));
+}
+
+#[test]
 fn policy_repo_scope_filters_root_request() {
     let conn = test_db();
 
