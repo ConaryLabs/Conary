@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,12 @@ use super::resolution_contract::{
 };
 use super::resolution_io::NativeResolutionOracleWriter;
 use crate::error::{Error, Result};
+
+mod evidence;
+
+#[allow(unused_imports)] // Consumed by feature-gated native explanation builders.
+pub(super) use evidence::NativeExplanationBudget;
+use evidence::canonical_explanation_size_with_limit;
 
 pub const NATIVE_RESOLUTION_SURVEY_SCHEMA_V1: u32 = 1;
 pub const NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT: usize = 5_000;
@@ -540,6 +546,13 @@ pub(super) enum RootOutcomeSink<'a> {
 
 #[allow(dead_code)]
 impl RootOutcomeSink<'_> {
+    pub(super) fn explanation_byte_limit(&self) -> u64 {
+        match self {
+            Self::Strict(_) => 0,
+            Self::Survey(collector) => collector.remaining_evidence_bytes(),
+        }
+    }
+
     pub(super) fn root(
         &mut self,
         root: &NativeParityPackageV1,
@@ -618,6 +631,17 @@ impl NativeResolutionSurveyCollector {
         Ok(())
     }
 
+    fn remaining_evidence_bytes(&self) -> u64 {
+        if self.evidence_budget_exhausted
+            || self.failures.len() >= NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT
+        {
+            0
+        } else {
+            self.evidence_byte_limit
+                .saturating_sub(self.retained_evidence_bytes)
+        }
+    }
+
     fn failure(
         &mut self,
         root: &NativeParityPackageV1,
@@ -656,6 +680,16 @@ impl NativeResolutionSurveyCollector {
         &mut self,
         explanation: NativeResolutionSurveyNativeExplanationV1,
     ) -> Result<NativeResolutionSurveyNativeExplanationV1> {
+        if matches!(
+            explanation,
+            NativeResolutionSurveyNativeExplanationV1::Withheld {
+                reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted
+            }
+        ) {
+            self.evidence_budget_exhausted = true;
+            self.withheld_explanations = checked_increment(self.withheld_explanations)?;
+            return Ok(explanation);
+        }
         if !self.evidence_budget_exhausted {
             let remaining_bytes = self
                 .evidence_byte_limit
@@ -743,51 +777,6 @@ fn checked_increment(value: u64) -> Result<u64> {
     value
         .checked_add(1)
         .ok_or_else(|| Error::ConfigError("native resolution survey count exceeds u64".to_string()))
-}
-
-/// Key ordering changes canonical JSON order but not its compact encoded length,
-/// so a bounded serde writer measures the exact canonical size without
-/// allocating a second copy of a potentially large explanation.
-fn canonical_explanation_size_with_limit(
-    explanation: &NativeResolutionSurveyNativeExplanationV1,
-    limit: u64,
-) -> Result<Option<u64>> {
-    let mut counter = ExplanationSizeCounter {
-        limit,
-        bytes: 0,
-        exceeded: false,
-    };
-    match serde_json::to_writer(&mut counter, explanation) {
-        Ok(()) => Ok(Some(counter.bytes)),
-        Err(_) if counter.exceeded => Ok(None),
-        Err(error) => Err(Error::ParseError(format!(
-            "serialize native resolution survey explanation: {error}"
-        ))),
-    }
-}
-
-struct ExplanationSizeCounter {
-    limit: u64,
-    bytes: u64,
-    exceeded: bool,
-}
-
-impl Write for ExplanationSizeCounter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let buffer_bytes = u64::try_from(buffer.len()).unwrap_or(u64::MAX);
-        if buffer_bytes > self.limit.saturating_sub(self.bytes) {
-            self.exceeded = true;
-            return Err(io::Error::other(
-                "native resolution survey evidence byte limit exceeded",
-            ));
-        }
-        self.bytes += buffer_bytes;
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -954,6 +943,31 @@ mod tests {
                 reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted
             }
         )));
+        survey.validate().unwrap();
+    }
+
+    #[test]
+    fn survey_counts_explanation_withheld_during_native_projection() {
+        let mut collector = collector(1);
+        collector
+            .failure(
+                &root(),
+                *NativeRootResolutionError::new(
+                    Error::ConfigError("diagnostic failure".to_string()),
+                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                    NativeResolutionSurveyNativeExplanationV1::Withheld {
+                        reason:
+                            NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted,
+                    },
+                ),
+            )
+            .unwrap();
+
+        let survey = collector.finish().unwrap();
+        assert_eq!(survey.retained_evidence_bytes, 0);
+        assert_eq!(survey.retained_explanations, 0);
+        assert_eq!(survey.withheld_explanations, 1);
+        assert!(survey.truncated_evidence);
         survey.validate().unwrap();
     }
 }

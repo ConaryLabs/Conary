@@ -16,8 +16,8 @@ use super::{
 use crate::error::{Error, Result};
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_survey::{
-    NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
-    RootOutcomeSink,
+    NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
+    NativeRootResolutionResult, RootOutcomeSink,
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
@@ -27,8 +27,8 @@ use crate::repository::catalog::parity::{
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
     NativeResolutionSurveyDebianMissingV1, NativeResolutionSurveyDebianPackageV1,
     NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
-    NativeResolutionSurveyNativeExplanationV1, NativeResolutionSurveyV1,
-    NativeUnresolvedDependencyV1, native_requirement_group_sha256,
+    NativeResolutionSurveyEvidenceWithheldReasonV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     write_native_resolution_oracle_manifest, write_native_resolution_survey,
 };
@@ -199,7 +199,13 @@ fn walk_resolution_roots(
     mut sink: RootOutcomeSink<'_>,
 ) -> Result<()> {
     package_oracle.for_each_package(|root| {
-        let result = resolve_exact_root(apt, package_index, &root, architecture);
+        let result = resolve_exact_root(
+            apt,
+            package_index,
+            &root,
+            architecture,
+            sink.explanation_byte_limit(),
+        );
         sink.root(&root, result)
     })
 }
@@ -209,6 +215,7 @@ fn resolve_exact_root(
     package_index: &PackageResolutionIndex,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     target_architecture: &str,
+    explanation_byte_limit: u64,
 ) -> NativeRootResolutionResult {
     let Some(root_architecture) = root.architecture.as_deref() else {
         return Err(NativeRootResolutionError::new(
@@ -230,7 +237,7 @@ fn resolve_exact_root(
             };
             NativeRootResolutionError::new(error, reason, debian_unavailable())
         })?;
-    let explanation = debian_explanation(&native);
+    let explanation = debian_explanation(&native, explanation_byte_limit);
     match native {
         AptResolutionOutcome::Resolved(packages) => {
             let closure = packages
@@ -287,37 +294,84 @@ fn resolve_exact_root(
     }
 }
 
-fn debian_explanation(outcome: &AptResolutionOutcome) -> NativeResolutionSurveyNativeExplanationV1 {
-    let result = match outcome {
-        AptResolutionOutcome::Resolved(packages) => {
-            NativeResolutionSurveyDebianResultV1::Resolved {
-                packages: packages.iter().map(debian_package).collect(),
+fn debian_explanation(
+    outcome: &AptResolutionOutcome,
+    byte_limit: u64,
+) -> NativeResolutionSurveyNativeExplanationV1 {
+    match outcome {
+        AptResolutionOutcome::Resolved(source_packages) => {
+            let mut explanation = NativeResolutionSurveyNativeExplanationV1::Debian {
+                result: NativeResolutionSurveyDebianResultV1::Resolved {
+                    packages: Vec::new(),
+                },
+            };
+            let Some(mut budget) =
+                NativeExplanationBudget::for_explanation(&explanation, byte_limit)
+            else {
+                return evidence_withheld();
+            };
+            let NativeResolutionSurveyNativeExplanationV1::Debian {
+                result: NativeResolutionSurveyDebianResultV1::Resolved { packages },
+            } = &mut explanation
+            else {
+                unreachable!("new Debian explanation has the wrong result")
+            };
+            for source_package in source_packages {
+                let package = debian_package(source_package);
+                if !budget.retain(&package, !packages.is_empty()) {
+                    return evidence_withheld();
+                }
+                packages.push(package);
             }
+            explanation
         }
-        AptResolutionOutcome::Unresolved(missing) => {
-            NativeResolutionSurveyDebianResultV1::Unresolved {
-                missing: missing
-                    .iter()
-                    .map(|missing| NativeResolutionSurveyDebianMissingV1 {
-                        requiring: debian_package(&missing.requiring),
-                        relation_kind: match missing.kind {
-                            AptRelationKind::Depends => "depends",
-                            AptRelationKind::PreDepends => "pre_depends",
-                            AptRelationKind::Recommends => "recommends",
-                            AptRelationKind::Suggests => "suggests",
-                            AptRelationKind::Enhances => "enhances",
-                            AptRelationKind::Conflicts => "conflicts",
-                            AptRelationKind::Breaks => "breaks",
-                            AptRelationKind::Replaces => "replaces",
-                        }
-                        .to_string(),
-                        dependency: missing.native_text.clone(),
-                    })
-                    .collect(),
+        AptResolutionOutcome::Unresolved(source_missing) => {
+            let mut explanation = NativeResolutionSurveyNativeExplanationV1::Debian {
+                result: NativeResolutionSurveyDebianResultV1::Unresolved {
+                    missing: Vec::new(),
+                },
+            };
+            let Some(mut budget) =
+                NativeExplanationBudget::for_explanation(&explanation, byte_limit)
+            else {
+                return evidence_withheld();
+            };
+            let NativeResolutionSurveyNativeExplanationV1::Debian {
+                result: NativeResolutionSurveyDebianResultV1::Unresolved { missing },
+            } = &mut explanation
+            else {
+                unreachable!("new Debian explanation has the wrong result")
+            };
+            for source in source_missing {
+                let entry = NativeResolutionSurveyDebianMissingV1 {
+                    requiring: debian_package(&source.requiring),
+                    relation_kind: match source.kind {
+                        AptRelationKind::Depends => "depends",
+                        AptRelationKind::PreDepends => "pre_depends",
+                        AptRelationKind::Recommends => "recommends",
+                        AptRelationKind::Suggests => "suggests",
+                        AptRelationKind::Enhances => "enhances",
+                        AptRelationKind::Conflicts => "conflicts",
+                        AptRelationKind::Breaks => "breaks",
+                        AptRelationKind::Replaces => "replaces",
+                    }
+                    .to_string(),
+                    dependency: source.native_text.clone(),
+                };
+                if !budget.retain(&entry, !missing.is_empty()) {
+                    return evidence_withheld();
+                }
+                missing.push(entry);
             }
+            explanation
         }
-    };
-    NativeResolutionSurveyNativeExplanationV1::Debian { result }
+    }
+}
+
+fn evidence_withheld() -> NativeResolutionSurveyNativeExplanationV1 {
+    NativeResolutionSurveyNativeExplanationV1::Withheld {
+        reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted,
+    }
 }
 
 fn debian_package(identity: &AptNativeIdentity) -> NativeResolutionSurveyDebianPackageV1 {

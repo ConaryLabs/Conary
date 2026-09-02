@@ -16,8 +16,8 @@ use super::{
 use crate::error::{Error, Result};
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_survey::{
-    NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
-    RootOutcomeSink,
+    NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
+    NativeRootResolutionResult, RootOutcomeSink,
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityOracleReader,
@@ -27,8 +27,9 @@ use crate::repository::catalog::parity::{
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
     NativeResolutionSurveyAlpmConflictV1, NativeResolutionSurveyAlpmMissingV1,
     NativeResolutionSurveyAlpmPackageV1, NativeResolutionSurveyAlpmResultV1,
-    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
+    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyEvidenceWithheldReasonV1,
+    NativeResolutionSurveyNativeExplanationV1, NativeResolutionSurveyV1,
+    NativeUnresolvedDependencyV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     write_native_resolution_oracle_manifest, write_native_resolution_survey,
 };
@@ -178,7 +179,14 @@ fn walk_resolution_roots(
     mut sink: RootOutcomeSink<'_>,
 ) -> Result<()> {
     package_oracle.for_each_package(|root| {
-        let result = resolve_exact_root(alpm, profile, inputs, package_index, &root);
+        let result = resolve_exact_root(
+            alpm,
+            profile,
+            inputs,
+            package_index,
+            &root,
+            sink.explanation_byte_limit(),
+        );
         sink.root(&root, result)
     })
 }
@@ -322,6 +330,7 @@ fn resolve_exact_root(
     inputs: &[AlpmParityMemberInput<'_>],
     package_index: &PackageResolutionIndex,
     root: &NativeParityPackageV1,
+    explanation_byte_limit: u64,
 ) -> NativeRootResolutionResult {
     let root_package = locate_exact_root(alpm, profile, inputs, root).map_err(|error| {
         NativeRootResolutionError::new(
@@ -363,7 +372,14 @@ fn resolve_exact_root(
         ));
     }
 
-    let outcome = resolve_initialized_transaction(alpm, profile, inputs, package_index, root);
+    let outcome = resolve_initialized_transaction(
+        alpm,
+        profile,
+        inputs,
+        package_index,
+        root,
+        explanation_byte_limit,
+    );
     let release = alpm.trans_release();
     match (outcome, release) {
         (Ok(outcome), Ok(())) => Ok(outcome),
@@ -396,6 +412,7 @@ fn resolve_initialized_transaction(
     inputs: &[AlpmParityMemberInput<'_>],
     package_index: &PackageResolutionIndex,
     root: &NativeParityPackageV1,
+    explanation_byte_limit: u64,
 ) -> NativeRootResolutionResult {
     enum Preparation {
         Prepared,
@@ -416,20 +433,10 @@ fn resolve_initialized_transaction(
                 let error_class = error.error();
                 match error.data() {
                     Some(PrepareData::UnsatisfiedDeps(dependencies)) => {
-                        let explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
-                            result: NativeResolutionSurveyAlpmResultV1::Unsatisfied {
-                                missing: dependencies
-                                    .iter()
-                                    .map(|dependency| NativeResolutionSurveyAlpmMissingV1 {
-                                        target: dependency.target().to_string(),
-                                        dependency: dependency.depend().to_string(),
-                                        causing_package: dependency
-                                            .causing_pkg()
-                                            .map(str::to_string),
-                                    })
-                                    .collect(),
-                            },
-                        };
+                        let explanation = alpm_unsatisfied_explanation(
+                            dependencies.iter(),
+                            explanation_byte_limit,
+                        );
                         let missing = dependencies
                             .iter()
                             .map(|dependency| {
@@ -465,18 +472,10 @@ fn resolve_initialized_transaction(
                         )
                     }
                     Some(PrepareData::ConflictingDeps(conflicts)) => {
-                        Preparation::Conflict(NativeResolutionSurveyNativeExplanationV1::Alpm {
-                            result: NativeResolutionSurveyAlpmResultV1::Conflicts {
-                                conflicts: conflicts
-                                    .iter()
-                                    .map(|conflict| NativeResolutionSurveyAlpmConflictV1 {
-                                        package1: alpm_package_explanation(conflict.package1()),
-                                        package2: alpm_package_explanation(conflict.package2()),
-                                        reason: conflict.reason().to_string(),
-                                    })
-                                    .collect(),
-                            },
-                        })
+                        Preparation::Conflict(alpm_conflict_explanation(
+                            conflicts.iter(),
+                            explanation_byte_limit,
+                        ))
                     }
                     None => Preparation::Unexpected(error_class),
                 }
@@ -486,7 +485,7 @@ fn resolve_initialized_transaction(
 
     match preparation {
         Preparation::Prepared => {
-            let explanation = alpm_prepared_explanation(alpm);
+            let explanation = alpm_prepared_explanation(alpm, explanation_byte_limit);
             let closure = transaction_packages(alpm, profile, inputs, root)
                 .map_err(|error| {
                     NativeRootResolutionError::new(
@@ -581,16 +580,102 @@ fn resolve_initialized_transaction(
     }
 }
 
-fn alpm_prepared_explanation(alpm: &Alpm) -> NativeResolutionSurveyNativeExplanationV1 {
-    NativeResolutionSurveyNativeExplanationV1::Alpm {
+fn alpm_prepared_explanation(
+    alpm: &Alpm,
+    byte_limit: u64,
+) -> NativeResolutionSurveyNativeExplanationV1 {
+    let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
         result: NativeResolutionSurveyAlpmResultV1::Prepared {
-            packages: alpm
-                .trans_add()
-                .iter()
-                .map(alpm_package_explanation)
-                .collect(),
+            packages: Vec::new(),
         },
+    };
+    let Some(mut budget) = NativeExplanationBudget::for_explanation(&explanation, byte_limit)
+    else {
+        return evidence_withheld();
+    };
+    let NativeResolutionSurveyNativeExplanationV1::Alpm {
+        result: NativeResolutionSurveyAlpmResultV1::Prepared { packages },
+    } = &mut explanation
+    else {
+        unreachable!("new ALPM explanation has the wrong result")
+    };
+    for source_package in alpm.trans_add().iter() {
+        let package = alpm_package_explanation(source_package);
+        if !budget.retain(&package, !packages.is_empty()) {
+            return evidence_withheld();
+        }
+        packages.push(package);
     }
+    explanation
+}
+
+fn alpm_unsatisfied_explanation<'a>(
+    dependencies: impl IntoIterator<Item = &'a alpm::DepMissing>,
+    byte_limit: u64,
+) -> NativeResolutionSurveyNativeExplanationV1 {
+    let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
+        result: NativeResolutionSurveyAlpmResultV1::Unsatisfied {
+            missing: Vec::new(),
+        },
+    };
+    let Some(mut budget) = NativeExplanationBudget::for_explanation(&explanation, byte_limit)
+    else {
+        return evidence_withheld();
+    };
+    let NativeResolutionSurveyNativeExplanationV1::Alpm {
+        result: NativeResolutionSurveyAlpmResultV1::Unsatisfied { missing },
+    } = &mut explanation
+    else {
+        unreachable!("new ALPM explanation has the wrong result")
+    };
+    for dependency in dependencies {
+        let entry = NativeResolutionSurveyAlpmMissingV1 {
+            target: dependency.target().to_string(),
+            dependency: dependency.depend().to_string(),
+            causing_package: dependency.causing_pkg().map(str::to_string),
+        };
+        if !budget.retain(&entry, !missing.is_empty()) {
+            return evidence_withheld();
+        }
+        missing.push(entry);
+    }
+    explanation
+}
+
+fn alpm_conflict_explanation<'a>(
+    conflicts: impl IntoIterator<Item = &'a alpm::Conflict>,
+    byte_limit: u64,
+) -> NativeResolutionSurveyNativeExplanationV1 {
+    let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
+        result: NativeResolutionSurveyAlpmResultV1::Conflicts {
+            conflicts: Vec::new(),
+        },
+    };
+    let Some(mut budget) = NativeExplanationBudget::for_explanation(&explanation, byte_limit)
+    else {
+        return evidence_withheld();
+    };
+    let NativeResolutionSurveyNativeExplanationV1::Alpm {
+        result:
+            NativeResolutionSurveyAlpmResultV1::Conflicts {
+                conflicts: retained,
+            },
+    } = &mut explanation
+    else {
+        unreachable!("new ALPM explanation has the wrong result")
+    };
+    for conflict in conflicts {
+        let entry = NativeResolutionSurveyAlpmConflictV1 {
+            package1: alpm_package_explanation(conflict.package1()),
+            package2: alpm_package_explanation(conflict.package2()),
+            reason: conflict.reason().to_string(),
+        };
+        if !budget.retain(&entry, !retained.is_empty()) {
+            return evidence_withheld();
+        }
+        retained.push(entry);
+    }
+    explanation
 }
 
 fn alpm_package_explanation(package: &Package) -> NativeResolutionSurveyAlpmPackageV1 {
@@ -606,6 +691,12 @@ fn alpm_unavailable(reason: &str) -> NativeResolutionSurveyNativeExplanationV1 {
         result: NativeResolutionSurveyAlpmResultV1::Unavailable {
             reason: reason.to_string(),
         },
+    }
+}
+
+fn evidence_withheld() -> NativeResolutionSurveyNativeExplanationV1 {
+    NativeResolutionSurveyNativeExplanationV1::Withheld {
+        reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted,
     }
 }
 
