@@ -9,6 +9,7 @@ mod io;
 mod resolution_compare;
 mod resolution_contract;
 mod resolution_io;
+mod resolution_survey;
 
 #[cfg(feature = "native-alpm-oracle")]
 mod alpm;
@@ -22,19 +23,20 @@ mod debian;
 #[cfg(feature = "native-alpm-oracle")]
 pub use alpm::{
     ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, AlpmParityMemberInput,
-    produce_alpm_parity_oracle, produce_alpm_resolution_oracle,
+    produce_alpm_parity_oracle, produce_alpm_resolution_oracle, produce_alpm_resolution_survey,
 };
 
 #[cfg(feature = "native-rpm-oracle")]
 pub use rpm::{
     RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V3, RpmParityMemberInput,
-    produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
+    produce_rpm_parity_oracle, produce_rpm_resolution_oracle, produce_rpm_resolution_survey,
 };
 
 #[cfg(feature = "native-debian-oracle")]
 pub use debian::{
     DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1,
     DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
+    produce_debian_resolution_survey,
 };
 
 pub use candidate_resolution::{
@@ -72,6 +74,19 @@ pub use resolution_io::{
     NATIVE_RESOLUTION_MANIFEST_FILE_NAME, NATIVE_RESOLUTION_ROOT_FILE_NAME,
     NativeResolutionOracleReader, NativeResolutionOracleWriter,
     verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
+};
+pub use resolution_survey::{
+    NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT,
+    NATIVE_RESOLUTION_SURVEY_SCHEMA_V1, NativeResolutionSurveyAlpmConflictV1,
+    NativeResolutionSurveyAlpmMissingV1, NativeResolutionSurveyAlpmPackageV1,
+    NativeResolutionSurveyAlpmResultV1, NativeResolutionSurveyCountsV1,
+    NativeResolutionSurveyDebianMissingV1, NativeResolutionSurveyDebianPackageV1,
+    NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorCountV1,
+    NativeResolutionSurveyErrorKindV1, NativeResolutionSurveyErrorReasonV1,
+    NativeResolutionSurveyErrorVariantV1, NativeResolutionSurveyEvidenceWithheldReasonV1,
+    NativeResolutionSurveyFailureV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeResolutionSurveyRpmPackageV1, NativeResolutionSurveyRpmProblemV1,
+    NativeResolutionSurveyRpmRuleV1, NativeResolutionSurveyV1, write_native_resolution_survey,
 };
 
 #[cfg(test)]

@@ -34,7 +34,10 @@ mod tests;
 
 use ffi::{AptArchitectureQualifier, AptAtom, AptPackage, AptPackages, AptRelationKind};
 
-pub use resolution::{DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1, produce_debian_resolution_oracle};
+pub use resolution::{
+    DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1, produce_debian_resolution_oracle,
+    produce_debian_resolution_survey,
+};
 
 pub const DEBIAN_PARITY_PROJECTION_SCHEMA_V1: u32 = 1;
 pub const PINNED_APT_PKG_VERSION: &str = "3.2.0";

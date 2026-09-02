@@ -23,7 +23,7 @@ ARG INSTALL_MODE=binary
 RUN printf '%s\n' \
         'Server = https://archive.archlinux.org/repos/2026/08/02/$repo/os/$arch' \
         > /etc/pacman.d/mirrorlist \
-    && pacman -Syyu --noconfirm \
+    && pacman -Syyu --noconfirm --disable-download-timeout \
         ca-certificates \
         curl \
         diffutils \

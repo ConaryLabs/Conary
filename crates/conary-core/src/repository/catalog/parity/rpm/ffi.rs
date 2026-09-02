@@ -62,6 +62,7 @@ unsafe extern "C" {
         handle: *mut c_void,
         problem_index: usize,
         rule_index: usize,
+        problem: *mut c_int,
         rule_type: *mut c_int,
         from_index: *mut usize,
         to_index: *mut usize,
@@ -209,6 +210,7 @@ impl SolvPool {
                     let rule_count = unsafe {
                         conary_solv_problem_rule_count(self.handle.as_ptr(), problem_index)
                     };
+                    let mut problem = 0;
                     let mut rules = Vec::with_capacity(rule_count);
                     for rule_index in 0..rule_count {
                         let mut rule_type = 0;
@@ -220,6 +222,7 @@ impl SolvPool {
                                 self.handle.as_ptr(),
                                 problem_index,
                                 rule_index,
+                                &mut problem,
                                 &mut rule_type,
                                 &mut from_index,
                                 &mut to_index,
@@ -239,7 +242,7 @@ impl SolvPool {
                             dependency,
                         });
                     }
-                    problems.push(SolvProblem { rules });
+                    problems.push(SolvProblem { problem, rules });
                 }
                 Ok(SolvResolution::Unresolved(problems))
             }
@@ -350,6 +353,7 @@ pub(super) enum SolvResolution {
 }
 
 pub(super) struct SolvProblem {
+    pub(super) problem: i32,
     pub(super) rules: Vec<SolvProblemRule>,
 }
 
