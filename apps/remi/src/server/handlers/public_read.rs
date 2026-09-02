@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 
 use crate::server::ServerState;
 use crate::server::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
-use crate::server::public_universe::PublicUniverseSnapshot;
+use crate::server::public_universe::{PublicUniverseLoadOutcome, PublicUniverseSnapshot};
 
 use super::HandlerResult;
 
@@ -28,6 +28,7 @@ const ERROR_HEADER: HeaderName = HeaderName::from_static("x-conary-error");
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PublicUniverseUnavailableReason {
     NoActiveUniverse,
+    ObsoleteProfileSchema,
     ProfileNotInUniverse,
     AuthorityUnavailable,
     SearchIndexUnavailable,
@@ -81,10 +82,17 @@ pub(crate) async fn context(state: &Arc<RwLock<ServerState>>) -> HandlerResult<P
     let loaded =
         tokio::task::spawn_blocking(move || PublicUniverseSnapshot::load(&lookup_path)).await;
     let universe = match loaded {
-        Ok(Ok(Some(universe))) => universe,
-        Ok(Ok(None)) => {
+        Ok(Ok(PublicUniverseLoadOutcome::Current(universe))) => universe,
+        Ok(Ok(PublicUniverseLoadOutcome::NoActiveUniverse)) => {
             return Err(unavailable_response(
                 PublicUniverseUnavailableReason::NoActiveUniverse,
+                None,
+            )
+            .into());
+        }
+        Ok(Ok(PublicUniverseLoadOutcome::ObsoleteProfileSchema)) => {
+            return Err(unavailable_response(
+                PublicUniverseUnavailableReason::ObsoleteProfileSchema,
                 None,
             )
             .into());
@@ -144,6 +152,9 @@ pub(crate) fn unavailable_response(
     let message = match reason {
         PublicUniverseUnavailableReason::NoActiveUniverse => {
             "no signed public package universe is active"
+        }
+        PublicUniverseUnavailableReason::ObsoleteProfileSchema => {
+            "the signed public package universe is unavailable while its profiles are rebuilt"
         }
         PublicUniverseUnavailableReason::ProfileNotInUniverse => {
             "the requested profile is absent from the active public universe"

@@ -107,8 +107,18 @@ pub(crate) async fn publish_current_universe_from_state(
         };
         if let Some(search_engine) = search_engine {
             tokio::task::spawn_blocking(move || {
-                let universe = super::public_universe::PublicUniverseSnapshot::load(&db_path)?
-                    .context("activated Remi universe pointer is absent")?;
+                let universe = match super::public_universe::PublicUniverseSnapshot::load(&db_path)?
+                {
+                    super::public_universe::PublicUniverseLoadOutcome::Current(universe) => {
+                        universe
+                    }
+                    super::public_universe::PublicUniverseLoadOutcome::NoActiveUniverse => {
+                        anyhow::bail!("activated Remi universe pointer is absent")
+                    }
+                    super::public_universe::PublicUniverseLoadOutcome::ObsoleteProfileSchema => {
+                        anyhow::bail!("activated Remi universe contains obsolete profile revisions")
+                    }
+                };
                 search_engine
                     .rebuild_from_universe(&db_path, &catalog_authority, &universe)
                     .context("rebuild search projection for activated Remi universe")?;

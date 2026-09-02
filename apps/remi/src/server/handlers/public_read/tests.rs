@@ -33,7 +33,7 @@ fn search_document(distro: &str, name: &str) -> PackageSearchDoc {
 
 async fn app(
     fixture: &ActiveCatalogFixture,
-    search_engine: SearchEngine,
+    search_engine: Arc<SearchEngine>,
 ) -> (tempfile::TempDir, Router) {
     let runtime = tempfile::tempdir().unwrap();
     let chunk_dir = runtime.path().join("chunks");
@@ -55,7 +55,11 @@ async fn app(
         ..ServerConfig::default()
     })
     .unwrap();
-    state.search_engine = Some(Arc::new(search_engine));
+    state.search_engine = Some(search_engine);
+    state.publication_readiness = crate::server::readiness::PublicationReadiness {
+        repository: crate::server::readiness::PublicationPhaseState::Complete,
+        canonical: crate::server::readiness::PublicationPhaseState::Complete,
+    };
     let router = create_router(Arc::new(RwLock::new(state))).await;
     (runtime, router)
 }
@@ -109,7 +113,7 @@ async fn every_package_read_surface_returns_typed_503_without_an_active_universe
     engine
         .index_package(&search_document("solus", "htop"))
         .unwrap();
-    let (_runtime, app) = app(&fixture, engine).await;
+    let (_runtime, app) = app(&fixture, Arc::new(engine)).await;
 
     for path in [
         "/v1/fedora/packages/htop",
@@ -135,6 +139,79 @@ async fn every_package_read_surface_returns_typed_503_without_an_active_universe
         let body = json(response).await;
         assert_eq!(body["code"], "PUBLIC_UNIVERSE_UNAVAILABLE", "{path}");
         assert_eq!(body["reason"], "no_active_universe", "{path}");
+    }
+}
+
+#[tokio::test]
+async fn obsolete_public_universe_is_typed_unavailable_until_current_replacement_activates() {
+    let fixture = ActiveCatalogFixture::new();
+    let package = package(
+        "fedora-44",
+        "htop",
+        "3.4.1",
+        "1",
+        Some("x86_64"),
+        1024,
+        "fedora-htop",
+    );
+    let current_revision = fixture.activate("fedora-44", 1, vec![package.clone()]);
+    fixture.replace_with_obsolete_schema(&current_revision);
+    fixture.activate_obsolete_profile_schema_universe(1);
+
+    assert!(matches!(
+        PublicUniverseSnapshot::load(fixture.db_path()).unwrap(),
+        PublicUniverseLoadOutcome::ObsoleteProfileSchema
+    ));
+
+    let search_dir = tempfile::tempdir().unwrap();
+    let engine = Arc::new(SearchEngine::new(search_dir.path()).unwrap());
+    let (_runtime, app) = app(&fixture, Arc::clone(&engine)).await;
+    let paths = [
+        ("/v1/fedora/packages/htop", StatusCode::ACCEPTED),
+        ("/v1/fedora/packages/htop/download", StatusCode::ACCEPTED),
+        ("/v1/packages/fedora/htop", StatusCode::OK),
+        ("/v1/packages/fedora/htop/versions", StatusCode::OK),
+        ("/v1/packages/fedora/htop/dependencies", StatusCode::OK),
+        ("/v1/packages/fedora/htop/rdepends", StatusCode::OK),
+        ("/v1/index/fedora/htop", StatusCode::OK),
+        ("/v1/search?q=htop", StatusCode::OK),
+        ("/v1/suggest?prefix=ht", StatusCode::OK),
+        ("/v1/stats/popular", StatusCode::OK),
+        ("/v1/stats/recent", StatusCode::OK),
+        ("/v1/stats/overview", StatusCode::OK),
+    ];
+    for (path, _) in paths {
+        let response = get(&app, path).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert_eq!(
+            response.headers()["x-conary-error"],
+            "PUBLIC_UNIVERSE_UNAVAILABLE",
+            "{path}"
+        );
+        let body = json(response).await;
+        assert_eq!(body["code"], "PUBLIC_UNIVERSE_UNAVAILABLE", "{path}");
+        assert_eq!(body["reason"], "obsolete_profile_schema", "{path}");
+    }
+
+    fixture.activate("fedora-44", 2, vec![package]);
+    let replacement_revision = fixture.activate_universe(2);
+    let PublicUniverseLoadOutcome::Current(replacement) =
+        PublicUniverseSnapshot::load(fixture.db_path()).unwrap()
+    else {
+        panic!("schema-three replacement universe is not current")
+    };
+    engine
+        .rebuild_from_universe(fixture.db_path(), fixture.authority(), &replacement)
+        .unwrap();
+
+    for (path, expected_status) in paths {
+        let response = get(&app, path).await;
+        assert_eq!(response.status(), expected_status, "{path}");
+        assert_eq!(
+            response.headers()[UNIVERSE_REVISION_HEADER],
+            replacement_revision,
+            "{path}"
+        );
     }
 }
 
@@ -198,9 +275,11 @@ async fn detail_index_search_and_stats_share_one_universe_and_exclude_candidates
     .unwrap();
     drop(conn);
     let universe_revision = fixture.activate_universe(1);
-    let universe = PublicUniverseSnapshot::load(fixture.db_path())
-        .unwrap()
-        .unwrap();
+    let PublicUniverseLoadOutcome::Current(universe) =
+        PublicUniverseSnapshot::load(fixture.db_path()).unwrap()
+    else {
+        panic!("fixture public universe is not current")
+    };
     assert!(universe.profile("solus").is_none());
 
     let search_dir = tempfile::tempdir().unwrap();
@@ -211,7 +290,7 @@ async fn detail_index_search_and_stats_share_one_universe_and_exclude_candidates
     engine
         .rebuild_from_universe(fixture.db_path(), fixture.authority(), &universe)
         .unwrap();
-    let (_runtime, app) = app(&fixture, engine).await;
+    let (_runtime, app) = app(&fixture, Arc::new(engine)).await;
 
     let paths = [
         "/v1/packages/fedora/htop",
@@ -299,15 +378,17 @@ async fn supported_profile_absent_from_the_active_universe_is_typed_unavailabili
         )],
     );
     fixture.activate_universe(1);
-    let universe = PublicUniverseSnapshot::load(fixture.db_path())
-        .unwrap()
-        .unwrap();
+    let PublicUniverseLoadOutcome::Current(universe) =
+        PublicUniverseSnapshot::load(fixture.db_path()).unwrap()
+    else {
+        panic!("fixture public universe is not current")
+    };
     let search_dir = tempfile::tempdir().unwrap();
     let engine = SearchEngine::new(search_dir.path()).unwrap();
     engine
         .rebuild_from_universe(fixture.db_path(), fixture.authority(), &universe)
         .unwrap();
-    let (_runtime, app) = app(&fixture, engine).await;
+    let (_runtime, app) = app(&fixture, Arc::new(engine)).await;
 
     let response = get(&app, "/v1/packages/ubuntu/htop").await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);

@@ -292,124 +292,6 @@ mod tests {
         }
     }
 
-    fn activate_obsolete_profile_schema_universe(
-        catalogs: &ActiveCatalogFixture,
-        sequence: u64,
-    ) -> String {
-        let conn = catalogs.connection();
-        let mut statement = conn
-            .prepare(
-                "SELECT active.source_profile, active.profile_revision_sha256,
-                        resource.manifest_json
-                 FROM remi_active_profile_revisions active
-                 JOIN remi_catalog_resources resource
-                   ON resource.resource_sha256 = active.profile_revision_sha256
-                 ORDER BY active.source_profile COLLATE BINARY",
-            )
-            .expect("prepare obsolete active profile query");
-        let profiles = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .expect("query obsolete active profiles")
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .expect("collect obsolete active profiles");
-        drop(statement);
-        assert_eq!(profiles.len(), 3);
-        let profile_values = profiles
-            .iter()
-            .enumerate()
-            .map(|(ordinal, (_profile, revision_sha256, manifest_json))| {
-                let revision: serde_json::Value =
-                    serde_json::from_str(manifest_json).expect("parse obsolete profile revision");
-                assert_eq!(revision["schema_version"], 2);
-                serde_json::json!({
-                    "ordinal": u32::try_from(ordinal).expect("ordinal fits u32"),
-                    "profile_revision_sha256": revision_sha256,
-                    "catalog": {
-                        "schema_version": revision["catalog"]["schema_version"],
-                        "sha256": revision["catalog"]["sha256"],
-                        "size": revision["catalog"]["size"],
-                        "logical_digest_sha256": revision["logical_digest_sha256"],
-                    },
-                    "revision": revision,
-                })
-            })
-            .collect::<Vec<_>>();
-        let generated_at = chrono::Utc::now();
-        let manifest = serde_json::json!({
-            "schema_version": conary_core::repository::universe::REMI_UNIVERSE_SCHEMA_V2,
-            "sequence": sequence,
-            "metadata_root_sha256": conary_core::hash::sha256(b"obsolete fixture root"),
-            "generated_at": generated_at,
-            "expires_at": generated_at + chrono::Duration::days(7),
-            "profiles": profile_values,
-            "canonical_map": {
-                "schema_version": conary_core::canonical::CANONICAL_MAP_SCHEMA_VERSION,
-                "sha256": conary_core::hash::sha256(b"obsolete fixture canonical map"),
-                "size": 0,
-                "revision": 0,
-                "entry_count": 0,
-            },
-        });
-        let manifest_json = String::from_utf8(
-            conary_core::json::canonical_json(&manifest)
-                .expect("canonicalize obsolete universe manifest"),
-        )
-        .expect("obsolete universe manifest is UTF-8");
-        let manifest_sha256 = conary_core::hash::sha256(manifest_json.as_bytes());
-        let sequence = i64::try_from(sequence).expect("obsolete sequence fits i64");
-        conn.execute(
-            "INSERT INTO remi_universe_revisions (
-                 manifest_sha256, sequence, promotion_evidence_sha256,
-                 conversion_crawl_sha256, metadata_root_sha256,
-                 canonical_map_sha256, canonical_map_size, targets_version,
-                 snapshot_version, timestamp_version, manifest_json, durable, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?2, ?2, ?2, ?7, 1, ?2)",
-            rusqlite::params![
-                &manifest_sha256,
-                sequence,
-                "e".repeat(64),
-                "c".repeat(64),
-                conary_core::hash::sha256(b"obsolete fixture root"),
-                conary_core::hash::sha256(b"obsolete fixture canonical map"),
-                &manifest_json,
-            ],
-        )
-        .expect("insert obsolete universe revision");
-        for (ordinal, (profile, revision_sha256, manifest_json)) in profiles.iter().enumerate() {
-            let revision: serde_json::Value =
-                serde_json::from_str(manifest_json).expect("parse obsolete profile revision");
-            conn.execute(
-                "INSERT INTO remi_universe_profile_revisions (
-                     manifest_sha256, ordinal, source_profile, profile_revision_sha256,
-                     catalog_sha256, catalog_size
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![
-                    &manifest_sha256,
-                    i64::try_from(ordinal).expect("ordinal fits i64"),
-                    profile,
-                    revision_sha256,
-                    revision["catalog"]["sha256"].as_str().expect("catalog digest"),
-                    revision["catalog"]["size"].as_i64().expect("catalog size"),
-                ],
-            )
-            .expect("insert obsolete universe member");
-        }
-        conn.execute(
-            "INSERT INTO remi_active_universe_revision (
-                 singleton, manifest_sha256, sequence, activated_at
-             ) VALUES (1, ?1, ?2, ?2)",
-            rusqlite::params![&manifest_sha256, sequence],
-        )
-        .expect("activate obsolete universe revision");
-        manifest_sha256
-    }
-
     fn refresh_repositories_for_revision(
         catalogs: &ActiveCatalogFixture,
         revision: &ProfileRevisionV2,
@@ -762,7 +644,7 @@ mod tests {
             staged_source_selections.push(current_selection);
             catalogs.replace_with_obsolete_schema(&revision);
         }
-        let obsolete_universe = activate_obsolete_profile_schema_universe(&catalogs, 41);
+        let obsolete_universe = catalogs.activate_obsolete_profile_schema_universe(41);
 
         let root = catalogs
             .catalog_dir()
@@ -987,11 +869,14 @@ mod tests {
         );
         drop(conn);
         assert_eq!(
-            crate::server::public_universe::PublicUniverseSnapshot::load(catalogs.db_path())
+            match crate::server::public_universe::PublicUniverseSnapshot::load(catalogs.db_path())
                 .expect("load strict replacement serving authority")
-                .expect("replacement universe is active")
-                .identity()
-                .manifest_sha256,
+            {
+                crate::server::public_universe::PublicUniverseLoadOutcome::Current(universe) => {
+                    universe.identity().manifest_sha256.clone()
+                }
+                outcome => panic!("replacement universe is not current: {outcome:?}"),
+            },
             manifest_sha256
         );
     }
