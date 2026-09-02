@@ -793,6 +793,17 @@ mod tests {
             })
             .expect("build upgrade refresh server state"),
         ));
+        assert_eq!(
+            crate::server::universe_publish::publish_current_universe(
+                catalogs.db_path(),
+                catalogs.catalog_dir(),
+                &candidate_dir,
+                None,
+                &DatabaseWriter::default(),
+            )
+            .expect("classify obsolete publication authority"),
+            crate::server::universe_publish::UniversePublicationOutcome::Unavailable
+        );
         for (selection, repositories) in staged_source_selections.iter().zip(refresh_repositories) {
             crate::server::admin_service::profile_refresh::refresh_native_profile_for_upgrade_test(
                 &state,

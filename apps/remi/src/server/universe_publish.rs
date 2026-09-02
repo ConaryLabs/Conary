@@ -335,6 +335,19 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         None => (None, 0, None, None, None),
     };
 
+    if base_manifest_sha256.is_some() && active_manifest.is_none() {
+        return Ok(UniverseInputs {
+            base_manifest_sha256,
+            base_sequence,
+            base_promotion_evidence_sha256,
+            base_conversion_crawl_sha256,
+            active_manifest,
+            profiles: Vec::new(),
+            profile_physical_attestations: BTreeMap::new(),
+            canonical_map: load_canonical_map_snapshot(&conn)?,
+        });
+    }
+
     let mut statement = conn.prepare(
         "SELECT resource.resource_sha256
          FROM remi_active_profile_revisions active
